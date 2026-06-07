@@ -598,6 +598,166 @@ impl RollbackToken {
 }
 
 // ---------------------------------------------------------------------------
+// ProofProducerArtifact — strict proof.json producer contract
+// ---------------------------------------------------------------------------
+
+/// Stable identity for the checker or theorem producer that emitted a proof
+/// artifact.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ProofToolIdentity {
+    /// Tool or backend name, e.g. "lean4", "z3-policy-theorem", or
+    /// "translation-validator".
+    pub tool_name: String,
+    /// Version or build identifier for the tool binary/backend.
+    pub tool_version: String,
+    /// Per-run producer invocation ID for audit correlation.
+    pub tool_invocation_id: String,
+}
+
+impl fmt::Display for ProofToolIdentity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}@{}#{}",
+            self.tool_name, self.tool_version, self.tool_invocation_id
+        )
+    }
+}
+
+impl ProofToolIdentity {
+    fn validate(&self) -> Result<(), ProofSchemaError> {
+        if self.tool_name.trim().is_empty() {
+            return Err(ProofSchemaError::MissingField {
+                field: "tool_identity.tool_name".to_string(),
+            });
+        }
+        if self.tool_version.trim().is_empty() {
+            return Err(ProofSchemaError::MissingField {
+                field: "tool_identity.tool_version".to_string(),
+            });
+        }
+        if self.tool_invocation_id.trim().is_empty() {
+            return Err(ProofSchemaError::MissingField {
+                field: "tool_identity.tool_invocation_id".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn append_to_preimage(&self, preimage: &mut Vec<u8>) {
+        append_length_prefixed(preimage, self.tool_name.as_bytes());
+        append_length_prefixed(preimage, self.tool_version.as_bytes());
+        append_length_prefixed(preimage, self.tool_invocation_id.as_bytes());
+    }
+}
+
+/// Checker outcome recorded by a proof producer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProofCheckerResult {
+    /// The theorem/validator proved the claim for the referenced artifacts.
+    Passed,
+    /// The checker found a real counterexample or proof failure.
+    Failed { reason: String },
+    /// The checker could not produce a verdict.
+    Inconclusive { reason: String },
+    /// The backend is fixture-only and may never promote a real claim.
+    FixtureOnly { reason: String },
+}
+
+impl ProofCheckerResult {
+    fn append_to_preimage(&self, preimage: &mut Vec<u8>) {
+        match self {
+            Self::Passed => append_length_prefixed(preimage, b"passed"),
+            Self::Failed { reason } => {
+                append_length_prefixed(preimage, b"failed");
+                append_length_prefixed(preimage, reason.as_bytes());
+            }
+            Self::Inconclusive { reason } => {
+                append_length_prefixed(preimage, b"inconclusive");
+                append_length_prefixed(preimage, reason.as_bytes());
+            }
+            Self::FixtureOnly { reason } => {
+                append_length_prefixed(preimage, b"fixture_only");
+                append_length_prefixed(preimage, reason.as_bytes());
+            }
+        }
+    }
+}
+
+/// Either a content commitment over the unsigned artifact body or a producer
+/// signature. The content-hash form is fully self-verifiable by this schema
+/// module; signature verification is delegated to the caller's trust policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProofSignatureOrContentHash {
+    ContentHash(ContentHash),
+    Signature {
+        signer_key_id: EngineObjectId,
+        signature: Vec<u8>,
+    },
+}
+
+/// Canonical proof.json contract emitted by theorem/validator producers before
+/// a claim may be promoted from hypothesis to backed evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProofProducerArtifact {
+    /// Schema version.
+    pub schema_version: SchemaVersion,
+    /// Claim IDs backed by this producer artifact.
+    pub claim_ids: Vec<String>,
+    /// Stable theorem name or validator ID.
+    pub theorem_or_validator_id: String,
+    /// Input artifacts and their content hashes.
+    pub input_artifact_hashes: BTreeMap<String, ContentHash>,
+    /// Output artifacts and their content hashes.
+    pub output_artifact_hashes: BTreeMap<String, ContentHash>,
+    /// Exact command line or deterministic command descriptor.
+    pub command: String,
+    /// Tool/backend identity.
+    pub tool_identity: ProofToolIdentity,
+    /// Checker verdict.
+    pub checker_result: ProofCheckerResult,
+    /// Counterexamples emitted by failing checks. Empty for successful checks.
+    pub counterexample_artifacts: BTreeMap<String, ContentHash>,
+    /// Virtual timestamp or event tick for deterministic replay binding.
+    pub timestamp_ticks: u64,
+    /// Security/logical epoch for the proof producer run.
+    pub logical_epoch: SecurityEpoch,
+    /// Producer signature or content hash over the unsigned artifact body.
+    pub signature_or_content_hash: ProofSignatureOrContentHash,
+}
+
+impl ProofProducerArtifact {
+    /// Compute the content hash over the unsigned proof.json body.
+    pub fn content_hash(&self) -> ContentHash {
+        ContentHash::compute(&self.content_preimage())
+    }
+
+    /// Deterministic preimage excluding `signature_or_content_hash`.
+    pub fn content_preimage(&self) -> Vec<u8> {
+        let mut preimage = Vec::new();
+        append_length_prefixed(&mut preimage, b"proof_schema::ProofProducerArtifact::v1");
+        preimage.extend_from_slice(&self.schema_version.major.to_be_bytes());
+        preimage.extend_from_slice(&self.schema_version.minor.to_be_bytes());
+
+        preimage.extend_from_slice(&(self.claim_ids.len() as u32).to_be_bytes());
+        for claim_id in &self.claim_ids {
+            append_length_prefixed(&mut preimage, claim_id.as_bytes());
+        }
+
+        append_length_prefixed(&mut preimage, self.theorem_or_validator_id.as_bytes());
+        append_content_hash_map(&mut preimage, &self.input_artifact_hashes);
+        append_content_hash_map(&mut preimage, &self.output_artifact_hashes);
+        append_length_prefixed(&mut preimage, self.command.as_bytes());
+        self.tool_identity.append_to_preimage(&mut preimage);
+        self.checker_result.append_to_preimage(&mut preimage);
+        append_content_hash_map(&mut preimage, &self.counterexample_artifacts);
+        preimage.extend_from_slice(&self.timestamp_ticks.to_be_bytes());
+        preimage.extend_from_slice(&self.logical_epoch.as_u64().to_be_bytes());
+        preimage
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ProofSchemaError
 // ---------------------------------------------------------------------------
 
@@ -639,6 +799,10 @@ pub enum ProofSchemaError {
         attested_signer_key_id: EngineObjectId,
         nonce_hex: String,
     },
+    /// Strict proof producer artifact failed deterministic validation.
+    InvalidProofArtifact { artifact: String, reason: String },
+    /// Fixture-only proof producers are never sufficient to promote a claim.
+    FixtureOnlyProofArtifact { tool: String, reason: String },
 }
 
 impl fmt::Display for ProofSchemaError {
@@ -696,6 +860,12 @@ impl fmt::Display for ProofSchemaError {
                 attested_signer_key_id.to_hex(),
                 nonce_hex
             ),
+            Self::InvalidProofArtifact { artifact, reason } => {
+                write!(f, "invalid proof artifact {artifact}: {reason}")
+            }
+            Self::FixtureOnlyProofArtifact { tool, reason } => {
+                write!(f, "fixture-only proof artifact from {tool}: {reason}")
+            }
         }
     }
 }
@@ -858,6 +1028,121 @@ pub fn validate_rollback_token(
     Ok(())
 }
 
+/// Validate a strict proof.json producer artifact.
+///
+/// Fail-closed: only a passing, non-fixture checker result with complete
+/// identity, artifact hashes, epoch/timestamp, and a valid content commitment
+/// or well-formed signature is accepted.
+pub fn validate_proof_producer_artifact(
+    artifact: &ProofProducerArtifact,
+) -> Result<(), ProofSchemaError> {
+    if !artifact
+        .schema_version
+        .is_compatible_with(&proof_schema_version_current())
+    {
+        return Err(ProofSchemaError::IncompatibleVersion {
+            expected_major: proof_schema_version_current().major,
+            actual: artifact.schema_version,
+        });
+    }
+
+    if artifact.claim_ids.is_empty() {
+        return Err(ProofSchemaError::MissingField {
+            field: "claim_ids".to_string(),
+        });
+    }
+    let mut seen_claim_ids = BTreeSet::new();
+    for claim_id in &artifact.claim_ids {
+        let trimmed = claim_id.trim();
+        if trimmed.is_empty() {
+            return Err(ProofSchemaError::MissingField {
+                field: "claim_ids[]".to_string(),
+            });
+        }
+        if !seen_claim_ids.insert(trimmed.to_string()) {
+            return Err(ProofSchemaError::InvalidProofArtifact {
+                artifact: "ProofProducerArtifact".to_string(),
+                reason: format!("duplicate claim_id: {trimmed}"),
+            });
+        }
+    }
+
+    if artifact.theorem_or_validator_id.trim().is_empty() {
+        return Err(ProofSchemaError::MissingField {
+            field: "theorem_or_validator_id".to_string(),
+        });
+    }
+    validate_content_hash_map(
+        "input_artifact_hashes",
+        &artifact.input_artifact_hashes,
+        true,
+    )?;
+    validate_content_hash_map(
+        "output_artifact_hashes",
+        &artifact.output_artifact_hashes,
+        true,
+    )?;
+    validate_content_hash_map(
+        "counterexample_artifacts",
+        &artifact.counterexample_artifacts,
+        false,
+    )?;
+    if artifact.command.trim().is_empty() {
+        return Err(ProofSchemaError::MissingField {
+            field: "command".to_string(),
+        });
+    }
+    artifact.tool_identity.validate()?;
+
+    match &artifact.checker_result {
+        ProofCheckerResult::Passed => {}
+        ProofCheckerResult::Failed { reason } => {
+            return Err(ProofSchemaError::InvalidProofArtifact {
+                artifact: "checker_result".to_string(),
+                reason: format!("checker failed: {reason}"),
+            });
+        }
+        ProofCheckerResult::Inconclusive { reason } => {
+            return Err(ProofSchemaError::InvalidProofArtifact {
+                artifact: "checker_result".to_string(),
+                reason: format!("checker inconclusive: {reason}"),
+            });
+        }
+        ProofCheckerResult::FixtureOnly { reason } => {
+            return Err(ProofSchemaError::FixtureOnlyProofArtifact {
+                tool: artifact.tool_identity.to_string(),
+                reason: reason.clone(),
+            });
+        }
+    }
+
+    match &artifact.signature_or_content_hash {
+        ProofSignatureOrContentHash::ContentHash(observed) => {
+            let expected = artifact.content_hash();
+            if !observed.constant_time_eq(&expected) {
+                return Err(ProofSchemaError::InvalidProofArtifact {
+                    artifact: "signature_or_content_hash".to_string(),
+                    reason: "content hash mismatch".to_string(),
+                });
+            }
+        }
+        ProofSignatureOrContentHash::Signature { signature, .. } => {
+            if signature.len() != SIGNATURE_LEN {
+                return Err(ProofSchemaError::InvalidSignature {
+                    artifact: "ProofProducerArtifact".to_string(),
+                });
+            }
+            if signature.iter().all(|byte| *byte == 0) {
+                return Err(ProofSchemaError::InvalidSignature {
+                    artifact: "ProofProducerArtifact".to_string(),
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Check that a signer role is authorized for the given artifact type.
 pub fn check_signer_authorization(
     role: SignerRole,
@@ -895,6 +1180,40 @@ fn decision_impact_bytes(impact: DecisionImpact) -> &'static [u8] {
         DecisionImpact::Standard => b"standard",
         DecisionImpact::HighImpact => b"high_impact",
     }
+}
+
+fn append_content_hash_map(preimage: &mut Vec<u8>, hashes: &BTreeMap<String, ContentHash>) {
+    preimage.extend_from_slice(&(hashes.len() as u32).to_be_bytes());
+    for (artifact_id, hash) in hashes {
+        append_length_prefixed(preimage, artifact_id.as_bytes());
+        preimage.extend_from_slice(hash.as_bytes());
+    }
+}
+
+fn validate_content_hash_map(
+    field: &str,
+    hashes: &BTreeMap<String, ContentHash>,
+    require_non_empty: bool,
+) -> Result<(), ProofSchemaError> {
+    if require_non_empty && hashes.is_empty() {
+        return Err(ProofSchemaError::MissingField {
+            field: field.to_string(),
+        });
+    }
+    for (artifact_id, hash) in hashes {
+        if artifact_id.trim().is_empty() {
+            return Err(ProofSchemaError::MissingField {
+                field: format!("{field}[]"),
+            });
+        }
+        if hash.as_bytes().iter().all(|byte| *byte == 0) {
+            return Err(ProofSchemaError::InvalidProofArtifact {
+                artifact: field.to_string(),
+                reason: format!("artifact `{artifact_id}` has an all-zero content hash"),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn format_nonce_hex(nonce: &[u8; 32]) -> String {
@@ -1015,6 +1334,52 @@ mod tests {
 
     fn test_rollback() -> RollbackToken {
         test_rollback_unsigned().sign(&test_token_signing_key())
+    }
+
+    fn test_proof_tool_identity() -> ProofToolIdentity {
+        ProofToolIdentity {
+            tool_name: "translation-validator".to_string(),
+            tool_version: "2026.06.07".to_string(),
+            tool_invocation_id: "validator-run-001".to_string(),
+        }
+    }
+
+    fn test_proof_producer_artifact_unsigned() -> ProofProducerArtifact {
+        ProofProducerArtifact {
+            schema_version: proof_schema_version_current(),
+            claim_ids: vec!["FE-CLAIM-017".to_string()],
+            theorem_or_validator_id: "translation-validator::semantic_equivalence".to_string(),
+            input_artifact_hashes: BTreeMap::from([
+                (
+                    "input.ir3.json".to_string(),
+                    ContentHash::compute(b"input-ir3"),
+                ),
+                (
+                    "baseline.trace.json".to_string(),
+                    ContentHash::compute(b"baseline-trace"),
+                ),
+            ]),
+            output_artifact_hashes: BTreeMap::from([(
+                "translation-witness.json".to_string(),
+                ContentHash::compute(b"translation-witness"),
+            )]),
+            command: "frankenctl verify translation --input input.ir3.json".to_string(),
+            tool_identity: test_proof_tool_identity(),
+            checker_result: ProofCheckerResult::Passed,
+            counterexample_artifacts: BTreeMap::new(),
+            timestamp_ticks: 1_234,
+            logical_epoch: test_epoch(),
+            signature_or_content_hash: ProofSignatureOrContentHash::ContentHash(
+                ContentHash::default(),
+            ),
+        }
+    }
+
+    fn test_proof_producer_artifact() -> ProofProducerArtifact {
+        let mut artifact = test_proof_producer_artifact_unsigned();
+        artifact.signature_or_content_hash =
+            ProofSignatureOrContentHash::ContentHash(artifact.content_hash());
+        artifact
     }
 
     // -- Schema version --
@@ -1368,6 +1733,90 @@ mod tests {
             validate_rollback_token(&token, Some(&test_token_verification_key()), test_epoch()),
             Err(ProofSchemaError::MissingField { .. })
         ));
+    }
+
+    // -- ProofProducerArtifact validation --
+
+    #[test]
+    fn validate_proof_producer_artifact_accepts_real_artifact() {
+        let artifact = test_proof_producer_artifact();
+        assert!(validate_proof_producer_artifact(&artifact).is_ok());
+    }
+
+    #[test]
+    fn validate_proof_producer_artifact_rejects_fixture_only() {
+        let mut artifact = test_proof_producer_artifact();
+        artifact.checker_result = ProofCheckerResult::FixtureOnly {
+            reason: "MockCertificate fixture backend".to_string(),
+        };
+
+        assert!(matches!(
+            validate_proof_producer_artifact(&artifact),
+            Err(ProofSchemaError::FixtureOnlyProofArtifact { .. })
+        ));
+    }
+
+    #[test]
+    fn validate_proof_producer_artifact_rejects_failed_checker() {
+        let mut artifact = test_proof_producer_artifact();
+        artifact.checker_result = ProofCheckerResult::Failed {
+            reason: "counterexample found".to_string(),
+        };
+        artifact.counterexample_artifacts = BTreeMap::from([(
+            "counterexample.json".to_string(),
+            ContentHash::compute(b"counterexample"),
+        )]);
+
+        assert!(matches!(
+            validate_proof_producer_artifact(&artifact),
+            Err(ProofSchemaError::InvalidProofArtifact { artifact, .. })
+                if artifact == "checker_result"
+        ));
+    }
+
+    #[test]
+    fn validate_proof_producer_artifact_rejects_missing_claims() {
+        let mut artifact = test_proof_producer_artifact();
+        artifact.claim_ids.clear();
+
+        assert!(matches!(
+            validate_proof_producer_artifact(&artifact),
+            Err(ProofSchemaError::MissingField { field }) if field == "claim_ids"
+        ));
+    }
+
+    #[test]
+    fn validate_proof_producer_artifact_rejects_hash_tamper() {
+        let mut artifact = test_proof_producer_artifact();
+        artifact.command = "frankenctl verify translation --input tampered.ir3.json".to_string();
+
+        assert!(matches!(
+            validate_proof_producer_artifact(&artifact),
+            Err(ProofSchemaError::InvalidProofArtifact { artifact, reason })
+                if artifact == "signature_or_content_hash" && reason.contains("mismatch")
+        ));
+    }
+
+    #[test]
+    fn proof_producer_artifact_json_field_names() {
+        let artifact = test_proof_producer_artifact();
+        let json = serde_json::to_string(&artifact).expect("serialize derived Serialize");
+        for field in &[
+            "schema_version",
+            "claim_ids",
+            "theorem_or_validator_id",
+            "input_artifact_hashes",
+            "output_artifact_hashes",
+            "command",
+            "tool_identity",
+            "checker_result",
+            "counterexample_artifacts",
+            "timestamp_ticks",
+            "logical_epoch",
+            "signature_or_content_hash",
+        ] {
+            assert!(json.contains(field), "missing: {field}");
+        }
     }
 
     // -- Signer authorization --

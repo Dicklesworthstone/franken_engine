@@ -1024,7 +1024,11 @@ impl HasErrorCode for ProofSchemaError {
             | ProofSchemaError::MissingAttestationBindings { .. }
             | ProofSchemaError::UnexpectedAttestationBindingsForVersion { .. }
             | ProofSchemaError::InvalidAttestationBindings { .. }
-            | ProofSchemaError::NonceReplay { .. } => FrankenErrorCode::ProofSchemaValidationError,
+            | ProofSchemaError::NonceReplay { .. }
+            | ProofSchemaError::InvalidProofArtifact { .. }
+            | ProofSchemaError::FixtureOnlyProofArtifact { .. } => {
+                FrankenErrorCode::ProofSchemaValidationError
+            }
         }
     }
 }

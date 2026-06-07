@@ -5,12 +5,13 @@
 //! Tests formal verification that optimization transformations preserve semantic
 //! correctness while generating proof certificates extending G.4-G.7 infrastructure.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use frankenengine_engine::optimization_proof_carriers::{
-    CertificateType, EquivalenceRelation, IrRegion, OptimizationPass, OptimizationPassApplication,
+    generate_optimization_test_cases, CertificateType, EquivalenceProof, EquivalenceRelation,
+    IrRegion, ObligationType, OptimizationPass, OptimizationPassApplication,
     OptimizationProofCarrier, OptimizationVerificationStatus, PerformanceImpact, ProofMethod,
-    ProofResult, TransformationRule, TransformationRuleType, generate_optimization_test_cases,
+    ProofObligation, ProofResult, TransformationRule, TransformationRuleType, VerificationMethod,
 };
 
 /// Test basic optimization proof carrier creation and configuration.
@@ -225,13 +226,11 @@ fn constant_folding_and_propagation_optimization() {
     assert!(!proof.proof_obligations.is_empty());
 
     // Verify proof obligations include arithmetic correctness
-    assert!(
-        proof
-            .proof_obligations
-            .iter()
-            .any(|po| po.obligation_id.contains("value_preservation")
-                || po.premise.contains("Constant values computed"))
-    );
+    assert!(proof
+        .proof_obligations
+        .iter()
+        .any(|po| po.obligation_id.contains("value_preservation")
+            || po.premise.contains("Constant values computed")));
 }
 
 /// Test loop optimization (unrolling and invariant hoisting).
@@ -352,13 +351,11 @@ fn loop_optimization_unrolling_and_hoisting() {
     );
 
     // Verify loop-specific proof obligations
-    assert!(
-        proof
-            .proof_obligations
-            .iter()
-            .any(|po| po.obligation_id.contains("loop_semantics")
-                || po.conclusion.contains("Loop semantics preserved"))
-    );
+    assert!(proof
+        .proof_obligations
+        .iter()
+        .any(|po| po.obligation_id.contains("loop_semantics")
+            || po.conclusion.contains("Loop semantics preserved")));
 }
 
 /// Test function inlining optimization.
@@ -452,13 +449,11 @@ fn function_inlining_optimization() {
     assert_eq!(proof.proof_method, ProofMethod::ContextualEquivalence);
 
     // Verify inlining-specific proof obligations
-    assert!(
-        proof
-            .proof_obligations
-            .iter()
-            .any(|po| po.obligation_id.contains("inlining_correctness")
-                || po.premise.contains("Function call replaced with body"))
-    );
+    assert!(proof
+        .proof_obligations
+        .iter()
+        .any(|po| po.obligation_id.contains("inlining_correctness")
+            || po.premise.contains("Function call replaced with body")));
 }
 
 /// Test comprehensive optimization verification workflow.
@@ -537,20 +532,21 @@ fn comprehensive_optimization_verification_workflow() {
 
     let verification_result = carrier.verify_all_proofs().unwrap();
     assert_eq!(verification_result.total_proofs, 4);
-    assert!(verification_result.verified_proofs > 0);
-    assert!(verification_result.verification_time_ms > 0);
+    assert_eq!(verification_result.verified_proofs, 0);
+    assert_eq!(verification_result.failed_proofs, 4);
 
     // Check optimization verification status
-    assert_ne!(
+    assert_eq!(
         carrier.verification_status,
-        OptimizationVerificationStatus::Unverified
+        OptimizationVerificationStatus::VerificationFailed
     );
 
-    // Should have generated proof certificates
+    // Performance certificates still land, but semantic certificates stay
+    // fail-closed until generated obligations carry real SMT/differential
+    // evidence instead of prose premises.
     assert!(verification_result.certificates_generated);
     assert!(!carrier.proof_certificates.is_empty());
 
-    // Verify certificate types
     let has_semantic_cert = carrier
         .proof_certificates
         .iter()
@@ -560,7 +556,7 @@ fn comprehensive_optimization_verification_workflow() {
         .iter()
         .any(|cert| cert.certificate_type == CertificateType::PerformanceImprovement);
 
-    assert!(has_semantic_cert);
+    assert!(!has_semantic_cert);
     assert!(has_performance_cert);
 }
 
@@ -615,12 +611,6 @@ fn optimization_test_case_generation_and_execution() {
         // Generate and verify proofs
         let proof_count = carrier.generate_equivalence_proofs().unwrap();
         assert_eq!(proof_count, test_case.optimization_passes.len());
-
-        // Verify expected equivalence relations
-        for proof in &carrier.equivalence_proofs {
-            // Each test case specifies expected equivalence relation
-            // In practice, different optimizations may have different relations
-        }
 
         let verification_result = carrier.verify_all_proofs().unwrap();
         assert_eq!(verification_result.total_proofs, proof_count);
@@ -824,23 +814,15 @@ fn proof_certificate_generation_and_validation() {
     assert!(verification_result.certificates_generated);
     assert!(!carrier.proof_certificates.is_empty());
 
-    // Verify semantic equivalence certificate
+    // Generated prose obligations fail closed; no semantic certificate should
+    // be emitted until the proof obligations become real SMT/differential
+    // evidence.
     let semantic_certs: Vec<_> = carrier
         .proof_certificates
         .iter()
         .filter(|cert| cert.certificate_type == CertificateType::SemanticEquivalence)
         .collect();
-    assert!(!semantic_certs.is_empty());
-
-    let semantic_cert = semantic_certs[0];
-    assert!(!semantic_cert.certificate_id.is_empty());
-    assert!(!semantic_cert.optimization_passes.is_empty());
-    assert!(
-        semantic_cert
-            .certificate_data
-            .contains("Semantic equivalence verified")
-    );
-    assert!(semantic_cert.validity_period.is_some());
+    assert!(semantic_certs.is_empty());
 
     // Verify performance improvement certificate
     let performance_certs: Vec<_> = carrier
@@ -851,12 +833,84 @@ fn proof_certificate_generation_and_validation() {
     assert!(!performance_certs.is_empty());
 
     let performance_cert = performance_certs[0];
-    assert!(
-        performance_cert
-            .certificate_data
-            .contains("Performance improvement")
-    );
+    assert!(performance_cert
+        .certificate_data
+        .contains("Performance improvement"));
     assert!(performance_cert.certificate_data.contains("35"));
+}
+
+/// Test FE-CLAIM-019/020 proof bundle emission gates on verified carrier state.
+#[test]
+fn fe_claim_019_020_bundle_emission_is_fail_closed() {
+    let carrier = OptimizationProofCarrier::new("source".to_string(), "target".to_string());
+    let bundle_dir = unique_bundle_dir("fail_closed");
+
+    let emitted = carrier
+        .emit_fe_claim_019_020_proof_bundles(&bundle_dir)
+        .unwrap();
+    assert!(emitted.is_empty());
+    assert!(!bundle_dir.join("FE-CLAIM-019.proof.json").exists());
+    assert!(!bundle_dir.join("FE-CLAIM-020.proof.json").exists());
+}
+
+/// Test FE-CLAIM-019/020 proof bundles use the shared canonical schema once a
+/// carrier has genuinely verified equivalence proofs.
+#[test]
+fn fe_claim_019_020_bundle_emission_writes_canonical_bundles() {
+    let mut carrier = OptimizationProofCarrier::new("source".to_string(), "target".to_string());
+    carrier.verification_status = OptimizationVerificationStatus::FullyVerified;
+    carrier.equivalence_proofs.push(EquivalenceProof {
+        proof_id: "verified-pass".to_string(),
+        proof_method: ProofMethod::SmtVerification,
+        source_semantics: "source semantics".to_string(),
+        target_semantics: "target semantics".to_string(),
+        equivalence_relation: EquivalenceRelation::ExactEquivalence,
+        proof_obligations: vec![ProofObligation {
+            obligation_id: "verified-obligation".to_string(),
+            obligation_type: ObligationType::SemanticPreservation,
+            premise: "true".to_string(),
+            conclusion: "true".to_string(),
+            proof_sketch: "checked by upstream verifier".to_string(),
+            verification_method: VerificationMethod::FormalLogic,
+        }],
+        verification_result: ProofResult::Verified,
+    });
+
+    let bundle_dir = unique_bundle_dir("verified");
+    let emitted = carrier
+        .emit_fe_claim_019_020_proof_bundles(&bundle_dir)
+        .unwrap();
+    let claim_ids: BTreeSet<_> = emitted
+        .iter()
+        .map(|bundle| bundle.claim_id.as_str())
+        .collect();
+    assert_eq!(claim_ids, BTreeSet::from(["FE-CLAIM-019", "FE-CLAIM-020"]));
+
+    for claim_id in ["FE-CLAIM-019", "FE-CLAIM-020"] {
+        let path = bundle_dir.join(format!("{claim_id}.proof.json"));
+        let body: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(
+            body["schema_version"],
+            "franken-engine.theorem-backed-compiler.proof.v1"
+        );
+        assert_eq!(body["claim_id"], claim_id);
+        assert_eq!(body["track"], "track-g");
+        assert_eq!(body["proof_kind"], "optimization-equivalence-z3");
+        assert_eq!(body["verdict"], "proven");
+        assert_eq!(
+            body["source_module"],
+            "frankenengine_engine::optimization_proof_carriers"
+        );
+        assert_eq!(
+            body["theorem_ids"][0],
+            "optimization-equivalence-verified-pass"
+        );
+        assert!(body["content_hash"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:"));
+    }
 }
 
 /// Test verification artifact export.
@@ -983,25 +1037,27 @@ fn integration_with_previous_validation_infrastructure() {
 
     let proof = &carrier.equivalence_proofs[0];
 
-    // Verify integration references in proof obligations
-    let integration_obligations: Vec<_> = proof
-        .proof_obligations
+    assert_eq!(proof.verification_result, ProofResult::Pending);
+    assert!(carrier.applied_passes[0]
+        .preconditions
         .iter()
-        .filter(|po| {
-            po.premise.contains("G.4")
-                || po.premise.contains("G.5")
-                || po.premise.contains("G.6")
-                || po.premise.contains("G.7")
-                || po.conclusion.contains("validation")
-                || po.conclusion.contains("policy")
-        })
-        .collect();
+        .any(|precondition| precondition.contains("G.4")));
+    assert!(carrier.applied_passes[0]
+        .postconditions
+        .iter()
+        .any(|postcondition| postcondition.contains("G.7")));
 
-    assert!(!integration_obligations.is_empty());
-
-    // Verify that optimization preserves validation properties
     let verification_result = carrier.verify_all_proofs().unwrap();
-    assert!(
-        verification_result.optimization_safety_verified || verification_result.verified_proofs > 0
-    );
+    assert!(!verification_result.optimization_safety_verified);
+    assert_eq!(verification_result.verified_proofs, 0);
+}
+
+fn unique_bundle_dir(label: &str) -> std::path::PathBuf {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!(
+        "franken_engine_optimization_proof_carriers_{label}_{nonce}"
+    ))
 }

@@ -15,12 +15,17 @@
 //! - Register allocation optimization
 //! - Control flow graph optimization
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use serde::{Deserialize, Serialize};
 
 use crate::ir_contract::{Ir1Op, Ir2Op, Ir3Instruction};
-use crate::policy_theorem_engine::{Z3Outcome, invoke_z3};
+use crate::policy_theorem_engine::{
+    invoke_z3, write_proof_bundle, EmittedProofBundle, ProofBundleBody, Z3Outcome,
+};
 
 /// Types of optimization passes supported by proof carriers.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -678,6 +683,52 @@ impl OptimizationProofCarrier {
                 self.verification_status
             )
         })
+    }
+
+    /// Emit Track-G proof bundles for FE-CLAIM-019 and FE-CLAIM-020.
+    ///
+    /// This is deliberately fail-closed: bundles are written only after the
+    /// carrier has a fully verified optimization proof set. The current
+    /// generated obligations are prose, so normal generated carriers will
+    /// return an empty list until the obligation generators and runner-backed
+    /// methods are upgraded to produce real verified evidence.
+    pub fn emit_fe_claim_019_020_proof_bundles(
+        &self,
+        bundle_dir: &Path,
+    ) -> Result<Vec<EmittedProofBundle>, String> {
+        if self.verification_status != OptimizationVerificationStatus::FullyVerified {
+            return Ok(Vec::new());
+        }
+
+        let mut theorem_ids: Vec<String> = self
+            .equivalence_proofs
+            .iter()
+            .filter(|proof| proof.verification_result == ProofResult::Verified)
+            .map(|proof| format!("optimization-equivalence-{}", proof.proof_id))
+            .collect();
+        theorem_ids.sort();
+        theorem_ids.dedup();
+
+        if theorem_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut emitted = Vec::new();
+        for claim_id in ["FE-CLAIM-019", "FE-CLAIM-020"] {
+            let body = ProofBundleBody {
+                schema_version: "franken-engine.theorem-backed-compiler.proof.v1".to_string(),
+                claim_id: claim_id.to_string(),
+                track: "track-g".to_string(),
+                proof_kind: "optimization-equivalence-z3".to_string(),
+                verdict: "proven".to_string(),
+                generated_utc: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+                source_module: "frankenengine_engine::optimization_proof_carriers".to_string(),
+                theorem_ids: theorem_ids.clone(),
+            };
+            emitted.push(write_proof_bundle(&body, bundle_dir)?);
+        }
+
+        Ok(emitted)
     }
 }
 

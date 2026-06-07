@@ -25,6 +25,7 @@ use frankenengine_engine::capability::{CapabilityProfile, RuntimeCapability};
 use frankenengine_engine::deterministic_replay::{NondeterminismTrace, ReplayEngine, ReplayMode};
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
+    OrchestratorResult,
 };
 use frankenengine_engine::fleet_trace_total_order::{
     FleetTraceNode, flatten_to_events, merge_fleet_traces, node_id_from_session,
@@ -61,6 +62,12 @@ use frankenengine_engine::runtime_diagnostics_cli::{
     parse_evidence_severity, render_onboarding_scorecard_markdown,
     render_rollout_decision_artifact_summary, run_preflight_doctor,
 };
+use frankenengine_engine::runtime_explain_bundle::{
+    RUNTIME_EXPLAIN_ORIGIN_ARTIFACT_METADATA_KEY, RUNTIME_EXPLAIN_ORIGIN_SCHEMA_METADATA_KEY,
+    RUNTIME_EXPLAIN_ORIGIN_SURFACE_METADATA_KEY, RuntimeArtifactKind, RuntimeArtifactRef,
+    RuntimeExplainBundle, RuntimeExplainBundleBuilder, RuntimeExplainLink, RuntimeExplainRelation,
+    RuntimeExplainRole, StableArtifactRef,
+};
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::third_party_verifier::{
     BenchmarkClaimBundle, ClaimedBenchmarkOutcome, THIRD_PARTY_VERIFIER_COMPONENT,
@@ -75,6 +82,12 @@ use sha2::{Digest, Sha256};
 
 const FRANKENCTL_SCHEMA_VERSION: &str = "franken-engine.frankenctl.v1";
 const COMPILE_ARTIFACT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.compile-artifact.v1";
+const RUN_REPORT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.run-report.v1";
+const RUN_SOURCE_SCHEMA_VERSION: &str = "franken-engine.frankenctl.run-source.v1";
+const RUN_ACTION_DECISION_SCHEMA_VERSION: &str = "franken-engine.frankenctl.run-action-decision.v1";
+const RUN_POSTERIOR_SCHEMA_VERSION: &str = "franken-engine.frankenctl.run-posterior.v1";
+const RUN_CONTAINMENT_RECEIPT_SCHEMA_VERSION: &str =
+    "franken-engine.frankenctl.run-containment-receipt.v1";
 const REACT_CLI_CONTRACT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.react-cli-contract.v1";
 const REACT_CLI_REPORT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.react-cli-report.v1";
 const REACT_DOCTOR_REPORT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.react-doctor.v1";
@@ -113,6 +126,7 @@ enum CommandSpec {
     HelpTopic(HelpTopic),
     Compile(CompileArgs),
     Run(RunArgs),
+    Explain(ExplainArgs),
     Doctor(Box<DoctorArgs>),
     Verify(VerifyArgs),
     Benchmark(BenchmarkArgs),
@@ -130,6 +144,7 @@ enum CommandSpec {
 enum HelpTopic {
     Compile,
     Run,
+    Explain,
     Doctor,
     Verify,
     VerifyCompileArtifact,
@@ -159,6 +174,7 @@ impl HelpTopic {
         match self {
             Self::Compile => compile_usage(),
             Self::Run => run_usage(),
+            Self::Explain => explain_usage(),
             Self::Doctor => doctor_usage(),
             Self::Verify => verify_usage(),
             Self::VerifyCompileArtifact => verify_compile_artifact_usage(),
@@ -201,6 +217,21 @@ struct RunArgs {
     input: PathBuf,
     extension_id: String,
     parse_goal: ParseGoal,
+    out: Option<PathBuf>,
+    explain: bool,
+    explain_out: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExplainOutputFormat {
+    Summary,
+    Json,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExplainArgs {
+    input: PathBuf,
+    format: ExplainOutputFormat,
     out: Option<PathBuf>,
 }
 
@@ -614,6 +645,8 @@ struct RunCommandOutput {
     parse_goal: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     report_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    explain_bundle_path: Option<String>,
     source_ingestion: SourceIngestionSummary,
     lane: String,
     lane_reason: String,
@@ -1264,6 +1297,7 @@ fn run(raw_args: Vec<String>) -> Result<i32, String> {
         }
         CommandSpec::Compile(args) => execute_compile(args),
         CommandSpec::Run(args) => execute_run(args),
+        CommandSpec::Explain(args) => execute_explain(args),
         CommandSpec::Doctor(args) => execute_doctor(*args),
         CommandSpec::Verify(args) => execute_verify(args),
         CommandSpec::Benchmark(args) => execute_benchmark(args),
@@ -1297,6 +1331,7 @@ fn parse_command(args: &[String]) -> Result<CommandSpec, String> {
         "version" => Ok(CommandSpec::Version),
         "compile" => parse_compile_command(&args[1..]),
         "run" => parse_run_command(&args[1..]),
+        "explain" => parse_explain_command(&args[1..]),
         "doctor" => parse_doctor_command(&args[1..]),
         "verify" => parse_verify_command(&args[1..]),
         "benchmark" => parse_benchmark_command(&args[1..]),
@@ -1320,6 +1355,7 @@ fn parse_help_command(args: &[String]) -> Result<CommandSpec, String> {
     match args[0].as_str() {
         "compile" => parse_leaf_help_topic("compile", HelpTopic::Compile, &args[1..]),
         "run" => parse_leaf_help_topic("run", HelpTopic::Run, &args[1..]),
+        "explain" => parse_leaf_help_topic("explain", HelpTopic::Explain, &args[1..]),
         "doctor" => parse_leaf_help_topic("doctor", HelpTopic::Doctor, &args[1..]),
         "verify" => parse_verify_help_command(&args[1..]),
         "benchmark" => parse_benchmark_help_command(&args[1..]),
@@ -1332,7 +1368,7 @@ fn parse_help_command(args: &[String]) -> Result<CommandSpec, String> {
         "orchestrate" => parse_leaf_help_topic("orchestrate", HelpTopic::Orchestrate, &args[1..]),
         "runtime" => parse_leaf_help_topic("runtime", HelpTopic::Runtime, &args[1..]),
         other => Err(format!(
-            "unknown help topic `{other}` (expected compile|run|doctor|verify|benchmark|replay|react|gates|reports|test|synth|orchestrate|runtime)"
+            "unknown help topic `{other}` (expected compile|run|explain|doctor|verify|benchmark|replay|react|gates|reports|test|synth|orchestrate|runtime)"
         )),
     }
 }
@@ -1422,7 +1458,6 @@ fn parse_compile_command(args: &[String]) -> Result<CommandSpec, String> {
     }
 
     let mut input: Option<PathBuf> = None;
-    let mut artifact_dir: Option<PathBuf> = None;
     let mut out: Option<PathBuf> = None;
     let mut goal = ParseGoal::Script;
     let mut trace_id = "trace-frankenctl-compile".to_string();
@@ -1473,6 +1508,8 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut extension_id: Option<String> = None;
     let mut goal = ParseGoal::Script;
     let mut out: Option<PathBuf> = None;
+    let mut explain = false;
+    let mut explain_out: Option<PathBuf> = None;
 
     let mut index = 0usize;
     while index < args.len() {
@@ -1481,6 +1518,19 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
             "--extension-id" => extension_id = Some(next_arg(args, &mut index, "--extension-id")?),
             "--goal" => goal = parse_goal(&next_arg(args, &mut index, "--goal")?)?,
             "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            "--explain" => {
+                explain = true;
+                if let Some(candidate) = args.get(index + 1)
+                    && !candidate.starts_with("--")
+                {
+                    index += 1;
+                    explain_out = Some(PathBuf::from(candidate.as_str()));
+                }
+            }
+            "--explain-out" => {
+                explain = true;
+                explain_out = Some(PathBuf::from(next_arg(args, &mut index, "--explain-out")?));
+            }
             flag => return Err(format!("unknown run flag `{flag}`")),
         }
         index += 1;
@@ -1494,6 +1544,41 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
         input,
         extension_id,
         parse_goal: goal,
+        out,
+        explain,
+        explain_out,
+    }))
+}
+
+fn parse_explain_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Explain));
+    }
+
+    let mut input: Option<PathBuf> = None;
+    let mut format = ExplainOutputFormat::Summary;
+    let mut out: Option<PathBuf> = None;
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--input" => input = Some(PathBuf::from(next_arg(args, &mut index, "--input")?)),
+            "--format" => {
+                format = parse_explain_output_format(&next_arg(args, &mut index, "--format")?)?
+            }
+            "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            value if !value.starts_with("--") && input.is_none() => {
+                input = Some(PathBuf::from(value));
+            }
+            flag => return Err(format!("unknown explain flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    Ok(CommandSpec::Explain(ExplainArgs {
+        input: input
+            .ok_or_else(|| "explain requires <bundle.json> or --input <bundle.json>".to_string())?,
+        format,
         out,
     }))
 }
@@ -2529,6 +2614,7 @@ fn execute_compile(args: CompileArgs) -> Result<i32, String> {
 fn execute_run(args: RunArgs) -> Result<i32, String> {
     let source = fs::read_to_string(&args.input)
         .map_err(|error| format!("failed to read source `{}`: {error}", args.input.display()))?;
+    let source_hash = ContentHash::compute(source.as_bytes());
 
     let source_label = args.input.display().to_string();
     let capabilities = run_cli_capabilities(args.parse_goal);
@@ -2549,26 +2635,36 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     let result = orchestrator
         .execute(&package)
         .map_err(|error| format_run_error(&args.input, &error))?;
+    let explain_bundle_path = resolve_run_explain_path(&args);
 
     let output = RunCommandOutput {
         schema_version: FRANKENCTL_SCHEMA_VERSION.to_string(),
-        extension_id: result.extension_id,
-        trace_id: result.trace_id,
-        decision_id: result.decision_id,
+        extension_id: result.extension_id.clone(),
+        trace_id: result.trace_id.clone(),
+        decision_id: result.decision_id.clone(),
         policy_id,
         parse_goal: args.parse_goal.as_str().to_string(),
         report_path: args.out.as_ref().map(|path| path.display().to_string()),
-        source_ingestion: result.source_ingestion,
+        explain_bundle_path: explain_bundle_path
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        source_ingestion: result.source_ingestion.clone(),
         lane: result.lane.to_string(),
         lane_reason: result.lane_reason.to_string(),
         containment_action: result.containment_action.to_string(),
-        execution_value: result.execution_value,
+        execution_value: result.execution_value.clone(),
         expected_loss_millionths: result.expected_loss_millionths,
         instructions_executed: result.instructions_executed,
         evidence_entries: result.evidence_entries.len(),
-        console_output: result.console_output,
+        console_output: result.console_output.clone(),
         observability_mode: default_capture_observability_mode(),
     };
+
+    let output_bytes = encode_json_value(&output, "frankenctl run output")?;
+    if let Some(path) = explain_bundle_path.as_ref() {
+        let bundle = build_run_explain_bundle(&args, &result, &output, source_hash, &output_bytes)?;
+        write_json_file(path, &bundle)?;
+    }
 
     if let Some(path) = args.out.as_ref() {
         write_json_file(path, &output)?;
@@ -2576,6 +2672,291 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     print_json(&output)?;
 
     Ok(0)
+}
+
+fn resolve_run_explain_path(args: &RunArgs) -> Option<PathBuf> {
+    if !args.explain {
+        return None;
+    }
+    if let Some(path) = &args.explain_out {
+        return Some(path.clone());
+    }
+    if let Some(path) = &args.out {
+        return Some(path.with_extension("explain.json"));
+    }
+    Some(args.input.with_extension("explain.json"))
+}
+
+fn build_run_explain_bundle(
+    args: &RunArgs,
+    result: &OrchestratorResult,
+    output: &RunCommandOutput,
+    source_hash: ContentHash,
+    output_bytes: &[u8],
+) -> Result<RuntimeExplainBundle, String> {
+    let mut builder = RuntimeExplainBundleBuilder::new(output.trace_id.clone())
+        .with_source_revision(env!("CARGO_PKG_VERSION"))
+        .with_metadata("command", "frankenctl run")
+        .with_metadata("extension_id", output.extension_id.clone())
+        .with_metadata("parse_goal", output.parse_goal.clone());
+
+    let source_ref = RuntimeArtifactRef::new(
+        "source",
+        RuntimeArtifactKind::Other {
+            schema_id: RUN_SOURCE_SCHEMA_VERSION.to_string(),
+        },
+        source_hash,
+        StableArtifactRef::new("source_file", args.input.display().to_string()),
+    )
+    .with_schema_id(RUN_SOURCE_SCHEMA_VERSION)
+    .with_producer("frankenctl")
+    .with_metadata(RUNTIME_EXPLAIN_ORIGIN_SURFACE_METADATA_KEY, "frankenctl")
+    .with_metadata(
+        RUNTIME_EXPLAIN_ORIGIN_SCHEMA_METADATA_KEY,
+        RUN_SOURCE_SCHEMA_VERSION,
+    )
+    .with_metadata(RUNTIME_EXPLAIN_ORIGIN_ARTIFACT_METADATA_KEY, "source_file");
+    builder = builder
+        .add_artifact(source_ref)
+        .map_err(|error| error.to_string())?;
+
+    let report_stable_key = output
+        .report_path
+        .clone()
+        .unwrap_or_else(|| "stdout".to_string());
+    let run_report_ref = RuntimeArtifactRef::new(
+        "run-report",
+        RuntimeArtifactKind::Other {
+            schema_id: RUN_REPORT_SCHEMA_VERSION.to_string(),
+        },
+        ContentHash::compute(output_bytes),
+        StableArtifactRef::new("frankenctl_run", report_stable_key)
+            .with_revision(output.trace_id.clone()),
+    )
+    .with_schema_id(RUN_REPORT_SCHEMA_VERSION)
+    .with_producer("frankenctl")
+    .with_roles([
+        RuntimeExplainRole::ChosenAction,
+        RuntimeExplainRole::ExpectedLoss,
+        RuntimeExplainRole::ReplayStatus,
+    ])
+    .with_metadata(
+        RUNTIME_EXPLAIN_ORIGIN_SURFACE_METADATA_KEY,
+        "frankenctl_run",
+    )
+    .with_metadata(
+        RUNTIME_EXPLAIN_ORIGIN_SCHEMA_METADATA_KEY,
+        RUN_REPORT_SCHEMA_VERSION,
+    )
+    .with_metadata(
+        RUNTIME_EXPLAIN_ORIGIN_ARTIFACT_METADATA_KEY,
+        "RunCommandOutput",
+    );
+    builder = builder
+        .add_artifact(run_report_ref)
+        .map_err(|error| error.to_string())?;
+
+    let action_hash = content_hash_for_json(&result.action_decision, "run action decision")?;
+    let action_ref = RuntimeArtifactRef::new(
+        "action-decision",
+        RuntimeArtifactKind::ChosenAction,
+        action_hash,
+        StableArtifactRef::new("execution_orchestrator", result.decision_id.clone())
+            .with_revision(result.trace_id.clone()),
+    )
+    .with_schema_id(RUN_ACTION_DECISION_SCHEMA_VERSION)
+    .with_producer("execution_orchestrator")
+    .with_roles([
+        RuntimeExplainRole::ChosenAction,
+        RuntimeExplainRole::ExpectedLoss,
+    ])
+    .with_metadata(
+        RUNTIME_EXPLAIN_ORIGIN_SURFACE_METADATA_KEY,
+        "execution_orchestrator",
+    )
+    .with_metadata(
+        RUNTIME_EXPLAIN_ORIGIN_SCHEMA_METADATA_KEY,
+        RUN_ACTION_DECISION_SCHEMA_VERSION,
+    )
+    .with_metadata(
+        RUNTIME_EXPLAIN_ORIGIN_ARTIFACT_METADATA_KEY,
+        "ActionDecision",
+    );
+    builder = builder
+        .add_artifact(action_ref)
+        .map_err(|error| error.to_string())?;
+
+    let posterior_hash = content_hash_for_json(&result.posterior, "run posterior")?;
+    let posterior_ref = RuntimeArtifactRef::new(
+        "guardplane-posterior",
+        RuntimeArtifactKind::GuardplanePosterior,
+        posterior_hash,
+        StableArtifactRef::new("guardplane_adapter", result.decision_id.clone())
+            .with_revision(result.trace_id.clone()),
+    )
+    .with_schema_id(RUN_POSTERIOR_SCHEMA_VERSION)
+    .with_producer("guardplane_adapter")
+    .with_role(RuntimeExplainRole::GuardplanePosterior)
+    .with_metadata(
+        RUNTIME_EXPLAIN_ORIGIN_SURFACE_METADATA_KEY,
+        "guardplane_adapter",
+    )
+    .with_metadata(
+        RUNTIME_EXPLAIN_ORIGIN_SCHEMA_METADATA_KEY,
+        RUN_POSTERIOR_SCHEMA_VERSION,
+    )
+    .with_metadata(RUNTIME_EXPLAIN_ORIGIN_ARTIFACT_METADATA_KEY, "Posterior");
+    builder = builder
+        .add_artifact(posterior_ref)
+        .map_err(|error| error.to_string())?;
+
+    builder = builder
+        .add_link(RuntimeExplainLink::new(
+            "source-to-action",
+            "source",
+            "action-decision",
+            RuntimeExplainRelation::DerivedFrom,
+        ))
+        .add_link(RuntimeExplainLink::new(
+            "posterior-to-action",
+            "guardplane-posterior",
+            "action-decision",
+            RuntimeExplainRelation::SelectsAction,
+        ))
+        .add_link(RuntimeExplainLink::new(
+            "action-to-run-report",
+            "action-decision",
+            "run-report",
+            RuntimeExplainRelation::ObservedDuring,
+        ));
+
+    for (index, entry) in result.evidence_entries.iter().enumerate() {
+        let artifact_id = format!("evidence-{index}");
+        let evidence_ref = RuntimeArtifactRef::new(
+            artifact_id.clone(),
+            RuntimeArtifactKind::EvidenceEntry,
+            content_hash_for_json(entry, "run evidence entry")?,
+            StableArtifactRef::new("evidence_ledger", entry.entry_id.clone())
+                .with_revision(result.trace_id.clone()),
+        )
+        .with_producer("evidence_ledger")
+        .with_role(RuntimeExplainRole::EvidenceEntry)
+        .with_logical_epoch(entry.epoch_id.as_u64())
+        .with_metadata(
+            RUNTIME_EXPLAIN_ORIGIN_SURFACE_METADATA_KEY,
+            "evidence_ledger",
+        )
+        .with_metadata(RUNTIME_EXPLAIN_ORIGIN_SCHEMA_METADATA_KEY, "evidence_entry")
+        .with_metadata(
+            RUNTIME_EXPLAIN_ORIGIN_ARTIFACT_METADATA_KEY,
+            "EvidenceEntry",
+        );
+        builder = builder
+            .add_artifact(evidence_ref)
+            .map_err(|error| error.to_string())?
+            .add_link(RuntimeExplainLink::new(
+                format!("action-to-{artifact_id}"),
+                "action-decision",
+                artifact_id,
+                RuntimeExplainRelation::EmitsEvidence,
+            ));
+    }
+
+    if let Some(receipt) = &result.containment_receipt {
+        let containment_ref = RuntimeArtifactRef::new(
+            "containment-receipt",
+            RuntimeArtifactKind::ContainmentReceipt,
+            content_hash_for_json(receipt, "run containment receipt")?,
+            StableArtifactRef::new("containment_executor", result.decision_id.clone())
+                .with_revision(result.trace_id.clone()),
+        )
+        .with_schema_id(RUN_CONTAINMENT_RECEIPT_SCHEMA_VERSION)
+        .with_producer("containment_executor")
+        .with_role(RuntimeExplainRole::ContainmentReceipt)
+        .with_metadata(
+            RUNTIME_EXPLAIN_ORIGIN_SURFACE_METADATA_KEY,
+            "containment_executor",
+        )
+        .with_metadata(
+            RUNTIME_EXPLAIN_ORIGIN_SCHEMA_METADATA_KEY,
+            RUN_CONTAINMENT_RECEIPT_SCHEMA_VERSION,
+        )
+        .with_metadata(
+            RUNTIME_EXPLAIN_ORIGIN_ARTIFACT_METADATA_KEY,
+            "ContainmentReceipt",
+        );
+        builder = builder
+            .add_artifact(containment_ref)
+            .map_err(|error| error.to_string())?
+            .add_link(RuntimeExplainLink::new(
+                "action-to-containment",
+                "action-decision",
+                "containment-receipt",
+                RuntimeExplainRelation::ProducesContainment,
+            ));
+    }
+
+    Ok(builder.build())
+}
+
+fn content_hash_for_json<T: Serialize>(value: &T, target: &str) -> Result<ContentHash, String> {
+    serde_json::to_vec(value)
+        .map(|bytes| ContentHash::compute(&bytes))
+        .map_err(|error| format!("failed to encode JSON for {target}: {error}"))
+}
+
+fn execute_explain(args: ExplainArgs) -> Result<i32, String> {
+    let bundle: RuntimeExplainBundle = load_json_file(&args.input)?;
+    match args.format {
+        ExplainOutputFormat::Json => {
+            if let Some(path) = args.out.as_ref() {
+                write_json_file(path, &bundle)?;
+            } else {
+                print_json(&bundle)?;
+            }
+        }
+        ExplainOutputFormat::Summary => {
+            let summary = render_runtime_explain_summary(&bundle, &args.input);
+            if let Some(path) = args.out.as_ref() {
+                write_bytes_file(path, summary.as_bytes())?;
+            } else {
+                println!("{summary}");
+            }
+        }
+    }
+    Ok(0)
+}
+
+fn render_runtime_explain_summary(bundle: &RuntimeExplainBundle, input: &Path) -> String {
+    let mut kind_counts = BTreeMap::<String, usize>::new();
+    for artifact in bundle.artifacts.values() {
+        *kind_counts.entry(artifact.kind.to_string()).or_default() += 1;
+    }
+    let kind_summary = kind_counts
+        .iter()
+        .map(|(kind, count)| format!("{kind}={count}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    [
+        "runtime explain bundle:".to_string(),
+        format!("  path: {}", input.display()),
+        format!("  run_id: {}", bundle.run_id),
+        format!("  schema_version: {}", bundle.schema_version),
+        format!("  content_hash: {}", bundle.content_hash()),
+        format!("  artifacts: {}", bundle.artifacts.len()),
+        format!("  links: {}", bundle.links.len()),
+        format!(
+            "  required_roles: {}",
+            bundle
+                .required_roles
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        format!("  artifact_kinds: {kind_summary}"),
+    ]
+    .join("\n")
 }
 
 fn format_run_error(input: &Path, error: &OrchestratorError) -> String {
@@ -5805,6 +6186,16 @@ fn parse_replay_mode(value: &str) -> Result<ReplayMode, String> {
     }
 }
 
+fn parse_explain_output_format(value: &str) -> Result<ExplainOutputFormat, String> {
+    match value {
+        "summary" => Ok(ExplainOutputFormat::Summary),
+        "json" => Ok(ExplainOutputFormat::Json),
+        other => Err(format!(
+            "invalid explain format `{other}` (expected summary|json)"
+        )),
+    }
+}
+
 fn replay_mode_name(mode: ReplayMode) -> &'static str {
     match mode {
         ReplayMode::Strict => "strict",
@@ -6158,6 +6549,8 @@ fn usage() -> String {
         "  frankenctl compile --input <source.js> --out <artifact.json> [--goal script|module]",
         "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>]",
         "  frankenctl run --input <source.js> --extension-id <id> [--goal script|module] [--out <report.json>]",
+        "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
+        "  frankenctl explain <bundle.json> [--format summary|json] [--out <path>]",
         "  frankenctl doctor (--input <runtime_input.json> | --artifact-dir <artifacts/<gate>/<ts>>)",
         "      [--summary] [--out-dir <path>]",
         "      [--workload-id <id>] [--package-name <name>] [--target-platform <value>]...",
@@ -6206,6 +6599,7 @@ fn command_label(command: &CommandSpec) -> &'static str {
         CommandSpec::HelpTopic(_) => "help",
         CommandSpec::Compile(_) => "compile",
         CommandSpec::Run(_) => "run",
+        CommandSpec::Explain(_) => "explain",
         CommandSpec::Doctor(_) => "doctor",
         CommandSpec::Verify(_) => "verify",
         CommandSpec::Benchmark(_) => "benchmark",
@@ -6245,6 +6639,7 @@ fn command_remediation(command: &str) -> &'static str {
     match command {
         "compile" => "Verify --input/--out paths and parse goal, then rerun `frankenctl compile`.",
         "run" => "Verify extension source path and `--extension-id`, then rerun `frankenctl run`.",
+        "explain" => "Verify the explain bundle path, then rerun `frankenctl explain`.",
         "doctor" => {
             "Verify runtime diagnostics input, optional signal paths, and then rerun `frankenctl doctor`."
         }
@@ -6286,6 +6681,16 @@ fn run_usage() -> String {
     [
         "run usage:",
         "  frankenctl run --input <source.js> --extension-id <id> [--goal script|module] [--out <report.json>]",
+        "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
+    ]
+    .join("\n")
+}
+
+fn explain_usage() -> String {
+    [
+        "explain usage:",
+        "  frankenctl explain <bundle.json> [--format summary|json] [--out <path>]",
+        "  frankenctl explain --input <bundle.json> [--format summary|json] [--out <path>]",
     ]
     .join("\n")
 }
@@ -6649,6 +7054,8 @@ mod tests {
                 assert_eq!(spec.extension_id, "ext-demo");
                 assert_eq!(spec.parse_goal, ParseGoal::Module);
                 assert_eq!(spec.out, Some(PathBuf::from("run.json")));
+                assert!(!spec.explain);
+                assert_eq!(spec.explain_out, None);
             }
             other => panic!("expected run command, got {other:?}"),
         }
@@ -6661,6 +7068,48 @@ mod tests {
         let error = parse_command(&missing_extension_id)
             .expect_err("run without extension-id should fail closed");
         assert_eq!(error, "run requires --extension-id <id>");
+    }
+
+    #[test]
+    fn parse_run_command_accepts_explain_bundle_path() {
+        let args = vec![
+            "run".to_string(),
+            "--input".to_string(),
+            "demo.js".to_string(),
+            "--extension-id".to_string(),
+            "ext-demo".to_string(),
+            "--explain".to_string(),
+            "explain.json".to_string(),
+        ];
+        let parsed = parse_command(&args).expect("run --explain command should parse");
+        match parsed {
+            CommandSpec::Run(spec) => {
+                assert!(spec.explain);
+                assert_eq!(spec.explain_out, Some(PathBuf::from("explain.json")));
+            }
+            other => panic!("expected run command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_explain_command_accepts_positional_input_and_json_format() {
+        let args = vec![
+            "explain".to_string(),
+            "bundle.json".to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+            "--out".to_string(),
+            "rendered.json".to_string(),
+        ];
+        let parsed = parse_command(&args).expect("explain command should parse");
+        match parsed {
+            CommandSpec::Explain(spec) => {
+                assert_eq!(spec.input, PathBuf::from("bundle.json"));
+                assert_eq!(spec.format, ExplainOutputFormat::Json);
+                assert_eq!(spec.out, Some(PathBuf::from("rendered.json")));
+            }
+            other => panic!("expected explain command, got {other:?}"),
+        }
     }
 
     #[test]

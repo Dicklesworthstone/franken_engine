@@ -1623,6 +1623,112 @@ fn frankenctl_run_normalizes_inline_typescript_input() {
 }
 
 #[test]
+fn frankenctl_run_explain_writes_bundle_and_explain_renders_it() {
+    let source_path = temp_path("frankenctl_run_explain_source", "js");
+    let report_path = temp_path("frankenctl_run_explain_report", "json");
+    let bundle_path = temp_path("frankenctl_run_explain_bundle", "json");
+    let rendered_json_path = temp_path("frankenctl_run_explain_rendered", "json");
+    write_source(&source_path, "let answer = 40 + 2; answer;\n");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "run",
+            "--input",
+            source_path
+                .to_str()
+                .expect("source path should be valid utf8"),
+            "--extension-id",
+            "ext-cli-run-explain",
+            "--out",
+            report_path
+                .to_str()
+                .expect("report path should be valid utf8"),
+            "--explain",
+            bundle_path
+                .to_str()
+                .expect("bundle path should be valid utf8"),
+        ])
+        .output()
+        .expect("run command should execute");
+
+    assert!(
+        output.status.success(),
+        "run --explain failed with stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout_json = parse_stdout_json(&output);
+    assert_eq!(
+        stdout_json["explain_bundle_path"].as_str(),
+        bundle_path.to_str()
+    );
+
+    let bundle_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&bundle_path).expect("explain bundle should be written"))
+            .expect("explain bundle should parse as json");
+    assert_eq!(bundle_json["run_id"], stdout_json["trace_id"]);
+    assert!(
+        bundle_json["artifacts"].get("run-report").is_some(),
+        "run-report artifact should be indexed"
+    );
+    assert!(
+        bundle_json["artifacts"].get("action-decision").is_some(),
+        "action-decision artifact should be indexed"
+    );
+    assert!(
+        bundle_json["links"]
+            .as_array()
+            .is_some_and(|links| links.len() >= 3),
+        "explain bundle should include navigation links"
+    );
+
+    let summary_output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "explain",
+            bundle_path
+                .to_str()
+                .expect("bundle path should be valid utf8"),
+        ])
+        .output()
+        .expect("explain command should execute");
+    assert!(
+        summary_output.status.success(),
+        "explain summary failed with stderr={}",
+        String::from_utf8_lossy(&summary_output.stderr)
+    );
+    let summary = String::from_utf8(summary_output.stdout).expect("summary should be utf8");
+    assert!(summary.contains("runtime explain bundle:"));
+    assert!(summary.contains("content_hash:"));
+    assert!(summary.contains("artifacts:"));
+
+    let json_output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "explain",
+            bundle_path
+                .to_str()
+                .expect("bundle path should be valid utf8"),
+            "--format",
+            "json",
+            "--out",
+            rendered_json_path
+                .to_str()
+                .expect("rendered json path should be valid utf8"),
+        ])
+        .output()
+        .expect("explain json command should execute");
+    assert!(
+        json_output.status.success(),
+        "explain json failed with stderr={}",
+        String::from_utf8_lossy(&json_output.stderr)
+    );
+    let rendered_json: serde_json::Value = serde_json::from_slice(
+        &fs::read(&rendered_json_path).expect("rendered bundle should be written"),
+    )
+    .expect("rendered bundle should parse as json");
+    assert_eq!(rendered_json, bundle_json);
+}
+
+#[test]
 fn frankenctl_run_preserves_exception_completion_values() {
     for (specimen_id, source, expected_execution_value) in [
         (

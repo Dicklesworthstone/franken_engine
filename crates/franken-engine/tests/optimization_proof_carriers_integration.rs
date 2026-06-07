@@ -5,7 +5,7 @@
 //! Tests formal verification that optimization transformations preserve semantic
 //! correctness while generating proof certificates extending G.4-G.7 infrastructure.
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, process::Command};
 
 use frankenengine_engine::optimization_proof_carriers::{
     CertificateType, EquivalenceProof, EquivalenceRelation, IrRegion, ObligationType,
@@ -925,6 +925,84 @@ fn fe_claim_019_020_bundle_emission_writes_canonical_bundles() {
     }
 }
 
+#[test]
+fn model_checking_obligation_verifies_bounded_qf_lia_when_z3_available() {
+    if !z3_is_available() {
+        eprintln!(
+            "z3 not on PATH - skipping model_checking_obligation_verifies_bounded_qf_lia_when_z3_available"
+        );
+        return;
+    }
+
+    let mut carrier = OptimizationProofCarrier::new("source".to_string(), "target".to_string());
+    carrier.equivalence_proofs.push(EquivalenceProof {
+        proof_id: "bounded_qf_lia_model".to_string(),
+        proof_method: ProofMethod::SmtVerification,
+        source_semantics: "bounded symbolic source state".to_string(),
+        target_semantics: "bounded symbolic target state".to_string(),
+        equivalence_relation: EquivalenceRelation::ExactEquivalence,
+        proof_obligations: vec![ProofObligation {
+            obligation_id: "bounded_commutativity".to_string(),
+            obligation_type: ObligationType::SemanticPreservation,
+            premise: "(declare-const x Int)\n(assert (and (<= 0 x) (<= x 4)))".to_string(),
+            conclusion: "(= (+ x 1) (+ 1 x))".to_string(),
+            proof_sketch: "QF_LIA bounded counterexample query".to_string(),
+            verification_method: VerificationMethod::ModelChecking,
+            sample_inputs: Vec::new(),
+        }],
+        verification_result: ProofResult::Pending,
+    });
+
+    let result = carrier.verify_all_proofs().unwrap();
+
+    assert_eq!(result.total_proofs, 1);
+    assert_eq!(result.verified_proofs, 1);
+    assert_eq!(result.failed_proofs, 0);
+    assert_eq!(
+        carrier.verification_status,
+        OptimizationVerificationStatus::FullyVerified
+    );
+}
+
+#[test]
+fn model_checking_obligation_rejects_bounded_counterexample_when_z3_available() {
+    if !z3_is_available() {
+        eprintln!(
+            "z3 not on PATH - skipping model_checking_obligation_rejects_bounded_counterexample_when_z3_available"
+        );
+        return;
+    }
+
+    let mut carrier = OptimizationProofCarrier::new("source".to_string(), "target".to_string());
+    carrier.equivalence_proofs.push(EquivalenceProof {
+        proof_id: "bounded_qf_lia_counterexample".to_string(),
+        proof_method: ProofMethod::SmtVerification,
+        source_semantics: "bounded symbolic source state".to_string(),
+        target_semantics: "bounded symbolic target state".to_string(),
+        equivalence_relation: EquivalenceRelation::ExactEquivalence,
+        proof_obligations: vec![ProofObligation {
+            obligation_id: "bounded_bad_equation".to_string(),
+            obligation_type: ObligationType::SemanticPreservation,
+            premise: "(declare-const x Int)\n(assert (and (<= 0 x) (<= x 4)))".to_string(),
+            conclusion: "(= (+ x 1) x)".to_string(),
+            proof_sketch: "QF_LIA bounded counterexample query".to_string(),
+            verification_method: VerificationMethod::ModelChecking,
+            sample_inputs: Vec::new(),
+        }],
+        verification_result: ProofResult::Pending,
+    });
+
+    let result = carrier.verify_all_proofs().unwrap();
+
+    assert_eq!(result.total_proofs, 1);
+    assert_eq!(result.verified_proofs, 0);
+    assert_eq!(result.failed_proofs, 1);
+    assert_eq!(
+        carrier.verification_status,
+        OptimizationVerificationStatus::VerificationFailed
+    );
+}
+
 /// Test verification artifact export.
 #[test]
 fn verification_artifact_export() {
@@ -1146,4 +1224,12 @@ fn unique_bundle_dir(label: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!(
         "franken_engine_optimization_proof_carriers_{label}_{nonce}"
     ))
+}
+
+fn z3_is_available() -> bool {
+    Command::new("z3")
+        .arg("-h")
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }

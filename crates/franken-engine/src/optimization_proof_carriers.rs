@@ -575,20 +575,18 @@ impl OptimizationProofCarrier {
     /// passed in. The unconditional-Verified stub is replaced here with a
     /// fail-closed router:
     ///
-    /// - `FormalLogic` / `TheoremProving` / `ModelChecking` /
-    ///   `SymbolicExecution` route through Z3 (`policy_theorem_engine::invoke_z3`,
-    ///   exposed by bd-cixqu.7.17). The premise and conclusion are taken to be
-    ///   SMT-LIB-2 formula fragments; the verifier asserts
-    ///   `(not (=> premise conclusion))` and accepts `unsat` (the universal
-    ///   theorem `P ⇒ C` holds) as `Verified`. A `sat` result is a real
-    ///   counterexample → `Failed`. `unknown` / parse errors / Z3 absent →
-    ///   `Failed` (no fabricated Verified). This is the only path that can
-    ///   today return `Verified`, and only when the obligation's premise and
-    ///   conclusion are real SMT-LIB shapes — the optimization-pass obligation
-    ///   generators (e.g. dead-code elimination) currently emit PROSE
-    ///   premises, so they fail closed; that's the correct signal that
-    ///   FE-CLAIM-019 / FE-CLAIM-020 stay `hypothesis` in the matrix until
-    ///   the obligation generators are extended to emit SMT-LIB formulas.
+    /// - `FormalLogic` / `TheoremProving` route through the existing Z3
+    ///   implication verifier (`policy_theorem_engine::invoke_z3`, exposed by
+    ///   bd-cixqu.7.17). The premise and conclusion are taken to be SMT-LIB-2
+    ///   formula fragments; the verifier asserts `(not (=> premise
+    ///   conclusion))` and accepts `unsat` as `Verified`.
+    /// - `ModelChecking` / `SymbolicExecution` route through a bounded Z3 script
+    ///   verifier. The premise must be SMT-LIB setup/assertion commands that
+    ///   encode the finite model or symbolic pre-state; the conclusion must be
+    ///   an SMT-LIB formula. The verifier asserts the negated conclusion under
+    ///   those assumptions and accepts only `unsat`. Generated prose premises
+    ///   are malformed SMT-LIB and fail closed, which keeps FE-CLAIM-019 /
+    ///   FE-CLAIM-020 in `hypothesis` until generators emit real obligations.
     /// - `DifferentialTesting` / `PropertyTesting` route through a bounded
     ///   deterministic sample runner. The runner executes `source_ir` and
     ///   `target_ir` under every explicit sample input attached to the
@@ -604,12 +602,12 @@ impl OptimizationProofCarrier {
             return Ok(ProofResult::Failed);
         }
         match obligation.verification_method {
-            VerificationMethod::FormalLogic
-            | VerificationMethod::TheoremProving
-            | VerificationMethod::ModelChecking
-            | VerificationMethod::SymbolicExecution => {
+            VerificationMethod::FormalLogic | VerificationMethod::TheoremProving => {
                 Ok(verify_via_z3(&obligation.premise, &obligation.conclusion))
             }
+            VerificationMethod::ModelChecking | VerificationMethod::SymbolicExecution => Ok(
+                verify_via_bounded_z3_model(&obligation.premise, &obligation.conclusion),
+            ),
             VerificationMethod::PropertyTesting | VerificationMethod::DifferentialTesting => {
                 Ok(verify_with_sample_differential_runner(
                     &self.source_ir,
@@ -791,6 +789,37 @@ fn verify_via_z3(premise: &str, conclusion: &str) -> ProofResult {
          (check-sat)\n\
          (exit)\n"
     );
+    match invoke_z3(&smt, Z3_VERIFY_TIMEOUT_SECONDS) {
+        Ok(Z3Outcome::Unsat) => ProofResult::Verified,
+        Ok(Z3Outcome::Sat { .. }) | Ok(Z3Outcome::Unknown { .. }) => ProofResult::Failed,
+        Err(_) => ProofResult::Failed,
+    }
+}
+
+/// Verify a bounded model-checking or symbolic-execution obligation using Z3.
+///
+/// `premise` is an SMT-LIB command block, normally declarations plus bounded
+/// assumptions such as `(assert (and (<= 0 x) (<= x 4)))`. `conclusion` is an
+/// SMT-LIB formula. The query searches for a counterexample by asserting
+/// `(not conclusion)` under the premise block; `unsat` means no bounded
+/// counterexample exists. This deliberately does not try to infer declarations
+/// or translate prose into formulas.
+fn verify_via_bounded_z3_model(premise: &str, conclusion: &str) -> ProofResult {
+    let premise = premise.trim();
+    let conclusion = conclusion.trim();
+    if premise.is_empty() || conclusion.is_empty() {
+        return ProofResult::Failed;
+    }
+
+    let mut smt = String::from("(set-logic QF_LIA)\n");
+    smt.push_str(premise);
+    if !premise.ends_with('\n') {
+        smt.push('\n');
+    }
+    smt.push_str("(assert (not ");
+    smt.push_str(conclusion);
+    smt.push_str("))\n(check-sat)\n(exit)\n");
+
     match invoke_z3(&smt, Z3_VERIFY_TIMEOUT_SECONDS) {
         Ok(Z3Outcome::Unsat) => ProofResult::Verified,
         Ok(Z3Outcome::Sat { .. }) | Ok(Z3Outcome::Unknown { .. }) => ProofResult::Failed,
@@ -1710,6 +1739,45 @@ mod tests {
         // must fail closed. `(declare-const p Bool)` would make `p ⇒ p` a
         // tautology; instead use a non-theorem: `true ⇒ false` (clearly false).
         assert_eq!(verify_via_z3("true", "false"), ProofResult::Failed);
+    }
+
+    #[test]
+    fn bounded_model_checker_verifies_qf_lia_obligation() {
+        if !z3_is_available() {
+            eprintln!("z3 not on PATH — skipping bounded_model_checker_verifies_qf_lia_obligation");
+            return;
+        }
+
+        let premise = "(declare-const x Int)\n(assert (and (<= 0 x) (<= x 4)))";
+        assert_eq!(
+            verify_via_bounded_z3_model(premise, "(= (+ x 1) (+ 1 x))"),
+            ProofResult::Verified
+        );
+    }
+
+    #[test]
+    fn bounded_model_checker_rejects_counterexample() {
+        if !z3_is_available() {
+            eprintln!("z3 not on PATH — skipping bounded_model_checker_rejects_counterexample");
+            return;
+        }
+
+        let premise = "(declare-const x Int)\n(assert (and (<= 0 x) (<= x 4)))";
+        assert_eq!(
+            verify_via_bounded_z3_model(premise, "(= (+ x 1) x)"),
+            ProofResult::Failed
+        );
+    }
+
+    #[test]
+    fn bounded_model_checker_rejects_generated_prose() {
+        assert_eq!(
+            verify_via_bounded_z3_model(
+                "Code identified as dead",
+                "Dead code has no observable effects"
+            ),
+            ProofResult::Failed
+        );
     }
 
     /// bd-cixqu.7.17.2: empty premise / conclusion fails closed (was

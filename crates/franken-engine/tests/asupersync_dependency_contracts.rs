@@ -43,12 +43,17 @@ impl control_plane::DecisionContract for ContractHarness {
         &self.loss_matrix
     }
 
-    fn update_posterior(&self, posterior: &mut control_plane::Posterior, state_index: usize) {
+    fn update_posterior(
+        &self,
+        posterior: &mut control_plane::Posterior,
+        state_index: usize,
+    ) -> Result<(), control_plane::UpdatePosteriorError> {
         match state_index {
             0 => posterior.bayesian_update(&[0.90, 0.10]),
             1 => posterior.bayesian_update(&[0.10, 0.90]),
             _ => posterior.bayesian_update(&[0.50, 0.50]),
         }
+        Ok(())
     }
 
     fn choose_action(&self, posterior: &control_plane::Posterior) -> usize {
@@ -123,9 +128,12 @@ fn franken_decision_reexports_and_evaluate_signature_match_upstream() {
         &ContractHarness,
         &franken_decision::Posterior,
         &franken_decision::EvalContext,
-    ) -> franken_decision::DecisionOutcome = control_plane::evaluate_contract::<ContractHarness>;
+    ) -> Result<
+        franken_decision::DecisionOutcome,
+        control_plane::ControlPlaneAdapterError,
+    > = control_plane::evaluate_contract::<ContractHarness>;
 
-    let outcome = evaluator(&contract, &posterior, &eval_context);
+    let outcome = evaluator(&contract, &posterior, &eval_context).expect("valid decision contract");
 
     assert_eq!(loss_matrix.n_states(), 2);
     assert_eq!(loss_matrix.n_actions(), 2);

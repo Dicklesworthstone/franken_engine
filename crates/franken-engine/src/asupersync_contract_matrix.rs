@@ -1432,8 +1432,13 @@ impl DecisionContract for MiniContract {
         &self.loss_matrix
     }
 
-    fn update_posterior(&self, posterior: &mut Posterior, _state_index: usize) {
+    fn update_posterior(
+        &self,
+        posterior: &mut Posterior,
+        _state_index: usize,
+    ) -> Result<(), crate::control_plane::UpdatePosteriorError> {
         posterior.bayesian_update(&[0.8, 0.2]);
+        Ok(())
     }
 
     fn choose_action(&self, posterior: &Posterior) -> usize {

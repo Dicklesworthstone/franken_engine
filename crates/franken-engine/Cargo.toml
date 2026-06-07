@@ -263,9 +263,9 @@ wait4 = "0.1"
 wait-timeout = "0.2"
 frankenengine-extension-host = { path = "../franken-extension-host" }
 fastapi-core = { path = "/dp/fastapi_rust/crates/fastapi-core" }
-franken-kernel = { version = "0.3.1", optional = true }
-franken-decision = { version = "0.3.1", optional = true }
-franken-evidence = { version = "0.3.1", optional = true }
+franken-kernel = { version = "0.3.4", optional = true }
+franken-decision = { version = "0.3.4", optional = true }
+franken-evidence = { version = "0.3.4", optional = true }
 fp-io = { path = "/dp/frankenpandas/crates/fp-io", default-features = false }
 fp-frame = { path = "/dp/frankenpandas/crates/fp-frame" }
 fp-columnar = { path = "/dp/frankenpandas/crates/fp-columnar" }

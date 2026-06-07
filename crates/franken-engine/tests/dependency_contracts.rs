@@ -50,12 +50,17 @@ mod asupersync_contracts {
             &self.loss_matrix
         }
 
-        fn update_posterior(&self, posterior: &mut control_plane::Posterior, state_index: usize) {
+        fn update_posterior(
+            &self,
+            posterior: &mut control_plane::Posterior,
+            state_index: usize,
+        ) -> Result<(), control_plane::UpdatePosteriorError> {
             match state_index {
                 0 => posterior.bayesian_update(&[0.90, 0.10]),
                 1 => posterior.bayesian_update(&[0.10, 0.90]),
                 _ => posterior.bayesian_update(&[0.50, 0.50]),
             }
+            Ok(())
         }
 
         fn choose_action(&self, posterior: &control_plane::Posterior) -> usize {
@@ -119,7 +124,8 @@ mod asupersync_contracts {
         };
 
         let outcome: franken_decision::DecisionOutcome =
-            control_plane::evaluate_contract(&contract, &posterior, &eval_context);
+            control_plane::evaluate_contract(&contract, &posterior, &eval_context)
+                .expect("valid decision contract");
 
         assert_eq!(outcome.action_name, "allow");
         assert!(!outcome.fallback_active);

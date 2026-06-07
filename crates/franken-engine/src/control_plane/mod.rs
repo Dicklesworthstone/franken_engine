@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "asupersync-integration")]
 pub use franken_decision::{
     DecisionContract, DecisionOutcome, EvalContext, FallbackPolicy, LossMatrix, Posterior,
+    UpdatePosteriorError,
 };
 #[cfg(feature = "asupersync-integration")]
 pub use franken_evidence::{EvidenceLedger, EvidenceLedgerBuilder};
@@ -27,7 +28,7 @@ pub use franken_kernel::{
 pub use standalone::{
     Budget, CapabilitySet, Cx, DecisionContract, DecisionId, DecisionOutcome, EvalContext,
     EvidenceLedger, EvidenceLedgerBuilder, FallbackPolicy, LossMatrix, NoCaps, PolicyId, Posterior,
-    SchemaVersion, TraceId,
+    SchemaVersion, TraceId, UpdatePosteriorError,
 };
 
 #[cfg(not(feature = "asupersync-integration"))]
@@ -702,12 +703,19 @@ mod standalone {
         }
     }
 
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum UpdatePosteriorError {}
+
     pub trait DecisionContract {
         fn name(&self) -> &str;
         fn state_space(&self) -> &[String];
         fn action_set(&self) -> &[String];
         fn loss_matrix(&self) -> &LossMatrix;
-        fn update_posterior(&self, posterior: &mut Posterior, state_index: usize);
+        fn update_posterior(
+            &self,
+            posterior: &mut Posterior,
+            state_index: usize,
+        ) -> Result<(), UpdatePosteriorError>;
         fn choose_action(&self, posterior: &Posterior) -> usize;
         fn fallback_action(&self) -> usize;
         fn fallback_policy(&self) -> &FallbackPolicy;
@@ -1388,8 +1396,12 @@ pub fn evaluate_contract<C: DecisionContract>(
     contract: &C,
     posterior: &Posterior,
     ctx: &EvalContext,
-) -> DecisionOutcome {
-    franken_decision::evaluate(contract, posterior, ctx)
+) -> Result<DecisionOutcome, ControlPlaneAdapterError> {
+    franken_decision::evaluate(contract, posterior, ctx).map_err(|_| {
+        ControlPlaneAdapterError::DecisionGateway {
+            code: "decision_validation",
+        }
+    })
 }
 
 #[cfg(not(feature = "asupersync-integration"))]
@@ -1397,8 +1409,8 @@ pub fn evaluate_contract<C: DecisionContract>(
     contract: &C,
     posterior: &Posterior,
     ctx: &EvalContext,
-) -> DecisionOutcome {
-    standalone::evaluate_contract(contract, posterior, ctx)
+) -> Result<DecisionOutcome, ControlPlaneAdapterError> {
+    Ok(standalone::evaluate_contract(contract, posterior, ctx))
 }
 
 /// Canonical decision adapter backed by `franken_decision::evaluate`.
@@ -1432,7 +1444,15 @@ impl<C: DecisionContract> DecisionAdapter for ContractDecisionAdapter<C> {
             trace_id: request.trace_id,
             ts_unix_ms: request.ts_unix_ms,
         };
-        let outcome = evaluate_contract(&self.contract, &self.posterior, &ctx);
+        let outcome = evaluate_contract(&self.contract, &self.posterior, &ctx).map_err(|err| {
+            self.events.push(new_event(
+                request,
+                "decision_eval",
+                "error",
+                Some(err.error_code()),
+            ));
+            err
+        })?;
         let verdict = action_to_verdict(&outcome.action_name).ok_or_else(|| {
             self.events.push(new_event(
                 request,
@@ -1870,9 +1890,14 @@ mod tests {
             &self.loss_matrix
         }
 
-        fn update_posterior(&self, posterior: &mut Posterior, state_index: usize) {
+        fn update_posterior(
+            &self,
+            posterior: &mut Posterior,
+            state_index: usize,
+        ) -> Result<(), UpdatePosteriorError> {
             let _ = state_index;
             posterior.bayesian_update(&[0.8, 0.2]);
+            Ok(())
         }
 
         fn choose_action(&self, posterior: &Posterior) -> usize {
@@ -1960,7 +1985,7 @@ mod tests {
             ts_unix_ms: 1_700_000_000_077,
         };
 
-        let outcome = evaluate_contract(&contract, &posterior, &ctx);
+        let outcome = evaluate_contract(&contract, &posterior, &ctx).expect("valid contract");
 
         assert_eq!(outcome.action_name, "deny");
         assert!(!outcome.fallback_active);

@@ -379,13 +379,18 @@ impl DecisionContract for SafetyContract {
         &self.loss_matrix
     }
 
-    fn update_posterior(&self, posterior: &mut Posterior, state_index: usize) {
+    fn update_posterior(
+        &self,
+        posterior: &mut Posterior,
+        state_index: usize,
+    ) -> Result<(), crate::control_plane::UpdatePosteriorError> {
         // Simple likelihood model: observation at state_index gets
         // high likelihood (0.9), other states get low (0.1).
         let likelihoods: Vec<f64> = (0..posterior.len())
             .map(|i| if i == state_index { 0.9 } else { 0.1 })
             .collect();
         posterior.bayesian_update(&likelihoods);
+        Ok(())
     }
 
     fn choose_action(&self, posterior: &Posterior) -> usize {
@@ -552,7 +557,22 @@ impl SafetyDecisionRouter {
         };
 
         // Evaluate decision contract.
-        let outcome = evaluate_contract(&contract, &posterior, &eval_ctx);
+        let outcome = evaluate_contract(&contract, &posterior, &eval_ctx).map_err(|_| {
+            let index = if contract.fallback_policy().should_fallback(
+                eval_ctx.calibration_score,
+                eval_ctx.e_process,
+                eval_ctx.ci_width,
+            ) {
+                contract.fallback_action()
+            } else {
+                contract.choose_action(&posterior)
+            };
+            SafetyRouterError::InvalidActionIndex {
+                action: request.action,
+                index,
+                max: contract.action_set().len().saturating_sub(1),
+            }
+        })?;
 
         // Map outcome to verdict.
         let verdict = self.map_outcome(&outcome, request.action);
@@ -626,7 +646,13 @@ impl SafetyDecisionRouter {
             .posteriors
             .entry(action)
             .or_insert_with(|| Posterior::uniform(state_space_len));
-        contract.update_posterior(posterior, state_index);
+        contract
+            .update_posterior(posterior, state_index)
+            .map_err(|_| SafetyRouterError::InvalidStateIndex {
+                action,
+                index: state_index,
+                state_space_len,
+            })?;
         Ok(())
     }
 
@@ -1078,7 +1104,8 @@ mod tests {
         let c = SafetyContract::default_for(SafetyAction::ExtensionQuarantine);
         let mut posterior = Posterior::uniform(2);
         // Observe "unsafe" (state_index=1)
-        c.update_posterior(&mut posterior, 1);
+        c.update_posterior(&mut posterior, 1)
+            .expect("valid posterior update");
         // After update, P(unsafe) should be > P(safe)
         assert!(posterior.probs()[1] > posterior.probs()[0]);
     }

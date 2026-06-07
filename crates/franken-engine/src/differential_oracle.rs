@@ -21,6 +21,8 @@ use crate::{HybridRouter, JsEngine, QuickJsInspiredNativeEngine};
 pub const DIFFERENTIAL_ORACLE_SCHEMA_VERSION: &str = "franken-engine.differential-oracle.v1";
 pub const DIFFERENTIAL_ORACLE_CANONICALIZATION_SCHEMA_VERSION: &str =
     "franken-engine.differential-oracle.canonicalization.v1";
+pub const DIFFERENTIAL_ORACLE_DIVERGENCE_TAXONOMY_SCHEMA_VERSION: &str =
+    "franken-engine.differential-oracle.divergence-taxonomy.v1";
 
 const DEFAULT_TIMEOUT_MS: u64 = 2_000;
 
@@ -175,6 +177,16 @@ pub enum DifferentialComparisonMode {
 }
 
 impl DifferentialComparisonMode {
+    pub const fn stable_label(self) -> &'static str {
+        match self {
+            Self::StructuredValue => "structured_value",
+            Self::ExactStdout => "exact_stdout",
+            Self::ExactStderr => "exact_stderr",
+            Self::ExceptionClass => "exception_class",
+            Self::TimingEnvelope => "timing_envelope",
+        }
+    }
+
     const fn contributes_to_semantic_verdict(self) -> bool {
         match self {
             Self::StructuredValue | Self::ExceptionClass => true,
@@ -241,6 +253,54 @@ pub struct DifferentialCanonicalizationReport {
     pub diagnostics: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DifferentialDivergenceClass {
+    Parser,
+    Lowering,
+    Runtime,
+    ModuleResolution,
+    HostcallPolicy,
+    IntentionalSecurityDivergence,
+    ReferenceRuntimeBug,
+}
+
+impl DifferentialDivergenceClass {
+    pub const fn stable_label(self) -> &'static str {
+        match self {
+            Self::Parser => "parser",
+            Self::Lowering => "lowering",
+            Self::Runtime => "runtime",
+            Self::ModuleResolution => "module_resolution",
+            Self::HostcallPolicy => "hostcall_policy",
+            Self::IntentionalSecurityDivergence => "intentional_security_divergence",
+            Self::ReferenceRuntimeBug => "reference_runtime_bug",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DifferentialDivergenceFinding {
+    pub class: DifferentialDivergenceClass,
+    pub comparison_mode: DifferentialComparisonMode,
+    pub message: String,
+    pub affected_backends: Vec<DifferentialBackend>,
+    pub reference_backends: Vec<DifferentialBackend>,
+    pub evidence_group_hashes: Vec<String>,
+    pub remediation_hint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiver_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DifferentialDivergenceTaxonomyReport {
+    pub schema_version: String,
+    pub verdict: DifferentialComparisonVerdict,
+    pub findings: Vec<DifferentialDivergenceFinding>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DifferentialOracleReport {
     pub schema_version: String,
@@ -252,6 +312,7 @@ pub struct DifferentialOracleReport {
     pub host: DifferentialHostFacts,
     pub backends: Vec<DifferentialBackendReceipt>,
     pub canonicalization: DifferentialCanonicalizationReport,
+    pub divergence_taxonomy: DifferentialDivergenceTaxonomyReport,
 }
 
 pub fn run_differential_oracle(input: &DifferentialOracleInput) -> DifferentialOracleReport {
@@ -263,6 +324,9 @@ pub fn run_differential_oracle(input: &DifferentialOracleInput) -> DifferentialO
         run_franken_core_backend(input.source.as_str()),
     ];
 
+    let canonicalization = canonicalize_backend_receipts(&backends);
+    let divergence_taxonomy = classify_differential_divergences(&backends, &canonicalization);
+
     DifferentialOracleReport {
         schema_version: DIFFERENTIAL_ORACLE_SCHEMA_VERSION.to_string(),
         generated_unix_ns: current_unix_ns(),
@@ -270,7 +334,8 @@ pub fn run_differential_oracle(input: &DifferentialOracleInput) -> DifferentialO
         source_path: input.source_path.clone(),
         source_sha256: sha256_hex(input.source.as_bytes()),
         host: capture_host_facts(),
-        canonicalization: canonicalize_backend_receipts(&backends),
+        canonicalization,
+        divergence_taxonomy,
         backends,
     }
 }
@@ -512,6 +577,283 @@ pub fn canonicalize_backend_receipts(
         comparisons,
         diagnostics,
     }
+}
+
+pub fn classify_differential_divergences(
+    receipts: &[DifferentialBackendReceipt],
+    canonicalization: &DifferentialCanonicalizationReport,
+) -> DifferentialDivergenceTaxonomyReport {
+    let findings = canonicalization
+        .comparisons
+        .iter()
+        .filter(|comparison| comparison.verdict == DifferentialComparisonVerdict::Divergence)
+        .map(|comparison| classify_mode_divergence(receipts, comparison))
+        .collect::<Vec<_>>();
+    let verdict = if findings.is_empty() {
+        canonicalization.semantic_verdict
+    } else if findings.iter().any(|finding| {
+        finding.comparison_mode.contributes_to_semantic_verdict()
+            && finding.class != DifferentialDivergenceClass::IntentionalSecurityDivergence
+    }) {
+        DifferentialComparisonVerdict::Divergence
+    } else {
+        canonicalization.semantic_verdict
+    };
+    let diagnostics = if findings.is_empty() {
+        Vec::new()
+    } else {
+        findings
+            .iter()
+            .filter(|finding| finding.waiver_id.is_some())
+            .map(|finding| {
+                format!(
+                    "{} requires waiver `{}`",
+                    finding.class.stable_label(),
+                    finding.waiver_id.as_deref().unwrap_or_default()
+                )
+            })
+            .collect()
+    };
+
+    DifferentialDivergenceTaxonomyReport {
+        schema_version: DIFFERENTIAL_ORACLE_DIVERGENCE_TAXONOMY_SCHEMA_VERSION.to_string(),
+        verdict,
+        findings,
+        diagnostics,
+    }
+}
+
+fn classify_mode_divergence(
+    receipts: &[DifferentialBackendReceipt],
+    comparison: &DifferentialModeComparison,
+) -> DifferentialDivergenceFinding {
+    let evidence = divergence_evidence_text(receipts, comparison);
+    let class = classify_divergence_evidence(evidence.as_str(), comparison);
+    let evidence_group_hashes = comparison
+        .groups
+        .iter()
+        .map(|group| group.canonical_key_sha256.clone())
+        .collect::<Vec<_>>();
+    let waiver_id = if class == DifferentialDivergenceClass::IntentionalSecurityDivergence {
+        Some(stable_waiver_id(comparison, &evidence_group_hashes))
+    } else {
+        None
+    };
+
+    DifferentialDivergenceFinding {
+        class,
+        comparison_mode: comparison.mode,
+        message: divergence_message(comparison),
+        affected_backends: comparison.applicable_backends.clone(),
+        reference_backends: comparison
+            .applicable_backends
+            .iter()
+            .copied()
+            .filter(is_reference_backend)
+            .collect(),
+        evidence_group_hashes,
+        remediation_hint: remediation_hint(class).to_string(),
+        waiver_id,
+    }
+}
+
+fn divergence_message(comparison: &DifferentialModeComparison) -> String {
+    let groups = comparison
+        .groups
+        .iter()
+        .map(|group| {
+            format!(
+                "{}=[{}]",
+                abbreviate(group.sample.as_str()),
+                group
+                    .backends
+                    .iter()
+                    .map(|backend| backend.stable_label())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!(
+        "{} divergence across {} backend group(s): {}",
+        comparison.mode.stable_label(),
+        comparison.groups.len(),
+        groups
+    )
+}
+
+fn divergence_evidence_text(
+    receipts: &[DifferentialBackendReceipt],
+    comparison: &DifferentialModeComparison,
+) -> String {
+    let mut evidence = String::new();
+    evidence.push_str(comparison.mode.stable_label());
+    for group in &comparison.groups {
+        evidence.push(' ');
+        evidence.push_str(group.sample.as_str());
+        evidence.push(' ');
+        evidence.push_str(group.canonical_key_sha256.as_str());
+    }
+    for receipt in receipts {
+        if !comparison.applicable_backends.contains(&receipt.backend) {
+            continue;
+        }
+        evidence.push(' ');
+        evidence.push_str(receipt.backend.stable_label());
+        evidence.push(' ');
+        evidence.push_str(receipt.status.stable_label());
+        evidence.push(' ');
+        evidence.push_str(receipt.stderr.as_str());
+        evidence.push(' ');
+        evidence.push_str(receipt.stdout.as_str());
+        evidence.push(' ');
+        evidence.push_str(receipt.diagnostics.join(" ").as_str());
+    }
+    evidence.to_ascii_lowercase()
+}
+
+fn classify_divergence_evidence(
+    evidence: &str,
+    comparison: &DifferentialModeComparison,
+) -> DifferentialDivergenceClass {
+    if contains_any(
+        evidence,
+        &[
+            "intentional-security",
+            "intentional_security",
+            "security divergence",
+            "security-divergence",
+        ],
+    ) {
+        return DifferentialDivergenceClass::IntentionalSecurityDivergence;
+    }
+    if contains_any(
+        evidence,
+        &[
+            "hostcall",
+            "host call",
+            "capability",
+            "policy",
+            "permission",
+            "denied",
+            "egress",
+            "filesystem",
+            "processspawn",
+            "cross_zone",
+        ],
+    ) {
+        return DifferentialDivergenceClass::HostcallPolicy;
+    }
+    if contains_any(
+        evidence,
+        &[
+            "module",
+            "import",
+            "require",
+            "resolution",
+            "resolve",
+            "not found",
+        ],
+    ) {
+        return DifferentialDivergenceClass::ModuleResolution;
+    }
+    if contains_any(
+        evidence,
+        &[
+            "parse",
+            "parser",
+            "syntax",
+            "unexpected token",
+            "unterminated",
+        ],
+    ) {
+        return DifferentialDivergenceClass::Parser;
+    }
+    if contains_any(
+        evidence,
+        &["lower", "lowering", "ir2", "ir3", "ir contract"],
+    ) {
+        return DifferentialDivergenceClass::Lowering;
+    }
+    if reference_runtimes_disagree_while_franken_agrees(comparison) {
+        return DifferentialDivergenceClass::ReferenceRuntimeBug;
+    }
+    DifferentialDivergenceClass::Runtime
+}
+
+fn reference_runtimes_disagree_while_franken_agrees(
+    comparison: &DifferentialModeComparison,
+) -> bool {
+    let franken_group = comparison.groups.iter().find(|group| {
+        group.backends.contains(&DifferentialBackend::FrankenEngine)
+            && group.backends.contains(&DifferentialBackend::FrankenCore)
+    });
+    let Some(franken_group) = franken_group else {
+        return false;
+    };
+    let reference_group_count = comparison
+        .groups
+        .iter()
+        .filter(|group| {
+            group
+                .backends
+                .iter()
+                .any(|backend| is_reference_backend(backend))
+        })
+        .count();
+    reference_group_count > 1
+        && comparison
+            .groups
+            .iter()
+            .any(|group| group.canonical_key_sha256 != franken_group.canonical_key_sha256)
+}
+
+fn is_reference_backend(backend: &DifferentialBackend) -> bool {
+    matches!(
+        backend,
+        DifferentialBackend::NodeLts | DifferentialBackend::BunStable
+    )
+}
+
+fn stable_waiver_id(
+    comparison: &DifferentialModeComparison,
+    evidence_group_hashes: &[String],
+) -> String {
+    let joined_hashes = evidence_group_hashes.join(":");
+    let digest =
+        sha256_hex(format!("{}:{joined_hashes}", comparison.mode.stable_label()).as_bytes());
+    format!("differential-oracle-waiver-{}", &digest[..16])
+}
+
+fn remediation_hint(class: DifferentialDivergenceClass) -> &'static str {
+    match class {
+        DifferentialDivergenceClass::Parser => {
+            "Minimize the source and compare parser diagnostics and source spans before runtime triage."
+        }
+        DifferentialDivergenceClass::Lowering => {
+            "Inspect lowering_pipeline and ir_contract output for a semantic translation mismatch."
+        }
+        DifferentialDivergenceClass::Runtime => {
+            "Minimize the case and compare evaluator/runtime instruction handling against the canonical observations."
+        }
+        DifferentialDivergenceClass::ModuleResolution => {
+            "Check module loader and resolution policy before classifying the runtime as semantically wrong."
+        }
+        DifferentialDivergenceClass::HostcallPolicy => {
+            "Inspect hostcall, capability, and IFC policy receipts; add an explicit waiver only for intended denials."
+        }
+        DifferentialDivergenceClass::IntentionalSecurityDivergence => {
+            "Verify the waiver id, document the intentional security divergence, and keep it out of bug counts."
+        }
+        DifferentialDivergenceClass::ReferenceRuntimeBug => {
+            "Confirm reference runtime versions and isolate the denominator behavior before opening an engine defect."
+        }
+    }
+}
+
+fn contains_any(haystack: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| haystack.contains(needle))
 }
 
 fn canonicalize_backend_receipt(
@@ -1240,6 +1582,155 @@ mod tests {
             DifferentialComparisonVerdict::Divergence
         );
         assert_eq!(exceptions.groups.len(), 2);
+    }
+
+    #[test]
+    fn taxonomy_classifies_structured_value_divergence_as_runtime() {
+        let receipts = vec![
+            receipt(
+                DifferentialBackend::NodeLts,
+                DifferentialBackendStatus::Completed,
+                Some("2"),
+                "2",
+                "",
+                &[],
+            ),
+            receipt(
+                DifferentialBackend::FrankenEngine,
+                DifferentialBackendStatus::Completed,
+                Some("3"),
+                "3",
+                "",
+                &[],
+            ),
+        ];
+        let canonicalization = canonicalize_backend_receipts(&receipts);
+        let taxonomy = classify_differential_divergences(&receipts, &canonicalization);
+
+        assert_eq!(
+            taxonomy.schema_version,
+            DIFFERENTIAL_ORACLE_DIVERGENCE_TAXONOMY_SCHEMA_VERSION
+        );
+        assert_eq!(taxonomy.verdict, DifferentialComparisonVerdict::Divergence);
+        let finding = taxonomy
+            .findings
+            .iter()
+            .find(|finding| finding.comparison_mode == DifferentialComparisonMode::StructuredValue)
+            .expect("structured value divergence should be classified");
+        assert_eq!(finding.class, DifferentialDivergenceClass::Runtime);
+        assert_eq!(
+            finding.affected_backends,
+            vec![
+                DifferentialBackend::NodeLts,
+                DifferentialBackend::FrankenEngine
+            ]
+        );
+        assert!(finding.waiver_id.is_none());
+    }
+
+    #[test]
+    fn taxonomy_marks_intentional_security_divergence_with_waiver() {
+        let receipts = vec![
+            receipt(
+                DifferentialBackend::NodeLts,
+                DifferentialBackendStatus::Failed,
+                None,
+                "",
+                "TypeError: network is not defined\n",
+                &[],
+            ),
+            receipt(
+                DifferentialBackend::FrankenEngine,
+                DifferentialBackendStatus::Failed,
+                None,
+                "",
+                "PolicyError: intentional-security-divergence hostcall capability denied\n",
+                &["intentional-security-divergence.hostcall_policy_denied"],
+            ),
+        ];
+        let canonicalization = canonicalize_backend_receipts(&receipts);
+        let taxonomy = classify_differential_divergences(&receipts, &canonicalization);
+
+        let finding = taxonomy
+            .findings
+            .iter()
+            .find(|finding| finding.comparison_mode == DifferentialComparisonMode::ExceptionClass)
+            .expect("exception class divergence should be classified");
+        assert_eq!(
+            finding.class,
+            DifferentialDivergenceClass::IntentionalSecurityDivergence
+        );
+        assert_eq!(
+            finding.reference_backends,
+            vec![DifferentialBackend::NodeLts]
+        );
+        assert!(
+            finding
+                .waiver_id
+                .as_deref()
+                .is_some_and(|waiver| waiver.starts_with("differential-oracle-waiver-"))
+        );
+        assert!(finding.remediation_hint.contains("waiver id"));
+        assert!(
+            taxonomy
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("intentional_security_divergence"))
+        );
+    }
+
+    #[test]
+    fn taxonomy_classifies_reference_runtime_split_when_franken_backends_agree() {
+        let receipts = vec![
+            receipt(
+                DifferentialBackend::NodeLts,
+                DifferentialBackendStatus::Completed,
+                Some("2"),
+                "2",
+                "",
+                &[],
+            ),
+            receipt(
+                DifferentialBackend::BunStable,
+                DifferentialBackendStatus::Completed,
+                Some("3"),
+                "3",
+                "",
+                &[],
+            ),
+            receipt(
+                DifferentialBackend::FrankenEngine,
+                DifferentialBackendStatus::Completed,
+                Some("2"),
+                "2",
+                "",
+                &[],
+            ),
+            receipt(
+                DifferentialBackend::FrankenCore,
+                DifferentialBackendStatus::Completed,
+                Some("2"),
+                "2",
+                "",
+                &[],
+            ),
+        ];
+        let canonicalization = canonicalize_backend_receipts(&receipts);
+        let taxonomy = classify_differential_divergences(&receipts, &canonicalization);
+
+        let finding = taxonomy
+            .findings
+            .iter()
+            .find(|finding| finding.comparison_mode == DifferentialComparisonMode::StructuredValue)
+            .expect("structured value divergence should be classified");
+        assert_eq!(
+            finding.class,
+            DifferentialDivergenceClass::ReferenceRuntimeBug
+        );
+        assert_eq!(
+            finding.reference_backends,
+            vec![DifferentialBackend::NodeLts, DifferentialBackend::BunStable]
+        );
     }
 
     fn receipt(

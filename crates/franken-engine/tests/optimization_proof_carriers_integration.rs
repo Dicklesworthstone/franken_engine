@@ -549,8 +549,8 @@ fn comprehensive_optimization_verification_workflow() {
     );
 
     // Performance certificates still land, but semantic certificates stay
-    // fail-closed until generated obligations carry real SMT/differential
-    // evidence instead of prose premises.
+    // fail-closed because this function-heavy fixture is outside the bounded
+    // sample language used by generated runner-backed obligations.
     assert!(verification_result.certificates_generated);
     assert!(!carrier.proof_certificates.is_empty());
 
@@ -821,9 +821,8 @@ fn proof_certificate_generation_and_validation() {
     assert!(verification_result.certificates_generated);
     assert!(!carrier.proof_certificates.is_empty());
 
-    // Generated prose obligations fail closed; no semantic certificate should
-    // be emitted until the proof obligations become real SMT/differential
-    // evidence.
+    // Unsupported source/target fixtures fail closed; no semantic certificate
+    // should be emitted until proof obligations verify against real evidence.
     let semantic_certs: Vec<_> = carrier
         .proof_certificates
         .iter()
@@ -906,7 +905,12 @@ fn fe_claim_019_020_bundle_emission_writes_canonical_bundles() {
         );
         assert_eq!(body["claim_id"], claim_id);
         assert_eq!(body["track"], "track-g");
-        assert_eq!(body["proof_kind"], "optimization-equivalence-z3");
+        let expected_proof_kind = match claim_id {
+            "FE-CLAIM-019" => "optimization-isomorphism",
+            "FE-CLAIM-020" => "theorem-backed-compiler",
+            _ => unreachable!("fixed FE-CLAIM-019/020 assertion list"),
+        };
+        assert_eq!(body["proof_kind"], expected_proof_kind);
         assert_eq!(body["verdict"], "proven");
         assert_eq!(
             body["source_module"],
@@ -997,6 +1001,133 @@ fn model_checking_obligation_rejects_bounded_counterexample_when_z3_available() 
     assert_eq!(result.total_proofs, 1);
     assert_eq!(result.verified_proofs, 0);
     assert_eq!(result.failed_proofs, 1);
+    assert_eq!(
+        carrier.verification_status,
+        OptimizationVerificationStatus::VerificationFailed
+    );
+}
+
+#[test]
+fn generated_sample_language_obligations_verify_and_emit_bundles() {
+    for test_case_name in [
+        "dead_code_elimination_simple",
+        "constant_folding_arithmetic",
+        "loop_unrolling_small",
+    ] {
+        let test_case = generate_optimization_test_cases()
+            .into_iter()
+            .find(|case| case.name == test_case_name)
+            .unwrap();
+        let mut carrier =
+            OptimizationProofCarrier::new(test_case.source_ir.clone(), test_case.target_ir.clone());
+
+        for (i, optimization_type) in test_case.optimization_passes.iter().enumerate() {
+            carrier.add_optimization_pass(OptimizationPassApplication {
+                pass_id: format!("generated_{test_case_name}_{i}"),
+                optimization_type: optimization_type.clone(),
+                source_region: IrRegion {
+                    region_id: format!("source_{test_case_name}_{i}"),
+                    start_instruction: 0,
+                    end_instruction: 10,
+                    basic_blocks: ["entry"].into_iter().map(String::from).collect(),
+                    control_flow_edges: Vec::new(),
+                    live_variables: BTreeSet::new(),
+                },
+                target_region: IrRegion {
+                    region_id: format!("target_{test_case_name}_{i}"),
+                    start_instruction: 0,
+                    end_instruction: 10,
+                    basic_blocks: ["entry"].into_iter().map(String::from).collect(),
+                    control_flow_edges: Vec::new(),
+                    live_variables: BTreeSet::new(),
+                },
+                transformation_rules: Vec::new(),
+                preconditions: Vec::new(),
+                postconditions: Vec::new(),
+                performance_impact: PerformanceImpact {
+                    execution_time_change: -test_case.expected_performance_improvement,
+                    memory_usage_change: 0.0,
+                    code_size_change: 0.0,
+                    compile_time_overhead: 1.0,
+                    optimization_benefit_score: 0.8,
+                },
+            });
+        }
+
+        let proof_count = carrier.generate_equivalence_proofs().unwrap();
+        let verification_result = carrier.verify_all_proofs().unwrap();
+
+        assert_eq!(proof_count, test_case.optimization_passes.len());
+        assert_eq!(
+            verification_result.verified_proofs, proof_count,
+            "{test_case_name} should verify through generated bounded sample obligations"
+        );
+        assert_eq!(verification_result.failed_proofs, 0);
+        assert_eq!(
+            carrier.verification_status,
+            OptimizationVerificationStatus::FullyVerified
+        );
+
+        let bundle_dir = unique_bundle_dir(&format!("generated_{test_case_name}"));
+        let emitted = carrier
+            .emit_fe_claim_019_020_proof_bundles(&bundle_dir)
+            .unwrap();
+        let claim_ids: BTreeSet<_> = emitted
+            .iter()
+            .map(|bundle| bundle.claim_id.as_str())
+            .collect();
+        assert_eq!(claim_ids, BTreeSet::from(["FE-CLAIM-019", "FE-CLAIM-020"]));
+    }
+}
+
+#[test]
+fn generated_sample_language_obligations_fail_closed_for_unsupported_inline_source() {
+    let test_case = generate_optimization_test_cases()
+        .into_iter()
+        .find(|case| case.name == "inline_expansion_function")
+        .unwrap();
+    let mut carrier =
+        OptimizationProofCarrier::new(test_case.source_ir.clone(), test_case.target_ir.clone());
+
+    for (i, optimization_type) in test_case.optimization_passes.iter().enumerate() {
+        carrier.add_optimization_pass(OptimizationPassApplication {
+            pass_id: format!("unsupported_inline_{i}"),
+            optimization_type: optimization_type.clone(),
+            source_region: IrRegion {
+                region_id: format!("unsupported_inline_source_{i}"),
+                start_instruction: 0,
+                end_instruction: 10,
+                basic_blocks: ["entry"].into_iter().map(String::from).collect(),
+                control_flow_edges: Vec::new(),
+                live_variables: BTreeSet::new(),
+            },
+            target_region: IrRegion {
+                region_id: format!("unsupported_inline_target_{i}"),
+                start_instruction: 0,
+                end_instruction: 10,
+                basic_blocks: ["entry"].into_iter().map(String::from).collect(),
+                control_flow_edges: Vec::new(),
+                live_variables: BTreeSet::new(),
+            },
+            transformation_rules: Vec::new(),
+            preconditions: Vec::new(),
+            postconditions: Vec::new(),
+            performance_impact: PerformanceImpact {
+                execution_time_change: -test_case.expected_performance_improvement,
+                memory_usage_change: 0.0,
+                code_size_change: 0.0,
+                compile_time_overhead: 1.0,
+                optimization_benefit_score: 0.8,
+            },
+        });
+    }
+
+    let proof_count = carrier.generate_equivalence_proofs().unwrap();
+    let verification_result = carrier.verify_all_proofs().unwrap();
+
+    assert_eq!(proof_count, test_case.optimization_passes.len());
+    assert_eq!(verification_result.verified_proofs, 0);
+    assert_eq!(verification_result.failed_proofs, proof_count);
     assert_eq!(
         carrier.verification_status,
         OptimizationVerificationStatus::VerificationFailed

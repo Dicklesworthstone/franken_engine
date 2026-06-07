@@ -6,6 +6,21 @@
 //! entries, replay results, or counterfactual reports. Callers provide the
 //! actual artifact catalog; validation resolves the bundle against that
 //! catalog and reports missing or stale links fail-closed.
+//!
+//! ## Canonical surface relationship
+//!
+//! The explain bundle is an index over other serialized surfaces, not a
+//! replacement for them:
+//!
+//! | Existing surface | Owns | Explain-bundle treatment |
+//! | --- | --- | --- |
+//! | `incident_replay_bundle` | portable incident archives, manifests, replay inputs, Merkle/signature checks | referenced by artifact id, schema id, stable ref, and content hash |
+//! | `runtime_diagnostics_cli` | diagnostics output, support bundles, evidence exports, redaction reports | referenced as produced artifacts for operator/debugging context |
+//! | `forensic_query_api` | causal explanations, influence analysis, counterfactual answers | referenced as query results linked back to source evidence/artifacts |
+//!
+//! ADR-0009 records the canonical ownership rule. New explain-bundle
+//! producers should preserve payloads in the owning surface and put only
+//! provenance metadata, stable references, and hashes here.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -17,6 +32,21 @@ use crate::hash_tiers::ContentHash;
 /// Current runtime explanation bundle schema.
 pub const RUNTIME_EXPLAIN_BUNDLE_SCHEMA_VERSION: RuntimeExplainBundleSchemaVersion =
     RuntimeExplainBundleSchemaVersion { major: 1, minor: 0 };
+
+/// ADR documenting the relationship between explain indexes and existing
+/// replay, diagnostics, and forensic schemas.
+pub const RUNTIME_EXPLAIN_CANONICAL_RELATION_ADR: &str =
+    "docs/adr/ADR-0009-runtime-explain-bundle-index.md";
+
+/// Metadata key naming the owning serialized surface for an indexed artifact.
+pub const RUNTIME_EXPLAIN_ORIGIN_SURFACE_METADATA_KEY: &str = "origin_surface";
+
+/// Metadata key naming the owning schema/version for an indexed artifact.
+pub const RUNTIME_EXPLAIN_ORIGIN_SCHEMA_METADATA_KEY: &str = "origin_schema";
+
+/// Metadata key naming the owning artifact or record type within the origin
+/// surface.
+pub const RUNTIME_EXPLAIN_ORIGIN_ARTIFACT_METADATA_KEY: &str = "origin_artifact";
 
 /// Semantic version for the explain bundle index format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

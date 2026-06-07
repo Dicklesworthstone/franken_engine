@@ -1,9 +1,12 @@
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::runtime_explain_bundle::{
+    RUNTIME_EXPLAIN_CANONICAL_RELATION_ADR, RUNTIME_EXPLAIN_ORIGIN_ARTIFACT_METADATA_KEY,
+    RUNTIME_EXPLAIN_ORIGIN_SCHEMA_METADATA_KEY, RUNTIME_EXPLAIN_ORIGIN_SURFACE_METADATA_KEY,
     RuntimeArtifactCatalog, RuntimeArtifactKind, RuntimeArtifactRef, RuntimeExplainBundleBuilder,
     RuntimeExplainDiagnostic, RuntimeExplainLink, RuntimeExplainLinkEndpoint,
     RuntimeExplainRelation, RuntimeExplainRole, StableArtifactRef,
 };
+use serde_json::Value;
 
 fn artifact(
     artifact_id: &str,
@@ -275,4 +278,141 @@ fn runtime_explain_bundle_flags_unknown_link_endpoints() {
             artifact_id,
         } if link_id == "ir3-to-replay" && artifact_id == "missing-replay"
     )));
+}
+
+fn json_contains_key(value: &Value, key: &str) -> bool {
+    match value {
+        Value::Object(fields) => {
+            fields.contains_key(key) || fields.values().any(|value| json_contains_key(value, key))
+        }
+        Value::Array(values) => values.iter().any(|value| json_contains_key(value, key)),
+        _ => false,
+    }
+}
+
+#[test]
+fn runtime_explain_bundle_indexes_existing_bundlers_without_payload_duplication() {
+    let incident_schema = "IncidentReplayBundle.v1";
+    let diagnostics_schema = "franken-engine.runtime-diagnostics.support-bundle.v1";
+    let forensic_schema = "franken-engine.forensic-query.v1";
+
+    let incident = RuntimeArtifactRef::new(
+        "incident-replay-bundle",
+        RuntimeArtifactKind::Other {
+            schema_id: incident_schema.to_string(),
+        },
+        ContentHash::compute(b"incident bundle manifest"),
+        StableArtifactRef::new("incident_replay_bundle", "incident-42").with_revision("bundle-v1"),
+    )
+    .with_schema_id(incident_schema)
+    .with_producer("incident_replay_bundle")
+    .with_role(RuntimeExplainRole::ReplayStatus)
+    .with_metadata(
+        RUNTIME_EXPLAIN_ORIGIN_SURFACE_METADATA_KEY,
+        "incident_replay_bundle",
+    )
+    .with_metadata(RUNTIME_EXPLAIN_ORIGIN_SCHEMA_METADATA_KEY, incident_schema)
+    .with_metadata(
+        RUNTIME_EXPLAIN_ORIGIN_ARTIFACT_METADATA_KEY,
+        "BundleManifest",
+    );
+
+    let diagnostics = RuntimeArtifactRef::new(
+        "runtime-support-bundle",
+        RuntimeArtifactKind::Other {
+            schema_id: diagnostics_schema.to_string(),
+        },
+        ContentHash::compute(b"support bundle index"),
+        StableArtifactRef::new("runtime_diagnostics_cli", "support_bundle/index.json")
+            .with_revision("run-42"),
+    )
+    .with_schema_id(diagnostics_schema)
+    .with_producer("runtime_diagnostics_cli")
+    .with_role(RuntimeExplainRole::EvidenceEntry)
+    .with_metadata(
+        RUNTIME_EXPLAIN_ORIGIN_SURFACE_METADATA_KEY,
+        "runtime_diagnostics_cli",
+    )
+    .with_metadata(
+        RUNTIME_EXPLAIN_ORIGIN_SCHEMA_METADATA_KEY,
+        diagnostics_schema,
+    )
+    .with_metadata(
+        RUNTIME_EXPLAIN_ORIGIN_ARTIFACT_METADATA_KEY,
+        "SupportBundleIndex",
+    );
+
+    let forensic = RuntimeArtifactRef::new(
+        "forensic-query-result",
+        RuntimeArtifactKind::Other {
+            schema_id: forensic_schema.to_string(),
+        },
+        ContentHash::compute(b"forensic causal explanation"),
+        StableArtifactRef::new("forensic_query_api", "query-result-42").with_revision("run-42"),
+    )
+    .with_schema_id(forensic_schema)
+    .with_producer("forensic_query_api")
+    .with_role(RuntimeExplainRole::CounterfactualStatus)
+    .with_metadata(
+        RUNTIME_EXPLAIN_ORIGIN_SURFACE_METADATA_KEY,
+        "forensic_query_api",
+    )
+    .with_metadata(RUNTIME_EXPLAIN_ORIGIN_SCHEMA_METADATA_KEY, forensic_schema)
+    .with_metadata(
+        RUNTIME_EXPLAIN_ORIGIN_ARTIFACT_METADATA_KEY,
+        "ForensicQueryResult",
+    );
+
+    let bundle = RuntimeExplainBundleBuilder::new("run-42")
+        .with_metadata(
+            "canonical_relation_adr",
+            RUNTIME_EXPLAIN_CANONICAL_RELATION_ADR,
+        )
+        .add_artifact(incident.clone())
+        .unwrap()
+        .add_artifact(diagnostics.clone())
+        .unwrap()
+        .add_artifact(forensic.clone())
+        .unwrap()
+        .add_link(RuntimeExplainLink::new(
+            "incident-to-diagnostics",
+            "incident-replay-bundle",
+            "runtime-support-bundle",
+            RuntimeExplainRelation::ObservedDuring,
+        ))
+        .add_link(RuntimeExplainLink::new(
+            "incident-to-forensic-query",
+            "incident-replay-bundle",
+            "forensic-query-result",
+            RuntimeExplainRelation::CounterfactualChecks,
+        ))
+        .build();
+
+    let report = bundle.validate(&RuntimeArtifactCatalog::from_artifacts([
+        incident,
+        diagnostics,
+        forensic,
+    ]));
+    assert!(report.is_valid(), "{:?}", report.diagnostics);
+
+    let serialized = serde_json::to_value(&bundle).expect("explain bundle should serialize");
+    for payload_key in [
+        "traces",
+        "evidence_entries",
+        "support_bundle_files",
+        "causal_subgraph",
+        "ranked_influences",
+        "policy_snapshots",
+        "merkle_root",
+        "bundle_signature",
+    ] {
+        assert!(
+            !json_contains_key(&serialized, payload_key),
+            "explain index must not duplicate payload key {payload_key}"
+        );
+    }
+
+    assert!(json_contains_key(&serialized, "schema_id"));
+    assert!(json_contains_key(&serialized, "stable_ref"));
+    assert!(json_contains_key(&serialized, "content_hash"));
 }

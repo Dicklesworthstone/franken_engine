@@ -4,6 +4,7 @@
 //! runtimes are represented as degraded receipts instead of failing the whole
 //! run, which keeps corpus sweeps reproducible on machines without Node or Bun.
 
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io::{self, Read};
@@ -18,6 +19,8 @@ use wait_timeout::ChildExt;
 use crate::{HybridRouter, JsEngine, QuickJsInspiredNativeEngine};
 
 pub const DIFFERENTIAL_ORACLE_SCHEMA_VERSION: &str = "franken-engine.differential-oracle.v1";
+pub const DIFFERENTIAL_ORACLE_CANONICALIZATION_SCHEMA_VERSION: &str =
+    "franken-engine.differential-oracle.canonicalization.v1";
 
 const DEFAULT_TIMEOUT_MS: u64 = 2_000;
 
@@ -119,6 +122,18 @@ pub enum DifferentialBackendStatus {
     Degraded,
 }
 
+impl DifferentialBackendStatus {
+    pub const fn stable_label(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Unavailable => "unavailable",
+            Self::Timeout => "timeout",
+            Self::Degraded => "degraded",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DifferentialHostFacts {
     pub os: String,
@@ -149,6 +164,83 @@ pub struct DifferentialBackendReceipt {
     pub diagnostics: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DifferentialComparisonMode {
+    StructuredValue,
+    ExactStdout,
+    ExactStderr,
+    ExceptionClass,
+    TimingEnvelope,
+}
+
+impl DifferentialComparisonMode {
+    const fn contributes_to_semantic_verdict(self) -> bool {
+        match self {
+            Self::StructuredValue | Self::ExceptionClass => true,
+            Self::ExactStdout | Self::ExactStderr | Self::TimingEnvelope => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DifferentialComparisonVerdict {
+    Consensus,
+    Divergence,
+    InsufficientData,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DifferentialTimingEnvelope {
+    pub duration_micros: u128,
+    pub tolerance_micros: u128,
+    pub lower_micros: u128,
+    pub upper_micros: u128,
+    pub bucket: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DifferentialCanonicalObservation {
+    pub backend: DifferentialBackend,
+    pub status: DifferentialBackendStatus,
+    pub canonical_stdout: String,
+    pub canonical_stderr: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exception_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exception_message_class: Option<String>,
+    pub timing_envelope: DifferentialTimingEnvelope,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DifferentialCanonicalGroup {
+    pub canonical_key_sha256: String,
+    pub sample: String,
+    pub backends: Vec<DifferentialBackend>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DifferentialModeComparison {
+    pub mode: DifferentialComparisonMode,
+    pub verdict: DifferentialComparisonVerdict,
+    pub applicable_backends: Vec<DifferentialBackend>,
+    pub ignored_backends: Vec<DifferentialBackend>,
+    pub groups: Vec<DifferentialCanonicalGroup>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DifferentialCanonicalizationReport {
+    pub schema_version: String,
+    pub semantic_verdict: DifferentialComparisonVerdict,
+    pub observations: Vec<DifferentialCanonicalObservation>,
+    pub comparisons: Vec<DifferentialModeComparison>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DifferentialOracleReport {
     pub schema_version: String,
@@ -159,6 +251,7 @@ pub struct DifferentialOracleReport {
     pub source_sha256: String,
     pub host: DifferentialHostFacts,
     pub backends: Vec<DifferentialBackendReceipt>,
+    pub canonicalization: DifferentialCanonicalizationReport,
 }
 
 pub fn run_differential_oracle(input: &DifferentialOracleInput) -> DifferentialOracleReport {
@@ -177,6 +270,7 @@ pub fn run_differential_oracle(input: &DifferentialOracleInput) -> DifferentialO
         source_path: input.source_path.clone(),
         source_sha256: sha256_hex(input.source.as_bytes()),
         host: capture_host_facts(),
+        canonicalization: canonicalize_backend_receipts(&backends),
         backends,
     }
 }
@@ -371,6 +465,424 @@ fn run_franken_core_backend(source: &str) -> DifferentialBackendReceipt {
                 ],
             }
         }
+    }
+}
+
+pub fn canonicalize_backend_receipts(
+    receipts: &[DifferentialBackendReceipt],
+) -> DifferentialCanonicalizationReport {
+    let observations = receipts
+        .iter()
+        .map(canonicalize_backend_receipt)
+        .collect::<Vec<_>>();
+    let comparisons = [
+        DifferentialComparisonMode::StructuredValue,
+        DifferentialComparisonMode::ExactStdout,
+        DifferentialComparisonMode::ExactStderr,
+        DifferentialComparisonMode::ExceptionClass,
+        DifferentialComparisonMode::TimingEnvelope,
+    ]
+    .into_iter()
+    .map(|mode| build_mode_comparison(mode, &observations))
+    .collect::<Vec<_>>();
+    let semantic_verdict = summarize_semantic_verdict(&comparisons);
+    let diagnostics = observations
+        .iter()
+        .filter(|observation| {
+            matches!(
+                observation.status,
+                DifferentialBackendStatus::Unavailable
+                    | DifferentialBackendStatus::Timeout
+                    | DifferentialBackendStatus::Degraded
+            )
+        })
+        .map(|observation| {
+            format!(
+                "{} is {} and was excluded from semantic consensus",
+                observation.backend,
+                observation.status.stable_label()
+            )
+        })
+        .collect::<Vec<_>>();
+
+    DifferentialCanonicalizationReport {
+        schema_version: DIFFERENTIAL_ORACLE_CANONICALIZATION_SCHEMA_VERSION.to_string(),
+        semantic_verdict,
+        observations,
+        comparisons,
+        diagnostics,
+    }
+}
+
+fn canonicalize_backend_receipt(
+    receipt: &DifferentialBackendReceipt,
+) -> DifferentialCanonicalObservation {
+    let canonical_stdout = canonicalize_stream(receipt.stdout.as_str());
+    let canonical_stderr = canonicalize_stream(receipt.stderr.as_str());
+    let structured_value = canonical_structured_value(receipt, canonical_stdout.as_str());
+    let (exception_kind, exception_message_class) = canonical_exception(receipt);
+
+    DifferentialCanonicalObservation {
+        backend: receipt.backend,
+        status: receipt.status,
+        canonical_stdout,
+        canonical_stderr,
+        structured_value,
+        exception_kind,
+        exception_message_class,
+        timing_envelope: timing_envelope(receipt.duration_micros),
+    }
+}
+
+fn build_mode_comparison(
+    mode: DifferentialComparisonMode,
+    observations: &[DifferentialCanonicalObservation],
+) -> DifferentialModeComparison {
+    let mut applicable_backends = Vec::new();
+    let mut ignored_backends = Vec::new();
+    let mut groups: BTreeMap<String, (String, Vec<DifferentialBackend>)> = BTreeMap::new();
+
+    for observation in observations {
+        match comparison_entry(mode, observation) {
+            Some((key, sample)) => {
+                applicable_backends.push(observation.backend);
+                groups
+                    .entry(key)
+                    .or_insert_with(|| (sample, Vec::new()))
+                    .1
+                    .push(observation.backend);
+            }
+            None => ignored_backends.push(observation.backend),
+        }
+    }
+
+    let groups = groups
+        .into_iter()
+        .map(|(key, (sample, backends))| DifferentialCanonicalGroup {
+            canonical_key_sha256: sha256_hex(key.as_bytes()),
+            sample,
+            backends,
+        })
+        .collect::<Vec<_>>();
+    let verdict = if applicable_backends.len() < 2 {
+        DifferentialComparisonVerdict::InsufficientData
+    } else if groups.len() == 1 {
+        DifferentialComparisonVerdict::Consensus
+    } else {
+        DifferentialComparisonVerdict::Divergence
+    };
+
+    DifferentialModeComparison {
+        mode,
+        verdict,
+        applicable_backends,
+        ignored_backends,
+        groups,
+    }
+}
+
+fn comparison_entry(
+    mode: DifferentialComparisonMode,
+    observation: &DifferentialCanonicalObservation,
+) -> Option<(String, String)> {
+    match mode {
+        DifferentialComparisonMode::StructuredValue => {
+            observation.structured_value.as_ref().map(|value| {
+                let sample = abbreviate(value);
+                (format!("structured_value:{value}"), sample)
+            })
+        }
+        DifferentialComparisonMode::ExactStdout => {
+            if observation.status == DifferentialBackendStatus::Completed {
+                Some((
+                    format!("stdout:{}", observation.canonical_stdout),
+                    abbreviate(observation.canonical_stdout.as_str()),
+                ))
+            } else {
+                None
+            }
+        }
+        DifferentialComparisonMode::ExactStderr => {
+            if observation.canonical_stderr.is_empty() {
+                None
+            } else {
+                Some((
+                    format!("stderr:{}", observation.canonical_stderr),
+                    abbreviate(observation.canonical_stderr.as_str()),
+                ))
+            }
+        }
+        DifferentialComparisonMode::ExceptionClass => {
+            if observation.status == DifferentialBackendStatus::Failed {
+                let kind = observation
+                    .exception_kind
+                    .as_deref()
+                    .unwrap_or("unknown_exception");
+                let message_class = observation
+                    .exception_message_class
+                    .as_deref()
+                    .unwrap_or("unknown_message");
+                Some((
+                    format!("exception:{kind}:{message_class}"),
+                    format!("{kind}:{message_class}"),
+                ))
+            } else {
+                None
+            }
+        }
+        DifferentialComparisonMode::TimingEnvelope => {
+            if matches!(
+                observation.status,
+                DifferentialBackendStatus::Completed | DifferentialBackendStatus::Failed
+            ) && observation.timing_envelope.duration_micros > 0
+            {
+                Some((
+                    format!("timing:{}", observation.timing_envelope.bucket),
+                    observation.timing_envelope.bucket.clone(),
+                ))
+            } else {
+                None
+            }
+        }
+    }
+}
+
+fn summarize_semantic_verdict(
+    comparisons: &[DifferentialModeComparison],
+) -> DifferentialComparisonVerdict {
+    let semantic = comparisons
+        .iter()
+        .filter(|comparison| comparison.mode.contributes_to_semantic_verdict())
+        .filter(|comparison| comparison.verdict != DifferentialComparisonVerdict::InsufficientData)
+        .collect::<Vec<_>>();
+
+    if semantic
+        .iter()
+        .any(|comparison| comparison.verdict == DifferentialComparisonVerdict::Divergence)
+    {
+        DifferentialComparisonVerdict::Divergence
+    } else if semantic
+        .iter()
+        .any(|comparison| comparison.verdict == DifferentialComparisonVerdict::Consensus)
+    {
+        DifferentialComparisonVerdict::Consensus
+    } else {
+        DifferentialComparisonVerdict::InsufficientData
+    }
+}
+
+fn canonical_structured_value(
+    receipt: &DifferentialBackendReceipt,
+    canonical_stdout: &str,
+) -> Option<String> {
+    if receipt.status != DifferentialBackendStatus::Completed {
+        return None;
+    }
+    receipt
+        .value
+        .as_deref()
+        .or_else(|| infer_single_stdout_value(canonical_stdout))
+        .map(canonicalize_js_value)
+}
+
+fn infer_single_stdout_value(canonical_stdout: &str) -> Option<&str> {
+    let mut non_empty_lines = canonical_stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty());
+    let first = non_empty_lines.next()?;
+    if non_empty_lines.next().is_some() {
+        None
+    } else {
+        Some(first)
+    }
+}
+
+fn canonical_exception(receipt: &DifferentialBackendReceipt) -> (Option<String>, Option<String>) {
+    if receipt.status != DifferentialBackendStatus::Failed {
+        return (None, None);
+    }
+
+    if let Some(namespace) = receipt
+        .diagnostics
+        .iter()
+        .find(|entry| entry.starts_with("eval."))
+    {
+        return (Some(namespace.to_string()), Some(namespace.to_string()));
+    }
+
+    let first_line = receipt
+        .stderr
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !is_stack_trace_line(line))
+        .unwrap_or_else(|| receipt.stderr.trim());
+    if first_line.is_empty() {
+        return (
+            Some("process_failure".to_string()),
+            Some("empty_stderr".to_string()),
+        );
+    }
+
+    let (kind, message) = first_line
+        .split_once(':')
+        .map(|(kind, message)| (kind.trim(), message.trim()))
+        .unwrap_or(("process_failure", first_line));
+    (
+        Some(canonicalize_exception_kind(kind)),
+        Some(canonicalize_message_class(message)),
+    )
+}
+
+fn canonicalize_stream(value: &str) -> String {
+    let normalized = value.replace("\r\n", "\n").replace('\r', "\n");
+    normalized
+        .trim_end_matches(|ch| matches!(ch, '\n' | '\t' | ' '))
+        .to_string()
+}
+
+fn canonicalize_js_value(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return "empty".to_string();
+    }
+
+    let lowercase = trimmed.to_ascii_lowercase();
+    match lowercase.as_str() {
+        "undefined" | "null" | "true" | "false" | "nan" | "infinity" | "-infinity" => {
+            return lowercase;
+        }
+        _ => {}
+    }
+
+    if let Ok(number) = trimmed.parse::<f64>() {
+        if number.is_finite() {
+            if number.fract() == 0.0 {
+                return format!("{number:.0}");
+            }
+            return number.to_string();
+        }
+    }
+
+    strip_matching_quotes(trimmed)
+        .map(str::to_string)
+        .unwrap_or_else(|| trimmed.to_string())
+}
+
+fn strip_matching_quotes(value: &str) -> Option<&str> {
+    let bytes = value.as_bytes();
+    if bytes.len() >= 2
+        && ((bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\'')
+            || (bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"'))
+    {
+        value.get(1..value.len() - 1)
+    } else {
+        None
+    }
+}
+
+fn canonicalize_exception_kind(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return "process_failure".to_string();
+    }
+    let mut normalized = String::with_capacity(trimmed.len());
+    for ch in trimmed.chars() {
+        if ch.is_ascii_alphanumeric() {
+            normalized.push(ch.to_ascii_lowercase());
+        } else if !normalized.ends_with('_') {
+            normalized.push('_');
+        }
+    }
+    normalized.trim_matches('_').to_string()
+}
+
+fn canonicalize_message_class(value: &str) -> String {
+    let mut normalized = String::with_capacity(value.len());
+    let mut previous_was_separator = false;
+    let mut in_quote = false;
+    let mut quote_char = '\0';
+    for ch in value.trim().chars() {
+        if in_quote {
+            if ch == quote_char {
+                in_quote = false;
+            }
+            if !previous_was_separator {
+                normalized.push('_');
+                previous_was_separator = true;
+            }
+            continue;
+        }
+        if ch == '\'' || ch == '"' || ch == '`' {
+            in_quote = true;
+            quote_char = ch;
+            if !previous_was_separator {
+                normalized.push('_');
+                previous_was_separator = true;
+            }
+            continue;
+        }
+        if ch.is_ascii_digit() {
+            if !previous_was_separator {
+                normalized.push('#');
+                previous_was_separator = true;
+            }
+            continue;
+        }
+        if ch.is_ascii_alphanumeric() {
+            normalized.push(ch.to_ascii_lowercase());
+            previous_was_separator = false;
+        } else if !previous_was_separator {
+            normalized.push('_');
+            previous_was_separator = true;
+        }
+    }
+    let normalized = normalized.trim_matches('_');
+    if normalized.is_empty() {
+        "empty_message".to_string()
+    } else {
+        normalized.to_string()
+    }
+}
+
+fn is_stack_trace_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with("at ")
+        || trimmed.starts_with("at:")
+        || trimmed.starts_with("node:")
+        || trimmed.contains(".js:")
+}
+
+fn timing_envelope(duration_micros: u128) -> DifferentialTimingEnvelope {
+    let tolerance_micros = (duration_micros / 10).max(1_000);
+    DifferentialTimingEnvelope {
+        duration_micros,
+        tolerance_micros,
+        lower_micros: duration_micros.saturating_sub(tolerance_micros),
+        upper_micros: duration_micros.saturating_add(tolerance_micros),
+        bucket: timing_bucket(duration_micros).to_string(),
+    }
+}
+
+fn timing_bucket(duration_micros: u128) -> &'static str {
+    match duration_micros {
+        0..=999 => "lt_1ms",
+        1_000..=4_999 => "1ms_to_5ms",
+        5_000..=24_999 => "5ms_to_25ms",
+        25_000..=99_999 => "25ms_to_100ms",
+        100_000..=999_999 => "100ms_to_1s",
+        _ => "gte_1s",
+    }
+}
+
+fn abbreviate(value: &str) -> String {
+    const MAX_CHARS: usize = 160;
+    let mut chars = value.chars();
+    let prefix = chars.by_ref().take(MAX_CHARS).collect::<String>();
+    if chars.next().is_some() {
+        format!("{prefix}...")
+    } else {
+        prefix
     }
 }
 
@@ -595,5 +1107,177 @@ mod tests {
         assert_eq!(receipt.version.as_deref(), Some("shell-version"));
         assert_eq!(receipt.stdout, "oracle-output");
         assert_eq!(receipt.stdout_sha256, sha256_hex(b"oracle-output"));
+    }
+
+    #[test]
+    fn canonicalization_matches_cosmetic_stdout_and_value_differences() {
+        let report = canonicalize_backend_receipts(&[
+            receipt(
+                DifferentialBackend::NodeLts,
+                DifferentialBackendStatus::Completed,
+                None,
+                "2\r\n",
+                "",
+                &[],
+            ),
+            receipt(
+                DifferentialBackend::FrankenEngine,
+                DifferentialBackendStatus::Completed,
+                Some("2.0"),
+                "2",
+                "",
+                &[],
+            ),
+        ]);
+
+        assert_eq!(
+            report.semantic_verdict,
+            DifferentialComparisonVerdict::Consensus
+        );
+        let structured = comparison(&report, DifferentialComparisonMode::StructuredValue);
+        assert_eq!(structured.verdict, DifferentialComparisonVerdict::Consensus);
+        assert_eq!(structured.groups.len(), 1);
+        assert_eq!(
+            structured.groups[0].backends,
+            vec![
+                DifferentialBackend::NodeLts,
+                DifferentialBackend::FrankenEngine
+            ]
+        );
+    }
+
+    #[test]
+    fn canonicalization_detects_real_structured_value_divergence() {
+        let report = canonicalize_backend_receipts(&[
+            receipt(
+                DifferentialBackend::NodeLts,
+                DifferentialBackendStatus::Completed,
+                None,
+                "2\n",
+                "",
+                &[],
+            ),
+            receipt(
+                DifferentialBackend::FrankenEngine,
+                DifferentialBackendStatus::Completed,
+                Some("3"),
+                "3",
+                "",
+                &[],
+            ),
+        ]);
+
+        assert_eq!(
+            report.semantic_verdict,
+            DifferentialComparisonVerdict::Divergence
+        );
+        let structured = comparison(&report, DifferentialComparisonMode::StructuredValue);
+        assert_eq!(
+            structured.verdict,
+            DifferentialComparisonVerdict::Divergence
+        );
+        assert_eq!(structured.groups.len(), 2);
+    }
+
+    #[test]
+    fn canonicalization_matches_equivalent_exception_shapes() {
+        let report = canonicalize_backend_receipts(&[
+            receipt(
+                DifferentialBackend::NodeLts,
+                DifferentialBackendStatus::Failed,
+                None,
+                "",
+                "TypeError: Cannot read property 'x' of undefined\n    at fixture.js:1:7\n",
+                &[],
+            ),
+            receipt(
+                DifferentialBackend::BunStable,
+                DifferentialBackendStatus::Failed,
+                None,
+                "",
+                "TypeError: Cannot read property \"y\" of undefined\n    at bun:internal\n",
+                &[],
+            ),
+        ]);
+
+        assert_eq!(
+            report.semantic_verdict,
+            DifferentialComparisonVerdict::Consensus
+        );
+        let exceptions = comparison(&report, DifferentialComparisonMode::ExceptionClass);
+        assert_eq!(exceptions.verdict, DifferentialComparisonVerdict::Consensus);
+        assert_eq!(exceptions.groups.len(), 1);
+    }
+
+    #[test]
+    fn canonicalization_detects_exception_kind_divergence() {
+        let report = canonicalize_backend_receipts(&[
+            receipt(
+                DifferentialBackend::NodeLts,
+                DifferentialBackendStatus::Failed,
+                None,
+                "",
+                "TypeError: Cannot read property 'x' of undefined\n",
+                &[],
+            ),
+            receipt(
+                DifferentialBackend::BunStable,
+                DifferentialBackendStatus::Failed,
+                None,
+                "",
+                "ReferenceError: x is not defined\n",
+                &[],
+            ),
+        ]);
+
+        assert_eq!(
+            report.semantic_verdict,
+            DifferentialComparisonVerdict::Divergence
+        );
+        let exceptions = comparison(&report, DifferentialComparisonMode::ExceptionClass);
+        assert_eq!(
+            exceptions.verdict,
+            DifferentialComparisonVerdict::Divergence
+        );
+        assert_eq!(exceptions.groups.len(), 2);
+    }
+
+    fn receipt(
+        backend: DifferentialBackend,
+        status: DifferentialBackendStatus,
+        value: Option<&str>,
+        stdout: &str,
+        stderr: &str,
+        diagnostics: &[&str],
+    ) -> DifferentialBackendReceipt {
+        DifferentialBackendReceipt {
+            backend,
+            status,
+            command: vec![backend.stable_label().to_string()],
+            version: Some("test-runtime".to_string()),
+            exit_code: Some(if status == DifferentialBackendStatus::Completed {
+                0
+            } else {
+                1
+            }),
+            duration_micros: 2_500,
+            value: value.map(str::to_string),
+            stdout: stdout.to_string(),
+            stderr: stderr.to_string(),
+            stdout_sha256: sha256_hex(stdout.as_bytes()),
+            stderr_sha256: sha256_hex(stderr.as_bytes()),
+            diagnostics: diagnostics.iter().map(|entry| entry.to_string()).collect(),
+        }
+    }
+
+    fn comparison(
+        report: &DifferentialCanonicalizationReport,
+        mode: DifferentialComparisonMode,
+    ) -> &DifferentialModeComparison {
+        report
+            .comparisons
+            .iter()
+            .find(|comparison| comparison.mode == mode)
+            .unwrap_or_else(|| panic!("missing {mode:?} comparison"))
     }
 }

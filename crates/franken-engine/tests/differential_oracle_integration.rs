@@ -74,6 +74,24 @@ fn frankenctl_differential_oracle_run_emits_four_backend_receipts() {
     );
     assert_eq!(stdout_report["backends"].as_array().unwrap().len(), 4);
     assert_eq!(
+        stdout_report["canonicalization"]["schema_version"].as_str(),
+        Some("franken-engine.differential-oracle.canonicalization.v1")
+    );
+    assert_eq!(
+        stdout_report["canonicalization"]["observations"]
+            .as_array()
+            .expect("canonical observations should be an array")
+            .len(),
+        4
+    );
+    assert!(
+        stdout_report["canonicalization"]["comparisons"]
+            .as_array()
+            .expect("canonical comparisons should be an array")
+            .iter()
+            .any(|comparison| comparison["mode"].as_str() == Some("structured_value"))
+    );
+    assert_eq!(
         file_report["schema_version"],
         stdout_report["schema_version"]
     );

@@ -6571,6 +6571,215 @@ fn check_ambient_authority_allowed(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn lower_spread_apply_hostcall_to_ir1(
+    capability: &str,
+    leading_arguments: &[Expression],
+    arguments: &[Expression],
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    root_scope_id: ScopeId,
+    label_counter: &mut u32,
+) -> Result<(), LoweringPipelineError> {
+    ops.push(Ir1Op::LoadLiteral {
+        value: Ir1Literal::String(capability.to_string()),
+    });
+    let mut array_elements = Vec::with_capacity(leading_arguments.len() + arguments.len());
+    array_elements.extend(leading_arguments.iter().cloned().map(Some));
+    array_elements.extend(arguments.iter().cloned().map(Some));
+    let args_array = Expression::ArrayLiteral(array_elements);
+    lower_expression_to_ir1(
+        &args_array,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        label_counter,
+    )?;
+    ops.push(Ir1Op::HostCall {
+        capability: "builtin:ApplyHostCall".to_string(),
+        arg_count: 2,
+    });
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_member_spread_call_to_reflect_apply(
+    object: &Expression,
+    property: &Expression,
+    computed: bool,
+    arguments: &[Expression],
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    root_scope_id: ScopeId,
+    label_counter: &mut u32,
+) -> Result<(), LoweringPipelineError> {
+    let receiver_binding = alloc_internal_binding(
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        "spread_method_receiver",
+    )?;
+    lower_expression_to_ir1(
+        object,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        label_counter,
+    )?;
+    ops.push(Ir1Op::StoreBinding {
+        binding_id: receiver_binding,
+    });
+    ops.push(Ir1Op::Pop);
+
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: receiver_binding,
+    });
+    let key = lower_member_property_key_to_ir1(
+        property,
+        computed,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        label_counter,
+    )?;
+    ops.push(Ir1Op::GetProperty { key });
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: receiver_binding,
+    });
+    let args_array = Expression::ArrayLiteral(arguments.iter().cloned().map(Some).collect());
+    lower_expression_to_ir1(
+        &args_array,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        label_counter,
+    )?;
+    ops.push(Ir1Op::HostCall {
+        capability: "builtin:ReflectApply".to_string(),
+        arg_count: 3,
+    });
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_optional_member_spread_call_to_reflect_apply(
+    object: &Expression,
+    property: &Expression,
+    computed: bool,
+    arguments: &[Expression],
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    root_scope_id: ScopeId,
+    label_counter: &mut u32,
+) -> Result<(), LoweringPipelineError> {
+    let temp_obj = alloc_internal_binding(
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        "opt_spread_method_obj",
+    )?;
+    let result_binding = alloc_internal_binding(
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        "opt_spread_method_result",
+    )?;
+    let skip_label = alloc_label(label_counter);
+    let end_label = alloc_label(label_counter);
+
+    lower_expression_to_ir1(
+        object,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        label_counter,
+    )?;
+    ops.push(Ir1Op::StoreBinding {
+        binding_id: temp_obj,
+    });
+    ops.push(Ir1Op::Pop);
+
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: temp_obj,
+    });
+    ops.push(Ir1Op::JumpIfNullish {
+        label_id: skip_label,
+    });
+
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: temp_obj,
+    });
+    let key = lower_member_property_key_to_ir1(
+        property,
+        computed,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        label_counter,
+    )?;
+    ops.push(Ir1Op::GetProperty { key });
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: temp_obj,
+    });
+    let args_array = Expression::ArrayLiteral(arguments.iter().cloned().map(Some).collect());
+    lower_expression_to_ir1(
+        &args_array,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        label_counter,
+    )?;
+    ops.push(Ir1Op::HostCall {
+        capability: "builtin:ReflectApply".to_string(),
+        arg_count: 3,
+    });
+    ops.push(Ir1Op::StoreBinding {
+        binding_id: result_binding,
+    });
+    ops.push(Ir1Op::Pop);
+    ops.push(Ir1Op::Jump {
+        label_id: end_label,
+    });
+
+    ops.push(Ir1Op::Label { id: skip_label });
+    ops.push(Ir1Op::LoadLiteral {
+        value: Ir1Literal::Undefined,
+    });
+    ops.push(Ir1Op::StoreBinding {
+        binding_id: result_binding,
+    });
+    ops.push(Ir1Op::Pop);
+
+    ops.push(Ir1Op::Label { id: end_label });
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: result_binding,
+    });
+    Ok(())
+}
+
 fn lower_expression_to_ir1(
     expression: &Expression,
     ops: &mut Vec<Ir1Op>,
@@ -7498,6 +7707,204 @@ fn lower_expression_to_ir1(
                 callee.as_ref(),
                 Expression::Member { .. } | Expression::OptionalMember { .. }
             );
+            if has_spread_argument {
+                if let Some(capability) = math_builtin_call_capability(callee, binding_lookup) {
+                    lower_spread_apply_hostcall_to_ir1(
+                        capability,
+                        &[],
+                        arguments,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    return Ok(());
+                }
+                if let Some(capability) = date_builtin_call_capability(callee, binding_lookup) {
+                    lower_spread_apply_hostcall_to_ir1(
+                        capability,
+                        &[],
+                        arguments,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    return Ok(());
+                }
+                if let Some(capability) = console_builtin_call_capability(callee, binding_lookup) {
+                    lower_spread_apply_hostcall_to_ir1(
+                        capability,
+                        &[],
+                        arguments,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    return Ok(());
+                }
+                if let Some(capability) = promise_builtin_call_capability(callee, binding_lookup) {
+                    lower_spread_apply_hostcall_to_ir1(
+                        capability,
+                        &[],
+                        arguments,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    return Ok(());
+                }
+                if let Some(capability) = reflect_builtin_call_capability(callee, binding_lookup) {
+                    lower_spread_apply_hostcall_to_ir1(
+                        capability,
+                        &[],
+                        arguments,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    return Ok(());
+                }
+                if let Some(capability) =
+                    number_static_builtin_call_capability(callee, binding_lookup)
+                {
+                    lower_spread_apply_hostcall_to_ir1(
+                        capability,
+                        &[],
+                        arguments,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    return Ok(());
+                }
+                if let Some(capability) =
+                    object_json_builtin_call_capability(callee, binding_lookup)
+                {
+                    lower_spread_apply_hostcall_to_ir1(
+                        capability,
+                        &[],
+                        arguments,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    return Ok(());
+                }
+                if let Some(capability) =
+                    object_receiver_static_call_capability(callee, binding_lookup)
+                {
+                    lower_spread_apply_hostcall_to_ir1(
+                        capability,
+                        &[Expression::UndefinedLiteral],
+                        arguments,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    return Ok(());
+                }
+                if let Some(capability) = string_literal_builtin_call_capability(callee) {
+                    let Expression::Member { object, .. } = callee.as_ref() else {
+                        return Err(LoweringPipelineError::InvariantViolation {
+                            detail: "string literal builtin capability without member callee",
+                        });
+                    };
+                    lower_spread_apply_hostcall_to_ir1(
+                        capability,
+                        &[object.as_ref().clone()],
+                        arguments,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    return Ok(());
+                }
+                if let Some(capability) = array_literal_builtin_call_capability(callee) {
+                    let Expression::Member { object, .. } = callee.as_ref() else {
+                        return Err(LoweringPipelineError::InvariantViolation {
+                            detail: "array literal builtin capability without member callee",
+                        });
+                    };
+                    lower_spread_apply_hostcall_to_ir1(
+                        capability,
+                        &[object.as_ref().clone()],
+                        arguments,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    return Ok(());
+                }
+                if let Expression::Member {
+                    object,
+                    property,
+                    computed,
+                } = callee.as_ref()
+                {
+                    lower_member_spread_call_to_reflect_apply(
+                        object,
+                        property,
+                        *computed,
+                        arguments,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    return Ok(());
+                }
+                if let Expression::OptionalMember {
+                    object,
+                    property,
+                    computed,
+                } = callee.as_ref()
+                {
+                    lower_optional_member_spread_call_to_reflect_apply(
+                        object,
+                        property,
+                        *computed,
+                        arguments,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    return Ok(());
+                }
+            }
             if has_spread_argument && !callee_is_member {
                 // builtin:ReflectApply reads [target, thisArg, argsList].
                 lower_expression_to_ir1(

@@ -16272,6 +16272,82 @@ impl InterpreterCore {
         outcome
     }
 
+    fn dispatch_hostcall_with_value_args(
+        &mut self,
+        cap: &str,
+        values: Vec<Value>,
+        module: Option<&Ir3Module>,
+    ) -> Result<Value, InterpreterError> {
+        let count =
+            u32::try_from(values.len()).map_err(|_| InterpreterError::RegisterOutOfBounds {
+                register: u32::MAX,
+                max: self.config.max_registers,
+            })?;
+        if count > self.config.max_registers {
+            return Err(InterpreterError::RegisterOutOfBounds {
+                register: count,
+                max: self.config.max_registers,
+            });
+        }
+
+        let register_base = self.register_base;
+        let value_count = count as usize;
+        let required_len = register_base.saturating_add(value_count);
+        let saved = self.mutate_registers(|registers| {
+            if registers.len() < required_len {
+                registers.resize(required_len, Value::Undefined);
+            }
+            let saved = registers[register_base..required_len].to_vec();
+            for (offset, value) in values.into_iter().enumerate() {
+                registers[register_base + offset] = value;
+            }
+            saved
+        });
+
+        let delegated_args = RegRange { start: 0, count };
+        let outcome = (|this: &mut Self| {
+            if cap.starts_with("promise:") {
+                this.dispatch_promise_hostcall(cap, delegated_args, module)
+            } else if cap == "module:require" {
+                let spec_val = if delegated_args.count > 0 {
+                    this.read_reg(delegated_args.start)?
+                } else {
+                    Value::Undefined
+                };
+                let specifier = match spec_val {
+                    Value::Str(s) => s,
+                    other => {
+                        return Err(InterpreterError::RequireSpecifierNotString {
+                            got: other.type_name().to_string(),
+                        });
+                    }
+                };
+                let module = module.ok_or_else(|| InterpreterError::InternalError {
+                    details: "module:require apply hostcall missing module context".to_string(),
+                })?;
+                this.require_module(module, &specifier)
+            } else if cap.starts_with("number:") {
+                this.dispatch_number_hostcall(cap, delegated_args)
+            } else if cap.starts_with("console:") {
+                this.dispatch_console_hostcall(cap, delegated_args)
+            } else if cap.starts_with("timer:") {
+                this.dispatch_timer_hostcall(cap, delegated_args)
+            } else if cap.starts_with("builtin:") {
+                this.dispatch_builtin_hostcall(cap, delegated_args, module)
+            } else {
+                Ok(Value::Undefined)
+            }
+        })(self);
+
+        self.mutate_registers(|registers| {
+            if registers.len() < required_len {
+                registers.resize(required_len, Value::Undefined);
+            }
+            registers[register_base..required_len].clone_from_slice(&saved);
+        });
+        outcome
+    }
+
     fn dispatch_builtin_hostcall_inner(
         &mut self,
         cap: &str,
@@ -16279,6 +16355,32 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
         match cap {
+            "builtin:ApplyHostCall" => {
+                if args.count < 2 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "target capability and argumentsList".to_string(),
+                        got: "missing argument".to_string(),
+                    });
+                }
+                let target_cap = match self.read_reg(args.start)? {
+                    Value::Str(capability) => capability.to_string(),
+                    other => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "hostcall capability string".to_string(),
+                            got: other.type_name().to_string(),
+                        });
+                    }
+                };
+                if target_cap == "builtin:ApplyHostCall" {
+                    return Err(InterpreterError::TypeError {
+                        expected: "non-recursive hostcall capability".to_string(),
+                        got: target_cap,
+                    });
+                }
+                check_hostcall_capability_gate(self, &target_cap, self.ip as u32)?;
+                let values = self.array_like_argument_values(self.read_reg(args.start + 1)?)?;
+                self.dispatch_hostcall_with_value_args(&target_cap, values, module)
+            }
             // Array methods
             "builtin:ArrayPrototypePush" => {
                 // Array.prototype.push implementation - adds elements to end of array and returns new length

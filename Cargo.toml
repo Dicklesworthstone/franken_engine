@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/dp",
+  "crates/franken-core",
   "crates/franken-engine",
   "crates/franken-engine-control-plane-integration-tests",
   "crates/franken-engine-deterministic-derive",
@@ -10,10 +11,6 @@ members = [
   "crates/franken-extension-host",
   "crates/franken-metamorphic",
 ]
-# NOTE: crates/franken-core is an in-progress modularization effort. Its
-# standalone manifest is compileable, but the crate remains excluded until a
-# deliberate workspace integration pass validates the extracted API boundary.
-exclude = ["crates/franken-core"]
 resolver = "2"
 
 [workspace.package]

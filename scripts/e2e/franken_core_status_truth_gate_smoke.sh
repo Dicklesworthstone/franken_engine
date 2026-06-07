@@ -21,20 +21,20 @@ write_truthful_root_manifest() {
 [workspace]
 members = [
   "crates/franken-engine",
+  "crates/franken-core",
 ]
-exclude = ["crates/franken-core"]
 resolver = "2"
 EOF
 }
 
-write_included_root_manifest() {
+write_excluded_root_manifest() {
   local path="$1"
   cat >"$path" <<'EOF'
 [workspace]
 members = [
   "crates/franken-engine",
-  "crates/franken-core",
 ]
+exclude = ["crates/franken-core"]
 resolver = "2"
 EOF
 }
@@ -56,8 +56,9 @@ assert_report_shape() {
     and (.decision == "pass" or .decision == "fail_closed")
     and (.root_workspace_state | type == "string")
     and (.manifest_state.core_manifest_state | type == "string")
-    and (.canonical_truth.workspace_graduation_complete == false)
-    and (.canonical_truth.workspace_acceptance_required == "bd-4w7h9.8")
+    and (.canonical_truth.workspace_graduation_complete == true)
+    and (.canonical_truth.workspace_acceptance_required == "bd-cixqu.10.7")
+    and (.canonical_truth.reexclude_guard_required == "bd-cixqu.10.8")
     and any(.evidence_beads[]; .bead_id == "bd-ucemx")
     and any(.evidence_beads[]; .bead_id == "bd-zsais")
     and any(.evidence_beads[]; .bead_id == "bd-dymfz")
@@ -83,10 +84,10 @@ run_live_case() {
   assert_report_shape "$report_path"
   jq -e '
     .decision == "pass"
-    and .root_workspace_state == "excluded_standalone"
+    and .root_workspace_state == "included"
     and .violation_count == 0
   ' "$report_path" >/dev/null || record_failure "live truthful state mismatch"
-  record_pass "live-current-truthful-state"
+  record_pass "live-current-included-state"
 }
 
 run_fixture_case() {
@@ -104,8 +105,8 @@ run_fixture_case() {
   claim_file="${tmpdir}/docs/status.md"
   output_dir="${tmpdir}/out"
 
-  if [[ "$root_mode" == "included" ]]; then
-    write_included_root_manifest "$root_manifest"
+  if [[ "$root_mode" == "excluded" ]]; then
+    write_excluded_root_manifest "$root_manifest"
   else
     write_truthful_root_manifest "$root_manifest"
   fi
@@ -147,7 +148,7 @@ run_fixture_case() {
     jq -e --arg code "$required_reason" 'any(.violations[]; .code == $code and (.remediation | length > 0) and (.path | length > 0))' "$report_path" >/dev/null \
       || record_failure "missing remediation ${case_name}"
   fi
-  grep -Fq "bd-zsais" "${output_dir}/commands.txt" || record_failure "commands missing superseding bead ${case_name}"
+  grep -Fq "bd-cixqu.10.8" "${output_dir}/commands.txt" || record_failure "commands missing re-exclusion guard ${case_name}"
   record_pass "$case_name"
 }
 
@@ -159,8 +160,8 @@ run_check() {
     "truthful-fixture" \
     "pass" \
     "" \
-    "excluded" \
-    "crates/franken-core remains excluded from the root workspace, while its standalone manifest is compileable. The old reference-only state is superseded by bd-zsais, bd-dymfz, and bd-nwhcp. Workspace graduation remains blocked until bd-4w7h9.8 passes."
+    "included" \
+    "crates/franken-core is included in the root workspace as a first-class member, while its standalone manifest remains compileable. bd-cixqu.10.8 forbids reintroducing a workspace.exclude entry for crates/franken-core."
   git -C "$root_dir" diff --check -- \
     docs/FRANKEN_CORE_STATUS_TRUTH_GATE_V1.md \
     docs/franken_core_status_truth_gate_v1.json \
@@ -174,20 +175,20 @@ run_negative() {
     "stale-reference-only-claim" \
     "fail_closed" \
     "stale_reference_only_claim" \
-    "excluded" \
+    "included" \
     "crates/franken-core is reference-only because required modules are missing."
   run_fixture_case \
-    "workspace-inclusion-overclaim" \
+    "stale-excluded-claim" \
     "fail_closed" \
-    "workspace_inclusion_overclaim" \
-    "excluded" \
-    "crates/franken-core is workspace-ready and included in the workspace."
-  run_fixture_case \
-    "manifest-doc-contradiction" \
-    "fail_closed" \
-    "root_manifest_state_contradicts_excluded_contract" \
+    "stale_excluded_status_claim" \
     "included" \
-    "crates/franken-core remains excluded from the root workspace, while its standalone manifest is compileable. Workspace graduation remains blocked until bd-4w7h9.8 passes."
+    "crates/franken-core remains excluded from the root workspace."
+  run_fixture_case \
+    "manifest-reexclude-guard" \
+    "fail_closed" \
+    "franken_core_reexcluded_from_workspace" \
+    "excluded" \
+    "crates/franken-core is included in the root workspace as a first-class member, while its standalone manifest remains compileable."
   record_pass "negative"
 }
 

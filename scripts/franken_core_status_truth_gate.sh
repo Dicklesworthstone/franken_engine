@@ -225,20 +225,63 @@ file_has_superseding_context() {
      "$lower" == *"standalone manifest is compileable"* ]]
 }
 
-line_has_overclaim() {
+line_has_included_claim() {
   local lower="$1"
-  [[ "$lower" == *"workspace-ready"* ||
-     "$lower" == *"workspace ready"* ||
+  [[ "$lower" == *"included in the root workspace"* ||
      "$lower" == *"included in the workspace"* ||
      "$lower" == *"included in workspace"* ||
      "$lower" == *"workspace member"* ||
      "$lower" == *"workspace inclusion complete"* ||
      "$lower" == *"workspace inclusion is complete"* ||
+     "$lower" == *"workspace_graduation_complete"* && "$lower" == *"true"* ||
+     "$lower" == *"root_workspace_state"* && "$lower" == *"included"* ||
+     "$lower" == *"current_workspace_state"* && "$lower" == *"included"* ]]
+}
+
+line_has_stale_exclusion_claim() {
+  local lower="$1"
+  [[ "$lower" == *"excluded from the root workspace"* ||
+     "$lower" == *"excluded from the workspace"* ||
+     "$lower" == *"remains excluded"* ||
+     "$lower" == *"still excludes"* ||
+     "$lower" == *"root workspace explicitly excludes"* ||
+     "$lower" == *"current_workspace_state"* && "$lower" == *"excluded"* ||
+     "$lower" == *"root_workspace_state"* && "$lower" == *"excluded_standalone"* ||
+     "$lower" == *"excluded_standalone"* ||
+     "$lower" == *"workspace_excluded"* ||
+     "$lower" == *"remain_excluded"* ||
+     "$lower" == *"exclude"* && "$lower" == *"crates/franken-core"* ]]
+}
+
+line_negates_stale_exclusion_claim() {
+  local lower="$1"
+  [[ "$lower" == *"must not"* ||
+     "$lower" == *"cannot"* ||
+     "$lower" == *"forbid"* ||
+     "$lower" == *"forbidden"* ||
+     "$lower" == *"reject"* ||
+     "$lower" == *"negative"* ||
+     "$lower" == *"no longer"* ||
+     "$lower" == *"former"* ||
+     "$lower" == *"historical"* ||
+     "$lower" == *"stale claims"* ||
+     "$lower" == *"fail-closed"* ||
+     "$lower" == *"violation"* ||
+     "$lower" == *"before bd-cixqu.10.7"* ||
+     "$lower" == *"bd-cixqu.10.8"* ||
+     "$lower" == *"re-exclude"* ||
+     "$lower" == *"reintroduce"* ]]
+}
+
+line_has_premature_inclusion_claim() {
+  local lower="$1"
+  [[ "$lower" == *"workspace-ready"* ||
+     "$lower" == *"workspace ready"* ||
      "$lower" == *"graduation complete"* ||
      "$lower" == *"ready for workspace inclusion"* ]]
 }
 
-line_negates_overclaim() {
+line_negates_premature_inclusion_claim() {
   local lower="$1"
   [[ "$lower" == *"not "* ||
      "$lower" == *"must not"* ||
@@ -261,18 +304,6 @@ line_negates_overclaim() {
      "$lower" == *"not approve"* ]]
 }
 
-line_has_excluded_claim() {
-  local lower="$1"
-  [[ "$lower" == *"excluded from the workspace"* ||
-     "$lower" == *"remains excluded"* ||
-     "$lower" == *"still excludes"* ||
-     "$lower" == *"root workspace explicitly excludes"* ||
-     "$lower" == *"current_workspace_state"* && "$lower" == *"excluded"* ||
-     "$lower" == *"workspace_excluded"* ||
-     "$lower" == *"remain_excluded"* ||
-     "$lower" == *"exclude"* && "$lower" == *"crates/franken-core"* ]]
-}
-
 line_has_standalone_compileability_claim() {
   local lower="$1"
   [[ "$lower" == *"standalone manifest compileable"* ||
@@ -287,16 +318,19 @@ write_event "truth_gate_start" "started" "checking franken-core status claims"
 
 if [[ ! -f "$root_cargo" ]]; then
   append_violation \
-    "root_manifest_state_contradicts_excluded_contract" \
+    "root_manifest_state_contradicts_included_contract" \
     "$root_cargo" \
     0 \
     "root Cargo.toml missing" \
-    "Restore a root Cargo.toml that excludes crates/franken-core until bd-4w7h9.8 passes."
+    "Restore a root Cargo.toml that includes crates/franken-core as a workspace member and does not exclude it."
   members_contains_core="missing"
   exclude_contains_core="missing"
 else
   members_contains_core="$(toml_array_contains "$root_cargo" "members" "crates/franken-core")"
   exclude_contains_core="$(toml_array_contains "$root_cargo" "exclude" "crates/franken-core")"
+  if [[ "$exclude_contains_core" == "missing" ]]; then
+    exclude_contains_core="false"
+  fi
 fi
 
 core_state="$(core_package_state "$core_cargo")"
@@ -320,22 +354,31 @@ else
   root_workspace_state="unclassified"
 fi
 
-if [[ "$root_workspace_state" != "excluded_standalone" ]]; then
+if [[ "$exclude_contains_core" == "true" ]]; then
   append_violation \
-    "root_manifest_state_contradicts_excluded_contract" \
+    "franken_core_reexcluded_from_workspace" \
+    "$root_cargo" \
+    0 \
+    "exclude contains crates/franken-core: ${exclude_contains_core}" \
+    "Remove crates/franken-core from workspace.exclude; bd-cixqu.10.8 forbids silently dropping it from all-target checks."
+fi
+
+if [[ "$root_workspace_state" != "included" ]]; then
+  append_violation \
+    "root_manifest_state_contradicts_included_contract" \
     "$root_cargo" \
     0 \
     "members contains crates/franken-core: ${members_contains_core}; exclude contains crates/franken-core: ${exclude_contains_core}" \
-    "Either keep crates/franken-core excluded until bd-4w7h9.8 passes, or update the graduation contract and topology evidence in the same approved topology bead."
+    "Keep crates/franken-core in workspace.members and out of workspace.exclude after bd-cixqu.10.7."
 fi
 
-has_excluded_claim=false
+has_included_claim=false
 has_standalone_compileability_claim=false
 
 while IFS= read -r claim_file; do
   if [[ ! -f "$claim_file" ]]; then
     append_violation \
-      "missing_excluded_status_claim" \
+      "missing_included_status_claim" \
       "$claim_file" \
       0 \
       "claim file missing" \
@@ -351,8 +394,8 @@ while IFS= read -r claim_file; do
     lower="${line,,}"
     combined_lower="${previous_lower} ${lower}"
 
-    if line_has_excluded_claim "$lower"; then
-      has_excluded_claim=true
+    if line_has_included_claim "$lower"; then
+      has_included_claim=true
     fi
     if line_has_standalone_compileability_claim "$lower"; then
       has_standalone_compileability_claim=true
@@ -364,28 +407,32 @@ while IFS= read -r claim_file; do
         "$claim_file" \
         "$line_number" \
         "$line" \
-        "Say crates/franken-core remains excluded but standalone compileability was restored by bd-zsais, bd-dymfz, and bd-nwhcp; do not repeat the old reference-only/missing-module state as current."
+        "Say crates/franken-core is now included as a workspace member after standalone compileability was restored by bd-zsais, bd-dymfz, and bd-nwhcp."
     fi
 
-    if line_mentions_core "$lower" && line_has_overclaim "$lower" && ! line_negates_overclaim "$combined_lower"; then
+    if line_mentions_core "$lower" && line_has_stale_exclusion_claim "$lower" && ! line_negates_stale_exclusion_claim "$combined_lower"; then
       append_violation \
-        "workspace_inclusion_overclaim" \
+        "stale_excluded_status_claim" \
         "$claim_file" \
         "$line_number" \
         "$line" \
-        "Replace workspace-ready/included wording with: crates/franken-core remains excluded until bd-4w7h9.8 passes and a separate topology bead changes Cargo.toml."
+        "Replace excluded-standalone wording with: crates/franken-core is included in the root workspace; bd-cixqu.10.8 rejects future re-exclusion."
+    fi
+
+    if line_mentions_core "$lower" && line_has_premature_inclusion_claim "$lower" && ! line_negates_premature_inclusion_claim "$combined_lower"; then
+      has_included_claim=true
     fi
     previous_lower="$lower"
   done <"$claim_file"
 done < <(jq -r '.[]' "$claim_files_json")
 
-if [[ "$has_excluded_claim" != "true" ]]; then
+if [[ "$has_included_claim" != "true" ]]; then
   append_violation \
-    "missing_excluded_status_claim" \
+    "missing_included_status_claim" \
     "$claim_files_json" \
     0 \
-    "no canonical excluded-status claim found" \
-    "Add explicit wording that crates/franken-core remains excluded from the root workspace."
+    "no canonical included-status claim found" \
+    "Add explicit wording that crates/franken-core is included in the root workspace and guarded against re-exclusion."
 fi
 
 if [[ "$has_standalone_compileability_claim" != "true" ]]; then
@@ -394,7 +441,7 @@ if [[ "$has_standalone_compileability_claim" != "true" ]]; then
     "$claim_files_json" \
     0 \
     "no standalone compileability claim found" \
-    "Add explicit wording that crates/franken-core has a standalone compileable manifest while workspace graduation remains blocked."
+    "Add explicit wording that crates/franken-core keeps a standalone compileable manifest while also participating in the workspace."
 fi
 
 violation_count="$(jq -s 'length' "$violations_jsonl")"
@@ -433,16 +480,19 @@ jq -n \
       core_manifest_state: $core_manifest_state
     },
     canonical_truth: {
-      current_state: "excluded_but_standalone_compileable",
-      workspace_graduation_complete: false,
-      workspace_acceptance_required: "bd-4w7h9.8"
+      current_state: "included_workspace_member",
+      workspace_graduation_complete: true,
+      workspace_acceptance_required: "bd-cixqu.10.7",
+      reexclude_guard_required: "bd-cixqu.10.8"
     },
     evidence_beads: [
       {bead_id:"bd-ucemx", role:"historical missing-module/reference-only context"},
       {bead_id:"bd-zsais", role:"standalone manifest compileability restored"},
       {bead_id:"bd-dymfz", role:"standalone franken-core test baseline restored"},
       {bead_id:"bd-nwhcp", role:"executable timer regressions restored"},
-      {bead_id:"bd-4w7h9.8", role:"required final acceptance suite"}
+      {bead_id:"bd-4w7h9.8", role:"final acceptance suite approved explicit membership bead"},
+      {bead_id:"bd-cixqu.10.7", role:"explicit workspace inclusion topology change"},
+      {bead_id:"bd-cixqu.10.8", role:"negative guard against future re-exclusion"}
     ],
     claim_files: $claim_files,
     reason_codes: $reason_codes,
@@ -486,7 +536,7 @@ jq -nc \
 
 {
   printf 'canonical remediation text:\n'
-  printf 'crates/franken-core remains excluded from the root workspace, while its standalone manifest is compileable. The old reference-only/missing-module state is superseded by bd-zsais, bd-dymfz, and bd-nwhcp. Workspace graduation remains blocked until bd-4w7h9.8 passes.\n'
+  printf 'crates/franken-core is included in the root workspace as a first-class member, while its standalone manifest remains compileable. bd-cixqu.10.8 forbids reintroducing a workspace.exclude entry for crates/franken-core.\n'
 } >>"$commands_path"
 
 if [[ "$decision" == "fail_closed" ]]; then

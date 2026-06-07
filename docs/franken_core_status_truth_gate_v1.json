@@ -5,7 +5,7 @@
   "parent_bead_id": "bd-4w7h9",
   "policy_id": "policy-franken-core-status-truth-gate-v1",
   "status": "active",
-  "purpose": "Keep franken-core docs and manifests aligned with the excluded-but-standalone-compileable graduation state.",
+  "purpose": "Keep franken-core docs and manifests aligned with the included-workspace graduation state and reject future re-exclusion.",
   "docs": {
     "operator_contract": "docs/FRANKEN_CORE_STATUS_TRUTH_GATE_V1.md",
     "machine_contract": "docs/franken_core_status_truth_gate_v1.json",
@@ -13,12 +13,14 @@
     "smoke": "scripts/e2e/franken_core_status_truth_gate_smoke.sh"
   },
   "canonical_state": {
-    "root_workspace_state": "excluded_standalone",
-    "root_cargo_exclude": "crates/franken-core",
+    "root_workspace_state": "included",
+    "root_cargo_exclude": null,
+    "forbidden_root_cargo_exclude": "crates/franken-core",
     "core_manifest_path": "crates/franken-core/Cargo.toml",
     "core_package_name": "frankenengine-core",
-    "workspace_graduation_complete": false,
-    "workspace_acceptance_required": "bd-4w7h9.8"
+    "workspace_graduation_complete": true,
+    "workspace_acceptance_required": "bd-cixqu.10.7",
+    "reexclude_guard_required": "bd-cixqu.10.8"
   },
   "historical_evidence": [
     {
@@ -44,15 +46,26 @@
     {
       "bead_id": "bd-4w7h9.8",
       "role": "final graduation acceptance suite",
-      "current_use": "required before workspace inclusion can be claimed"
+      "current_use": "approved opening the explicit workspace-membership bead"
+    },
+    {
+      "bead_id": "bd-cixqu.10.7",
+      "role": "explicit workspace inclusion topology change",
+      "current_use": "makes franken-core a first-class workspace member"
+    },
+    {
+      "bead_id": "bd-cixqu.10.8",
+      "role": "negative re-exclusion guard",
+      "current_use": "forbids workspace.exclude from silently dropping franken-core from all-target checks"
     }
   ],
   "required_reason_codes": [
-    "root_manifest_state_contradicts_excluded_contract",
+    "root_manifest_state_contradicts_included_contract",
+    "franken_core_reexcluded_from_workspace",
     "core_manifest_missing_or_malformed",
     "stale_reference_only_claim",
-    "workspace_inclusion_overclaim",
-    "missing_excluded_status_claim",
+    "stale_excluded_status_claim",
+    "missing_included_status_claim",
     "missing_standalone_compileability_claim"
   ],
   "required_outputs": [

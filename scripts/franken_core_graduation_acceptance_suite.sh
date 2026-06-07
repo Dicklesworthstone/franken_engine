@@ -206,7 +206,7 @@ if [[ -f "$golden_json" ]]; then
     ([.reports[].family] | sort) == [
       "api_parity_ledger",
       "graduation_contract",
-      "negative_status_truth_gate_overclaim",
+      "negative_status_truth_gate_stale_exclusion",
       "no_mock_graduation_drill",
       "staged_inclusion_rehearsal",
       "status_truth_gate",
@@ -237,16 +237,19 @@ fi
 
 members_contains_core="$(toml_array_contains "$root_cargo" "members" "crates/franken-core")"
 exclude_contains_core="$(toml_array_contains "$root_cargo" "exclude" "crates/franken-core")"
+if [[ "$exclude_contains_core" == "missing" ]]; then
+  exclude_contains_core="false"
+fi
 root_workspace_state="unknown"
 if [[ "$exclude_contains_core" == "true" && "$members_contains_core" == "false" ]]; then
-  root_workspace_state="excluded_standalone"
+  root_workspace_state="reexcluded_standalone"
 elif [[ "$members_contains_core" == "true" && "$exclude_contains_core" == "false" ]]; then
-  root_workspace_state="already_included"
+  root_workspace_state="included"
 else
   root_workspace_state="ambiguous"
 fi
-if [[ "$root_workspace_state" == "already_included" ]]; then
-  append_violation "workspace_already_changed" "$root_cargo" "franken-core already appears as a workspace member" "This acceptance suite only approves readiness for a later explicit topology bead; it must not run after silent membership changes."
+if [[ "$root_workspace_state" != "included" ]]; then
+  append_violation "workspace_not_included_after_bd_cixqu_10_7" "$root_cargo" "expected included workspace state, got ${root_workspace_state}" "Keep crates/franken-core in workspace.members and out of workspace.exclude after bd-cixqu.10.7."
 fi
 
 violations_json="$(jq -s 'sort_by(.code, .path, .detail)' "$violations_jsonl")"
@@ -254,9 +257,9 @@ reason_codes_json="$(jq -s '[.[].code] | unique | sort' "$violations_jsonl")"
 violation_count="$(jq -s 'length' "$violations_jsonl")"
 child_results_json="$(jq -s 'sort_by(.name)' "$child_results_jsonl")"
 
-decision="ready_for_explicit_workspace_membership_bead"
+decision="workspace_membership_complete"
 if [[ "$violation_count" -ne 0 ]]; then
-  decision="remain_excluded"
+  decision="fail_closed"
 fi
 
 final_proof_commands_json="$(jq -n '[
@@ -284,14 +287,14 @@ jq -n \
     source_revision:$source_revision,
     decision:$decision,
     root_workspace_state:$root_workspace_state,
-    workspace_membership_complete:false,
-    ready_for_explicit_change:($decision == "ready_for_explicit_workspace_membership_bead"),
+    workspace_membership_complete:($decision == "workspace_membership_complete"),
+    ready_for_explicit_change:false,
     child_results:$child_results,
     reason_codes:$reason_codes,
     violation_count:$violation_count,
     violations:$violations,
     final_proof_commands:$final_proof_commands,
-    next_recommendation:(if $decision == "ready_for_explicit_workspace_membership_bead" then "open a separate explicit workspace-membership bead if operators want to change Cargo.toml" else "keep crates/franken-core excluded and fix fail-closed violations" end),
+    next_recommendation:(if $decision == "workspace_membership_complete" then "keep bd-cixqu.10.8 re-exclusion guard green and run final rch-wrapped workspace gates" else "fix fail-closed violations before claiming the included topology is coherent" end),
     coordination_handling:{
       agent_mail_required:false,
       degraded_agent_mail_fallback:"use Beads assignment plus Git commits as the soft lock; record Agent Mail outage in handoff"
@@ -317,7 +320,7 @@ jq -nc --arg schema_version "franken-engine.franken-core-graduation-acceptance.e
   printf '# Franken-Core Graduation Acceptance\n\n'
   printf -- '- decision: `%s`\n' "$decision"
   printf -- '- root_workspace_state: `%s`\n' "$root_workspace_state"
-  printf -- '- workspace_membership_complete: `false`\n'
+  printf -- '- workspace_membership_complete: `%s`\n' "$(jq -r '.workspace_membership_complete' "$report_json")"
   printf '\n## Final Proof Commands\n\n'
   jq -r '.final_proof_commands[] | "- " + .' "$report_json"
   if [[ "$violation_count" -ne 0 ]]; then
@@ -331,7 +334,7 @@ jq -nc --arg schema_version "franken-engine.franken-core-graduation-acceptance.e
   jq -r '.final_proof_commands[] | "- " + .' "$report_json"
 } >>"$commands_path"
 
-if [[ "$decision" == "remain_excluded" ]]; then
+if [[ "$decision" == "fail_closed" ]]; then
   exit 42
 fi
 exit 0

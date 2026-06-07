@@ -14,16 +14,16 @@
     {
       "family": "graduation_contract",
       "schema_version": "franken-engine.franken-core-graduation-contract.v1",
-      "current_workspace_state": "excluded",
-      "workspace_inclusion_complete": false,
+      "current_workspace_state": "included",
+      "workspace_inclusion_complete": true,
       "acceptance_suite_required": "bd-4w7h9.8",
       "forbidden_shortcut_count": 6
     },
     {
       "family": "api_parity_ledger",
       "schema_version": "franken-engine.franken-core-api-parity-ledger.v1",
-      "decision_workspace_state": "excluded",
-      "workspace_inclusion_complete": false,
+      "decision_workspace_state": "included",
+      "workspace_inclusion_complete": true,
       "core_module_count": 41,
       "matching_engine_export_count": 41,
       "unclassified_row_count": 0,
@@ -48,22 +48,24 @@
       "family": "status_truth_gate",
       "schema_version": "franken-engine.franken-core-status-truth-report.v1",
       "decision": "pass",
-      "root_workspace_state": "excluded_standalone",
+      "root_workspace_state": "included",
       "violation_count": 0,
       "evidence_bead_ids": [
         "bd-ucemx",
         "bd-zsais",
         "bd-dymfz",
         "bd-nwhcp",
-        "bd-4w7h9.8"
+        "bd-4w7h9.8",
+        "bd-cixqu.10.7",
+        "bd-cixqu.10.8"
       ]
     },
     {
       "family": "no_mock_graduation_drill",
       "schema_version": "franken-engine.franken-core-no-mock-graduation-drill-report.v1",
       "decision": "pass",
-      "root_workspace_state": "excluded_standalone",
-      "workspace_inclusion_ready": false,
+      "root_workspace_state": "included",
+      "workspace_inclusion_ready": true,
       "selected_modules": [
         "object_model",
         "promise_model",
@@ -71,14 +73,14 @@
         "control_plane",
         "capability"
       ],
-      "proof_count": 6
+      "proof_count": 7
     },
     {
       "family": "staged_inclusion_rehearsal",
       "schema_version": "franken-engine.franken-core-staged-inclusion-rehearsal-report.v1",
       "decision": "pass",
       "simulation_mode": "current",
-      "root_workspace_state": "excluded_standalone",
+      "root_workspace_state": "included",
       "mutates_root_cargo_toml": false,
       "risk_ids": [
         "feature_propagation",
@@ -88,16 +90,17 @@
         "workspace_membership_blast_radius"
       ],
       "validation_gate_count": 6,
-      "rollback_step_count": 4
+      "rollback_step_count": 5
     },
     {
-      "family": "negative_status_truth_gate_overclaim",
+      "family": "negative_status_truth_gate_stale_exclusion",
       "schema_version": "franken-engine.franken-core-status-truth-report.v1",
       "decision": "fail_closed",
       "reason_codes": [
-        "workspace_inclusion_overclaim"
+        "missing_included_status_claim",
+        "stale_excluded_status_claim"
       ],
-      "violation_count": 1
+      "violation_count": 2
     }
   ]
 }

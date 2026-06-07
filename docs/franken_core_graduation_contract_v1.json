@@ -22,11 +22,11 @@
     ".beads/issues.jsonl"
   ],
   "decision": {
-    "current_workspace_state": "excluded",
-    "current_state_rationale": "Root Cargo.toml excludes crates/franken-core while later beads restored standalone compileability and tests.",
+    "current_workspace_state": "included",
+    "current_state_rationale": "Root Cargo.toml includes crates/franken-core after bd-cixqu.10.7; earlier beads restored standalone compileability and tests before the topology change.",
     "green_state_requires_acceptance_suite": true,
-    "workspace_inclusion_complete": false,
-    "next_allowed_decision": "ready_for_separate_explicit_workspace_membership_bead"
+    "workspace_inclusion_complete": true,
+    "next_allowed_decision": "guarded_workspace_member"
   },
   "canonical_owners": [
     {
@@ -92,32 +92,37 @@
     "requires_separate_change_bead_for_membership": true
   },
   "workspace_membership_policy": {
-    "current_root_cargo_exclude": "crates/franken-core",
-    "allowed_change_requires_separate_bead": true,
+    "current_root_cargo_exclude": null,
+    "forbidden_root_cargo_exclude": "crates/franken-core",
+    "completed_change_bead": "bd-cixqu.10.7",
+    "guard_bead": "bd-cixqu.10.8",
+    "allowed_change_requires_separate_bead": false,
     "allowed_change_requires_acceptance_suite": "bd-4w7h9.8",
     "required_pre_change_outputs": [
       "franken_core_api_parity_ledger",
       "franken_core_validation_impact_plan",
       "franken_core_no_mock_graduation_drill",
-      "franken_core_stale_exclusion_truth_gate",
+      "franken_core_status_truth_gate",
       "franken_core_staged_inclusion_rehearsal",
       "franken_core_golden_report_coverage",
       "franken_core_graduation_acceptance_suite"
     ],
-    "default_when_missing_evidence": "remain_excluded"
+    "default_when_missing_evidence": "block_claims_above_membership"
   },
   "allowed_proof_states": [
-    "workspace_excluded",
+    "workspace_included",
     "standalone_compileable",
     "standalone_tests_restored",
     "placeholder_surface_reduced",
     "graduation_readiness_pending",
-    "ready_for_explicit_change"
+    "acceptance_suite_passed",
+    "explicit_topology_change",
+    "reexclude_guarded"
   ],
   "accepted_evidence": [
     {
-      "evidence_id": "root_workspace_exclusion",
-      "proof_state": "workspace_excluded",
+      "evidence_id": "root_workspace_inclusion",
+      "proof_state": "workspace_included",
       "source": "Cargo.toml",
       "required": true
     },
@@ -141,13 +146,25 @@
     },
     {
       "evidence_id": "idea_wizard_v_acceptance_suite",
-      "proof_state": "graduation_readiness_pending",
+      "proof_state": "acceptance_suite_passed",
       "source": "bd-4w7h9.8",
+      "required": true
+    },
+    {
+      "evidence_id": "explicit_workspace_topology_change",
+      "proof_state": "explicit_topology_change",
+      "source": "bd-cixqu.10.7",
+      "required": true
+    },
+    {
+      "evidence_id": "workspace_reexclude_guard",
+      "proof_state": "reexclude_guarded",
+      "source": "bd-cixqu.10.8",
       "required": true
     }
   ],
   "forbidden_shortcuts": [
-    "add crates/franken-core to root workspace before bd-4w7h9.8",
+    "reintroduce workspace.exclude for crates/franken-core",
     "claim standalone compileability means workspace inclusion is complete",
     "introduce a franken_engine to franken_node dependency",
     "create forked engine crates inside franken_node",
@@ -159,8 +176,8 @@
     "missing_contract_json",
     "missing_required_doc_section",
     "unknown_proof_state",
-    "workspace_inclusion_claim_before_acceptance",
-    "root_cargo_exclude_mismatch",
+    "stale_workspace_exclusion_claim_after_bd_cixqu_10_7",
+    "forbidden_root_cargo_exclude_present",
     "missing_rch_target_dir_guidance",
     "bare_heavy_cargo_example"
   ],

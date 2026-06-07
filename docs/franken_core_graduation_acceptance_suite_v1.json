@@ -5,7 +5,7 @@
   "parent_bead_id": "bd-4w7h9",
   "policy_id": "policy-franken-core-graduation-acceptance-suite-v1",
   "status": "active",
-  "purpose": "Compose franken-core graduation artifacts into one fail-closed operator decision without changing workspace membership.",
+  "purpose": "Compose franken-core graduation artifacts into one fail-closed operator decision for the included workspace topology.",
   "docs": {
     "operator_runbook": "docs/FRANKEN_CORE_GRADUATION_ACCEPTANCE_SUITE_V1.md",
     "machine_contract": "docs/franken_core_graduation_acceptance_suite_v1.json",
@@ -28,7 +28,7 @@
     "status_truth_gate",
     "no_mock_graduation_drill",
     "staged_inclusion_rehearsal",
-    "negative_status_truth_gate_overclaim"
+    "negative_status_truth_gate_stale_exclusion"
   ],
   "required_validation_classes": [
     "docs_only",
@@ -40,8 +40,8 @@
     "unknown_path"
   ],
   "decision_vocabulary": [
-    "ready_for_explicit_workspace_membership_bead",
-    "remain_excluded"
+    "workspace_membership_complete",
+    "fail_closed"
   ],
   "required_reason_codes": [
     "missing_child_artifact",
@@ -50,7 +50,7 @@
     "unclassified_api_rows",
     "unknown_validation_class",
     "missing_golden_coverage",
-    "workspace_already_changed"
+    "workspace_not_included_after_bd_cixqu_10_7"
   ],
   "non_mutation_attestation": {
     "mutates_root_cargo_toml": false,

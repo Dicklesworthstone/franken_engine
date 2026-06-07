@@ -20,7 +20,7 @@
     "status_truth_gate",
     "no_mock_graduation_drill",
     "staged_inclusion_rehearsal",
-    "negative_status_truth_gate_overclaim"
+    "negative_status_truth_gate_stale_exclusion"
   ],
   "scrubbed_fields": [
     "source_revision",

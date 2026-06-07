@@ -7,9 +7,10 @@ Machine-readable contract: `docs/franken_core_no_mock_graduation_drill_v1.json`
 
 ## Scope
 
-This drill exercises the real `crates/franken-core` graduation surfaces before
-any workspace topology mutation is attempted. It reads live manifests and source
-files by default:
+This drill exercises the real `crates/franken-core` graduation surfaces. It was
+created before the J.7 topology mutation and now remains as evidence that the
+real manifests and source files were inspected before inclusion. It reads live
+manifests and source files by default:
 
 - root `Cargo.toml`
 - `crates/franken-core/Cargo.toml`
@@ -23,13 +24,15 @@ run RCH, or claim that workspace inclusion is approved.
 
 ## Current Expected State
 
-The only passing live state for this bead is:
+The only passing live state after `bd-cixqu.10.7` is:
 
-- root `Cargo.toml` excludes `crates/franken-core`
+- root `Cargo.toml` includes `crates/franken-core`
+- root `Cargo.toml` does not contain a `workspace.exclude` entry for
+  `crates/franken-core`
 - `crates/franken-core/Cargo.toml` names package `frankenengine-core`
 - selected modules are exported by both `franken-core` and `franken-engine`
 - selected module source files exist in both crates
-- docs do not claim workspace-ready or included membership
+- docs do not claim that workspace membership alone settles module ownership
 - every heavy proof command listed by the drill is RCH-wrapped with an explicit
   `CARGO_TARGET_DIR`
 
@@ -47,7 +50,7 @@ This is not the final API parity proof. The full parity ledger remains
 `docs/franken_core_api_parity_ledger_v1.json`; this drill proves the real source
 and manifest seams are readable and internally coherent.
 
-## Proofs Still Needed Before Workspace Inclusion
+## Proofs Still Needed After Workspace Inclusion
 
 The drill report names these required future proofs:
 
@@ -56,7 +59,8 @@ The drill report names these required future proofs:
 - staged-inclusion rehearsal models topology blast radius without mutating root
   `Cargo.toml`
 - golden artifacts cover graduation reports
-- final acceptance suite `bd-4w7h9.8` passes
+- final acceptance suite `bd-4w7h9.8` has passed
+- re-exclusion guard `bd-cixqu.10.8` stays green
 - final heavy Rust gates are run through `rch exec -- env CARGO_TARGET_DIR=...`
 
 ## Outputs

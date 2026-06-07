@@ -292,6 +292,30 @@ line_negates_overclaim() {
      "$lower" == *"separate topology"* ]]
 }
 
+line_has_stale_exclusion_claim() {
+  local lower="$1"
+  [[ "$lower" == *"excluded from the root workspace"* ||
+     "$lower" == *"excluded from the workspace"* ||
+     "$lower" == *"remains excluded"* ||
+     "$lower" == *"still excludes"* ||
+     "$lower" == *"root workspace explicitly excludes"* ]]
+}
+
+line_negates_stale_exclusion_claim() {
+  local lower="$1"
+  [[ "$lower" == *"historical"* ||
+     "$lower" == *"former"* ||
+     "$lower" == *"stale"* ||
+     "$lower" == *"negative"* ||
+     "$lower" == *"must not"* ||
+     "$lower" == *"forbid"* ||
+     "$lower" == *"forbidden"* ||
+     "$lower" == *"reject"* ||
+     "$lower" == *"bd-cixqu.10.8"* ||
+     "$lower" == *"re-exclude"* ||
+     "$lower" == *"reintroduce"* ]]
+}
+
 is_heavy_cargo_command() {
   local command="$1"
   [[ "$command" == *"cargo check"* ||
@@ -317,6 +341,9 @@ exclude_contains_core="missing"
 if [[ -f "$root_cargo" ]]; then
   members_contains_core="$(toml_array_contains "$root_cargo" "members" "crates/franken-core")"
   exclude_contains_core="$(toml_array_contains "$root_cargo" "exclude" "crates/franken-core")"
+  if [[ "$exclude_contains_core" == "missing" ]]; then
+    exclude_contains_core="false"
+  fi
 fi
 
 root_workspace_state="unknown"
@@ -330,12 +357,12 @@ else
   root_workspace_state="unclassified"
 fi
 
-if [[ "$root_workspace_state" != "excluded_standalone" ]]; then
+if [[ "$root_workspace_state" != "included" ]]; then
   append_violation \
-    "root_manifest_state_contradicts_excluded_drill" \
+    "root_manifest_state_contradicts_included_drill" \
     "$root_cargo" \
     "members contains crates/franken-core: ${members_contains_core}; exclude contains crates/franken-core: ${exclude_contains_core}" \
-    "Keep crates/franken-core excluded until the staged rehearsal and bd-4w7h9.8 acceptance suite approve a separate topology change."
+    "Keep crates/franken-core in workspace.members and out of workspace.exclude after bd-cixqu.10.7; bd-cixqu.10.8 rejects future re-exclusion."
 fi
 
 core_manifest_state="$(core_package_state "$core_cargo")"
@@ -404,6 +431,13 @@ while IFS= read -r claim_file; do
     line_number=$((line_number + 1))
     lower="${line,,}"
     combined_lower="${previous_lower} ${lower}"
+    if [[ "$root_workspace_state" == "included" ]] && line_mentions_core "$lower" && line_has_stale_exclusion_claim "$lower" && ! line_negates_stale_exclusion_claim "$combined_lower"; then
+      append_violation \
+        "doc_manifest_contradiction" \
+        "$claim_file" \
+        "line ${line_number}: ${line}" \
+        "Replace stale excluded wording with included-workspace wording and keep ownership claims separate from membership."
+    fi
     if [[ "$root_workspace_state" == "excluded_standalone" ]] && line_mentions_core "$lower" && line_has_overclaim "$lower" && ! line_negates_overclaim "$combined_lower"; then
       append_violation \
         "doc_manifest_contradiction" \
@@ -437,9 +471,10 @@ fi
 proofs_still_needed_json="$(jq -n '[
   "bd-4w7h9.3 validation impact planner remains green for changed paths",
   "bd-4w7h9.5 status truth gate remains green against live docs and manifests",
-  "bd-4w7h9.6 staged-inclusion rehearsal models topology blast radius without mutating root Cargo.toml",
+  "bd-4w7h9.6 staged-inclusion rehearsal remains green against the included topology",
   "bd-4w7h9.7 golden artifacts cover graduation reports",
-  "bd-4w7h9.8 final acceptance suite passes",
+  "bd-4w7h9.8 final acceptance suite remains green",
+  "bd-cixqu.10.8 re-exclusion guard remains green",
   "final Cargo check, clippy, and test gates run through rch with explicit CARGO_TARGET_DIR"
 ]')"
 
@@ -474,7 +509,7 @@ jq -n \
       core_manifest_state:$core_manifest_state
     },
     workspace_membership_mutated:false,
-    workspace_inclusion_ready:false,
+    workspace_inclusion_ready:true,
     selected_modules:$selected_modules,
     module_evidence:$module_evidence,
     claim_files:$claim_files,
@@ -510,7 +545,7 @@ jq -nc \
   printf '# Franken-Core No-Mock Graduation Drill\n\n'
   printf -- '- decision: `%s`\n' "$decision"
   printf -- '- root_workspace_state: `%s`\n' "$root_workspace_state"
-  printf -- '- workspace_inclusion_ready: `false`\n'
+  printf -- '- workspace_inclusion_ready: `true`\n'
   printf -- '- violation_count: `%s`\n' "$violation_count"
   printf '\n## Proofs Still Needed\n\n'
   jq -r '.proofs_still_needed[] | "- " + .' "$report_json"

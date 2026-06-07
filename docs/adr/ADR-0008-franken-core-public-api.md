@@ -8,17 +8,17 @@
 
 ## Context
 
-Track J prepares `crates/franken-core` for deliberate workspace participation.
-The crate is currently excluded from the root workspace, but its standalone
-manifest compiles and the J.1-J.5 boundary-test beads now cover class semantics,
-async functions, async generators, accessor descriptors, and heap-backed
-own-property storage.
+Track J prepared `crates/franken-core` for deliberate workspace participation.
+The crate is now included in the root workspace under `bd-cixqu.10.7`; its
+standalone manifest compiles and the J.1-J.5 boundary-test beads cover class
+semantics, async functions, async generators, accessor descriptors, and
+heap-backed own-property storage.
 
-Before J.7 can remove the root workspace `exclude = ["crates/franken-core"]`,
-the public API surface must be named, frozen, and governed. Without this ADR,
-later workspace inclusion could accidentally treat a broad `pub mod` surface as
-unreviewed internal detail, or conversely treat experimental extracted modules
-as stable third-party contracts without a semver policy.
+Before J.7 removed the root workspace exclusion, the public API surface had to be
+named, frozen, and governed. Without this ADR, workspace inclusion could
+accidentally treat a broad `pub mod` surface as unreviewed internal detail, or
+conversely treat experimental extracted modules as stable third-party contracts
+without a semver policy.
 
 Existing graduation artifacts remain authoritative:
 
@@ -168,8 +168,8 @@ Audit result:
 - Module-level public declarations are broad, but this is an intentional
   v0.1 workspace-boundary freeze, not a claim of third-party API maturity.
 - The parity ledger records 41 matching module names in `franken-engine`, 0
-  missing engine exports, 3 identical source files, 38 different source files,
-  and `workspace_inclusion_complete = false`.
+  missing engine exports, 0 identical source files, 41 different source files,
+  and `workspace_inclusion_complete = true`.
 - Every parity-ledger row is still `pending_graduation`.
 
 No source visibility changes are required for J.6. Narrowing module exports is a

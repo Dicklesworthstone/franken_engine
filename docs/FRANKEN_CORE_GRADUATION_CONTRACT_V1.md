@@ -8,14 +8,14 @@ Machine-readable contract: `docs/franken_core_graduation_contract_v1.json`
 ## Scope
 
 This contract defines the evidence required before `crates/franken-core` can move
-from an excluded standalone crate toward intentional workspace participation.
+from a standalone crate toward intentional workspace participation.
 
-The current root workspace explicitly excludes `crates/franken-core`. The crate
-has regained standalone compileability and test coverage through later work, but
-that does not make workspace membership complete or approved. Graduation remains
-blocked until the IDEA-WIZARD-V acceptance suite (`bd-4w7h9.8`) proves the
-contract, parity ledger, validation planner, no-mock drill, truth gate, staged
-rehearsal, and golden reports are coherent.
+The current root workspace includes `crates/franken-core` under the explicit
+topology bead `bd-cixqu.10.7`. The crate had already regained standalone
+compileability and test coverage, and the IDEA-WIZARD-V acceptance suite
+(`bd-4w7h9.8`) approved opening this topology change after checking the contract,
+parity ledger, validation planner, no-mock drill, truth gate, staged rehearsal,
+and golden reports.
 
 ## Contract Version
 
@@ -25,12 +25,12 @@ rehearsal, and golden reports are coherent.
 
 ## Current Decision
 
-`crates/franken-core` remains excluded from the root workspace until a separate
-explicit workspace-membership bead is opened after `bd-4w7h9.8` passes.
+`crates/franken-core` is included in the root workspace as a first-class member
+after `bd-4w7h9.8` accepted the evidence package and `bd-cixqu.10.7` changed
+the root topology.
 
-The contract may describe future command evidence, but this bead must not change
-root `Cargo.toml`, workspace membership, dependency direction, `franken_node`, or
-cross-repo ownership.
+This contract still does not authorize dependency-direction changes,
+`franken_node` changes, or cross-repo ownership changes.
 
 ## Historical Inputs
 
@@ -62,8 +62,7 @@ The repository split remains one-way: `franken_node` may depend on
 This bead may add or update the contract documents and contract checker. It must
 not:
 
-- edit root workspace members or `exclude`
-- add `crates/franken-core` to the workspace
+- reintroduce a root workspace `exclude` for `crates/franken-core`
 - introduce engine forks inside `franken_node`
 - add a core-to-node dependency
 - replace sibling-repo reuse policy with local substitutes
@@ -77,12 +76,15 @@ The graduation package must eventually include:
 - an API parity ledger between `crates/franken-core` and `crates/franken-engine`
 - a validation impact planner with fail-closed unknown path handling
 - a no-mock drill over real manifests and source imports
-- a stale-exclusion truth gate for docs and manifests
+- a status truth gate for docs and manifests
 - a staged-inclusion rehearsal that does not mutate root workspace topology
 - golden artifacts for every graduation report
 - final acceptance output from `bd-4w7h9.8`
+- explicit topology output from `bd-cixqu.10.7`
+- a re-exclusion guard from `bd-cixqu.10.8`
 
-Missing evidence keeps the crate excluded.
+Missing evidence now blocks claims above workspace membership, not membership
+itself.
 
 ## RCH Policy
 
@@ -102,9 +104,8 @@ The contract checker must reject:
 
 - missing required document sections
 - unknown proof states
-- any claim that workspace inclusion is complete before `bd-4w7h9.8`
-- a missing root `Cargo.toml` exclusion for `crates/franken-core` while this
-  contract still declares the current state as excluded
+- stale claims that workspace inclusion is incomplete after `bd-cixqu.10.7`
+- a root `Cargo.toml` exclusion for `crates/franken-core`
 - missing RCH target-dir guidance for heavy Rust command examples
 
 ## Validation

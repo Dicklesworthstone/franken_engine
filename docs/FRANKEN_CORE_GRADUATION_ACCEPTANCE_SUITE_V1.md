@@ -8,9 +8,9 @@ Machine-readable contract: `docs/franken_core_graduation_acceptance_suite_v1.jso
 ## Scope
 
 This suite composes the IDEA-WIZARD-V franken-core graduation artifacts into one
-operator-facing decision. It does not change workspace membership. A passing
-suite means `crates/franken-core` remains excluded but the evidence package is
-ready for a separate explicit workspace-membership bead.
+operator-facing decision. It was the pre-topology acceptance package that
+authorized opening the explicit membership bead. The later topology bead
+`bd-cixqu.10.7` includes `crates/franken-core` in the root workspace.
 
 ## Acceptance Command
 
@@ -29,12 +29,14 @@ The command writes:
 
 | Decision | Meaning |
 | --- | --- |
-| `ready_for_explicit_workspace_membership_bead` | Evidence package is coherent; a later topology bead may propose membership. |
-| `remain_excluded` | Missing, stale, contradictory, or downgraded evidence keeps the crate excluded. |
+| `workspace_membership_complete` | Current post-J.7 decision: the included root topology and guard artifacts are coherent. |
+| `fail_closed` | Current post-J.7 fail-closed decision: stale artifacts, failed child smokes, or manifest drift block the claim. |
+| `ready_for_explicit_workspace_membership_bead` | Historical pre-J.7 decision: evidence package is coherent; a later topology bead may propose membership. |
+| `remain_excluded` | Historical pre-J.7 fail-closed decision: missing, stale, contradictory, or downgraded evidence kept the crate out of the workspace. |
 
-The suite must never report that workspace membership is already complete.
+Post-J.7, the status truth gate is the live authority for membership state.
 
-## Final Proof Commands For A Later Topology Bead
+## Final Proof Commands For The Topology Bead
 
 ```bash
 rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_franken_core_membership CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check --all-targets

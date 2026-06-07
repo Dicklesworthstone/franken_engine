@@ -5,7 +5,7 @@
   "parent_bead_id": "bd-4w7h9",
   "policy_id": "policy-franken-core-no-mock-graduation-drill-v1",
   "status": "active",
-  "purpose": "Exercise real franken-core graduation manifests, docs, and selected source imports before any workspace-topology mutation.",
+  "purpose": "Exercise real franken-core graduation manifests, docs, and selected source imports after the explicit workspace-topology mutation.",
   "docs": {
     "operator_contract": "docs/FRANKEN_CORE_NO_MOCK_GRADUATION_DRILL_V1.md",
     "machine_contract": "docs/franken_core_no_mock_graduation_drill_v1.json",
@@ -27,16 +27,17 @@
   ],
   "required_reason_codes": [
     "missing_required_manifest_or_source",
-    "root_manifest_state_contradicts_excluded_drill",
+    "root_manifest_state_contradicts_included_drill",
     "doc_manifest_contradiction",
     "bare_heavy_cargo_proof"
   ],
   "proofs_still_needed": [
     "bd-4w7h9.3 validation impact planner remains green",
     "bd-4w7h9.5 status truth gate remains green",
-    "bd-4w7h9.6 staged-inclusion rehearsal models topology blast radius",
+    "bd-4w7h9.6 staged-inclusion rehearsal remains green against the included topology",
     "bd-4w7h9.7 golden artifacts cover graduation reports",
-    "bd-4w7h9.8 final acceptance suite passes",
+    "bd-4w7h9.8 final acceptance suite remains green",
+    "bd-cixqu.10.8 re-exclusion guard remains green",
     "final Cargo check, clippy, and test gates run through rch with explicit CARGO_TARGET_DIR"
   ],
   "non_mutation_attestation": {

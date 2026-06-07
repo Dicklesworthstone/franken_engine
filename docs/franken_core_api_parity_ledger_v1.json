@@ -7,7 +7,7 @@
   "acceptance_suite_bead_id": "bd-4w7h9.8",
   "policy_id": "policy-franken-core-api-parity-ledger-v1",
   "status": "active",
-  "purpose": "Inventory every franken-core public module export and match it to the corresponding franken-engine public module export before any workspace graduation decision.",
+  "purpose": "Inventory every franken-core public module export and match it to the corresponding franken-engine public module export after workspace inclusion; membership does not settle module ownership.",
   "docs": {
     "operator_ledger": "docs/FRANKEN_CORE_API_PARITY_LEDGER_V1.md",
     "machine_ledger": "docs/franken_core_api_parity_ledger_v1.json",
@@ -15,8 +15,8 @@
     "smoke_script": "scripts/e2e/franken_core_api_parity_ledger_smoke.sh"
   },
   "decision": {
-    "current_workspace_state": "excluded",
-    "workspace_inclusion_complete": false,
+    "current_workspace_state": "included",
+    "workspace_inclusion_complete": true,
     "default_row_status": "pending_graduation",
     "next_required_beads": [
       "bd-4w7h9.3",
@@ -24,7 +24,8 @@
       "bd-4w7h9.5",
       "bd-4w7h9.6",
       "bd-4w7h9.7",
-      "bd-4w7h9.8"
+      "bd-4w7h9.8",
+      "bd-cixqu.10.8"
     ]
   },
   "allowed_statuses": [
@@ -54,16 +55,16 @@
     "core_module_count": 41,
     "matching_engine_export_count": 41,
     "missing_engine_export_count": 0,
-    "identical_file_count": 3,
-    "different_file_count": 38,
+    "identical_file_count": 0,
+    "different_file_count": 41,
     "unclassified_row_count": 0,
-    "workspace_inclusion_complete": false
+    "workspace_inclusion_complete": true
   },
   "historical_inputs": [
     {
       "bead_id": "bd-ucemx",
       "role": "earlier exclusion documentation",
-      "rationale": "Superseded as a compileability blocker by later franken-core restoration work, but still proves why workspace inclusion was not previously complete."
+      "rationale": "Superseded as a compileability blocker by later franken-core restoration and topology work, but still proves why workspace inclusion was not previously complete."
     },
     {
       "bead_id": "bd-zsais",
@@ -105,7 +106,7 @@
       "engine_path": "crates/franken-engine/src/ast.rs",
       "engine_export_present": true,
       "file_relation": "different",
-      "owner_rationale": "Both crates export ast, but the source files differ and workspace membership is not accepted.",
+      "owner_rationale": "Both crates export ast, but the source files differ and workspace membership alone does not settle canonical ownership.",
       "test_expectation": "Future parity work must prove AST compatibility before claiming canonical ownership.",
       "known_beads": []
     },
@@ -173,7 +174,7 @@
       "core_path": "crates/franken-core/src/closure_model.rs",
       "engine_path": "crates/franken-engine/src/closure_model.rs",
       "engine_export_present": true,
-      "file_relation": "identical",
+      "file_relation": "different",
       "owner_rationale": "The files are currently identical, but the ledger does not promote ownership before the acceptance suite.",
       "test_expectation": "Future parity work may use the identical file relation as evidence for a canonical_core candidate.",
       "known_beads": [
@@ -201,7 +202,7 @@
       "core_path": "crates/franken-core/src/control_plane.rs",
       "engine_path": "crates/franken-engine/src/control_plane/mod.rs",
       "engine_export_present": true,
-      "file_relation": "identical",
+      "file_relation": "different",
       "owner_rationale": "control_plane was restored for standalone compileability after earlier missing-module exclusion.",
       "test_expectation": "Future parity work must decide whether this belongs in core or remains engine-level control surface.",
       "known_beads": [
@@ -483,7 +484,7 @@
       "core_path": "crates/franken-core/src/profiling.rs",
       "engine_path": "crates/franken-engine/src/profiling.rs",
       "engine_export_present": true,
-      "file_relation": "identical",
+      "file_relation": "different",
       "owner_rationale": "The files are currently identical after standalone restoration, but ownership remains pending.",
       "test_expectation": "Future parity work may use the identical file relation as evidence for a canonical owner recommendation.",
       "known_beads": [

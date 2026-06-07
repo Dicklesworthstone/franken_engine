@@ -33,10 +33,10 @@ Rows use one of these stable statuses:
 - `pending_graduation`: ownership is not settled by this ledger
 - `not_comparable`: no meaningful module-level comparison exists
 
-For this first ledger, every row is `pending_graduation`. The root workspace
-still excludes `crates/franken-core`, and `bd-4w7h9.8` has not accepted the
-graduation package. Any stronger owner claim must be made in a later bead with
-proof attached.
+For this first ledger, every row is `pending_graduation`. The root workspace now
+includes `crates/franken-core` under `bd-cixqu.10.7`; module ownership claims
+still require row-level evidence and should not be inferred from membership
+alone.
 
 ## Current Inventory
 
@@ -45,9 +45,9 @@ proof attached.
 | franken-core public modules | 41 |
 | matching franken-engine public modules | 41 |
 | missing engine module names | 0 |
-| identical source files | 3 |
-| different source files | 38 |
-| workspace inclusion complete | false |
+| identical source files | 0 |
+| different source files | 41 |
+| workspace inclusion complete | true |
 
 ## Historical Inputs
 
@@ -71,7 +71,7 @@ The smoke checker rejects:
 - stale source paths
 - a recorded source relation that no longer matches the live files
 - a missing matching `franken-engine` export
-- any claim that workspace inclusion is complete
+- any claim that workspace inclusion alone settles canonical module ownership
 
 ## Validation
 

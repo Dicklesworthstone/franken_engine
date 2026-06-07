@@ -29,8 +29,8 @@ assert_report_shape() {
   local report_path="$1"
   jq -e '
     .schema_version == "franken-engine.franken-core-graduation-acceptance-report.v1"
-    and (.decision == "ready_for_explicit_workspace_membership_bead" or .decision == "remain_excluded")
-    and .workspace_membership_complete == false
+    and (.decision == "workspace_membership_complete" or .decision == "fail_closed")
+    and ((.decision == "workspace_membership_complete" and .workspace_membership_complete == true) or (.decision == "fail_closed" and .workspace_membership_complete == false))
     and (.final_proof_commands | length) == 3
     and all(.final_proof_commands[]; startswith("rch exec -- env CARGO_TARGET_DIR="))
     and .coordination_handling.agent_mail_required == false
@@ -48,7 +48,7 @@ run_acceptance_case() {
   local tmpdir output_dir status expected_exit report_path
   tmpdir="$(mktemp -d)"
   output_dir="${tmpdir}/out"
-  if [[ "$expected_decision" == "remain_excluded" ]]; then
+  if [[ "$expected_decision" == "fail_closed" ]]; then
     expected_exit=42
   else
     expected_exit=0
@@ -81,7 +81,7 @@ run_acceptance_case() {
 run_check() {
   jq empty "$contract_json"
   bash -n "$suite" "${BASH_SOURCE[0]}"
-  run_acceptance_case "live-ready" "ready_for_explicit_workspace_membership_bead" ""
+  run_acceptance_case "live-ready" "workspace_membership_complete" ""
   git -C "$root_dir" diff --check -- \
     docs/FRANKEN_CORE_GRADUATION_ACCEPTANCE_SUITE_V1.md \
     docs/franken_core_graduation_acceptance_suite_v1.json \
@@ -96,7 +96,7 @@ run_negative() {
 
   run_acceptance_case \
     "missing-child-artifact" \
-    "remain_excluded" \
+    "fail_closed" \
     "missing_child_artifact" \
     --golden-json "${tmpdir}/missing-golden.json" \
     --skip-child-smokes
@@ -105,7 +105,7 @@ run_negative() {
     "${root_dir}/docs/franken_core_api_parity_ledger_v1.json" >"${tmpdir}/bad-parity.json"
   run_acceptance_case \
     "unclassified-api-row" \
-    "remain_excluded" \
+    "fail_closed" \
     "unclassified_api_rows" \
     --parity-json "${tmpdir}/bad-parity.json" \
     --skip-child-smokes
@@ -114,7 +114,7 @@ run_negative() {
     "${root_dir}/docs/franken_core_validation_impact_planner_v1.json" >"${tmpdir}/bad-validation.json"
   run_acceptance_case \
     "unknown-validation-class" \
-    "remain_excluded" \
+    "fail_closed" \
     "unknown_validation_class" \
     --validation-contract-json "${tmpdir}/bad-validation.json" \
     --skip-child-smokes
@@ -123,7 +123,7 @@ run_negative() {
     "${root_dir}/scripts/testdata/franken_core_graduation_golden_reports/reports.json" >"${tmpdir}/bad-goldens.json"
   run_acceptance_case \
     "missing-golden-coverage" \
-    "remain_excluded" \
+    "fail_closed" \
     "missing_golden_coverage" \
     --golden-json "${tmpdir}/bad-goldens.json" \
     --skip-child-smokes
@@ -131,7 +131,7 @@ run_negative() {
   write_bad_status_claim "${tmpdir}/bad-status.md"
   run_acceptance_case \
     "stale-docs" \
-    "remain_excluded" \
+    "fail_closed" \
     "stale_docs_or_manifest_claim" \
     --status-claim-file "${tmpdir}/bad-status.md" \
     --skip-child-smokes

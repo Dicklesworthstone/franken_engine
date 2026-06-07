@@ -25,9 +25,9 @@ json_shape_filter='
   and .acceptance_suite_bead_id == "bd-4w7h9.8"
   and .policy_id == "policy-franken-core-graduation-v1"
   and .status == "active"
-  and .decision.current_workspace_state == "excluded"
+  and .decision.current_workspace_state == "included"
   and .decision.green_state_requires_acceptance_suite == true
-  and .decision.workspace_inclusion_complete == false
+  and .decision.workspace_inclusion_complete == true
   and .mutation_boundary.mutates_workspace_membership == false
   and .mutation_boundary.edits_root_workspace_members == false
   and .mutation_boundary.edits_root_workspace_exclude == false
@@ -36,16 +36,19 @@ json_shape_filter='
   and .mutation_boundary.introduces_node_engine_fork == false
   and .mutation_boundary.runs_heavy_cargo_locally == false
   and .mutation_boundary.requires_separate_change_bead_for_membership == true
-  and .workspace_membership_policy.current_root_cargo_exclude == "crates/franken-core"
-  and .workspace_membership_policy.allowed_change_requires_separate_bead == true
+  and .workspace_membership_policy.current_root_cargo_exclude == null
+  and .workspace_membership_policy.forbidden_root_cargo_exclude == "crates/franken-core"
+  and .workspace_membership_policy.completed_change_bead == "bd-cixqu.10.7"
+  and .workspace_membership_policy.guard_bead == "bd-cixqu.10.8"
+  and .workspace_membership_policy.allowed_change_requires_separate_bead == false
   and .workspace_membership_policy.allowed_change_requires_acceptance_suite == "bd-4w7h9.8"
-  and .workspace_membership_policy.default_when_missing_evidence == "remain_excluded"
+  and .workspace_membership_policy.default_when_missing_evidence == "block_claims_above_membership"
   and ([.historical_inputs[].bead_id] | sort) == (["bd-dymfz", "bd-nwhcp", "bd-ucemx", "bd-zsais"] | sort)
   and (.required_doc_sections | length) >= 10
   and (.fail_closed_conditions | index("missing_required_doc_section"))
   and (.fail_closed_conditions | index("unknown_proof_state"))
-  and (.fail_closed_conditions | index("workspace_inclusion_claim_before_acceptance"))
-  and (.fail_closed_conditions | index("root_cargo_exclude_mismatch"))
+  and (.fail_closed_conditions | index("stale_workspace_exclusion_claim_after_bd_cixqu_10_7"))
+  and (.fail_closed_conditions | index("forbidden_root_cargo_exclude_present"))
   and (.rch_policy.required_heavy_cargo_prefix == "rch exec -- env CARGO_TARGET_DIR=")
   and (.rch_policy.canonical_heavy_cargo_example | contains("rch exec -- env CARGO_TARGET_DIR="))
   and (.rch_policy.canonical_heavy_cargo_example | contains("CARGO_BUILD_JOBS=1"))
@@ -65,16 +68,16 @@ doc_shape_ok() {
   done < <(jq -r '.required_doc_sections[]' "$contract_json")
 
   grep -Fq 'Machine-readable contract: `docs/franken_core_graduation_contract_v1.json`' "$contract_doc" \
-    && grep -Fq '`crates/franken-core` remains excluded from the root workspace' "$contract_doc" \
+    && grep -Fq '`crates/franken-core` is included in the root workspace' "$contract_doc" \
     && grep -Fq 'bd-4w7h9.8' "$contract_doc" \
-    && grep -Fq 'root `Cargo.toml`, workspace membership' "$contract_doc" \
+    && grep -Fq 'bd-cixqu.10.7' "$contract_doc" \
+    && grep -Fq 'bd-cixqu.10.8' "$contract_doc" \
     && grep -Fq 'rch exec -- env CARGO_TARGET_DIR=' "$contract_doc"
 }
 
 root_cargo_state_ok() {
-  grep -Fq 'exclude = ["crates/franken-core"]' "$root_cargo" \
-    && grep -Fq 'standalone manifest is compileable' "$root_cargo" \
-    && grep -Fq 'deliberate workspace integration pass validates the extracted API boundary' "$root_cargo"
+  grep -Fq '"crates/franken-core"' "$root_cargo" \
+    && ! grep -Fq 'exclude = ["crates/franken-core"]' "$root_cargo"
 }
 
 no_bare_heavy_cargo_examples() {
@@ -110,7 +113,7 @@ expect_invalid() {
 run_negative() {
   expect_invalid "missing required doc section" 'del(.required_doc_sections[0])'
   expect_invalid "unknown proof state" '.accepted_evidence[0].proof_state = "workspace_inclusion_complete"'
-  expect_invalid "inclusion complete claim" '.decision.workspace_inclusion_complete = true'
+  expect_invalid "stale inclusion incomplete claim" '.decision.workspace_inclusion_complete = false'
   expect_invalid "missing acceptance suite" 'del(.acceptance_suite_bead_id)'
   expect_invalid "local heavy cargo allowed" '.mutation_boundary.runs_heavy_cargo_locally = true'
 }

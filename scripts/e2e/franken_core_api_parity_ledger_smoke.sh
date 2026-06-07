@@ -27,9 +27,9 @@ json_shape_filter='
   and .acceptance_suite_bead_id == "bd-4w7h9.8"
   and .policy_id == "policy-franken-core-api-parity-ledger-v1"
   and .status == "active"
-  and .decision.current_workspace_state == "excluded"
-  and .decision.workspace_inclusion_complete == false
-  and .summary.workspace_inclusion_complete == false
+  and .decision.current_workspace_state == "included"
+  and .decision.workspace_inclusion_complete == true
+  and .summary.workspace_inclusion_complete == true
   and .summary.core_module_count == (.rows | length)
   and .summary.matching_engine_export_count == ([.rows[] | select(.engine_export_present == true)] | length)
   and .summary.missing_engine_export_count == ([.rows[] | select(.engine_export_present != true)] | length)
@@ -61,7 +61,7 @@ doc_shape_ok() {
   grep -Fq 'Machine-readable ledger: `docs/franken_core_api_parity_ledger_v1.json`' "$ledger_doc" \
     && grep -Fq 'The current inventory has 41 franken-core module exports.' "$ledger_doc" \
     && grep -Fq 'For this first ledger, every row is `pending_graduation`.' "$ledger_doc" \
-    && grep -Fq 'workspace inclusion is complete' "$ledger_doc" \
+    && grep -Fq '| workspace inclusion complete | true |' "$ledger_doc" \
     && grep -Fq 'bash scripts/e2e/franken_core_api_parity_ledger_smoke.sh negative' "$ledger_doc"
 }
 
@@ -161,7 +161,7 @@ run_negative() {
   expect_invalid_shape "missing row count" 'del(.rows[0])'
   expect_invalid_shape "duplicate module key" '.rows += [.rows[0]] | .summary.core_module_count += 1 | .summary.matching_engine_export_count += 1 | .summary.different_file_count += 1'
   expect_invalid_shape "unknown status" '.rows[0].status = "workspace_inclusion_complete" | .summary.unclassified_row_count = 1'
-  expect_invalid_shape "inclusion complete claim" '.decision.workspace_inclusion_complete = true'
+  expect_invalid_shape "stale inclusion incomplete claim" '.decision.workspace_inclusion_complete = false'
   expect_invalid_module_set "missing live module row" 'del(.rows[0]) | .summary.core_module_count -= 1 | .summary.matching_engine_export_count -= 1 | .summary.different_file_count -= 1'
   expect_invalid_paths "stale path" '.rows[0].core_path = "crates/franken-core/src/not_real.rs"'
   expect_invalid_paths "stale file relation" '.rows[0].file_relation = "identical" | .summary.identical_file_count += 1 | .summary.different_file_count -= 1'

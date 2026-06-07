@@ -7,10 +7,10 @@ Machine-readable contract: `docs/franken_core_staged_inclusion_rehearsal_v1.json
 
 ## Scope
 
-This rehearsal models what would change if `crates/franken-core` were considered
-for workspace membership. It does not edit root `Cargo.toml`; it emits an
-artifact describing the simulated transition, risks, validation gates, and
-rollback requirements.
+This rehearsal modeled what would change when `crates/franken-core` was
+considered for workspace membership. It does not edit root `Cargo.toml`; it
+emits an artifact describing the simulated transition, risks, validation gates,
+and rollback requirements.
 
 The rehearsal is consumable by the final acceptance suite and is intentionally
 bounded to deterministic metadata inspection:
@@ -26,8 +26,8 @@ bounded to deterministic metadata inspection:
 
 | Mode | Use |
 | --- | --- |
-| `current` | Default live mode; root `Cargo.toml` must still exclude `crates/franken-core`. |
-| `included_artifact` | Fixture/artifact mode for a generated manifest that already models inclusion. |
+| `current` | Default live mode after `bd-cixqu.10.7`; root `Cargo.toml` includes `crates/franken-core`. |
+| `included_artifact` | Fixture/artifact mode for a generated manifest that models inclusion. |
 
 Ambiguous topology, such as a manifest that both includes and excludes
 `crates/franken-core`, fails closed.

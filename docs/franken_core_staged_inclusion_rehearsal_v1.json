@@ -5,7 +5,7 @@
   "parent_bead_id": "bd-4w7h9",
   "policy_id": "policy-franken-core-staged-inclusion-rehearsal-v1",
   "status": "active",
-  "purpose": "Model optional franken-core workspace membership through deterministic artifacts without mutating root Cargo.toml.",
+  "purpose": "Monitor the included franken-core workspace topology through deterministic artifacts without mutating root Cargo.toml.",
   "docs": {
     "operator_contract": "docs/FRANKEN_CORE_STAGED_INCLUSION_REHEARSAL_V1.md",
     "machine_contract": "docs/franken_core_staged_inclusion_rehearsal_v1.json",

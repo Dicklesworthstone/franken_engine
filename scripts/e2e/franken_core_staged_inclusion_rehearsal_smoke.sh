@@ -86,14 +86,14 @@ assert_report_shape() {
     and (.decision == "pass" or .decision == "fail_closed")
     and .mutates_root_cargo_toml == false
     and .creates_generated_manifest_file == false
-    and (.simulated_workspace_patch.add_members | index("crates/franken-core") != null)
-    and (.simulated_workspace_patch.remove_exclude | index("crates/franken-core") != null)
+    and (.simulated_workspace_patch.preserve_members | index("crates/franken-core") != null)
+    and (.simulated_workspace_patch.forbidden_exclude | index("crates/franken-core") != null)
     and any(.risks[]; .risk_id == "workspace_membership_blast_radius")
     and any(.risks[]; .risk_id == "feature_propagation")
     and any(.risks[]; .risk_id == "package_name_conflict")
     and any(.risks[]; .risk_id == "rollback_required")
     and any(.validation_gates[]; startswith("rch exec -- env CARGO_TARGET_DIR="))
-    and (.rollback_steps | index("restore crates/franken-core in root workspace exclude") != null)
+    and (.rollback_steps | index("do not restore crates/franken-core in workspace.exclude without explicit rollback approval") != null)
     and (.final_acceptance_inputs | index("docs/franken_core_staged_inclusion_rehearsal_v1.json") != null)
     and .non_mutation_attestation.mutates_root_cargo_toml == false
     and .non_mutation_attestation.runs_cargo == false
@@ -113,11 +113,11 @@ run_live_case() {
   [[ -f "${output_dir}/commands.txt" ]] || record_failure "missing live commands"
   [[ -f "${output_dir}/report.md" ]] || record_failure "missing live markdown"
   assert_report_shape "$report_path"
-  jq -e '.decision == "pass" and .simulation_mode == "current" and .root_workspace_state == "excluded_standalone"' "$report_path" >/dev/null \
+  jq -e '.decision == "pass" and .simulation_mode == "current" and .root_workspace_state == "included"' "$report_path" >/dev/null \
     || record_failure "live state mismatch"
   jq -e '.mutates_root_cargo_toml == false and .simulated_to.expected_root_workspace_state == "included"' "${output_dir}/simulated_workspace_patch.json" >/dev/null \
     || record_failure "live patch mismatch"
-  record_pass "live-current-excluded"
+  record_pass "live-current-included"
 }
 
 run_fixture_case() {
@@ -169,7 +169,7 @@ run_check() {
   jq empty "$contract_json"
   bash -n "$rehearsal" "${BASH_SOURCE[0]}"
   run_live_case
-  run_fixture_case "current-excluded-fixture" "excluded" "current" "pass" ""
+  run_fixture_case "current-included-fixture" "included" "current" "pass" ""
   run_fixture_case "included-artifact-fixture" "included" "included_artifact" "pass" ""
   git -C "$root_dir" diff --check -- \
     docs/FRANKEN_CORE_STAGED_INCLUSION_REHEARSAL_V1.md \
@@ -181,7 +181,7 @@ run_check() {
 
 run_negative() {
   run_fixture_case "ambiguous-topology" "ambiguous" "current" "fail_closed" "ambiguous_workspace_topology"
-  run_fixture_case "included-in-current-mode" "included" "current" "fail_closed" "ambiguous_workspace_topology"
+  run_fixture_case "excluded-in-current-mode" "excluded" "current" "fail_closed" "ambiguous_workspace_topology"
   run_fixture_case "excluded-in-included-artifact-mode" "excluded" "included_artifact" "fail_closed" "artifact_mode_state_mismatch"
   record_pass "negative"
 }

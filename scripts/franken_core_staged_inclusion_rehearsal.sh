@@ -199,7 +199,7 @@ feature_keys() {
   ' "$file" | sort -u
 }
 
-write_event "staged_inclusion_start" "started" "modeling optional franken-core workspace inclusion"
+write_event "staged_inclusion_start" "started" "checking franken-core included workspace topology"
 
 for required_manifest in "$root_cargo" "$core_cargo"; do
   if [[ ! -f "$required_manifest" ]]; then
@@ -217,6 +217,9 @@ if [[ -f "$root_cargo" ]]; then
   toml_array_values "$root_cargo" "members" | jq -R . | jq -s 'map(select(length > 0))' >"$member_paths_json"
   members_contains_core="$(toml_array_contains "$root_cargo" "members" "crates/franken-core")"
   exclude_contains_core="$(toml_array_contains "$root_cargo" "exclude" "crates/franken-core")"
+  if [[ "$exclude_contains_core" == "missing" ]]; then
+    exclude_contains_core="false"
+  fi
 else
   jq -n '[]' >"$member_paths_json"
 fi
@@ -232,12 +235,12 @@ else
   root_workspace_state="ambiguous_missing_member_and_exclude"
 fi
 
-if [[ "$simulation_mode" == "current" && "$root_workspace_state" != "excluded_standalone" ]]; then
+if [[ "$simulation_mode" == "current" && "$root_workspace_state" != "included" ]]; then
   append_violation \
     "ambiguous_workspace_topology" \
     "$root_cargo" \
-    "current mode expected excluded_standalone, got ${root_workspace_state}" \
-    "Keep live root Cargo.toml excluded until a separate approved topology bead changes membership."
+    "current mode expected included, got ${root_workspace_state}" \
+    "Keep live root Cargo.toml included after bd-cixqu.10.7 and do not reintroduce workspace.exclude for crates/franken-core."
 fi
 
 if [[ "$simulation_mode" == "included_artifact" && "$root_workspace_state" != "included" ]]; then
@@ -279,11 +282,11 @@ fi
 core_features_json="$(feature_keys "$core_cargo" | jq -R . | jq -s 'map(select(length > 0))')"
 member_packages_json="$(jq -s 'sort_by(.member_path)' "$member_packages_jsonl")"
 risks_json="$(jq -n --argjson core_features "$core_features_json" '[
-  {risk_id:"workspace_membership_blast_radius", severity:"high", detail:"Adding crates/franken-core makes it part of all workspace all-target checks."},
+  {risk_id:"workspace_membership_blast_radius", severity:"high", detail:"crates/franken-core is part of all workspace all-target checks."},
   {risk_id:"feature_propagation", severity:(if ($core_features | length) > 0 then "medium" else "low" end), detail:"Core feature keys must not unexpectedly propagate into workspace default feature expectations.", observed_features:$core_features},
   {risk_id:"package_name_conflict", severity:"medium", detail:"Package names must remain unique across workspace members."},
   {risk_id:"validation_runtime_cost", severity:"high", detail:"Final proof requires workspace cargo check, clippy, and tests through rch."},
-  {risk_id:"rollback_required", severity:"high", detail:"Rollback must restore root exclude and remove crates/franken-core from workspace members."}
+  {risk_id:"rollback_required", severity:"high", detail:"Any rollback would need an explicit topology bead because reintroducing workspace.exclude would drop franken-core from all-target checks."}
 ]')"
 validation_gates_json="$(jq -n '[
   "bash scripts/e2e/franken_core_validation_impact_planner_smoke.sh check",
@@ -294,8 +297,9 @@ validation_gates_json="$(jq -n '[
   "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_franken_core_inclusion CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test"
 ]')"
 rollback_steps_json="$(jq -n '[
-  "remove crates/franken-core from root workspace members",
-  "restore crates/franken-core in root workspace exclude",
+  "open an explicit rollback bead before changing root workspace topology",
+  "document why crates/franken-core should leave workspace members",
+  "do not restore crates/franken-core in workspace.exclude without explicit rollback approval",
   "rerun status truth gate and no-mock drill",
   "rerun final rch-wrapped workspace validation gates"
 ]')"
@@ -303,7 +307,7 @@ rollback_steps_json="$(jq -n '[
 if [[ "$simulation_mode" == "included_artifact" ]]; then
   patch_action="modeled_generated_included_manifest"
 else
-  patch_action="model_optional_inclusion_from_current_excluded_state"
+  patch_action="verify_current_included_manifest"
 fi
 
 jq -n \
@@ -318,8 +322,8 @@ jq -n \
     mutates_root_cargo_toml:false,
     from:{root_workspace_state:$from_state},
     simulated_to:{
-      add_members:["crates/franken-core"],
-      remove_exclude:["crates/franken-core"],
+      preserve_members:["crates/franken-core"],
+      forbidden_exclude:["crates/franken-core"],
       expected_root_workspace_state:"included"
     }
   }' >"$patch_json"
@@ -372,8 +376,8 @@ jq -n \
       core_feature_keys:$core_features
     },
     simulated_workspace_patch:{
-      add_members:["crates/franken-core"],
-      remove_exclude:["crates/franken-core"],
+      preserve_members:["crates/franken-core"],
+      forbidden_exclude:["crates/franken-core"],
       expected_root_workspace_state:"included"
     },
     risks:$risks,

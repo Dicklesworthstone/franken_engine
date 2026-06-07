@@ -21,6 +21,18 @@ write_truthful_root_manifest() {
 [workspace]
 members = [
   "crates/franken-engine",
+  "crates/franken-core",
+]
+resolver = "2"
+EOF
+}
+
+write_reexcluded_root_manifest() {
+  local path="$1"
+  cat >"$path" <<'EOF'
+[workspace]
+members = [
+  "crates/franken-engine",
 ]
 exclude = ["crates/franken-core"]
 resolver = "2"
@@ -75,13 +87,13 @@ assert_report_shape() {
     .schema_version == "franken-engine.franken-core-no-mock-graduation-drill-report.v1"
     and (.decision == "pass" or .decision == "fail_closed")
     and .workspace_membership_mutated == false
-    and .workspace_inclusion_ready == false
+    and .workspace_inclusion_ready == true
     and (.selected_modules | index("object_model") != null)
     and (.selected_modules | index("promise_model") != null)
     and (.selected_modules | index("profiling") != null)
     and (.selected_modules | index("control_plane") != null)
     and (.selected_modules | index("capability") != null)
-    and (.proofs_still_needed | index("bd-4w7h9.8 final acceptance suite passes") != null)
+    and (.proofs_still_needed | index("bd-cixqu.10.8 re-exclusion guard remains green") != null)
     and (.non_mutation_attestation.edits_manifests == false)
     and (.non_mutation_attestation.runs_cargo == false)
     and (.non_mutation_attestation.runs_rch == false)
@@ -102,13 +114,13 @@ run_live_case() {
   assert_report_shape "$report_path"
   jq -e '
     .decision == "pass"
-    and .root_workspace_state == "excluded_standalone"
+    and .root_workspace_state == "included"
     and .violation_count == 0
     and all(.module_evidence[]; .core_export_present == true and .engine_export_present == true and (.core_source_path | length > 0) and (.engine_source_path | length > 0))
   ' "$report_path" >/dev/null || record_failure "live report mismatch"
-  grep -Fq "bd-4w7h9.8 final acceptance suite passes" "${output_dir}/report.md" \
+  grep -Fq "bd-cixqu.10.8 re-exclusion guard remains green" "${output_dir}/report.md" \
     || record_failure "live report missing final proof"
-  record_pass "live-current-excluded-standalone"
+  record_pass "live-current-included"
 }
 
 run_fixture_case() {
@@ -118,7 +130,7 @@ run_fixture_case() {
   local claim_text="$4"
   local omit_path="${5:-}"
   local bare_command="${6:-false}"
-  local tmpdir output_dir root_manifest core_manifest core_lib engine_lib claim_file status expected_exit report_path
+  local tmpdir output_dir root_manifest core_manifest core_lib engine_lib claim_file status expected_exit report_path root_mode
 
   tmpdir="$(mktemp -d)"
   mkdir -p "${tmpdir}/crates/franken-core" "${tmpdir}/docs"
@@ -126,7 +138,16 @@ run_fixture_case() {
   core_manifest="${tmpdir}/crates/franken-core/Cargo.toml"
   claim_file="${tmpdir}/docs/status.md"
   output_dir="${tmpdir}/out"
-  write_truthful_root_manifest "$root_manifest"
+  root_mode="included"
+  if [[ "$omit_path" == "reexcluded_root" ]]; then
+    root_mode="reexcluded"
+    omit_path=""
+  fi
+  if [[ "$root_mode" == "reexcluded" ]]; then
+    write_reexcluded_root_manifest "$root_manifest"
+  else
+    write_truthful_root_manifest "$root_manifest"
+  fi
   write_core_manifest "$core_manifest"
   write_libs_and_sources "$tmpdir"
   core_lib="${tmpdir}/crates/franken-core/src/lib.rs"
@@ -192,7 +213,7 @@ run_check() {
     "truthful-fixture" \
     "pass" \
     "" \
-    "crates/franken-core remains excluded from the root workspace, while its standalone manifest is compileable. Workspace graduation remains blocked until bd-4w7h9.8 passes."
+    "crates/franken-core is included in the root workspace as a first-class member, while its standalone manifest remains compileable. Workspace membership alone does not settle module ownership."
   git -C "$root_dir" diff --check -- \
     docs/FRANKEN_CORE_NO_MOCK_GRADUATION_DRILL_V1.md \
     docs/franken_core_no_mock_graduation_drill_v1.json \
@@ -206,24 +227,30 @@ run_negative() {
     "missing-core-manifest" \
     "fail_closed" \
     "missing_required_manifest_or_source" \
-    "crates/franken-core remains excluded from the root workspace, while its standalone manifest is compileable." \
+    "crates/franken-core is included in the root workspace as a first-class member, while its standalone manifest remains compileable." \
     "core_manifest"
   run_fixture_case \
     "missing-engine-lib" \
     "fail_closed" \
     "missing_required_manifest_or_source" \
-    "crates/franken-core remains excluded from the root workspace, while its standalone manifest is compileable." \
+    "crates/franken-core is included in the root workspace as a first-class member, while its standalone manifest remains compileable." \
     "engine_lib"
   run_fixture_case \
-    "contradictory-doc-cargo-state" \
+    "stale-excluded-doc-state" \
     "fail_closed" \
     "doc_manifest_contradiction" \
-    "crates/franken-core is workspace-ready and included in the workspace."
+    "crates/franken-core remains excluded from the root workspace, while its standalone manifest is compileable."
+  run_fixture_case \
+    "reexcluded-root-manifest" \
+    "fail_closed" \
+    "root_manifest_state_contradicts_included_drill" \
+    "crates/franken-core is included in the root workspace as a first-class member, while its standalone manifest remains compileable." \
+    "reexcluded_root"
   run_fixture_case \
     "bare-heavy-cargo-command" \
     "fail_closed" \
     "bare_heavy_cargo_proof" \
-    "crates/franken-core remains excluded from the root workspace, while its standalone manifest is compileable." \
+    "crates/franken-core is included in the root workspace as a first-class member, while its standalone manifest remains compileable." \
     "" \
     "true"
   record_pass "negative"

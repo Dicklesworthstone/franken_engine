@@ -31,8 +31,8 @@ write_truthful_root_manifest() {
 [workspace]
 members = [
   "crates/franken-engine",
+  "crates/franken-core",
 ]
-exclude = ["crates/franken-core"]
 resolver = "2"
 EOF
 }
@@ -83,8 +83,6 @@ generate_actual() {
   write_core_manifest "${fixture_root}/crates/franken-core/Cargo.toml"
   cat >"$negative_claim" <<'EOF'
 crates/franken-core remains excluded from the root workspace, while its standalone manifest is compileable.
-
-crates/franken-core is workspace-ready and included in the workspace.
 EOF
 
   set +e
@@ -170,7 +168,7 @@ EOF
           rollback_step_count:($rehearsal[0].rollback_steps | length)
         },
         {
-          family:"negative_status_truth_gate_overclaim",
+          family:"negative_status_truth_gate_stale_exclusion",
           schema_version:$negative[0].schema_version,
           decision:$negative[0].decision,
           reason_codes:$negative[0].reason_codes,
@@ -189,7 +187,7 @@ EOF
     (.reports[] | "- `" + .family + "` decision=`" + ((.decision // .current_workspace_state // .decision_workspace_state) | tostring) + "` schema=`" + .schema_version + "`"),
     "",
     "## Negative Coverage",
-    (.reports[] | select(.family == "negative_status_truth_gate_overclaim") | "- `" + .family + "` reason_codes=`" + (.reason_codes | join(",")) + "`")
+    (.reports[] | select(.family == "negative_status_truth_gate_stale_exclusion") | "- `" + .family + "` reason_codes=`" + (.reason_codes | join(",")) + "`")
   ' "$output_json" >"$output_md"
 }
 
@@ -201,19 +199,19 @@ assert_golden_shape() {
     and ([.reports[].family] | sort) == [
       "api_parity_ledger",
       "graduation_contract",
-      "negative_status_truth_gate_overclaim",
+      "negative_status_truth_gate_stale_exclusion",
       "no_mock_graduation_drill",
       "staged_inclusion_rehearsal",
       "status_truth_gate",
       "validation_impact_planner"
     ]
-    and any(.reports[]; .family == "graduation_contract" and .workspace_inclusion_complete == false)
+    and any(.reports[]; .family == "graduation_contract" and .workspace_inclusion_complete == true)
     and any(.reports[]; .family == "api_parity_ledger" and .core_module_count == 41 and .unclassified_row_count == 0)
     and any(.reports[]; .family == "validation_impact_planner" and .decision == "green" and (.workspace_inclusion_claim_supported == false))
     and any(.reports[]; .family == "status_truth_gate" and .decision == "pass" and .violation_count == 0)
     and any(.reports[]; .family == "no_mock_graduation_drill" and .decision == "pass" and (.selected_modules | index("capability") != null))
     and any(.reports[]; .family == "staged_inclusion_rehearsal" and .decision == "pass" and .mutates_root_cargo_toml == false)
-    and any(.reports[]; .family == "negative_status_truth_gate_overclaim" and .decision == "fail_closed" and (.reason_codes | index("workspace_inclusion_overclaim") != null))
+    and any(.reports[]; .family == "negative_status_truth_gate_stale_exclusion" and .decision == "fail_closed" and (.reason_codes | index("stale_excluded_status_claim") != null))
   ' "$golden_json" >/dev/null || record_failure "golden JSON shape"
 }
 
@@ -238,7 +236,7 @@ run_check() {
   diff -u "$golden_md" "$actual_md" >/dev/null || record_failure "Markdown golden differs; run explicit update command"
   assert_golden_shape
   assert_no_dynamic_values
-  grep -Fq "negative_status_truth_gate_overclaim" "$golden_md" || record_failure "Markdown golden missing negative fixture"
+  grep -Fq "negative_status_truth_gate_stale_exclusion" "$golden_md" || record_failure "Markdown golden missing negative fixture"
   if [[ "$failures" -eq 0 ]]; then
     record_pass "check"
   fi

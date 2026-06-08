@@ -40,7 +40,10 @@ fn find_last_index_no_match_minus_one() {
 
 #[test]
 fn flat_map_spreads_array_results() {
-    assert_eq!(ev("[1,2,3].flatMap(x=>[x,x*10]).join(',')"), "1,10,2,20,3,30");
+    assert_eq!(
+        ev("[1,2,3].flatMap(x=>[x,x*10]).join(',')"),
+        "1,10,2,20,3,30"
+    );
 }
 
 #[test]

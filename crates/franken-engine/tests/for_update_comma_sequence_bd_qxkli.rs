@@ -50,10 +50,7 @@ fn for_update_comma_primary_counter_advances() {
 fn for_update_comma_two_increments_terminates() {
     // Both counters increment; the loop must terminate (no infinite loop) and
     // j accumulates 0+1+2 = 3.
-    assert_eq!(
-        ev("let s=0; for(let i=0,j=0;i<3;i++,j++){ s+=j; } s"),
-        "3"
-    );
+    assert_eq!(ev("let s=0; for(let i=0,j=0;i<3;i++,j++){ s+=j; } s"), "3");
 }
 
 #[test]

@@ -8434,12 +8434,16 @@ fn parse_for_statement(
     let condition = if cond_src.is_empty() {
         None
     } else {
-        Some(parse_expression_allowing_sequence(cond_src, &span, context)?)
+        Some(parse_expression_allowing_sequence(
+            cond_src, &span, context,
+        )?)
     };
     let update = if update_src.is_empty() {
         None
     } else {
-        Some(parse_expression_allowing_sequence(update_src, &span, context)?)
+        Some(parse_expression_allowing_sequence(
+            update_src, &span, context,
+        )?)
     };
 
     let body_src = rest.trim();
@@ -8789,7 +8793,17 @@ fn parse_try_catch_statement(
                     Some(span.clone()),
                 )
             })?;
-            (Some(p.trim().to_string()), r)
+            let parameter = p.trim();
+            if parameter.is_empty() {
+                return Err(ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    "catch clause parameter cannot be empty",
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                ));
+            }
+            parse_binding_pattern(parameter, &span, context)?;
+            (Some(parameter.to_string()), r)
         } else {
             (None, after_catch)
         };
@@ -8819,29 +8833,42 @@ fn parse_try_catch_statement(
     };
 
     // Parse optional finally clause.
-    let finalizer = if rest.starts_with("finally") {
+    let (finalizer, rest) = if rest.starts_with("finally") {
         let after_finally = rest.strip_prefix("finally").unwrap_or(rest).trim_start();
-        let (finally_inner, _) = extract_balanced(after_finally, '{', '}').ok_or_else(|| {
-            ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                "finally clause requires a braced block",
-                context.source_label.to_string(),
-                Some(span.clone()),
-            )
-        })?;
+        let (finally_inner, rest2) =
+            extract_balanced(after_finally, '{', '}').ok_or_else(|| {
+                ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    "finally clause requires a braced block",
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                )
+            })?;
         let finally_body = parse_body_statements(finally_inner, goal, &span, context)?;
-        Some(BlockStatement {
-            body: finally_body,
-            span: span.clone(),
-        })
+        (
+            Some(BlockStatement {
+                body: finally_body,
+                span: span.clone(),
+            }),
+            rest2.trim(),
+        )
     } else {
-        None
+        (None, rest)
     };
 
     if handler.is_none() && finalizer.is_none() {
         return Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "try statement requires at least a catch or finally clause",
+            context.source_label.to_string(),
+            Some(span),
+        ));
+    }
+
+    if !rest.is_empty() {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "try statement has unexpected trailing tokens",
             context.source_label.to_string(),
             Some(span),
         ));
@@ -13003,6 +13030,21 @@ mod tests {
             .expect("parse should succeed")
     }
 
+    fn parse_single_script_statement(source: &str) -> ParseResult<Statement> {
+        let options = ParserOptions::default();
+        let span = SourceSpan::new(0, source.len() as u64, 1, 1, 1, source.len() as u64 + 1);
+        let mut context = ParseExecutionContext {
+            source_label: "test.js",
+            options: &options,
+            source_bytes: source.len() as u64,
+            token_count: 0,
+            max_recursion_observed: 0,
+            statement_depth: 0,
+            strict_mode: false,
+        };
+        parse_statement(source, ParseGoal::Script, span, &mut context)
+    }
+
     fn first_expr(tree: &SyntaxTree) -> &Expression {
         match &tree.body[0] {
             Statement::Expression(es) => &es.expression,
@@ -13523,6 +13565,31 @@ mod tests {
     }
 
     #[test]
+    fn try_catch_without_binding() {
+        let tree = parse_script("try { x } catch { y }");
+        match &tree.body[0] {
+            Statement::TryCatch(s) => {
+                let handler = s.handler.as_ref().expect("catch handler present");
+                assert_eq!(handler.parameter, None);
+                assert!(s.finalizer.is_none());
+            }
+            other => panic!("expected TryCatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn try_finally_statement() {
+        let tree = parse_script("try { x } finally { z }");
+        match &tree.body[0] {
+            Statement::TryCatch(s) => {
+                assert!(s.handler.is_none());
+                assert!(s.finalizer.is_some());
+            }
+            other => panic!("expected TryCatch, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn try_catch_finally() {
         let tree = parse_script("try { x } catch (e) { y } finally { z }");
         match &tree.body[0] {
@@ -13531,6 +13598,57 @@ mod tests {
                 assert!(s.finalizer.is_some());
             }
             other => panic!("expected TryCatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn try_catch_preserves_statement_and_clause_spans() {
+        let tree = parse_script("try { x } catch (e) { y } finally { z }");
+        match &tree.body[0] {
+            Statement::TryCatch(s) => {
+                assert_eq!(*tree.body[0].span(), s.span);
+                assert_eq!(s.block.span, s.span);
+                assert_eq!(
+                    s.handler.as_ref().expect("catch handler present").span,
+                    s.span
+                );
+                assert_eq!(
+                    s.finalizer.as_ref().expect("finally block present").span,
+                    s.span
+                );
+            }
+            other => panic!("expected TryCatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn malformed_try_catch_finally_syntax_is_rejected() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "try { x }",
+            "try x catch (e) { y }",
+            "try { x } catch () { y }",
+            "try { x } catch (e) y",
+            "try { x } catch (e) unexpected { y }",
+            "try { x } finally z",
+            "try { x } finally unexpected { z }",
+        ] {
+            assert!(
+                parser.parse(source, ParseGoal::Script).is_err(),
+                "source should fail: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn try_statement_rejects_unconsumed_clause_tail() {
+        for source in [
+            "try { x } catch (e) { y } trailing",
+            "try { x } finally { z } trailing",
+        ] {
+            let error = parse_single_script_statement(source)
+                .expect_err("single try statement should reject unconsumed trailing text");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
         }
     }
 

@@ -658,6 +658,8 @@ pub enum ProofCheckerResult {
     Passed,
     /// The checker found a real counterexample or proof failure.
     Failed { reason: String },
+    /// The checker/backend could not run to a verdict.
+    Unavailable { reason: String },
     /// The checker could not produce a verdict.
     Inconclusive { reason: String },
     /// The backend is fixture-only and may never promote a real claim.
@@ -670,6 +672,10 @@ impl ProofCheckerResult {
             Self::Passed => append_length_prefixed(preimage, b"passed"),
             Self::Failed { reason } => {
                 append_length_prefixed(preimage, b"failed");
+                append_length_prefixed(preimage, reason.as_bytes());
+            }
+            Self::Unavailable { reason } => {
+                append_length_prefixed(preimage, b"unavailable");
                 append_length_prefixed(preimage, reason.as_bytes());
             }
             Self::Inconclusive { reason } => {
@@ -1100,6 +1106,12 @@ pub fn validate_proof_producer_artifact(
             return Err(ProofSchemaError::InvalidProofArtifact {
                 artifact: "checker_result".to_string(),
                 reason: format!("checker failed: {reason}"),
+            });
+        }
+        ProofCheckerResult::Unavailable { reason } => {
+            return Err(ProofSchemaError::InvalidProofArtifact {
+                artifact: "checker_result".to_string(),
+                reason: format!("checker unavailable: {reason}"),
             });
         }
         ProofCheckerResult::Inconclusive { reason } => {
@@ -1771,6 +1783,22 @@ mod tests {
             validate_proof_producer_artifact(&artifact),
             Err(ProofSchemaError::InvalidProofArtifact { artifact, .. })
                 if artifact == "checker_result"
+        ));
+    }
+
+    #[test]
+    fn validate_proof_producer_artifact_rejects_unavailable_checker() {
+        let mut artifact = test_proof_producer_artifact();
+        artifact.checker_result = ProofCheckerResult::Unavailable {
+            reason: "lake build unavailable".to_string(),
+        };
+        artifact.signature_or_content_hash =
+            ProofSignatureOrContentHash::ContentHash(artifact.content_hash());
+
+        assert!(matches!(
+            validate_proof_producer_artifact(&artifact),
+            Err(ProofSchemaError::InvalidProofArtifact { artifact, reason })
+                if artifact == "checker_result" && reason.contains("unavailable")
         ));
     }
 

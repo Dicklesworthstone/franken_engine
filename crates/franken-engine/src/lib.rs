@@ -272,6 +272,7 @@ pub mod law_mining;
 pub mod law_promotion_lifecycle;
 pub mod law_promotion_pack;
 pub mod law_proof_refutation;
+pub mod lean_proof_producer;
 pub mod lease_tracker;
 pub mod live_revocation_first_gate_example;
 pub mod lowering_arena;

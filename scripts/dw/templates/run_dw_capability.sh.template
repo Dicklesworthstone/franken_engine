@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# TEMPLATE — copy to scripts/run_dw_<capability>.sh and fill the marked sections.
+# Implements the DW.STD (bd-fqlfw.11) e2e gate contract via the shared harness.
+#
+# Conventions (match the repo's existing 241 run_*.sh gates):
+#   modes: check | test | clippy | ci   (ci runs all)
+#   exit:  0 pass | non-zero fail-closed | 3 degraded (dependency unavailable)
+#   bundle: artifacts/<capability>/<timestamp>/ with run_manifest.json + events.jsonl + ...
+set -euo pipefail
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root_dir"
+# shellcheck source=scripts/dw/lib/dw_e2e_lib.sh
+source "$root_dir/scripts/dw/lib/dw_e2e_lib.sh"
+
+CAP="<capability-slug>"      # e.g. differential_oracle  -> scripts/run_dw_differential_oracle.sh
+mode="${1:-ci}"
+
+dw_begin "$CAP" "$mode"
+
+# --- OPTIONAL: declare external deps; fail-closed + degraded receipt if absent --------------
+# dw_require_dep node "node --version" || dw_finish
+# dw_require_dep bun  "bun --version"  || dw_finish
+
+run_unit_and_integration() {
+  # Unit + integration tests for this capability (DW.STD layers 1-2). Name the real targets.
+  dw_run_step "cargo test -p frankenengine-engine --test <capability>_tests" \
+    cargo test -p frankenengine-engine --test "<capability>_tests"
+}
+
+run_e2e() {
+  # Drive the real capability end-to-end and produce its user-facing artifact (DW.STD layer 3).
+  # Every command goes through dw_run_step so it is logged to events.jsonl with hashes + timing.
+  dw_run_step "frankenctl <capability> ... --json" \
+    ./target/release/frankenctl <capability> --json
+}
+
+case "$mode" in
+  check)  dw_run_step "cargo check -p frankenengine-engine" cargo check -p frankenengine-engine ;;
+  test)   run_unit_and_integration ;;
+  clippy) dw_run_step "cargo clippy --all-targets -- -D warnings" cargo clippy --all-targets -- -D warnings ;;
+  ci)
+    dw_run_step "cargo check -p frankenengine-engine" cargo check -p frankenengine-engine
+    run_unit_and_integration
+    run_e2e
+    dw_run_step "cargo clippy --all-targets -- -D warnings" cargo clippy --all-targets -- -D warnings
+    dw_run_step "cargo fmt --check" cargo fmt --check
+    ;;
+  *) echo "usage: $0 [check|test|clippy|ci]" >&2; exit 2 ;;
+esac
+
+dw_finish

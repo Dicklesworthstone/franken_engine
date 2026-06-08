@@ -1,0 +1,42 @@
+# Runbook: <Capability Name> (`frankenctl <cap>`)
+
+> Operator runbook per DW.DOCS (bd-fqlfw.12). Copy to `runbooks/dw_<cap>.md` and fill in.
+> Capability bead: `bd-fqlfw.<n>`. Claim state: <OBSERVED|TARGETED|HYPOTHESIS> (see matrix).
+
+## What this does (one paragraph)
+<Plain-language description; when an operator reaches for this.>
+
+## Preflight
+- Build: `cargo build --release -p frankenengine-engine --bin frankenctl`
+- Dependencies: <node/bun/solver/lean — or "none">. If a dependency is absent the gate emits a
+  `degraded_receipt.json` and exits **3** (NOT a pass).
+- Inputs required: <files / flags>.
+
+## Normal use
+```bash
+frankenctl <cap> <args> --json            # machine output (agent/robot mode)
+./scripts/run_dw_<cap>.sh ci              # full gate -> artifacts/<cap>/<timestamp>/
+./scripts/e2e/dw_<cap>_replay.sh bundle artifacts/<cap>/<timestamp>   # verify a bundle
+```
+
+## Reading the artifact bundle (`artifacts/<cap>/<timestamp>/`)
+| File | Answers |
+|---|---|
+| `run_manifest.json` | Did it pass? source revision, host facts, content hashes, verify command. |
+| `events.jsonl` | The detailed step-by-step log (inputs/decision/outputs/hashes/timing). |
+| `commands.txt` | Exact commands run, in order. |
+| `steps/<n>_*.log` | Full stdout+stderr of step <n>. |
+| `degraded_receipt.json` | Present only if a required dependency was missing. |
+
+## Exit codes
+| Code | Meaning | Operator action |
+|---|---|---|
+| 0 | pass | none |
+| non-zero (≠3) | fail-closed | open the failing step's `steps/*.log`; the `events.jsonl` `fail` event names the failing invariant |
+| 3 | degraded (dependency unavailable) | install the missing dependency named in `degraded_receipt.json`, re-run |
+
+## Failure triage
+- <symptom → cause → fix>, one row per known failure mode.
+
+## Claim-state note
+<What is OBSERVED vs TARGETED vs HYPOTHESIS here; bounded wording so readers don't over-trust.>

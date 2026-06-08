@@ -253,6 +253,7 @@ pub mod ifc_provenance_index;
 pub mod incentive_governance_mechanism;
 pub mod incident_replay_bundle;
 pub mod interleaving_explorer;
+pub mod intrinsics_codegen;
 pub mod intrinsics_table;
 pub mod ir_contract;
 pub mod iterator_protocol;

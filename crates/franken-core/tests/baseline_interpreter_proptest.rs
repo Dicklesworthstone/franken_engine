@@ -3,17 +3,19 @@
 //! Validates that lazy-seed implementation and eager baseline implementation
 //! produce byte-identical interpreter state at every reset point.
 
-use proptest::prelude::*;
 use proptest::collection::vec;
+use proptest::prelude::*;
 
-use frankenengine_core::baseline_interpreter::{InterpreterCore, ExecutionSeed, EagerExecutionSeed, Value};
+use frankenengine_core::baseline_interpreter::{
+    EagerExecutionSeed, ExecutionSeed, InterpreterCore, Value,
+};
 
 #[derive(Debug, Clone)]
 enum Op {
     WriteRegister(u8, Value),
     WriteHeapSlot(u32, Value),
     Capture,
-    Reset(usize),   // index into the live seed list
+    Reset(usize), // index into the live seed list
 }
 
 fn arbitrary_value() -> impl Strategy<Value = Value> {
@@ -34,7 +36,6 @@ fn arbitrary_op() -> impl Strategy<Value = Op> {
         (0..4usize).prop_map(Op::Reset),
     ]
 }
-
 
 proptest! {
     #[test]

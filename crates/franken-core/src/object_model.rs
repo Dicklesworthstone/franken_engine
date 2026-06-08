@@ -2656,7 +2656,9 @@ mod tests {
         )
         .expect("operation should succeed for valid inputs");
 
-        let keys = heap.keys(h).expect("operation should succeed for valid inputs");
+        let keys = heap
+            .keys(h)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(keys, vec!["a".to_string()]);
     }
 
@@ -2702,7 +2704,8 @@ mod tests {
         heap.set_property(h, str_key("x"), int_val(1))
             .expect("operation should succeed for valid inputs");
         // SAFETY: Test-only unwrap with valid heap object
-        heap.seal(h).expect("operation should succeed for valid inputs");
+        heap.seal(h)
+            .expect("operation should succeed for valid inputs");
 
         // SAFETY: Test-only unwrap with valid heap object
         assert!(
@@ -3967,7 +3970,8 @@ mod tests {
                 .expect("operation should succeed for valid inputs")
         );
         assert_eq!(
-            Reflect::get(&heap, h, &str_key("x")).expect("operation should succeed for valid inputs"),
+            Reflect::get(&heap, h, &str_key("x"))
+                .expect("operation should succeed for valid inputs"),
             int_val(42)
         );
     }
@@ -3979,10 +3983,12 @@ mod tests {
         Reflect::set(&mut heap, h, str_key("x"), int_val(1))
             .expect("operation should succeed for valid inputs");
         assert!(
-            Reflect::has(&heap, h, &str_key("x")).expect("operation should succeed for valid inputs")
+            Reflect::has(&heap, h, &str_key("x"))
+                .expect("operation should succeed for valid inputs")
         );
         assert!(
-            !Reflect::has(&heap, h, &str_key("y")).expect("operation should succeed for valid inputs")
+            !Reflect::has(&heap, h, &str_key("y"))
+                .expect("operation should succeed for valid inputs")
         );
     }
 
@@ -3997,7 +4003,8 @@ mod tests {
                 .expect("operation should succeed for valid inputs")
         );
         assert!(
-            !Reflect::has(&heap, h, &str_key("x")).expect("operation should succeed for valid inputs")
+            !Reflect::has(&heap, h, &str_key("x"))
+                .expect("operation should succeed for valid inputs")
         );
     }
 
@@ -4019,7 +4026,8 @@ mod tests {
         let proto = heap.alloc_plain();
         let obj = heap.alloc(Some(proto));
         assert_eq!(
-            Reflect::get_prototype_of(&heap, obj).expect("operation should succeed for valid inputs"),
+            Reflect::get_prototype_of(&heap, obj)
+                .expect("operation should succeed for valid inputs"),
             Some(proto)
         );
     }
@@ -4043,12 +4051,16 @@ mod tests {
     fn reflect_is_extensible_and_prevent() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
-        assert!(Reflect::is_extensible(&heap, h).expect("operation should succeed for valid inputs"));
+        assert!(
+            Reflect::is_extensible(&heap, h).expect("operation should succeed for valid inputs")
+        );
         assert!(
             Reflect::prevent_extensions(&mut heap, h)
                 .expect("operation should succeed for valid inputs")
         );
-        assert!(!Reflect::is_extensible(&heap, h).expect("operation should succeed for valid inputs"));
+        assert!(
+            !Reflect::is_extensible(&heap, h).expect("operation should succeed for valid inputs")
+        );
     }
 
     #[test]
@@ -4159,7 +4171,8 @@ mod tests {
         let h = heap.alloc_plain();
         heap.set_property(h, str_key("x"), int_val(1))
             .expect("operation should succeed for valid inputs");
-        heap.seal(h).expect("operation should succeed for valid inputs");
+        heap.seal(h)
+            .expect("operation should succeed for valid inputs");
 
         // Data property is sealed (non-configurable) but writable.
         // Define with same attributes but different value should succeed.
@@ -4427,7 +4440,8 @@ mod tests {
             .expect("operation should succeed for valid inputs");
         assert!(desc.is_some());
         assert_eq!(
-            desc.expect("operation should succeed for valid inputs").value(),
+            desc.expect("operation should succeed for valid inputs")
+                .value(),
             Some(&int_val(1))
         );
     }
@@ -4672,7 +4686,8 @@ mod tests {
         assert!(!result);
         // Value unchanged.
         assert_eq!(
-            Reflect::get(&heap, h, &str_key("x")).expect("operation should succeed for valid inputs"),
+            Reflect::get(&heap, h, &str_key("x"))
+                .expect("operation should succeed for valid inputs"),
             int_val(1)
         );
     }
@@ -4889,7 +4904,8 @@ mod tests {
             .as_proxy()
             .expect("operation should succeed for valid inputs");
         assert_eq!(
-            p3.target().expect("operation should succeed for valid inputs"),
+            p3.target()
+                .expect("operation should succeed for valid inputs"),
             proxy2
         );
     }
@@ -5167,7 +5183,8 @@ mod tests {
             .expect("operation should succeed for valid inputs");
         assert!(desc.is_some());
         assert_eq!(
-            desc.expect("operation should succeed for valid inputs").value(),
+            desc.expect("operation should succeed for valid inputs")
+                .value(),
             Some(&str_val("Source"))
         );
     }
@@ -5182,7 +5199,8 @@ mod tests {
         let h = heap.alloc_plain();
         heap.set_property(h, str_key("x"), int_val(1))
             .expect("operation should succeed for valid inputs");
-        heap.seal(h).expect("operation should succeed for valid inputs");
+        heap.seal(h)
+            .expect("operation should succeed for valid inputs");
 
         // Can update existing property.
         assert!(
@@ -5994,8 +6012,7 @@ mod tests {
     fn symbol_id_serde_roundtrip() {
         let id = SymbolId(42);
         let json = serde_json::to_string(&id).expect("serialization should succeed");
-        let back: SymbolId =
-            serde_json::from_str(&json).expect("deserialization should succeed");
+        let back: SymbolId = serde_json::from_str(&json).expect("deserialization should succeed");
         assert_eq!(id, back);
     }
 

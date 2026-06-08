@@ -1342,7 +1342,9 @@ mod tests {
         let h = store.create_closure("add".into(), 2, true, captures, EnvironmentHandle(0));
         assert_eq!(store.len(), 1);
         // SAFETY: Test gets valid closure handle; get succeeds in controlled test environment.
-        let closure = store.get(h).expect("operation should succeed for valid inputs");
+        let closure = store
+            .get(h)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(closure.name, "add");
         assert_eq!(closure.arity, 2);
         assert!(closure.strict);
@@ -1369,7 +1371,9 @@ mod tests {
         ];
         let h = store.create_closure("f".into(), 0, false, captures, EnvironmentHandle(0));
         // SAFETY: Test gets valid closure handle; get succeeds in controlled test environment.
-        let closure = store.get(h).expect("operation should succeed for valid inputs");
+        let closure = store
+            .get(h)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(closure.max_capture_label, Label::Secret);
     }
 
@@ -1427,8 +1431,7 @@ mod tests {
         // SAFETY: Test serializes known-valid Closure; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&closure).expect("serialization should succeed");
         // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
-        let back: Closure =
-            serde_json::from_str(&json).expect("deserialization should succeed");
+        let back: Closure = serde_json::from_str(&json).expect("deserialization should succeed");
         assert_eq!(back, closure);
     }
 
@@ -1897,8 +1900,7 @@ mod tests {
         // SAFETY: Test serializes known-valid ScopeChain; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&chain).expect("serialization should succeed");
         // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
-        let back: ScopeChain =
-            serde_json::from_str(&json).expect("deserialization should succeed");
+        let back: ScopeChain = serde_json::from_str(&json).expect("deserialization should succeed");
         assert_eq!(back.depth(), chain.depth());
         // Verify bindings survived the round-trip.
         // SAFETY: Test gets valid round-tripped binding; get_value succeeds in controlled test environment.
@@ -1952,7 +1954,9 @@ mod tests {
             EnvironmentHandle(u32::MAX), // max handle value
         );
         // SAFETY: Test gets valid closure handle; get succeeds in controlled test environment.
-        let c = store.get(h).expect("operation should succeed for valid inputs");
+        let c = store
+            .get(h)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(c.name, "");
         assert_eq!(c.arity, 0);
         assert!(!c.strict);
@@ -2432,8 +2436,7 @@ mod tests {
         // SAFETY: Test serializes known-valid ScopeError; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&err).expect("serialization should succeed");
         // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
-        let back: ScopeError =
-            serde_json::from_str(&json).expect("deserialization should succeed");
+        let back: ScopeError = serde_json::from_str(&json).expect("deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -2452,11 +2455,9 @@ mod tests {
         let min_val = EnvValue::Number(i64::MIN);
         let max_val = EnvValue::Number(i64::MAX);
         // SAFETY: Test serializes known-valid EnvValue; to_string succeeds in controlled test environment.
-        let json_min =
-            serde_json::to_string(&min_val).expect("serialization should succeed");
+        let json_min = serde_json::to_string(&min_val).expect("serialization should succeed");
         // SAFETY: Test serializes known-valid EnvValue; to_string succeeds in controlled test environment.
-        let json_max =
-            serde_json::to_string(&max_val).expect("serialization should succeed");
+        let json_max = serde_json::to_string(&max_val).expect("serialization should succeed");
         // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
         let back_min: EnvValue =
             serde_json::from_str(&json_min).expect("deserialization should succeed");
@@ -2572,8 +2573,7 @@ mod tests {
         // SAFETY: Test serializes known-valid ScopeId; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&sid).expect("serialization should succeed");
         // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
-        let back: ScopeId =
-            serde_json::from_str(&json).expect("deserialization should succeed");
+        let back: ScopeId = serde_json::from_str(&json).expect("deserialization should succeed");
         assert_eq!(sid, back);
     }
 

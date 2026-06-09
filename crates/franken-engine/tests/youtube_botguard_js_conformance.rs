@@ -325,6 +325,425 @@ fn confirmed_working_youtube_js_vector_table() {
 }
 
 #[test]
+fn arraybuffer_backing_store_conformance_vectors() {
+    let vectors = [
+        JsConformanceVector::value(
+            "ytbg-arraybuffer-byte-length-three",
+            "arraybuffer",
+            "var b = new ArrayBuffer(3); b.byteLength",
+            "3",
+        ),
+        JsConformanceVector::value(
+            "ytbg-arraybuffer-byte-length-default-zero",
+            "arraybuffer",
+            "var b = new ArrayBuffer(); b.byteLength",
+            "0",
+        ),
+        JsConformanceVector::engine_error(
+            "ytbg-arraybuffer-negative-length-range-error",
+            "arraybuffer",
+            "new ArrayBuffer(-1)",
+            "eval.runtime.fault",
+            Some("invalid ArrayBuffer byteLength"),
+        ),
+        JsConformanceVector::engine_error(
+            "ytbg-arraybuffer-oversized-length-range-error",
+            "arraybuffer",
+            "new ArrayBuffer(8388609)",
+            "eval.runtime.fault",
+            Some("per-buffer cap"),
+        ),
+    ];
+
+    let report = assert_js_conformance_vectors(&vectors);
+    println!(
+        "YTBG_ARRAYBUFFER_CONFORMANCE_REPORT_JSON={}",
+        serde_json::to_string_pretty(&report).expect("ArrayBuffer report must serialize")
+    );
+
+    assert_eq!(report.total_vectors, vectors.len() as u32);
+    assert_eq!(report.passed, vectors.len() as u32);
+    assert_eq!(report.failed, 0);
+    assert!(
+        report.logs.iter().all(|log| log.category == "arraybuffer"),
+        "all ArrayBuffer vectors should be categorized for YTBG reporting"
+    );
+    assert!(
+        report
+            .logs
+            .iter()
+            .filter(|log| log.actual_kind == "engine_error")
+            .all(
+                |log| log.error_code.as_deref() == Some("eval.runtime.fault")
+                    && log.error_message.as_deref().is_some_and(|message| {
+                        message.contains("ArrayBuffer") && message.contains("byteLength")
+                    }),
+            ),
+        "ArrayBuffer rejection vectors must emit deterministic structured runtime errors"
+    );
+}
+
+#[test]
+fn typed_array_constructor_view_conformance_vectors() {
+    let vectors = [
+        JsConformanceVector::value(
+            "ytbg-typedarray-typeof-uint8array",
+            "typedarray",
+            "typeof Uint8Array",
+            "function",
+        ),
+        JsConformanceVector::value(
+            "ytbg-typedarray-uint8-length",
+            "typedarray",
+            "var u = new Uint8Array(3); u.length",
+            "3",
+        ),
+        JsConformanceVector::value(
+            "ytbg-typedarray-uint8-byte-length",
+            "typedarray",
+            "var u = new Uint8Array(3); u.byteLength",
+            "3",
+        ),
+        JsConformanceVector::value(
+            "ytbg-typedarray-uint8-buffer-byte-length",
+            "typedarray",
+            "var u = new Uint8Array(3); u.buffer.byteLength",
+            "3",
+        ),
+        JsConformanceVector::value(
+            "ytbg-typedarray-int32-arraybuffer-length",
+            "typedarray",
+            "var b = new ArrayBuffer(8); var i = new Int32Array(b); i.length",
+            "2",
+        ),
+        JsConformanceVector::value(
+            "ytbg-typedarray-uint32-window-byte-offset",
+            "typedarray",
+            "var b = new ArrayBuffer(12); var u = new Uint32Array(b, 4, 2); u.byteOffset",
+            "4",
+        ),
+        JsConformanceVector::value(
+            "ytbg-typedarray-uint32-window-length",
+            "typedarray",
+            "var b = new ArrayBuffer(12); var u = new Uint32Array(b, 4, 2); u.length",
+            "2",
+        ),
+        JsConformanceVector::engine_error(
+            "ytbg-typedarray-int32-misaligned-byte-offset",
+            "typedarray",
+            "new Int32Array(new ArrayBuffer(4), 1)",
+            "eval.runtime.fault",
+            Some("misaligned"),
+        ),
+        JsConformanceVector::engine_error(
+            "ytbg-typedarray-uint32-implicit-length-alignment",
+            "typedarray",
+            "new Uint32Array(new ArrayBuffer(5))",
+            "eval.runtime.fault",
+            Some("not a multiple"),
+        ),
+    ];
+
+    let report = assert_js_conformance_vectors(&vectors);
+    println!(
+        "YTBG_TYPED_ARRAY_CONFORMANCE_REPORT_JSON={}",
+        serde_json::to_string_pretty(&report).expect("typed-array report must serialize")
+    );
+
+    assert_eq!(report.total_vectors, vectors.len() as u32);
+    assert_eq!(report.passed, vectors.len() as u32);
+    assert_eq!(report.failed, 0);
+    assert!(
+        report.logs.iter().all(|log| log.category == "typedarray"),
+        "all typed-array vectors should be categorized for YTBG reporting"
+    );
+    assert!(
+        report
+            .logs
+            .iter()
+            .filter(|log| log.actual_kind == "engine_error")
+            .all(
+                |log| log.error_code.as_deref() == Some("eval.runtime.fault")
+                    && log.error_message.as_deref().is_some_and(|message| {
+                        message.contains("Uint32Array")
+                            || message.contains("Int32Array")
+                            || message.contains("typed-array")
+                    }),
+            ),
+        "typed-array rejection vectors must emit deterministic structured runtime errors"
+    );
+}
+
+#[test]
+fn typed_array_indexed_storage_conformance_vectors() {
+    let vectors = [
+        JsConformanceVector::value(
+            "ytbg-typedarray-g1-indexed-sum",
+            "typedarray_indexed_storage",
+            "var a = new Uint8Array(3); a[0] = 255; a[1] = 1; a[0] + a[1]",
+            "256",
+        ),
+        JsConformanceVector::value(
+            "ytbg-typedarray-uint8-wraps-modulo-256",
+            "typedarray_indexed_storage",
+            "var a = new Uint8Array(2); a[0] = 256; a[1] = 0 - 1; a[0] + a[1]",
+            "255",
+        ),
+        JsConformanceVector::value(
+            "ytbg-typedarray-int32-signed-wrap",
+            "typedarray_indexed_storage",
+            "var i = new Int32Array(1); i[0] = 2147483648; i[0]",
+            "-2147483648",
+        ),
+        JsConformanceVector::value(
+            "ytbg-typedarray-uint32-unsigned-wrap",
+            "typedarray_indexed_storage",
+            "var u = new Uint32Array(1); u[0] = 0 - 1; u[0]",
+            "4294967295",
+        ),
+        JsConformanceVector::value(
+            "ytbg-typedarray-oob-read-after-write-is-undefined",
+            "typedarray_indexed_storage",
+            "var a = new Uint8Array(1); a[1] = 7; a[1]",
+            "undefined",
+        ),
+        JsConformanceVector::value(
+            "ytbg-typedarray-non-index-property-preserved",
+            "typedarray_indexed_storage",
+            "var a = new Uint8Array(1); a.foo = 9; a.foo",
+            "9",
+        ),
+    ];
+
+    let report = assert_js_conformance_vectors(&vectors);
+    println!(
+        "YTBG_TYPED_ARRAY_INDEXED_STORAGE_CONFORMANCE_REPORT_JSON={}",
+        serde_json::to_string_pretty(&report)
+            .expect("typed-array indexed-storage report must serialize")
+    );
+
+    assert_eq!(report.total_vectors, vectors.len() as u32);
+    assert_eq!(report.passed, vectors.len() as u32);
+    assert_eq!(report.failed, 0);
+    assert!(
+        report
+            .logs
+            .iter()
+            .all(|log| log.category == "typedarray_indexed_storage"),
+        "all typed-array indexed-storage vectors should be categorized for YTBG reporting"
+    );
+}
+
+#[test]
+fn data_view_integer_accessors_conformance_vectors() {
+    let vectors = [
+        JsConformanceVector::value(
+            "ytbg-dataview-typeof",
+            "dataview_integer_accessors",
+            "typeof DataView",
+            "function",
+        ),
+        JsConformanceVector::value(
+            "ytbg-dataview-byte-length",
+            "dataview_integer_accessors",
+            "var b = new ArrayBuffer(4); var d = new DataView(b); d.byteLength",
+            "4",
+        ),
+        JsConformanceVector::value(
+            "ytbg-dataview-window-byte-offset",
+            "dataview_integer_accessors",
+            "var b = new ArrayBuffer(8); var d = new DataView(b, 2, 4); d.byteOffset",
+            "2",
+        ),
+        JsConformanceVector::value(
+            "ytbg-dataview-uint8-round-trip",
+            "dataview_integer_accessors",
+            "var b = new ArrayBuffer(4); var d = new DataView(b); d.setUint8(0,255); d.getUint8(0)",
+            "255",
+        ),
+        JsConformanceVector::value(
+            "ytbg-dataview-uint32-big-endian-first-byte",
+            "dataview_integer_accessors",
+            "var b = new ArrayBuffer(4); var d = new DataView(b); d.setUint32(0,16909060,false); d.getUint8(0)",
+            "1",
+        ),
+        JsConformanceVector::value(
+            "ytbg-dataview-uint32-little-endian-round-trip",
+            "dataview_integer_accessors",
+            "var b = new ArrayBuffer(4); var d = new DataView(b); d.setUint32(0,16909060,true); d.getUint32(0,true)",
+            "16909060",
+        ),
+        JsConformanceVector::value(
+            "ytbg-dataview-int32-signed-wrap",
+            "dataview_integer_accessors",
+            "var b = new ArrayBuffer(4); var d = new DataView(b); d.setInt32(0,2147483648,false); d.getInt32(0,false)",
+            "-2147483648",
+        ),
+        JsConformanceVector::value(
+            "ytbg-dataview-write-visible-to-uint8array",
+            "dataview_integer_accessors",
+            "var b = new ArrayBuffer(2); var d = new DataView(b); var a = new Uint8Array(b); d.setUint8(0,42); a[0]",
+            "42",
+        ),
+        JsConformanceVector::value(
+            "ytbg-dataview-reads-uint8array-write",
+            "dataview_integer_accessors",
+            "var b = new ArrayBuffer(2); var d = new DataView(b); var a = new Uint8Array(b); a[1] = 7; d.getUint8(1)",
+            "7",
+        ),
+        JsConformanceVector::engine_error(
+            "ytbg-dataview-constructor-byte-offset-range-error",
+            "dataview_integer_accessors",
+            "new DataView(new ArrayBuffer(4), 5)",
+            "eval.runtime.fault",
+            Some("DataView byteOffset"),
+        ),
+        JsConformanceVector::engine_error(
+            "ytbg-dataview-getuint32-out-of-bounds",
+            "dataview_integer_accessors",
+            "var b = new ArrayBuffer(4); var d = new DataView(b); d.getUint32(1)",
+            "eval.runtime.fault",
+            Some("out of bounds"),
+        ),
+    ];
+
+    let report = assert_js_conformance_vectors(&vectors);
+    println!(
+        "YTBG_DATAVIEW_INTEGER_ACCESSORS_CONFORMANCE_REPORT_JSON={}",
+        serde_json::to_string_pretty(&report).expect("DataView report must serialize")
+    );
+
+    assert_eq!(report.total_vectors, vectors.len() as u32);
+    assert_eq!(report.passed, vectors.len() as u32);
+    assert_eq!(report.failed, 0);
+    assert!(
+        report
+            .logs
+            .iter()
+            .all(|log| log.category == "dataview_integer_accessors"),
+        "all DataView vectors should be categorized for YTBG reporting"
+    );
+    assert!(
+        report
+            .logs
+            .iter()
+            .filter(|log| log.actual_kind == "engine_error")
+            .all(
+                |log| log.error_code.as_deref() == Some("eval.runtime.fault")
+                    && log
+                        .error_message
+                        .as_deref()
+                        .is_some_and(|message| message.contains("DataView"))
+            ),
+        "DataView rejection vectors must emit deterministic structured runtime errors"
+    );
+}
+
+#[test]
+fn typed_array_method_conformance_vectors() {
+    let vectors = [
+        JsConformanceVector::value(
+            "ytbg-typedarray-set-array-source",
+            "typedarray_methods",
+            "var a = new Uint8Array(4); a.set([1,2],1); a[0] + a[1]*10 + a[2]*100 + a[3]*1000",
+            "210",
+        ),
+        JsConformanceVector::value(
+            "ytbg-typedarray-fill-window",
+            "typedarray_methods",
+            "var a = new Uint8Array(4); a.fill(7,1,3); a[0] + a[1] + a[2] + a[3]",
+            "14",
+        ),
+        JsConformanceVector::value(
+            "ytbg-typedarray-copy-within-overlap",
+            "typedarray_methods",
+            "var a = new Uint8Array(4); a.set([1,2,3,4]); a.copyWithin(2,0,2); a[0]*1000 + a[1]*100 + a[2]*10 + a[3]",
+            "1212",
+        ),
+        JsConformanceVector::value(
+            "ytbg-typedarray-subarray-shares-backing",
+            "typedarray_methods",
+            "var a = new Uint8Array(4); a.set([10,20,30,40]); var s = a.subarray(1,3); s[0] = 99; a[1]",
+            "99",
+        ),
+        JsConformanceVector::value(
+            "ytbg-typedarray-slice-copies-backing",
+            "typedarray_methods",
+            "var a = new Uint8Array(4); a.set([10,20,30,40]); var s = a.slice(1,3); s[0] = 99; a[1]",
+            "20",
+        ),
+        JsConformanceVector::value(
+            "ytbg-typedarray-int32-set-wrap",
+            "typedarray_methods",
+            "var i = new Int32Array(2); i.set([2147483648],1); i[1]",
+            "-2147483648",
+        ),
+        JsConformanceVector::value(
+            "ytbg-typedarray-array-from-conversion",
+            "typedarray_methods",
+            "var a = new Uint8Array(3); a.set([5,6,7]); Array.from(a).join(\",\")",
+            "5,6,7",
+        ),
+        JsConformanceVector::value(
+            "ytbg-typedarray-values-iterator",
+            "typedarray_methods",
+            "var a = new Uint8Array(3); a.set([5,6,7]); var it = a.values(); it.next().value + it.next().value",
+            "11",
+        ),
+        JsConformanceVector::value(
+            "ytbg-typedarray-keys-iterator",
+            "typedarray_methods",
+            "var a = new Uint8Array(3); var it = a.keys(); it.next().value + it.next().value",
+            "1",
+        ),
+        JsConformanceVector::value(
+            "ytbg-typedarray-entries-iterator",
+            "typedarray_methods",
+            "var a = new Uint8Array(1); a[0] = 5; var e = a.entries().next().value; e[0]*10 + e[1]",
+            "5",
+        ),
+        JsConformanceVector::engine_error(
+            "ytbg-typedarray-unsupported-method-diagnostic",
+            "typedarray_methods",
+            "new Uint8Array(1).map(0)",
+            "eval.runtime.fault",
+            Some("unsupported TypedArray method"),
+        ),
+    ];
+
+    let report = assert_js_conformance_vectors(&vectors);
+    println!(
+        "YTBG_TYPED_ARRAY_METHOD_CONFORMANCE_REPORT_JSON={}",
+        serde_json::to_string_pretty(&report).expect("typed-array method report must serialize")
+    );
+
+    assert_eq!(report.total_vectors, vectors.len() as u32);
+    assert_eq!(report.passed, vectors.len() as u32);
+    assert_eq!(report.failed, 0);
+    assert!(
+        report
+            .logs
+            .iter()
+            .all(|log| log.category == "typedarray_methods"),
+        "all typed-array method vectors should be categorized for YTBG reporting"
+    );
+    assert!(
+        report
+            .logs
+            .iter()
+            .filter(|log| log.actual_kind == "engine_error")
+            .all(
+                |log| log.error_code.as_deref() == Some("eval.runtime.fault")
+                    && log
+                        .error_message
+                        .as_deref()
+                        .is_some_and(|message| message.contains("TypedArray"))
+            ),
+        "typed-array unsupported method vectors must emit deterministic structured runtime errors"
+    );
+}
+
+#[test]
 fn likely_botguard_gap_spike_vectors_are_logged_with_current_observations() {
     let probes = [
         BotGuardSpikeProbe {

@@ -1,24 +1,22 @@
 #![forbid(unsafe_code)]
 
-use std::path::Path;
-
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction};
 use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
 
-// golden_diag lives under tests/_support/ (bd-ub6x8.18); pulled in via #[path]
-// so cargo does not compile it as a standalone integration-test binary.
-#[path = "_support/golden_diag.rs"]
-mod golden_diag;
+// Migrated from the hand-rolled `golden_diag::GoldenDiag` helper to `insta`
+// snapshots (bd-ub6x8.21, follow-up to the bd-ub6x8.11 adoption spike). The
+// rendered IR3 text is unchanged; only the assert/regen mechanism moved.
+// Snapshots live under tests/snapshots/; bless with:
+//   INSTA_UPDATE=always cargo test -p frankenengine-engine --test golden_lowering
+// then review with `cargo insta review`.
 
 struct LoweringGoldenCase {
     name: &'static str,
     source: &'static str,
     goal: ParseGoal,
 }
-
-const UPDATE_GOLDENS_ENV: &str = "UPDATE_GOLDENS";
 
 fn render_lowered_ir3(case: &LoweringGoldenCase) -> String {
     let parser = CanonicalEs2020Parser;
@@ -37,9 +35,9 @@ fn render_lowered_ir3(case: &LoweringGoldenCase) -> String {
     rendered.push_str("# franken-engine lowering IR3 golden\n");
     rendered.push_str("# Update with:\n");
     rendered.push_str(
-        "#   UPDATE_GOLDENS=1 cargo test -p frankenengine-engine --test golden_lowering\n",
+        "#   INSTA_UPDATE=always cargo test -p frankenengine-engine --test golden_lowering\n",
     );
-    rendered.push_str("# Then review and commit the diff under tests/golden/lowering/.\n");
+    rendered.push_str("# Then review with `cargo insta review` and commit tests/snapshots/.\n");
     rendered.push_str(&format!("case: {}\n", case.name));
     rendered.push_str(&format!("goal: {:?}\n", case.goal));
     rendered.push_str("source:\n");
@@ -86,17 +84,13 @@ fn render_instruction(instruction: &Ir3Instruction) -> String {
         .expect("Ir3Instruction derives Serialize, JSON encoding cannot fail")
 }
 
-/// Assert IR3 lowering output matches golden file.
-/// UPDATE_GOLDENS + read-or-panic + .actual sweep is delegated to
-/// golden_diag::GoldenDiag (bd-ub6x8.3).
+/// Assert IR3 lowering output matches its insta snapshot.
+/// The bless/review/`.snap.new`-sibling flow is insta-native (bd-ub6x8.21);
+/// the per-case `name` becomes the snapshot name so each case keeps a
+/// distinct fixture, matching the prior one-file-per-case layout.
 fn assert_lowering_golden(case: &LoweringGoldenCase) {
-    let golden_path = Path::new("tests/golden/lowering").join(format!("{}.txt", case.name));
     let actual = render_lowered_ir3(case);
-    golden_diag::GoldenDiag {
-        framework_name: "Lowering IR3 golden",
-        regen_env_var: UPDATE_GOLDENS_ENV,
-    }
-    .assert_golden_match(&actual, &golden_path, case.name, None);
+    insta::assert_snapshot!(case.name, actual);
 }
 
 #[test]

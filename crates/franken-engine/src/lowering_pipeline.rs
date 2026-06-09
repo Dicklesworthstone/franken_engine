@@ -7104,15 +7104,14 @@ fn lower_expression_to_ir1(
                 return Ok(());
             }
 
-            // `typeof Date` — the bare `Date` global has no eval-scope binding, so
-            // it would otherwise lower to a `LoadScoped` miss → `undefined` and
-            // yield `typeof` => "undefined". Date is a callable global (its
-            // constructor / `Date.now()` are routed to `builtin:Date`/`DateNow`
-            // host calls below), so report `typeof Date` as "function" to match
-            // (bd-cseei). Only when unshadowed by a user binding in scope.
+            // `typeof <known constructor>` — these bare globals have no eval-scope
+            // binding, so they would otherwise lower to a `LoadScoped` miss →
+            // `undefined` and yield `typeof` => "undefined". They are callable
+            // globals routed to constructor hostcalls below, so report
+            // "function" when unshadowed by a user binding in scope.
             if *operator == UnaryOperator::Typeof
                 && let Expression::Identifier(name) = argument.as_ref()
-                && name == "Date"
+                && known_constructor_typeof_name(name)
                 && !binding_lookup.contains_key(name.as_str())
             {
                 ops.push(Ir1Op::LoadLiteral {
@@ -9466,6 +9465,93 @@ fn lower_expression_to_ir1(
                 });
                 return Ok(());
             }
+            // `new ArrayBuffer(length)` is the root of the typed-array/DataView
+            // object model. Route the unshadowed global constructor to the runtime
+            // hostcall so allocation, zero-fill, byteLength, and budget failures
+            // all pass through the baseline interpreter's deterministic object
+            // model (bd-8enww.2.2).
+            if let Some(capability) = array_buffer_constructor_capability(callee, binding_lookup) {
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
+            // Typed-array constructors are JS-visible globals with no eval-scope
+            // binding in this runtime. Route the BotGuard v1 constructor family to
+            // hostcalls over the ArrayBuffer object model (bd-8enww.2.3).
+            if let Some(capability) = typed_array_constructor_capability(callee, binding_lookup) {
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
+            // `new DataView(buffer, byteOffset?, byteLength?)` shares the
+            // ArrayBuffer-backed memory model but uses byte-addressed, endian
+            // aware accessors instead of homogeneous indexed elements
+            // (bd-8enww.2.6).
+            if let Some(capability) = data_view_constructor_capability(callee, binding_lookup) {
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
             // `new Proxy(target, handler)` likewise has no eval binding; route to
             // the `builtin:Proxy` constructor hostcall (which allocates the proxy
             // object; member access then flows through the already-wired
@@ -9969,6 +10055,66 @@ fn date_constructor_capability(
         "Date" => Some("builtin:Date"),
         _ => None,
     }
+}
+
+/// Capability for `new ArrayBuffer(length)` (bd-8enww.2.2). Returns `None`
+/// when `ArrayBuffer` is shadowed by a user binding so local constructors retain
+/// ordinary `new` semantics.
+fn array_buffer_constructor_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Identifier(name) = callee else {
+        return None;
+    };
+    if binding_lookup.contains_key(name.as_str()) {
+        return None;
+    }
+    match name.as_str() {
+        "ArrayBuffer" => Some("builtin:ArrayBuffer"),
+        _ => None,
+    }
+}
+
+fn typed_array_constructor_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Identifier(name) = callee else {
+        return None;
+    };
+    if binding_lookup.contains_key(name.as_str()) {
+        return None;
+    }
+    match name.as_str() {
+        "Uint8Array" => Some("builtin:Uint8Array"),
+        "Int32Array" => Some("builtin:Int32Array"),
+        "Uint32Array" => Some("builtin:Uint32Array"),
+        _ => None,
+    }
+}
+
+fn data_view_constructor_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Identifier(name) = callee else {
+        return None;
+    };
+    if binding_lookup.contains_key(name.as_str()) {
+        return None;
+    }
+    match name.as_str() {
+        "DataView" => Some("builtin:DataView"),
+        _ => None,
+    }
+}
+
+fn known_constructor_typeof_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Date" | "ArrayBuffer" | "Uint8Array" | "Int32Array" | "Uint32Array" | "DataView"
+    )
 }
 
 /// Capability for a `Date.now()` static member call (bd-cseei). Mirrors

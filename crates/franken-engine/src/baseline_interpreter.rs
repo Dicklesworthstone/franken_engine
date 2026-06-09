@@ -8508,7 +8508,62 @@ impl InterpreterCore {
         })
     }
 
+    /// Is there a catch frame in the *current* run-loop invocation that can
+    /// handle an exception raised at the current call depth? Recursive
+    /// `run_loop` invocations (callbacks, `Reflect.construct`) clear and later
+    /// restore `catch_frames`, so this only ever observes frames belonging to
+    /// the active invocation — an enclosing try/catch in a caller is correctly
+    /// invisible here and is reached by re-propagating the host error upward.
+    fn has_active_catch_frame(&self) -> bool {
+        let depth = self.call_stack.len();
+        self.catch_frames.iter().any(|f| f.call_depth <= depth)
+    }
+
+    /// Drive the bytecode dispatch loop, converting *native* runtime errors
+    /// (TypeError from `null.x`, ReferenceError from TDZ access, …) into JS
+    /// exceptions that are catchable by JS `try`/`catch` (bd-8enww.4.3).
+    ///
+    /// The actual instruction loop lives in [`Self::run_loop_dispatch`]. When
+    /// that returns a JS-catchable host error AND the current invocation has an
+    /// active catch frame, we route the error through the exact same unwinding
+    /// path as the `Throw` instruction (build an error object, suspend the
+    /// prior abrupt completion, set `pending_exception`, unwind to the handler
+    /// via `pop_exception_target_frame`) and re-enter the dispatch loop at the
+    /// catch target. Errors with no eligible handler — and all engine
+    /// faults/resource limits, which are not JS-catchable — propagate
+    /// unchanged.
     fn run_loop(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
+        loop {
+            match self.run_loop_dispatch(module) {
+                Err(err)
+                    if Self::js_catchable_error_name(&err).is_some()
+                        && self.has_active_catch_frame() =>
+                {
+                    let thrown = self.native_error_to_thrown_value(&err)?;
+                    self.suspend_current_abrupt_completion();
+                    self.pending_return = None;
+                    self.pending_exception = Some(thrown.clone());
+                    match self.pop_exception_target_frame() {
+                        Some(frame) => {
+                            self.ip = frame.catch_target;
+                            // Re-enter dispatch at the handler.
+                        }
+                        None => {
+                            // `has_active_catch_frame` raced/changed: surface as
+                            // an uncaught exception rather than the host error.
+                            self.suspended_abrupt_completions.clear();
+                            return Err(InterpreterError::UncaughtException {
+                                value: Self::uncaught_exception_description(&thrown),
+                            });
+                        }
+                    }
+                }
+                other => return other,
+            }
+        }
+    }
+
+    fn run_loop_dispatch(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
         // Initialize CheckpointGuard if cancellation token is provided
         let mut checkpoint_guard = if let Some(ref token) = self.config.cancellation_token {
             Some(CheckpointGuard::new(
@@ -11870,6 +11925,47 @@ impl InterpreterCore {
 
     /// Construct an error object (`Error` or a subclass) with the given `name`
     /// and a `message` derived from the first argument. Shared by the
+    /// Map a host [`InterpreterError`] to the JS error-constructor name it
+    /// should surface as when it escapes into a JS `try`/`catch` block
+    /// (bd-8enww.4.3). Returns `None` for engine faults and resource limits
+    /// (budget, stack overflow, cancellation, containment, …) which must NOT
+    /// be swallowed by untrusted `catch` blocks — those keep propagating as
+    /// host errors to the eval boundary.
+    fn js_catchable_error_name(err: &InterpreterError) -> Option<&'static str> {
+        match err {
+            // Language type errors: `null.x`, bad receivers, non-callable
+            // calls, and "assignment to constant variable" all surface as
+            // `TypeError` in JS.
+            InterpreterError::TypeError { .. } | InterpreterError::ConstAssignment { .. } => {
+                Some("TypeError")
+            }
+            InterpreterError::RangeError { .. } => Some("RangeError"),
+            // Temporal-dead-zone access of a `let`/`const` binding is a
+            // `ReferenceError` per ES semantics.
+            InterpreterError::UninitializedBinding { .. } => Some("ReferenceError"),
+            _ => None,
+        }
+    }
+
+    /// Build a JS error object (name/message/stack) for a host
+    /// [`InterpreterError`] so it can be bound as the catch parameter when a
+    /// native runtime error is caught by JS `try`/`catch` (bd-8enww.4.3). The
+    /// `message` preserves the interpreter's diagnostic string so logs can
+    /// still distinguish the originating fault.
+    fn native_error_to_thrown_value(
+        &mut self,
+        err: &InterpreterError,
+    ) -> Result<Value, InterpreterError> {
+        let name = Self::js_catchable_error_name(err).unwrap_or("Error");
+        let message = err.to_string();
+        let error_id = self.alloc_object_with_prototype(None)?;
+        self.set_object_property(error_id, "name".to_string(), Value::str(name))?;
+        self.set_object_property(error_id, "message".to_string(), Value::str(message))?;
+        let stack_trace = self.format_stack_trace();
+        self.set_object_property(error_id, "stack".to_string(), Value::str(stack_trace))?;
+        Ok(Value::Object(error_id))
+    }
+
     /// `builtin:Error` / `builtin:TypeError` / … hostcall arms (bd-bg9l1.27.10).
     fn construct_error_object(
         &mut self,

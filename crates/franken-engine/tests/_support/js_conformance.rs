@@ -23,6 +23,7 @@ pub struct JsConformanceVector {
     pub category: &'static str,
     pub source: &'static str,
     pub expected: JsConformanceExpectation,
+    pub resource: JsConformanceResourceExpectation,
 }
 
 impl JsConformanceVector {
@@ -37,6 +38,7 @@ impl JsConformanceVector {
             category,
             source,
             expected: JsConformanceExpectation::Value { value },
+            resource: JsConformanceResourceExpectation::not_applicable(),
         }
     }
 
@@ -51,6 +53,7 @@ impl JsConformanceVector {
             category,
             source,
             expected: JsConformanceExpectation::CaughtValue { value },
+            resource: JsConformanceResourceExpectation::not_applicable(),
         }
     }
 
@@ -69,6 +72,34 @@ impl JsConformanceVector {
                 namespace,
                 message_contains,
             },
+            resource: JsConformanceResourceExpectation::not_applicable(),
+        }
+    }
+
+    pub fn with_resource(
+        mut self,
+        memory_size_bytes: Option<u64>,
+        budget_outcome: &'static str,
+    ) -> Self {
+        self.resource = JsConformanceResourceExpectation {
+            memory_size_bytes,
+            budget_outcome,
+        };
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JsConformanceResourceExpectation {
+    pub memory_size_bytes: Option<u64>,
+    pub budget_outcome: &'static str,
+}
+
+impl JsConformanceResourceExpectation {
+    pub const fn not_applicable() -> Self {
+        Self {
+            memory_size_bytes: None,
+            budget_outcome: "not_applicable",
         }
     }
 }
@@ -137,6 +168,8 @@ pub struct JsConformanceLog {
     pub passed: bool,
     pub duration_ns: u64,
     pub source_hash: String,
+    pub memory_size_bytes: Option<u64>,
+    pub budget_outcome: String,
     pub engine: Option<String>,
     pub route_reason: Option<String>,
     pub error_class: Option<String>,
@@ -197,6 +230,8 @@ fn run_one_vector(router: &mut HybridRouter, vector: &JsConformanceVector) -> Js
                 passed,
                 duration_ns,
                 source_hash,
+                memory_size_bytes: vector.resource.memory_size_bytes,
+                budget_outcome: vector.resource.budget_outcome.to_owned(),
                 engine: Some(outcome.engine.to_string()),
                 route_reason: Some(outcome.route_reason.to_string()),
                 error_class: None,
@@ -229,6 +264,8 @@ fn run_one_vector(router: &mut HybridRouter, vector: &JsConformanceVector) -> Js
                 passed,
                 duration_ns,
                 source_hash,
+                memory_size_bytes: vector.resource.memory_size_bytes,
+                budget_outcome: vector.resource.budget_outcome.to_owned(),
                 engine: None,
                 route_reason: None,
                 error_class: Some(err.class().stable_label().to_owned()),

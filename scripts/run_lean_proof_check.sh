@@ -34,6 +34,8 @@
 #     — proof_kind: "lean-mechanised"
 #     — source_module: "frankenengine.proofs.lean4"
 #     — theorem_ids: per-module top-level theorems compiled successfully
+#     — producer_tool/version, timeout policy, exact command, and Lean input
+#       artifact hashes are recorded for repro.lock-style auditability
 #     — content_hash: sha256(canonicalised body) — same scheme the gate script
 #       recomputes
 #
@@ -51,6 +53,7 @@ readonly BUNDLE_SOURCE="frankenengine.proofs.lean4"
 readonly LEAN_PROOFS_DIR="${PROJECT_DIR}/proofs/lean4"
 readonly DEFAULT_BUNDLE_DIR="${PROJECT_DIR}/artifacts/rgc_theorem_backed_compiler_inputs"
 readonly ELAN_BIN_DIR="${HOME}/.elan/bin"
+readonly TIMEOUT_SECONDS="${LEAN_PROOF_TIMEOUT_SECONDS:-300}"
 
 MODE="${1:-ci}"
 
@@ -68,6 +71,8 @@ Modes:
 
 Environment:
   LEAN_PROOF_BUNDLE_DIR   override default bundle output dir
+  LEAN_PROOF_TIMEOUT_SECONDS
+                          per-run lake build timeout in seconds (default: 300)
 EOF
 }
 
@@ -82,11 +87,43 @@ esac
 # Mirrors the Python recompute the promotion gate does at L310-313 of
 # scripts/run_fe_claim_016_021_promotion_gate.sh.
 #-------------------------------------------------------------------------
+proof_input_hashes_json() {
+    LEAN_INPUT_DIR="$LEAN_PROOFS_DIR" python3 <<'PY'
+import hashlib
+import json
+import os
+
+root = os.environ["LEAN_INPUT_DIR"]
+paths = {"lakefile.lean", "lean-toolchain"}
+for dirpath, _dirnames, filenames in os.walk(root):
+    for name in filenames:
+        if name.endswith(".lean"):
+            rel = os.path.relpath(os.path.join(dirpath, name), root)
+            paths.add(rel.replace(os.sep, "/"))
+
+hashes = {}
+for rel in sorted(paths):
+    path = os.path.join(root, *rel.split("/"))
+    if not os.path.isfile(path):
+        continue
+    with open(path, "rb") as fh:
+        hashes[rel] = "sha256:" + hashlib.sha256(fh.read()).hexdigest()
+
+print(json.dumps(hashes, sort_keys=True, separators=(",", ":")))
+PY
+}
+
 emit_proof_bundle() {
     local out_path="$1"
     local verdict="$2"          # "proven" | "unproven"
     shift 2
     local theorem_ids=("$@")    # remaining args = theorem ids
+    local producer_tool="${PROOF_PRODUCER_TOOL:-lean4}"
+    local producer_version="${PROOF_PRODUCER_VERSION:-lean:unknown;lake:unknown}"
+    local timeout_policy="${PROOF_TIMEOUT_POLICY:-per-run lake build timeout}"
+    local timeout_seconds="${PROOF_TIMEOUT_SECONDS:-$TIMEOUT_SECONDS}"
+    local input_hashes_json="${PROOF_INPUT_HASHES_JSON:-{}}"
+    local command_desc="${PROOF_COMMAND:-cd proofs/lean4 && lake build}"
 
     local now_utc
     now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -94,27 +131,52 @@ emit_proof_bundle() {
 
     PROOF_OUT="$out_path" \
     PROOF_CLAIM="$CLAIM_ID" \
+    PROOF_BEAD="$BEAD" \
     PROOF_SCHEMA="$BUNDLE_SCHEMA" \
     PROOF_KIND="$BUNDLE_KIND" \
     PROOF_VERDICT="$verdict" \
     PROOF_GENERATED="$now_utc" \
     PROOF_SOURCE="$BUNDLE_SOURCE" \
     PROOF_IDS="$(printf '%s\n' "${theorem_ids[@]}" | tr '\n' '|' | sed 's/|$//')" \
+    PROOF_PRODUCER_TOOL="$producer_tool" \
+    PROOF_PRODUCER_VERSION="$producer_version" \
+    PROOF_TIMEOUT_POLICY="$timeout_policy" \
+    PROOF_TIMEOUT_SECONDS="$timeout_seconds" \
+    PROOF_INPUT_HASHES_JSON="$input_hashes_json" \
+    PROOF_COMMAND="$command_desc" \
     python3 <<'PY'
 import hashlib
 import json
 import os
 import sys
 
+theorem_ids = [s for s in os.environ.get("PROOF_IDS", "").split("|") if s]
+try:
+    input_artifact_hashes = json.loads(os.environ.get("PROOF_INPUT_HASHES_JSON", "{}"))
+except json.JSONDecodeError as exc:
+    print(f"[lean-runner] invalid PROOF_INPUT_HASHES_JSON: {exc}", file=sys.stderr)
+    sys.exit(2)
+if not isinstance(input_artifact_hashes, dict):
+    print("[lean-runner] PROOF_INPUT_HASHES_JSON must decode to an object", file=sys.stderr)
+    sys.exit(2)
+
 body = {
     "schema_version": os.environ["PROOF_SCHEMA"],
     "claim_id": os.environ["PROOF_CLAIM"],
+    "owning_bead": os.environ["PROOF_BEAD"],
     "track": "track-g",
     "proof_kind": os.environ["PROOF_KIND"],
     "verdict": os.environ["PROOF_VERDICT"],
     "generated_utc": os.environ["PROOF_GENERATED"],
     "source_module": os.environ["PROOF_SOURCE"],
-    "theorem_ids": [s for s in os.environ.get("PROOF_IDS", "").split("|") if s],
+    "producer_tool": os.environ["PROOF_PRODUCER_TOOL"],
+    "producer_version": os.environ["PROOF_PRODUCER_VERSION"],
+    "timeout_policy": os.environ["PROOF_TIMEOUT_POLICY"],
+    "timeout_seconds": int(os.environ["PROOF_TIMEOUT_SECONDS"]),
+    "input_artifact_hashes": input_artifact_hashes,
+    "command": os.environ["PROOF_COMMAND"],
+    "theorem_count": len(theorem_ids),
+    "theorem_ids": theorem_ids,
 }
 
 # The gate's canonical-body recompute (separators=(',', ':'), sort_keys=True)
@@ -144,7 +206,14 @@ if [[ "$MODE" == "selftest" ]]; then
     tmp_dir="$(mktemp -d -t lean-runner-selftest.XXXXXXXX)"
     trap 'rm -rf "$tmp_dir"' EXIT
     fixture_out="${tmp_dir}/${CLAIM_ID}.proof.json"
+    fixture_hashes="$(proof_input_hashes_json)"
 
+    PROOF_PRODUCER_TOOL="lean4" \
+    PROOF_PRODUCER_VERSION="lean:structural-check;lake:structural-check" \
+    PROOF_TIMEOUT_POLICY="structural check without external theorem command" \
+    PROOF_TIMEOUT_SECONDS="0" \
+    PROOF_INPUT_HASHES_JSON="$fixture_hashes" \
+    PROOF_COMMAND="structural check: emit proof bundle without invoking lake" \
     emit_proof_bundle "$fixture_out" "proven" \
         "IFCLatticeIsomorphism.isomorphism" \
         "CapabilityAlgebraSpecification.compose_associativity"
@@ -168,10 +237,19 @@ if proof["content_hash"] != expected:
 
 # Required-fields shape check matching the gate.
 required = ["schema_version", "claim_id", "track", "proof_kind", "verdict",
-            "generated_utc", "source_module", "theorem_ids", "content_hash"]
+            "generated_utc", "source_module", "owning_bead", "producer_tool",
+            "producer_version", "timeout_policy", "timeout_seconds",
+            "input_artifact_hashes", "command", "theorem_count",
+            "theorem_ids", "content_hash"]
 missing = [k for k in required if k not in proof]
 if missing:
     print(f"[lean-runner] selftest: missing fields {missing}", file=sys.stderr)
+    sys.exit(1)
+if proof.get("theorem_count") != len(proof.get("theorem_ids", [])):
+    print("[lean-runner] selftest: theorem_count does not match theorem_ids", file=sys.stderr)
+    sys.exit(1)
+if not proof.get("input_artifact_hashes"):
+    print("[lean-runner] selftest: input_artifact_hashes is empty", file=sys.stderr)
     sys.exit(1)
 
 # Reject simulation markers — same logic as the gate.
@@ -202,6 +280,7 @@ proof_out="${bundle_dir}/${CLAIM_ID}.proof.json"
 [[ -d "$LEAN_PROOFS_DIR" ]] || refuse "proofs/lean4/ missing"
 [[ -f "$LEAN_PROOFS_DIR/lakefile.lean" ]] || refuse "proofs/lean4/lakefile.lean missing"
 command -v python3 >/dev/null 2>&1 || refuse "python3 required for canonical-body hashing"
+[[ "$TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || refuse "LEAN_PROOF_TIMEOUT_SECONDS must be a non-negative integer"
 
 # Detect lake. Fall back to elan's bin dir if not on PATH yet.
 if ! command -v lake >/dev/null 2>&1; then
@@ -212,13 +291,38 @@ if ! command -v lake >/dev/null 2>&1; then
         refuse "lake not on PATH — install with scripts/install_lean_toolchain.sh install"
     fi
 fi
+if ! command -v lean >/dev/null 2>&1; then
+    if [[ -x "${ELAN_BIN_DIR}/lean" ]]; then
+        export PATH="${ELAN_BIN_DIR}:${PATH}"
+        log "added ${ELAN_BIN_DIR} to PATH for lean"
+    else
+        refuse "lean not on PATH — install with scripts/install_lean_toolchain.sh install"
+    fi
+fi
 
-log "running lake build in ${LEAN_PROOFS_DIR}"
+lean_version="$(lean --version 2>/dev/null | sed -n '1p' || true)"
+lake_version="$(lake --version 2>/dev/null | sed -n '1p' || true)"
+producer_version="lean:${lean_version:-unknown};lake:${lake_version:-unknown}"
+input_hashes_json="$(proof_input_hashes_json)"
+timeout_policy="per-run lake build timeout ${TIMEOUT_SECONDS}s"
+command_desc="cd ${LEAN_PROOFS_DIR} && lake build"
+if (( TIMEOUT_SECONDS > 0 )) && command -v timeout >/dev/null 2>&1; then
+    command_desc="cd ${LEAN_PROOFS_DIR} && timeout ${TIMEOUT_SECONDS}s lake build"
+fi
+
+log "running lake build in ${LEAN_PROOFS_DIR} (${timeout_policy})"
 build_log="$(mktemp -t lake-build.XXXXXXXX.log)"
 trap 'rm -f "$build_log"' EXIT
 
 build_status=0
-(cd "$LEAN_PROOFS_DIR" && lake build 2>&1) | tee "$build_log" || build_status=$?
+if (( TIMEOUT_SECONDS > 0 )) && command -v timeout >/dev/null 2>&1; then
+    (cd "$LEAN_PROOFS_DIR" && timeout "${TIMEOUT_SECONDS}s" lake build 2>&1) | tee "$build_log" || build_status=$?
+else
+    if (( TIMEOUT_SECONDS > 0 )); then
+        log "timeout command unavailable; recording timeout policy but running lake directly"
+    fi
+    (cd "$LEAN_PROOFS_DIR" && lake build 2>&1) | tee "$build_log" || build_status=$?
+fi
 
 if (( build_status != 0 )); then
     err "lake build exited non-zero (rc=${build_status})"
@@ -245,6 +349,12 @@ fi
 
 log "found ${#theorem_ids[@]} top-level theorem(s)"
 
+PROOF_PRODUCER_TOOL="lean4" \
+PROOF_PRODUCER_VERSION="$producer_version" \
+PROOF_TIMEOUT_POLICY="$timeout_policy" \
+PROOF_TIMEOUT_SECONDS="$TIMEOUT_SECONDS" \
+PROOF_INPUT_HASHES_JSON="$input_hashes_json" \
+PROOF_COMMAND="$command_desc" \
 emit_proof_bundle "$proof_out" "proven" "${theorem_ids[@]}"
 log "ci: emitted ${proof_out}"
 log "ci: rerun scripts/run_fe_claim_016_021_promotion_gate.sh ci to recheck"

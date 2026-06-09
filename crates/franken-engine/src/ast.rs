@@ -1391,20 +1391,34 @@ pub enum Expression {
     Call {
         callee: Box<Expression>,
         arguments: Vec<Expression>,
+        /// Source-span provenance for the call expression (bd-fqlfw.1.1).
+        /// Optional and excluded from `canonical_value` so AST/IR hashes are
+        /// unaffected; populated by the parser, `None` at desugar/test sites.
+        #[serde(default)]
+        span: Option<SourceSpan>,
     },
     Member {
         object: Box<Expression>,
         property: Box<Expression>,
         computed: bool,
+        /// Source-span provenance for the member access (bd-fqlfw.1.1).
+        #[serde(default)]
+        span: Option<SourceSpan>,
     },
     OptionalCall {
         callee: Box<Expression>,
         arguments: Vec<Expression>,
+        /// Source-span provenance for the optional call (bd-fqlfw.1.1).
+        #[serde(default)]
+        span: Option<SourceSpan>,
     },
     OptionalMember {
         object: Box<Expression>,
         property: Box<Expression>,
         computed: bool,
+        /// Source-span provenance for the optional member access (bd-fqlfw.1.1).
+        #[serde(default)]
+        span: Option<SourceSpan>,
     },
     This,
     ArrayLiteral(Vec<Option<Expression>>),
@@ -1536,7 +1550,9 @@ impl Expression {
                 ("consequent", consequent.canonical_value()),
                 ("alternate", alternate.canonical_value()),
             ]),
-            Self::Call { callee, arguments } => CanonicalValue::map_from_entries([
+            Self::Call {
+                callee, arguments, ..
+            } => CanonicalValue::map_from_entries([
                 ("kind", CanonicalValue::str("call")),
                 ("callee", callee.canonical_value()),
                 (
@@ -1550,13 +1566,16 @@ impl Expression {
                 object,
                 property,
                 computed,
+                ..
             } => CanonicalValue::map_from_entries([
                 ("kind", CanonicalValue::str("member")),
                 ("object", object.canonical_value()),
                 ("property", property.canonical_value()),
                 ("computed", CanonicalValue::Bool(*computed)),
             ]),
-            Self::OptionalCall { callee, arguments } => CanonicalValue::map_from_entries([
+            Self::OptionalCall {
+                callee, arguments, ..
+            } => CanonicalValue::map_from_entries([
                 ("kind", CanonicalValue::str("optional_call")),
                 ("callee", callee.canonical_value()),
                 (
@@ -1570,6 +1589,7 @@ impl Expression {
                 object,
                 property,
                 computed,
+                ..
             } => CanonicalValue::map_from_entries([
                 ("kind", CanonicalValue::str("optional_member")),
                 ("object", object.canonical_value()),
@@ -2978,6 +2998,7 @@ mod tests {
                 Expression::NumericLiteral(1),
                 Expression::StringLiteral("a".to_string()),
             ],
+            span: None,
         };
         match expr.canonical_value() {
             CanonicalValue::Map(map) => {
@@ -3001,6 +3022,7 @@ mod tests {
             object: Box::new(Expression::Identifier("obj".to_string())),
             property: Box::new(Expression::Identifier("prop".to_string())),
             computed: false,
+            span: None,
         };
         match expr.canonical_value() {
             CanonicalValue::Map(map) => {
@@ -3020,6 +3042,7 @@ mod tests {
             object: Box::new(Expression::Identifier("arr".to_string())),
             property: Box::new(Expression::NumericLiteral(0)),
             computed: true,
+            span: None,
         };
         match expr.canonical_value() {
             CanonicalValue::Map(map) => {
@@ -3034,6 +3057,7 @@ mod tests {
         let expr = Expression::OptionalCall {
             callee: Box::new(Expression::Identifier("maybe_fn".to_string())),
             arguments: vec![Expression::NumericLiteral(1)],
+            span: None,
         };
         match expr.canonical_value() {
             CanonicalValue::Map(map) => {
@@ -3057,6 +3081,7 @@ mod tests {
             object: Box::new(Expression::Identifier("config".to_string())),
             property: Box::new(Expression::Identifier("theme".to_string())),
             computed: false,
+            span: None,
         };
         match expr.canonical_value() {
             CanonicalValue::Map(map) => {
@@ -3282,20 +3307,24 @@ mod tests {
             Expression::Call {
                 callee: Box::new(Expression::Identifier("f".to_string())),
                 arguments: vec![],
+                span: None,
             },
             Expression::Member {
                 object: Box::new(Expression::Identifier("o".to_string())),
                 property: Box::new(Expression::Identifier("p".to_string())),
                 computed: false,
+                span: None,
             },
             Expression::OptionalCall {
                 callee: Box::new(Expression::Identifier("maybe".to_string())),
                 arguments: vec![Expression::NullLiteral],
+                span: None,
             },
             Expression::OptionalMember {
                 object: Box::new(Expression::Identifier("cfg".to_string())),
                 property: Box::new(Expression::Identifier("theme".to_string())),
                 computed: false,
+                span: None,
             },
             Expression::This,
             Expression::ArrayLiteral(vec![None, Some(Expression::NullLiteral)]),
@@ -4300,11 +4329,13 @@ mod tests {
             Expression::Call {
                 callee: Box::new(Expression::Identifier("f".to_string())),
                 arguments: vec![],
+                span: None,
             },
             Expression::Member {
                 object: Box::new(Expression::Identifier("o".to_string())),
                 property: Box::new(Expression::Identifier("p".to_string())),
                 computed: false,
+                span: None,
             },
             Expression::This,
             Expression::ArrayLiteral(vec![]),
@@ -4611,6 +4642,7 @@ mod tests {
         let expr = Expression::Call {
             callee: Box::new(Expression::Identifier("f".to_string())),
             arguments: vec![],
+            span: None,
         };
         if let CanonicalValue::Map(map) = expr.canonical_value() {
             if let CanonicalValue::Array(args) = &map["arguments"] {

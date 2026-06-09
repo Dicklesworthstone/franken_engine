@@ -990,3 +990,206 @@ fn conformance_module_rejection_preserves_description() {
     assert_eq!(state.phase, AsyncModulePhase::Rejected);
     assert!(state.rejection_reason_description.is_some());
 }
+
+// ---------------------------------------------------------------------------
+// 9. Native runtime errors are catchable in JS try/catch (bd-8enww.4.3, YTBG-D3)
+//
+// Native runtime faults raised by the interpreter (a TypeError from `null.x`,
+// a ReferenceError from temporal-dead-zone access) must surface as ordinary
+// JS exceptions that JS `try`/`catch` can intercept — rather than escaping the
+// catch as an uncatchable host error. BotGuard deliberately triggers such
+// errors as branch probes, so the G-3 report vector fails if they bypass catch.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn conformance_g3_null_property_access_typeerror_is_catchable() {
+    // The canonical G-3 vector shape: a TypeError from null property access
+    // must be caught and the catch path must run.
+    let source = r#"
+        let result = "uncaught";
+        try {
+            let o = null;
+            o.x;
+        } catch (e) {
+            result = "caught";
+        }
+        result;
+    "#;
+    assert_eq!(
+        eval_source(source),
+        "caught",
+        "TypeError from null property access must be catchable by JS try/catch"
+    );
+}
+
+#[test]
+fn conformance_native_typeerror_binds_error_object_with_name() {
+    // The caught value is an Error-shaped object exposing `.name`/`.message`.
+    let source = r#"
+        let name = "none";
+        try {
+            let o = null;
+            o.x;
+        } catch (e) {
+            name = e.name;
+        }
+        name;
+    "#;
+    assert_eq!(
+        eval_source(source),
+        "TypeError",
+        "caught native runtime error must bind a TypeError object with .name"
+    );
+}
+
+#[test]
+fn conformance_native_typeerror_message_is_observable() {
+    let source = r#"
+        let msg = "";
+        try {
+            let o = undefined;
+            o.y;
+        } catch (e) {
+            msg = (typeof e.message === "string") ? "has-message" : "no-message";
+        }
+        msg;
+    "#;
+    assert_eq!(
+        eval_source(source),
+        "has-message",
+        "caught native runtime error must expose a string .message for diagnostics"
+    );
+}
+
+#[test]
+fn conformance_native_error_thrown_from_called_function_unwinds_to_catch() {
+    // A native TypeError raised inside a *called* function must unwind the
+    // call stack to the enclosing try/catch, just like an explicit throw.
+    let source = r#"
+        function boom() {
+            let o = null;
+            return o.z;
+        }
+        let r = "no";
+        try {
+            boom();
+        } catch (e) {
+            r = "yes:" + e.name;
+        }
+        r;
+    "#;
+    assert_eq!(
+        eval_source(source),
+        "yes:TypeError",
+        "native error from a nested call must unwind to the enclosing catch"
+    );
+}
+
+#[test]
+fn conformance_native_error_runs_finally_then_propagates() {
+    // try/finally (no catch): finally must run, then the native error rethrows.
+    let source = r#"
+        let log = "";
+        function attempt() {
+            try {
+                let o = null;
+                o.q;
+            } finally {
+                log = "finally-ran";
+            }
+        }
+        let outcome = "";
+        try {
+            attempt();
+        } catch (e) {
+            outcome = log + ":" + e.name;
+        }
+        outcome;
+    "#;
+    assert_eq!(
+        eval_source(source),
+        "finally-ran:TypeError",
+        "native error must run finally, then propagate to the outer catch"
+    );
+}
+
+#[test]
+fn conformance_tdz_reference_error_is_catchable() {
+    // Temporal-dead-zone access of a `let` binding throws a catchable
+    // ReferenceError.
+    let source = r#"
+        let r = "none";
+        try {
+            x;
+            let x = 1;
+        } catch (e) {
+            r = e.name;
+        }
+        r;
+    "#;
+    assert_eq!(
+        eval_source(source),
+        "ReferenceError",
+        "TDZ access of a let binding must be catchable as a ReferenceError"
+    );
+}
+
+#[test]
+fn conformance_caught_native_error_lets_execution_continue() {
+    // After catching a native error, normal execution resumes and the catch
+    // binding does not leak.
+    let source = r#"
+        let total = 0;
+        for (let i = 0; i < 3; i++) {
+            try {
+                let o = null;
+                o.p;
+            } catch (e) {
+                total += 1;
+            }
+        }
+        total;
+    "#;
+    assert_eq!(
+        eval_source(source),
+        "3",
+        "each loop iteration must independently catch the native error"
+    );
+}
+
+#[test]
+fn conformance_uncaught_native_typeerror_still_surfaces_as_host_error() {
+    // Outside any try/catch, a native runtime error must NOT be silently
+    // swallowed — it surfaces to the eval boundary as a host error.
+    let ir3 = lower_source_to_ir3("let o = null; o.x;");
+    let result = engine_core_lane().execute(&ir3, "eval-test");
+    assert!(
+        result.is_err(),
+        "native TypeError with no enclosing try/catch must surface as a host error, got {result:?}"
+    );
+}
+
+#[test]
+fn conformance_resource_limit_errors_are_not_js_catchable() {
+    // Engine faults / resource limits (e.g. budget exhaustion) must NOT be
+    // catchable by untrusted JS — they keep propagating as host errors even
+    // inside try/catch.
+    let source = r#"
+        let caught = false;
+        try {
+            while (true) {}
+        } catch (e) {
+            caught = true;
+        }
+        caught;
+    "#;
+    let ir3 = lower_source_to_ir3(source);
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.granted_capabilities = CapabilityProfile::engine_core().capabilities().clone();
+    config.instruction_budget = 5_000;
+    let result = QuickJsLane::with_config(config).execute(&ir3, "eval-test");
+    assert!(
+        matches!(result, Err(InterpreterError::BudgetExhausted { .. })),
+        "budget exhaustion must not be catchable by JS try/catch, got {result:?}"
+    );
+}

@@ -29,6 +29,7 @@ use frankenengine_engine::module_live_binding::LiveBindingMap;
 use frankenengine_engine::object_model::JsValue;
 use frankenengine_engine::parser_api_stability::parse_script;
 use frankenengine_engine::promise_model::PromiseHandle;
+use frankenengine_engine::{EvalErrorCode, HybridRouter};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -80,6 +81,13 @@ fn eval_source(source: &str) -> String {
         Value::Undefined => "undefined".to_string(),
         other => format!("{:?}", other),
     }
+}
+
+fn eval_router_value(source: &str) -> String {
+    HybridRouter::default()
+        .eval(source)
+        .expect("HybridRouter eval should succeed")
+        .value
 }
 
 fn test_module(instructions: Vec<Ir3Instruction>) -> Ir3Module {
@@ -539,6 +547,65 @@ fn conformance_lowered_try_catch_finally_return_in_finally_overrides_catch_retur
         .execute(&ir3, "conformance")
         .expect("finally return should override catch return");
     assert_eq!(result.value, Value::Int(2));
+}
+
+// ---------------------------------------------------------------------------
+// 2a. Eval-path conformance: user-facing throw/catch semantics
+// ---------------------------------------------------------------------------
+
+#[test]
+fn conformance_eval_catches_primitive_throw_value() {
+    assert_eq!(
+        eval_router_value(r#"try { throw "ytbg"; } catch (e) { e; }"#),
+        "ytbg"
+    );
+}
+
+#[test]
+fn conformance_eval_catch_binding_is_block_scoped() {
+    assert_eq!(
+        eval_router_value(r#"let e = "outer"; try { throw "inner"; } catch (e) { e; } e;"#),
+        "outer"
+    );
+    assert_eq!(
+        eval_router_value(r#"try { throw "inner"; } catch (e) { e; } typeof e;"#),
+        "undefined"
+    );
+}
+
+#[test]
+fn conformance_eval_rethrow_reaches_outer_catch() {
+    assert_eq!(
+        eval_router_value(
+            r#"try { try { throw "nested"; } catch (e) { throw e; } } catch (outer) { outer; }"#
+        ),
+        "nested"
+    );
+}
+
+#[test]
+fn conformance_eval_catches_thrown_object_values() {
+    assert_eq!(
+        eval_router_value(r#"try { throw { message: "botguard" }; } catch (e) { e.message; }"#),
+        "botguard"
+    );
+    assert_eq!(
+        eval_router_value(r#"try { throw { code: 7 }; } catch (e) { e.code; }"#),
+        "7"
+    );
+}
+
+#[test]
+fn conformance_eval_uncaught_throw_surfaces_runtime_fault() {
+    let err = HybridRouter::default()
+        .eval(r#"throw "uncaught-ytbg";"#)
+        .expect_err("uncaught throw should surface as eval error");
+    assert_eq!(err.code, EvalErrorCode::RuntimeFault);
+    assert!(
+        err.to_string()
+            .contains("uncaught exception: uncaught-ytbg"),
+        "uncaught throw diagnostic should include thrown value, got {err}"
+    );
 }
 
 #[test]

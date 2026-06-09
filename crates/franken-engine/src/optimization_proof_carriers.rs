@@ -28,7 +28,7 @@ use proptest::{
 use serde::{Deserialize, Serialize};
 
 use crate::policy_theorem_engine::{
-    EmittedProofBundle, ProofBundleBody, Z3Outcome, invoke_z3, write_proof_bundle,
+    EmittedProofBundle, ProofBundleBody, Z3Outcome, invoke_z3, write_proof_bundle, z3_tool_version,
 };
 
 /// Types of optimization passes supported by proof carriers.
@@ -795,6 +795,15 @@ impl OptimizationProofCarrier {
                 verdict: "proven".to_string(),
                 generated_utc: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
                 source_module: "frankenengine_engine::optimization_proof_carriers".to_string(),
+                producer_tool: "z3".to_string(),
+                producer_version: z3_tool_version()
+                    .unwrap_or_else(|err| format!("unavailable: {err}")),
+                timeout_policy: format!(
+                    "per-obligation z3 -t:{}ms",
+                    Z3_VERIFY_TIMEOUT_SECONDS.saturating_mul(1_000)
+                ),
+                timeout_seconds: Z3_VERIFY_TIMEOUT_SECONDS,
+                theorem_count: theorem_ids.len(),
                 theorem_ids: theorem_ids.clone(),
             };
             emitted.push(write_proof_bundle(&body, bundle_dir)?);

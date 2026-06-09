@@ -16,7 +16,9 @@ use frankenengine_engine::{
     slot_registry::SlotId,
     translation_validation_proof_carrier::{
         TranslationValidationEngine, TranslationValidationError, TranslationValidationProof,
-        ValidationResult, create_slot_specification, validate_promotion_and_get_proof_ref,
+        TranslationValidationWitnessArtifact, TranslationValidationWitnessVerdict,
+        ValidationResult, create_slot_specification, emit_translation_validation_witness_artifact,
+        validate_promotion_and_get_proof_ref,
     },
 };
 
@@ -127,6 +129,49 @@ fn test_validation_result_types() {
     assert!(!failure.is_success());
     assert_eq!(failure.success_rate_percent(), 95);
     assert_eq!(failure.total_test_cases(), 100);
+}
+
+#[test]
+fn test_public_witness_artifact_api_emits_counterexample_json() {
+    let slot_id = SlotId::new("public-witness").expect("valid slot ID");
+    let proof = TranslationValidationProof {
+        proof_id: frankenengine_engine::engine_object_id::EngineObjectId([5u8; 32]),
+        source_spec: create_slot_specification(slot_id.clone(), b"old", "javascript"),
+        target_spec: create_slot_specification(slot_id, b"new", "javascript"),
+        validation_result: ValidationResult::Failed {
+            test_cases_passed: 9,
+            test_cases_total: 10,
+            success_rate_percent: 90,
+            failure_reasons: vec!["observable output changed".to_string()],
+        },
+        validation_logs: vec!["validator: divergence classified".to_string()],
+        formal_proof_ref: None,
+        transformation_witness: Vec::new(),
+        test_case_digest: "public_witness_digest".to_string(),
+        validation_timestamp_ns: 99,
+        security_epoch: SecurityEpoch::from_raw(1),
+        zone: "public".to_string(),
+    };
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let emitted =
+        emit_translation_validation_witness_artifact(&proof, tmp.path(), "hostcall-validator")
+            .expect("witness should emit");
+    let json = std::fs::read_to_string(&emitted.path).expect("read witness json");
+    let parsed: TranslationValidationWitnessArtifact =
+        serde_json::from_str(&json).expect("valid witness json");
+
+    assert_eq!(
+        parsed.verdict,
+        TranslationValidationWitnessVerdict::Counterexample
+    );
+    assert_eq!(
+        emitted.verdict,
+        TranslationValidationWitnessVerdict::Counterexample
+    );
+    assert_eq!(parsed.content_hash, emitted.content_hash);
+    assert!(parsed.counterexample.is_some());
+    assert!(parsed.verify_content_hash());
 }
 
 #[test]

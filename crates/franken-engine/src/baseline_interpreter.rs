@@ -205,6 +205,12 @@ const MEMORY_ESTIMATE_CALL_FRAME_BASE_BYTES: u64 = 64;
 const MEMORY_ESTIMATE_ITERATOR_BASE_BYTES: u64 = 32;
 /// Approximate per-generator base footprint.
 const MEMORY_ESTIMATE_GENERATOR_BASE_BYTES: u64 = 48;
+/// BotGuard typed-array v1 per-buffer cap from bd-8enww.2.1.
+const MAX_ARRAY_BUFFER_BYTE_LENGTH: u64 = 8 * 1024 * 1024;
+/// Approximate metadata footprint for an ArrayBuffer-backed typed-array view.
+const MEMORY_ESTIMATE_TYPED_ARRAY_VIEW_BYTES: u64 = 48;
+/// Approximate metadata footprint for an ArrayBuffer-backed DataView.
+const MEMORY_ESTIMATE_DATA_VIEW_BYTES: u64 = 40;
 /// Offset for test-only synthetic function IDs to avoid production table IDs.
 #[cfg(test)]
 const TEST_FUNCTION_ID_OFFSET: u32 = 100_000;
@@ -835,6 +841,48 @@ pub enum BuiltinFunctionKind {
     /// internal `__timestamp` in milliseconds, or NaN for a non-Date receiver
     /// (bd-cseei).
     DateGetTime,
+    /// `DataView.prototype.getUint8(byteOffset)` over shared ArrayBuffer bytes
+    /// (bd-8enww.2.6).
+    DataViewGetUint8,
+    /// `DataView.prototype.setUint8(byteOffset, value)` over shared ArrayBuffer
+    /// bytes (bd-8enww.2.6).
+    DataViewSetUint8,
+    /// `DataView.prototype.getInt32(byteOffset, littleEndian?)` over shared
+    /// ArrayBuffer bytes (bd-8enww.2.6).
+    DataViewGetInt32,
+    /// `DataView.prototype.setInt32(byteOffset, value, littleEndian?)` over
+    /// shared ArrayBuffer bytes (bd-8enww.2.6).
+    DataViewSetInt32,
+    /// `DataView.prototype.getUint32(byteOffset, littleEndian?)` over shared
+    /// ArrayBuffer bytes (bd-8enww.2.6).
+    DataViewGetUint32,
+    /// `DataView.prototype.setUint32(byteOffset, value, littleEndian?)` over
+    /// shared ArrayBuffer bytes (bd-8enww.2.6).
+    DataViewSetUint32,
+    /// `TypedArray.prototype.set(source, offset?)` over shared ArrayBuffer bytes
+    /// (bd-8enww.2.5).
+    TypedArraySet,
+    /// `TypedArray.prototype.subarray(begin?, end?)` returns a shared view
+    /// (bd-8enww.2.5).
+    TypedArraySubarray,
+    /// `TypedArray.prototype.slice(begin?, end?)` returns a copied view
+    /// (bd-8enww.2.5).
+    TypedArraySlice,
+    /// `TypedArray.prototype.fill(value, start?, end?)` over backing bytes
+    /// (bd-8enww.2.5).
+    TypedArrayFill,
+    /// `TypedArray.prototype.copyWithin(target, start, end?)` over backing bytes
+    /// (bd-8enww.2.5).
+    TypedArrayCopyWithin,
+    /// `TypedArray.prototype.entries()` iterator (bd-8enww.2.5).
+    TypedArrayEntries,
+    /// `TypedArray.prototype.keys()` iterator (bd-8enww.2.5).
+    TypedArrayKeys,
+    /// `TypedArray.prototype.values()` / `@@iterator` iterator (bd-8enww.2.5).
+    TypedArrayValues,
+    /// Deterministic diagnostic for common typed-array methods outside the v1
+    /// BotGuard support surface (bd-8enww.2.5).
+    TypedArrayUnsupportedMethod,
     /// `Promise.resolve(value)` — route the JS-visible static method to the
     /// internal promise model, yielding a real promise handle (bd-bpf76).
     PromiseResolve,
@@ -1596,6 +1644,141 @@ impl BuiltinFunction {
         }
     }
 
+    fn data_view_get_uint8() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::DataViewGetUint8,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn data_view_set_uint8() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::DataViewSetUint8,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn data_view_get_int32() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::DataViewGetInt32,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn data_view_set_int32() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::DataViewSetInt32,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn data_view_get_uint32() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::DataViewGetUint32,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn data_view_set_uint32() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::DataViewSetUint32,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn typed_array_set() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::TypedArraySet,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn typed_array_subarray() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::TypedArraySubarray,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn typed_array_slice() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::TypedArraySlice,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn typed_array_fill() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::TypedArrayFill,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn typed_array_copy_within() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::TypedArrayCopyWithin,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn typed_array_entries() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::TypedArrayEntries,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn typed_array_keys() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::TypedArrayKeys,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn typed_array_values() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::TypedArrayValues,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn typed_array_unsupported_method() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::TypedArrayUnsupportedMethod,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn promise_resolve() -> Self {
         Self {
             kind: BuiltinFunctionKind::PromiseResolve,
@@ -1852,6 +2035,21 @@ impl BuiltinFunction {
             BuiltinFunctionKind::MapClear => "clear",
             BuiltinFunctionKind::SetClear => "clear",
             BuiltinFunctionKind::DateGetTime => "getTime",
+            BuiltinFunctionKind::DataViewGetUint8 => "getUint8",
+            BuiltinFunctionKind::DataViewSetUint8 => "setUint8",
+            BuiltinFunctionKind::DataViewGetInt32 => "getInt32",
+            BuiltinFunctionKind::DataViewSetInt32 => "setInt32",
+            BuiltinFunctionKind::DataViewGetUint32 => "getUint32",
+            BuiltinFunctionKind::DataViewSetUint32 => "setUint32",
+            BuiltinFunctionKind::TypedArraySet => "set",
+            BuiltinFunctionKind::TypedArraySubarray => "subarray",
+            BuiltinFunctionKind::TypedArraySlice => "slice",
+            BuiltinFunctionKind::TypedArrayFill => "fill",
+            BuiltinFunctionKind::TypedArrayCopyWithin => "copyWithin",
+            BuiltinFunctionKind::TypedArrayEntries => "entries",
+            BuiltinFunctionKind::TypedArrayKeys => "keys",
+            BuiltinFunctionKind::TypedArrayValues => "values",
+            BuiltinFunctionKind::TypedArrayUnsupportedMethod => "unsupportedTypedArrayMethod",
             BuiltinFunctionKind::PromiseResolve => "resolve",
             BuiltinFunctionKind::PromiseReject => "reject",
             BuiltinFunctionKind::PromiseAll => "all",
@@ -1996,6 +2194,113 @@ impl fmt::Display for Value {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ObjectId(pub u32);
 
+/// Owned ArrayBuffer byte storage. Views store the ArrayBuffer ObjectId and
+/// read/write through this backing so mutations stay shared.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArrayBufferBacking {
+    pub bytes: Vec<u8>,
+}
+
+impl ArrayBufferBacking {
+    pub fn new_zeroed(byte_length: usize) -> Self {
+        Self {
+            bytes: vec![0; byte_length],
+        }
+    }
+
+    pub fn byte_length(&self) -> usize {
+        self.bytes.len()
+    }
+}
+
+/// BotGuard v1 typed-array families backed by ArrayBuffer bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TypedArrayKind {
+    Uint8,
+    Int32,
+    Uint32,
+}
+
+impl TypedArrayKind {
+    fn from_builtin_capability(capability: &str) -> Option<Self> {
+        match capability {
+            "builtin:Uint8Array" => Some(Self::Uint8),
+            "builtin:Int32Array" => Some(Self::Int32),
+            "builtin:Uint32Array" => Some(Self::Uint32),
+            _ => None,
+        }
+    }
+
+    fn from_type_name(type_name: &str) -> Option<Self> {
+        match type_name {
+            "Uint8Array" => Some(Self::Uint8),
+            "Int32Array" => Some(Self::Int32),
+            "Uint32Array" => Some(Self::Uint32),
+            _ => None,
+        }
+    }
+
+    fn type_name(self) -> &'static str {
+        match self {
+            Self::Uint8 => "Uint8Array",
+            Self::Int32 => "Int32Array",
+            Self::Uint32 => "Uint32Array",
+        }
+    }
+
+    fn element_size(self) -> usize {
+        match self {
+            Self::Uint8 => 1,
+            Self::Int32 | Self::Uint32 => 4,
+        }
+    }
+}
+
+/// Fixed-length view over an ArrayBuffer backing store.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypedArrayView {
+    pub kind: TypedArrayKind,
+    pub buffer: ObjectId,
+    pub byte_offset: usize,
+    pub byte_length: usize,
+    pub length: usize,
+}
+
+/// Fixed-length byte-addressed view over an ArrayBuffer backing store.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DataViewView {
+    pub buffer: ObjectId,
+    pub byte_offset: usize,
+    pub byte_length: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DataViewIntegerKind {
+    Uint8,
+    Int32,
+    Uint32,
+}
+
+impl DataViewIntegerKind {
+    fn byte_width(self) -> usize {
+        match self {
+            Self::Uint8 => 1,
+            Self::Int32 | Self::Uint32 => 4,
+        }
+    }
+
+    fn method_name(self, setter: bool) -> &'static str {
+        match (self, setter) {
+            (Self::Uint8, false) => "getUint8",
+            (Self::Uint8, true) => "setUint8",
+            (Self::Int32, false) => "getInt32",
+            (Self::Int32, true) => "setInt32",
+            (Self::Uint32, false) => "getUint32",
+            (Self::Uint32, true) => "setUint32",
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // HeapObject — simplified object model
 // ---------------------------------------------------------------------------
@@ -2013,6 +2318,12 @@ pub struct HeapObject {
     pub is_array: bool,
     /// Cached dense length for arrays (None = sparse, compute from properties).
     pub cached_dense_length: Option<u32>,
+    /// Optional ArrayBuffer backing-store bytes for JS-visible binary memory.
+    pub array_buffer: Option<ArrayBufferBacking>,
+    /// Optional fixed-length typed-array view over an ArrayBuffer backing store.
+    pub typed_array: Option<TypedArrayView>,
+    /// Optional fixed-length DataView over an ArrayBuffer backing store.
+    pub data_view: Option<DataViewView>,
     /// Whether this object has been frozen via Object.freeze().
     pub is_frozen: bool,
 }
@@ -6963,6 +7274,64 @@ impl InterpreterCore {
                 }
                 Ok(Value::Float(f64::NAN.into()))
             }
+            BuiltinFunctionKind::DataViewGetUint8 => self.data_view_get_integer(
+                receiver.unwrap_or(Value::Undefined),
+                args,
+                DataViewIntegerKind::Uint8,
+            ),
+            BuiltinFunctionKind::DataViewSetUint8 => self.data_view_set_integer(
+                receiver.unwrap_or(Value::Undefined),
+                args,
+                DataViewIntegerKind::Uint8,
+            ),
+            BuiltinFunctionKind::DataViewGetInt32 => self.data_view_get_integer(
+                receiver.unwrap_or(Value::Undefined),
+                args,
+                DataViewIntegerKind::Int32,
+            ),
+            BuiltinFunctionKind::DataViewSetInt32 => self.data_view_set_integer(
+                receiver.unwrap_or(Value::Undefined),
+                args,
+                DataViewIntegerKind::Int32,
+            ),
+            BuiltinFunctionKind::DataViewGetUint32 => self.data_view_get_integer(
+                receiver.unwrap_or(Value::Undefined),
+                args,
+                DataViewIntegerKind::Uint32,
+            ),
+            BuiltinFunctionKind::DataViewSetUint32 => self.data_view_set_integer(
+                receiver.unwrap_or(Value::Undefined),
+                args,
+                DataViewIntegerKind::Uint32,
+            ),
+            BuiltinFunctionKind::TypedArraySet => {
+                self.typed_array_set(receiver.unwrap_or(Value::Undefined), args)
+            }
+            BuiltinFunctionKind::TypedArraySubarray => {
+                self.typed_array_subarray(receiver.unwrap_or(Value::Undefined), args)
+            }
+            BuiltinFunctionKind::TypedArraySlice => {
+                self.typed_array_slice(receiver.unwrap_or(Value::Undefined), args)
+            }
+            BuiltinFunctionKind::TypedArrayFill => {
+                self.typed_array_fill(receiver.unwrap_or(Value::Undefined), args)
+            }
+            BuiltinFunctionKind::TypedArrayCopyWithin => {
+                self.typed_array_copy_within(receiver.unwrap_or(Value::Undefined), args)
+            }
+            BuiltinFunctionKind::TypedArrayEntries => self
+                .typed_array_iterator_for_receiver(receiver.unwrap_or(Value::Undefined), "entries"),
+            BuiltinFunctionKind::TypedArrayKeys => {
+                self.typed_array_iterator_for_receiver(receiver.unwrap_or(Value::Undefined), "keys")
+            }
+            BuiltinFunctionKind::TypedArrayValues => self
+                .typed_array_iterator_for_receiver(receiver.unwrap_or(Value::Undefined), "values"),
+            BuiltinFunctionKind::TypedArrayUnsupportedMethod => Err(InterpreterError::TypeError {
+                expected:
+                    "supported TypedArray v1 BotGuard method (set/subarray/slice/fill/copyWithin/entries/keys/values)"
+                        .to_string(),
+                got: "unsupported TypedArray method".to_string(),
+            }),
             BuiltinFunctionKind::PromiseResolve => {
                 self.dispatch_promise_hostcall("promise:resolve", args, Some(module))
             }
@@ -11909,6 +12278,10 @@ impl InterpreterCore {
         key: &str,
         receiver: Value,
     ) -> Result<Value, InterpreterError> {
+        if let Some(value) = self.typed_array_indexed_get_property(object_id, key)? {
+            return Ok(value);
+        }
+
         let mut current = Some(object_id);
         let mut depth = 0u32;
         let mut visited = BTreeSet::new();
@@ -12054,6 +12427,34 @@ impl InterpreterCore {
             ("Set", "clear") => Some(BuiltinFunction::set_clear()),
             ("Date", "getTime") => Some(BuiltinFunction::date_get_time()),
             ("RegExp", "test") => Some(BuiltinFunction::regexp_test()),
+            ("DataView", "getUint8") => Some(BuiltinFunction::data_view_get_uint8()),
+            ("DataView", "setUint8") => Some(BuiltinFunction::data_view_set_uint8()),
+            ("DataView", "getInt32") => Some(BuiltinFunction::data_view_get_int32()),
+            ("DataView", "setInt32") => Some(BuiltinFunction::data_view_set_int32()),
+            ("DataView", "getUint32") => Some(BuiltinFunction::data_view_get_uint32()),
+            ("DataView", "setUint32") => Some(BuiltinFunction::data_view_set_uint32()),
+            _ => None,
+        }
+        .or_else(|| Self::typed_array_prototype_method(type_tag, key))
+    }
+
+    fn typed_array_prototype_method(type_tag: &str, key: &str) -> Option<BuiltinFunction> {
+        TypedArrayKind::from_type_name(type_tag)?;
+        match key {
+            "set" => Some(BuiltinFunction::typed_array_set()),
+            "subarray" => Some(BuiltinFunction::typed_array_subarray()),
+            "slice" => Some(BuiltinFunction::typed_array_slice()),
+            "fill" => Some(BuiltinFunction::typed_array_fill()),
+            "copyWithin" => Some(BuiltinFunction::typed_array_copy_within()),
+            "entries" => Some(BuiltinFunction::typed_array_entries()),
+            "keys" => Some(BuiltinFunction::typed_array_keys()),
+            "values" | "@@iterator" | "Symbol.iterator" => {
+                Some(BuiltinFunction::typed_array_values())
+            }
+            "map" | "filter" | "reduce" | "reduceRight" | "forEach" | "find" | "findIndex"
+            | "includes" | "indexOf" | "lastIndexOf" | "reverse" | "sort" | "join" | "toString" => {
+                Some(BuiltinFunction::typed_array_unsupported_method())
+            }
             _ => None,
         }
     }
@@ -12644,6 +13045,9 @@ impl InterpreterCore {
             });
         }
         let Some((target, handler)) = self.active_proxy_record(object_id)? else {
+            if let Some(success) = self.typed_array_indexed_set_property(object_id, key, &value)? {
+                return Ok(success);
+            }
             if let Some(accessor) = self.prototype_chain_find_property(object_id, key)?
                 && self.resolve_accessor_set(module, accessor, receiver, value.clone())?
             {
@@ -12795,18 +13199,7 @@ impl InterpreterCore {
     }
 
     fn read_array_like_values(&self, obj_id: ObjectId) -> Vec<Value> {
-        self.heap
-            .get(obj_id.0 as usize)
-            .map(|obj| {
-                let mut values = Vec::new();
-                let mut idx = 0u32;
-                while let Some(val) = obj.properties.get(&idx.to_string()) {
-                    values.push(val.clone());
-                    idx += 1;
-                }
-                values
-            })
-            .unwrap_or_default()
+        self.array_like_values(obj_id).unwrap_or_default()
     }
 
     fn alloc_array_from_values(&mut self, values: &[Value]) -> Result<ObjectId, InterpreterError> {
@@ -13979,6 +14372,1009 @@ impl InterpreterCore {
         }
     }
 
+    fn array_buffer_byte_length_from_args(
+        &self,
+        args: RegRange,
+    ) -> Result<usize, InterpreterError> {
+        let raw_length = if args.count == 0 {
+            Value::Undefined
+        } else {
+            self.read_reg(args.start)?
+        };
+
+        if matches!(raw_length, Value::Undefined) {
+            return Ok(0);
+        }
+
+        let Some(length) = Self::coerce_to_number(&raw_length) else {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "invalid ArrayBuffer byteLength {}; requested value must be a finite integer, per-buffer cap is {} bytes, total cap is {} bytes, committed bytes are {}",
+                    self.value_to_string(&raw_length),
+                    MAX_ARRAY_BUFFER_BYTE_LENGTH,
+                    self.config.max_total_memory_bytes,
+                    self.estimated_memory_bytes,
+                ),
+            });
+        };
+
+        if length < 0 {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "invalid ArrayBuffer byteLength {length}; requested value must be non-negative, per-buffer cap is {} bytes, total cap is {} bytes, committed bytes are {}",
+                    MAX_ARRAY_BUFFER_BYTE_LENGTH,
+                    self.config.max_total_memory_bytes,
+                    self.estimated_memory_bytes,
+                ),
+            });
+        }
+
+        let length = length as u64;
+        if length > MAX_ARRAY_BUFFER_BYTE_LENGTH {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "ArrayBuffer byteLength {length} exceeds per-buffer cap of {} bytes; total cap is {} bytes, committed bytes are {}",
+                    MAX_ARRAY_BUFFER_BYTE_LENGTH,
+                    self.config.max_total_memory_bytes,
+                    self.estimated_memory_bytes,
+                ),
+            });
+        }
+
+        usize::try_from(length).map_err(|_| InterpreterError::RangeError {
+            message: format!(
+                "ArrayBuffer byteLength {length} exceeds host addressable size; per-buffer cap is {} bytes, total cap is {} bytes, committed bytes are {}",
+                MAX_ARRAY_BUFFER_BYTE_LENGTH,
+                self.config.max_total_memory_bytes,
+                self.estimated_memory_bytes,
+            ),
+        })
+    }
+
+    fn typed_array_index_from_value(
+        &self,
+        kind: TypedArrayKind,
+        field: &str,
+        value: &Value,
+    ) -> Result<usize, InterpreterError> {
+        let Some(index) = Self::coerce_to_number(value) else {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "invalid {} {field} {}; requested value must be a finite integer",
+                    kind.type_name(),
+                    self.value_to_string(value),
+                ),
+            });
+        };
+        if index < 0 {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "invalid {} {field} {index}; requested value must be non-negative",
+                    kind.type_name(),
+                ),
+            });
+        }
+        usize::try_from(index).map_err(|_| InterpreterError::RangeError {
+            message: format!(
+                "{} {field} {index} exceeds host addressable size",
+                kind.type_name(),
+            ),
+        })
+    }
+
+    fn typed_array_optional_index_arg(
+        &self,
+        kind: TypedArrayKind,
+        args: RegRange,
+        offset: u32,
+        field: &str,
+    ) -> Result<Option<usize>, InterpreterError> {
+        if offset >= args.count {
+            return Ok(None);
+        }
+        let value = self.read_reg(args.start + offset)?;
+        if matches!(value, Value::Undefined) {
+            return Ok(None);
+        }
+        self.typed_array_index_from_value(kind, field, &value)
+            .map(Some)
+    }
+
+    fn checked_typed_array_byte_length(
+        &self,
+        kind: TypedArrayKind,
+        length: usize,
+    ) -> Result<usize, InterpreterError> {
+        length
+            .checked_mul(kind.element_size())
+            .filter(|byte_length| (*byte_length as u64) <= MAX_ARRAY_BUFFER_BYTE_LENGTH)
+            .ok_or_else(|| InterpreterError::RangeError {
+                message: format!(
+                    "{} length {length} exceeds per-buffer cap of {} bytes",
+                    kind.type_name(),
+                    MAX_ARRAY_BUFFER_BYTE_LENGTH,
+                ),
+            })
+    }
+
+    fn array_buffer_byte_length(&self, object_id: ObjectId) -> Result<usize, InterpreterError> {
+        self.with_array_buffer_bytes(object_id, |bytes| bytes.len())
+    }
+
+    fn typed_array_buffer_view_shape(
+        &self,
+        kind: TypedArrayKind,
+        buffer_id: ObjectId,
+        args: RegRange,
+    ) -> Result<(usize, usize, usize), InterpreterError> {
+        let buffer_len = self.array_buffer_byte_length(buffer_id)?;
+        let byte_offset = self
+            .typed_array_optional_index_arg(kind, args, 1, "byteOffset")?
+            .unwrap_or(0);
+        let element_size = kind.element_size();
+
+        if byte_offset % element_size != 0 {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "{} byteOffset {byte_offset} is misaligned for element size {element_size}",
+                    kind.type_name(),
+                ),
+            });
+        }
+        if byte_offset > buffer_len {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "{} byteOffset {byte_offset} exceeds ArrayBuffer byteLength {buffer_len}",
+                    kind.type_name(),
+                ),
+            });
+        }
+
+        let remaining = buffer_len - byte_offset;
+        let length = match self.typed_array_optional_index_arg(kind, args, 2, "length")? {
+            Some(length) => length,
+            None => {
+                if remaining % element_size != 0 {
+                    return Err(InterpreterError::RangeError {
+                        message: format!(
+                            "{} view byteLength {remaining} is not a multiple of element size {element_size}",
+                            kind.type_name(),
+                        ),
+                    });
+                }
+                remaining / element_size
+            }
+        };
+        let byte_length = self.checked_typed_array_byte_length(kind, length)?;
+        let end =
+            byte_offset
+                .checked_add(byte_length)
+                .ok_or_else(|| InterpreterError::RangeError {
+                    message: format!(
+                        "{} byteOffset {byte_offset} plus byteLength {byte_length} overflows",
+                        kind.type_name(),
+                    ),
+                })?;
+        if end > buffer_len {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "{} view range byteOffset {byte_offset} + byteLength {byte_length} exceeds ArrayBuffer byteLength {buffer_len}",
+                    kind.type_name(),
+                ),
+            });
+        }
+
+        Ok((byte_offset, byte_length, length))
+    }
+
+    fn typed_array_integer_index_key(key: &str) -> Option<usize> {
+        if key.is_empty() || !key.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        if key.len() > 1 && key.starts_with('0') {
+            return None;
+        }
+        key.parse::<usize>().ok()
+    }
+
+    fn typed_array_element_range(
+        kind: TypedArrayKind,
+        byte_offset: usize,
+        index: usize,
+    ) -> Result<(usize, usize), InterpreterError> {
+        let element_size = kind.element_size();
+        let relative_start =
+            index
+                .checked_mul(element_size)
+                .ok_or_else(|| InterpreterError::RangeError {
+                    message: format!("{} element index {index} overflows", kind.type_name()),
+                })?;
+        let start = byte_offset.checked_add(relative_start).ok_or_else(|| {
+            InterpreterError::RangeError {
+                message: format!("{} element index {index} overflows", kind.type_name()),
+            }
+        })?;
+        let end = start
+            .checked_add(element_size)
+            .ok_or_else(|| InterpreterError::RangeError {
+                message: format!("{} element index {index} overflows", kind.type_name()),
+            })?;
+        Ok((start, end))
+    }
+
+    fn typed_array_unsigned_mod_i64(value: i64, modulus: u64) -> u64 {
+        i128::from(value).rem_euclid(i128::from(modulus)) as u64
+    }
+
+    fn typed_array_unsigned_mod_f64(value: f64, modulus: u64) -> u64 {
+        if !value.is_finite() || value == 0.0 {
+            return 0;
+        }
+        value.trunc().rem_euclid(modulus as f64) as u64
+    }
+
+    fn typed_array_unsigned_mod(value: &Value, modulus: u64) -> u64 {
+        match value {
+            Value::Int(n) => Self::typed_array_unsigned_mod_i64(*n, modulus),
+            Value::Bool(true) => 1 % modulus,
+            Value::Bool(false) | Value::Null => 0,
+            _ => Self::coerce_to_float(value)
+                .map(|number| Self::typed_array_unsigned_mod_f64(number, modulus))
+                .unwrap_or(0),
+        }
+    }
+
+    fn typed_array_u8_value(value: &Value) -> u8 {
+        Self::typed_array_unsigned_mod(value, 256) as u8
+    }
+
+    fn typed_array_i32_value(value: &Value) -> i32 {
+        (Self::typed_array_unsigned_mod(value, 1u64 << 32) as u32) as i32
+    }
+
+    fn typed_array_u32_value(value: &Value) -> u32 {
+        Self::typed_array_unsigned_mod(value, 1u64 << 32) as u32
+    }
+
+    fn read_typed_array_element_bytes(
+        view: &TypedArrayView,
+        bytes: &[u8],
+        index: usize,
+    ) -> Result<Value, InterpreterError> {
+        let (start, end) = Self::typed_array_element_range(view.kind, view.byte_offset, index)?;
+        let Some(slot) = bytes.get(start..end) else {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "{} element index {index} is out of bounds",
+                    view.kind.type_name()
+                ),
+            });
+        };
+        match view.kind {
+            TypedArrayKind::Uint8 => Ok(Value::Int(i64::from(slot[0]))),
+            TypedArrayKind::Int32 => {
+                let mut raw = [0u8; 4];
+                raw.copy_from_slice(slot);
+                Ok(Value::Int(i64::from(i32::from_le_bytes(raw))))
+            }
+            TypedArrayKind::Uint32 => {
+                let mut raw = [0u8; 4];
+                raw.copy_from_slice(slot);
+                Ok(Value::Int(i64::from(u32::from_le_bytes(raw))))
+            }
+        }
+    }
+
+    fn write_typed_array_element_bytes_at_offset(
+        kind: TypedArrayKind,
+        byte_offset: usize,
+        bytes: &mut [u8],
+        index: usize,
+        value: &Value,
+    ) -> Result<(), InterpreterError> {
+        let (start, end) = Self::typed_array_element_range(kind, byte_offset, index)?;
+        let Some(slot) = bytes.get_mut(start..end) else {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "{} element index {index} is out of bounds",
+                    kind.type_name()
+                ),
+            });
+        };
+        match kind {
+            TypedArrayKind::Uint8 => {
+                slot[0] = Self::typed_array_u8_value(value);
+            }
+            TypedArrayKind::Int32 => {
+                slot.copy_from_slice(&Self::typed_array_i32_value(value).to_le_bytes());
+            }
+            TypedArrayKind::Uint32 => {
+                slot.copy_from_slice(&Self::typed_array_u32_value(value).to_le_bytes());
+            }
+        }
+        Ok(())
+    }
+
+    fn write_typed_array_element_bytes(
+        kind: TypedArrayKind,
+        bytes: &mut [u8],
+        index: usize,
+        value: &Value,
+    ) -> Result<(), InterpreterError> {
+        Self::write_typed_array_element_bytes_at_offset(kind, 0, bytes, index, value)
+    }
+
+    fn typed_array_indexed_get_property(
+        &self,
+        object_id: ObjectId,
+        key: &str,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let Some(index) = Self::typed_array_integer_index_key(key) else {
+            return Ok(None);
+        };
+        let Some(view) = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
+            .typed_array
+            .clone()
+        else {
+            return Ok(None);
+        };
+        if index >= view.length {
+            return Ok(Some(Value::Undefined));
+        }
+        let value = self.with_array_buffer_bytes(view.buffer, |bytes| {
+            Self::read_typed_array_element_bytes(&view, bytes, index)
+        })??;
+        Ok(Some(value))
+    }
+
+    fn typed_array_indexed_set_property(
+        &mut self,
+        object_id: ObjectId,
+        key: &str,
+        value: &Value,
+    ) -> Result<Option<bool>, InterpreterError> {
+        let Some(index) = Self::typed_array_integer_index_key(key) else {
+            return Ok(None);
+        };
+        let Some(view) = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
+            .typed_array
+            .clone()
+        else {
+            return Ok(None);
+        };
+        if index >= view.length {
+            return Ok(Some(true));
+        }
+        self.with_array_buffer_bytes_mut(view.buffer, |bytes| {
+            Self::write_typed_array_element_bytes_at_offset(
+                view.kind,
+                view.byte_offset,
+                bytes,
+                index,
+                value,
+            )
+        })??;
+        Ok(Some(true))
+    }
+
+    fn typed_array_view_for_object(
+        &self,
+        object_id: ObjectId,
+    ) -> Result<Option<TypedArrayView>, InterpreterError> {
+        let object = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        Ok(object.typed_array.clone())
+    }
+
+    fn typed_array_receiver_view(
+        &self,
+        receiver: Value,
+        method_name: &str,
+    ) -> Result<(ObjectId, TypedArrayView), InterpreterError> {
+        let Value::Object(object_id) = receiver else {
+            return Err(InterpreterError::TypeError {
+                expected: format!("TypedArray receiver for TypedArray.prototype.{method_name}"),
+                got: receiver.type_name().to_string(),
+            });
+        };
+        let object = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        let view = object.typed_array.clone().ok_or_else(|| {
+            let got = object
+                .properties
+                .get("__type")
+                .map(|value| self.value_to_string(value))
+                .unwrap_or_else(|| "object".to_string());
+            InterpreterError::TypeError {
+                expected: format!("TypedArray receiver for TypedArray.prototype.{method_name}"),
+                got,
+            }
+        })?;
+        Ok((object_id, view))
+    }
+
+    fn typed_array_values_in_range(
+        &self,
+        view: &TypedArrayView,
+        start: usize,
+        end: usize,
+    ) -> Result<Vec<Value>, InterpreterError> {
+        if start > end || end > view.length {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "{} value range {start}..{end} exceeds length {}",
+                    view.kind.type_name(),
+                    view.length,
+                ),
+            });
+        }
+        self.with_array_buffer_bytes(view.buffer, |bytes| {
+            let mut values = Vec::with_capacity(end - start);
+            for index in start..end {
+                values.push(Self::read_typed_array_element_bytes(view, bytes, index)?);
+            }
+            Ok(values)
+        })?
+    }
+
+    fn array_like_values(&self, obj_id: ObjectId) -> Result<Vec<Value>, InterpreterError> {
+        if let Some(view) = self.typed_array_view_for_object(obj_id)? {
+            return self.typed_array_values_in_range(&view, 0, view.length);
+        }
+        let length = self.array_like_length(obj_id)?;
+        let mut values = Vec::with_capacity(length);
+        for index in 0..length {
+            values.push(
+                self.array_index_value(obj_id, index)?
+                    .unwrap_or(Value::Undefined),
+            );
+        }
+        Ok(values)
+    }
+
+    fn typed_array_source_values(&self, source: Value) -> Result<Vec<Value>, InterpreterError> {
+        match source {
+            Value::Object(object_id) => self.array_like_values(object_id),
+            other => Err(InterpreterError::TypeError {
+                expected: "array-like or TypedArray source for TypedArray.prototype.set"
+                    .to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn typed_array_offset_arg(
+        &self,
+        kind: TypedArrayKind,
+        args: RegRange,
+        offset: u32,
+        field: &str,
+    ) -> Result<usize, InterpreterError> {
+        let Some(value) = self.builtin_arg(args, offset)? else {
+            return Ok(0);
+        };
+        if matches!(value, Value::Undefined) {
+            return Ok(0);
+        }
+        self.typed_array_index_from_value(kind, field, &value)
+    }
+
+    fn typed_array_relative_index_arg(
+        &self,
+        args: RegRange,
+        offset: u32,
+        len: usize,
+        default: usize,
+    ) -> Result<usize, InterpreterError> {
+        match self.builtin_arg(args, offset)? {
+            Some(Value::Undefined) | None => Ok(default),
+            Some(value) => Ok(Self::clamp_relative_index(
+                Self::value_as_integer(&value),
+                len,
+            )),
+        }
+    }
+
+    fn typed_array_method_range(
+        &self,
+        args: RegRange,
+        start_offset: u32,
+        end_offset: u32,
+        len: usize,
+    ) -> Result<(usize, usize), InterpreterError> {
+        let start = self.typed_array_relative_index_arg(args, start_offset, len, 0)?;
+        let end = self.typed_array_relative_index_arg(args, end_offset, len, len)?;
+        Ok((start, end))
+    }
+
+    fn typed_array_set(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let (_, target_view) = self.typed_array_receiver_view(receiver, "set")?;
+        let source = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let values = self.typed_array_source_values(source)?;
+        let offset = self.typed_array_offset_arg(target_view.kind, args, 1, "offset")?;
+        let end = offset
+            .checked_add(values.len())
+            .ok_or_else(|| InterpreterError::RangeError {
+                message: format!(
+                    "{}.prototype.set offset {offset} plus source length {} overflows",
+                    target_view.kind.type_name(),
+                    values.len(),
+                ),
+            })?;
+        if end > target_view.length {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "{}.prototype.set source length {} at offset {offset} exceeds target length {}",
+                    target_view.kind.type_name(),
+                    values.len(),
+                    target_view.length,
+                ),
+            });
+        }
+        self.with_array_buffer_bytes_mut(target_view.buffer, |bytes| {
+            for (relative, value) in values.iter().enumerate() {
+                Self::write_typed_array_element_bytes_at_offset(
+                    target_view.kind,
+                    target_view.byte_offset,
+                    bytes,
+                    offset + relative,
+                    value,
+                )?;
+            }
+            Ok(())
+        })??;
+        Ok(Value::Undefined)
+    }
+
+    fn typed_array_subarray(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let (_, view) = self.typed_array_receiver_view(receiver, "subarray")?;
+        let (start, end) = self.typed_array_method_range(args, 0, 1, view.length)?;
+        let length = end.saturating_sub(start);
+        let element_size = view.kind.element_size();
+        let relative_byte_offset =
+            start
+                .checked_mul(element_size)
+                .ok_or_else(|| InterpreterError::RangeError {
+                    message: format!(
+                        "{}.prototype.subarray byteOffset overflows",
+                        view.kind.type_name()
+                    ),
+                })?;
+        let byte_offset = view
+            .byte_offset
+            .checked_add(relative_byte_offset)
+            .ok_or_else(|| InterpreterError::RangeError {
+                message: format!(
+                    "{}.prototype.subarray absolute byteOffset overflows",
+                    view.kind.type_name()
+                ),
+            })?;
+        let byte_length =
+            length
+                .checked_mul(element_size)
+                .ok_or_else(|| InterpreterError::RangeError {
+                    message: format!(
+                        "{}.prototype.subarray byteLength overflows",
+                        view.kind.type_name()
+                    ),
+                })?;
+        let result = self.alloc_typed_array_view_object(
+            view.kind,
+            view.buffer,
+            byte_offset,
+            byte_length,
+            length,
+        )?;
+        Ok(Value::Object(result))
+    }
+
+    fn typed_array_slice(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let (_, view) = self.typed_array_receiver_view(receiver, "slice")?;
+        let (start, end) = self.typed_array_method_range(args, 0, 1, view.length)?;
+        let values = self.typed_array_values_in_range(&view, start, end.max(start))?;
+        let result = self.alloc_typed_array_from_values(view.kind, &values)?;
+        Ok(Value::Object(result))
+    }
+
+    fn typed_array_fill(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let (target_id, view) = self.typed_array_receiver_view(receiver, "fill")?;
+        let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let start = self.typed_array_relative_index_arg(args, 1, view.length, 0)?;
+        let end = self.typed_array_relative_index_arg(args, 2, view.length, view.length)?;
+        if start < end {
+            self.with_array_buffer_bytes_mut(view.buffer, |bytes| {
+                for index in start..end {
+                    Self::write_typed_array_element_bytes_at_offset(
+                        view.kind,
+                        view.byte_offset,
+                        bytes,
+                        index,
+                        &value,
+                    )?;
+                }
+                Ok(())
+            })??;
+        }
+        Ok(Value::Object(target_id))
+    }
+
+    fn typed_array_copy_within(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let (target_id, view) = self.typed_array_receiver_view(receiver, "copyWithin")?;
+        let to = self.typed_array_relative_index_arg(args, 0, view.length, 0)?;
+        let from = self.typed_array_relative_index_arg(args, 1, view.length, 0)?;
+        let end = self.typed_array_relative_index_arg(args, 2, view.length, view.length)?;
+        let count = end.saturating_sub(from).min(view.length.saturating_sub(to));
+        if count > 0 {
+            let values = self.typed_array_values_in_range(&view, from, from + count)?;
+            self.with_array_buffer_bytes_mut(view.buffer, |bytes| {
+                for (relative, value) in values.iter().enumerate() {
+                    Self::write_typed_array_element_bytes_at_offset(
+                        view.kind,
+                        view.byte_offset,
+                        bytes,
+                        to + relative,
+                        value,
+                    )?;
+                }
+                Ok(())
+            })??;
+        }
+        Ok(Value::Object(target_id))
+    }
+
+    fn typed_array_iterator_for_receiver(
+        &mut self,
+        receiver: Value,
+        kind: &'static str,
+    ) -> Result<Value, InterpreterError> {
+        let (object_id, view) = self.typed_array_receiver_view(receiver, kind)?;
+        let elements = self.typed_array_values_in_range(&view, 0, view.length)?;
+        let mut values = Vec::with_capacity(elements.len());
+        for (index, element) in elements.into_iter().enumerate() {
+            let index_value = i64::try_from(index).map_err(|_| InterpreterError::TypeError {
+                expected: "typed-array iterator index within i64".to_string(),
+                got: index.to_string(),
+            })?;
+            match kind {
+                "entries" => {
+                    let entry_id =
+                        self.alloc_array_from_values(&[Value::Int(index_value), element])?;
+                    values.push(Value::Object(entry_id));
+                }
+                "keys" => values.push(Value::Int(index_value)),
+                "values" => values.push(element),
+                _ => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "typed-array iterator kind".to_string(),
+                        got: kind.to_string(),
+                    });
+                }
+            }
+        }
+        let trace_index = self.start_iteration_trace(
+            IterationKind::ForOf,
+            format!("typed_array_iterator:{kind}|{}", object_id.0),
+        );
+        let iterable_ref = self.iteration_ref_for_object(object_id);
+        self.record_iteration_event(trace_index, |record_id, step_index| {
+            make_get_iterator_event(
+                record_id,
+                step_index,
+                IteratorSymbolKind::Iterator,
+                iterable_ref,
+            )
+        });
+        let handle = self.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
+            values,
+            next_index: 0,
+            iterator_object: None,
+            next_method: None,
+            done: false,
+            closed: false,
+            return_called: false,
+            trace_index,
+        }))?;
+        Ok(Value::Iterator(handle))
+    }
+
+    fn data_view_index_from_value(
+        &self,
+        field: &str,
+        value: &Value,
+    ) -> Result<usize, InterpreterError> {
+        let Some(index) = Self::coerce_to_number(value) else {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "invalid DataView {field} {}; requested value must be a finite integer",
+                    self.value_to_string(value),
+                ),
+            });
+        };
+        if index < 0 {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "invalid DataView {field} {index}; requested value must be non-negative"
+                ),
+            });
+        }
+        usize::try_from(index).map_err(|_| InterpreterError::RangeError {
+            message: format!("DataView {field} {index} exceeds host addressable size"),
+        })
+    }
+
+    fn data_view_optional_index_arg(
+        &self,
+        args: RegRange,
+        offset: u32,
+        field: &str,
+    ) -> Result<Option<usize>, InterpreterError> {
+        if offset >= args.count {
+            return Ok(None);
+        }
+        let value = self.read_reg(args.start + offset)?;
+        if matches!(value, Value::Undefined) {
+            return Ok(None);
+        }
+        self.data_view_index_from_value(field, &value).map(Some)
+    }
+
+    fn data_view_buffer_view_shape(
+        &self,
+        buffer_id: ObjectId,
+        args: RegRange,
+    ) -> Result<(usize, usize), InterpreterError> {
+        let buffer_len = self.array_buffer_byte_length(buffer_id)?;
+        let byte_offset = self
+            .data_view_optional_index_arg(args, 1, "byteOffset")?
+            .unwrap_or(0);
+        if byte_offset > buffer_len {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "DataView byteOffset {byte_offset} exceeds ArrayBuffer byteLength {buffer_len}"
+                ),
+            });
+        }
+
+        let remaining = buffer_len - byte_offset;
+        let byte_length = self
+            .data_view_optional_index_arg(args, 2, "byteLength")?
+            .unwrap_or(remaining);
+        let end =
+            byte_offset
+                .checked_add(byte_length)
+                .ok_or_else(|| InterpreterError::RangeError {
+                    message: format!(
+                        "DataView byteOffset {byte_offset} plus byteLength {byte_length} overflows"
+                    ),
+                })?;
+        if end > buffer_len {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "DataView view range byteOffset {byte_offset} + byteLength {byte_length} exceeds ArrayBuffer byteLength {buffer_len}"
+                ),
+            });
+        }
+
+        Ok((byte_offset, byte_length))
+    }
+
+    fn data_view_byte_offset_arg(
+        &self,
+        args: RegRange,
+        method_name: &str,
+    ) -> Result<usize, InterpreterError> {
+        let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Int(0));
+        self.data_view_index_from_value(
+            &format!("byteOffset for DataView.prototype.{method_name}"),
+            &value,
+        )
+    }
+
+    fn data_view_little_endian_arg(
+        &self,
+        args: RegRange,
+        offset: u32,
+    ) -> Result<bool, InterpreterError> {
+        Ok(self
+            .builtin_arg(args, offset)?
+            .map(|value| value.is_truthy())
+            .unwrap_or(false))
+    }
+
+    fn data_view_receiver_view(
+        &self,
+        receiver: Value,
+        method_name: &str,
+    ) -> Result<DataViewView, InterpreterError> {
+        let Value::Object(object_id) = receiver else {
+            return Err(InterpreterError::TypeError {
+                expected: format!("DataView receiver for DataView.prototype.{method_name}"),
+                got: receiver.type_name().to_string(),
+            });
+        };
+        let object = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        object.data_view.clone().ok_or_else(|| {
+            let got = object
+                .properties
+                .get("__type")
+                .map(|value| self.value_to_string(value))
+                .unwrap_or_else(|| "object".to_string());
+            InterpreterError::TypeError {
+                expected: format!("DataView receiver for DataView.prototype.{method_name}"),
+                got,
+            }
+        })
+    }
+
+    fn data_view_absolute_range(
+        view: &DataViewView,
+        method_name: &str,
+        byte_offset: usize,
+        byte_width: usize,
+    ) -> Result<(usize, usize), InterpreterError> {
+        let relative_end =
+            byte_offset
+                .checked_add(byte_width)
+                .ok_or_else(|| InterpreterError::RangeError {
+                    message: format!(
+                        "DataView.prototype.{method_name} byteOffset {byte_offset} plus {byte_width} bytes overflows"
+                    ),
+                })?;
+        if relative_end > view.byte_length {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "DataView.prototype.{method_name} byteOffset {byte_offset} plus {byte_width} bytes is out of bounds for DataView byteLength {}",
+                    view.byte_length,
+                ),
+            });
+        }
+        let start = view.byte_offset.checked_add(byte_offset).ok_or_else(|| {
+            InterpreterError::RangeError {
+                message: format!("DataView.prototype.{method_name} absolute byteOffset overflows"),
+            }
+        })?;
+        let end = start
+            .checked_add(byte_width)
+            .ok_or_else(|| InterpreterError::RangeError {
+                message: format!("DataView.prototype.{method_name} byte range overflows"),
+            })?;
+        Ok((start, end))
+    }
+
+    fn data_view_get_integer(
+        &self,
+        receiver: Value,
+        args: RegRange,
+        kind: DataViewIntegerKind,
+    ) -> Result<Value, InterpreterError> {
+        let method_name = kind.method_name(false);
+        let view = self.data_view_receiver_view(receiver, method_name)?;
+        let byte_offset = self.data_view_byte_offset_arg(args, method_name)?;
+        let little_endian = if matches!(kind, DataViewIntegerKind::Uint8) {
+            false
+        } else {
+            self.data_view_little_endian_arg(args, 1)?
+        };
+        let (start, end) =
+            Self::data_view_absolute_range(&view, method_name, byte_offset, kind.byte_width())?;
+        self.with_array_buffer_bytes(view.buffer, |bytes| {
+            let slot = bytes
+                .get(start..end)
+                .ok_or_else(|| InterpreterError::RangeError {
+                    message: format!(
+                        "DataView.prototype.{method_name} absolute byte range is out of bounds"
+                    ),
+                })?;
+            match kind {
+                DataViewIntegerKind::Uint8 => Ok(Value::Int(i64::from(slot[0]))),
+                DataViewIntegerKind::Int32 => {
+                    let mut raw = [0u8; 4];
+                    raw.copy_from_slice(slot);
+                    let value = if little_endian {
+                        i32::from_le_bytes(raw)
+                    } else {
+                        i32::from_be_bytes(raw)
+                    };
+                    Ok(Value::Int(i64::from(value)))
+                }
+                DataViewIntegerKind::Uint32 => {
+                    let mut raw = [0u8; 4];
+                    raw.copy_from_slice(slot);
+                    let value = if little_endian {
+                        u32::from_le_bytes(raw)
+                    } else {
+                        u32::from_be_bytes(raw)
+                    };
+                    Ok(Value::Int(i64::from(value)))
+                }
+            }
+        })?
+    }
+
+    fn data_view_set_integer(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+        kind: DataViewIntegerKind,
+    ) -> Result<Value, InterpreterError> {
+        let method_name = kind.method_name(true);
+        let view = self.data_view_receiver_view(receiver, method_name)?;
+        let byte_offset = self.data_view_byte_offset_arg(args, method_name)?;
+        let value = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+        let little_endian = if matches!(kind, DataViewIntegerKind::Uint8) {
+            false
+        } else {
+            self.data_view_little_endian_arg(args, 2)?
+        };
+        let (start, end) =
+            Self::data_view_absolute_range(&view, method_name, byte_offset, kind.byte_width())?;
+        self.with_array_buffer_bytes_mut(view.buffer, |bytes| {
+            let slot = bytes
+                .get_mut(start..end)
+                .ok_or_else(|| InterpreterError::RangeError {
+                    message: format!(
+                        "DataView.prototype.{method_name} absolute byte range is out of bounds"
+                    ),
+                })?;
+            match kind {
+                DataViewIntegerKind::Uint8 => {
+                    slot[0] = Self::typed_array_u8_value(&value);
+                }
+                DataViewIntegerKind::Int32 => {
+                    let raw = if little_endian {
+                        Self::typed_array_i32_value(&value).to_le_bytes()
+                    } else {
+                        Self::typed_array_i32_value(&value).to_be_bytes()
+                    };
+                    slot.copy_from_slice(&raw);
+                }
+                DataViewIntegerKind::Uint32 => {
+                    let raw = if little_endian {
+                        Self::typed_array_u32_value(&value).to_le_bytes()
+                    } else {
+                        Self::typed_array_u32_value(&value).to_be_bytes()
+                    };
+                    slot.copy_from_slice(&raw);
+                }
+            }
+            Ok(())
+        })??;
+        Ok(Value::Undefined)
+    }
+
     /// Coerce a value to f64 for floating-point operations.
     fn coerce_to_float(value: &Value) -> Option<f64> {
         match value {
@@ -14402,6 +15798,11 @@ impl InterpreterCore {
         array_id: ObjectId,
         element_index: usize,
     ) -> Result<Option<Value>, InterpreterError> {
+        if let Some(value) =
+            self.typed_array_indexed_get_property(array_id, &element_index.to_string())?
+        {
+            return Ok(Some(value));
+        }
         let object = self
             .heap
             .get(array_id.0 as usize)
@@ -14972,12 +16373,19 @@ impl InterpreterCore {
                     let key_value = Self::read_local_register(&local_registers, key)?;
                     let key_string = self.property_key_from_value(&key_value);
                     let value = match object_value {
-                        Value::Object(object_id) => self
-                            .heap
-                            .get(object_id.0 as usize)
-                            .and_then(|object| object.properties.get(&key_string))
-                            .cloned()
-                            .unwrap_or(Value::Undefined),
+                        Value::Object(object_id) => {
+                            if let Some(value) =
+                                self.typed_array_indexed_get_property(object_id, &key_string)?
+                            {
+                                value
+                            } else {
+                                self.heap
+                                    .get(object_id.0 as usize)
+                                    .and_then(|object| object.properties.get(&key_string))
+                                    .cloned()
+                                    .unwrap_or(Value::Undefined)
+                            }
+                        }
                         Value::Iterator(iterator_handle) => {
                             self.iterator_property_value(iterator_handle, &key_string)
                         }
@@ -15002,11 +16410,17 @@ impl InterpreterCore {
                     let property_value = Self::read_local_register(&local_registers, val)?;
                     match object_value {
                         Value::Object(object_id) => {
-                            self.set_object_property(
-                                object_id,
-                                self.property_key_from_value(&key_value),
-                                property_value,
-                            )?;
+                            let property_key = self.property_key_from_value(&key_value);
+                            if self
+                                .typed_array_indexed_set_property(
+                                    object_id,
+                                    &property_key,
+                                    &property_value,
+                                )?
+                                .is_none()
+                            {
+                                self.set_object_property(object_id, property_key, property_value)?;
+                            }
                         }
                         other => {
                             return Err(InterpreterError::TypeError {
@@ -15187,12 +16601,19 @@ impl InterpreterCore {
                     let key_value = Self::read_local_register(&local_registers, key)?;
                     let key_string = self.property_key_from_value(&key_value);
                     let value = match object_value {
-                        Value::Object(object_id) => self
-                            .heap
-                            .get(object_id.0 as usize)
-                            .and_then(|object| object.properties.get(&key_string))
-                            .cloned()
-                            .unwrap_or(Value::Undefined),
+                        Value::Object(object_id) => {
+                            if let Some(value) =
+                                self.typed_array_indexed_get_property(object_id, &key_string)?
+                            {
+                                value
+                            } else {
+                                self.heap
+                                    .get(object_id.0 as usize)
+                                    .and_then(|object| object.properties.get(&key_string))
+                                    .cloned()
+                                    .unwrap_or(Value::Undefined)
+                            }
+                        }
                         Value::Iterator(iterator_handle) => {
                             self.iterator_property_value(iterator_handle, &key_string)
                         }
@@ -15217,11 +16638,17 @@ impl InterpreterCore {
                     let property_value = Self::read_local_register(&local_registers, val)?;
                     match object_value {
                         Value::Object(object_id) => {
-                            self.set_object_property(
-                                object_id,
-                                self.property_key_from_value(&key_value),
-                                property_value,
-                            )?;
+                            let property_key = self.property_key_from_value(&key_value);
+                            if self
+                                .typed_array_indexed_set_property(
+                                    object_id,
+                                    &property_key,
+                                    &property_value,
+                                )?
+                                .is_none()
+                            {
+                                self.set_object_property(object_id, property_key, property_value)?;
+                            }
                         }
                         other => {
                             return Err(InterpreterError::TypeError {
@@ -16540,46 +17967,7 @@ impl InterpreterCore {
                 let array_id = self.alloc_array_with_prototype(None)?;
 
                 let mut elements = match first_arg {
-                    Value::Object(obj_id) => {
-                        // Check if object is array-like (has length property).
-                        // Snapshot length + elements under an immutable borrow
-                        // so we can release it before the &mut self calls below.
-                        #[derive(Debug)]
-                        enum Snapshot {
-                            ObjectMissing,
-                            NoLength,
-                            InvalidLength,
-                            Valid(Vec<Value>),
-                        }
-                        let snapshot: Snapshot = match self.heap.get(obj_id.0 as usize) {
-                            None => Snapshot::ObjectMissing,
-                            Some(obj) => match obj.properties.get("length") {
-                                None => Snapshot::NoLength,
-                                Some(Value::Int(len)) if *len >= 0 => {
-                                    let len_u32 = *len as u32;
-                                    let elements: Vec<Value> = (0..len_u32)
-                                        .map(|i| {
-                                            obj.properties
-                                                .get(&i.to_string())
-                                                .cloned()
-                                                .unwrap_or(Value::Undefined)
-                                        })
-                                        .collect();
-                                    Snapshot::Valid(elements)
-                                }
-                                Some(_) => Snapshot::InvalidLength,
-                            },
-                        };
-
-                        match snapshot {
-                            Snapshot::Valid(elements) => elements,
-                            // All of: invalid length value, missing length, or
-                            // missing object — treat as empty array.
-                            Snapshot::InvalidLength
-                            | Snapshot::NoLength
-                            | Snapshot::ObjectMissing => Vec::new(),
-                        }
-                    }
+                    Value::Object(obj_id) => self.array_like_values(obj_id)?,
                     Value::Str(s) => {
                         // Convert string to array of characters
                         s.chars().map(|ch| Value::str(ch.to_string())).collect()
@@ -17831,6 +19219,22 @@ impl InterpreterCore {
                     Value::Float(Float64::new(millis)),
                 )?;
                 Ok(Value::Object(date_id))
+            }
+            "builtin:ArrayBuffer" => {
+                let byte_length = self.array_buffer_byte_length_from_args(args)?;
+                let buffer_id = self.alloc_array_buffer_object(byte_length)?;
+                Ok(Value::Object(buffer_id))
+            }
+            "builtin:Uint8Array" | "builtin:Int32Array" | "builtin:Uint32Array" => {
+                let kind = TypedArrayKind::from_builtin_capability(cap).expect(
+                    "typed-array constructor branch must use a known typed-array capability",
+                );
+                let view_id = self.construct_typed_array(kind, args)?;
+                Ok(Value::Object(view_id))
+            }
+            "builtin:DataView" => {
+                let view_id = self.construct_data_view(args)?;
+                Ok(Value::Object(view_id))
             }
             "builtin:MathPow" => {
                 // Math.pow(base, exponent) implementation
@@ -24792,7 +26196,26 @@ impl InterpreterCore {
                     .saturating_add(Self::estimate_value_bytes(value))
             })
             .sum::<u64>();
-        MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES.saturating_add(properties)
+        let array_buffer_bytes = object
+            .array_buffer
+            .as_ref()
+            .map(|backing| backing.bytes.len() as u64)
+            .unwrap_or(0);
+        let typed_array_bytes = object
+            .typed_array
+            .as_ref()
+            .map(|_| MEMORY_ESTIMATE_TYPED_ARRAY_VIEW_BYTES)
+            .unwrap_or(0);
+        let data_view_bytes = object
+            .data_view
+            .as_ref()
+            .map(|_| MEMORY_ESTIMATE_DATA_VIEW_BYTES)
+            .unwrap_or(0);
+        MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES
+            .saturating_add(properties)
+            .saturating_add(array_buffer_bytes)
+            .saturating_add(typed_array_bytes)
+            .saturating_add(data_view_bytes)
     }
 
     fn estimate_iterator_bytes(iterator: &RuntimeIteratorState) -> u64 {
@@ -24956,6 +26379,416 @@ impl InterpreterCore {
             }
         }
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+    }
+
+    fn alloc_array_buffer_object(
+        &mut self,
+        byte_length: usize,
+    ) -> Result<ObjectId, InterpreterError> {
+        if !self
+            .config
+            .granted_capabilities
+            .contains(&RuntimeCapability::HeapAllocate)
+        {
+            return Err(InterpreterError::CapabilityDenied {
+                capability: "HeapAllocate".to_string(),
+            });
+        }
+
+        let byte_length_u64 = u64::try_from(byte_length).map_err(|_| InterpreterError::RangeError {
+            message: format!(
+                "ArrayBuffer byteLength {byte_length} exceeds host addressable size; per-buffer cap is {} bytes, total cap is {} bytes, committed bytes are {}",
+                MAX_ARRAY_BUFFER_BYTE_LENGTH,
+                self.config.max_total_memory_bytes,
+                self.estimated_memory_bytes,
+            ),
+        })?;
+        let byte_length_i64 = i64::try_from(byte_length).map_err(|_| InterpreterError::RangeError {
+            message: format!(
+                "ArrayBuffer byteLength {byte_length} exceeds JS integer storage; per-buffer cap is {} bytes, total cap is {} bytes, committed bytes are {}",
+                MAX_ARRAY_BUFFER_BYTE_LENGTH,
+                self.config.max_total_memory_bytes,
+                self.estimated_memory_bytes,
+            ),
+        })?;
+
+        let requested_heap_objects = self.heap_object_count_u32().saturating_add(1);
+        if requested_heap_objects > self.config.max_heap_objects {
+            return Err(
+                self.memory_budget_error(self.estimated_memory_bytes, requested_heap_objects)
+            );
+        }
+
+        let id =
+            ObjectId(
+                u32::try_from(self.heap.len()).map_err(|_| InterpreterError::TypeError {
+                    expected: "heap capacity".into(),
+                    got: format!("exceeded u32::MAX ({})", self.heap.len()),
+                })?,
+            );
+
+        let mut object = HeapObject::new();
+        object
+            .properties
+            .insert("__type".to_string(), Value::str("ArrayBuffer"));
+        object
+            .properties
+            .insert("byteLength".to_string(), Value::Int(byte_length_i64));
+
+        let metadata_size = Self::estimate_heap_object_bytes(&object);
+        let object_size = metadata_size.saturating_add(byte_length_u64);
+        let requested_bytes = self.estimated_memory_bytes.saturating_add(object_size);
+        if requested_bytes > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(requested_bytes, requested_heap_objects));
+        }
+
+        object.array_buffer = Some(ArrayBufferBacking::new_zeroed(byte_length));
+        self.mutate_heap(|h| h.push(object));
+        self.estimated_memory_bytes = requested_bytes;
+
+        if let Some(profiler) = &mut self.profiling_data {
+            profiler.record_object_allocation(object_size);
+        }
+
+        Ok(id)
+    }
+
+    pub(crate) fn with_array_buffer_bytes<R>(
+        &self,
+        object_id: ObjectId,
+        f: impl FnOnce(&[u8]) -> R,
+    ) -> Result<R, InterpreterError> {
+        let object = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        let backing = object
+            .array_buffer
+            .as_ref()
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "ArrayBuffer".to_string(),
+                got: object
+                    .properties
+                    .get("__type")
+                    .map(|value| self.value_to_string(value))
+                    .unwrap_or_else(|| "object".to_string()),
+            })?;
+        Ok(f(&backing.bytes))
+    }
+
+    pub(crate) fn with_array_buffer_bytes_mut<R>(
+        &mut self,
+        object_id: ObjectId,
+        f: impl FnOnce(&mut [u8]) -> R,
+    ) -> Result<R, InterpreterError> {
+        let outcome = self.mutate_heap(|heap| {
+            let object = heap
+                .get_mut(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+            let got = object
+                .properties
+                .get("__type")
+                .map(|value| match value {
+                    Value::Str(text) => text.to_string(),
+                    other => other.type_name().to_string(),
+                })
+                .unwrap_or_else(|| "object".to_string());
+            let backing =
+                object
+                    .array_buffer
+                    .as_mut()
+                    .ok_or_else(|| InterpreterError::TypeError {
+                        expected: "ArrayBuffer".to_string(),
+                        got,
+                    })?;
+            Ok(f(&mut backing.bytes))
+        });
+        outcome
+    }
+
+    fn alloc_typed_array_view_object(
+        &mut self,
+        kind: TypedArrayKind,
+        buffer: ObjectId,
+        byte_offset: usize,
+        byte_length: usize,
+        length: usize,
+    ) -> Result<ObjectId, InterpreterError> {
+        if !self
+            .config
+            .granted_capabilities
+            .contains(&RuntimeCapability::HeapAllocate)
+        {
+            return Err(InterpreterError::CapabilityDenied {
+                capability: "HeapAllocate".to_string(),
+            });
+        }
+
+        let length_i64 = i64::try_from(length).map_err(|_| InterpreterError::RangeError {
+            message: format!(
+                "{} length {length} exceeds JS integer storage",
+                kind.type_name()
+            ),
+        })?;
+        let byte_length_i64 =
+            i64::try_from(byte_length).map_err(|_| InterpreterError::RangeError {
+                message: format!(
+                    "{} byteLength {byte_length} exceeds JS integer storage",
+                    kind.type_name(),
+                ),
+            })?;
+        let byte_offset_i64 =
+            i64::try_from(byte_offset).map_err(|_| InterpreterError::RangeError {
+                message: format!(
+                    "{} byteOffset {byte_offset} exceeds JS integer storage",
+                    kind.type_name(),
+                ),
+            })?;
+        let element_size_i64 = i64::try_from(kind.element_size()).expect("element size fits i64");
+
+        let requested_heap_objects = self.heap_object_count_u32().saturating_add(1);
+        if requested_heap_objects > self.config.max_heap_objects {
+            return Err(
+                self.memory_budget_error(self.estimated_memory_bytes, requested_heap_objects)
+            );
+        }
+
+        let id =
+            ObjectId(
+                u32::try_from(self.heap.len()).map_err(|_| InterpreterError::TypeError {
+                    expected: "heap capacity".into(),
+                    got: format!("exceeded u32::MAX ({})", self.heap.len()),
+                })?,
+            );
+
+        let mut object = HeapObject::new();
+        object
+            .properties
+            .insert("__type".to_string(), Value::str(kind.type_name()));
+        object
+            .properties
+            .insert("__typedArrayKind".to_string(), Value::str(kind.type_name()));
+        object
+            .properties
+            .insert("length".to_string(), Value::Int(length_i64));
+        object
+            .properties
+            .insert("byteLength".to_string(), Value::Int(byte_length_i64));
+        object
+            .properties
+            .insert("byteOffset".to_string(), Value::Int(byte_offset_i64));
+        object
+            .properties
+            .insert("buffer".to_string(), Value::Object(buffer));
+        object.properties.insert(
+            "BYTES_PER_ELEMENT".to_string(),
+            Value::Int(element_size_i64),
+        );
+        object.typed_array = Some(TypedArrayView {
+            kind,
+            buffer,
+            byte_offset,
+            byte_length,
+            length,
+        });
+
+        let object_size = Self::estimate_heap_object_bytes(&object);
+        let requested_bytes = self.estimated_memory_bytes.saturating_add(object_size);
+        if requested_bytes > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(requested_bytes, requested_heap_objects));
+        }
+
+        self.mutate_heap(|h| h.push(object));
+        self.estimated_memory_bytes = requested_bytes;
+
+        if let Some(profiler) = &mut self.profiling_data {
+            profiler.record_object_allocation(object_size);
+        }
+
+        Ok(id)
+    }
+
+    fn alloc_typed_array_with_fresh_buffer(
+        &mut self,
+        kind: TypedArrayKind,
+        length: usize,
+    ) -> Result<ObjectId, InterpreterError> {
+        let byte_length = self.checked_typed_array_byte_length(kind, length)?;
+        let buffer = self.alloc_array_buffer_object(byte_length)?;
+        self.alloc_typed_array_view_object(kind, buffer, 0, byte_length, length)
+    }
+
+    fn alloc_typed_array_from_values(
+        &mut self,
+        kind: TypedArrayKind,
+        values: &[Value],
+    ) -> Result<ObjectId, InterpreterError> {
+        let view = self.alloc_typed_array_with_fresh_buffer(kind, values.len())?;
+        let buffer = self
+            .heap
+            .get(view.0 as usize)
+            .and_then(|object| object.typed_array.as_ref())
+            .map(|typed_array| typed_array.buffer)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "typed-array view".to_string(),
+                got: "ordinary object".to_string(),
+            })?;
+        self.with_array_buffer_bytes_mut(buffer, |bytes| {
+            for (index, value) in values.iter().enumerate() {
+                Self::write_typed_array_element_bytes(kind, bytes, index, value)?;
+            }
+            Ok(())
+        })??;
+        Ok(view)
+    }
+
+    fn construct_typed_array(
+        &mut self,
+        kind: TypedArrayKind,
+        args: RegRange,
+    ) -> Result<ObjectId, InterpreterError> {
+        let first_arg = if args.count == 0 {
+            Value::Undefined
+        } else {
+            self.read_reg(args.start)?
+        };
+
+        if matches!(first_arg, Value::Undefined) {
+            return self.alloc_typed_array_with_fresh_buffer(kind, 0);
+        }
+
+        if let Value::Object(object_id) = first_arg {
+            if self
+                .heap
+                .get(object_id.0 as usize)
+                .is_some_and(|object| object.array_buffer.is_some())
+            {
+                let (byte_offset, byte_length, length) =
+                    self.typed_array_buffer_view_shape(kind, object_id, args)?;
+                return self.alloc_typed_array_view_object(
+                    kind,
+                    object_id,
+                    byte_offset,
+                    byte_length,
+                    length,
+                );
+            }
+
+            let values = self.read_array_like_values(object_id);
+            return self.alloc_typed_array_from_values(kind, &values);
+        }
+
+        let length = self.typed_array_index_from_value(kind, "length", &first_arg)?;
+        self.alloc_typed_array_with_fresh_buffer(kind, length)
+    }
+
+    fn alloc_data_view_object(
+        &mut self,
+        buffer: ObjectId,
+        byte_offset: usize,
+        byte_length: usize,
+    ) -> Result<ObjectId, InterpreterError> {
+        if !self
+            .config
+            .granted_capabilities
+            .contains(&RuntimeCapability::HeapAllocate)
+        {
+            return Err(InterpreterError::CapabilityDenied {
+                capability: "HeapAllocate".to_string(),
+            });
+        }
+
+        let byte_length_i64 =
+            i64::try_from(byte_length).map_err(|_| InterpreterError::RangeError {
+                message: format!("DataView byteLength {byte_length} exceeds JS integer storage"),
+            })?;
+        let byte_offset_i64 =
+            i64::try_from(byte_offset).map_err(|_| InterpreterError::RangeError {
+                message: format!("DataView byteOffset {byte_offset} exceeds JS integer storage"),
+            })?;
+
+        let requested_heap_objects = self.heap_object_count_u32().saturating_add(1);
+        if requested_heap_objects > self.config.max_heap_objects {
+            return Err(
+                self.memory_budget_error(self.estimated_memory_bytes, requested_heap_objects)
+            );
+        }
+
+        let id =
+            ObjectId(
+                u32::try_from(self.heap.len()).map_err(|_| InterpreterError::TypeError {
+                    expected: "heap capacity".into(),
+                    got: format!("exceeded u32::MAX ({})", self.heap.len()),
+                })?,
+            );
+
+        let mut object = HeapObject::new();
+        object
+            .properties
+            .insert("__type".to_string(), Value::str("DataView"));
+        object
+            .properties
+            .insert("buffer".to_string(), Value::Object(buffer));
+        object
+            .properties
+            .insert("byteLength".to_string(), Value::Int(byte_length_i64));
+        object
+            .properties
+            .insert("byteOffset".to_string(), Value::Int(byte_offset_i64));
+        object.data_view = Some(DataViewView {
+            buffer,
+            byte_offset,
+            byte_length,
+        });
+
+        let object_size = Self::estimate_heap_object_bytes(&object);
+        let requested_bytes = self.estimated_memory_bytes.saturating_add(object_size);
+        if requested_bytes > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(requested_bytes, requested_heap_objects));
+        }
+
+        self.mutate_heap(|h| h.push(object));
+        self.estimated_memory_bytes = requested_bytes;
+
+        if let Some(profiler) = &mut self.profiling_data {
+            profiler.record_object_allocation(object_size);
+        }
+
+        Ok(id)
+    }
+
+    fn construct_data_view(&mut self, args: RegRange) -> Result<ObjectId, InterpreterError> {
+        let first_arg = if args.count == 0 {
+            Value::Undefined
+        } else {
+            self.read_reg(args.start)?
+        };
+
+        let Value::Object(buffer_id) = first_arg else {
+            return Err(InterpreterError::TypeError {
+                expected: "ArrayBuffer".to_string(),
+                got: first_arg.type_name().to_string(),
+            });
+        };
+        if !self
+            .heap
+            .get(buffer_id.0 as usize)
+            .is_some_and(|object| object.array_buffer.is_some())
+        {
+            let got = self
+                .heap
+                .get(buffer_id.0 as usize)
+                .and_then(|object| object.properties.get("__type"))
+                .map(|value| self.value_to_string(value))
+                .unwrap_or_else(|| "object".to_string());
+            return Err(InterpreterError::TypeError {
+                expected: "ArrayBuffer".to_string(),
+                got,
+            });
+        }
+
+        let (byte_offset, byte_length) = self.data_view_buffer_view_shape(buffer_id, args)?;
+        self.alloc_data_view_object(buffer_id, byte_offset, byte_length)
     }
 
     /// Allocate a new object with an explicit prototype link.
@@ -26732,6 +28565,1111 @@ mod active_builtin_regressions {
             specialization: None,
             required_capabilities: Vec::new(),
         }
+    }
+
+    fn expect_object_id(value: Value) -> ObjectId {
+        match value {
+            Value::Object(id) => id,
+            other => panic!("expected object value, got {other:?}"),
+        }
+    }
+
+    fn call_builtin_for_test(
+        core: &mut InterpreterCore,
+        builtin: BuiltinFunction,
+        receiver: ObjectId,
+        args: &[Value],
+    ) -> Result<Value, InterpreterError> {
+        let count = u32::try_from(args.len()).expect("test argument count fits u32");
+        core.mutate_registers(|registers| {
+            for (index, value) in args.iter().enumerate() {
+                registers[index] = value.clone();
+            }
+        });
+        let module = halted_test_module();
+        core.dispatch_builtin_function(
+            &module,
+            &builtin,
+            RegRange { start: 0, count },
+            Some(Value::Object(receiver)),
+        )
+    }
+
+    #[test]
+    fn array_buffer_constructor_allocates_zero_filled_shared_backing() {
+        let mut core = test_core();
+        core.mutate_registers(|r| {
+            r[0] = Value::Int(3);
+        });
+
+        let buffer_id = expect_object_id(
+            core.dispatch_builtin_hostcall(
+                "builtin:ArrayBuffer",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("ArrayBuffer constructor should allocate"),
+        );
+
+        let object = core
+            .heap
+            .get(buffer_id.0 as usize)
+            .expect("ArrayBuffer object must be published after successful allocation");
+        assert_eq!(
+            object.properties.get("__type"),
+            Some(&Value::str("ArrayBuffer"))
+        );
+        assert_eq!(object.properties.get("byteLength"), Some(&Value::Int(3)));
+        let backing = object
+            .array_buffer
+            .as_ref()
+            .expect("ArrayBuffer object must carry backing bytes");
+        assert_eq!(backing.byte_length(), 3);
+        assert_eq!(backing.bytes, vec![0, 0, 0]);
+        let object_bytes = InterpreterCore::estimate_heap_object_bytes(object);
+        assert!(
+            object_bytes >= MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES + 3,
+            "ArrayBuffer bytes must be included in deterministic object memory accounting"
+        );
+
+        core.with_array_buffer_bytes_mut(buffer_id, |bytes| {
+            bytes[1] = 7;
+        })
+        .expect("shared backing mutation should succeed");
+        let observed = core
+            .with_array_buffer_bytes(buffer_id, |bytes| bytes.to_vec())
+            .expect("shared backing read should succeed");
+        assert_eq!(observed, vec![0, 7, 0]);
+    }
+
+    #[test]
+    fn array_buffer_constructor_rejects_invalid_lengths_without_publication() {
+        let invalid_lengths = [
+            Value::Int(-1),
+            Value::Float(Float64::new(f64::NAN)),
+            Value::Float(Float64::new(1.5)),
+            Value::BigInt("1".to_string()),
+        ];
+
+        for invalid_length in invalid_lengths {
+            let mut core = test_core();
+            core.mutate_registers(|r| {
+                r[0] = invalid_length.clone();
+            });
+
+            let err = core
+                .dispatch_builtin_hostcall(
+                    "builtin:ArrayBuffer",
+                    RegRange { start: 0, count: 1 },
+                    None,
+                )
+                .expect_err("invalid ArrayBuffer length should fail closed");
+            assert!(
+                matches!(err, InterpreterError::RangeError { .. }),
+                "expected RangeError for {invalid_length:?}, got {err:?}"
+            );
+            assert_eq!(
+                core.heap_size(),
+                0,
+                "invalid ArrayBuffer length must not publish a partial object"
+            );
+        }
+    }
+
+    #[test]
+    fn array_buffer_constructor_respects_caps_and_budget_without_publication() {
+        let mut per_buffer_core = test_core();
+        per_buffer_core.mutate_registers(|r| {
+            r[0] = Value::Int((MAX_ARRAY_BUFFER_BYTE_LENGTH + 1) as i64);
+        });
+        let per_buffer_err = per_buffer_core
+            .dispatch_builtin_hostcall("builtin:ArrayBuffer", RegRange { start: 0, count: 1 }, None)
+            .expect_err("oversized ArrayBuffer should fail per-buffer cap");
+        assert!(
+            matches!(per_buffer_err, InterpreterError::RangeError { .. }),
+            "expected RangeError for per-buffer cap, got {per_buffer_err:?}"
+        );
+        assert_eq!(per_buffer_core.heap_size(), 0);
+
+        let mut config = test_quickjs_config();
+        config.max_total_memory_bytes = MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES;
+        let mut total_budget_core = InterpreterCore::new(config, "arraybuffer-total-budget");
+        total_budget_core.mutate_registers(|r| {
+            r[0] = Value::Int(4);
+        });
+        let total_budget_err = total_budget_core
+            .dispatch_builtin_hostcall("builtin:ArrayBuffer", RegRange { start: 0, count: 1 }, None)
+            .expect_err("ArrayBuffer should honor total runtime memory budget");
+        assert!(
+            matches!(
+                total_budget_err,
+                InterpreterError::MemoryBudgetExceeded { .. }
+            ),
+            "expected MemoryBudgetExceeded for total cap, got {total_budget_err:?}"
+        );
+        assert_eq!(
+            total_budget_core.heap_size(),
+            0,
+            "budget rejection must not publish a partial ArrayBuffer object"
+        );
+    }
+
+    #[test]
+    fn typed_array_numeric_length_constructor_allocates_metadata_and_backing() {
+        let mut uint8_core = test_core();
+        uint8_core.mutate_registers(|r| {
+            r[0] = Value::Int(3);
+        });
+        let uint8_id = expect_object_id(
+            uint8_core
+                .dispatch_builtin_hostcall(
+                    "builtin:Uint8Array",
+                    RegRange { start: 0, count: 1 },
+                    None,
+                )
+                .expect("Uint8Array length constructor should allocate"),
+        );
+        let uint8_object = uint8_core
+            .heap
+            .get(uint8_id.0 as usize)
+            .expect("typed-array view object must be published");
+        assert_eq!(
+            uint8_object.properties.get("__type"),
+            Some(&Value::str("Uint8Array"))
+        );
+        assert_eq!(uint8_object.properties.get("length"), Some(&Value::Int(3)));
+        assert_eq!(
+            uint8_object.properties.get("byteLength"),
+            Some(&Value::Int(3))
+        );
+        assert_eq!(
+            uint8_object.properties.get("byteOffset"),
+            Some(&Value::Int(0))
+        );
+        let uint8_view = uint8_object
+            .typed_array
+            .as_ref()
+            .expect("Uint8Array object must carry view metadata");
+        assert_eq!(uint8_view.kind, TypedArrayKind::Uint8);
+        assert_eq!(uint8_view.length, 3);
+        assert_eq!(uint8_view.byte_length, 3);
+        assert_eq!(
+            uint8_core
+                .with_array_buffer_bytes(uint8_view.buffer, |bytes| bytes.to_vec())
+                .expect("fresh Uint8Array buffer should be readable"),
+            vec![0, 0, 0]
+        );
+
+        let mut int32_core = test_core();
+        int32_core.mutate_registers(|r| {
+            r[0] = Value::Int(2);
+        });
+        let int32_id = expect_object_id(
+            int32_core
+                .dispatch_builtin_hostcall(
+                    "builtin:Int32Array",
+                    RegRange { start: 0, count: 1 },
+                    None,
+                )
+                .expect("Int32Array length constructor should allocate"),
+        );
+        let int32_object = int32_core
+            .heap
+            .get(int32_id.0 as usize)
+            .expect("Int32Array view object must be published");
+        assert_eq!(int32_object.properties.get("length"), Some(&Value::Int(2)));
+        assert_eq!(
+            int32_object.properties.get("byteLength"),
+            Some(&Value::Int(8))
+        );
+        assert_eq!(
+            int32_object.properties.get("BYTES_PER_ELEMENT"),
+            Some(&Value::Int(4))
+        );
+        assert_eq!(
+            int32_object
+                .typed_array
+                .as_ref()
+                .expect("Int32Array must carry view metadata")
+                .kind,
+            TypedArrayKind::Int32
+        );
+    }
+
+    #[test]
+    fn typed_array_arraybuffer_constructor_validates_offsets_and_alignment() {
+        let mut core = test_core();
+        core.mutate_registers(|r| {
+            r[0] = Value::Int(12);
+        });
+        let buffer_id = expect_object_id(
+            core.dispatch_builtin_hostcall(
+                "builtin:ArrayBuffer",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("ArrayBuffer allocation should succeed"),
+        );
+
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(buffer_id);
+            r[1] = Value::Int(4);
+            r[2] = Value::Int(2);
+        });
+        let view_id = expect_object_id(
+            core.dispatch_builtin_hostcall(
+                "builtin:Uint32Array",
+                RegRange { start: 0, count: 3 },
+                None,
+            )
+            .expect("aligned Uint32Array view should allocate"),
+        );
+        let view = core
+            .heap
+            .get(view_id.0 as usize)
+            .and_then(|object| object.typed_array.as_ref())
+            .expect("Uint32Array object must carry view metadata");
+        assert_eq!(view.kind, TypedArrayKind::Uint32);
+        assert_eq!(view.buffer, buffer_id);
+        assert_eq!(view.byte_offset, 4);
+        assert_eq!(view.byte_length, 8);
+        assert_eq!(view.length, 2);
+
+        let heap_size_before_bad_offset = core.heap_size();
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(buffer_id);
+            r[1] = Value::Int(1);
+        });
+        let bad_offset = core
+            .dispatch_builtin_hostcall("builtin:Int32Array", RegRange { start: 0, count: 2 }, None)
+            .expect_err("misaligned Int32Array byteOffset should fail closed");
+        assert!(
+            matches!(bad_offset, InterpreterError::RangeError { .. }),
+            "expected RangeError for misaligned offset, got {bad_offset:?}"
+        );
+        assert_eq!(
+            core.heap_size(),
+            heap_size_before_bad_offset,
+            "misaligned view must not publish a partial typed-array object"
+        );
+
+        core.mutate_registers(|r| {
+            r[0] = Value::Int(5);
+        });
+        let odd_buffer = expect_object_id(
+            core.dispatch_builtin_hostcall(
+                "builtin:ArrayBuffer",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("odd byteLength ArrayBuffer should allocate"),
+        );
+        let heap_size_before_bad_length = core.heap_size();
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(odd_buffer);
+        });
+        let bad_length = core
+            .dispatch_builtin_hostcall("builtin:Uint32Array", RegRange { start: 0, count: 1 }, None)
+            .expect_err("implicit Uint32Array byteLength must align to element size");
+        assert!(
+            matches!(bad_length, InterpreterError::RangeError { .. }),
+            "expected RangeError for non-multiple view byteLength, got {bad_length:?}"
+        );
+        assert_eq!(
+            core.heap_size(),
+            heap_size_before_bad_length,
+            "invalid view byteLength must not publish a partial typed-array object"
+        );
+    }
+
+    #[test]
+    fn typed_array_views_share_arraybuffer_backing_store() {
+        let mut core = test_core();
+        core.mutate_registers(|r| {
+            r[0] = Value::Int(4);
+        });
+        let buffer_id = expect_object_id(
+            core.dispatch_builtin_hostcall(
+                "builtin:ArrayBuffer",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("ArrayBuffer allocation should succeed"),
+        );
+
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(buffer_id);
+        });
+        let full_view = expect_object_id(
+            core.dispatch_builtin_hostcall(
+                "builtin:Uint8Array",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("full Uint8Array view should allocate"),
+        );
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(buffer_id);
+            r[1] = Value::Int(1);
+            r[2] = Value::Int(2);
+        });
+        let window_view = expect_object_id(
+            core.dispatch_builtin_hostcall(
+                "builtin:Uint8Array",
+                RegRange { start: 0, count: 3 },
+                None,
+            )
+            .expect("windowed Uint8Array view should allocate"),
+        );
+
+        let full = core
+            .heap
+            .get(full_view.0 as usize)
+            .and_then(|object| object.typed_array.as_ref())
+            .expect("full view metadata should exist");
+        let window = core
+            .heap
+            .get(window_view.0 as usize)
+            .and_then(|object| object.typed_array.as_ref())
+            .expect("window view metadata should exist");
+        assert_eq!(full.buffer, buffer_id);
+        assert_eq!(window.buffer, buffer_id);
+        assert_eq!(window.byte_offset, 1);
+        assert_eq!(window.length, 2);
+
+        core.with_array_buffer_bytes_mut(buffer_id, |bytes| {
+            bytes[2] = 9;
+        })
+        .expect("shared backing mutation should succeed");
+        assert_eq!(
+            core.with_array_buffer_bytes(buffer_id, |bytes| bytes.to_vec())
+                .expect("shared backing read should succeed"),
+            vec![0, 0, 9, 0]
+        );
+    }
+
+    #[test]
+    fn typed_array_array_like_constructor_copies_current_object_model_values() {
+        let mut core = test_core();
+        let source = core
+            .alloc_array_from_values(&[Value::Int(-1), Value::Int(256), Value::Int(2)])
+            .expect("source array allocation should succeed");
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(source);
+        });
+        let view_id = expect_object_id(
+            core.dispatch_builtin_hostcall(
+                "builtin:Uint8Array",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("Uint8Array array-like constructor should allocate"),
+        );
+        let buffer = core
+            .heap
+            .get(view_id.0 as usize)
+            .and_then(|object| object.typed_array.as_ref())
+            .map(|view| view.buffer)
+            .expect("view metadata should expose backing buffer");
+        assert_eq!(
+            core.with_array_buffer_bytes(buffer, |bytes| bytes.to_vec())
+                .expect("array-like copied backing should be readable"),
+            vec![255, 0, 2]
+        );
+    }
+
+    #[test]
+    fn typed_array_indexed_get_set_routes_through_backing_store() {
+        let mut core = test_core();
+        core.mutate_registers(|r| {
+            r[0] = Value::Int(3);
+        });
+        let view_id = expect_object_id(
+            core.dispatch_builtin_hostcall(
+                "builtin:Uint8Array",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("Uint8Array constructor should allocate indexed storage"),
+        );
+
+        assert!(
+            core.proxy_aware_set_property(
+                None,
+                view_id,
+                "0",
+                Value::Int(255),
+                Value::Object(view_id),
+                0,
+            )
+            .expect("typed-array index set should succeed")
+        );
+        assert!(
+            core.proxy_aware_set_property(
+                None,
+                view_id,
+                "1",
+                Value::Int(1),
+                Value::Object(view_id),
+                0
+            )
+            .expect("typed-array second index set should succeed")
+        );
+        assert_eq!(
+            core.proxy_aware_get_property(None, view_id, "0", Value::Object(view_id), 0)
+                .expect("typed-array index read should succeed"),
+            Value::Int(255)
+        );
+        assert_eq!(
+            core.proxy_aware_get_property(None, view_id, "1", Value::Object(view_id), 0)
+                .expect("typed-array second index read should succeed"),
+            Value::Int(1)
+        );
+
+        let view = core
+            .heap
+            .get(view_id.0 as usize)
+            .and_then(|object| object.typed_array.as_ref())
+            .expect("view metadata must remain attached")
+            .clone();
+        assert_eq!(
+            core.with_array_buffer_bytes(view.buffer, |bytes| bytes.to_vec())
+                .expect("typed-array backing store should be readable"),
+            vec![255, 1, 0]
+        );
+    }
+
+    #[test]
+    fn typed_array_numeric_coercion_wraps_uint8_int32_and_uint32() {
+        let mut core = test_core();
+        core.mutate_registers(|r| {
+            r[0] = Value::Int(2);
+        });
+        let uint8_id = expect_object_id(
+            core.dispatch_builtin_hostcall(
+                "builtin:Uint8Array",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("Uint8Array should allocate"),
+        );
+        core.typed_array_indexed_set_property(uint8_id, "0", &Value::Int(256))
+            .expect("Uint8Array wrap write should succeed");
+        core.typed_array_indexed_set_property(uint8_id, "1", &Value::Int(-1))
+            .expect("Uint8Array negative wrap write should succeed");
+        assert_eq!(
+            core.typed_array_indexed_get_property(uint8_id, "0")
+                .expect("Uint8Array wrapped zero should read")
+                .expect("Uint8Array index should be handled"),
+            Value::Int(0)
+        );
+        assert_eq!(
+            core.typed_array_indexed_get_property(uint8_id, "1")
+                .expect("Uint8Array wrapped 255 should read")
+                .expect("Uint8Array index should be handled"),
+            Value::Int(255)
+        );
+
+        core.mutate_registers(|r| {
+            r[0] = Value::Int(2);
+        });
+        let int32_id = expect_object_id(
+            core.dispatch_builtin_hostcall(
+                "builtin:Int32Array",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("Int32Array should allocate"),
+        );
+        core.typed_array_indexed_set_property(int32_id, "0", &Value::Int(2_147_483_648))
+            .expect("Int32Array signed wrap write should succeed");
+        core.typed_array_indexed_set_property(int32_id, "1", &Value::Int(-1))
+            .expect("Int32Array negative write should succeed");
+        assert_eq!(
+            core.typed_array_indexed_get_property(int32_id, "0")
+                .expect("Int32Array signed value should read")
+                .expect("Int32Array index should be handled"),
+            Value::Int(-2_147_483_648)
+        );
+        assert_eq!(
+            core.typed_array_indexed_get_property(int32_id, "1")
+                .expect("Int32Array -1 should read")
+                .expect("Int32Array index should be handled"),
+            Value::Int(-1)
+        );
+
+        core.mutate_registers(|r| {
+            r[0] = Value::Int(2);
+        });
+        let uint32_id = expect_object_id(
+            core.dispatch_builtin_hostcall(
+                "builtin:Uint32Array",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("Uint32Array should allocate"),
+        );
+        core.typed_array_indexed_set_property(uint32_id, "0", &Value::Int(-1))
+            .expect("Uint32Array unsigned wrap write should succeed");
+        core.typed_array_indexed_set_property(uint32_id, "1", &Value::Int(4_294_967_296))
+            .expect("Uint32Array modulo write should succeed");
+        assert_eq!(
+            core.typed_array_indexed_get_property(uint32_id, "0")
+                .expect("Uint32Array wrapped max should read")
+                .expect("Uint32Array index should be handled"),
+            Value::Int(4_294_967_295)
+        );
+        assert_eq!(
+            core.typed_array_indexed_get_property(uint32_id, "1")
+                .expect("Uint32Array wrapped zero should read")
+                .expect("Uint32Array index should be handled"),
+            Value::Int(0)
+        );
+    }
+
+    #[test]
+    fn typed_array_out_of_bounds_and_non_index_properties_are_spec_shaped() {
+        let mut core = test_core();
+        core.mutate_registers(|r| {
+            r[0] = Value::Int(1);
+        });
+        let view_id = expect_object_id(
+            core.dispatch_builtin_hostcall(
+                "builtin:Uint8Array",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("Uint8Array should allocate"),
+        );
+
+        assert_eq!(
+            core.typed_array_indexed_set_property(view_id, "1", &Value::Int(7))
+                .expect("out-of-bounds typed-array write should be accepted"),
+            Some(true)
+        );
+        assert_eq!(
+            core.typed_array_indexed_get_property(view_id, "1")
+                .expect("out-of-bounds typed-array read should be accepted"),
+            Some(Value::Undefined)
+        );
+        assert!(
+            !core
+                .heap
+                .get(view_id.0 as usize)
+                .expect("view object must exist")
+                .properties
+                .contains_key("1"),
+            "out-of-bounds integer-indexed writes must not create ordinary object properties"
+        );
+
+        assert!(
+            core.proxy_aware_set_property(
+                None,
+                view_id,
+                "foo",
+                Value::Int(9),
+                Value::Object(view_id),
+                0
+            )
+            .expect("non-index property write should succeed")
+        );
+        assert!(
+            core.proxy_aware_set_property(
+                None,
+                view_id,
+                "01",
+                Value::Int(7),
+                Value::Object(view_id),
+                0
+            )
+            .expect("leading-zero non-index property write should succeed")
+        );
+        assert_eq!(
+            core.proxy_aware_get_property(None, view_id, "foo", Value::Object(view_id), 0)
+                .expect("non-index property read should succeed"),
+            Value::Int(9)
+        );
+        assert_eq!(
+            core.proxy_aware_get_property(None, view_id, "01", Value::Object(view_id), 0)
+                .expect("leading-zero non-index property read should succeed"),
+            Value::Int(7)
+        );
+        let buffer = core
+            .heap
+            .get(view_id.0 as usize)
+            .and_then(|object| object.typed_array.as_ref())
+            .map(|view| view.buffer)
+            .expect("typed-array metadata should expose backing buffer");
+        assert_eq!(
+            core.with_array_buffer_bytes(buffer, |bytes| bytes.to_vec())
+                .expect("backing store should remain readable"),
+            vec![0],
+            "ordinary non-index properties must not mutate typed-array element storage"
+        );
+    }
+
+    #[test]
+    fn data_view_constructor_allocates_byte_window_metadata() {
+        let mut core = test_core();
+        core.mutate_registers(|r| {
+            r[0] = Value::Int(8);
+        });
+        let buffer_id = expect_object_id(
+            core.dispatch_builtin_hostcall(
+                "builtin:ArrayBuffer",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("ArrayBuffer allocation should succeed"),
+        );
+
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(buffer_id);
+            r[1] = Value::Int(2);
+            r[2] = Value::Int(4);
+        });
+        let view_id = expect_object_id(
+            core.dispatch_builtin_hostcall(
+                "builtin:DataView",
+                RegRange { start: 0, count: 3 },
+                None,
+            )
+            .expect("DataView should allocate a byte-addressed view"),
+        );
+        let view_object = core
+            .heap
+            .get(view_id.0 as usize)
+            .expect("DataView object must be published");
+        assert_eq!(
+            view_object.properties.get("__type"),
+            Some(&Value::str("DataView"))
+        );
+        assert_eq!(
+            view_object.properties.get("buffer"),
+            Some(&Value::Object(buffer_id))
+        );
+        assert_eq!(
+            view_object.properties.get("byteOffset"),
+            Some(&Value::Int(2))
+        );
+        assert_eq!(
+            view_object.properties.get("byteLength"),
+            Some(&Value::Int(4))
+        );
+        let view = view_object
+            .data_view
+            .as_ref()
+            .expect("DataView object must carry view metadata");
+        assert_eq!(view.buffer, buffer_id);
+        assert_eq!(view.byte_offset, 2);
+        assert_eq!(view.byte_length, 4);
+
+        let heap_size_before_bad_offset = core.heap_size();
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(buffer_id);
+            r[1] = Value::Int(9);
+        });
+        let bad_offset = core
+            .dispatch_builtin_hostcall("builtin:DataView", RegRange { start: 0, count: 2 }, None)
+            .expect_err("DataView byteOffset beyond buffer should fail closed");
+        assert!(
+            matches!(bad_offset, InterpreterError::RangeError { .. }),
+            "expected RangeError for DataView byteOffset, got {bad_offset:?}"
+        );
+        assert_eq!(
+            core.heap_size(),
+            heap_size_before_bad_offset,
+            "invalid DataView byteOffset must not publish a partial view"
+        );
+
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(buffer_id);
+            r[1] = Value::Int(6);
+            r[2] = Value::Int(3);
+        });
+        let bad_length = core
+            .dispatch_builtin_hostcall("builtin:DataView", RegRange { start: 0, count: 3 }, None)
+            .expect_err("DataView byteLength beyond buffer should fail closed");
+        assert!(
+            matches!(bad_length, InterpreterError::RangeError { .. }),
+            "expected RangeError for DataView byteLength, got {bad_length:?}"
+        );
+        assert_eq!(
+            core.heap_size(),
+            heap_size_before_bad_offset,
+            "invalid DataView byteLength must not publish a partial view"
+        );
+    }
+
+    #[test]
+    fn data_view_integer_accessors_obey_endianness_and_numeric_coercion() {
+        let mut core = test_core();
+        core.mutate_registers(|r| {
+            r[0] = Value::Int(8);
+        });
+        let buffer_id = expect_object_id(
+            core.dispatch_builtin_hostcall(
+                "builtin:ArrayBuffer",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("ArrayBuffer allocation should succeed"),
+        );
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(buffer_id);
+        });
+        let view_id = expect_object_id(
+            core.dispatch_builtin_hostcall(
+                "builtin:DataView",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("DataView should allocate"),
+        );
+
+        assert_eq!(
+            call_builtin_for_test(
+                &mut core,
+                BuiltinFunction::data_view_set_uint32(),
+                view_id,
+                &[Value::Int(0), Value::Int(16_909_060), Value::Bool(false)],
+            )
+            .expect("setUint32 big-endian should succeed"),
+            Value::Undefined
+        );
+        assert_eq!(
+            call_builtin_for_test(
+                &mut core,
+                BuiltinFunction::data_view_get_uint8(),
+                view_id,
+                &[Value::Int(0)],
+            )
+            .expect("getUint8 should read the first big-endian byte"),
+            Value::Int(1)
+        );
+        assert_eq!(
+            call_builtin_for_test(
+                &mut core,
+                BuiltinFunction::data_view_get_uint32(),
+                view_id,
+                &[Value::Int(0), Value::Bool(false)],
+            )
+            .expect("getUint32 big-endian should round-trip"),
+            Value::Int(16_909_060)
+        );
+
+        call_builtin_for_test(
+            &mut core,
+            BuiltinFunction::data_view_set_uint32(),
+            view_id,
+            &[Value::Int(0), Value::Int(16_909_060), Value::Bool(true)],
+        )
+        .expect("setUint32 little-endian should succeed");
+        assert_eq!(
+            core.with_array_buffer_bytes(buffer_id, |bytes| bytes[0..4].to_vec())
+                .expect("ArrayBuffer bytes should be readable"),
+            vec![4, 3, 2, 1]
+        );
+        assert_eq!(
+            call_builtin_for_test(
+                &mut core,
+                BuiltinFunction::data_view_get_uint32(),
+                view_id,
+                &[Value::Int(0), Value::Bool(true)],
+            )
+            .expect("getUint32 little-endian should round-trip"),
+            Value::Int(16_909_060)
+        );
+
+        call_builtin_for_test(
+            &mut core,
+            BuiltinFunction::data_view_set_int32(),
+            view_id,
+            &[Value::Int(0), Value::Int(2_147_483_648), Value::Bool(false)],
+        )
+        .expect("setInt32 should apply Int32 coercion");
+        assert_eq!(
+            call_builtin_for_test(
+                &mut core,
+                BuiltinFunction::data_view_get_int32(),
+                view_id,
+                &[Value::Int(0), Value::Bool(false)],
+            )
+            .expect("getInt32 should read signed value"),
+            Value::Int(-2_147_483_648)
+        );
+
+        call_builtin_for_test(
+            &mut core,
+            BuiltinFunction::data_view_set_uint8(),
+            view_id,
+            &[Value::Int(3), Value::Int(256)],
+        )
+        .expect("setUint8 should wrap modulo 256");
+        assert_eq!(
+            call_builtin_for_test(
+                &mut core,
+                BuiltinFunction::data_view_get_uint8(),
+                view_id,
+                &[Value::Int(3)],
+            )
+            .expect("getUint8 should read wrapped byte"),
+            Value::Int(0)
+        );
+    }
+
+    #[test]
+    fn data_view_and_typed_arrays_share_arraybuffer_backing_store() {
+        let mut core = test_core();
+        core.mutate_registers(|r| {
+            r[0] = Value::Int(4);
+        });
+        let buffer_id = expect_object_id(
+            core.dispatch_builtin_hostcall(
+                "builtin:ArrayBuffer",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("ArrayBuffer allocation should succeed"),
+        );
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(buffer_id);
+        });
+        let data_view_id = expect_object_id(
+            core.dispatch_builtin_hostcall(
+                "builtin:DataView",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("DataView should allocate"),
+        );
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(buffer_id);
+        });
+        let uint8_id = expect_object_id(
+            core.dispatch_builtin_hostcall(
+                "builtin:Uint8Array",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("Uint8Array should allocate"),
+        );
+
+        call_builtin_for_test(
+            &mut core,
+            BuiltinFunction::data_view_set_uint8(),
+            data_view_id,
+            &[Value::Int(0), Value::Int(42)],
+        )
+        .expect("DataView write should succeed");
+        assert_eq!(
+            core.typed_array_indexed_get_property(uint8_id, "0")
+                .expect("typed-array read should succeed")
+                .expect("typed-array index should be handled"),
+            Value::Int(42)
+        );
+
+        core.typed_array_indexed_set_property(uint8_id, "1", &Value::Int(7))
+            .expect("typed-array write should succeed");
+        assert_eq!(
+            call_builtin_for_test(
+                &mut core,
+                BuiltinFunction::data_view_get_uint8(),
+                data_view_id,
+                &[Value::Int(1)],
+            )
+            .expect("DataView read should observe typed-array write"),
+            Value::Int(7)
+        );
+    }
+
+    #[test]
+    fn typed_array_set_fill_and_copy_within_mutate_backing_store() {
+        let mut core = test_core();
+        core.mutate_registers(|r| {
+            r[0] = Value::Int(5);
+        });
+        let view_id = expect_object_id(
+            core.dispatch_builtin_hostcall(
+                "builtin:Uint8Array",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("Uint8Array should allocate"),
+        );
+        let source = core
+            .alloc_array_from_values(&[Value::Int(9), Value::Int(8)])
+            .expect("source array should allocate");
+
+        assert_eq!(
+            call_builtin_for_test(
+                &mut core,
+                BuiltinFunction::typed_array_fill(),
+                view_id,
+                &[Value::Int(1)],
+            )
+            .expect("fill should succeed"),
+            Value::Object(view_id)
+        );
+        assert_eq!(
+            call_builtin_for_test(
+                &mut core,
+                BuiltinFunction::typed_array_set(),
+                view_id,
+                &[Value::Object(source), Value::Int(1)],
+            )
+            .expect("set should succeed"),
+            Value::Undefined
+        );
+        assert_eq!(
+            call_builtin_for_test(
+                &mut core,
+                BuiltinFunction::typed_array_copy_within(),
+                view_id,
+                &[Value::Int(3), Value::Int(1), Value::Int(3)],
+            )
+            .expect("copyWithin should succeed"),
+            Value::Object(view_id)
+        );
+
+        let view = core
+            .heap
+            .get(view_id.0 as usize)
+            .and_then(|object| object.typed_array.as_ref())
+            .expect("view metadata should exist")
+            .clone();
+        assert_eq!(
+            core.with_array_buffer_bytes(view.buffer, |bytes| bytes.to_vec())
+                .expect("backing store should be readable"),
+            vec![1, 9, 8, 9, 8]
+        );
+    }
+
+    #[test]
+    fn typed_array_subarray_shares_and_slice_copies_backing_store() {
+        let mut core = test_core();
+        let source = core
+            .alloc_array_from_values(&[
+                Value::Int(10),
+                Value::Int(20),
+                Value::Int(30),
+                Value::Int(40),
+            ])
+            .expect("source array should allocate");
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(source);
+        });
+        let view_id = expect_object_id(
+            core.dispatch_builtin_hostcall(
+                "builtin:Uint8Array",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("Uint8Array should copy source values"),
+        );
+
+        let subarray_id = expect_object_id(
+            call_builtin_for_test(
+                &mut core,
+                BuiltinFunction::typed_array_subarray(),
+                view_id,
+                &[Value::Int(1), Value::Int(3)],
+            )
+            .expect("subarray should allocate shared view"),
+        );
+        let slice_id = expect_object_id(
+            call_builtin_for_test(
+                &mut core,
+                BuiltinFunction::typed_array_slice(),
+                view_id,
+                &[Value::Int(1), Value::Int(3)],
+            )
+            .expect("slice should allocate copied view"),
+        );
+
+        core.typed_array_indexed_set_property(subarray_id, "0", &Value::Int(99))
+            .expect("subarray write should succeed");
+        assert_eq!(
+            core.typed_array_indexed_get_property(view_id, "1")
+                .expect("parent read should succeed")
+                .expect("typed-array index should be handled"),
+            Value::Int(99),
+            "subarray writes must be visible through the parent backing store"
+        );
+        assert_eq!(
+            core.typed_array_indexed_get_property(slice_id, "0")
+                .expect("slice read should succeed")
+                .expect("typed-array index should be handled"),
+            Value::Int(20),
+            "slice must preserve copied bytes after parent mutation"
+        );
+
+        core.typed_array_indexed_set_property(slice_id, "1", &Value::Int(77))
+            .expect("slice write should succeed");
+        assert_eq!(
+            core.typed_array_indexed_get_property(view_id, "2")
+                .expect("parent read should succeed")
+                .expect("typed-array index should be handled"),
+            Value::Int(30),
+            "slice writes must not mutate the original backing store"
+        );
+    }
+
+    #[test]
+    fn typed_array_methods_cover_int32_and_array_conversion_hooks() {
+        let mut core = test_core();
+        core.mutate_registers(|r| {
+            r[0] = Value::Int(3);
+        });
+        let view_id = expect_object_id(
+            core.dispatch_builtin_hostcall(
+                "builtin:Int32Array",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("Int32Array should allocate"),
+        );
+        let source = core
+            .alloc_array_from_values(&[Value::Int(2_147_483_648), Value::Int(-1)])
+            .expect("source array should allocate");
+
+        call_builtin_for_test(
+            &mut core,
+            BuiltinFunction::typed_array_fill(),
+            view_id,
+            &[Value::Int(1)],
+        )
+        .expect("Int32Array fill should succeed");
+        call_builtin_for_test(
+            &mut core,
+            BuiltinFunction::typed_array_set(),
+            view_id,
+            &[Value::Object(source), Value::Int(1)],
+        )
+        .expect("Int32Array set should succeed");
+        assert_eq!(
+            core.typed_array_indexed_get_property(view_id, "1")
+                .expect("Int32Array read should succeed")
+                .expect("typed-array index should be handled"),
+            Value::Int(-2_147_483_648)
+        );
+        assert_eq!(
+            core.array_like_values(view_id)
+                .expect("array-like conversion should read Int32Array bytes"),
+            vec![Value::Int(1), Value::Int(-2_147_483_648), Value::Int(-1)]
+        );
+
+        let unsupported = call_builtin_for_test(
+            &mut core,
+            BuiltinFunction::typed_array_unsupported_method(),
+            view_id,
+            &[],
+        )
+        .expect_err("unsupported typed-array methods should fail clearly");
+        assert!(
+            matches!(unsupported, InterpreterError::TypeError { .. }),
+            "expected deterministic TypeError for unsupported typed-array method, got {unsupported:?}"
+        );
     }
 
     #[test]

@@ -8,7 +8,7 @@
 //! * a **dispatch plan** (name → the hand-written impl fn, or the documented escape-hatch site),
 //! * generated **gap-inventory entries** (replaces the hand-maintained `lowering_gap_inventory`
 //!   rows),
-//! all derived from the single source of truth so they cannot drift from each other.
+//!   all derived from the single source of truth so they cannot drift from each other.
 //!
 //! # Two surfaces
 //! * [`define_intrinsics!`] — the declaration macro. `define_intrinsics! { row, row, ... }`

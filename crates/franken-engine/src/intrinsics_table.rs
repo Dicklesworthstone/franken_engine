@@ -186,19 +186,19 @@ impl IntrinsicRow {
             ));
         }
         // A Range arity must be well-ordered.
-        if let Arity::Range { min, max } = self.arity {
-            if min > max {
-                return Err(format!("{}: Range arity min {min} > max {max}", self.name));
-            }
+        if let Arity::Range { min, max } = self.arity
+            && min > max
+        {
+            return Err(format!("{}: Range arity min {min} > max {max}", self.name));
         }
         // Escape-hatch rows must document a reason and a site.
-        if let ImplBinding::Manual { reason, site } = self.impl_binding {
-            if reason.is_empty() || site.is_empty() {
-                return Err(format!(
-                    "{}: Manual escape-hatch rows must document both reason and site",
-                    self.name
-                ));
-            }
+        if let ImplBinding::Manual { reason, site } = self.impl_binding
+            && (reason.is_empty() || site.is_empty())
+        {
+            return Err(format!(
+                "{}: Manual escape-hatch rows must document both reason and site",
+                self.name
+            ));
         }
         Ok(())
     }
@@ -316,6 +316,327 @@ pub fn validate_table(rows: &[IntrinsicRow]) -> Result<(), String> {
     Ok(())
 }
 
+/// The complete `String.prototype.*` family expressed as intrinsic rows — the first
+/// family migrated onto the table (Dueling-Wizards E4.T3, `bd-fqlfw.4.3`).
+///
+/// # Coexist status
+/// The legacy `BuiltinFunctionKind::String*` match arms in `baseline_interpreter.rs`
+/// still serve production dispatch; the table-driven path
+/// (`InterpreterCore::dispatch_string_intrinsic`) routes through these rows and is
+/// parity-tested against the legacy arms. Both paths call the SAME hand-written
+/// `string_*_impl` fns, so semantics live in exactly one place. The flip that retires
+/// the legacy arms is the follow-on step in
+/// `docs/dueling_wizards/E4_INTRINSIC_TABLE_MIGRATION_PLAN.md`.
+///
+/// # Adding a method to this family
+/// Append one row here and write the matching `string_<name>_impl` fn (plus its
+/// one-line entry in `string_intrinsic_impl_binding`) in `baseline_interpreter.rs`.
+/// No enum variant, ctor, display-name, exec arm, or property-map edits are needed
+/// on the generated path.
+///
+/// # Arity note
+/// `arity` documents the declared call contract. It is NOT enforced at dispatch:
+/// JS semantics tolerate missing arguments (they read as `undefined`) and ignore
+/// extras, and the legacy arms behave that way today. Enforcing arity would be a
+/// behavioral divergence, which the coexist invariant forbids.
+///
+/// Rows are listed in the same order as the legacy `string_property_value` match so
+/// reviewers can diff the two seams side by side.
+pub mod string_prototype {
+    use super::*;
+
+    crate::define_intrinsics! {
+        IntrinsicRow {
+            name: "String.prototype.charAt",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Range { min: 0, max: 1 },
+            capability: None,
+            ifc: IfcPropagation::JoinReceiverAndArgs,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_char_at_impl" },
+            conformance: "test262:built-ins/String/prototype/charAt",
+            gap_status: GapStatus::Resolved,
+        },
+        IntrinsicRow {
+            name: "String.prototype.charCodeAt",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Range { min: 0, max: 1 },
+            capability: None,
+            ifc: IfcPropagation::JoinReceiverAndArgs,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_char_code_at_impl" },
+            conformance: "test262:built-ins/String/prototype/charCodeAt",
+            gap_status: GapStatus::Resolved,
+        },
+        IntrinsicRow {
+            name: "String.prototype.at",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Range { min: 0, max: 1 },
+            capability: None,
+            ifc: IfcPropagation::JoinReceiverAndArgs,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_at_impl" },
+            conformance: "test262:built-ins/String/prototype/at",
+            gap_status: GapStatus::Resolved,
+        },
+        IntrinsicRow {
+            name: "String.prototype.toUpperCase",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Exact(0),
+            capability: None,
+            ifc: IfcPropagation::PropagateReceiverLabel,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_to_upper_case_impl" },
+            conformance: "test262:built-ins/String/prototype/toUpperCase",
+            gap_status: GapStatus::Resolved,
+        },
+        IntrinsicRow {
+            name: "String.prototype.toLowerCase",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Exact(0),
+            capability: None,
+            ifc: IfcPropagation::PropagateReceiverLabel,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_to_lower_case_impl" },
+            conformance: "test262:built-ins/String/prototype/toLowerCase",
+            gap_status: GapStatus::Resolved,
+        },
+        IntrinsicRow {
+            name: "String.prototype.trim",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Exact(0),
+            capability: None,
+            ifc: IfcPropagation::PropagateReceiverLabel,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_trim_impl" },
+            conformance: "test262:built-ins/String/prototype/trim",
+            gap_status: GapStatus::Resolved,
+        },
+        IntrinsicRow {
+            name: "String.prototype.trimStart",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Exact(0),
+            capability: None,
+            ifc: IfcPropagation::PropagateReceiverLabel,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_trim_start_impl" },
+            conformance: "test262:built-ins/String/prototype/trimStart",
+            gap_status: GapStatus::Resolved,
+        },
+        IntrinsicRow {
+            name: "String.prototype.trimEnd",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Exact(0),
+            capability: None,
+            ifc: IfcPropagation::PropagateReceiverLabel,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_trim_end_impl" },
+            conformance: "test262:built-ins/String/prototype/trimEnd",
+            gap_status: GapStatus::Resolved,
+        },
+        IntrinsicRow {
+            name: "String.prototype.replaceAll",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Range { min: 0, max: 2 },
+            capability: None,
+            ifc: IfcPropagation::JoinReceiverAndArgs,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_replace_all_impl" },
+            conformance: "test262:built-ins/String/prototype/replaceAll",
+            gap_status: GapStatus::Partial(
+                "string search patterns only; regex search values pending (bd-9hw6q follow-up)",
+            ),
+        },
+        IntrinsicRow {
+            name: "String.prototype.codePointAt",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Range { min: 0, max: 1 },
+            capability: None,
+            ifc: IfcPropagation::JoinReceiverAndArgs,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_code_point_at_impl" },
+            conformance: "test262:built-ins/String/prototype/codePointAt",
+            gap_status: GapStatus::Resolved,
+        },
+        IntrinsicRow {
+            name: "String.prototype.localeCompare",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Range { min: 0, max: 1 },
+            capability: None,
+            ifc: IfcPropagation::JoinReceiverAndArgs,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_locale_compare_impl" },
+            conformance: "test262:built-ins/String/prototype/localeCompare",
+            gap_status: GapStatus::Resolved,
+        },
+        IntrinsicRow {
+            name: "String.prototype.normalize",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Range { min: 0, max: 1 },
+            capability: None,
+            ifc: IfcPropagation::JoinReceiverAndArgs,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_normalize_impl" },
+            conformance: "test262:built-ins/String/prototype/normalize",
+            gap_status: GapStatus::Resolved,
+        },
+        IntrinsicRow {
+            name: "String.prototype.split",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Range { min: 0, max: 2 },
+            capability: None,
+            ifc: IfcPropagation::JoinReceiverAndArgs,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_split_impl" },
+            conformance: "test262:built-ins/String/prototype/split",
+            gap_status: GapStatus::Partial("limit argument not honored (bd-9a8cz follow-up)"),
+        },
+        IntrinsicRow {
+            name: "String.prototype.includes",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Range { min: 0, max: 2 },
+            capability: None,
+            ifc: IfcPropagation::JoinReceiverAndArgs,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_includes_impl" },
+            conformance: "test262:built-ins/String/prototype/includes",
+            gap_status: GapStatus::Resolved,
+        },
+        IntrinsicRow {
+            name: "String.prototype.startsWith",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Range { min: 0, max: 2 },
+            capability: None,
+            ifc: IfcPropagation::JoinReceiverAndArgs,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_starts_with_impl" },
+            conformance: "test262:built-ins/String/prototype/startsWith",
+            gap_status: GapStatus::Resolved,
+        },
+        IntrinsicRow {
+            name: "String.prototype.endsWith",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Range { min: 0, max: 2 },
+            capability: None,
+            ifc: IfcPropagation::JoinReceiverAndArgs,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_ends_with_impl" },
+            conformance: "test262:built-ins/String/prototype/endsWith",
+            gap_status: GapStatus::Resolved,
+        },
+        IntrinsicRow {
+            name: "String.prototype.indexOf",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Range { min: 0, max: 2 },
+            capability: None,
+            ifc: IfcPropagation::JoinReceiverAndArgs,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_index_of_impl" },
+            conformance: "test262:built-ins/String/prototype/indexOf",
+            gap_status: GapStatus::Resolved,
+        },
+        IntrinsicRow {
+            name: "String.prototype.lastIndexOf",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Range { min: 0, max: 2 },
+            capability: None,
+            ifc: IfcPropagation::JoinReceiverAndArgs,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_last_index_of_impl" },
+            conformance: "test262:built-ins/String/prototype/lastIndexOf",
+            gap_status: GapStatus::Resolved,
+        },
+        IntrinsicRow {
+            name: "String.prototype.slice",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Range { min: 0, max: 2 },
+            capability: None,
+            ifc: IfcPropagation::JoinReceiverAndArgs,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_slice_impl" },
+            conformance: "test262:built-ins/String/prototype/slice",
+            gap_status: GapStatus::Resolved,
+        },
+        IntrinsicRow {
+            name: "String.prototype.substring",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Range { min: 0, max: 2 },
+            capability: None,
+            ifc: IfcPropagation::JoinReceiverAndArgs,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_substring_impl" },
+            conformance: "test262:built-ins/String/prototype/substring",
+            gap_status: GapStatus::Resolved,
+        },
+        IntrinsicRow {
+            name: "String.prototype.replace",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Range { min: 0, max: 2 },
+            capability: None,
+            ifc: IfcPropagation::JoinReceiverAndArgs,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_replace_impl" },
+            conformance: "test262:built-ins/String/prototype/replace",
+            gap_status: GapStatus::Resolved,
+        },
+        IntrinsicRow {
+            name: "String.prototype.match",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Range { min: 0, max: 1 },
+            capability: None,
+            ifc: IfcPropagation::JoinReceiverAndArgs,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_match_impl" },
+            conformance: "test262:built-ins/String/prototype/match",
+            gap_status: GapStatus::Resolved,
+        },
+        IntrinsicRow {
+            name: "String.prototype.search",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Range { min: 0, max: 1 },
+            capability: None,
+            ifc: IfcPropagation::JoinReceiverAndArgs,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_search_impl" },
+            conformance: "test262:built-ins/String/prototype/search",
+            gap_status: GapStatus::Resolved,
+        },
+        IntrinsicRow {
+            name: "String.prototype.repeat",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Range { min: 0, max: 1 },
+            capability: None,
+            ifc: IfcPropagation::JoinReceiverAndArgs,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_repeat_impl" },
+            conformance: "test262:built-ins/String/prototype/repeat",
+            gap_status: GapStatus::Resolved,
+        },
+        IntrinsicRow {
+            name: "String.prototype.padStart",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Range { min: 0, max: 2 },
+            capability: None,
+            ifc: IfcPropagation::JoinReceiverAndArgs,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_pad_start_impl" },
+            conformance: "test262:built-ins/String/prototype/padStart",
+            gap_status: GapStatus::Resolved,
+        },
+        IntrinsicRow {
+            name: "String.prototype.padEnd",
+            receiver: ReceiverKind::String,
+            this_coercion: ThisCoercion::ToString,
+            arity: Arity::Range { min: 0, max: 2 },
+            capability: None,
+            ifc: IfcPropagation::JoinReceiverAndArgs,
+            impl_binding: ImplBinding::Generated { impl_fn: "string_pad_end_impl" },
+            conformance: "test262:built-ins/String/prototype/padEnd",
+            gap_status: GapStatus::Resolved,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,6 +644,55 @@ mod tests {
     #[test]
     fn seed_table_is_valid_and_unique() {
         validate_table(SEED_ROWS).expect("seed intrinsic table must validate");
+    }
+
+    #[test]
+    fn string_prototype_family_table_is_valid_and_unique() {
+        validate_table(string_prototype::ROWS)
+            .expect("String.prototype family table must validate");
+        assert_eq!(
+            string_prototype::ROWS.len(),
+            26,
+            "String.prototype family carries the 26 methods served by the legacy seam"
+        );
+    }
+
+    #[test]
+    fn string_prototype_family_rows_are_uniform() {
+        for row in string_prototype::ROWS {
+            assert!(
+                row.name.starts_with("String.prototype."),
+                "{}: family rows must be String.prototype methods",
+                row.name
+            );
+            assert_eq!(
+                row.receiver,
+                ReceiverKind::String,
+                "{}: family rows dispatch via the String seam",
+                row.name
+            );
+            assert_eq!(
+                row.this_coercion,
+                ThisCoercion::ToString,
+                "{}: String.prototype methods coerce via ToString(this)",
+                row.name
+            );
+            assert!(
+                row.capability.is_none(),
+                "{}: String.prototype methods are pure (no typed authority)",
+                row.name
+            );
+            assert!(
+                !row.conformance.is_empty(),
+                "{}: family rows must link a conformance path",
+                row.name
+            );
+            assert!(
+                !row.is_escape_hatch(),
+                "{}: the String family is fully generated (no manual escape hatches)",
+                row.name
+            );
+        }
     }
 
     #[test]

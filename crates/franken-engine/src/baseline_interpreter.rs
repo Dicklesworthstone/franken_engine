@@ -41,7 +41,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hmac::{Hmac, Mac};
@@ -63,6 +63,8 @@ use crate::hostcall_telemetry::{
     RecordInput, RecorderConfig, ResourceDelta, TelemetryRecorder,
 };
 use crate::ifc_artifacts::Label;
+use crate::intrinsics_codegen::{GeneratedGlue, generate_glue};
+use crate::intrinsics_table::{ImplBinding, ThisCoercion};
 use crate::ir_contract::{
     AccessorKind, CapabilityTag, HostcallDecisionRecord, Ir0Module, Ir3Instruction, Ir3Module,
     IteratorCloseReason, RegRange, WitnessEvent, WitnessEventKind,
@@ -5653,388 +5655,140 @@ impl InterpreterCore {
                         })?;
                 Ok(Value::Iterator(iterator_handle))
             }
+            // The String.prototype arms below delegate to the shared
+            // `string_*_impl` fns (E4.T3, `bd-fqlfw.4.3`): semantics live once,
+            // served by both this legacy seam and the intrinsic-table path
+            // (`dispatch_string_intrinsic`). The receiver coercion here mirrors
+            // the table rows' declared `ThisCoercion::ToString`.
             BuiltinFunctionKind::StringCharAt => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let index = if args.count > 0 {
-                    Some(self.read_reg(args.start)?)
-                } else {
-                    None
-                };
-                Self::string_prototype_char_at_value(receiver, index)
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                self.string_char_at_impl(&value, args)
             }
             BuiltinFunctionKind::StringCharCodeAt => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let index = if args.count > 0 {
-                    Some(self.read_reg(args.start)?)
-                } else {
-                    None
-                };
-                Self::string_prototype_char_code_at_value(receiver, index)
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                self.string_char_code_at_impl(&value, args)
             }
             BuiltinFunctionKind::StringAt => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let index = if args.count > 0 {
-                    Some(self.read_reg(args.start)?)
-                } else {
-                    None
-                };
-                Self::string_prototype_at_value(receiver, index)
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                self.string_at_impl(&value, args)
             }
             BuiltinFunctionKind::StringToUpperCase => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
-                Ok(Value::str(value.to_uppercase()))
+                self.string_to_upper_case_impl(&value, args)
             }
             BuiltinFunctionKind::StringToLowerCase => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
-                Ok(Value::str(value.to_lowercase()))
+                self.string_to_lower_case_impl(&value, args)
             }
             BuiltinFunctionKind::StringTrim => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
-                Ok(Value::str(value.trim().to_string()))
+                self.string_trim_impl(&value, args)
             }
             BuiltinFunctionKind::StringTrimStart => {
-                // ES2019 21.1.3.27: trim leading whitespace only.
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
-                Ok(Value::str(value.trim_start().to_string()))
+                self.string_trim_start_impl(&value, args)
             }
             BuiltinFunctionKind::StringTrimEnd => {
-                // ES2019 21.1.3.26: trim trailing whitespace only.
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
-                Ok(Value::str(value.trim_end().to_string()))
+                self.string_trim_end_impl(&value, args)
             }
             BuiltinFunctionKind::StringReplaceAll => {
-                // ES2021 21.1.3.18: replace EVERY occurrence of a string search
-                // value. (Rust's `str::replace` replaces all occurrences.)
-                // Regex search values are not handled here (string patterns only,
-                // the common case); see bd-9hw6q follow-up.
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
-                let search = match self.builtin_arg(args, 0)? {
-                    Some(arg) => self.value_to_string(&arg),
-                    None => "undefined".to_string(),
-                };
-                let replacement = match self.builtin_arg(args, 1)? {
-                    Some(arg) => self.value_to_string(&arg),
-                    None => "undefined".to_string(),
-                };
-                Ok(Value::str(
-                    value.replace(search.as_str(), replacement.as_str()),
-                ))
+                self.string_replace_all_impl(&value, args)
             }
             BuiltinFunctionKind::StringCodePointAt => {
-                // ES2015 21.1.3.3: the Unicode code point at a (scalar) index;
-                // out-of-range / negative => `undefined`. Indices are Unicode
-                // scalar offsets, consistent with this engine's other string
-                // methods (charCodeAt/at/includes).
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
-                let index = match self.builtin_arg(args, 0)? {
-                    Some(arg) => Self::coerce_to_number(&arg).unwrap_or(0),
-                    None => 0,
-                };
-                if index < 0 {
-                    return Ok(Value::Undefined);
-                }
-                Ok(match value.chars().nth(index as usize) {
-                    Some(ch) => Value::Int(ch as i64),
-                    None => Value::Undefined,
-                })
+                self.string_code_point_at_impl(&value, args)
             }
             BuiltinFunctionKind::StringLocaleCompare => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let this_string = Self::require_object_coercible_to_string(&receiver)?;
-                let that_string = match self.builtin_arg(args, 0)? {
-                    Some(value) => self.value_to_string(&value),
-                    None => "undefined".to_string(),
-                };
-                let comparison = match this_string.cmp(&that_string) {
-                    std::cmp::Ordering::Less => -1,
-                    std::cmp::Ordering::Equal => 0,
-                    std::cmp::Ordering::Greater => 1,
-                };
-                Ok(Value::Int(comparison))
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                self.string_locale_compare_impl(&value, args)
             }
             BuiltinFunctionKind::StringNormalize => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
-                let form = match self.builtin_arg(args, 0)? {
-                    Some(Value::Undefined) | None => "NFC".to_string(),
-                    Some(value) => self.value_to_string(&value),
-                };
-                let normalized = normalize_unicode_string(&value, &form)
-                    .map_err(|message| InterpreterError::RangeError { message })?;
-                Ok(Value::str(normalized))
+                self.string_normalize_impl(&value, args)
             }
             BuiltinFunctionKind::StringIncludes => {
-                // ES2020 21.1.3.7: substring containment from an optional start
-                // position (bd-9a8cz.1). Positions are Unicode scalar offsets,
-                // consistent with the slice/substring arms below.
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
-                let search = match self.builtin_arg(args, 0)? {
-                    Some(arg) => self.value_to_string(&arg),
-                    None => "undefined".to_string(),
-                };
-                let char_len = value.chars().count();
-                let from = match self.builtin_arg(args, 1)? {
-                    Some(arg) => Self::coerce_to_number(&arg)
-                        .unwrap_or(0)
-                        .clamp(0, char_len as i64) as usize,
-                    None => 0,
-                };
-                let haystack: String = value.chars().skip(from).collect();
-                Ok(Value::Bool(haystack.contains(&search)))
+                self.string_includes_impl(&value, args)
             }
             BuiltinFunctionKind::StringStartsWith => {
-                // ES2020 21.1.3.20: prefix test at an optional position (bd-9a8cz.1).
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
-                let search = match self.builtin_arg(args, 0)? {
-                    Some(arg) => self.value_to_string(&arg),
-                    None => "undefined".to_string(),
-                };
-                let char_len = value.chars().count();
-                let from = match self.builtin_arg(args, 1)? {
-                    Some(arg) => Self::coerce_to_number(&arg)
-                        .unwrap_or(0)
-                        .clamp(0, char_len as i64) as usize,
-                    None => 0,
-                };
-                let tail: String = value.chars().skip(from).collect();
-                Ok(Value::Bool(tail.starts_with(&search)))
+                self.string_starts_with_impl(&value, args)
             }
             BuiltinFunctionKind::StringEndsWith => {
-                // ES2020 21.1.3.6: suffix test against the prefix of length
-                // `endPosition` (default = full length) (bd-9a8cz.1).
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
-                let search = match self.builtin_arg(args, 0)? {
-                    Some(arg) => self.value_to_string(&arg),
-                    None => "undefined".to_string(),
-                };
-                let char_len = value.chars().count();
-                let end = match self.builtin_arg(args, 1)? {
-                    Some(Value::Undefined) | None => char_len,
-                    Some(arg) => Self::coerce_to_number(&arg)
-                        .unwrap_or(char_len as i64)
-                        .clamp(0, char_len as i64) as usize,
-                };
-                let head: String = value.chars().take(end).collect();
-                Ok(Value::Bool(head.ends_with(&search)))
+                self.string_ends_with_impl(&value, args)
             }
             BuiltinFunctionKind::StringSplit => {
-                // ES2020 21.1.3.19: split into an array of substrings. An
-                // `undefined` separator yields the whole string as one element;
-                // an empty separator splits per character. (limit arg not yet
-                // honored — see bd-9a8cz follow-up.)
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
-                let pieces: Vec<String> = match self.builtin_arg(args, 0)? {
-                    None | Some(Value::Undefined) => vec![value.clone()],
-                    Some(separator_value) => {
-                        let separator = self.value_to_string(&separator_value);
-                        if separator.is_empty() {
-                            value.chars().map(|ch| ch.to_string()).collect()
-                        } else {
-                            value
-                                .split(separator.as_str())
-                                .map(|piece| piece.to_string())
-                                .collect()
-                        }
-                    }
-                };
-                let result = self.alloc_array_with_prototype(None)?;
-                for (index, piece) in pieces.iter().enumerate() {
-                    self.set_object_property(result, index.to_string(), Value::str(piece.clone()))?;
-                }
-                self.set_object_property(
-                    result,
-                    "length".to_string(),
-                    Value::Int(i64::try_from(pieces.len()).unwrap_or(i64::MAX)),
-                )?;
-                Ok(Value::Object(result))
+                self.string_split_impl(&value, args)
             }
             BuiltinFunctionKind::StringIndexOf => {
-                // ES2020 21.1.3.8: first index of `search` at/after an optional
-                // start position, else -1. Indices are Unicode scalar offsets
-                // (consistent with the slice/substring arms here). (bd-9a8cz.1)
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
-                let search = match self.builtin_arg(args, 0)? {
-                    Some(arg) => self.value_to_string(&arg),
-                    None => "undefined".to_string(),
-                };
-                let chars: Vec<char> = value.chars().collect();
-                let needle: Vec<char> = search.chars().collect();
-                let from = match self.builtin_arg(args, 1)? {
-                    Some(arg) => Self::coerce_to_number(&arg)
-                        .unwrap_or(0)
-                        .clamp(0, chars.len() as i64) as usize,
-                    None => 0,
-                };
-                let result = if needle.is_empty() {
-                    from.min(chars.len()) as i64
-                } else if needle.len() > chars.len() {
-                    -1
-                } else {
-                    let last = chars.len() - needle.len();
-                    let mut found = -1i64;
-                    let mut i = from;
-                    while i <= last {
-                        if chars[i..i + needle.len()] == needle[..] {
-                            found = i as i64;
-                            break;
-                        }
-                        i += 1;
-                    }
-                    found
-                };
-                Ok(Value::Int(result))
+                self.string_index_of_impl(&value, args)
             }
             BuiltinFunctionKind::StringLastIndexOf => {
-                // ES2020 21.1.3.9: highest start index of `search` at/before an
-                // optional position (default = end of string), else -1. (bd-9a8cz.1)
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
-                let search = match self.builtin_arg(args, 0)? {
-                    Some(arg) => self.value_to_string(&arg),
-                    None => "undefined".to_string(),
-                };
-                let chars: Vec<char> = value.chars().collect();
-                let needle: Vec<char> = search.chars().collect();
-                let from = match self.builtin_arg(args, 1)? {
-                    Some(arg) => Self::coerce_to_number(&arg)
-                        .unwrap_or(chars.len() as i64)
-                        .clamp(0, chars.len() as i64) as usize,
-                    None => chars.len(),
-                };
-                let result = if needle.is_empty() {
-                    from.min(chars.len()) as i64
-                } else if needle.len() > chars.len() {
-                    -1
-                } else {
-                    let last = chars.len() - needle.len();
-                    let start = from.min(last);
-                    let mut found = -1i64;
-                    let mut i = start as i64;
-                    while i >= 0 {
-                        let idx = i as usize;
-                        if chars[idx..idx + needle.len()] == needle[..] {
-                            found = i;
-                            break;
-                        }
-                        i -= 1;
-                    }
-                    found
-                };
-                Ok(Value::Int(result))
+                self.string_last_index_of_impl(&value, args)
             }
             BuiltinFunctionKind::StringSlice => {
-                // ES2020 21.1.3.18: negative indices count from the end; an
-                // empty/inverted range yields "". (bd-9a8cz.1)
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
-                let chars: Vec<char> = value.chars().collect();
-                let len = chars.len() as i64;
-                let normalize =
-                    |n: i64| -> i64 { if n < 0 { (len + n).max(0) } else { n.min(len) } };
-                let start = match self.builtin_arg(args, 0)? {
-                    Some(Value::Undefined) | None => 0,
-                    Some(arg) => normalize(Self::coerce_to_number(&arg).unwrap_or(0)),
-                };
-                let end = match self.builtin_arg(args, 1)? {
-                    Some(Value::Undefined) | None => len,
-                    Some(arg) => normalize(Self::coerce_to_number(&arg).unwrap_or(0)),
-                };
-                let result: String = if start < end {
-                    chars[start as usize..end as usize].iter().collect()
-                } else {
-                    String::new()
-                };
-                Ok(Value::str(result))
+                self.string_slice_impl(&value, args)
             }
             BuiltinFunctionKind::StringSubstring => {
-                // ES2020 21.1.3.21: clamp both indices to [0, len], then swap so
-                // start <= end. (bd-9a8cz.1)
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
-                let chars: Vec<char> = value.chars().collect();
-                let len = chars.len() as i64;
-                let clamp_idx = |n: i64| -> i64 { n.clamp(0, len) };
-                let start = match self.builtin_arg(args, 0)? {
-                    Some(Value::Undefined) | None => 0,
-                    Some(arg) => clamp_idx(Self::coerce_to_number(&arg).unwrap_or(0)),
-                };
-                let end = match self.builtin_arg(args, 1)? {
-                    Some(Value::Undefined) | None => len,
-                    Some(arg) => clamp_idx(Self::coerce_to_number(&arg).unwrap_or(0)),
-                };
-                let (lo, hi) = if start <= end {
-                    (start, end)
-                } else {
-                    (end, start)
-                };
-                let result: String = chars[lo as usize..hi as usize].iter().collect();
-                Ok(Value::str(result))
+                self.string_substring_impl(&value, args)
             }
             BuiltinFunctionKind::StringReplace => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
-                let search = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                let replacement = match self.builtin_arg(args, 1)? {
-                    Some(arg) => self.value_to_string(&arg),
-                    None => "undefined".to_string(),
-                };
-                self.string_replace_value(&value, &search, &replacement)
+                self.string_replace_impl(&value, args)
             }
             BuiltinFunctionKind::StringMatch => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
-                let pattern = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                self.string_match_value(&value, &pattern)
+                self.string_match_impl(&value, args)
             }
             BuiltinFunctionKind::StringSearch => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
-                let pattern = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                self.string_search_value(&value, &pattern)
+                self.string_search_impl(&value, args)
             }
             BuiltinFunctionKind::StringRepeat => {
-                // ES2020 21.1.3.16: concatenate `count` copies. A negative count
-                // is clamped to 0 (matching the existing receiver-less handler);
-                // an allocation guard rejects pathological sizes. (bd-9a8cz.1)
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
-                let count = match self.builtin_arg(args, 0)? {
-                    Some(arg) => Self::coerce_to_number(&arg).unwrap_or(0).max(0) as usize,
-                    None => 0,
-                };
-                if value.len().saturating_mul(count) > 10_000_000 {
-                    return Err(InterpreterError::TypeError {
-                        expected: "String.prototype.repeat result within size limit".to_string(),
-                        got: format!("{} bytes", value.len().saturating_mul(count)),
-                    });
-                }
-                Ok(Value::str(value.repeat(count)))
+                self.string_repeat_impl(&value, args)
             }
             BuiltinFunctionKind::StringPadStart => {
-                // ES2020 21.1.3.14: left-pad to `targetLength` (Unicode scalar
-                // count) with `padString` (default " "). (bd-9a8cz.1)
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
-                Ok(Value::str(self.string_pad_value(&value, args, true)?))
+                self.string_pad_start_impl(&value, args)
             }
             BuiltinFunctionKind::StringPadEnd => {
-                // ES2020 21.1.3.13: right-pad to `targetLength` (Unicode scalar
-                // count) with `padString` (default " "). (bd-9a8cz.1)
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
-                Ok(Value::str(self.string_pad_value(&value, args, false)?))
+                self.string_pad_end_impl(&value, args)
             }
             BuiltinFunctionKind::NumberToFixed => {
                 // ES2020 20.1.3.3: fixed-point notation with `digits` (0..=100)
@@ -12021,6 +11775,573 @@ impl InterpreterCore {
             }
             _ => Value::Undefined,
         }
+    }
+
+    // =====================================================================
+    // E4.T3 (`bd-fqlfw.4.3`): String.prototype family — intrinsic-table
+    // generated dispatch, coexisting with the legacy `BuiltinFunctionKind`
+    // match arms.
+    //
+    // The `string_*_impl` fns below hold the family's semantics in exactly one
+    // place: the legacy exec arms in `dispatch_builtin_function` delegate to
+    // them after the same receiver coercion, and the table-driven path
+    // (`dispatch_string_intrinsic`) reaches the same fns through the generated
+    // glue (`intrinsics_table::string_prototype::ROWS` + `generate_glue`).
+    // Parity between the two routes is asserted by
+    // `string_intrinsic_table_parity_tests`. The flip that retires the legacy
+    // arms is migration-plan step 5 and is NOT part of this change.
+    // =====================================================================
+
+    /// Generated glue for the String.prototype family table, built once.
+    ///
+    /// Returns `None` if the table fails codegen or cross-artifact
+    /// verification. During coexist the legacy arms still serve production
+    /// dispatch, so a broken table degrades to legacy behavior; the parity
+    /// tests assert the glue builds, making breakage loud at CI time. The
+    /// flip (migration-plan step 5) upgrades this to fail-closed.
+    #[allow(dead_code)] // production caller lands at the family flip (E4 step 5)
+    fn string_family_glue() -> Option<&'static GeneratedGlue<'static>> {
+        static GLUE: OnceLock<Option<GeneratedGlue<'static>>> = OnceLock::new();
+        GLUE.get_or_init(|| {
+            let glue = generate_glue(crate::intrinsics_table::string_prototype::ROWS).ok()?;
+            glue.verify().ok()?;
+            Some(glue)
+        })
+        .as_ref()
+    }
+
+    /// Resolve a row's declared `impl_fn` identifier to its hand-written
+    /// semantic fn. ONE mechanical line per method, colocated here — versus
+    /// the five scattered edit sites of the legacy seam. A row naming an
+    /// unknown identifier resolves to `None`; the binding-completeness parity
+    /// test fails on any such drift.
+    #[allow(dead_code)] // production caller lands at the family flip (E4 step 5)
+    #[allow(clippy::type_complexity)]
+    fn string_intrinsic_impl_binding(
+        impl_fn: &str,
+    ) -> Option<fn(&mut Self, &str, RegRange) -> Result<Value, InterpreterError>> {
+        Some(match impl_fn {
+            "string_char_at_impl" => Self::string_char_at_impl,
+            "string_char_code_at_impl" => Self::string_char_code_at_impl,
+            "string_at_impl" => Self::string_at_impl,
+            "string_to_upper_case_impl" => Self::string_to_upper_case_impl,
+            "string_to_lower_case_impl" => Self::string_to_lower_case_impl,
+            "string_trim_impl" => Self::string_trim_impl,
+            "string_trim_start_impl" => Self::string_trim_start_impl,
+            "string_trim_end_impl" => Self::string_trim_end_impl,
+            "string_replace_all_impl" => Self::string_replace_all_impl,
+            "string_code_point_at_impl" => Self::string_code_point_at_impl,
+            "string_locale_compare_impl" => Self::string_locale_compare_impl,
+            "string_normalize_impl" => Self::string_normalize_impl,
+            "string_split_impl" => Self::string_split_impl,
+            "string_includes_impl" => Self::string_includes_impl,
+            "string_starts_with_impl" => Self::string_starts_with_impl,
+            "string_ends_with_impl" => Self::string_ends_with_impl,
+            "string_index_of_impl" => Self::string_index_of_impl,
+            "string_last_index_of_impl" => Self::string_last_index_of_impl,
+            "string_slice_impl" => Self::string_slice_impl,
+            "string_substring_impl" => Self::string_substring_impl,
+            "string_replace_impl" => Self::string_replace_impl,
+            "string_match_impl" => Self::string_match_impl,
+            "string_search_impl" => Self::string_search_impl,
+            "string_repeat_impl" => Self::string_repeat_impl,
+            "string_pad_start_impl" => Self::string_pad_start_impl,
+            "string_pad_end_impl" => Self::string_pad_end_impl,
+            _ => return None,
+        })
+    }
+
+    /// Table-driven dispatch for `String.prototype.<method_key>` (E4.T3).
+    ///
+    /// Returns `None` when the method is not a generated-dispatch row of the
+    /// String family (unknown name, manual escape-hatch row, or glue
+    /// failure), in which case the caller falls back to the legacy seam.
+    /// Receiver coercion is applied per the row's declared [`ThisCoercion`],
+    /// so the coercion policy is table data rather than per-site code. The
+    /// row's declared arity is documentation, not an enforcement gate: JS
+    /// tolerates missing/extra arguments and the legacy arms behave that way.
+    #[allow(dead_code)] // production caller lands at the family flip (E4 step 5)
+    fn dispatch_string_intrinsic(
+        &mut self,
+        method_key: &str,
+        receiver: Value,
+        args: RegRange,
+    ) -> Option<Result<Value, InterpreterError>> {
+        let glue = Self::string_family_glue()?;
+        let full_name = format!("String.prototype.{method_key}");
+        let row = glue.registry.get(full_name.as_str())?;
+        let impl_fn = match &row.impl_binding {
+            ImplBinding::Generated { impl_fn } => Self::string_intrinsic_impl_binding(impl_fn)?,
+            // Manual escape-hatch rows keep their documented legacy site.
+            ImplBinding::Manual { .. } => return None,
+        };
+        let coerced = match row.this_coercion {
+            ThisCoercion::ToString => match Self::require_object_coercible_to_string(&receiver) {
+                Ok(value) => value,
+                Err(error) => return Some(Err(error)),
+            },
+            // String-family rows declare ToString; any other coercion is not
+            // generated by this seam.
+            _ => return None,
+        };
+        Some(impl_fn(self, &coerced, args))
+    }
+
+    // ---- String.prototype semantic impl fns (single source of truth) ----
+    // Signature contract (required by the fn-pointer binding above):
+    //   fn(&mut Self, this_str: &str, args: RegRange) -> Result<Value, InterpreterError>
+    // `this_str` is the already-coerced receiver (ToString applied by the
+    // dispatching seam, legacy or generated).
+
+    fn string_char_at_impl(
+        &mut self,
+        this_str: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let index = self.builtin_arg(args, 0)?;
+        Self::string_prototype_char_at_value(Value::str(this_str), index)
+    }
+
+    fn string_char_code_at_impl(
+        &mut self,
+        this_str: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let index = self.builtin_arg(args, 0)?;
+        Self::string_prototype_char_code_at_value(Value::str(this_str), index)
+    }
+
+    fn string_at_impl(
+        &mut self,
+        this_str: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let index = self.builtin_arg(args, 0)?;
+        Self::string_prototype_at_value(Value::str(this_str), index)
+    }
+
+    fn string_to_upper_case_impl(
+        &mut self,
+        this_str: &str,
+        _args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        Ok(Value::str(this_str.to_uppercase()))
+    }
+
+    fn string_to_lower_case_impl(
+        &mut self,
+        this_str: &str,
+        _args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        Ok(Value::str(this_str.to_lowercase()))
+    }
+
+    fn string_trim_impl(
+        &mut self,
+        this_str: &str,
+        _args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        Ok(Value::str(this_str.trim()))
+    }
+
+    fn string_trim_start_impl(
+        &mut self,
+        this_str: &str,
+        _args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        // ES2019 21.1.3.27: trim leading whitespace only.
+        Ok(Value::str(this_str.trim_start()))
+    }
+
+    fn string_trim_end_impl(
+        &mut self,
+        this_str: &str,
+        _args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        // ES2019 21.1.3.26: trim trailing whitespace only.
+        Ok(Value::str(this_str.trim_end()))
+    }
+
+    fn string_replace_all_impl(
+        &mut self,
+        this_str: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        // ES2021 21.1.3.18: replace EVERY occurrence of a string search
+        // value. (Rust's `str::replace` replaces all occurrences.)
+        // Regex search values are not handled here (string patterns only,
+        // the common case); see bd-9hw6q follow-up.
+        let search = match self.builtin_arg(args, 0)? {
+            Some(arg) => self.value_to_string(&arg),
+            None => "undefined".to_string(),
+        };
+        let replacement = match self.builtin_arg(args, 1)? {
+            Some(arg) => self.value_to_string(&arg),
+            None => "undefined".to_string(),
+        };
+        Ok(Value::str(
+            this_str.replace(search.as_str(), replacement.as_str()),
+        ))
+    }
+
+    fn string_code_point_at_impl(
+        &mut self,
+        this_str: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        // ES2015 21.1.3.3: the Unicode code point at a (scalar) index;
+        // out-of-range / negative => `undefined`. Indices are Unicode
+        // scalar offsets, consistent with this engine's other string
+        // methods (charCodeAt/at/includes).
+        let index = match self.builtin_arg(args, 0)? {
+            Some(arg) => Self::coerce_to_number(&arg).unwrap_or(0),
+            None => 0,
+        };
+        if index < 0 {
+            return Ok(Value::Undefined);
+        }
+        Ok(match this_str.chars().nth(index as usize) {
+            Some(ch) => Value::Int(ch as i64),
+            None => Value::Undefined,
+        })
+    }
+
+    fn string_locale_compare_impl(
+        &mut self,
+        this_str: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let that_string = match self.builtin_arg(args, 0)? {
+            Some(value) => self.value_to_string(&value),
+            None => "undefined".to_string(),
+        };
+        let comparison = match this_str.cmp(that_string.as_str()) {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        };
+        Ok(Value::Int(comparison))
+    }
+
+    fn string_normalize_impl(
+        &mut self,
+        this_str: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let form = match self.builtin_arg(args, 0)? {
+            Some(Value::Undefined) | None => "NFC".to_string(),
+            Some(value) => self.value_to_string(&value),
+        };
+        let normalized = normalize_unicode_string(this_str, &form)
+            .map_err(|message| InterpreterError::RangeError { message })?;
+        Ok(Value::str(normalized))
+    }
+
+    fn string_split_impl(
+        &mut self,
+        this_str: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        // ES2020 21.1.3.19: split into an array of substrings. An
+        // `undefined` separator yields the whole string as one element;
+        // an empty separator splits per character. (limit arg not yet
+        // honored — see bd-9a8cz follow-up.)
+        let pieces: Vec<String> = match self.builtin_arg(args, 0)? {
+            None | Some(Value::Undefined) => vec![this_str.to_string()],
+            Some(separator_value) => {
+                let separator = self.value_to_string(&separator_value);
+                if separator.is_empty() {
+                    this_str.chars().map(|ch| ch.to_string()).collect()
+                } else {
+                    this_str
+                        .split(separator.as_str())
+                        .map(|piece| piece.to_string())
+                        .collect()
+                }
+            }
+        };
+        let result = self.alloc_array_with_prototype(None)?;
+        for (index, piece) in pieces.iter().enumerate() {
+            self.set_object_property(result, index.to_string(), Value::str(piece.clone()))?;
+        }
+        self.set_object_property(
+            result,
+            "length".to_string(),
+            Value::Int(i64::try_from(pieces.len()).unwrap_or(i64::MAX)),
+        )?;
+        Ok(Value::Object(result))
+    }
+
+    fn string_includes_impl(
+        &mut self,
+        this_str: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        // ES2020 21.1.3.7: substring containment from an optional start
+        // position (bd-9a8cz.1). Positions are Unicode scalar offsets,
+        // consistent with the slice/substring impls below.
+        let search = match self.builtin_arg(args, 0)? {
+            Some(arg) => self.value_to_string(&arg),
+            None => "undefined".to_string(),
+        };
+        let char_len = this_str.chars().count();
+        let from = match self.builtin_arg(args, 1)? {
+            Some(arg) => Self::coerce_to_number(&arg)
+                .unwrap_or(0)
+                .clamp(0, char_len as i64) as usize,
+            None => 0,
+        };
+        let haystack: String = this_str.chars().skip(from).collect();
+        Ok(Value::Bool(haystack.contains(&search)))
+    }
+
+    fn string_starts_with_impl(
+        &mut self,
+        this_str: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        // ES2020 21.1.3.20: prefix test at an optional position (bd-9a8cz.1).
+        let search = match self.builtin_arg(args, 0)? {
+            Some(arg) => self.value_to_string(&arg),
+            None => "undefined".to_string(),
+        };
+        let char_len = this_str.chars().count();
+        let from = match self.builtin_arg(args, 1)? {
+            Some(arg) => Self::coerce_to_number(&arg)
+                .unwrap_or(0)
+                .clamp(0, char_len as i64) as usize,
+            None => 0,
+        };
+        let tail: String = this_str.chars().skip(from).collect();
+        Ok(Value::Bool(tail.starts_with(&search)))
+    }
+
+    fn string_ends_with_impl(
+        &mut self,
+        this_str: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        // ES2020 21.1.3.6: suffix test against the prefix of length
+        // `endPosition` (default = full length) (bd-9a8cz.1).
+        let search = match self.builtin_arg(args, 0)? {
+            Some(arg) => self.value_to_string(&arg),
+            None => "undefined".to_string(),
+        };
+        let char_len = this_str.chars().count();
+        let end = match self.builtin_arg(args, 1)? {
+            Some(Value::Undefined) | None => char_len,
+            Some(arg) => Self::coerce_to_number(&arg)
+                .unwrap_or(char_len as i64)
+                .clamp(0, char_len as i64) as usize,
+        };
+        let head: String = this_str.chars().take(end).collect();
+        Ok(Value::Bool(head.ends_with(&search)))
+    }
+
+    fn string_index_of_impl(
+        &mut self,
+        this_str: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        // ES2020 21.1.3.8: first index of `search` at/after an optional
+        // start position, else -1. Indices are Unicode scalar offsets
+        // (consistent with the slice/substring impls here). (bd-9a8cz.1)
+        let search = match self.builtin_arg(args, 0)? {
+            Some(arg) => self.value_to_string(&arg),
+            None => "undefined".to_string(),
+        };
+        let chars: Vec<char> = this_str.chars().collect();
+        let needle: Vec<char> = search.chars().collect();
+        let from = match self.builtin_arg(args, 1)? {
+            Some(arg) => Self::coerce_to_number(&arg)
+                .unwrap_or(0)
+                .clamp(0, chars.len() as i64) as usize,
+            None => 0,
+        };
+        let result = if needle.is_empty() {
+            from.min(chars.len()) as i64
+        } else if needle.len() > chars.len() {
+            -1
+        } else {
+            let last = chars.len() - needle.len();
+            let mut found = -1i64;
+            let mut i = from;
+            while i <= last {
+                if chars[i..i + needle.len()] == needle[..] {
+                    found = i as i64;
+                    break;
+                }
+                i += 1;
+            }
+            found
+        };
+        Ok(Value::Int(result))
+    }
+
+    fn string_last_index_of_impl(
+        &mut self,
+        this_str: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        // ES2020 21.1.3.9: highest start index of `search` at/before an
+        // optional position (default = end of string), else -1. (bd-9a8cz.1)
+        let search = match self.builtin_arg(args, 0)? {
+            Some(arg) => self.value_to_string(&arg),
+            None => "undefined".to_string(),
+        };
+        let chars: Vec<char> = this_str.chars().collect();
+        let needle: Vec<char> = search.chars().collect();
+        let from = match self.builtin_arg(args, 1)? {
+            Some(arg) => Self::coerce_to_number(&arg)
+                .unwrap_or(chars.len() as i64)
+                .clamp(0, chars.len() as i64) as usize,
+            None => chars.len(),
+        };
+        let result = if needle.is_empty() {
+            from.min(chars.len()) as i64
+        } else if needle.len() > chars.len() {
+            -1
+        } else {
+            let last = chars.len() - needle.len();
+            let start = from.min(last);
+            let mut found = -1i64;
+            let mut i = start as i64;
+            while i >= 0 {
+                let idx = i as usize;
+                if chars[idx..idx + needle.len()] == needle[..] {
+                    found = i;
+                    break;
+                }
+                i -= 1;
+            }
+            found
+        };
+        Ok(Value::Int(result))
+    }
+
+    fn string_slice_impl(
+        &mut self,
+        this_str: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        // ES2020 21.1.3.18: negative indices count from the end; an
+        // empty/inverted range yields "". (bd-9a8cz.1)
+        let chars: Vec<char> = this_str.chars().collect();
+        let len = chars.len() as i64;
+        let normalize = |n: i64| -> i64 { if n < 0 { (len + n).max(0) } else { n.min(len) } };
+        let start = match self.builtin_arg(args, 0)? {
+            Some(Value::Undefined) | None => 0,
+            Some(arg) => normalize(Self::coerce_to_number(&arg).unwrap_or(0)),
+        };
+        let end = match self.builtin_arg(args, 1)? {
+            Some(Value::Undefined) | None => len,
+            Some(arg) => normalize(Self::coerce_to_number(&arg).unwrap_or(0)),
+        };
+        let result: String = if start < end {
+            chars[start as usize..end as usize].iter().collect()
+        } else {
+            String::new()
+        };
+        Ok(Value::str(result))
+    }
+
+    fn string_substring_impl(
+        &mut self,
+        this_str: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        // ES2020 21.1.3.21: clamp both indices to [0, len], then swap so
+        // start <= end. (bd-9a8cz.1)
+        let chars: Vec<char> = this_str.chars().collect();
+        let len = chars.len() as i64;
+        let clamp_idx = |n: i64| -> i64 { n.clamp(0, len) };
+        let start = match self.builtin_arg(args, 0)? {
+            Some(Value::Undefined) | None => 0,
+            Some(arg) => clamp_idx(Self::coerce_to_number(&arg).unwrap_or(0)),
+        };
+        let end = match self.builtin_arg(args, 1)? {
+            Some(Value::Undefined) | None => len,
+            Some(arg) => clamp_idx(Self::coerce_to_number(&arg).unwrap_or(0)),
+        };
+        let (lo, hi) = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
+        let result: String = chars[lo as usize..hi as usize].iter().collect();
+        Ok(Value::str(result))
+    }
+
+    fn string_replace_impl(
+        &mut self,
+        this_str: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let search = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let replacement = match self.builtin_arg(args, 1)? {
+            Some(arg) => self.value_to_string(&arg),
+            None => "undefined".to_string(),
+        };
+        self.string_replace_value(this_str, &search, &replacement)
+    }
+
+    fn string_match_impl(
+        &mut self,
+        this_str: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let pattern = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        self.string_match_value(this_str, &pattern)
+    }
+
+    fn string_search_impl(
+        &mut self,
+        this_str: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let pattern = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        self.string_search_value(this_str, &pattern)
+    }
+
+    fn string_repeat_impl(
+        &mut self,
+        this_str: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        // ES2020 21.1.3.16: concatenate `count` copies. A negative count
+        // is clamped to 0 (matching the existing receiver-less handler);
+        // an allocation guard rejects pathological sizes. (bd-9a8cz.1)
+        let count = match self.builtin_arg(args, 0)? {
+            Some(arg) => Self::coerce_to_number(&arg).unwrap_or(0).max(0) as usize,
+            None => 0,
+        };
+        if this_str.len().saturating_mul(count) > 10_000_000 {
+            return Err(InterpreterError::TypeError {
+                expected: "String.prototype.repeat result within size limit".to_string(),
+                got: format!("{} bytes", this_str.len().saturating_mul(count)),
+            });
+        }
+        Ok(Value::str(this_str.repeat(count)))
+    }
+
+    fn string_pad_start_impl(
+        &mut self,
+        this_str: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        // ES2020 21.1.3.14: left-pad to `targetLength` (Unicode scalar
+        // count) with `padString` (default " "). (bd-9a8cz.1)
+        Ok(Value::str(self.string_pad_value(this_str, args, true)?))
+    }
+
+    fn string_pad_end_impl(
+        &mut self,
+        this_str: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        // ES2020 21.1.3.13: right-pad to `targetLength` (Unicode scalar
+        // count) with `padString` (default " "). (bd-9a8cz.1)
+        Ok(Value::str(self.string_pad_value(this_str, args, false)?))
     }
 
     fn string_property_value(receiver: &str, key: &str) -> Value {
@@ -41803,5 +42124,432 @@ mod json_stringify_bd9a8cz3_tests {
         assert_eq!(eval_value("JSON.stringify(true);"), "true");
         assert_eq!(eval_value(r#"JSON.stringify("x");"#), r#""x""#);
         assert_eq!(eval_value("JSON.stringify(null);"), "null");
+    }
+}
+
+/// E4.T3 (`bd-fqlfw.4.3`): parity proof between the legacy
+/// `BuiltinFunctionKind::String*` dispatch arms and the intrinsic-table
+/// generated path (`dispatch_string_intrinsic`). Both routes must agree on
+/// every (receiver, args) case — including TypeError cases — before the
+/// family can flip to table-only dispatch (migration-plan step 5).
+#[cfg(test)]
+mod string_intrinsic_table_parity_tests {
+    use super::*;
+    use crate::intrinsics_codegen::{DispatchTarget, generate_glue};
+    use crate::intrinsics_table::string_prototype;
+    use crate::ir_contract::{IrHeader, IrLevel, IrSchemaVersion, RegRange};
+
+    fn parity_test_config() -> InterpreterConfig {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
+        config
+    }
+
+    fn parity_test_core() -> InterpreterCore {
+        InterpreterCore::new(parity_test_config(), "string-intrinsic-parity-test")
+    }
+
+    fn halted_module() -> Ir3Module {
+        Ir3Module {
+            header: IrHeader {
+                schema_version: IrSchemaVersion::CURRENT,
+                level: IrLevel::Ir3,
+                source_hash: None,
+                source_label: "string-intrinsic-parity".to_string(),
+            },
+            instructions: vec![Ir3Instruction::Halt],
+            constant_pool: Vec::new(),
+            function_table: Vec::new(),
+            specialization: None,
+            required_capabilities: Vec::new(),
+        }
+    }
+
+    fn load_args(core: &mut InterpreterCore, args: &[Value]) -> RegRange {
+        core.mutate_registers(|registers| {
+            for (index, value) in args.iter().enumerate() {
+                registers[index] = value.clone();
+            }
+        });
+        RegRange {
+            start: 0,
+            count: u32::try_from(args.len()).expect("test arg count fits u32"),
+        }
+    }
+
+    fn run_legacy(
+        core: &mut InterpreterCore,
+        kind: BuiltinFunctionKind,
+        receiver: &Value,
+        args: &[Value],
+    ) -> Result<Value, InterpreterError> {
+        let range = load_args(core, args);
+        let builtin = BuiltinFunction {
+            kind,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        };
+        let module = halted_module();
+        core.dispatch_builtin_function(&module, &builtin, range, Some(receiver.clone()))
+    }
+
+    fn run_generated(
+        core: &mut InterpreterCore,
+        method_key: &str,
+        receiver: &Value,
+        args: &[Value],
+    ) -> Result<Value, InterpreterError> {
+        let range = load_args(core, args);
+        core.dispatch_string_intrinsic(method_key, receiver.clone(), range)
+            .unwrap_or_else(|| {
+                panic!("String.prototype.{method_key} must be served by the generated path")
+            })
+    }
+
+    /// Object results (e.g. `split`) allocate fresh ids per call, so parity is
+    /// asserted on the materialized property maps rather than the ids.
+    fn assert_outcome_parity(
+        core: &InterpreterCore,
+        legacy: Result<Value, InterpreterError>,
+        generated: Result<Value, InterpreterError>,
+        context: &str,
+    ) {
+        match (&legacy, &generated) {
+            (Ok(Value::Object(a)), Ok(Value::Object(b))) => {
+                let legacy_object = core
+                    .heap
+                    .get(a.0 as usize)
+                    .unwrap_or_else(|| panic!("legacy object missing: {context}"));
+                let generated_object = core
+                    .heap
+                    .get(b.0 as usize)
+                    .unwrap_or_else(|| panic!("generated object missing: {context}"));
+                assert_eq!(
+                    legacy_object.properties, generated_object.properties,
+                    "object-result parity: {context}"
+                );
+            }
+            _ => assert_eq!(legacy, generated, "result parity: {context}"),
+        }
+    }
+
+    fn assert_method_parity(
+        kind: BuiltinFunctionKind,
+        method_key: &str,
+        cases: &[(Value, Vec<Value>)],
+    ) {
+        let mut core = parity_test_core();
+        for (receiver, args) in cases {
+            let legacy = run_legacy(&mut core, kind, receiver, args);
+            let generated = run_generated(&mut core, method_key, receiver, args);
+            let context =
+                format!("String.prototype.{method_key} receiver={receiver:?} args={args:?}");
+            assert_outcome_parity(&core, legacy, generated, &context);
+        }
+    }
+
+    /// Receivers exercised for every method: plain, unicode (astral plane),
+    /// non-string coercibles, and the TypeError pair (null / undefined).
+    fn common_receivers() -> Vec<Value> {
+        vec![
+            Value::str("  Héllo wörld  "),
+            Value::str("a😀b"),
+            Value::str(""),
+            Value::Int(12345),
+            Value::Bool(true),
+            Value::Null,
+            Value::Undefined,
+        ]
+    }
+
+    fn cases_with_arg_sets(arg_sets: &[Vec<Value>]) -> Vec<(Value, Vec<Value>)> {
+        let mut cases = Vec::new();
+        for receiver in common_receivers() {
+            for args in arg_sets {
+                cases.push((receiver.clone(), args.clone()));
+            }
+        }
+        cases
+    }
+
+    #[test]
+    fn string_family_glue_builds_and_verifies() {
+        let glue = generate_glue(string_prototype::ROWS)
+            .expect("String.prototype family table must generate glue");
+        glue.verify()
+            .expect("String.prototype family glue must verify");
+        assert_eq!(glue.registry.len(), 26);
+        assert!(
+            InterpreterCore::string_family_glue().is_some(),
+            "interpreter-side glue accessor must build the family glue"
+        );
+    }
+
+    #[test]
+    fn every_generated_row_resolves_to_an_impl_fn() {
+        let glue = generate_glue(string_prototype::ROWS).expect("glue");
+        for entry in &glue.dispatch {
+            match &entry.target {
+                DispatchTarget::Generated { impl_fn } => {
+                    assert!(
+                        InterpreterCore::string_intrinsic_impl_binding(impl_fn).is_some(),
+                        "{}: row declares impl fn `{impl_fn}` but the binding does not \
+                         resolve it — row/impl drift",
+                        entry.name
+                    );
+                }
+                DispatchTarget::Manual { site } => {
+                    panic!(
+                        "{}: the String family must be fully generated, found manual site {site}",
+                        entry.name
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn generated_path_declines_unknown_methods() {
+        let mut core = parity_test_core();
+        let range = load_args(&mut core, &[]);
+        assert!(
+            core.dispatch_string_intrinsic("noSuchMethod", Value::str("abc"), range)
+                .is_none(),
+            "unknown method names must fall back to the legacy seam"
+        );
+    }
+
+    #[test]
+    fn parity_char_at_family() {
+        let index_args: Vec<Vec<Value>> = vec![
+            vec![],
+            vec![Value::Int(0)],
+            vec![Value::Int(2)],
+            vec![Value::Int(-1)],
+            vec![Value::Int(99)],
+            vec![Value::str("1")],
+            vec![Value::Undefined],
+        ];
+        assert_method_parity(
+            BuiltinFunctionKind::StringCharAt,
+            "charAt",
+            &cases_with_arg_sets(&index_args),
+        );
+        assert_method_parity(
+            BuiltinFunctionKind::StringCharCodeAt,
+            "charCodeAt",
+            &cases_with_arg_sets(&index_args),
+        );
+        assert_method_parity(
+            BuiltinFunctionKind::StringAt,
+            "at",
+            &cases_with_arg_sets(&index_args),
+        );
+        assert_method_parity(
+            BuiltinFunctionKind::StringCodePointAt,
+            "codePointAt",
+            &cases_with_arg_sets(&index_args),
+        );
+    }
+
+    #[test]
+    fn parity_case_and_trim_family() {
+        let no_args: Vec<Vec<Value>> = vec![vec![]];
+        assert_method_parity(
+            BuiltinFunctionKind::StringToUpperCase,
+            "toUpperCase",
+            &cases_with_arg_sets(&no_args),
+        );
+        assert_method_parity(
+            BuiltinFunctionKind::StringToLowerCase,
+            "toLowerCase",
+            &cases_with_arg_sets(&no_args),
+        );
+        assert_method_parity(
+            BuiltinFunctionKind::StringTrim,
+            "trim",
+            &cases_with_arg_sets(&no_args),
+        );
+        assert_method_parity(
+            BuiltinFunctionKind::StringTrimStart,
+            "trimStart",
+            &cases_with_arg_sets(&no_args),
+        );
+        assert_method_parity(
+            BuiltinFunctionKind::StringTrimEnd,
+            "trimEnd",
+            &cases_with_arg_sets(&no_args),
+        );
+    }
+
+    #[test]
+    fn parity_search_family() {
+        let search_args: Vec<Vec<Value>> = vec![
+            vec![],
+            vec![Value::str("l")],
+            vec![Value::str("")],
+            vec![Value::str("l"), Value::Int(3)],
+            vec![Value::str("l"), Value::Int(-5)],
+            vec![Value::str("l"), Value::Undefined],
+            vec![Value::str("zz"), Value::Int(0)],
+            vec![Value::Int(2)],
+        ];
+        assert_method_parity(
+            BuiltinFunctionKind::StringIncludes,
+            "includes",
+            &cases_with_arg_sets(&search_args),
+        );
+        assert_method_parity(
+            BuiltinFunctionKind::StringStartsWith,
+            "startsWith",
+            &cases_with_arg_sets(&search_args),
+        );
+        assert_method_parity(
+            BuiltinFunctionKind::StringEndsWith,
+            "endsWith",
+            &cases_with_arg_sets(&search_args),
+        );
+        assert_method_parity(
+            BuiltinFunctionKind::StringIndexOf,
+            "indexOf",
+            &cases_with_arg_sets(&search_args),
+        );
+        assert_method_parity(
+            BuiltinFunctionKind::StringLastIndexOf,
+            "lastIndexOf",
+            &cases_with_arg_sets(&search_args),
+        );
+    }
+
+    #[test]
+    fn parity_slice_family() {
+        let range_args: Vec<Vec<Value>> = vec![
+            vec![],
+            vec![Value::Int(1)],
+            vec![Value::Int(1), Value::Int(3)],
+            vec![Value::Int(-2)],
+            vec![Value::Int(3), Value::Int(1)],
+            vec![Value::Undefined, Value::Int(2)],
+            vec![Value::Int(0), Value::Int(99)],
+        ];
+        assert_method_parity(
+            BuiltinFunctionKind::StringSlice,
+            "slice",
+            &cases_with_arg_sets(&range_args),
+        );
+        assert_method_parity(
+            BuiltinFunctionKind::StringSubstring,
+            "substring",
+            &cases_with_arg_sets(&range_args),
+        );
+    }
+
+    #[test]
+    fn parity_replace_family() {
+        let replace_args: Vec<Vec<Value>> = vec![
+            vec![],
+            vec![Value::str("l")],
+            vec![Value::str("l"), Value::str("_")],
+            vec![Value::str("zz"), Value::str("X")],
+            vec![Value::str(""), Value::str("@")],
+        ];
+        assert_method_parity(
+            BuiltinFunctionKind::StringReplace,
+            "replace",
+            &cases_with_arg_sets(&replace_args),
+        );
+        assert_method_parity(
+            BuiltinFunctionKind::StringReplaceAll,
+            "replaceAll",
+            &cases_with_arg_sets(&replace_args),
+        );
+    }
+
+    #[test]
+    fn parity_split() {
+        let split_args: Vec<Vec<Value>> = vec![
+            vec![],
+            vec![Value::Undefined],
+            vec![Value::str(" ")],
+            vec![Value::str("")],
+            vec![Value::str("ö")],
+        ];
+        assert_method_parity(
+            BuiltinFunctionKind::StringSplit,
+            "split",
+            &cases_with_arg_sets(&split_args),
+        );
+    }
+
+    #[test]
+    fn parity_match_search_locale_normalize() {
+        let pattern_args: Vec<Vec<Value>> =
+            vec![vec![], vec![Value::str("l")], vec![Value::str("zz")]];
+        assert_method_parity(
+            BuiltinFunctionKind::StringMatch,
+            "match",
+            &cases_with_arg_sets(&pattern_args),
+        );
+        assert_method_parity(
+            BuiltinFunctionKind::StringSearch,
+            "search",
+            &cases_with_arg_sets(&pattern_args),
+        );
+        assert_method_parity(
+            BuiltinFunctionKind::StringLocaleCompare,
+            "localeCompare",
+            &cases_with_arg_sets(&pattern_args),
+        );
+        let normalize_args: Vec<Vec<Value>> = vec![
+            vec![],
+            vec![Value::str("NFC")],
+            vec![Value::str("NFD")],
+            vec![Value::str("BOGUS")],
+            vec![Value::Undefined],
+        ];
+        assert_method_parity(
+            BuiltinFunctionKind::StringNormalize,
+            "normalize",
+            &cases_with_arg_sets(&normalize_args),
+        );
+    }
+
+    #[test]
+    fn parity_repeat_and_pad() {
+        let repeat_args: Vec<Vec<Value>> = vec![
+            vec![],
+            vec![Value::Int(0)],
+            vec![Value::Int(3)],
+            vec![Value::Int(-2)],
+            // Size-guard TypeError must reproduce identically on both routes.
+            vec![Value::Int(10_000_000)],
+        ];
+        assert_method_parity(
+            BuiltinFunctionKind::StringRepeat,
+            "repeat",
+            &cases_with_arg_sets(&repeat_args),
+        );
+        let pad_args: Vec<Vec<Value>> = vec![
+            vec![],
+            vec![Value::Int(8)],
+            vec![Value::Int(8), Value::str("ab")],
+            vec![Value::Int(8), Value::str("")],
+            vec![Value::Int(2)],
+            vec![Value::Int(-3)],
+        ];
+        assert_method_parity(
+            BuiltinFunctionKind::StringPadStart,
+            "padStart",
+            &cases_with_arg_sets(&pad_args),
+        );
+        assert_method_parity(
+            BuiltinFunctionKind::StringPadEnd,
+            "padEnd",
+            &cases_with_arg_sets(&pad_args),
+        );
     }
 }

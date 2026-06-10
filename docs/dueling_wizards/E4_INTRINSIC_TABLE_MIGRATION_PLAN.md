@@ -69,7 +69,7 @@ consistently by construction (E4.T2).
 
 | Family | Rows authored | Glue wired (coexist) | Parity green | Flipped (legacy removed) | Bead |
 |---|---|---|---|---|---|
-| String.prototype | ☐ | ☐ | ☐ | ☐ | E4.T3 (`bd-fqlfw.4.3`) |
+| String.prototype | ☑ (26 rows, `intrinsics_table::string_prototype`) | ☑ (`dispatch_string_intrinsic` + shared `string_*_impl` fns; legacy arms delegate) | ☑ (`string_intrinsic_table_parity_tests` + `tests/intrinsic_table_string_family_migration.rs`) | ☐ | E4.T3 (`bd-fqlfw.4.3`) |
 | Array.prototype | ☐ | ☐ | ☐ | ☐ | follow-on |
 | Collections | ☐ | ☐ | ☐ | ☐ | follow-on |
 | Globals | ☐ | ☐ | ☐ | ☐ | follow-on |

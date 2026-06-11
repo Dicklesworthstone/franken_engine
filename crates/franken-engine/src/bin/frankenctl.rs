@@ -52,6 +52,7 @@ use frankenengine_engine::receipt_verifier_pipeline::{
     ReceiptVerifierCliInput, UnifiedReceiptVerificationVerdict, render_verdict_summary,
     verify_receipt_by_id,
 };
+use frankenengine_engine::replay_time_travel::{TimeTravelConfig, TimeTravelCursor};
 use frankenengine_engine::runtime_diagnostics_cli::{
     CompatibilityAdvisoryInput, CompatibilityAdvisoryOutput, EvidenceExportFilter,
     OnboardingReadinessClass, OnboardingScorecardInput, OnboardingScorecardOutput,
@@ -75,6 +76,7 @@ use frankenengine_engine::third_party_verifier::{
     ThirdPartyVerificationReport, VerificationCheckResult, VerificationVerdict, VerifierEvent,
     render_report_summary, verify_benchmark_claim,
 };
+use frankenengine_engine::time_travel_debugger::{DebuggerEvent, RobotSession, TimeTravelDebugger};
 use frankenengine_engine::ts_normalization::{
     SourceIngestionSummary, prepare_source_entry_for_public_entrypoints,
 };
@@ -132,6 +134,7 @@ enum CommandSpec {
     Verify(VerifyArgs),
     Benchmark(BenchmarkArgs),
     Replay(ReplayArgs),
+    ReplayDebug(ReplayDebugArgs),
     DifferentialOracle(DifferentialOracleArgs),
     React(ReactArgs),
     Gates(GatesArgs),
@@ -158,6 +161,7 @@ enum HelpTopic {
     BenchmarkVerify,
     Replay,
     ReplayRun,
+    ReplayDebug,
     DifferentialOracle,
     DifferentialOracleRun,
     React,
@@ -190,6 +194,7 @@ impl HelpTopic {
             Self::BenchmarkVerify => benchmark_verify_usage(),
             Self::Replay => replay_usage(),
             Self::ReplayRun => replay_run_usage(),
+            Self::ReplayDebug => replay_debug_usage(),
             Self::DifferentialOracle => differential_oracle_usage(),
             Self::DifferentialOracleRun => differential_oracle_run_usage(),
             Self::React => react_usage(),
@@ -326,6 +331,16 @@ struct ReplayArgs {
     mode: ReplayMode,
     out: Option<PathBuf>,
     fleet_trace: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReplayDebugArgs {
+    trace: PathBuf,
+    script: Option<PathBuf>,
+    events: Option<PathBuf>,
+    checkpoint_interval: u64,
+    mode: ReplayMode,
+    out: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1326,6 +1341,7 @@ fn run(raw_args: Vec<String>) -> Result<i32, String> {
         CommandSpec::Verify(args) => execute_verify(args),
         CommandSpec::Benchmark(args) => execute_benchmark(args),
         CommandSpec::Replay(args) => execute_replay(args),
+        CommandSpec::ReplayDebug(args) => execute_replay_debug(args),
         CommandSpec::DifferentialOracle(args) => execute_differential_oracle(args),
         CommandSpec::React(args) => execute_react(args),
         CommandSpec::Gates(args) => execute_gates(args),
@@ -1457,8 +1473,9 @@ fn parse_replay_help_command(args: &[String]) -> Result<CommandSpec, String> {
 
     match args[0].as_str() {
         "run" => parse_leaf_help_topic("replay run", HelpTopic::ReplayRun, &args[1..]),
+        "debug" => parse_leaf_help_topic("replay debug", HelpTopic::ReplayDebug, &args[1..]),
         other => Err(format!(
-            "unknown replay help topic `{other}` (expected run)"
+            "unknown replay help topic `{other}` (expected run|debug)"
         )),
     }
 }
@@ -1980,14 +1997,15 @@ fn parse_benchmark_verify_command(args: &[String]) -> Result<CommandSpec, String
 
 fn parse_replay_command(args: &[String]) -> Result<CommandSpec, String> {
     if args.is_empty() {
-        return Err("replay requires subcommand `run`".to_string());
+        return Err("replay requires subcommand `run` or `debug`".to_string());
     }
 
     match args[0].as_str() {
         "help" | "--help" | "-h" => Ok(CommandSpec::HelpTopic(HelpTopic::Replay)),
         "run" => parse_replay_run_command(&args[1..]),
+        "debug" => parse_replay_debug_command(&args[1..]),
         other => Err(format!(
-            "unknown replay subcommand `{other}` (expected run)"
+            "unknown replay subcommand `{other}` (expected run|debug)"
         )),
     }
 }
@@ -2030,6 +2048,47 @@ fn parse_replay_run_command(args: &[String]) -> Result<CommandSpec, String> {
         mode,
         out,
         fleet_trace,
+    }))
+}
+
+fn parse_replay_debug_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::ReplayDebug));
+    }
+
+    let mut trace: Option<PathBuf> = None;
+    let mut script: Option<PathBuf> = None;
+    let mut events: Option<PathBuf> = None;
+    let mut checkpoint_interval: u64 = 64;
+    let mut mode = ReplayMode::Strict;
+    let mut out: Option<PathBuf> = None;
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--trace" => trace = Some(PathBuf::from(next_arg(args, &mut index, "--trace")?)),
+            "--script" => script = Some(PathBuf::from(next_arg(args, &mut index, "--script")?)),
+            "--events" => events = Some(PathBuf::from(next_arg(args, &mut index, "--events")?)),
+            "--checkpoint-interval" => {
+                let raw = next_arg(args, &mut index, "--checkpoint-interval")?;
+                checkpoint_interval = raw
+                    .parse::<u64>()
+                    .map_err(|error| format!("invalid --checkpoint-interval `{raw}`: {error}"))?;
+            }
+            "--mode" => mode = parse_replay_mode(&next_arg(args, &mut index, "--mode")?)?,
+            "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            flag => return Err(format!("unknown replay debug flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    Ok(CommandSpec::ReplayDebug(ReplayDebugArgs {
+        trace: trace.ok_or_else(|| "replay debug requires --trace <path>".to_string())?,
+        script,
+        events,
+        checkpoint_interval,
+        mode,
+        out,
     }))
 }
 
@@ -5284,6 +5343,67 @@ fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
     Ok(0)
 }
 
+/// `frankenctl replay debug`: drive the evidence-aware time-travel debugger
+/// over a captured nondeterminism trace via the JSON-line robot protocol
+/// (bd-fqlfw.3.5.3 / E3.T5c). Commands come from `--script` (one JSON
+/// object per line; blank lines and `#` comment lines are skipped) or from
+/// stdin; every command line yields exactly one JSON response line on
+/// stdout, and `--out` additionally captures the full transcript. Identical
+/// trace + script input produces a byte-identical transcript. Protocol-level
+/// failures (malformed lines, out-of-range ticks) are fail-closed
+/// `{"ok":false,...}` RESPONSES, not process errors.
+fn execute_replay_debug(args: ReplayDebugArgs) -> Result<i32, String> {
+    let trace = load_json_file::<NondeterminismTrace>(&args.trace)?;
+    let cursor = TimeTravelCursor::new(
+        trace,
+        args.mode,
+        TimeTravelConfig {
+            checkpoint_interval: args.checkpoint_interval,
+        },
+    )
+    .map_err(|error| format!("replay debug failed to open trace: {error}"))?;
+
+    let debugger_events: Vec<DebuggerEvent> = match args.events.as_ref() {
+        Some(path) => load_json_file::<Vec<DebuggerEvent>>(path)?,
+        None => Vec::new(),
+    };
+    let debugger = TimeTravelDebugger::new(cursor, debugger_events);
+    let mut session = RobotSession::new(debugger);
+
+    let command_lines: Vec<String> = match args.script.as_ref() {
+        Some(path) => fs::read_to_string(path)
+            .map_err(|error| format!("failed to read script `{}`: {error}", path.display()))?
+            .lines()
+            .map(str::to_string)
+            .collect(),
+        None => {
+            let mut buffer = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut buffer)
+                .map_err(|error| format!("failed to read robot commands from stdin: {error}"))?;
+            buffer.lines().map(str::to_string).collect()
+        }
+    };
+
+    let mut transcript: Vec<String> = Vec::new();
+    for line in command_lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let response = session.handle_line(trimmed);
+        println!("{response}");
+        transcript.push(response);
+    }
+
+    if let Some(path) = args.out.as_ref() {
+        let mut body = transcript.join("\n");
+        body.push('\n');
+        fs::write(path, body)
+            .map_err(|error| format!("failed to write transcript `{}`: {error}", path.display()))?;
+    }
+    Ok(0)
+}
+
 fn execute_differential_oracle(args: DifferentialOracleArgs) -> Result<i32, String> {
     match args.mode {
         DifferentialOracleMode::Run(args) => execute_differential_oracle_run(args),
@@ -6735,6 +6855,7 @@ fn command_label(command: &CommandSpec) -> &'static str {
         CommandSpec::Verify(_) => "verify",
         CommandSpec::Benchmark(_) => "benchmark",
         CommandSpec::Replay(_) => "replay",
+        CommandSpec::ReplayDebug(_) => "replay-debug",
         CommandSpec::DifferentialOracle(_) => "differential-oracle",
         CommandSpec::React(ReactArgs::Compile(_)) => "react-compile",
         CommandSpec::React(ReactArgs::Build(_)) => "react-build",
@@ -6923,6 +7044,37 @@ fn replay_usage() -> String {
     [
         "replay usage:",
         "  frankenctl replay run --trace <trace.json> [--mode strict|best-effort|validate] [--out <report.json>]",
+        "  frankenctl replay debug --trace <trace.json> [--script <commands.jsonl>] [--out <transcript.jsonl>]",
+    ]
+    .join("\n")
+}
+
+fn replay_debug_usage() -> String {
+    [
+        "replay debug usage:",
+        "  frankenctl replay debug --trace <trace.json>",
+        "      [--script <commands.jsonl>] [--events <debugger_events.json>]",
+        "      [--checkpoint-interval <ticks>] [--mode strict|best-effort|validate]",
+        "      [--out <transcript.jsonl>]",
+        "",
+        "notes:",
+        "  Drives the evidence-aware time-travel debugger over a captured",
+        "  nondeterminism trace through the JSON-line robot protocol. Commands",
+        "  are read from --script (one JSON object per line; blank lines and",
+        "  `#` comments skipped) or stdin; every command yields exactly one",
+        "  JSON response line on stdout. Identical trace + script input gives",
+        "  a byte-identical transcript.",
+        "",
+        "  commands: {\"cmd\":\"state\"} | {\"cmd\":\"step\"} | {\"cmd\":\"back\"} |",
+        "    {\"cmd\":\"goto\",\"tick\":N} | {\"cmd\":\"run_until_break\"} |",
+        "    {\"cmd\":\"add_breakpoint\",\"breakpoint\":{...}} |",
+        "    {\"cmd\":\"remove_breakpoint\",\"id\":N} | {\"cmd\":\"list_breakpoints\"} |",
+        "    {\"cmd\":\"why\",\"tick\":N} | {\"cmd\":\"events_at\",\"tick\":N}",
+        "",
+        "  --events supplies a normalized DebuggerEvent JSON array (IFC label",
+        "  levels, capability outcomes, posterior observations) so breakpoints",
+        "  like label_level_at_least / capability_denied /",
+        "  malicious_posterior_above and `why` have evidence to bind to.",
     ]
     .join("\n")
 }
@@ -7401,6 +7553,186 @@ mod tests {
                 fleet_trace: None,
             })
         );
+    }
+
+    #[test]
+    fn parse_replay_debug_command_accepts_all_flags() {
+        let args = vec![
+            "replay".to_string(),
+            "debug".to_string(),
+            "--trace".to_string(),
+            "trace.json".to_string(),
+            "--script".to_string(),
+            "commands.jsonl".to_string(),
+            "--events".to_string(),
+            "events.json".to_string(),
+            "--checkpoint-interval".to_string(),
+            "8".to_string(),
+            "--mode".to_string(),
+            "best-effort".to_string(),
+            "--out".to_string(),
+            "transcript.jsonl".to_string(),
+        ];
+        let parsed = parse_command(&args).expect("replay debug should parse all flags");
+        assert_eq!(
+            parsed,
+            CommandSpec::ReplayDebug(ReplayDebugArgs {
+                trace: PathBuf::from("trace.json"),
+                script: Some(PathBuf::from("commands.jsonl")),
+                events: Some(PathBuf::from("events.json")),
+                checkpoint_interval: 8,
+                mode: ReplayMode::BestEffort,
+                out: Some(PathBuf::from("transcript.jsonl")),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_replay_debug_command_applies_defaults() {
+        let args = vec![
+            "replay".to_string(),
+            "debug".to_string(),
+            "--trace".to_string(),
+            "trace.json".to_string(),
+        ];
+        let parsed = parse_command(&args).expect("replay debug should parse with defaults");
+        assert_eq!(
+            parsed,
+            CommandSpec::ReplayDebug(ReplayDebugArgs {
+                trace: PathBuf::from("trace.json"),
+                script: None,
+                events: None,
+                checkpoint_interval: 64,
+                mode: ReplayMode::Strict,
+                out: None,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_replay_debug_command_fails_closed_on_bad_input() {
+        let missing_trace = vec!["replay".to_string(), "debug".to_string()];
+        let error = parse_command(&missing_trace).expect_err("missing --trace should fail");
+        assert!(error.contains("requires --trace"));
+
+        let unknown_flag = vec![
+            "replay".to_string(),
+            "debug".to_string(),
+            "--trace".to_string(),
+            "trace.json".to_string(),
+            "--bogus".to_string(),
+        ];
+        let error = parse_command(&unknown_flag).expect_err("unknown flag should fail");
+        assert!(error.contains("unknown replay debug flag"));
+
+        let bad_interval = vec![
+            "replay".to_string(),
+            "debug".to_string(),
+            "--trace".to_string(),
+            "trace.json".to_string(),
+            "--checkpoint-interval".to_string(),
+            "zero?".to_string(),
+        ];
+        let error = parse_command(&bad_interval).expect_err("bad interval should fail");
+        assert!(error.contains("invalid --checkpoint-interval"));
+    }
+
+    #[test]
+    fn parse_replay_debug_help_topic() {
+        let flag_form = vec![
+            "replay".to_string(),
+            "debug".to_string(),
+            "--help".to_string(),
+        ];
+        let parsed = parse_command(&flag_form).expect("replay debug --help should parse");
+        assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::ReplayDebug));
+
+        let topic_form = vec![
+            "help".to_string(),
+            "replay".to_string(),
+            "debug".to_string(),
+        ];
+        let parsed = parse_command(&topic_form).expect("help replay debug should parse");
+        assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::ReplayDebug));
+
+        assert!(replay_debug_usage().contains("run_until_break"));
+    }
+
+    #[test]
+    fn execute_replay_debug_script_round_trip_is_deterministic() {
+        use frankenengine_engine::deterministic_replay::NondeterminismSource;
+
+        let temp_dir =
+            std::env::temp_dir().join(format!("frankenctl-replay-debug-{}", current_unix_ns()));
+        fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+
+        let mut trace = NondeterminismTrace::new("replay-debug-cli-test");
+        for index in 0..6u64 {
+            trace.capture(
+                NondeterminismSource::TimerRead,
+                vec![index as u8],
+                index + 1,
+                "cli-test",
+            );
+        }
+        trace.finalise(6);
+        let trace_path = temp_dir.join("trace.json");
+        fs::write(
+            &trace_path,
+            serde_json::to_string(&trace).expect("trace should serialize"),
+        )
+        .expect("trace file should write");
+
+        let script_path = temp_dir.join("commands.jsonl");
+        fs::write(
+            &script_path,
+            concat!(
+                "# agent session\n",
+                "{\"cmd\":\"state\"}\n",
+                "{\"cmd\":\"goto\",\"tick\":4}\n",
+                "{\"cmd\":\"back\"}\n",
+                "\n",
+                "{\"cmd\":\"goto\",\"tick\":99}\n",
+                "not json\n",
+            ),
+        )
+        .expect("script file should write");
+
+        let run = |out_name: &str| -> String {
+            let out_path = temp_dir.join(out_name);
+            let exit = execute_replay_debug(ReplayDebugArgs {
+                trace: trace_path.clone(),
+                script: Some(script_path.clone()),
+                events: None,
+                checkpoint_interval: 2,
+                mode: ReplayMode::Strict,
+                out: Some(out_path.clone()),
+            })
+            .expect("replay debug should execute");
+            assert_eq!(exit, 0);
+            fs::read_to_string(&out_path).expect("transcript should be readable")
+        };
+
+        let first = run("transcript_a.jsonl");
+        let second = run("transcript_b.jsonl");
+        assert_eq!(first, second, "transcripts must be byte-identical");
+
+        let lines: Vec<&str> = first.lines().collect();
+        // 5 command lines (comment + blank skipped) -> 5 response lines.
+        assert_eq!(lines.len(), 5);
+        assert!(lines[0].contains("\"tick\":0"));
+        assert!(lines[1].contains("\"tick\":4"));
+        assert!(lines[2].contains("\"tick\":3"));
+        assert!(lines[3].contains("\"ok\":false"));
+        assert!(lines[3].contains("out of range"));
+        assert!(lines[4].contains("\"ok\":false"));
+        assert!(lines[4].contains("bad request"));
+        for line in &lines {
+            assert!(
+                serde_json::from_str::<serde_json::Value>(line).is_ok(),
+                "every transcript line must be one JSON object: {line}"
+            );
+        }
     }
 
     #[test]

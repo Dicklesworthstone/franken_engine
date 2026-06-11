@@ -1771,7 +1771,12 @@ mod tests {
 
         let verification_result = carrier.verify_all_proofs().unwrap();
         assert_eq!(verification_result.total_proofs, proof_count);
-        assert!(verification_result.verification_time_ms > 0);
+        // Elapsed-ms can legitimately be 0 on a fast host (bd-2869t); assert the
+        // result and the carrier metrics agree on the same measurement instead.
+        assert_eq!(
+            verification_result.verification_time_ms,
+            carrier.performance_metrics.verification_time_ms
+        );
     }
 
     #[test]

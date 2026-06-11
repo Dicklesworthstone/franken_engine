@@ -1645,9 +1645,14 @@ fn await_chain_through_pipeline() {
     let tree = SyntaxTree {
         goal: ParseGoal::Script,
         body: vec![
+            // This test exercises await-chain LOWERING mechanics, so the
+            // awaited identifiers must not collide with the ambient-authority
+            // gate (bare `fetch` is NetConnect-gated and fail-closed-rejected
+            // at lowering; the fixture predated that gate — dormant-target
+            // staleness found while landing bd-fqlfw.1.2).
             Statement::Expression(ExpressionStatement {
                 expression: Expression::Await(Box::new(Expression::Identifier(
-                    "fetch".to_string(),
+                    "response".to_string(),
                 ))),
                 span: span(),
             }),

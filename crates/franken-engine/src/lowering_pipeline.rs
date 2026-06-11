@@ -7691,7 +7691,11 @@ fn lower_expression_to_ir1(
                 binding_id: result_binding,
             });
         }
-        Expression::Call { callee, arguments, .. } => {
+        Expression::Call {
+            callee,
+            arguments,
+            span,
+        } => {
             // Spread in call arguments (bd-hsv77): `f(a, ...xs, b)` must expand
             // the spread into positional args. Build the argument array (reusing
             // the array-literal spread lowering) and dispatch via
@@ -8323,8 +8327,10 @@ fn lower_expression_to_ir1(
                             required_effect,
                             caller_profile,
                             accessor: name.clone(),
-                            // Bare-identifier callee; AST identifiers carry no span.
-                            span: None,
+                            // The callee identifier carries no span, but the
+                            // enclosing call does (bd-fqlfw.1.1): point the
+                            // denial at the `require(...)` call site.
+                            span: *span,
                         });
                     }
                 }
@@ -8681,7 +8687,7 @@ fn lower_expression_to_ir1(
             object,
             property,
             computed,
-            ..
+            span,
         } => {
             // Check for ambient authority violation on member access
             if let Expression::Identifier(object_name) = object.as_ref() {
@@ -8697,8 +8703,9 @@ fn lower_expression_to_ir1(
                                     required_effect,
                                     caller_profile,
                                     accessor: format!("{object_name}.{prop_name}"),
-                                    // Member access; AST member nodes carry no span.
-                                    span: None,
+                                    // Member nodes carry parse-time spans since
+                                    // bd-fqlfw.1.1; the denial points at source.
+                                    span: *span,
                                 });
                             }
                         }
@@ -8853,7 +8860,9 @@ fn lower_expression_to_ir1(
                 binding_id: result_binding,
             });
         }
-        Expression::OptionalCall { callee, arguments, .. } => {
+        Expression::OptionalCall {
+            callee, arguments, ..
+        } => {
             // Desugar `fn?.()` / `obj.m?.()` into:
             //   temp_callee = <callee>
             //   if (temp_callee == null || temp_callee == undefined) goto skip

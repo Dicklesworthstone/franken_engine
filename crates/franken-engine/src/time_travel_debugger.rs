@@ -241,6 +241,22 @@ pub struct TimeTravelDebugger {
     events: Vec<DebuggerEvent>,
     breakpoints: BTreeMap<u64, Breakpoint>,
     next_breakpoint_id: u64,
+    /// Index into `events` where the next `run_until_breakpoint` scan
+    /// starts. Advanced past each delivered hit so a hit is delivered
+    /// exactly once — including same-tick siblings and events whose tick
+    /// exceeds the trace range (where the cursor clamps below the event
+    /// tick and a cursor-tick-based scan would re-hit forever).
+    scan_index: usize,
+    /// Cursor tick observed when `scan_index` was last established. When
+    /// navigation has moved the cursor since then, the scan re-syncs from
+    /// the new cursor tick (so backward travel re-arms later events).
+    scan_anchor_tick: u64,
+    /// Bumped on every breakpoint add/remove; a change re-arms the scan
+    /// from the current cursor tick so newly added breakpoints can match
+    /// events an earlier (different-breakpoint-set) scan already passed.
+    breakpoint_generation: u64,
+    /// `breakpoint_generation` observed when `scan_index` was established.
+    scan_generation: u64,
 }
 
 impl TimeTravelDebugger {
@@ -248,11 +264,17 @@ impl TimeTravelDebugger {
     /// stream. Events are sorted by (tick, seq) at construction.
     pub fn new(cursor: TimeTravelCursor, mut events: Vec<DebuggerEvent>) -> Self {
         events.sort_by(|a, b| (a.tick, a.seq).cmp(&(b.tick, b.seq)));
+        let scan_anchor_tick = cursor.current_tick();
+        let scan_index = events.partition_point(|event| event.tick <= scan_anchor_tick);
         Self {
             cursor,
             events,
             breakpoints: BTreeMap::new(),
             next_breakpoint_id: 0,
+            scan_index,
+            scan_anchor_tick,
+            breakpoint_generation: 0,
+            scan_generation: 0,
         }
     }
 
@@ -292,12 +314,17 @@ impl TimeTravelDebugger {
         let id = self.next_breakpoint_id;
         self.next_breakpoint_id = self.next_breakpoint_id.saturating_add(1);
         self.breakpoints.insert(id, breakpoint);
+        self.breakpoint_generation = self.breakpoint_generation.saturating_add(1);
         id
     }
 
     /// Remove a breakpoint by id. Returns whether it existed.
     pub fn remove_breakpoint(&mut self, id: u64) -> bool {
-        self.breakpoints.remove(&id).is_some()
+        let existed = self.breakpoints.remove(&id).is_some();
+        if existed {
+            self.breakpoint_generation = self.breakpoint_generation.saturating_add(1);
+        }
+        existed
     }
 
     /// Active breakpoints, id-ordered.
@@ -308,36 +335,51 @@ impl TimeTravelDebugger {
             .collect()
     }
 
-    /// Scan events strictly after the cursor's current tick, in (tick, seq)
-    /// order, for the first breakpoint match. On a hit, positions the cursor
-    /// at the event's tick (clamped to the trace range) and returns the hit.
-    /// Returns `Ok(None)` when no remaining event matches (cursor unmoved).
+    /// Scan forward, in (tick, seq) order, for the first breakpoint match.
+    /// On a hit, positions the cursor at the event's tick (clamped to the
+    /// trace range) and returns the hit. Returns `Ok(None)` when no
+    /// remaining event matches (cursor unmoved).
+    ///
+    /// Each matching event is delivered exactly once across consecutive
+    /// calls — same-tick siblings are not skipped, and an event whose tick
+    /// exceeds the trace range (cursor clamps below it) is not re-hit.
+    /// Explicit navigation (`step`/`back`/`goto`) re-syncs the scan from
+    /// the new cursor tick, so traveling backward re-arms later events.
     pub fn run_until_breakpoint(&mut self) -> Result<Option<BreakHit>, TimeTravelError> {
         if self.breakpoints.is_empty() {
             return Ok(None);
         }
         let current = self.cursor.current_tick();
-        let hit = self.events.iter().find_map(|event| {
-            if event.tick <= current {
-                return None;
-            }
-            self.breakpoints
+        if current != self.scan_anchor_tick || self.breakpoint_generation != self.scan_generation {
+            // Navigation moved the cursor, or the breakpoint set changed,
+            // since the last scan: restart from the first event strictly
+            // after the current cursor tick.
+            self.scan_index = self.events.partition_point(|event| event.tick <= current);
+            self.scan_anchor_tick = current;
+            self.scan_generation = self.breakpoint_generation;
+        }
+
+        while let Some(event) = self.events.get(self.scan_index) {
+            let matched = self
+                .breakpoints
                 .iter()
                 .find(|(_, breakpoint)| breakpoint.matches(event))
-                .map(|(id, _)| (*id, event.clone()))
-        });
-        match hit {
-            Some((breakpoint_id, event)) => {
+                .map(|(id, _)| (*id, event.clone()));
+            self.scan_index += 1;
+            if let Some((breakpoint_id, event)) = matched {
                 let target = event.tick.min(self.cursor.total_ticks());
                 let cursor_tick = self.cursor.goto_tick(target)?;
-                Ok(Some(BreakHit {
+                // Anchor to the post-hit cursor position so the next call
+                // continues the scan instead of re-syncing backwards.
+                self.scan_anchor_tick = cursor_tick;
+                return Ok(Some(BreakHit {
                     breakpoint_id,
                     event,
                     cursor_tick,
-                }))
+                }));
             }
-            None => Ok(None),
         }
+        Ok(None)
     }
 
     /// Render the causal chain answering "at exactly which tick and why".
@@ -816,6 +858,75 @@ mod tests {
         assert!(!debugger.remove_breakpoint(id));
         let result = debugger.run_until_breakpoint().expect("run should succeed");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn clamped_beyond_range_hit_is_delivered_exactly_once() {
+        // bd-fqlfw.3.5.4 regression: containment at tick 9 on a 6-tick
+        // trace clamps the cursor to 6 (< 9); a cursor-tick-based rescan
+        // would re-deliver the same hit forever.
+        let mut debugger = TimeTravelDebugger::new(make_cursor(6), scenario_events());
+        debugger.add_breakpoint(Breakpoint::KindIs {
+            kind: DebuggerEventKind::ContainmentAction,
+        });
+        let first = debugger
+            .run_until_breakpoint()
+            .expect("run should succeed")
+            .expect("hit");
+        assert_eq!(first.event.tick, 9);
+        assert_eq!(first.cursor_tick, 6);
+        let second = debugger.run_until_breakpoint().expect("run should succeed");
+        assert!(
+            second.is_none(),
+            "clamped hit must not re-deliver: {second:?}"
+        );
+        assert_eq!(debugger.cursor().current_tick(), 6);
+    }
+
+    #[test]
+    fn same_tick_sibling_hits_are_both_delivered() {
+        // bd-fqlfw.3.5.4 regression: two matching events at the same tick
+        // must yield two consecutive hits, not one.
+        let mut first_event = event(5, 0, DebuggerEventKind::CapabilityChecked);
+        first_event.capability_allowed = Some(false);
+        let mut second_event = event(5, 1, DebuggerEventKind::CapabilityChecked);
+        second_event.capability_allowed = Some(false);
+        let mut debugger =
+            TimeTravelDebugger::new(make_cursor(12), vec![second_event, first_event]);
+        debugger.add_breakpoint(Breakpoint::CapabilityDenied);
+
+        let first = debugger
+            .run_until_breakpoint()
+            .expect("run should succeed")
+            .expect("first sibling hit");
+        assert_eq!((first.event.tick, first.event.seq), (5, 0));
+        let second = debugger
+            .run_until_breakpoint()
+            .expect("run should succeed")
+            .expect("second sibling hit");
+        assert_eq!((second.event.tick, second.event.seq), (5, 1));
+        let third = debugger.run_until_breakpoint().expect("run should succeed");
+        assert!(third.is_none());
+    }
+
+    #[test]
+    fn breakpoint_added_after_dry_scan_rearms_passed_events() {
+        // A no-match scan must not permanently consume events: changing the
+        // breakpoint set re-arms the scan from the current cursor tick.
+        let mut debugger = make_debugger();
+        debugger.add_breakpoint(Breakpoint::MaliciousPosteriorAbove {
+            threshold_millionths: 900_000,
+        });
+        let dry = debugger.run_until_breakpoint().expect("run should succeed");
+        assert!(dry.is_none());
+        debugger.add_breakpoint(Breakpoint::LabelLevelAtLeast {
+            min_level: SECRET_LABEL_LEVEL,
+        });
+        let hit = debugger
+            .run_until_breakpoint()
+            .expect("run should succeed")
+            .expect("newly added breakpoint should match an earlier event");
+        assert_eq!(hit.event.tick, 3);
     }
 
     #[test]

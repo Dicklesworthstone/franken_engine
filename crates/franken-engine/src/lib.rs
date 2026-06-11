@@ -357,6 +357,7 @@ pub mod plas_burn_in_gate;
 pub mod plas_lockstep;
 pub mod plas_release_gate;
 pub mod policy_as_data_security;
+pub mod policy_backtest;
 pub mod policy_checkpoint;
 pub mod policy_controller;
 pub mod policy_theorem_compiler;

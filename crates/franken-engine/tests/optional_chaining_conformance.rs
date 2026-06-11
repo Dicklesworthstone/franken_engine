@@ -56,6 +56,7 @@ fn no_halt_used_as_optional_chain_placeholder() {
         object: Box::new(Expression::Identifier("obj".into())),
         property: Box::new(Expression::Identifier("prop".into())),
         computed: false,
+        span: None,
     });
 
     // The only Halt should be the trailing program-termination sentinel.
@@ -83,6 +84,7 @@ fn no_halt_used_for_optional_computed_member() {
         object: Box::new(Expression::Identifier("arr".into())),
         property: Box::new(Expression::NumericLiteral(0)),
         computed: true,
+        span: None,
     });
     let halt_count = instructions
         .iter()
@@ -104,6 +106,7 @@ fn no_halt_used_for_optional_call() {
     let instructions = expr_to_ir3(Expression::OptionalCall {
         callee: Box::new(Expression::Identifier("fn_maybe".into())),
         arguments: vec![Expression::NumericLiteral(1)],
+        span: None,
     });
     let halt_count = instructions
         .iter()
@@ -130,6 +133,7 @@ fn optional_member_emits_get_property_on_non_nullish_path() {
         object: Box::new(Expression::Identifier("obj".into())),
         property: Box::new(Expression::Identifier("x".into())),
         computed: false,
+        span: None,
     });
     assert!(
         instructions
@@ -145,6 +149,7 @@ fn optional_member_emits_load_undefined_on_nullish_path() {
         object: Box::new(Expression::Identifier("obj".into())),
         property: Box::new(Expression::Identifier("y".into())),
         computed: false,
+        span: None,
     });
     assert!(
         instructions
@@ -160,6 +165,7 @@ fn optional_call_emits_call_or_hostcall_on_non_nullish_path() {
     let instructions = expr_to_ir3(Expression::OptionalCall {
         callee: Box::new(Expression::Identifier("fn_maybe".into())),
         arguments: vec![Expression::NumericLiteral(1)],
+        span: None,
     });
     let has_call = instructions.iter().any(|i| {
         matches!(
@@ -183,6 +189,7 @@ fn optional_call_emits_load_undefined_on_nullish_path() {
     let instructions = expr_to_ir3(Expression::OptionalCall {
         callee: Box::new(Expression::Identifier("fn_maybe".into())),
         arguments: vec![],
+        span: None,
     });
     assert!(
         instructions
@@ -204,9 +211,11 @@ fn nested_optional_member_chain_produces_multiple_nullish_guards() {
             object: Box::new(Expression::Identifier("obj".into())),
             property: Box::new(Expression::Identifier("a".into())),
             computed: false,
+            span: None,
         }),
         property: Box::new(Expression::Identifier("b".into())),
         computed: false,
+        span: None,
     });
     let nullish_count = instructions
         .iter()
@@ -228,6 +237,7 @@ fn optional_member_ir3_is_deterministic() {
         object: Box::new(Expression::Identifier("x".into())),
         property: Box::new(Expression::Identifier("y".into())),
         computed: false,
+        span: None,
     };
     let a = expr_to_ir3(expr());
     let b = expr_to_ir3(expr());
@@ -240,6 +250,7 @@ fn optional_call_ir3_is_deterministic() {
     let expr = || Expression::OptionalCall {
         callee: Box::new(Expression::Identifier("f".into())),
         arguments: vec![Expression::NumericLiteral(42)],
+        span: None,
     };
     let a = expr_to_ir3(expr());
     let b = expr_to_ir3(expr());
@@ -259,6 +270,7 @@ fn support_matrix_all_optional_chain_variants_lower_successfully() {
                 object: Box::new(Expression::Identifier("obj".into())),
                 property: Box::new(Expression::Identifier("prop".into())),
                 computed: false,
+                span: None,
             },
         ),
         (
@@ -267,6 +279,7 @@ fn support_matrix_all_optional_chain_variants_lower_successfully() {
                 object: Box::new(Expression::Identifier("obj".into())),
                 property: Box::new(Expression::Identifier("idx".into())),
                 computed: true,
+                span: None,
             },
         ),
         (
@@ -274,6 +287,7 @@ fn support_matrix_all_optional_chain_variants_lower_successfully() {
             Expression::OptionalCall {
                 callee: Box::new(Expression::Identifier("fn_val".into())),
                 arguments: vec![],
+                span: None,
             },
         ),
         (
@@ -284,6 +298,7 @@ fn support_matrix_all_optional_chain_variants_lower_successfully() {
                     Expression::Identifier("a".into()),
                     Expression::Identifier("b".into()),
                 ],
+                span: None,
             },
         ),
         (
@@ -293,9 +308,11 @@ fn support_matrix_all_optional_chain_variants_lower_successfully() {
                     object: Box::new(Expression::Identifier("obj".into())),
                     property: Box::new(Expression::Identifier("a".into())),
                     computed: false,
+                    span: None,
                 }),
                 property: Box::new(Expression::Identifier("b".into())),
                 computed: false,
+                span: None,
             },
         ),
     ];

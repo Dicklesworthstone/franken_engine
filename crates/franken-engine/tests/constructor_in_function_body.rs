@@ -172,8 +172,10 @@ fn test_constructor_as_method_argument() {
             object: Box::new(Expression::Identifier("obj".to_string())),
             property: Box::new(Expression::Identifier("method".to_string())),
             computed: false,
+            span: None,
         }),
         arguments: vec![constructor_call],
+        span: None,
     };
 
     let func_decl = create_function_with_constructor(method_call);
@@ -208,9 +210,11 @@ fn test_constructor_chain_with_property_access() {
             object: Box::new(constructor_call),
             property: Box::new(Expression::Identifier("bar".to_string())),
             computed: false,
+            span: None,
         }),
         property: Box::new(Expression::Identifier("baz".to_string())),
         computed: false,
+        span: None,
     };
 
     let func_decl = create_function_with_constructor(property_chain);
@@ -304,6 +308,7 @@ fn test_delete_property_in_function() {
             object: Box::new(Expression::Identifier("obj".to_string())),
             property: Box::new(Expression::Identifier("prop".to_string())),
             computed: false,
+            span: None,
         }),
     };
 

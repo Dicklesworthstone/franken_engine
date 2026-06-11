@@ -5866,6 +5866,7 @@ fn try_parse_postfix(
                                     object: Box::new(Expression::Identifier(strings_param.clone())),
                                     property: Box::new(Expression::Identifier("raw".to_string())),
                                     computed: false,
+                                    span: None,
                                 }),
                                 right: Box::new(Expression::ArrayLiteral(raw_strings)),
                             },
@@ -5883,6 +5884,7 @@ fn try_parse_postfix(
             let strings_with_raw = Expression::Call {
                 callee: Box::new(raw_arrow),
                 arguments: vec![Expression::ArrayLiteral(cooked_strings)],
+                span: None,
             };
             let mut arguments = Vec::with_capacity(expressions.len() + 1);
             arguments.push(strings_with_raw);
@@ -5890,6 +5892,7 @@ fn try_parse_postfix(
             return Some(Ok(Expression::Call {
                 callee: Box::new(callee),
                 arguments,
+                span: Some(*span),
             }));
         }
     }
@@ -5933,11 +5936,13 @@ fn try_parse_postfix(
             Expression::OptionalCall {
                 callee: Box::new(callee),
                 arguments,
+                span: Some(*span),
             }
         } else {
             Expression::Call {
                 callee: Box::new(callee),
                 arguments,
+                span: Some(*span),
             }
         }));
     }
@@ -5981,12 +5986,14 @@ fn try_parse_postfix(
                 object: Box::new(object),
                 property: Box::new(property),
                 computed: true,
+                span: Some(*span),
             }
         } else {
             Expression::Member {
                 object: Box::new(object),
                 property: Box::new(property),
                 computed: true,
+                span: Some(*span),
             }
         }));
     }
@@ -6031,6 +6038,7 @@ fn try_parse_postfix(
                         property_src,
                     ))),
                     computed: false,
+                    span: Some(*span),
                 }
             } else {
                 Expression::Member {
@@ -6039,6 +6047,7 @@ fn try_parse_postfix(
                         property_src,
                     ))),
                     computed: false,
+                    span: Some(*span),
                 }
             }));
         }
@@ -6110,9 +6119,9 @@ fn contains_optional_chain(expression: &Expression) -> bool {
                 || contains_optional_chain(consequent)
                 || contains_optional_chain(alternate)
         }
-        Expression::Call { callee, arguments } => {
-            contains_optional_chain(callee) || arguments.iter().any(contains_optional_chain)
-        }
+        Expression::Call {
+            callee, arguments, ..
+        } => contains_optional_chain(callee) || arguments.iter().any(contains_optional_chain),
         Expression::Member {
             object, property, ..
         } => contains_optional_chain(object) || contains_optional_chain(property),
@@ -8356,6 +8365,7 @@ fn build_sequence_expression(operands: Vec<Expression>, span: &SourceSpan) -> Ex
             is_async: false,
         }),
         arguments: operands,
+        span: Some(*span),
     }
 }
 
@@ -10397,17 +10407,18 @@ mod tests {
                 let declarator = &decl.declarations[0];
                 if let Some(init) = &declarator.initializer {
                     match init {
-                        Expression::Await(inner) => {
-                            assert_eq!(
-                                **inner,
-                                Expression::Call {
-                                    callee: Box::new(Expression::Identifier(
-                                        "fetchData".to_string(),
-                                    )),
-                                    arguments: Vec::new(),
-                                }
-                            );
-                        }
+                        Expression::Await(inner) => match inner.as_ref() {
+                            Expression::Call {
+                                callee, arguments, ..
+                            } => {
+                                assert_eq!(
+                                    **callee,
+                                    Expression::Identifier("fetchData".to_string())
+                                );
+                                assert!(arguments.is_empty());
+                            }
+                            _ => panic!("expected call expression in await"),
+                        },
                         _ => panic!("expected await expression in initializer"),
                     }
                 } else {
@@ -10426,15 +10437,15 @@ mod tests {
             .expect("parse");
         match &tree.body[0] {
             Statement::Expression(expr) => match &expr.expression {
-                Expression::Await(inner) => {
-                    assert_eq!(
-                        **inner,
-                        Expression::Call {
-                            callee: Box::new(Expression::Identifier("doSomething".to_string(),)),
-                            arguments: Vec::new(),
-                        }
-                    );
-                }
+                Expression::Await(inner) => match inner.as_ref() {
+                    Expression::Call {
+                        callee, arguments, ..
+                    } => {
+                        assert_eq!(**callee, Expression::Identifier("doSomething".to_string()));
+                        assert!(arguments.is_empty());
+                    }
+                    _ => panic!("expected call expression in await"),
+                },
                 _ => panic!("expected await expression"),
             },
             _ => panic!("expected expression statement"),
@@ -13052,6 +13063,49 @@ mod tests {
         }
     }
 
+    // bd-fqlfw.1.1 (E1.T1): expression-level Member/Call nodes — the carriers of
+    // capability/IFC-relevant accessors (`process.env.X`, bare `eval(...)`) — carry
+    // a `SourceSpan` populated by the parser. Spans are currently statement-granular
+    // (the enclosing source region); precise sub-expression offsets are a follow-up.
+    #[test]
+    fn member_and_call_expressions_carry_source_spans_bd_fqlfw_1_1() {
+        // `process.env.HOME` parses to a Member accessor that carries a span.
+        let src = "process.env.HOME";
+        let tree = parse_script(src);
+        let Statement::Expression(stmt) = &tree.body[0] else {
+            panic!("expected expression statement");
+        };
+        let stmt_span = stmt.span;
+        match &stmt.expression {
+            Expression::Member { span, .. } => {
+                let span = span.expect("parser must populate Member span");
+                // The accessor span maps onto the real source region.
+                assert_eq!(span, stmt_span, "member span maps to the source region");
+                assert!(
+                    span.start_offset <= span.end_offset
+                        && span.end_offset <= src.len() as u64 + 1,
+                    "member span must map into source offsets (got {span:?})"
+                );
+            }
+            other => panic!("expected Member, got {other:?}"),
+        }
+
+        // A bare `eval(...)` call — a dynamic-code accessor — also carries a span.
+        let src = "eval(\"x\")";
+        let tree = parse_script(src);
+        match first_expr(&tree) {
+            Expression::Call { span, .. } => {
+                let span = span.expect("parser must populate Call span");
+                assert!(
+                    span.start_offset <= span.end_offset
+                        && span.end_offset <= src.len() as u64 + 1,
+                    "call span must map into source offsets (got {span:?})"
+                );
+            }
+            other => panic!("expected Call, got {other:?}"),
+        }
+    }
+
     #[test]
     fn binary_addition() {
         let tree = parse_script("a + b");
@@ -13286,7 +13340,7 @@ mod tests {
     fn call_expression_no_args() {
         let tree = parse_script("foo()");
         match first_expr(&tree) {
-            Expression::Call { callee, arguments } => {
+            Expression::Call { callee, arguments, .. } => {
                 assert!(matches!(callee.as_ref(), Expression::Identifier(n) if n == "foo"));
                 assert!(arguments.is_empty());
             }
@@ -13298,7 +13352,7 @@ mod tests {
     fn call_expression_with_args() {
         let tree = parse_script("foo(1, 2)");
         match first_expr(&tree) {
-            Expression::Call { callee, arguments } => {
+            Expression::Call { callee, arguments, .. } => {
                 assert!(matches!(callee.as_ref(), Expression::Identifier(n) if n == "foo"));
                 assert_eq!(arguments.len(), 2);
                 assert!(matches!(&arguments[0], Expression::NumericLiteral(1)));
@@ -13316,6 +13370,7 @@ mod tests {
                 object,
                 property,
                 computed,
+                ..
             } => {
                 assert!(matches!(object.as_ref(), Expression::Identifier(n) if n == "obj"));
                 assert!(matches!(property.as_ref(), Expression::Identifier(n) if n == "prop"));
@@ -13333,6 +13388,7 @@ mod tests {
                 object,
                 property,
                 computed,
+                ..
             } => {
                 assert!(matches!(object.as_ref(), Expression::Identifier(n) if n == "arr"));
                 assert!(matches!(property.as_ref(), Expression::NumericLiteral(0)));
@@ -13456,6 +13512,7 @@ mod tests {
                 object,
                 property,
                 computed,
+                ..
             } => {
                 assert!(!computed);
                 assert!(matches!(property.as_ref(), Expression::Identifier(n) if n == "c"));
@@ -13464,6 +13521,7 @@ mod tests {
                         object: inner_obj,
                         property: inner_prop,
                         computed: inner_computed,
+                        ..
                     } => {
                         assert!(!inner_computed);
                         assert!(
@@ -14437,7 +14495,7 @@ process.exit(attackSucceeded ? 0 : 1);"#,
     fn tagged_template_expression_is_call_with_template_argument() {
         let tree = parse_script("render`hello ${name}`");
         match first_expr(&tree) {
-            Expression::Call { callee, arguments } => {
+            Expression::Call { callee, arguments, .. } => {
                 assert!(
                     matches!(callee.as_ref(), Expression::Identifier(name) if name == "render")
                 );
@@ -14455,7 +14513,7 @@ process.exit(attackSucceeded ? 0 : 1);"#,
     fn tagged_template_member_expression_is_call_with_template_argument() {
         let tree = parse_script("view.render`ok`");
         match first_expr(&tree) {
-            Expression::Call { callee, arguments } => {
+            Expression::Call { callee, arguments, .. } => {
                 assert!(matches!(callee.as_ref(), Expression::Member { .. }));
                 // tag(stringsObject): the `.raw`-attaching IIFE, no substitutions
                 assert_eq!(arguments.len(), 1);
@@ -14840,13 +14898,14 @@ process.exit(attackSucceeded ? 0 : 1);"#,
     fn regexp_literal_receiver_member_call_parses_bd_wni4m() {
         let tree = parse_script(r#"/ab/.test("xabz");"#);
         match first_expr(&tree) {
-            Expression::Call { callee, arguments } => {
+            Expression::Call { callee, arguments, .. } => {
                 assert_eq!(arguments.len(), 1);
                 match callee.as_ref() {
                     Expression::Member {
                         object,
                         property,
                         computed,
+                        ..
                     } => {
                         assert!(!computed);
                         assert!(matches!(

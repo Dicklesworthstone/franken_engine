@@ -83,6 +83,7 @@ fn test_optional_chaining_in_function_body() {
         object: Box::new(Expression::Identifier("obj".to_string())),
         property: Box::new(Expression::Identifier("prop".to_string())),
         computed: false,
+        span: None,
     };
 
     let func_decl = create_function_with_expression(optional_member);
@@ -137,11 +138,14 @@ fn test_nested_optional_chaining() {
                 object: Box::new(Expression::Identifier("obj".to_string())),
                 property: Box::new(Expression::Identifier("prop".to_string())),
                 computed: false,
+                span: None,
             }),
             property: Box::new(Expression::Identifier("method".to_string())),
             computed: false,
+            span: None,
         }),
         arguments: vec![],
+        span: None,
     };
 
     let func_decl = create_function_with_expression(nested_optional);
@@ -167,6 +171,7 @@ fn test_control_flow_deterministic_lowering() {
             object: Box::new(Expression::Identifier("a".to_string())),
             property: Box::new(Expression::Identifier("b".to_string())),
             computed: false,
+            span: None,
         }),
         operator: BinaryOperator::NullishCoalescing,
         right: Box::new(Expression::Identifier("fallback".to_string())),
@@ -214,6 +219,7 @@ fn test_delete_simple_property() {
             object: Box::new(Expression::Identifier("obj".to_string())),
             property: Box::new(Expression::Identifier("prop".to_string())),
             computed: false,
+            span: None,
         }),
     };
 
@@ -239,6 +245,7 @@ fn test_delete_computed_property() {
             object: Box::new(Expression::Identifier("obj".to_string())),
             property: Box::new(Expression::Identifier("key".to_string())),
             computed: true,
+            span: None,
         }),
     };
 
@@ -265,9 +272,11 @@ fn test_delete_nested_property() {
                 object: Box::new(Expression::Identifier("obj".to_string())),
                 property: Box::new(Expression::Identifier("nested".to_string())),
                 computed: false,
+                span: None,
             }),
             property: Box::new(Expression::Identifier("prop".to_string())),
             computed: false,
+            span: None,
         }),
     };
 
@@ -301,6 +310,7 @@ fn test_property_operations_deterministic_lowering() {
             object: Box::new(Expression::Identifier("target".to_string())),
             property: Box::new(Expression::StringLiteral("dynamicKey".to_string())),
             computed: true,
+            span: None,
         }),
     };
 

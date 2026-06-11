@@ -1419,7 +1419,7 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
             walk_expression(state, object, span);
             walk_expression(state, property, span);
         }
-        Expression::OptionalCall { callee, arguments } => {
+        Expression::OptionalCall { callee, arguments, .. } => {
             walk_expression(state, callee, span);
             for arg in arguments {
                 walk_expression(state, arg, span);
@@ -1597,8 +1597,8 @@ fn initializer_self_reference(expr: &Expression, targets: &BTreeSet<&str>) -> Op
         } => initializer_self_reference(test, targets)
             .or_else(|| initializer_self_reference(consequent, targets))
             .or_else(|| initializer_self_reference(alternate, targets)),
-        Expression::Call { callee, arguments }
-        | Expression::OptionalCall { callee, arguments }
+        Expression::Call { callee, arguments, .. }
+        | Expression::OptionalCall { callee, arguments, .. }
         | Expression::New { callee, arguments } => initializer_self_reference(callee, targets)
             .or_else(|| {
                 arguments
@@ -1609,11 +1609,13 @@ fn initializer_self_reference(expr: &Expression, targets: &BTreeSet<&str>) -> Op
             object,
             property,
             computed,
+            ..
         }
         | Expression::OptionalMember {
             object,
             property,
             computed,
+            ..
         } => initializer_self_reference(object, targets).or_else(|| {
             // Only a computed member (`obj[x]`) references the variable `x`;
             // a static member (`obj.x`) names a property, not a binding.
@@ -1687,7 +1689,7 @@ fn collect_identifier_refs(expr: &Expression, out: &mut Vec<String>) {
             collect_identifier_refs(object, out);
             collect_identifier_refs(property, out);
         }
-        Expression::OptionalCall { callee, arguments } => {
+        Expression::OptionalCall { callee, arguments, .. } => {
             collect_identifier_refs(callee, out);
             for arg in arguments {
                 collect_identifier_refs(arg, out);
@@ -3660,6 +3662,7 @@ mod tests {
                         object: Box::new(Expression::Identifier("obj".to_string())),
                         property: Box::new(Expression::Identifier("prop".to_string())),
                         computed: false,
+                        span: None,
                     }),
                 },
                 1,
@@ -3823,6 +3826,7 @@ mod tests {
                     arguments: vec![Expression::Await(Box::new(Expression::Identifier(
                         "p".to_string(),
                     )))],
+                    span: None,
                 },
                 1,
             )],
@@ -3947,6 +3951,7 @@ mod tests {
                     Expression::Call {
                         callee: Box::new(Expression::Identifier("foo".to_string())),
                         arguments: vec![Expression::Identifier("x".to_string())],
+                        span: None,
                     },
                     1,
                 ),
@@ -4152,6 +4157,7 @@ mod tests {
                 Expression::Identifier("x".to_string()),
                 Expression::NumericLiteral(1),
             ],
+            span: None,
         };
         let mut refs = Vec::new();
         collect_identifier_refs(&expr, &mut refs);
@@ -4307,6 +4313,7 @@ mod tests {
                     object: Box::new(Expression::Identifier("obj".to_string())),
                     property: Box::new(Expression::Identifier("prop".to_string())),
                     computed: false,
+                    span: None,
                 },
                 1,
             )],
@@ -4952,6 +4959,7 @@ mod tests {
             object: Box::new(Expression::Identifier("obj".to_string())),
             property: Box::new(Expression::Identifier("prop".to_string())),
             computed: false,
+            span: None,
         };
         let mut refs = Vec::new();
         collect_identifier_refs(&expr, &mut refs);
@@ -5019,6 +5027,7 @@ mod tests {
                     )))),
                     property: Box::new(Expression::Identifier("then".to_string())),
                     computed: false,
+                    span: None,
                 },
                 1,
             )],
@@ -5162,6 +5171,7 @@ mod tests {
                         object: Box::new(Expression::Identifier("x".to_string())),
                         property: Box::new(Expression::Identifier("prop".to_string())),
                         computed: false,
+                        span: None,
                     },
                     1,
                 ),

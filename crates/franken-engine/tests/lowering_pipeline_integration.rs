@@ -1613,6 +1613,7 @@ fn import_then_export_then_expression_complex_module() {
                 expression: Expression::Call {
                     callee: Box::new(Expression::Identifier("sink".to_string())),
                     arguments: vec![Expression::Identifier("React".to_string())],
+                    span: None,
                 },
                 span: span(),
             }),
@@ -1749,6 +1750,7 @@ fn pipeline_required_capabilities_aggregate_in_ir3() {
                 expression: Expression::Call {
                     callee: Box::new(Expression::Identifier("sink".to_string())),
                     arguments: vec![Expression::Identifier("fs".to_string())],
+                    span: None,
                 },
                 span: span(),
             }),

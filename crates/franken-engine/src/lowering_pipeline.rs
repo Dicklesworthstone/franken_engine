@@ -7063,6 +7063,7 @@ fn lower_expression_to_ir1(
                         object,
                         property,
                         computed,
+                        ..
                     } => {
                         lower_expression_to_ir1(
                             object,
@@ -7226,6 +7227,7 @@ fn lower_expression_to_ir1(
                 object,
                 property,
                 computed,
+                ..
             } = left.as_ref()
             {
                 if matches!(
@@ -7595,6 +7597,7 @@ fn lower_expression_to_ir1(
                             object: Box::new(Expression::Identifier(temp_name.clone())),
                             property: Box::new(Expression::NumericLiteral(index as i64)),
                             computed: true,
+                            span: None,
                         }),
                     };
                     lower_expression_to_ir1(
@@ -7688,7 +7691,7 @@ fn lower_expression_to_ir1(
                 binding_id: result_binding,
             });
         }
-        Expression::Call { callee, arguments } => {
+        Expression::Call { callee, arguments, .. } => {
             // Spread in call arguments (bd-hsv77): `f(a, ...xs, b)` must expand
             // the spread into positional args. Build the argument array (reusing
             // the array-literal spread lowering) and dispatch via
@@ -7867,6 +7870,7 @@ fn lower_expression_to_ir1(
                     object,
                     property,
                     computed,
+                    ..
                 } = callee.as_ref()
                 {
                     lower_member_spread_call_to_reflect_apply(
@@ -7887,6 +7891,7 @@ fn lower_expression_to_ir1(
                     object,
                     property,
                     computed,
+                    ..
                 } = callee.as_ref()
                 {
                     lower_optional_member_spread_call_to_reflect_apply(
@@ -8452,6 +8457,7 @@ fn lower_expression_to_ir1(
                 object,
                 property,
                 computed,
+                ..
             } = callee.as_ref()
             {
                 let temp_obj = alloc_internal_binding(
@@ -8675,6 +8681,7 @@ fn lower_expression_to_ir1(
             object,
             property,
             computed,
+            ..
         } => {
             // Check for ambient authority violation on member access
             if let Expression::Identifier(object_name) = object.as_ref() {
@@ -8758,6 +8765,7 @@ fn lower_expression_to_ir1(
             object,
             property,
             computed,
+            ..
         } => {
             // Desugar `obj?.prop` / `obj?.[expr]` into:
             //   temp_obj = <object>
@@ -8845,7 +8853,7 @@ fn lower_expression_to_ir1(
                 binding_id: result_binding,
             });
         }
-        Expression::OptionalCall { callee, arguments } => {
+        Expression::OptionalCall { callee, arguments, .. } => {
             // Desugar `fn?.()` / `obj.m?.()` into:
             //   temp_callee = <callee>
             //   if (temp_callee == null || temp_callee == undefined) goto skip
@@ -10129,6 +10137,7 @@ fn date_builtin_call_capability(
         object,
         property,
         computed,
+        ..
     } = callee
     else {
         return None;
@@ -10161,6 +10170,7 @@ fn promise_builtin_call_capability(
         object,
         property,
         computed,
+        ..
     } = callee
     else {
         return None;
@@ -10194,6 +10204,7 @@ fn console_builtin_call_capability(
         object,
         property,
         computed,
+        ..
     } = callee
     else {
         return None;
@@ -10285,6 +10296,7 @@ fn reflect_builtin_call_capability(
         object,
         property,
         computed,
+        ..
     } = callee
     else {
         return None;
@@ -10387,6 +10399,7 @@ fn math_builtin_call_capability(
         object,
         property,
         computed,
+        ..
     } = callee
     else {
         return None;
@@ -10446,6 +10459,7 @@ fn object_json_builtin_call_capability(
         object,
         property,
         computed,
+        ..
     } = callee
     else {
         return None;
@@ -10522,6 +10536,7 @@ fn object_receiver_static_call_capability(
         object,
         property,
         computed,
+        ..
     } = callee
     else {
         return None;
@@ -10564,6 +10579,7 @@ fn number_static_builtin_call_capability(
         object,
         property,
         computed,
+        ..
     } = callee
     else {
         return None;
@@ -10594,6 +10610,7 @@ fn array_literal_builtin_call_capability(callee: &Expression) -> Option<&'static
         object,
         property,
         computed,
+        ..
     } = callee
     else {
         return None;
@@ -10614,6 +10631,7 @@ fn string_literal_builtin_call_capability(callee: &Expression) -> Option<&'stati
         object,
         property,
         computed,
+        ..
     } = callee
     else {
         return None;
@@ -13416,6 +13434,7 @@ mod tests {
                 object: Box::new(Expression::Identifier("obj".into())),
                 property: Box::new(Expression::Identifier("prop".into())),
                 computed: false,
+                span: None,
             }),
             right: Box::new(Expression::NumericLiteral(1)),
         });
@@ -13486,6 +13505,7 @@ mod tests {
                 Expression::NumericLiteral(1),
                 Expression::StringLiteral("a".into()),
             ],
+            span: None,
         });
         let result = lower_ir0_to_ir1(&ir0).expect("call should lower");
         assert!(
@@ -13503,6 +13523,7 @@ mod tests {
             object: Box::new(Expression::Identifier("obj".into())),
             property: Box::new(Expression::Identifier("key".into())),
             computed: false,
+            span: None,
         });
         let result = lower_ir0_to_ir1(&ir0).expect("member should lower");
         assert!(result.module.ops.iter().any(|op| matches!(
@@ -13519,6 +13540,7 @@ mod tests {
             object: Box::new(Expression::Identifier("obj".into())),
             property: Box::new(Expression::Identifier("key".into())),
             computed: true,
+            span: None,
         });
         let result = lower_ir0_to_ir1(&ir0).expect("computed member should lower");
         assert!(result.module.ops.iter().any(|op| matches!(
@@ -13535,6 +13557,7 @@ mod tests {
             object: Box::new(Expression::Identifier("obj".into())),
             property: Box::new(Expression::Identifier("key".into())),
             computed: false,
+            span: None,
         });
         let result = lower_ir0_to_ir1(&ir0).expect("optional member should lower");
 
@@ -13566,9 +13589,11 @@ mod tests {
             object: Box::new(Expression::Call {
                 callee: Box::new(Expression::Identifier("make_obj".into())),
                 arguments: vec![],
+                span: None,
             }),
             property: Box::new(Expression::Identifier("value".into())),
             computed: false,
+            span: None,
         });
         let result = lower_ir0_to_ir1(&ir0).expect("optional member should lower");
 
@@ -13590,6 +13615,7 @@ mod tests {
             object: Box::new(Expression::Identifier("obj".into())),
             property: Box::new(Expression::NumericLiteral(7)),
             computed: true,
+            span: None,
         });
         let result = lower_ir0_to_ir1(&ir0).expect("computed optional member should lower");
 
@@ -13643,9 +13669,11 @@ mod tests {
                 object: Box::new(Expression::Identifier("obj".into())),
                 property: Box::new(Expression::Identifier("nested".into())),
                 computed: false,
+                span: None,
             }),
             property: Box::new(Expression::Identifier("value".into())),
             computed: false,
+            span: None,
         });
         let result = lower_ir0_to_ir1(&ir0).expect("nested optional member should lower");
 
@@ -13668,9 +13696,11 @@ mod tests {
                 object: Box::new(Expression::Identifier("obj".into())),
                 property: Box::new(Expression::Identifier("nested".into())),
                 computed: false,
+                span: None,
             }),
             property: Box::new(Expression::Identifier("value".into())),
             computed: false,
+            span: None,
         });
         let result = lower_ir0_to_ir1(&ir0).expect("grouped optional member should lower");
 
@@ -14147,6 +14177,7 @@ mod tests {
                 object: Box::new(Expression::Identifier("obj".into())),
                 property: Box::new(Expression::Identifier("field".into())),
                 computed: true,
+                span: None,
             }),
             right: Box::new(Expression::NumericLiteral(7)),
         });
@@ -15135,12 +15166,14 @@ mod tests {
                 object: Box::new(Expression::Identifier("React".into())),
                 property: Box::new(Expression::Identifier("createElement".into())),
                 computed: false,
+                span: None,
             }),
             arguments: vec![
                 Expression::StringLiteral("h1".into()),
                 Expression::NullLiteral,
                 Expression::StringLiteral("React DOM Client Test".into()),
             ],
+            span: None,
         };
         let ir0 = stmt_ir0(vec![Statement::FunctionDeclaration(FunctionDeclaration {
             name: Some("App".into()),
@@ -15191,6 +15224,7 @@ mod tests {
         let ir0 = expr_ir0(Expression::Call {
             callee: Box::new(Expression::Identifier("f".into())),
             arguments: vec![],
+            span: None,
         });
         let result = lower_ir0_to_ir1(&ir0).expect("0-arg call should lower");
         assert!(
@@ -15736,6 +15770,7 @@ mod tests {
             object: Box::new(Expression::Identifier("obj".to_string())),
             property: Box::new(Expression::Identifier("prop".to_string())),
             computed: false,
+            span: None,
         });
         let result = lower_ir0_to_ir1(&ir0).expect("optional member should lower");
         // Must contain JumpIfNullish for the short-circuit path.
@@ -15775,6 +15810,7 @@ mod tests {
             object: Box::new(Expression::Identifier("arr".to_string())),
             property: Box::new(Expression::NumericLiteral(0)),
             computed: true,
+            span: None,
         });
         let result = lower_ir0_to_ir1(&ir0).expect("optional computed member should lower");
         assert!(
@@ -15802,6 +15838,7 @@ mod tests {
         let ir0 = expr_ir0(Expression::OptionalCall {
             callee: Box::new(Expression::Identifier("fn_val".to_string())),
             arguments: vec![],
+            span: None,
         });
         let result = lower_ir0_to_ir1(&ir0).expect("optional call should lower");
         assert!(
@@ -15837,6 +15874,7 @@ mod tests {
         let ir0 = expr_ir0(Expression::OptionalCall {
             callee: Box::new(Expression::Identifier("maybe".to_string())),
             arguments: vec![Expression::NumericLiteral(1), Expression::NumericLiteral(2)],
+            span: None,
         });
         let result = lower_ir0_to_ir1(&ir0).expect("optional call with args should lower");
         assert!(
@@ -15856,6 +15894,7 @@ mod tests {
             object: Box::new(Expression::Identifier("obj".to_string())),
             property: Box::new(Expression::Identifier("prop".to_string())),
             computed: false,
+            span: None,
         });
         let ir1 = lower_ir0_to_ir1(&ir0).expect("IR0→IR1");
         let ir2 = lower_ir1_to_ir2(&ir1.module).expect("IR1→IR2");
@@ -15892,6 +15931,7 @@ mod tests {
         let ir0 = expr_ir0(Expression::OptionalCall {
             callee: Box::new(Expression::Identifier("fn_val".to_string())),
             arguments: vec![Expression::NumericLiteral(42)],
+            span: None,
         });
         let ir1 = lower_ir0_to_ir1(&ir0).expect("IR0→IR1");
         let ir2 = lower_ir1_to_ir2(&ir1.module).expect("IR1→IR2");
@@ -15920,11 +15960,13 @@ mod tests {
             object: Box::new(Expression::Identifier("a".to_string())),
             property: Box::new(Expression::Identifier("b".to_string())),
             computed: false,
+            span: None,
         };
         let ir0 = expr_ir0(Expression::OptionalMember {
             object: Box::new(inner),
             property: Box::new(Expression::Identifier("c".to_string())),
             computed: false,
+            span: None,
         });
         let ir1 = lower_ir0_to_ir1(&ir0).expect("nested optional chain should lower");
         // Should emit two JumpIfNullish ops (one per ?. in the chain).
@@ -17061,6 +17103,7 @@ mod tests {
                     expression: Expression::Call {
                         callee: Box::new(Expression::Identifier("log".to_string())),
                         arguments: vec![Expression::Identifier("i".to_string())],
+                        span: None,
                     },
                     span: span(),
                 })),

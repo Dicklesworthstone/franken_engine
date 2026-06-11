@@ -1737,6 +1737,7 @@ fn lowering_delete_member_expression_emits_delete_property() {
                 object: Box::new(Expression::Identifier("obj".to_string())),
                 property: Box::new(Expression::Identifier("prop".to_string())),
                 computed: false,
+                span: None,
             }),
         })],
     );
@@ -1859,6 +1860,7 @@ fn lowering_call_expression() {
         vec![make_expr_stmt(Expression::Call {
             callee: Box::new(Expression::Identifier("console".to_string())),
             arguments: vec![Expression::StringLiteral("hello".to_string())],
+            span: None,
         })],
     );
     let output = run_full(&ir0);
@@ -1882,6 +1884,7 @@ fn lowering_call_expression_no_args() {
         vec![make_expr_stmt(Expression::Call {
             callee: Box::new(Expression::Identifier("fn".to_string())),
             arguments: vec![],
+            span: None,
         })],
     );
     let output = run_full(&ir0);
@@ -1899,6 +1902,7 @@ fn lowering_call_expression_multiple_args() {
                 Expression::NumericLiteral(2),
                 Expression::NumericLiteral(3),
             ],
+            span: None,
         })],
     );
     let ir1 = lower_ir0_to_ir1(&ir0).unwrap();
@@ -1918,6 +1922,7 @@ fn lowering_member_expression() {
             object: Box::new(Expression::Identifier("obj".to_string())),
             property: Box::new(Expression::Identifier("prop".to_string())),
             computed: false,
+            span: None,
         })],
     );
     let output = run_full(&ir0);
@@ -1942,6 +1947,7 @@ fn lowering_computed_member_expression() {
             object: Box::new(Expression::Identifier("obj".to_string())),
             property: Box::new(Expression::Identifier("propKey".to_string())),
             computed: true,
+            span: None,
         })],
     );
     let output = run_full(&ir0);
@@ -1971,6 +1977,7 @@ fn lowering_computed_member_assignment() {
                 object: Box::new(Expression::Identifier("obj".to_string())),
                 property: Box::new(Expression::Identifier("propKey".to_string())),
                 computed: true,
+                span: None,
             }),
             right: Box::new(Expression::NumericLiteral(7)),
         })],
@@ -2025,6 +2032,7 @@ fn lowering_logical_compound_member_assignment_uses_short_circuit_ops() {
                     Expression::Identifier("prop".to_string())
                 }),
                 computed,
+                span: None,
             }),
             right: Box::new(Expression::NumericLiteral(7)),
         }));
@@ -2331,6 +2339,7 @@ fn determinism_for_with_complex_body() {
             make_block(vec![make_expr_stmt(Expression::Call {
                 callee: Box::new(Expression::Identifier("log".to_string())),
                 arguments: vec![Expression::Identifier("i".to_string())],
+                span: None,
             })]),
         )],
     );
@@ -2617,6 +2626,7 @@ fn ir3_member_expression_produces_get_property() {
             object: Box::new(Expression::Identifier("obj".to_string())),
             property: Box::new(Expression::Identifier("field".to_string())),
             computed: false,
+            span: None,
         })],
     );
     let output = run_full(&ir0);
@@ -2724,6 +2734,7 @@ fn witness_invariants_pass_for_expressions() {
             Expression::Call {
                 callee: Box::new(Expression::Identifier("f".to_string())),
                 arguments: vec![Expression::NumericLiteral(1)],
+                span: None,
             },
         ),
         (
@@ -2732,6 +2743,7 @@ fn witness_invariants_pass_for_expressions() {
                 object: Box::new(Expression::Identifier("o".to_string())),
                 property: Box::new(Expression::Identifier("p".to_string())),
                 computed: false,
+                span: None,
             },
         ),
         ("this", Expression::This),

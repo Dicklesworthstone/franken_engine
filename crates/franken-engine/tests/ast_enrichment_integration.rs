@@ -110,6 +110,7 @@ fn enrichment_full_program_hash_deterministic_across_constructions() {
                         argument: Some(Expression::Call {
                             callee: Box::new(id("h")),
                             arguments: vec![str_lit("div"), id("props")],
+                            span: None,
                         }),
                         span: s0(),
                     })],
@@ -213,6 +214,7 @@ fn enrichment_nested_function_declarations_hash_determinism() {
                 argument: Some(Expression::Call {
                     callee: Box::new(id("inner")),
                     arguments: vec![id("x")],
+                    span: None,
                 }),
                 span: s0(),
             }),
@@ -717,6 +719,7 @@ fn enrichment_try_catch_finally_full_serde() {
         block: block(vec![expr_stmt(Expression::Call {
             callee: Box::new(id("riskyOp")),
             arguments: vec![],
+            span: None,
         })]),
         handler: Some(CatchClause {
             parameter: Some("err".to_string()),
@@ -725,14 +728,17 @@ fn enrichment_try_catch_finally_full_serde() {
                     object: Box::new(id("console")),
                     property: Box::new(id("error")),
                     computed: false,
+                    span: None,
                 }),
                 arguments: vec![id("err")],
+                span: None,
             })]),
             span: s0(),
         }),
         finalizer: Some(block(vec![expr_stmt(Expression::Call {
             callee: Box::new(id("cleanup")),
             arguments: vec![],
+            span: None,
         })])),
         span: s0(),
     });
@@ -765,6 +771,7 @@ fn enrichment_switch_with_default_and_fallthrough_serde() {
                     expr_stmt(Expression::Call {
                         callee: Box::new(id("begin")),
                         arguments: vec![],
+                        span: None,
                     }),
                     Statement::Break(BreakStatement {
                         label: None,
@@ -808,8 +815,10 @@ fn enrichment_for_in_with_const_binding() {
                 object: Box::new(id("console")),
                 property: Box::new(id("log")),
                 computed: false,
+                span: None,
             }),
             arguments: vec![id("key")],
+            span: None,
         })),
         span: s0(),
     };
@@ -831,8 +840,10 @@ fn enrichment_for_of_without_binding_kind() {
                 object: Box::new(id("map")),
                 property: Box::new(id("entries")),
                 computed: false,
+                span: None,
             }),
             arguments: vec![],
+            span: None,
         },
         body: Box::new(Statement::Block(block(vec![]))),
         span: s0(),
@@ -896,8 +907,10 @@ fn enrichment_optional_chaining_member_and_call() {
             object: Box::new(id("obj")),
             property: Box::new(id("method")),
             computed: false,
+            span: None,
         }),
         arguments: vec![num(1), num(2)],
+        span: None,
     };
     let json = serde_json::to_string(&expr).unwrap();
     let restored: Expression = serde_json::from_str(&json).unwrap();
@@ -910,6 +923,7 @@ fn enrichment_optional_member_computed() {
         object: Box::new(id("arr")),
         property: Box::new(num(0)),
         computed: true,
+        span: None,
     };
     let json = serde_json::to_string(&expr).unwrap();
     let restored: Expression = serde_json::from_str(&json).unwrap();
@@ -967,6 +981,7 @@ fn enrichment_object_literal_computed_key() {
         key: Expression::Call {
             callee: Box::new(id("Symbol")),
             arguments: vec![str_lit("key")],
+            span: None,
         },
         value: num(42),
         computed: true,
@@ -1074,6 +1089,7 @@ fn enrichment_realistic_module_round_trip() {
                     initializer: Some(Expression::Call {
                         callee: Box::new(id("useState")),
                         arguments: vec![num(0)],
+                        span: None,
                     }),
                     span: span(61, 95),
                 }],
@@ -1090,6 +1106,7 @@ fn enrichment_realistic_module_round_trip() {
                         left: Box::new(id("count")),
                         right: Box::new(num(1)),
                     }],
+                    span: None,
                 })],
             )),
             // export default increment;
@@ -1479,6 +1496,7 @@ fn enrichment_conditional_with_call_chains() {
         consequent: Box::new(Expression::Call {
             callee: Box::new(id("x")),
             arguments: vec![],
+            span: None,
         }),
         alternate: Box::new(Expression::Identifier("x".to_string())),
     };
@@ -1497,6 +1515,7 @@ fn enrichment_object_pattern_property_computed_vs_shorthand() {
         key: Expression::Call {
             callee: Box::new(id("Symbol")),
             arguments: vec![str_lit("key")],
+            span: None,
         },
         value: BindingPattern::Identifier("val".to_string()),
         computed: true,
@@ -1525,6 +1544,7 @@ fn enrichment_await_deeply_nested() {
         Box::new(Expression::Call {
             callee: Box::new(id("fetch")),
             arguments: vec![str_lit("https://example.com")],
+            span: None,
         }),
     )))));
     let json = serde_json::to_string(&expr).unwrap();
@@ -1590,20 +1610,24 @@ fn enrichment_all_expression_canonical_kinds_unique() {
         Expression::Call {
             callee: Box::new(id("f")),
             arguments: vec![],
+            span: None,
         },
         Expression::Member {
             object: Box::new(id("o")),
             property: Box::new(id("p")),
             computed: false,
+            span: None,
         },
         Expression::OptionalCall {
             callee: Box::new(id("f")),
             arguments: vec![],
+            span: None,
         },
         Expression::OptionalMember {
             object: Box::new(id("o")),
             property: Box::new(id("p")),
             computed: false,
+            span: None,
         },
         Expression::This,
         Expression::ArrayLiteral(vec![]),

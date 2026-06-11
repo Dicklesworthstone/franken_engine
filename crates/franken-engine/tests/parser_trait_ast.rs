@@ -1016,6 +1016,7 @@ fn parser_optional_chain_emits_member_expression() {
             object,
             property,
             computed,
+            ..
         } = init
         {
             assert!(!computed);
@@ -1041,6 +1042,7 @@ fn parser_optional_chain_emits_computed_member_expression() {
             object,
             property,
             computed,
+            ..
         } = init
         {
             assert!(*computed);
@@ -1062,7 +1064,10 @@ fn parser_optional_chain_emits_call_expression() {
         .expect("parse should succeed");
     if let Statement::VariableDeclaration(decl) = &tree.body[0] {
         let init = decl.declarations[0].initializer.as_ref().unwrap();
-        if let Expression::OptionalCall { callee, arguments } = init {
+        if let Expression::OptionalCall {
+            callee, arguments, ..
+        } = init
+        {
             assert!(matches!(callee.as_ref(), Expression::Identifier(name) if name == "maybeFn"));
             assert_eq!(arguments.len(), 2);
             assert!(
@@ -1095,7 +1100,10 @@ fn parser_optional_chain_supports_nested_package_style_expression() {
         {
             assert_eq!(*operator, BinaryOperator::NullishCoalescing);
             assert!(matches!(right.as_ref(), Expression::Identifier(name) if name == "fallback"));
-            if let Expression::OptionalCall { callee, arguments } = left.as_ref() {
+            if let Expression::OptionalCall {
+                callee, arguments, ..
+            } = left.as_ref()
+            {
                 assert!(
                     matches!(&arguments[..], [Expression::Identifier(argument)] if argument == "ctx")
                 );
@@ -1103,6 +1111,7 @@ fn parser_optional_chain_supports_nested_package_style_expression() {
                     object,
                     property,
                     computed,
+                    ..
                 } = callee.as_ref()
                 {
                     assert!(!computed);
@@ -1113,6 +1122,7 @@ fn parser_optional_chain_supports_nested_package_style_expression() {
                         object,
                         property,
                         computed,
+                        ..
                     } = object.as_ref()
                     {
                         assert!(*computed);
@@ -1360,12 +1370,20 @@ fn parser_tagged_meta_frontier_accepts_tagged_template_expressions() {
     let Statement::Expression(statement) = &tree.body[0] else {
         panic!("expected expression statement");
     };
-    let Expression::Call { callee, arguments } = &statement.expression else {
+    let Expression::Call {
+        callee, arguments, ..
+    } = &statement.expression
+    else {
         panic!("expected tagged template to parse as Call");
     };
     assert!(matches!(callee.as_ref(), Expression::Identifier(name) if name == "render"));
-    assert_eq!(arguments.len(), 1);
-    assert!(matches!(&arguments[0], Expression::TemplateLiteral { .. }));
+    // tag(stringsObject, ...substitutions): arg0 is the `.raw`-attaching IIFE
+    // wrapping the cooked array; then the `name` substitution (the desugar
+    // shape shipped with the String.raw work — mirrors the parser unit test
+    // tagged_template_expression_is_call_with_template_argument).
+    assert_eq!(arguments.len(), 2);
+    assert!(matches!(&arguments[0], Expression::Call { .. }));
+    assert!(matches!(&arguments[1], Expression::Identifier(n) if n == "name"));
     assert_eq!(statement.span, single_line_source_span(source));
 }
 

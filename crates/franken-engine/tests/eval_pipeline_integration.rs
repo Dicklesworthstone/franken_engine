@@ -617,6 +617,7 @@ fn ir3_execution_of_logical_compound_member_assignment_preserves_result_semantic
                     Expression::Identifier("x".to_string())
                 }),
                 computed,
+                span: None,
             }),
             right: Box::new(rhs),
         }));
@@ -628,6 +629,7 @@ fn ir3_execution_of_logical_compound_member_assignment_preserves_result_semantic
                 Expression::Identifier("x".to_string())
             }),
             computed,
+            span: None,
         }));
 
         let ir0 = Ir0Module::from_syntax_tree(make_tree(ParseGoal::Script, body), "member.js");

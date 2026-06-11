@@ -72,6 +72,7 @@ pub mod cancellation_lifecycle;
 pub mod canonical_encoding;
 pub mod canonical_evidence_emitter;
 pub mod capability;
+pub mod capability_lease;
 pub mod capability_pruned_dispatch;
 pub mod capability_token;
 pub mod capability_witness;

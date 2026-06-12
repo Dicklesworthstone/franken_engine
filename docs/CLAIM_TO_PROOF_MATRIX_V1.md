@@ -52,7 +52,7 @@ Operator workflow, failure triage, and comparison steps live in
 | `FE-CLAIM-005` | operations | `README.md:140` | `target` | downgrade until live quarantine propagation proof exists | `bd-ls22h` |
 | `FE-CLAIM-006` | security | `README.md:141` | `observed` | compile-time capability-typed rejection via C.1-C.4 (effect_set IR2, lowering refusal, 16-scenario red-team corpus, RGC gate + replay) | `bd-cixqu.3.5` |
 | `FE-CLAIM-007` | operations | `README.md:93-99` | `observed` | allow documented CLI smoke workflow reference | `bd-3tsah` |
-| `FE-CLAIM-008` | operations | `README.md:2346` | `observed` | allow unsupported-surfaces support policy wording | `bd-1qkrc` |
+| `FE-CLAIM-008` | operations | `README.md:2363` | `observed` | allow unsupported-surfaces support policy wording | `bd-1qkrc` |
 | `FE-CLAIM-009` | evidence | `README.md:213` | `observed` | gate refuses OBSERVED state without repro.lock (bd-cixqu.4.3); all OBSERVED rows have reproducibility bundles | `bd-cixqu.4.4` |
 | `FE-CLAIM-010` | performance | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:56-58` | `target` | downgrade until live Node/Bun denominator artifacts replace targeted placeholder throughput evidence | `bd-y6v8s` |
 | `FE-CLAIM-011` | security | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:58` | `observed` | allow observed red-team compromise-rate comparison with baseline validation | `bd-1vwza` |
@@ -66,7 +66,7 @@ Operator workflow, failure triage, and comparison steps live in
 | `FE-CLAIM-019` | optimization | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:636` | `hypothesis` | STAY_HYPOTHESIS (G.10): `optimization_proof_carriers.rs` returns Verified unconditionally — no real model checker or differential oracle | `bd-csnqb` |
 | `FE-CLAIM-020` | policy | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:744` | `hypothesis` | STAY_HYPOTHESIS (G.10): end-to-end compiler composes 018/019/021 and inherits their simulated verdicts | `bd-csnqb` |
 | `FE-CLAIM-021` | policy | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:828-898` | `hypothesis` | STAY_HYPOTHESIS (G.10): Policy Theorem Engine monotonicity/non-interference/attenuation checks are simulated, not solver-backed | `bd-csnqb` |
-| `FE-CLAIM-024` | integration | `README.md:2054` | `observed` | sibling-repo integration verification across all 6 declared siblings (bd-cixqu.13.1 full-integration lane records pass/skipped/failed per sibling) | `bd-cixqu.13.3` |
+| `FE-CLAIM-024` | integration | `README.md:2071` | `observed` | sibling-repo integration verification across all 6 declared siblings (bd-cixqu.13.1 full-integration lane records pass/skipped/failed per sibling) | `bd-cixqu.13.3` |
 
 ## Failure Output
 

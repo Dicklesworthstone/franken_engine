@@ -443,6 +443,23 @@ The Lowering Gap Truth Invariant (`docs/LOWERING_GAP_TRUTH_INVARIANT_V1.md`) enf
 
 This list is not exhaustive; it is the operator-facing summary. The authoritative state is the lowering-gap inventory at HEAD.
 
+### YouTube / BotGuard Status Note
+
+The corrected 2026-06-07 YouTube JS gap report is a snapshot, not the live source
+of truth. Its important correction was that the signature-cipher lane was already
+green in this repo: `youtube_signature_cipher_acceptance_gate` and
+`confirmed_working_youtube_js_vector_table` in
+`crates/franken-engine/tests/youtube_botguard_js_conformance.rs` are the
+executable references. The stale `v0.1.0` checkout used by the earlier report
+caused false negatives around already-supported Array/String/loop surfaces.
+
+For follow-up work, cite beads and tests rather than only the report. The three
+real BotGuard blockers identified by that snapshot were typed arrays
+(`bd-8enww.2.*`, now tracked by focused YTBG conformance vectors), Function
+constructor parameter/body compilation (`bd-8enww.3.2`), and exception handling
+through native runtime errors / `finally` ordering (`bd-8enww.4.*`). Check those
+beads and the YTBG conformance tests at HEAD before reopening a gap.
+
 ### `parser_gap_inventory.rs` and `lowering_gap_inventory.rs` as a pattern
 
 The gap-inventory pattern recurs across the runtime: the implementation itself ships a list of "what is and isn't done" against a typed contract, and a gate refuses status drift. The two language-surface inventories above are the most visible instances, but the pattern is also used for:

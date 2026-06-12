@@ -384,9 +384,12 @@ impl CanonicalEvidenceEmitter {
         // 2. Validate context.
         self.validate_context(context)?;
 
-        // 3. Check buffer capacity.
+        // 3. Check buffer capacity. The drop must be recorded as a FAILURE
+        // in the audit log (error_code drives the outcome field; passing
+        // None here logged the rejected emission as outcome="success",
+        // hiding evidence drops from monitoring).
         if self.ledger.len() >= self.policy.buffer_capacity {
-            self.emit_log(context, "buffer_full", None);
+            self.emit_log(context, "buffer_full", Some("buffer_full"));
             return Err(EmissionError::BufferFull {
                 capacity: self.policy.buffer_capacity,
             });
@@ -2637,13 +2640,21 @@ mod tests {
             test_witnesses(),
             BTreeMap::new(),
         );
-        // The buffer_full attempt should also produce a log event.
+        // The buffer_full attempt should also produce a log event, and the
+        // dropped emission must be recorded as a failure (not as a
+        // outcome="success" event, which would hide evidence drops from
+        // monitoring).
         assert!(emitter.log_events().len() >= 2);
         let last = emitter
             .log_events()
             .last()
             .expect("operation should succeed for valid inputs");
         assert_eq!(last.event, "buffer_full");
+        assert_eq!(
+            last.outcome, "failure",
+            "a dropped emission must not be logged as success"
+        );
+        assert_eq!(last.error_code.as_deref(), Some("buffer_full"));
     }
 
     #[test]

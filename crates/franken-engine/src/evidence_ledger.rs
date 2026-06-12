@@ -25,7 +25,7 @@ use crate::hindsight_boundary_capture::{
 };
 use crate::security_epoch::SecurityEpoch;
 use crate::signature_preimage::{
-    Signature, SigningKey, VerificationKey, sign_preimage, verify_signature,
+    PreparedSigningKey, PreparedVerificationKey, Signature, SigningKey, VerificationKey,
 };
 
 pub use crate::control_plane::SchemaVersion;
@@ -65,8 +65,18 @@ static DEFAULT_EVIDENCE_SIGNING_KEY: std::sync::LazyLock<SigningKey> =
             .expect("default evidence signing key bytes are non-zero (const)")
     });
 
+// Fully-expanded default key: Ed25519 key expansion (seed hash + basepoint
+// multiplication + compression) happens once here instead of on every
+// sign/verification_key call — that per-call expansion dominated the
+// evidence-emission hot path (bd-o4cbn.1.4 profile).
+static DEFAULT_EVIDENCE_PREPARED_SIGNING_KEY: std::sync::LazyLock<PreparedSigningKey> =
+    std::sync::LazyLock::new(|| {
+        PreparedSigningKey::prepare(&DEFAULT_EVIDENCE_SIGNING_KEY)
+            .expect("default evidence signing key bytes are non-zero (const)")
+    });
+
 static DEFAULT_EVIDENCE_VERIFICATION_KEY: std::sync::LazyLock<VerificationKey> =
-    std::sync::LazyLock::new(|| DEFAULT_EVIDENCE_SIGNING_KEY.verification_key());
+    std::sync::LazyLock::new(|| DEFAULT_EVIDENCE_PREPARED_SIGNING_KEY.verification_key());
 
 fn default_evidence_signing_key() -> SigningKey {
     // Cheap byte-array copy of the cached SigningKey. No curve work.
@@ -86,8 +96,7 @@ fn default_evidence_verification_key() -> VerificationKey {
 /// deterministic, replay-stable key (bd-k2bz7). The default key bytes are a
 /// non-zero const, so signing never fails.
 pub(crate) fn sign_evidence_preimage(preimage: &[u8]) -> Signature {
-    sign_preimage(&DEFAULT_EVIDENCE_SIGNING_KEY, preimage)
-        .expect("default evidence signing key is a valid non-zero Ed25519 key (const)")
+    DEFAULT_EVIDENCE_PREPARED_SIGNING_KEY.sign(preimage)
 }
 
 /// The Ed25519 verification key paired with [`sign_evidence_preimage`], for
@@ -317,15 +326,24 @@ impl EvidenceEntry {
         signing_key: &SigningKey,
     ) -> Result<(), LedgerError> {
         let producer_id = producer_id.into();
-        let signature =
-            sign_preimage(signing_key, &self.unsigned_signature_preimage()?).map_err(|e| {
+        let preimage = self.unsigned_signature_preimage()?;
+        // The default engine key skips per-call Ed25519 key expansion via
+        // the prepared static; other keys expand once (the old path
+        // expanded twice: once to sign, once to derive the public key).
+        let (signature, verification_key) = if signing_key == &*DEFAULT_EVIDENCE_SIGNING_KEY {
+            let prepared = &*DEFAULT_EVIDENCE_PREPARED_SIGNING_KEY;
+            (prepared.sign(&preimage), prepared.verification_key())
+        } else {
+            let prepared = PreparedSigningKey::prepare(signing_key).map_err(|e| {
                 LedgerError::SchemaValidationFailed {
                     reason: format!("evidence entry signing failed for {producer_id}: {e}"),
                 }
             })?;
+            (prepared.sign(&preimage), prepared.verification_key())
+        };
         self.signed_envelope = Some(EvidenceSignatureEnvelope {
             producer_id,
-            verification_key: signing_key.verification_key(),
+            verification_key,
             signature,
         });
         Ok(())
@@ -552,7 +570,9 @@ pub struct InMemoryLedger {
     entries: Vec<EvidenceEntry>,
     entry_ids: std::collections::BTreeSet<String>,
     current_epoch: Option<SecurityEpoch>,
-    authorized_producers: BTreeMap<String, VerificationKey>,
+    // Prepared form: the Ed25519 point is decompressed/validated once at
+    // registration instead of on every emit-time signature verification.
+    authorized_producers: BTreeMap<String, PreparedVerificationKey>,
     authorized_policy_ids: BTreeSet<String>,
 }
 
@@ -561,7 +581,7 @@ impl Default for InMemoryLedger {
         let mut authorized_producers = BTreeMap::new();
         authorized_producers.insert(
             DEFAULT_EVIDENCE_PRODUCER_ID.to_string(),
-            default_evidence_verification_key(),
+            PreparedVerificationKey::prepare(default_evidence_verification_key()),
         );
         Self {
             entries: Vec::new(),
@@ -590,8 +610,10 @@ impl InMemoryLedger {
         producer_id: impl Into<String>,
         verification_key: VerificationKey,
     ) {
-        self.authorized_producers
-            .insert(producer_id.into(), verification_key);
+        self.authorized_producers.insert(
+            producer_id.into(),
+            PreparedVerificationKey::prepare(verification_key),
+        );
     }
 
     pub fn authorize_policy(&mut self, policy_id: impl Into<String>) {
@@ -677,7 +699,7 @@ impl InMemoryLedger {
             .ok_or_else(|| LedgerError::SchemaValidationFailed {
                 reason: format!("unauthorized evidence producer: {}", envelope.producer_id),
             })?;
-        if registered_key != &envelope.verification_key {
+        if registered_key.raw() != &envelope.verification_key {
             return Err(LedgerError::SchemaValidationFailed {
                 reason: format!(
                     "producer verification key mismatch: {}",
@@ -685,17 +707,14 @@ impl InMemoryLedger {
                 ),
             });
         }
-        verify_signature(
-            registered_key,
-            &entry.unsigned_signature_preimage()?,
-            &envelope.signature,
-        )
-        .map_err(|_| LedgerError::SchemaValidationFailed {
-            reason: format!(
-                "invalid evidence signature from producer: {}",
-                envelope.producer_id
-            ),
-        })?;
+        registered_key
+            .verify(&entry.unsigned_signature_preimage()?, &envelope.signature)
+            .map_err(|_| LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "invalid evidence signature from producer: {}",
+                    envelope.producer_id
+                ),
+            })?;
         Ok(())
     }
 }
@@ -2088,6 +2107,7 @@ impl BundleFileArtifact {
 mod tests {
     use super::*;
     use crate::hindsight_boundary_capture::{BoundaryCaptureSession, BoundaryContext};
+    use crate::signature_preimage::sign_preimage;
 
     fn sample_entry() -> EvidenceEntry {
         EvidenceEntryBuilder::new(

@@ -363,6 +363,108 @@ pub fn verify_object<T: SignaturePreimage>(
 }
 
 // ---------------------------------------------------------------------------
+// Prepared keys — one-time Ed25519 expansion for hot sign/verify paths
+// ---------------------------------------------------------------------------
+
+/// A signing key whose Ed25519 expansion (seed hash, clamping, basepoint
+/// multiplication, public-key compression) is performed once at
+/// construction.
+///
+/// [`SigningKey`] stores raw seed bytes and re-expands on every
+/// [`sign_preimage`] / [`SigningKey::verification_key`] call; on hot
+/// evidence-emission paths that per-call expansion costs more than the
+/// signing itself. Signatures are byte-identical to the unprepared path
+/// because Ed25519 signing is deterministic in (key, message).
+pub struct PreparedSigningKey {
+    ed25519: Ed25519SigningKey,
+    verification_key: VerificationKey,
+}
+
+impl std::fmt::Debug for PreparedSigningKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("PreparedSigningKey")
+            .field(&"[REDACTED]")
+            .finish()
+    }
+}
+
+impl PreparedSigningKey {
+    /// Expand a signing key once. Rejects the all-zero key exactly like
+    /// [`sign_preimage`].
+    pub fn prepare(key: &SigningKey) -> Result<Self, SignatureError> {
+        if key.inner == [0u8; SIGNING_KEY_LEN] {
+            return Err(SignatureError::InvalidSigningKey);
+        }
+        let ed25519 = key.to_ed25519();
+        let verification_key = VerificationKey {
+            inner: ed25519.verifying_key().to_bytes(),
+        };
+        Ok(Self {
+            ed25519,
+            verification_key,
+        })
+    }
+
+    /// The cached verification key (no per-call basepoint multiplication).
+    pub fn verification_key(&self) -> VerificationKey {
+        self.verification_key.clone()
+    }
+
+    /// Sign a preimage; byte-identical to [`sign_preimage`] with the same key.
+    pub fn sign(&self, preimage: &[u8]) -> Signature {
+        Signature::from_bytes(self.ed25519.sign(preimage).to_bytes())
+    }
+}
+
+/// A verification key parsed to its Ed25519 point form once.
+///
+/// [`verify_signature`] re-parses (decompresses and validates) the public
+/// key on every call; verifiers that check many signatures against a fixed
+/// key registry can parse at registration time instead. Verification
+/// semantics — including rejection of all-zero and non-canonical keys —
+/// are identical to [`verify_signature`].
+#[derive(Debug, Clone)]
+pub struct PreparedVerificationKey {
+    raw: VerificationKey,
+    parsed: Option<Ed25519VerifyingKey>,
+}
+
+impl PreparedVerificationKey {
+    /// Parse a verification key once. An invalid key still constructs
+    /// (matching the lazy behavior of storing a raw [`VerificationKey`]);
+    /// verification then fails exactly like [`verify_signature`] would.
+    pub fn prepare(key: VerificationKey) -> Self {
+        let parsed = if key.inner == [0u8; VERIFICATION_KEY_LEN] {
+            None
+        } else {
+            key.to_ed25519().ok()
+        };
+        Self { raw: key, parsed }
+    }
+
+    /// The raw verification key.
+    pub fn raw(&self) -> &VerificationKey {
+        &self.raw
+    }
+
+    /// Verify a detached signature; semantics identical to
+    /// [`verify_signature`] with the same key.
+    pub fn verify(&self, preimage: &[u8], signature: &Signature) -> Result<(), SignatureError> {
+        let Some(parsed) = self.parsed.as_ref() else {
+            return Err(SignatureError::InvalidVerificationKey);
+        };
+        let sig_bytes = signature.to_bytes();
+        let ed25519_sig = Ed25519Signature::from_bytes(&sig_bytes);
+        parsed
+            .verify(preimage, &ed25519_sig)
+            .map_err(|_| SignatureError::VerificationFailed {
+                signer: self.raw.clone(),
+                reason: "Ed25519 signature verification failed".to_string(),
+            })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Preimage construction helpers
 // ---------------------------------------------------------------------------
 
@@ -772,6 +874,83 @@ mod tests {
         let p1 = obj.preimage_bytes();
         let p2 = obj.preimage_bytes();
         assert_eq!(p1, p2);
+    }
+
+    // -- Prepared-key equivalence: prepared paths must be byte/behavior
+    //    identical to the raw sign_preimage / verify_signature paths. --
+
+    #[test]
+    fn prepared_signing_key_signature_matches_sign_preimage() {
+        let key = SigningKey::from_bytes([0x42; SIGNING_KEY_LEN]).expect("non-zero key");
+        let prepared = PreparedSigningKey::prepare(&key).expect("non-zero key prepares");
+        let preimage = b"prepared-key-equivalence-preimage";
+        let raw_sig = sign_preimage(&key, preimage).expect("raw signing succeeds");
+        assert_eq!(
+            prepared.sign(preimage).to_bytes(),
+            raw_sig.to_bytes(),
+            "prepared signature must be byte-identical to sign_preimage"
+        );
+    }
+
+    #[test]
+    fn prepared_signing_key_verification_key_matches_unprepared() {
+        let key = SigningKey::from_bytes([0x42; SIGNING_KEY_LEN]).expect("non-zero key");
+        let prepared = PreparedSigningKey::prepare(&key).expect("non-zero key prepares");
+        assert_eq!(prepared.verification_key(), key.verification_key());
+    }
+
+    #[test]
+    fn prepared_signing_key_rejects_zero_key_like_sign_preimage() {
+        let zero = SigningKey {
+            inner: [0u8; SIGNING_KEY_LEN],
+        };
+        assert_eq!(
+            PreparedSigningKey::prepare(&zero).unwrap_err(),
+            SignatureError::InvalidSigningKey
+        );
+    }
+
+    #[test]
+    fn prepared_verification_key_verify_matches_verify_signature() {
+        let key = SigningKey::from_bytes([0x42; SIGNING_KEY_LEN]).expect("non-zero key");
+        let vk = key.verification_key();
+        let preimage = b"prepared-verify-equivalence-preimage";
+        let sig = sign_preimage(&key, preimage).expect("signing succeeds");
+
+        let prepared = PreparedVerificationKey::prepare(vk.clone());
+        assert_eq!(prepared.raw(), &vk);
+        assert!(prepared.verify(preimage, &sig).is_ok());
+        assert!(verify_signature(&vk, preimage, &sig).is_ok());
+
+        // Tampered preimage must fail through both paths.
+        assert!(prepared.verify(b"tampered", &sig).is_err());
+        assert!(verify_signature(&vk, b"tampered", &sig).is_err());
+
+        // Wrong key must fail through both paths.
+        let other = SigningKey::from_bytes([0x43; SIGNING_KEY_LEN]).expect("non-zero key");
+        let other_prepared = PreparedVerificationKey::prepare(other.verification_key());
+        assert!(other_prepared.verify(preimage, &sig).is_err());
+        assert!(verify_signature(&other.verification_key(), preimage, &sig).is_err());
+    }
+
+    #[test]
+    fn prepared_verification_key_rejects_zero_key_like_verify_signature() {
+        let zero = VerificationKey {
+            inner: [0u8; VERIFICATION_KEY_LEN],
+        };
+        let key = SigningKey::from_bytes([0x42; SIGNING_KEY_LEN]).expect("non-zero key");
+        let preimage = b"zero-key-check";
+        let sig = sign_preimage(&key, preimage).expect("signing succeeds");
+
+        let prepared = PreparedVerificationKey::prepare(zero.clone());
+        assert_eq!(
+            prepared.verify(preimage, &sig).unwrap_err(),
+            SignatureError::InvalidVerificationKey
+        );
+        assert_eq!(
+            verify_signature(&zero, preimage, &sig).unwrap_err(),
+            SignatureError::InvalidVerificationKey
+        );
     }
 
     #[test]

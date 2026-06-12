@@ -1308,7 +1308,22 @@ impl QuickJsInspiredNativeEngine {
         prepared: PreparedEvalSource,
         route_reason: RouteReason,
     ) -> EvalResult<EvalOutcome> {
-        eval_with_lane(prepared, LaneChoice::QuickJs, route_reason)
+        eval_with_lane(prepared, LaneChoice::QuickJs, route_reason, None)
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn eval_prepared_with_budget(
+        &mut self,
+        prepared: PreparedEvalSource,
+        route_reason: RouteReason,
+        instruction_budget: Option<u64>,
+    ) -> EvalResult<EvalOutcome> {
+        eval_with_lane(
+            prepared,
+            LaneChoice::QuickJs,
+            route_reason,
+            instruction_budget,
+        )
     }
 }
 
@@ -1319,7 +1334,17 @@ impl V8InspiredNativeEngine {
         prepared: PreparedEvalSource,
         route_reason: RouteReason,
     ) -> EvalResult<EvalOutcome> {
-        eval_with_lane(prepared, LaneChoice::V8, route_reason)
+        eval_with_lane(prepared, LaneChoice::V8, route_reason, None)
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn eval_prepared_with_budget(
+        &mut self,
+        prepared: PreparedEvalSource,
+        route_reason: RouteReason,
+        instruction_budget: Option<u64>,
+    ) -> EvalResult<EvalOutcome> {
+        eval_with_lane(prepared, LaneChoice::V8, route_reason, instruction_budget)
     }
 }
 
@@ -1345,15 +1370,43 @@ impl HybridRouter {
 
     #[allow(clippy::result_large_err)]
     pub fn eval(&mut self, source: &str) -> EvalResult<EvalOutcome> {
+        self.eval_routed(source, None)
+    }
+
+    /// Same routing and semantics as [`Self::eval`], but with the per-lane
+    /// interpreter instruction budget overridden. The defaults
+    /// (`DEFAULT_QUICKJS_BUDGET` / `DEFAULT_V8_BUDGET`) are a containment
+    /// posture for untrusted extension code; measurement and benchmarking
+    /// callers (e.g. the differential-oracle performance arm) use this so
+    /// large-but-terminating workloads can complete. The override is a
+    /// measurement-configuration fact and must be recorded in whatever
+    /// artifact the caller emits.
+    #[allow(clippy::result_large_err)]
+    pub fn eval_with_instruction_budget(
+        &mut self,
+        source: &str,
+        instruction_budget: u64,
+    ) -> EvalResult<EvalOutcome> {
+        self.eval_routed(source, Some(instruction_budget))
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn eval_routed(
+        &mut self,
+        source: &str,
+        instruction_budget: Option<u64>,
+    ) -> EvalResult<EvalOutcome> {
         let prepared = prepare_eval_source(source, "hybrid")?;
         let route_reason = Self::classify_source_route(prepared.prepared_source.as_str());
         match route_reason {
-            RouteReason::ContainsImportKeyword | RouteReason::ContainsAwaitKeyword => {
-                self.v8_lineage.eval_prepared(prepared, route_reason)
-            }
-            RouteReason::DefaultQuickJsPath => {
-                self.quickjs_lineage.eval_prepared(prepared, route_reason)
-            }
+            RouteReason::ContainsImportKeyword | RouteReason::ContainsAwaitKeyword => self
+                .v8_lineage
+                .eval_prepared_with_budget(prepared, route_reason, instruction_budget),
+            RouteReason::DefaultQuickJsPath => self.quickjs_lineage.eval_prepared_with_budget(
+                prepared,
+                route_reason,
+                instruction_budget,
+            ),
             RouteReason::DirectEngineInvocation => Err(EvalError::new(
                 EvalErrorCode::InvariantViolation,
                 "router never emits direct route",
@@ -1709,8 +1762,9 @@ fn eval_with_lane(
     prepared: PreparedEvalSource,
     lane: LaneChoice,
     route_reason: RouteReason,
+    instruction_budget: Option<u64>,
 ) -> EvalResult<EvalOutcome> {
-    let output = eval_via_native_pipeline(&prepared, lane)?;
+    let output = eval_via_native_pipeline(&prepared, lane, instruction_budget)?;
     Ok(EvalOutcome {
         engine: engine_kind_for_lane(lane),
         value: output.value,
@@ -1736,6 +1790,7 @@ struct NativeEvalOutput {
 fn eval_via_native_pipeline(
     prepared: &PreparedEvalSource,
     lane: LaneChoice,
+    instruction_budget: Option<u64>,
 ) -> EvalResult<NativeEvalOutput> {
     let parser = CanonicalEs2020Parser;
     let syntax_tree = parser
@@ -1812,7 +1867,7 @@ fn eval_via_native_pipeline(
     let mut ir3 = lowering_output.ir3;
     patch_eval_completion_value(&mut ir3);
 
-    let lane_router = eval_lane_router_for_ir3(&ir3);
+    let lane_router = eval_lane_router_for_ir3(&ir3, instruction_budget);
     let routed = lane_router
         .execute(&ir3, prepared.trace_id.as_str(), Some(lane))
         .map_err(map_interpreter_error)
@@ -1831,7 +1886,7 @@ fn eval_via_native_pipeline(
     })
 }
 
-fn eval_lane_router_for_ir3(ir3: &Ir3Module) -> LaneRouter {
+fn eval_lane_router_for_ir3(ir3: &Ir3Module, instruction_budget: Option<u64>) -> LaneRouter {
     let mut granted_capabilities = std::collections::BTreeSet::from([
         RuntimeCapability::VmDispatch,
         RuntimeCapability::HeapAllocate,
@@ -1852,6 +1907,10 @@ fn eval_lane_router_for_ir3(ir3: &Ir3Module) -> LaneRouter {
     quickjs_config.granted_capabilities = granted_capabilities.clone();
     let mut v8_config = InterpreterConfig::v8_defaults();
     v8_config.granted_capabilities = granted_capabilities;
+    if let Some(budget) = instruction_budget {
+        quickjs_config.instruction_budget = budget;
+        v8_config.instruction_budget = budget;
+    }
     LaneRouter::with_configs(quickjs_config, v8_config)
 }
 

@@ -375,6 +375,7 @@ struct DifferentialOraclePerfArgs {
     warmup: u32,
     samples: u32,
     case_timeout_ms: u64,
+    engine_budget: Option<u64>,
     node_bin: Option<String>,
     bun_bin: Option<String>,
     case_filter: Vec<String>,
@@ -2186,6 +2187,7 @@ fn parse_differential_oracle_perf_command(args: &[String]) -> Result<CommandSpec
     let mut warmup = 3_u32;
     let mut samples = 30_u32;
     let mut case_timeout_ms = 120_000_u64;
+    let mut engine_budget: Option<u64> = None;
     let mut node_bin: Option<String> = None;
     let mut bun_bin: Option<String> = None;
     let mut case_filter: Vec<String> = Vec::new();
@@ -2219,6 +2221,12 @@ fn parse_differential_oracle_perf_command(args: &[String]) -> Result<CommandSpec
                 )?
                 .max(1)
             }
+            "--engine-budget" => {
+                engine_budget = Some(parse_u64(
+                    &next_arg(args, &mut index, "--engine-budget")?,
+                    "--engine-budget",
+                )?)
+            }
             "--node-bin" => node_bin = Some(next_arg(args, &mut index, "--node-bin")?),
             "--bun-bin" => bun_bin = Some(next_arg(args, &mut index, "--bun-bin")?),
             "--case" => case_filter.push(next_arg(args, &mut index, "--case")?),
@@ -2237,6 +2245,7 @@ fn parse_differential_oracle_perf_command(args: &[String]) -> Result<CommandSpec
             warmup,
             samples,
             case_timeout_ms,
+            engine_budget,
             node_bin,
             bun_bin,
             case_filter,
@@ -5521,6 +5530,9 @@ fn execute_differential_oracle_perf(args: DifferentialOraclePerfArgs) -> Result<
         case_timeout_ms: args.case_timeout_ms,
         ..PerfArmConfig::default()
     };
+    if let Some(engine_budget) = args.engine_budget {
+        config.engine_instruction_budget = engine_budget;
+    }
     if let Some(node_bin) = args.node_bin {
         config.node.program = node_bin;
     }
@@ -7260,7 +7272,7 @@ fn differential_oracle_usage() -> String {
         "  frankenctl differential-oracle perf --manifest <manifest.json>",
         "      [--out <report.json>] [--events <events.jsonl>]",
         "      [--warmup <u32>] [--samples <u32>] [--case-timeout-ms <u64>]",
-        "      [--node-bin <path>] [--bun-bin <path>] [--case <id>]...",
+        "      [--engine-budget <u64>] [--node-bin <path>] [--bun-bin <path>] [--case <id>]...",
         "",
         "behavior:",
         "  run: executes one JS fixture across Node, Bun, franken-engine, and the franken-core-compatible baseline lane.",
@@ -7286,7 +7298,7 @@ fn differential_oracle_perf_usage() -> String {
         "  frankenctl differential-oracle perf --manifest <manifest.json>",
         "      [--out <report.json>] [--events <events.jsonl>]",
         "      [--warmup <u32>] [--samples <u32>] [--case-timeout-ms <u64>]",
-        "      [--node-bin <path>] [--bun-bin <path>] [--case <id>]...",
+        "      [--engine-budget <u64>] [--node-bin <path>] [--bun-bin <path>] [--case <id>]...",
         "",
         "behavior:",
         "  measures warm steady-state throughput of every corpus case under Node, Bun, and the",

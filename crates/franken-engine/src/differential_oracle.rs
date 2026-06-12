@@ -73,6 +73,12 @@ pub struct DifferentialOracleInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_path: Option<String>,
     pub timeout_ms: u64,
+    /// Override for the engine lane's interpreter instruction budget. The
+    /// containment default cannot execute large benchmark workloads; corpus
+    /// sweeps set this so the engine lane measures throughput rather than the
+    /// budget ceiling. Recorded in the backend receipt's diagnostics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_instruction_budget: Option<u64>,
     pub node: ExternalRuntimeSpec,
     pub bun: ExternalRuntimeSpec,
 }
@@ -84,6 +90,7 @@ impl DifferentialOracleInput {
             source: source.into(),
             source_path: None,
             timeout_ms: DEFAULT_TIMEOUT_MS,
+            engine_instruction_budget: None,
             node: ExternalRuntimeSpec::node_default(),
             bun: ExternalRuntimeSpec::bun_default(),
         }
@@ -96,6 +103,11 @@ impl DifferentialOracleInput {
 
     pub fn with_timeout_ms(mut self, timeout_ms: u64) -> Self {
         self.timeout_ms = timeout_ms.max(1);
+        self
+    }
+
+    pub fn with_engine_instruction_budget(mut self, instruction_budget: u64) -> Self {
+        self.engine_instruction_budget = Some(instruction_budget);
         self
     }
 }
@@ -332,7 +344,7 @@ pub fn run_differential_oracle(input: &DifferentialOracleInput) -> DifferentialO
     let backends = vec![
         run_external_backend(&input.node, input.source.as_str(), timeout),
         run_external_backend(&input.bun, input.source.as_str(), timeout),
-        run_franken_engine_backend(input.source.as_str()),
+        run_franken_engine_backend(input.source.as_str(), input.engine_instruction_budget),
         run_franken_core_backend(input.source.as_str()),
     ];
 
@@ -452,12 +464,23 @@ fn run_external_backend(
     }
 }
 
-fn run_franken_engine_backend(source: &str) -> DifferentialBackendReceipt {
+fn run_franken_engine_backend(
+    source: &str,
+    instruction_budget: Option<u64>,
+) -> DifferentialBackendReceipt {
     let started = Instant::now();
     let mut router = HybridRouter::default();
-    match router.eval(source) {
+    let evaluated = match instruction_budget {
+        Some(budget) => router.eval_with_instruction_budget(source, budget),
+        None => router.eval(source),
+    };
+    let budget_diagnostic =
+        instruction_budget.map(|budget| format!("instruction_budget_override={budget}"));
+    match evaluated {
         Ok(outcome) => {
             let stdout = outcome.value.clone();
+            let mut diagnostics = vec![format!("route_reason={}", outcome.route_reason)];
+            diagnostics.extend(budget_diagnostic.clone());
             DifferentialBackendReceipt {
                 backend: DifferentialBackend::FrankenEngine,
                 status: DifferentialBackendStatus::Completed,
@@ -470,11 +493,13 @@ fn run_franken_engine_backend(source: &str) -> DifferentialBackendReceipt {
                 stderr_sha256: sha256_hex(b""),
                 stdout,
                 stderr: String::new(),
-                diagnostics: vec![format!("route_reason={}", outcome.route_reason)],
+                diagnostics,
             }
         }
         Err(error) => {
             let stderr = error.to_string();
+            let mut diagnostics = vec![error.stable_namespace().to_string()];
+            diagnostics.extend(budget_diagnostic);
             DifferentialBackendReceipt {
                 backend: DifferentialBackend::FrankenEngine,
                 status: DifferentialBackendStatus::Failed,
@@ -487,7 +512,7 @@ fn run_franken_engine_backend(source: &str) -> DifferentialBackendReceipt {
                 stderr,
                 stdout_sha256: sha256_hex(b""),
                 stderr_sha256: sha256_hex(error.to_string().as_bytes()),
-                diagnostics: vec![error.stable_namespace().to_string()],
+                diagnostics,
             }
         }
     }

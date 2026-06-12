@@ -63,6 +63,14 @@ pub const DENOMINATOR_FLOOR_MILLIONTHS: u64 = 3_000_000;
 /// Sentinel prefix the external harness prints before its timing payload.
 pub const PERF_HARNESS_SENTINEL: &str = "__FE_PERF__";
 
+/// Default engine-lane instruction budget for perf measurement. The engine's
+/// containment defaults (100K/1M instructions) cannot execute the benchmark
+/// corpus (1M-iteration loops); measurement needs workloads to COMPLETE so
+/// throughput — not the budget ceiling — is what gets measured. Recorded in
+/// the environment manifest because a budget override is a
+/// measurement-configuration fact.
+pub const DEFAULT_PERF_ENGINE_INSTRUCTION_BUDGET: u64 = 2_000_000_000;
+
 const MILLIONTHS: u64 = 1_000_000;
 
 // ---------------------------------------------------------------------------
@@ -97,6 +105,9 @@ pub struct PerfArmConfig {
     /// (150_000 == 15%). Cases noisier than this are excluded from the
     /// denominator and the exclusion is recorded.
     pub max_cv_millionths: u32,
+    /// Engine-lane instruction budget (applies to the perf lane AND the
+    /// correctness-arm consensus precondition).
+    pub engine_instruction_budget: u64,
     pub node: ExternalRuntimeSpec,
     pub bun: ExternalRuntimeSpec,
 }
@@ -108,6 +119,7 @@ impl Default for PerfArmConfig {
             measured_iterations: 30,
             case_timeout_ms: 120_000,
             max_cv_millionths: 150_000,
+            engine_instruction_budget: DEFAULT_PERF_ENGINE_INSTRUCTION_BUDGET,
             node: ExternalRuntimeSpec::node_default(),
             bun: ExternalRuntimeSpec::bun_default(),
         }
@@ -227,6 +239,10 @@ pub struct PerfEnvironmentManifest {
     pub bun_version: Option<String>,
     pub warmup_iterations: u32,
     pub measured_iterations: u32,
+    /// Engine-lane instruction budget in force for this run (containment
+    /// defaults are overridden for measurement; see `PerfArmConfig`).
+    #[serde(default)]
+    pub engine_instruction_budget: u64,
     pub corpus_case_count: usize,
     pub corpus_sha256: String,
     pub generated_unix_ns: u128,
@@ -574,6 +590,7 @@ pub fn capture_perf_environment(
         bun_version,
         warmup_iterations: config.warmup_iterations,
         measured_iterations: config.measured_iterations,
+        engine_instruction_budget: config.engine_instruction_budget,
         corpus_case_count: corpus.len(),
         corpus_sha256: corpus_sha256(corpus),
         generated_unix_ns: current_unix_ns(),
@@ -635,6 +652,11 @@ pub fn evaluate_fairness(
          and JIT-warm — conservative against FrankenEngine"
             .to_string(),
     );
+    notes.push(format!(
+        "engine instruction budget overridden to {} for measurement (containment defaults \
+         cannot execute the corpus); node/bun have no analogous cap",
+        environment.engine_instruction_budget
+    ));
 
     PerfFairnessReport {
         compliant: violations.is_empty(),
@@ -763,7 +785,8 @@ fn run_engine_perf_case(source: &str, config: &PerfArmConfig) -> PerfBackendCase
         for _ in 0..count {
             let mut router = HybridRouter::default();
             let started = Instant::now();
-            let outcome = router.eval(source);
+            let outcome =
+                router.eval_with_instruction_budget(source, config.engine_instruction_budget);
             let elapsed = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
             match outcome {
                 Ok(_) => {
@@ -815,7 +838,8 @@ fn run_engine_perf_case(source: &str, config: &PerfArmConfig) -> PerfBackendCase
 /// membership is ignored — the denominator claim is about Node and Bun.
 fn check_behavior_equivalence(case: &PerfCorpusCase, config: &PerfArmConfig) -> (bool, String) {
     let mut input = DifferentialOracleInput::new(case.case_id.clone(), case.source.clone())
-        .with_timeout_ms(config.case_timeout_ms.max(1));
+        .with_timeout_ms(config.case_timeout_ms.max(1))
+        .with_engine_instruction_budget(config.engine_instruction_budget);
     input.node = config.node.clone();
     input.bun = config.bun.clone();
     let report = run_differential_oracle(&input);
@@ -1404,6 +1428,38 @@ mod tests {
     }
 
     #[test]
+    fn fairness_notes_record_budget_override() {
+        let report = evaluate_fairness(&test_environment(), &PerfArmConfig::default());
+        assert!(
+            report
+                .notes
+                .iter()
+                .any(|n| n.contains("instruction budget overridden to 2000000000"))
+        );
+    }
+
+    #[test]
+    fn default_engine_budget_executes_million_iteration_loop() {
+        // The containment default (100K instructions) refuses this workload;
+        // the perf default must let it complete so throughput is measurable.
+        let config = PerfArmConfig {
+            warmup_iterations: 0,
+            measured_iterations: 1,
+            ..PerfArmConfig::default()
+        };
+        let source = "var i = 0; var sum = 0;\n\
+                      while (i < 1000000) { sum = sum + i; i = i + 1; }\n\
+                      sum;";
+        let result = run_engine_perf_case(source, &config);
+        assert_eq!(
+            result.status,
+            PerfMeasurementStatus::Measured,
+            "diagnostics: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
     fn corpus_sha_is_length_prefixed() {
         // ("ab","c") and ("a","bc") must hash differently.
         let one = corpus_sha256(&[PerfCorpusCase::new("ab", "c")]);
@@ -1534,6 +1590,7 @@ mod tests {
             bun_version: Some("1.3.14".to_string()),
             warmup_iterations: 3,
             measured_iterations: 30,
+            engine_instruction_budget: DEFAULT_PERF_ENGINE_INSTRUCTION_BUDGET,
             corpus_case_count: 1,
             corpus_sha256: "0".repeat(64),
             generated_unix_ns: 42,

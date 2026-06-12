@@ -7934,10 +7934,10 @@ impl InterpreterCore {
             kind: WitnessEventKind::ContainmentAction,
             instruction_index: self.ip as u32,
             payload_hash: ContentHash::compute(&payload_bytes),
-            timestamp_tick: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
+            // Logical tick, NOT wall-clock: timestamp_tick participates in the
+            // canonical IR4 witness encoding, so wall-clock here breaks replay
+            // identity for any execution that records a containment action.
+            timestamp_tick: self.instructions_executed,
         };
 
         self.containment_evidence.push(evidence.clone());

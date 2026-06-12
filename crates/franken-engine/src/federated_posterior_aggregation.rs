@@ -125,13 +125,29 @@ impl PosteriorDelta {
         }
     }
 
-    /// Check if this delta is valid (deltas sum to zero).
+    /// Check if this delta is valid: every component bounded by one unit of
+    /// probability mass, components sum to zero, and the confidence weight is
+    /// a non-zero [0, 1] millionths ratio.
+    ///
+    /// The magnitude bounds are load-bearing: deltas arrive from remote fleet
+    /// nodes, and unbounded values would let a hostile node overflow the
+    /// weighted-aggregation arithmetic (and, via wrapping, forge the zero-sum
+    /// invariant) in `compute_aggregation`.
     pub fn is_valid(&self) -> bool {
-        let sum = self.delta_benign_millionths
-            + self.delta_anomalous_millionths
-            + self.delta_malicious_millionths
-            + self.delta_unknown_millionths;
-        sum == 0 && self.confidence_weight_millionths > 0
+        let deltas = [
+            self.delta_benign_millionths,
+            self.delta_anomalous_millionths,
+            self.delta_malicious_millionths,
+            self.delta_unknown_millionths,
+        ];
+        if deltas.iter().any(|delta| delta.abs() > MILLION) {
+            return false;
+        }
+        // Bounded components (|each| <= 1e6) make this sum overflow-free.
+        let sum: i64 = deltas.iter().sum();
+        sum == 0
+            && self.confidence_weight_millionths > 0
+            && self.confidence_weight_millionths <= MILLION as u64
     }
 }
 
@@ -522,6 +538,9 @@ impl AggregationCoordinator {
         if contributed_count < MIN_AGGREGATION_PARTICIPANTS {
             return Err(FederatedAggregationError::InsufficientParticipants);
         }
+        if deltas.len() > MAX_AGGREGATION_PARTICIPANTS {
+            return Err(FederatedAggregationError::TooManyParticipants);
+        }
 
         round.state = AggregationState::Aggregating;
 
@@ -553,13 +572,20 @@ impl AggregationCoordinator {
         let fingerprint_input = evidence_hashes.concat();
         let evidence_fingerprint = ContentHash::compute(&fingerprint_input);
 
+        // With `is_valid` bounds (|delta| <= 1e6, weight <= 1e6) and the
+        // participant cap (1000), the sums fit i64/u64 with headroom; the
+        // saturating conversions keep that a local invariant rather than a
+        // cross-function assumption.
+        let saturate_i64 = |value: i128| {
+            i64::try_from(value).unwrap_or(if value < 0 { i64::MIN } else { i64::MAX })
+        };
         let aggregated = AggregatedPosteriorUpdate {
             extension_id: round.extension_id.clone(),
-            aggregate_delta_benign_millionths: weighted_benign_sum as i64,
-            aggregate_delta_anomalous_millionths: weighted_anomalous_sum as i64,
-            aggregate_delta_malicious_millionths: weighted_malicious_sum as i64,
-            aggregate_delta_unknown_millionths: weighted_unknown_sum as i64,
-            total_confidence_weight_millionths: total_weight as u64,
+            aggregate_delta_benign_millionths: saturate_i64(weighted_benign_sum),
+            aggregate_delta_anomalous_millionths: saturate_i64(weighted_anomalous_sum),
+            aggregate_delta_malicious_millionths: saturate_i64(weighted_malicious_sum),
+            aggregate_delta_unknown_millionths: saturate_i64(weighted_unknown_sum),
+            total_confidence_weight_millionths: u64::try_from(total_weight).unwrap_or(u64::MAX),
             participant_count: deltas.len() as u32,
             evidence_fingerprint,
             epoch: round.epoch,

@@ -1460,6 +1460,7 @@ dependencies = [
  "parquet",
  "quick-xml 0.40.1",
  "rust_xlsxwriter",
+ "ryu",
  "scraper",
  "serde-pickle",
  "serde_json",

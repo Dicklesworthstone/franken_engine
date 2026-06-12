@@ -256,8 +256,10 @@ mod tests {
 
     #[test]
     fn participant_limit_enforcement() {
-        let mut config = AggregationConfig::default();
-        config.max_participants = 1;
+        let config = AggregationConfig {
+            max_participants: 1,
+            ..AggregationConfig::default()
+        };
 
         let mut session = SecureAggregationSession::new("test-session".into(), config);
 
@@ -270,10 +272,12 @@ mod tests {
 
     #[test]
     fn aggregation_workflow() {
-        let mut config = AggregationConfig::default();
-        config.min_participants = 2;
-        config.max_participants = 3;
-        config.vector_dimension = 5;
+        let config = AggregationConfig {
+            min_participants: 2,
+            max_participants: 3,
+            vector_dimension: 5,
+            ..AggregationConfig::default()
+        };
 
         let mut session = SecureAggregationSession::new("test-session".into(), config);
         let mut rng = thread_rng();

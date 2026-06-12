@@ -47,7 +47,7 @@ fn complete_secure_aggregation_workflow() {
     let mut all_masked_contributions = Vec::new();
 
     // Each participant's private input (these would be real sensitive data)
-    let private_inputs = vec![
+    let private_inputs = [
         vec![10, 20, 30, 40], // Alice's private vector
         vec![15, 25, 35, 45], // Bob's private vector
         vec![5, 10, 15, 20],  // Charlie's private vector

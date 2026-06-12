@@ -435,15 +435,18 @@ impl ReAdmissionReceipt {
             ..self.clone()
         };
 
+        // A non-matching signature is the normal "invalid" outcome and must
+        // surface as Ok(false), not Err — the same Result<bool> contract that
+        // `ReAdmissionDecision::verify_signature` documents and pins. The old
+        // `.map(|_| true).map_err(..)?` shape propagated Ed25519's mismatch
+        // error through `?`, making the `Ok(false)` branch unreachable and
+        // tampered receipts indistinguishable from operational failures.
         let signature_valid = verify_signature(
             system_key,
             &unsigned.preimage_bytes(),
             &self.system_signature,
         )
-        .map(|_| true)
-        .map_err(|e| {
-            ReAdmissionError::Verification(format!("System signature verification failed: {}", e))
-        })?;
+        .is_ok();
 
         if !signature_valid {
             return Ok(false);
@@ -852,6 +855,50 @@ mod tests {
             receipt2
                 .verify(&system_verification_key)
                 .expect("Verification should not error")
+        );
+    }
+
+    #[test]
+    fn test_receipt_verify_wrong_key_is_ok_false_not_err() {
+        let (system_key, _) = make_test_keys();
+        let (operator_key, _) = make_test_keys();
+        let (_, wrong_verification_key) = make_test_keys();
+        let epoch = SecurityEpoch::from_raw(42);
+
+        let decision = ReAdmissionDecision::new(
+            epoch,
+            EngineObjectId::default(),
+            make_test_quarantine_reason(),
+            3600,
+            "operator-alice".to_string(),
+            AttestationStatus::Available {
+                quote: make_test_attestation_quote(),
+            },
+            800_000,
+            make_test_fallback_path(),
+            BTreeMap::new(),
+            &operator_key,
+        )
+        .expect("Decision creation should succeed");
+
+        let receipt = ReAdmissionReceipt::new(
+            epoch,
+            decision,
+            ReAdmissionReceipt::genesis_hash(),
+            1234567890,
+            &system_key,
+        )
+        .expect("Receipt creation should succeed");
+
+        // Invalid-signature is the normal "tampered/wrong key" outcome and
+        // must be Ok(false) (fail-closed but distinguishable from an
+        // operational error), matching ReAdmissionDecision::verify_signature.
+        assert_eq!(
+            receipt
+                .verify(&wrong_verification_key)
+                .expect("wrong key must yield Ok(false), not an error"),
+            false,
+            "a receipt verified against the wrong system key must be invalid"
         );
     }
 

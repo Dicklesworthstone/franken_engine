@@ -893,11 +893,10 @@ mod tests {
         // Invalid-signature is the normal "tampered/wrong key" outcome and
         // must be Ok(false) (fail-closed but distinguishable from an
         // operational error), matching ReAdmissionDecision::verify_signature.
-        assert_eq!(
-            receipt
+        assert!(
+            !receipt
                 .verify(&wrong_verification_key)
                 .expect("wrong key must yield Ok(false), not an error"),
-            false,
             "a receipt verified against the wrong system key must be invalid"
         );
     }

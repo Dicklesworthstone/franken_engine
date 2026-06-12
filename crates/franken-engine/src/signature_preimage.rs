@@ -71,14 +71,32 @@ pub const SIGNATURE_SENTINEL: [u8; SIGNATURE_LEN] = [0u8; SIGNATURE_LEN];
 // Key types
 // ---------------------------------------------------------------------------
 
+/// Constant-time all-zero check for secret key bytes.
+fn is_all_zero_secret(bytes: &[u8; SIGNING_KEY_LEN]) -> bool {
+    use subtle::ConstantTimeEq;
+    bytes.ct_eq(&[0u8; SIGNING_KEY_LEN]).into()
+}
+
 /// A signing key (Ed25519 private key).
 ///
 /// Debug output is redacted to prevent key material leakage in logs.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SigningKey {
     #[serde(with = "serde_bytes")]
     inner: [u8; SIGNING_KEY_LEN],
 }
+
+/// Equality on secret key material must be constant-time (project crypto
+/// discipline; the derived `PartialEq` short-circuits on the first differing
+/// byte, leaking match-prefix length through timing).
+impl PartialEq for SigningKey {
+    fn eq(&self, other: &Self) -> bool {
+        use subtle::ConstantTimeEq;
+        self.inner.ct_eq(&other.inner).into()
+    }
+}
+
+impl Eq for SigningKey {}
 
 impl std::fmt::Debug for SigningKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -96,8 +114,10 @@ pub struct VerificationKey {
 impl SigningKey {
     /// Create from raw bytes.
     pub fn from_bytes(bytes: [u8; SIGNING_KEY_LEN]) -> Result<Self, SignatureError> {
-        // Ed25519 keys of all zeros are invalid
-        if bytes == [0u8; SIGNING_KEY_LEN] {
+        // Ed25519 keys of all zeros are invalid. Constant-time comparison:
+        // a short-circuiting `==` on secret bytes leaks the leading-zero
+        // prefix length through timing.
+        if is_all_zero_secret(&bytes) {
             return Err(SignatureError::InvalidSigningKey);
         }
         // Ed25519SigningKey::from_bytes doesn't return a Result in ed25519-dalek 2.0
@@ -312,7 +332,7 @@ pub fn sign_preimage(
     signing_key: &SigningKey,
     preimage: &[u8],
 ) -> Result<Signature, SignatureError> {
-    if signing_key.inner == [0u8; SIGNING_KEY_LEN] {
+    if is_all_zero_secret(&signing_key.inner) {
         return Err(SignatureError::InvalidSigningKey);
     }
 
@@ -392,7 +412,7 @@ impl PreparedSigningKey {
     /// Expand a signing key once. Rejects the all-zero key exactly like
     /// [`sign_preimage`].
     pub fn prepare(key: &SigningKey) -> Result<Self, SignatureError> {
-        if key.inner == [0u8; SIGNING_KEY_LEN] {
+        if is_all_zero_secret(&key.inner) {
             return Err(SignatureError::InvalidSigningKey);
         }
         let ed25519 = key.to_ed25519();
@@ -621,7 +641,7 @@ impl SignatureContext {
         // Check canonicality first.
         let unsigned = object.unsigned_view();
         if let Err(e) = check_canonical_for_signing(&unsigned) {
-            self.failure_count += 1;
+            self.failure_count = self.failure_count.saturating_add(1);
             self.events.push(SignatureEvent {
                 event_type: SignatureEventType::CanonicalityCheckFailed {
                     detail: e.to_string(),
@@ -635,7 +655,7 @@ impl SignatureContext {
         let vk = signing_key.verification_key();
         let signature = sign_object(object, signing_key)?;
 
-        self.sign_count += 1;
+        self.sign_count = self.sign_count.saturating_add(1);
         self.events.push(SignatureEvent {
             event_type: SignatureEventType::Signed { signer: vk },
             domain: object.signature_domain(),
@@ -679,7 +699,7 @@ impl SignatureContext {
 
         match &result {
             Ok(()) => {
-                self.verify_count += 1;
+                self.verify_count = self.verify_count.saturating_add(1);
                 self.events.push(SignatureEvent {
                     event_type: SignatureEventType::Verified {
                         signer: verification_key.clone(),
@@ -689,7 +709,7 @@ impl SignatureContext {
                 });
             }
             Err(SignatureError::VerificationFailed { reason, .. }) => {
-                self.failure_count += 1;
+                self.failure_count = self.failure_count.saturating_add(1);
                 self.events.push(SignatureEvent {
                     event_type: SignatureEventType::VerificationFailed {
                         signer: verification_key.clone(),
@@ -700,7 +720,7 @@ impl SignatureContext {
                 });
             }
             Err(_) => {
-                self.failure_count += 1;
+                self.failure_count = self.failure_count.saturating_add(1);
             }
         }
 

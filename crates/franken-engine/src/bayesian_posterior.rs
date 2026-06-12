@@ -512,6 +512,15 @@ pub struct CalibrationResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BayesianPosteriorUpdater {
     posterior: Posterior,
+    /// The prior the updater was constructed with. BOCPD's "new regime"
+    /// predictive resets to THIS prior, not the factory default — otherwise
+    /// change-point detection for an updater configured with a custom prior
+    /// (orchestrator/guardplane/federated callers pass variable priors) would
+    /// score regime changes against a baseline the model never declared.
+    /// Serde default keeps previously persisted updaters loadable with the
+    /// old behavior.
+    #[serde(default = "Posterior::default_prior")]
+    prior: Posterior,
     likelihood_model: LikelihoodModel,
     change_detector: ChangePointDetector,
     cumulative_llr_millionths: i64,
@@ -525,7 +534,8 @@ impl BayesianPosteriorUpdater {
     /// Create a new updater with the given prior and extension ID.
     pub fn new(prior: Posterior, extension_id: impl Into<String>) -> Self {
         Self {
-            posterior: prior,
+            posterior: prior.clone(),
+            prior,
             likelihood_model: LikelihoodModel::default(),
             change_detector: ChangePointDetector::new(50_000, 100), // 5% hazard, max 100 steps
             cumulative_llr_millionths: 0,
@@ -566,8 +576,14 @@ impl BayesianPosteriorUpdater {
             unnormalized[3],
         );
 
-        // Update cumulative log-likelihood ratio (benign vs malicious).
-        // LLR = log(L_malicious / L_benign), in millionths of nats.
+        // Update the cumulative likelihood-ratio statistic (benign vs
+        // malicious). NOTE: this is the first-order proxy
+        // (L_mal - L_ben) / L_ben for ln(L_mal / L_ben), in millionths —
+        // exact at ratio 1 and increasingly overestimating |ln| as the ratio
+        // departs from 1. It is a self-contained diagnostic: neither the
+        // posterior update nor BOCPD consumes it, so the approximation does
+        // not affect decisions. Replace with a fixed-point ln if this ever
+        // feeds a boundary test.
         let llr_step = if likelihoods[0] > 0 && likelihoods[2] > 0 {
             if likelihoods[2] >= likelihoods[0] {
                 (likelihoods[2] - likelihoods[0]) * MILLION / likelihoods[0]
@@ -581,16 +597,17 @@ impl BayesianPosteriorUpdater {
         };
         self.cumulative_llr_millionths = self.cumulative_llr_millionths.saturating_add(llr_step);
 
-        // BOCPD update: evaluate how well current posterior predicts data vs the prior.
+        // BOCPD update: evaluate how well the current posterior predicts the
+        // data versus a regime reset to the CONFIGURED prior (the model's own
+        // baseline, not the factory default).
         let predictive_continuation = unnormalized
             .iter()
             .fold(0i64, |acc, x| acc.saturating_add(*x));
 
-        let prior = Posterior::default_prior();
-        let predictive_new = (prior.p_benign * likelihoods[0] / MILLION)
-            + (prior.p_anomalous * likelihoods[1] / MILLION)
-            + (prior.p_malicious * likelihoods[2] / MILLION)
-            + (prior.p_unknown * likelihoods[3] / MILLION);
+        let predictive_new = (self.prior.p_benign * likelihoods[0] / MILLION)
+            + (self.prior.p_anomalous * likelihoods[1] / MILLION)
+            + (self.prior.p_malicious * likelihoods[2] / MILLION)
+            + (self.prior.p_unknown * likelihoods[3] / MILLION);
 
         self.change_detector
             .update(predictive_continuation, predictive_new);

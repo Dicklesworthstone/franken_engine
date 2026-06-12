@@ -4,6 +4,23 @@ on:
   pull_request:
 
 jobs:
+  workspace-policy:
+    name: workspace policy (franken-core re-exclude guard)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # bd-cixqu.10.8 (Track J): the root Cargo.toml must never silently
+      # re-exclude crates/franken-core. `check` fails the build if the live
+      # workspace state regresses; `negative` proves the guard still detects
+      # a re-excluded fixture, so the guard itself cannot rot.
+      - name: franken-core status-truth gate (check + negative)
+        run: |
+          bash scripts/e2e/franken_core_status_truth_gate_smoke.sh check
+          bash scripts/e2e/franken_core_status_truth_gate_smoke.sh negative
+
   frankenengine-engine:
     name: frankenengine-engine quality gates
     runs-on: ubuntu-latest

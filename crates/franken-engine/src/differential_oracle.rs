@@ -1417,12 +1417,15 @@ fn abbreviate(value: &str) -> String {
     }
 }
 
-enum VersionProbe {
+pub(crate) enum VersionProbe {
     Available(String),
     Unavailable(String),
 }
 
-fn capture_external_version(spec: &ExternalRuntimeSpec, timeout: Duration) -> VersionProbe {
+pub(crate) fn capture_external_version(
+    spec: &ExternalRuntimeSpec,
+    timeout: Duration,
+) -> VersionProbe {
     match run_command_with_timeout(
         spec.program.as_str(),
         spec.version_args.iter().map(String::as_str),
@@ -1458,15 +1461,15 @@ fn capture_external_version(spec: &ExternalRuntimeSpec, timeout: Duration) -> Ve
     }
 }
 
-struct TimedCommandOutput {
-    status: ExitStatus,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-    duration_micros: u128,
-    timed_out: bool,
+pub(crate) struct TimedCommandOutput {
+    pub(crate) status: ExitStatus,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
+    pub(crate) duration_micros: u128,
+    pub(crate) timed_out: bool,
 }
 
-fn run_command_with_timeout<'a>(
+pub(crate) fn run_command_with_timeout<'a>(
     program: &str,
     args: impl IntoIterator<Item = &'a str>,
     timeout: Duration,
@@ -1528,7 +1531,7 @@ fn external_eval_command(spec: &ExternalRuntimeSpec) -> Vec<String> {
     command
 }
 
-fn capture_host_facts() -> DifferentialHostFacts {
+pub(crate) fn capture_host_facts() -> DifferentialHostFacts {
     DifferentialHostFacts {
         os: env::consts::OS.to_string(),
         arch: env::consts::ARCH.to_string(),
@@ -1571,14 +1574,14 @@ fn linux_cpu_model() -> Option<String> {
         .filter(|model| !model.is_empty())
 }
 
-fn current_unix_ns() -> u128 {
+pub(crate) fn current_unix_ns() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0)
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 

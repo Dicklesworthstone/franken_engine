@@ -24,6 +24,9 @@ use frankenengine_engine::benchmark_e2e::{
 use frankenengine_engine::capability::{CapabilityProfile, RuntimeCapability};
 use frankenengine_engine::deterministic_replay::{NondeterminismTrace, ReplayEngine, ReplayMode};
 use frankenengine_engine::differential_oracle::{DifferentialOracleInput, run_differential_oracle};
+use frankenengine_engine::differential_oracle_perf::{
+    PerfArmConfig, load_runtime_comparison_corpus, run_differential_perf,
+};
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
     OrchestratorResult,
@@ -164,6 +167,7 @@ enum HelpTopic {
     ReplayDebug,
     DifferentialOracle,
     DifferentialOracleRun,
+    DifferentialOraclePerf,
     React,
     ReactCompile,
     ReactBuild,
@@ -197,6 +201,7 @@ impl HelpTopic {
             Self::ReplayDebug => replay_debug_usage(),
             Self::DifferentialOracle => differential_oracle_usage(),
             Self::DifferentialOracleRun => differential_oracle_run_usage(),
+            Self::DifferentialOraclePerf => differential_oracle_perf_usage(),
             Self::React => react_usage(),
             Self::ReactCompile => react_compile_usage(),
             Self::ReactBuild => react_build_usage(),
@@ -351,6 +356,7 @@ struct DifferentialOracleArgs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DifferentialOracleMode {
     Run(DifferentialOracleRunArgs),
+    Perf(DifferentialOraclePerfArgs),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -359,6 +365,19 @@ struct DifferentialOracleRunArgs {
     case_id: Option<String>,
     timeout_ms: u64,
     out: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DifferentialOraclePerfArgs {
+    manifest: PathBuf,
+    out: Option<PathBuf>,
+    events: Option<PathBuf>,
+    warmup: u32,
+    samples: u32,
+    case_timeout_ms: u64,
+    node_bin: Option<String>,
+    bun_bin: Option<String>,
+    case_filter: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1491,6 +1510,11 @@ fn parse_differential_oracle_help_command(args: &[String]) -> Result<CommandSpec
             HelpTopic::DifferentialOracleRun,
             &args[1..],
         ),
+        "perf" => parse_leaf_help_topic(
+            "differential-oracle perf",
+            HelpTopic::DifferentialOraclePerf,
+            &args[1..],
+        ),
         other => Err(format!(
             "unknown differential-oracle help topic `{other}` (expected run)"
         )),
@@ -2100,14 +2124,16 @@ fn parse_differential_oracle_command(args: &[String]) -> Result<CommandSpec, Str
     match args[0].as_str() {
         "help" | "--help" | "-h" => match args.get(1).map(String::as_str) {
             Some("run") => Ok(CommandSpec::HelpTopic(HelpTopic::DifferentialOracleRun)),
+            Some("perf") => Ok(CommandSpec::HelpTopic(HelpTopic::DifferentialOraclePerf)),
             Some(other) => Err(format!(
-                "unknown differential-oracle help topic `{other}` (expected run)"
+                "unknown differential-oracle help topic `{other}` (expected run|perf)"
             )),
             None => Ok(CommandSpec::HelpTopic(HelpTopic::DifferentialOracle)),
         },
         "run" => parse_differential_oracle_run_command(&args[1..]),
+        "perf" => parse_differential_oracle_perf_command(&args[1..]),
         other => Err(format!(
-            "unknown differential-oracle subcommand `{other}` (expected run)"
+            "unknown differential-oracle subcommand `{other}` (expected run|perf)"
         )),
     }
 }
@@ -2145,6 +2171,75 @@ fn parse_differential_oracle_run_command(args: &[String]) -> Result<CommandSpec,
             case_id,
             timeout_ms,
             out,
+        }),
+    }))
+}
+
+fn parse_differential_oracle_perf_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::DifferentialOraclePerf));
+    }
+
+    let mut manifest: Option<PathBuf> = None;
+    let mut out: Option<PathBuf> = None;
+    let mut events: Option<PathBuf> = None;
+    let mut warmup = 3_u32;
+    let mut samples = 30_u32;
+    let mut case_timeout_ms = 120_000_u64;
+    let mut node_bin: Option<String> = None;
+    let mut bun_bin: Option<String> = None;
+    let mut case_filter: Vec<String> = Vec::new();
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--manifest" => {
+                manifest = Some(PathBuf::from(next_arg(args, &mut index, "--manifest")?))
+            }
+            "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            "--events" => events = Some(PathBuf::from(next_arg(args, &mut index, "--events")?)),
+            "--warmup" => {
+                warmup = u32::try_from(parse_u64(
+                    &next_arg(args, &mut index, "--warmup")?,
+                    "--warmup",
+                )?)
+                .map_err(|_| "--warmup value does not fit in u32".to_string())?
+            }
+            "--samples" => {
+                samples = u32::try_from(parse_u64(
+                    &next_arg(args, &mut index, "--samples")?,
+                    "--samples",
+                )?)
+                .map_err(|_| "--samples value does not fit in u32".to_string())?
+            }
+            "--case-timeout-ms" => {
+                case_timeout_ms = parse_u64(
+                    &next_arg(args, &mut index, "--case-timeout-ms")?,
+                    "--case-timeout-ms",
+                )?
+                .max(1)
+            }
+            "--node-bin" => node_bin = Some(next_arg(args, &mut index, "--node-bin")?),
+            "--bun-bin" => bun_bin = Some(next_arg(args, &mut index, "--bun-bin")?),
+            "--case" => case_filter.push(next_arg(args, &mut index, "--case")?),
+            flag => return Err(format!("unknown differential-oracle perf flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    Ok(CommandSpec::DifferentialOracle(DifferentialOracleArgs {
+        mode: DifferentialOracleMode::Perf(DifferentialOraclePerfArgs {
+            manifest: manifest.ok_or_else(|| {
+                "differential-oracle perf requires --manifest <manifest.json>".to_string()
+            })?,
+            out,
+            events,
+            warmup,
+            samples,
+            case_timeout_ms,
+            node_bin,
+            bun_bin,
+            case_filter,
         }),
     }))
 }
@@ -5407,7 +5502,66 @@ fn execute_replay_debug(args: ReplayDebugArgs) -> Result<i32, String> {
 fn execute_differential_oracle(args: DifferentialOracleArgs) -> Result<i32, String> {
     match args.mode {
         DifferentialOracleMode::Run(args) => execute_differential_oracle_run(args),
+        DifferentialOracleMode::Perf(args) => execute_differential_oracle_perf(args),
     }
+}
+
+fn execute_differential_oracle_perf(args: DifferentialOraclePerfArgs) -> Result<i32, String> {
+    let mut corpus = load_runtime_comparison_corpus(&args.manifest)?;
+    if !args.case_filter.is_empty() {
+        corpus.retain(|case| args.case_filter.iter().any(|id| id == &case.case_id));
+        if corpus.is_empty() {
+            return Err("--case filters matched no corpus case".to_string());
+        }
+    }
+
+    let mut config = PerfArmConfig {
+        warmup_iterations: args.warmup,
+        measured_iterations: args.samples,
+        case_timeout_ms: args.case_timeout_ms,
+        ..PerfArmConfig::default()
+    };
+    if let Some(node_bin) = args.node_bin {
+        config.node.program = node_bin;
+    }
+    if let Some(bun_bin) = args.bun_bin {
+        config.bun.program = bun_bin;
+    }
+
+    let (report, iteration_events) = run_differential_perf(&corpus, &config);
+
+    if let Some(path) = &args.events {
+        let mut lines = String::new();
+        for event in &iteration_events {
+            let line = serde_json::to_string(event)
+                .map_err(|error| format!("failed to serialize iteration event: {error}"))?;
+            lines.push_str(&line);
+            lines.push('\n');
+        }
+        fs::write(path, lines)
+            .map_err(|error| format!("failed to write events `{}`: {error}", path.display()))?;
+    }
+    if let Some(path) = &args.out {
+        write_json_file(path, &report)?;
+    }
+
+    // stdout gets a compact operator summary; raw per-iteration data lives in
+    // the --out report and --events stream.
+    let summary = serde_json::json!({
+        "schema_version": report.schema_version,
+        "fairness": report.fairness,
+        "case_count": report.cases.len(),
+        "admitted_case_ids": report
+            .cases
+            .iter()
+            .filter(|case| case.admitted)
+            .map(|case| case.case_id.clone())
+            .collect::<Vec<_>>(),
+        "node_denominator": report.node_denominator,
+        "bun_denominator": report.bun_denominator,
+    });
+    print_json(&summary)?;
+    Ok(0)
 }
 
 fn execute_differential_oracle_run(args: DifferentialOracleRunArgs) -> Result<i32, String> {
@@ -6819,6 +6973,8 @@ fn usage() -> String {
         "      [--mode strict|best-effort|validate] [--out <report.json>]",
         "  frankenctl differential-oracle run --input <source.js>",
         "      [--case-id <id>] [--timeout-ms <u64>] [--out <report.json>]",
+        "  frankenctl differential-oracle perf --manifest <manifest.json>",
+        "      [--out <report.json>] [--events <events.jsonl>] [--warmup <u32>] [--samples <u32>]",
         "  frankenctl react compile|build|doctor|contract [options]  # React integration surfaces",
         "",
         "OPERATOR/DEVELOPMENT SURFACES (unsupported in production):",
@@ -7101,9 +7257,15 @@ fn differential_oracle_usage() -> String {
         "differential-oracle usage:",
         "  frankenctl differential-oracle run --input <source.js>",
         "      [--case-id <id>] [--timeout-ms <u64>] [--out <report.json>]",
+        "  frankenctl differential-oracle perf --manifest <manifest.json>",
+        "      [--out <report.json>] [--events <events.jsonl>]",
+        "      [--warmup <u32>] [--samples <u32>] [--case-timeout-ms <u64>]",
+        "      [--node-bin <path>] [--bun-bin <path>] [--case <id>]...",
         "",
         "behavior:",
-        "  executes one JS fixture across Node, Bun, franken-engine, and the franken-core-compatible baseline lane.",
+        "  run: executes one JS fixture across Node, Bun, franken-engine, and the franken-core-compatible baseline lane.",
+        "  perf: measures steady-state throughput over a corpus and emits the Node/Bun denominator",
+        "        with fairness enforcement (degraded receipt when rules are unmet).",
         "  missing external runtimes produce unavailable backend receipts instead of failing the run.",
     ]
     .join("\n")
@@ -7114,6 +7276,24 @@ fn differential_oracle_run_usage() -> String {
         "differential-oracle run usage:",
         "  frankenctl differential-oracle run --input <source.js>",
         "      [--case-id <id>] [--timeout-ms <u64>] [--out <report.json>]",
+    ]
+    .join("\n")
+}
+
+fn differential_oracle_perf_usage() -> String {
+    [
+        "differential-oracle perf usage:",
+        "  frankenctl differential-oracle perf --manifest <manifest.json>",
+        "      [--out <report.json>] [--events <events.jsonl>]",
+        "      [--warmup <u32>] [--samples <u32>] [--case-timeout-ms <u64>]",
+        "      [--node-bin <path>] [--bun-bin <path>] [--case <id>]...",
+        "",
+        "behavior:",
+        "  measures warm steady-state throughput of every corpus case under Node, Bun, and the",
+        "  native engine; cases enter the denominator only when the correctness arm reports",
+        "  structured-value consensus. per-iteration timings stream to --events so the ratio can",
+        "  be re-derived from raw data. fairness violations (e.g. `node` resolving to Bun's shim)",
+        "  degrade the receipt instead of publishing a number.",
     ]
     .join("\n")
 }

@@ -197,7 +197,7 @@ impl SecureAggregationSession {
         // Add entropy from RNG for this session
         let mut entropy = [0u8; 32];
         rng.fill_bytes(&mut entropy);
-        hasher.update(&entropy);
+        hasher.update(entropy);
 
         Ok(hasher.finalize().to_vec())
     }

@@ -90,6 +90,25 @@ mismatch artifacts) but tracks every `*.golden`, `*.json`, `*.txt`, and
   `tests/golden/fuzz_adversarial/*.json` files are retained for audit history
   until explicit deletion/move approval is given.
 
+### `fuzz_adversarial__{simple_script_success,malformed_syntax_error,module_with_exports}.snap` *(moved to `tests/snapshots/` — bd-ub6x8.21)*
+
+- **Owning test:** `tests/fuzz_adversarial.rs`. Migrated from the
+  shared `golden_diag::GoldenDiag` helper to `insta::assert_snapshot!`
+  with `Settings::add_filter` scrubbing for parser hashes and generated
+  trace/decision IDs.
+- **Subject under test:** parser-boundary harness output for a successful
+  script parse, malformed syntax diagnostics, and module import/export
+  coverage.
+- **Regen:**
+  `rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_fe5 INSTA_UPDATE=always cargo test -p frankenengine-engine --test fuzz_adversarial golden_parser_boundary -- --nocapture`,
+  followed by `cargo insta review` for interactive blessing.
+- **Scrubbing:** SHA256 -> `[HASH]`; trace IDs -> `[TRACE_ID]`;
+  parser decision IDs -> `[DECISION_ID]`.
+- **Fixtures (3):** `simple_script_success.snap`,
+  `malformed_syntax_error.snap`, `module_with_exports.snap`. Legacy
+  `tests/golden/parser_boundary/*.json` files are retained for audit history
+  until explicit deletion/move approval is given.
+
 ### `lowering/`
 
 - **Owning test:** `tests/golden_lowering.rs` (helper

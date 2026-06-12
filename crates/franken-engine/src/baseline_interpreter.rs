@@ -9489,6 +9489,20 @@ impl InterpreterCore {
                             });
                         }
                     }
+                    // IFC: the read value's confidentiality is bounded below by
+                    // the source object's label — a property of a Secret object
+                    // is itself at least Secret. Join the object register's
+                    // label onto dst (mirrors the BinaryOp/UnaryOp/HostCall
+                    // propagation; without this, every property read under-taints
+                    // and launders the object's label to the dst's stale prior
+                    // value, enabling IFC confinement bypass — bd-0zybl, sibling
+                    // of the HostCall gap bd-n2mjy). Conservative join (not bare
+                    // overwrite) so a dst already carrying higher taint is never
+                    // lowered by a property read.
+                    let joined_label = self
+                        .get_register_label(dst)?
+                        .join(self.get_register_label(obj)?);
+                    self.set_register_label(dst, joined_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::SetProperty { obj, key, val } => {
@@ -10157,6 +10171,14 @@ impl InterpreterCore {
                         result.push_str(&part_str);
                     }
                     self.write_reg(dst, Value::str(result))?;
+                    // IFC: the concatenated string is derived from every part —
+                    // `` `${secret}` `` must carry the secret's label, not the
+                    // dst register's stale prior label (the bd-0zybl / bd-n2mjy
+                    // under-tainting class). Same join contract as HostCall
+                    // arguments: the new value depends exactly on the parts, so
+                    // overwrite dst's label with the join of all part labels.
+                    let parts_label = self.join_arg_range_label(parts)?;
+                    self.set_register_label(dst, parts_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Halt => {
@@ -24429,17 +24451,21 @@ impl InterpreterCore {
                     return Ok(Value::Undefined);
                 };
 
-                // Normalize indices
+                // Normalize indices. ES2015 §22.1.3.3: non-negative relative
+                // indices clamp to `len` (inclusive), not `len - 1` — clamping
+                // to `len - 1` made `copyWithin(len, 0, 1)` overwrite the last
+                // element instead of being a no-op, and on an empty array it
+                // produced index `-1` (inserting a bogus "-1" property).
                 let actual_target = if target < 0 {
                     (length + target).max(0)
                 } else {
-                    target.min(length - 1)
+                    target.min(length)
                 };
 
                 let actual_start = if start < 0 {
                     (length + start).max(0)
                 } else {
-                    start.min(length - 1)
+                    start.min(length)
                 };
 
                 let actual_end = end.map_or(length, |e| {
@@ -31899,6 +31925,215 @@ mod async_runtime_tests_current {
                 .expect("dst register label should exist"),
             &crate::ifc_artifacts::Label::Public,
             "zero-arg hostcall dst must reset to Public"
+        );
+    }
+
+    /// bd-0zybl: reading a property off a Secret-labeled object must taint the
+    /// destination register at least Secret. Before the fix, `GetProperty`
+    /// wrote only the value via `write_reg` and never touched the dst's label,
+    /// so a Secret object's field laundered to a stale `Public` dst — an IFC
+    /// confinement bypass (a subsequent egress hostcall would see Public and be
+    /// permitted). Sibling of bd-n2mjy (the HostCall-arg variant).
+    #[test]
+    fn get_property_joins_object_label_onto_dst() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 2,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+        module.constant_pool.push("data".to_string());
+
+        let mut core = test_interpreter();
+        let secret_obj = core
+            .alloc_object_with_properties(&[("data", Value::Int(99))])
+            .expect("test object allocation should succeed");
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(secret_obj);
+        });
+        core.set_register_label(0, crate::ifc_artifacts::Label::Secret)
+            .expect("object label should be settable");
+        // Seed dst strictly below Secret to prove the read raises it. If the
+        // join were a no-op the dst label would stay Public (the bd-0zybl bug).
+        core.set_register_label(2, crate::ifc_artifacts::Label::Public)
+            .expect("dst label should be settable");
+
+        core.execute(&module)
+            .expect("property read off a secret object should execute");
+
+        assert_eq!(
+            core.get_register_label(2)
+                .expect("dst register label should exist"),
+            &crate::ifc_artifacts::Label::Secret,
+            "GetProperty dst must inherit (join) the source object's label"
+        );
+    }
+
+    /// bd-0zybl: the label propagation is a JOIN, not a bare overwrite — a dst
+    /// already carrying higher taint than the object must not be lowered by a
+    /// property read (over-taint is safe; under-taint is the security bug).
+    #[test]
+    fn get_property_join_preserves_higher_prior_dst_label() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 2,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+        module.constant_pool.push("data".to_string());
+
+        let mut core = test_interpreter();
+        let public_obj = core
+            .alloc_object_with_properties(&[("data", Value::Int(1))])
+            .expect("test object allocation should succeed");
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(public_obj);
+        });
+        core.set_register_label(0, crate::ifc_artifacts::Label::Public)
+            .expect("object label should be settable");
+        core.set_register_label(2, crate::ifc_artifacts::Label::Secret)
+            .expect("dst label should be settable");
+
+        core.execute(&module)
+            .expect("property read off a public object should execute");
+
+        assert_eq!(
+            core.get_register_label(2)
+                .expect("dst register label should exist"),
+            &crate::ifc_artifacts::Label::Secret,
+            "GetProperty join must not lower a dst that already holds higher taint"
+        );
+    }
+
+    /// bd-0zybl family: a template literal's output is derived from every
+    /// part, so `` `${secret}` `` must carry the secret part's label. Before
+    /// the fix `TemplateLiteral` wrote the concatenated string via `write_reg`
+    /// and left the dst register's stale prior label in place — the same
+    /// under-tainting laundering hole as GetProperty/HostCall.
+    #[test]
+    fn template_literal_joins_part_labels_onto_dst() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::TemplateLiteral {
+                    parts: RegRange { start: 0, count: 2 },
+                    dst: 2,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+
+        let mut core = test_interpreter();
+        core.mutate_registers(|r| {
+            r[0] = Value::str("prefix-".to_string());
+            r[1] = Value::str("secret-suffix".to_string());
+        });
+        core.set_register_label(1, crate::ifc_artifacts::Label::Secret)
+            .expect("part label should be settable");
+        // Seed dst strictly below Secret to prove the join raises it.
+        core.set_register_label(2, crate::ifc_artifacts::Label::Public)
+            .expect("dst label should be settable");
+
+        core.execute(&module)
+            .expect("template literal should execute");
+
+        assert_eq!(
+            core.get_register_label(2)
+                .expect("dst register label should exist"),
+            &crate::ifc_artifacts::Label::Secret,
+            "TemplateLiteral dst must inherit join(parts' labels)"
+        );
+    }
+
+    /// ES2015 §22.1.3.3: `copyWithin` clamps non-negative `target`/`start` to
+    /// `len` (inclusive), not `len - 1`. Before the fix, `copyWithin(len, 0)`
+    /// overwrote the last element instead of being a no-op, and on an empty
+    /// array the `min(len - 1)` clamp produced index `-1`, inserting a bogus
+    /// `"-1"` property.
+    #[test]
+    fn copy_within_clamps_target_and_start_to_length() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("builtin:ArrayPrototypeCopyWithin".to_string()),
+                    args: RegRange { start: 0, count: 3 },
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+
+        let mut core = test_interpreter();
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::Builtin);
+        let arr = core
+            .alloc_array_from_values(&[
+                Value::Int(10),
+                Value::Int(20),
+                Value::Int(30),
+                Value::Int(40),
+                Value::Int(50),
+            ])
+            .expect("test array allocation should succeed");
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(arr);
+            r[1] = Value::Int(5); // target == length → must be a no-op
+            r[2] = Value::Int(0); // start
+        });
+
+        core.execute(&module)
+            .expect("copyWithin hostcall should execute");
+
+        let last = core
+            .heap
+            .get(arr.0 as usize)
+            .and_then(|obj| obj.properties.get("4"))
+            .cloned();
+        assert_eq!(
+            last,
+            Some(Value::Int(50)),
+            "copyWithin(len, 0) must be a no-op, not overwrite the last element"
+        );
+
+        // Empty array: copyWithin(0, 0) must not synthesize a "-1" property.
+        let empty = core
+            .alloc_array_from_values(&[])
+            .expect("empty array allocation should succeed");
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(empty);
+            r[1] = Value::Int(0);
+            r[2] = Value::Int(0);
+        });
+        core.execute(&module)
+            .expect("copyWithin on empty array should execute");
+        let bogus = core
+            .heap
+            .get(empty.0 as usize)
+            .and_then(|obj| obj.properties.get("-1"))
+            .cloned();
+        assert_eq!(
+            bogus, None,
+            "copyWithin on an empty array must not insert a \"-1\" property"
         );
     }
 

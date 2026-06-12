@@ -5,9 +5,8 @@
 //! and class inheritance patterns using franken-core's boundary interface.
 
 use frankenengine_core::object_model::{
-    JsValue, ManagedObject, ObjectError, ObjectHandle, ObjectHeap, OrdinaryObject,
-    PropertyDescriptor, PropertyKey, ProxyInvariantChecker, ProxyObject, Reflect,
-    ReflectApplyRequest, ReflectConstructRequest, SymbolId, SymbolRegistry, WellKnownSymbol,
+    JsValue, ObjectError, ObjectHandle, ObjectHeap, OrdinaryObject, PropertyDescriptor,
+    PropertyKey, ProxyInvariantChecker, Reflect, WellKnownSymbol,
 };
 
 // Helper functions for test clarity

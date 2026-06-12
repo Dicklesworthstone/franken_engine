@@ -304,7 +304,8 @@ fn safety_contract_update_posterior_shifts_toward_observed_state() {
     let c = SafetyContract::default_for(SafetyAction::ExtensionQuarantine);
     let mut posterior = Posterior::uniform(2);
     let before_safe = posterior.probs()[0];
-    c.update_posterior(&mut posterior, 0); // observe "safe"
+    c.update_posterior(&mut posterior, 0) // observe "safe"
+        .expect("posterior update for a valid state index should succeed");
     assert!(
         posterior.probs()[0] > before_safe,
         "P(safe) must increase after safe observation"
@@ -315,7 +316,8 @@ fn safety_contract_update_posterior_shifts_toward_observed_state() {
 fn safety_contract_update_posterior_unsafe_observation() {
     let c = SafetyContract::default_for(SafetyAction::ForcedTermination);
     let mut posterior = Posterior::uniform(2);
-    c.update_posterior(&mut posterior, 1); // observe "unsafe"
+    c.update_posterior(&mut posterior, 1) // observe "unsafe"
+        .expect("posterior update for a valid state index should succeed");
     assert!(posterior.probs()[1] > posterior.probs()[0]);
 }
 

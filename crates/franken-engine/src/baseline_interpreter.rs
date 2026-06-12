@@ -20701,6 +20701,15 @@ impl InterpreterCore {
                             array_obj
                                 .properties
                                 .insert("length".to_string(), Value::Int(elements.len() as i64));
+                            // splice rewrites the array densely as 0..len, so the
+                            // dense-length cache must follow the new length. Without
+                            // this the cache stays at the PRE-splice length, and the
+                            // `ArrayPush` fast path (which trusts cached_dense_length
+                            // as the next write index) appends past the end — e.g.
+                            // `[1,2,3,4,5].splice(0,3); a.push(9)` would write index 5
+                            // instead of 2, leaving holes. Mirrors the cache update
+                            // every dense-construction site already performs.
+                            array_obj.cached_dense_length = Some(elements.len() as u32);
                         }
 
                         // Push result array
@@ -32134,6 +32143,64 @@ mod async_runtime_tests_current {
         assert_eq!(
             bogus, None,
             "copyWithin on an empty array must not insert a \"-1\" property"
+        );
+    }
+
+    /// The legacy `builtin:ArrayPrototypeSplice` capability-dispatch path
+    /// (reached when `splice` is invoked as a bare builtin function value,
+    /// `map_function_index_to_builtin_capability` → `dispatch_builtin_hostcall`)
+    /// rewrites the array densely but must also refresh the dense-length cache.
+    /// Before the fix it left `cached_dense_length` at the PRE-splice length, so
+    /// a subsequent `ArrayPush` (which trusts the cache as the next write index)
+    /// appended past the end. The modern receiver-aware `ArraySplice` already
+    /// refreshes the cache; this pins the legacy path to the same invariant.
+    #[test]
+    fn legacy_splice_dispatch_refreshes_dense_length_cache() {
+        let mut core = test_interpreter();
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::Builtin);
+        let arr = core
+            .alloc_array_from_values(&[
+                Value::Int(1),
+                Value::Int(2),
+                Value::Int(3),
+                Value::Int(4),
+                Value::Int(5),
+            ])
+            .expect("array allocation should succeed");
+        // Pre-condition: dense cache reflects the original length.
+        assert_eq!(
+            core.heap
+                .get(arr.0 as usize)
+                .and_then(|o| o.cached_dense_length),
+            Some(5)
+        );
+
+        // splice(start=0, deleteCount=3) — this at args.start, start at +1,
+        // deleteCount at +2.
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(arr);
+            r[1] = Value::Int(0);
+            r[2] = Value::Int(3);
+        });
+        core.dispatch_builtin_hostcall(
+            "builtin:ArrayPrototypeSplice",
+            RegRange { start: 0, count: 3 },
+            None,
+        )
+        .expect("legacy splice dispatch should succeed");
+
+        let obj = core.heap.get(arr.0 as usize).expect("array still on heap");
+        assert_eq!(
+            obj.properties.get("length"),
+            Some(&Value::Int(2)),
+            "splice must shrink length to 2"
+        );
+        assert_eq!(
+            obj.cached_dense_length,
+            Some(2),
+            "the dense-length cache must follow splice's new length, not stay stale at 5"
         );
     }
 

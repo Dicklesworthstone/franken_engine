@@ -95,3 +95,28 @@ fn splice_inserts_items() {
         "4"
     );
 }
+
+#[test]
+fn splice_then_push_appends_at_the_new_length() {
+    // After splice shrinks the array, push must append at the post-splice
+    // length, not the pre-splice one. The dense-length cache has to follow
+    // splice's new length; a stale cache made push write past the end,
+    // leaving holes (e.g. index 5 instead of 2 here).
+    assert_eq!(
+        eval_value("let a = [1, 2, 3, 4, 5]; a.splice(0, 3); a.push(9); a.length;"),
+        "3"
+    );
+    assert_eq!(
+        eval_value("let a = [1, 2, 3, 4, 5]; a.splice(0, 3); a.push(9); a[2];"),
+        "9"
+    );
+    // Growing splice (net insert) then push: length 2 -> 4 -> 5.
+    assert_eq!(
+        eval_value("let a = [1, 4]; a.splice(1, 0, 2, 3); a.push(5); a.length;"),
+        "5"
+    );
+    assert_eq!(
+        eval_value("let a = [1, 4]; a.splice(1, 0, 2, 3); a.push(5); a[4];"),
+        "5"
+    );
+}

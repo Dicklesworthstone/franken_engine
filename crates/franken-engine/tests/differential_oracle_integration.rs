@@ -129,6 +129,16 @@ fn frankenctl_differential_oracle_run_emits_four_backend_receipts() {
     assert_eq!(franken_core["value"].as_str(), Some("2"));
     assert_eq!(franken_core["exit_code"].as_i64(), Some(0));
     assert!(
+        franken_core["command"]
+            .as_array()
+            .expect("franken-core command should be an array")
+            .iter()
+            .any(|entry| entry
+                .as_str()
+                .unwrap_or_default()
+                .contains("frankenengine_core::baseline_interpreter::QuickJsLane::execute"))
+    );
+    assert!(
         franken_core["diagnostics"]
             .as_array()
             .expect("franken-core diagnostics should be an array")
@@ -136,6 +146,6 @@ fn frankenctl_differential_oracle_run_emits_four_backend_receipts() {
             .any(|entry| entry
                 .as_str()
                 .unwrap_or_default()
-                .contains("frankenengine-core crate is not linked"))
+                .contains("frankenengine-core path dependency executed"))
     );
 }

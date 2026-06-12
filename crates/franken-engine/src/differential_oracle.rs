@@ -16,7 +16,20 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use wait_timeout::ChildExt;
 
-use crate::{HybridRouter, JsEngine, QuickJsInspiredNativeEngine};
+use frankenengine_core::baseline_interpreter::QuickJsLane as CoreQuickJsLane;
+use frankenengine_core::ir_contract::{
+    Ir0Module as CoreIr0Module, Ir3Instruction as CoreIr3Instruction,
+    Ir3Module as CoreIr3Module,
+};
+use frankenengine_core::lowering_pipeline::{
+    LoweringContext as CoreLoweringContext, lower_ir0_to_ir3 as core_lower_ir0_to_ir3,
+};
+use frankenengine_core::parser::{
+    CanonicalEs2020Parser as CoreParser, ParseGoal as CoreParseGoal,
+    ParserOptions as CoreParserOptions,
+};
+
+use crate::{HybridRouter, JsEngine, RouteReason};
 
 pub const DIFFERENTIAL_ORACLE_SCHEMA_VERSION: &str = "franken-engine.differential-oracle.v1";
 pub const DIFFERENTIAL_ORACLE_CANONICALIZATION_SCHEMA_VERSION: &str =
@@ -483,53 +496,230 @@ fn run_franken_engine_backend(source: &str) -> DifferentialBackendReceipt {
 
 fn run_franken_core_backend(source: &str) -> DifferentialBackendReceipt {
     let started = Instant::now();
-    let mut engine = QuickJsInspiredNativeEngine;
-    match engine.eval(source) {
-        Ok(outcome) => {
-            let stdout = outcome.value.clone();
+    match eval_with_franken_core(source) {
+        Ok(value) => {
+            let stdout = value.clone();
             DifferentialBackendReceipt {
                 backend: DifferentialBackend::FrankenCore,
                 status: DifferentialBackendStatus::Completed,
                 command: vec![
-                    "franken-engine::QuickJsInspiredNativeEngine::eval".to_string(),
-                    "franken-core-compatible-baseline-lane".to_string(),
+                    "frankenengine_core::parser::CanonicalEs2020Parser::parse_with_options"
+                        .to_string(),
+                    "frankenengine_core::lowering_pipeline::lower_ir0_to_ir3".to_string(),
+                    "frankenengine_core::baseline_interpreter::QuickJsLane::execute".to_string(),
                 ],
-                version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                version: Some(format!(
+                    "frankenengine-core path dependency; frankenengine-engine {}",
+                    env!("CARGO_PKG_VERSION")
+                )),
                 exit_code: Some(0),
                 duration_micros: started.elapsed().as_micros(),
-                value: Some(outcome.value),
+                value: Some(value),
                 stdout_sha256: sha256_hex(stdout.as_bytes()),
                 stderr_sha256: sha256_hex(b""),
                 stdout,
                 stderr: String::new(),
                 diagnostics: vec![
-                    "frankenengine-core crate is not linked by frankenengine-engine; receipt uses the in-crate baseline interpreter compatibility lane".to_string(),
+                    "frankenengine-core path dependency executed in-process through parser/lowering/QuickJsLane".to_string(),
                 ],
             }
         }
         Err(error) => {
-            let stderr = error.to_string();
+            let stderr = format!("{}: {}", error.stage, error.message);
             DifferentialBackendReceipt {
                 backend: DifferentialBackend::FrankenCore,
                 status: DifferentialBackendStatus::Failed,
                 command: vec![
-                    "franken-engine::QuickJsInspiredNativeEngine::eval".to_string(),
-                    "franken-core-compatible-baseline-lane".to_string(),
+                    "frankenengine_core::parser::CanonicalEs2020Parser::parse_with_options"
+                        .to_string(),
+                    "frankenengine_core::lowering_pipeline::lower_ir0_to_ir3".to_string(),
+                    "frankenengine_core::baseline_interpreter::QuickJsLane::execute".to_string(),
                 ],
-                version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                version: Some(format!(
+                    "frankenengine-core path dependency; frankenengine-engine {}",
+                    env!("CARGO_PKG_VERSION")
+                )),
                 exit_code: Some(1),
                 duration_micros: started.elapsed().as_micros(),
                 value: None,
                 stdout: String::new(),
                 stderr,
                 stdout_sha256: sha256_hex(b""),
-                stderr_sha256: sha256_hex(error.to_string().as_bytes()),
+                stderr_sha256: sha256_hex(format!("{}: {}", error.stage, error.message).as_bytes()),
                 diagnostics: vec![
-                    error.stable_namespace().to_string(),
-                    "frankenengine-core crate is not linked by frankenengine-engine; receipt uses the in-crate baseline interpreter compatibility lane".to_string(),
+                    format!("frankenengine-core backend failed during {}", error.stage),
+                    "frankenengine-core path dependency is linked; no fallback lane was used"
+                        .to_string(),
                 ],
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FrankenCoreBackendError {
+    stage: &'static str,
+    message: String,
+}
+
+impl FrankenCoreBackendError {
+    fn new(stage: &'static str, error: impl std::fmt::Display) -> Self {
+        Self {
+            stage,
+            message: error.to_string(),
+        }
+    }
+}
+
+fn eval_with_franken_core(source: &str) -> Result<String, FrankenCoreBackendError> {
+    let normalized = source.trim();
+    if normalized.is_empty() {
+        return Err(FrankenCoreBackendError {
+            stage: "parse",
+            message: "empty source".to_string(),
+        });
+    }
+
+    let parser = CoreParser;
+    let syntax_tree = parser
+        .parse_with_options(
+            normalized,
+            core_parse_goal(normalized),
+            &CoreParserOptions::default(),
+        )
+        .map_err(|error| FrankenCoreBackendError::new("parse", error))?;
+    let ir0 = CoreIr0Module::from_syntax_tree(syntax_tree, "<differential-oracle>");
+    let lowering_context = CoreLoweringContext::new(
+        "trace-differential-franken-core",
+        "decision-differential-franken-core",
+        "policy-differential-franken-core",
+    );
+    let mut lowering_output = core_lower_ir0_to_ir3(&ir0, &lowering_context)
+        .map_err(|error| FrankenCoreBackendError::new("lower", error))?;
+    patch_core_eval_completion_value(&mut lowering_output.ir3);
+    let result = CoreQuickJsLane::new()
+        .execute(&lowering_output.ir3, "trace-differential-franken-core")
+        .map_err(|error| FrankenCoreBackendError::new("execute", error))?;
+    Ok(result.value.to_string())
+}
+
+fn core_parse_goal(source: &str) -> CoreParseGoal {
+    match HybridRouter::classify_source_route(source) {
+        RouteReason::ContainsImportKeyword | RouteReason::ContainsAwaitKeyword => {
+            CoreParseGoal::Module
+        }
+        RouteReason::DirectEngineInvocation | RouteReason::DefaultQuickJsPath => {
+            CoreParseGoal::Script
+        }
+    }
+}
+
+fn patch_core_eval_completion_value(ir3: &mut CoreIr3Module) {
+    let Some(main) = ir3.function_table.first() else {
+        return;
+    };
+    let Ok(main_start) = usize::try_from(main.entry) else {
+        return;
+    };
+    if main_start >= ir3.instructions.len() {
+        return;
+    }
+    let main_end = ir3
+        .function_table
+        .iter()
+        .skip(1)
+        .filter_map(|function| usize::try_from(function.entry).ok())
+        .filter(|entry| *entry > main_start)
+        .min()
+        .unwrap_or(ir3.instructions.len())
+        .min(ir3.instructions.len());
+    let instructions = &mut ir3.instructions[main_start..main_end];
+
+    let mut completion_reg = None;
+    for instr in instructions.iter().rev() {
+        match instr {
+            CoreIr3Instruction::Move { dst, src } if dst == src => continue,
+            CoreIr3Instruction::Halt | CoreIr3Instruction::Throw { .. } => continue,
+            CoreIr3Instruction::Return { .. } => continue,
+            _ => {
+                completion_reg = core_ir3_destination_register(instr);
+                break;
+            }
+        }
+    }
+
+    if let Some(src) = completion_reg
+        && src != 0
+    {
+        for instr in instructions.iter_mut() {
+            if let CoreIr3Instruction::Return { value } = instr {
+                *value = src;
+            }
+        }
+    }
+}
+
+fn core_ir3_destination_register(instr: &CoreIr3Instruction) -> Option<u32> {
+    match instr {
+        CoreIr3Instruction::LoadInt { dst, .. }
+        | CoreIr3Instruction::LoadFloat { dst, .. }
+        | CoreIr3Instruction::LoadStr { dst, .. }
+        | CoreIr3Instruction::LoadBool { dst, .. }
+        | CoreIr3Instruction::LoadNull { dst }
+        | CoreIr3Instruction::LoadUndefined { dst }
+        | CoreIr3Instruction::Add { dst, .. }
+        | CoreIr3Instruction::Sub { dst, .. }
+        | CoreIr3Instruction::Mul { dst, .. }
+        | CoreIr3Instruction::Div { dst, .. }
+        | CoreIr3Instruction::Mod { dst, .. }
+        | CoreIr3Instruction::Exp { dst, .. }
+        | CoreIr3Instruction::UnaryNeg { dst, .. }
+        | CoreIr3Instruction::UnaryPlus { dst, .. }
+        | CoreIr3Instruction::LogicalNot { dst, .. }
+        | CoreIr3Instruction::BitNot { dst, .. }
+        | CoreIr3Instruction::TypeOf { dst, .. }
+        | CoreIr3Instruction::Void { dst, .. }
+        | CoreIr3Instruction::Lt { dst, .. }
+        | CoreIr3Instruction::Lte { dst, .. }
+        | CoreIr3Instruction::Gt { dst, .. }
+        | CoreIr3Instruction::Gte { dst, .. }
+        | CoreIr3Instruction::Eq { dst, .. }
+        | CoreIr3Instruction::StrictEq { dst, .. }
+        | CoreIr3Instruction::NotEq { dst, .. }
+        | CoreIr3Instruction::StrictNotEq { dst, .. }
+        | CoreIr3Instruction::BitAnd { dst, .. }
+        | CoreIr3Instruction::BitOr { dst, .. }
+        | CoreIr3Instruction::BitXor { dst, .. }
+        | CoreIr3Instruction::Shl { dst, .. }
+        | CoreIr3Instruction::Shr { dst, .. }
+        | CoreIr3Instruction::Ushr { dst, .. }
+        | CoreIr3Instruction::InstanceOf { dst, .. }
+        | CoreIr3Instruction::InOp { dst, .. }
+        | CoreIr3Instruction::Construct { dst, .. }
+        | CoreIr3Instruction::ForInInit { dst, .. }
+        | CoreIr3Instruction::ForInNext { value_dst: dst, .. }
+        | CoreIr3Instruction::ForOfInit { dst, .. }
+        | CoreIr3Instruction::ForOfNext { value_dst: dst, .. }
+        | CoreIr3Instruction::Move { dst, .. }
+        | CoreIr3Instruction::Call { dst, .. }
+        | CoreIr3Instruction::CallMethod { dst, .. }
+        | CoreIr3Instruction::HostCall { dst, .. }
+        | CoreIr3Instruction::GetProperty { dst, .. }
+        | CoreIr3Instruction::DeleteProperty { dst, .. }
+        | CoreIr3Instruction::NewObject { dst }
+        | CoreIr3Instruction::NewArray { dst }
+        | CoreIr3Instruction::ArraySlice { dst, .. }
+        | CoreIr3Instruction::TemplateLiteral { dst, .. }
+        | CoreIr3Instruction::LoadThis { dst }
+        | CoreIr3Instruction::LoadNewTarget { dst }
+        | CoreIr3Instruction::LoadSuper { dst }
+        | CoreIr3Instruction::EnterCatch { dst }
+        | CoreIr3Instruction::CreateClosure { dst, .. }
+        | CoreIr3Instruction::ImportModule { dst, .. }
+        | CoreIr3Instruction::CreateGenerator { dst, .. }
+        | CoreIr3Instruction::CreateAsyncFunction { dst, .. }
+        | CoreIr3Instruction::CreateAsyncGenerator { dst, .. } => Some(*dst),
+        _ => None,
     }
 }
 

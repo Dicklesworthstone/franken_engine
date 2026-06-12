@@ -38,9 +38,19 @@ case "$mode" in
     if [[ $# -ge 1 ]]; then
       verify_bundle "$1"
     else
-      latest=$(ls -1d "artifacts/$CAP"/*/ 2>/dev/null | LC_ALL=C sort | tail -1 || true)
-      [[ -n "${latest:-}" ]] || { echo "replay: no preserved $CAP bundle found" >&2; exit 2; }
-      verify_bundle "${latest%/}"
+      # Repo convention: pick the latest COMPLETE bundle; warn and skip
+      # newer incomplete run directories (e.g. a gate run that aborted
+      # before writing run_manifest.json) rather than failing on them.
+      latest=""
+      for dir in $(ls -1d "artifacts/$CAP"/*/ 2>/dev/null | LC_ALL=C sort -r); do
+        if [[ -f "${dir%/}/run_manifest.json" ]]; then
+          latest="${dir%/}"
+          break
+        fi
+        echo "replay: skipping incomplete bundle ${dir%/} (no run_manifest.json)" >&2
+      done
+      [[ -n "$latest" ]] || { echo "replay: no complete $CAP bundle found" >&2; exit 2; }
+      verify_bundle "$latest"
     fi
     ;;
   rerun)

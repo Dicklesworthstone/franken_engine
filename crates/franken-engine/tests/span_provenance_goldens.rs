@@ -155,6 +155,57 @@ fn golden_call_expression_carries_statement_span() {
     assert_eq!(*span, Some(single_line_span(source)));
 }
 
+// ── Bare-accessor contract goldens (E1.TEST / bd-fqlfw.1.4) ──────────────
+
+#[test]
+fn golden_bare_eval_denial_has_no_span_by_design() {
+    // Bare-identifier accessors carry no span until identifier span
+    // tracking lands (bd-fqlfw.1.1 deferred design). This golden pins the
+    // CURRENT contract so that landing identifier spans forces a conscious
+    // update here rather than a silent behavior change.
+    let (accessor, span) = denial_span("eval(\"1\")");
+    assert_eq!(accessor, "eval");
+    // `eval(...)` is rejected on the bare callee identifier; the enclosing
+    // call's span is not consulted by the Identifier-arm denial.
+    assert!(
+        span.is_none(),
+        "bare eval denial unexpectedly carries a span — identifier spans \
+         landed? Update this golden and the AmbientAuthorityViolation doc."
+    );
+}
+
+#[test]
+fn golden_bare_fetch_denial_has_no_span_by_design() {
+    let (accessor, span) = denial_span("fetch");
+    assert_eq!(accessor, "fetch");
+    assert!(span.is_none());
+}
+
+#[test]
+fn golden_stale_span_doctrine_stays_removed() {
+    // bd-fqlfw.1.4 regression pin: the pre-1.2 doc note on
+    // AmbientAuthorityViolation claimed the span was 'Currently always
+    // `None`' because 'the AST `Expression` carries no span'. Both claims
+    // are false since 06eed20b/6f5323ef. Pin their removal textually so a
+    // revert or doc rot reintroducing the stale doctrine fails loudly.
+    let source = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/lowering_pipeline.rs"
+    ))
+    .expect("lowering_pipeline.rs should be readable");
+    assert!(
+        !source.contains("Currently always `None`"),
+        "the stale 'Currently always `None`' span doctrine is back in \
+         lowering_pipeline.rs — spans ARE populated for member/require \
+         denials since bd-fqlfw.1.2"
+    );
+    assert!(
+        source.contains("bd-fqlfw.1.2"),
+        "the AmbientAuthorityViolation span doc must reference the \
+         bd-fqlfw.1.2 population contract"
+    );
+}
+
 #[test]
 fn golden_span_convention_is_one_column_strict() {
     // Belt-and-braces: a deliberately perturbed expectation must differ,

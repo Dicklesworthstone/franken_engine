@@ -290,15 +290,16 @@ pub enum LoweringPipelineError {
         /// The offending ambient-authority accessor as written in source — a
         /// bare identifier (`eval`, `require`, `fetch`, `process`, `crypto`) or
         /// a member access (`globalThis.process`). Lets the diagnostic name
-        /// *what* was rejected even though precise line/column spans are not
-        /// available at the lowering layer (the AST `Expression` carries no
-        /// span; see `span`).
+        /// *what* was rejected alongside *where* (see `span`).
         accessor: String,
-        /// Source span of the offending access. Currently always `None`:
-        /// expression-level AST nodes (`Expression::Identifier`,
-        /// `Expression::Member`) do not carry spans, so there is no span to
-        /// surface here without threading span tracking through the parser/AST
-        /// and the recursive `lower_expression_to_ir1` (bd-1lw7r.3 follow-up).
+        /// Source span of the offending access (bd-fqlfw.1.2): `Some` for
+        /// member-access denials (the `Expression::Member` parse-time span)
+        /// and for `require(...)` denials (the enclosing call's span);
+        /// `None` only for bare-identifier accessors (`eval`, `fetch`,
+        /// `process` as plain identifiers), which carry no span until
+        /// identifier span tracking lands (deferred by bd-fqlfw.1.1 design;
+        /// see also bd-1lw7r.3). Spans are statement-granular today. Pinned
+        /// by `tests/span_provenance_goldens.rs`.
         span: Option<SourceSpan>,
     },
 }

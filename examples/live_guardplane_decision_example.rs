@@ -538,13 +538,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Example 1: Suspicious extension
     println!("\n📊 Example 1: Suspicious Extension Analysis");
     let suspicious_input = SyntheticDecisionInput::suspicious_extension_scenario();
-    let output_dir_1 = Path::new("/tmp/guardplane_example_suspicious");
+    // Relative path: `ProofArtifactPaths::standard` requires bundle-relative
+    // (non-absolute) run directories, and `tmp/` is gitignored.
+    let output_dir_1 = Path::new("tmp/guardplane_example_suspicious");
     execute_guardplane_decision_with_proof(&suspicious_input, output_dir_1)?;
 
     // Example 2: Benign extension
     println!("\n📊 Example 2: Benign Extension Analysis");
     let benign_input = SyntheticDecisionInput::benign_extension_scenario();
-    let output_dir_2 = Path::new("/tmp/guardplane_example_benign");
+    let output_dir_2 = Path::new("tmp/guardplane_example_benign");
     execute_guardplane_decision_with_proof(&benign_input, output_dir_2)?;
 
     println!("\n✨ Live guardplane decision examples completed successfully!");

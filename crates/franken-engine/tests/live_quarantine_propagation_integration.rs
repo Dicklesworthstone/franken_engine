@@ -17,7 +17,9 @@ mod live_quarantine_propagation_example {
 use live_quarantine_propagation_example::*;
 
 fn temp_output_dir(test_name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("quarantine_test_{}", test_name))
+    // Relative path: `ProofArtifactPaths::standard` rejects absolute run
+    // directories (bundle paths must be portable), and `tmp/` is gitignored.
+    PathBuf::from(format!("tmp/quarantine_test_{}", test_name))
 }
 
 fn cleanup_temp_dir(dir: &PathBuf) {
@@ -308,7 +310,7 @@ fn test_convergence_analysis() {
     // Check convergence status
     let convergence_achieved = quarantine_state.is_converged(&evidence_hash, fleet.total_instances);
     let (acks, total) = quarantine_state
-        .convergence_progress(&evidence_hash)
+        .convergence_progress(&evidence_hash, fleet.total_instances)
         .unwrap_or((0, 0));
 
     // For a 5-instance fleet with 80% threshold, need 4 acks

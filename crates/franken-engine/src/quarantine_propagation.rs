@@ -50,11 +50,23 @@ impl QuarantineDecision {
         lamport_timestamp: u64,
         security_epoch: SecurityEpoch,
     ) -> Self {
-        let content = format!(
-            "{}:{}:{}:{}",
-            extension_id, reason, originator_instance.0, lamport_timestamp
+        // Length-prefix each variable-length field before hashing: a
+        // ":"-joined format would let distinct decisions collide (e.g.
+        // extension_id "a:b" + reason "c" vs extension_id "a" + reason
+        // "b:c"), and this hash is the fleet-wide dedup key.
+        let mut content = Vec::with_capacity(
+            3 * 8 + extension_id.len() + reason.len() + originator_instance.0.len() + 8,
         );
-        let evidence_hash = ContentHash::compute(content.as_bytes());
+        for field in [
+            extension_id.as_bytes(),
+            reason.as_bytes(),
+            originator_instance.0.as_bytes(),
+        ] {
+            content.extend_from_slice(&(field.len() as u64).to_be_bytes());
+            content.extend_from_slice(field);
+        }
+        content.extend_from_slice(&lamport_timestamp.to_be_bytes());
+        let evidence_hash = ContentHash::compute(&content);
 
         Self {
             extension_id,
@@ -173,11 +185,16 @@ impl QuarantineState {
         }
     }
 
-    /// Get convergence progress for a decision.
-    pub fn convergence_progress(&self, evidence_hash: &ContentHash) -> Option<(usize, usize)> {
+    /// Get convergence progress for a decision as
+    /// `(acknowledgments received, total fleet instances)`.
+    pub fn convergence_progress(
+        &self,
+        evidence_hash: &ContentHash,
+        total_instances: usize,
+    ) -> Option<(usize, usize)> {
         self.acknowledgments
             .get(evidence_hash)
-            .map(|acks| (acks.len(), acks.len()))
+            .map(|acks| (acks.len(), total_instances))
     }
 }
 
@@ -514,6 +531,53 @@ mod tests {
         assert_eq!(decision.reason, "Suspicious behavior detected");
         assert_eq!(decision.lamport_timestamp, 1);
         assert!(decision.age() >= Duration::from_millis(0));
+    }
+
+    #[test]
+    fn evidence_hash_distinguishes_field_boundaries() {
+        let originator = NodeId("origin".to_string());
+        let a = QuarantineDecision::new(
+            "ext:a".to_string(),
+            "b".to_string(),
+            originator.clone(),
+            1,
+            test_security_epoch(),
+        );
+        let b = QuarantineDecision::new(
+            "ext".to_string(),
+            "a:b".to_string(),
+            originator,
+            1,
+            test_security_epoch(),
+        );
+        assert_ne!(
+            a.evidence_hash, b.evidence_hash,
+            "field boundaries must be unambiguous in the evidence hash"
+        );
+    }
+
+    #[test]
+    fn convergence_progress_reports_acks_against_fleet_size() {
+        let mut state = QuarantineState::new();
+        let decision = QuarantineDecision::new(
+            "ext".to_string(),
+            "reason".to_string(),
+            NodeId("origin".to_string()),
+            1,
+            test_security_epoch(),
+        );
+        let evidence_hash = decision.evidence_hash;
+        state.add_decision(decision);
+        state.add_acknowledgment(QuarantineAck::new(
+            evidence_hash,
+            NodeId("instance-1".to_string()),
+            2,
+            true,
+            None,
+        ));
+        assert_eq!(state.convergence_progress(&evidence_hash, 5), Some((1, 5)));
+        let unknown = ContentHash::compute(b"unknown");
+        assert_eq!(state.convergence_progress(&unknown, 5), None);
     }
 
     #[test]

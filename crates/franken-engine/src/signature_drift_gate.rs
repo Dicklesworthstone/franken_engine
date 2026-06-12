@@ -141,7 +141,7 @@ pub fn compute_drift(
     // Shared features.
     for (key, baseline_val) in &baseline.features {
         if let Some(current_val) = current.features.get(key) {
-            let diff = baseline_val.saturating_sub(*current_val).abs();
+            let diff = baseline_val.saturating_sub(*current_val).saturating_abs();
             per_feature_drift.insert(key.clone(), diff);
             l1 = l1.saturating_add(diff);
             linf = linf.max(diff);

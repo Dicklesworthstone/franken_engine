@@ -1419,7 +1419,9 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
             walk_expression(state, object, span);
             walk_expression(state, property, span);
         }
-        Expression::OptionalCall { callee, arguments, .. } => {
+        Expression::OptionalCall {
+            callee, arguments, ..
+        } => {
             walk_expression(state, callee, span);
             for arg in arguments {
                 walk_expression(state, arg, span);
@@ -1597,8 +1599,12 @@ fn initializer_self_reference(expr: &Expression, targets: &BTreeSet<&str>) -> Op
         } => initializer_self_reference(test, targets)
             .or_else(|| initializer_self_reference(consequent, targets))
             .or_else(|| initializer_self_reference(alternate, targets)),
-        Expression::Call { callee, arguments, .. }
-        | Expression::OptionalCall { callee, arguments, .. }
+        Expression::Call {
+            callee, arguments, ..
+        }
+        | Expression::OptionalCall {
+            callee, arguments, ..
+        }
         | Expression::New { callee, arguments } => initializer_self_reference(callee, targets)
             .or_else(|| {
                 arguments
@@ -1689,7 +1695,9 @@ fn collect_identifier_refs(expr: &Expression, out: &mut Vec<String>) {
             collect_identifier_refs(object, out);
             collect_identifier_refs(property, out);
         }
-        Expression::OptionalCall { callee, arguments, .. } => {
+        Expression::OptionalCall {
+            callee, arguments, ..
+        } => {
             collect_identifier_refs(callee, out);
             for arg in arguments {
                 collect_identifier_refs(arg, out);

@@ -18,8 +18,7 @@ use wait_timeout::ChildExt;
 
 use frankenengine_core::baseline_interpreter::QuickJsLane as CoreQuickJsLane;
 use frankenengine_core::ir_contract::{
-    Ir0Module as CoreIr0Module, Ir3Instruction as CoreIr3Instruction,
-    Ir3Module as CoreIr3Module,
+    Ir0Module as CoreIr0Module, Ir3Instruction as CoreIr3Instruction, Ir3Module as CoreIr3Module,
 };
 use frankenengine_core::lowering_pipeline::{
     LoweringContext as CoreLoweringContext, lower_ir0_to_ir3 as core_lower_ir0_to_ir3,

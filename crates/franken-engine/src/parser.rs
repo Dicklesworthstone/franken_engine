@@ -13082,8 +13082,7 @@ mod tests {
                 // The accessor span maps onto the real source region.
                 assert_eq!(span, stmt_span, "member span maps to the source region");
                 assert!(
-                    span.start_offset <= span.end_offset
-                        && span.end_offset <= src.len() as u64 + 1,
+                    span.start_offset <= span.end_offset && span.end_offset <= src.len() as u64 + 1,
                     "member span must map into source offsets (got {span:?})"
                 );
             }
@@ -13097,8 +13096,7 @@ mod tests {
             Expression::Call { span, .. } => {
                 let span = span.expect("parser must populate Call span");
                 assert!(
-                    span.start_offset <= span.end_offset
-                        && span.end_offset <= src.len() as u64 + 1,
+                    span.start_offset <= span.end_offset && span.end_offset <= src.len() as u64 + 1,
                     "call span must map into source offsets (got {span:?})"
                 );
             }
@@ -13340,7 +13338,9 @@ mod tests {
     fn call_expression_no_args() {
         let tree = parse_script("foo()");
         match first_expr(&tree) {
-            Expression::Call { callee, arguments, .. } => {
+            Expression::Call {
+                callee, arguments, ..
+            } => {
                 assert!(matches!(callee.as_ref(), Expression::Identifier(n) if n == "foo"));
                 assert!(arguments.is_empty());
             }
@@ -13352,7 +13352,9 @@ mod tests {
     fn call_expression_with_args() {
         let tree = parse_script("foo(1, 2)");
         match first_expr(&tree) {
-            Expression::Call { callee, arguments, .. } => {
+            Expression::Call {
+                callee, arguments, ..
+            } => {
                 assert!(matches!(callee.as_ref(), Expression::Identifier(n) if n == "foo"));
                 assert_eq!(arguments.len(), 2);
                 assert!(matches!(&arguments[0], Expression::NumericLiteral(1)));
@@ -14495,7 +14497,9 @@ process.exit(attackSucceeded ? 0 : 1);"#,
     fn tagged_template_expression_is_call_with_template_argument() {
         let tree = parse_script("render`hello ${name}`");
         match first_expr(&tree) {
-            Expression::Call { callee, arguments, .. } => {
+            Expression::Call {
+                callee, arguments, ..
+            } => {
                 assert!(
                     matches!(callee.as_ref(), Expression::Identifier(name) if name == "render")
                 );
@@ -14513,7 +14517,9 @@ process.exit(attackSucceeded ? 0 : 1);"#,
     fn tagged_template_member_expression_is_call_with_template_argument() {
         let tree = parse_script("view.render`ok`");
         match first_expr(&tree) {
-            Expression::Call { callee, arguments, .. } => {
+            Expression::Call {
+                callee, arguments, ..
+            } => {
                 assert!(matches!(callee.as_ref(), Expression::Member { .. }));
                 // tag(stringsObject): the `.raw`-attaching IIFE, no substitutions
                 assert_eq!(arguments.len(), 1);
@@ -14898,7 +14904,9 @@ process.exit(attackSucceeded ? 0 : 1);"#,
     fn regexp_literal_receiver_member_call_parses_bd_wni4m() {
         let tree = parse_script(r#"/ab/.test("xabz");"#);
         match first_expr(&tree) {
-            Expression::Call { callee, arguments, .. } => {
+            Expression::Call {
+                callee, arguments, ..
+            } => {
                 assert_eq!(arguments.len(), 1);
                 match callee.as_ref() {
                     Expression::Member {

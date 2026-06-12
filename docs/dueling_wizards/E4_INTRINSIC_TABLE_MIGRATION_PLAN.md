@@ -76,6 +76,16 @@ consistently by construction (E4.T2).
 | Object/Number/Reflect | ☐ | ☐ | ☐ | ☐ | follow-on |
 | Proxy/exotic (escape hatch) | ☐ | ☐ | ☐ | ☐ | follow-on |
 
+**Step-6 IFC status (E4.T4, `bd-fqlfw.4.4`, landed):** `InterpreterCore::intrinsic_result_label`
+evaluates each row's declared `IfcPropagation` uniformly (PropagateReceiverLabel /
+JoinReceiverAndArgs / JoinArgs / Constant; `Custom` defers to the row's documented manual
+site), and `dispatch_string_intrinsic_to_reg` is the register-shaped seam that applies the
+policy to the dst register — the entry the per-family flip routes the production `CallMethod`
+arm through. The String-family audit test
+(`string_family_ifc_policies_are_uniform_and_auto_generated`) locks arg-less rows to
+PropagateReceiverLabel and arg-bearing rows to JoinReceiverAndArgs. The legacy seam performs no
+label propagation for these methods, so the flip *strengthens* IFC (guards `bd-0zybl`/`bd-ooaka`).
+
 Definition of done for E4 overall: an agent adds a builtin by appending **one table row + one
 impl fn** (no surgery on the 1.25 MB file), the gap inventory updates by construction, IFC
 propagation is uniform per row, and the legacy `match` has shrunk to only the documented

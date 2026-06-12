@@ -86,6 +86,11 @@ pub enum ThisCoercion {
 
 /// IFC label-propagation policy for an intrinsic's *result*. Declared once per row so the
 /// generated label glue is uniform (no hand-wired per-site propagation).
+///
+/// Evaluated by `InterpreterCore::intrinsic_result_label` (E4.T4, `bd-fqlfw.4.4`): the
+/// register-shaped dispatch seam derives the dst register's label from this policy alone,
+/// so propagation cannot be forgotten per-site. `Custom` rows are excluded — their
+/// documented manual site owns the irregular flow.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IfcPropagation {
     /// Result label ≥ receiver label (the common case for prototype methods).

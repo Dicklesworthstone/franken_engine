@@ -64,7 +64,7 @@ use crate::hostcall_telemetry::{
 };
 use crate::ifc_artifacts::Label;
 use crate::intrinsics_codegen::{GeneratedGlue, generate_glue};
-use crate::intrinsics_table::{ImplBinding, ThisCoercion};
+use crate::intrinsics_table::{IfcPropagation, ImplBinding, ThisCoercion};
 use crate::ir_contract::{
     AccessorKind, CapabilityTag, HostcallDecisionRecord, Ir0Module, Ir3Instruction, Ir3Module,
     IteratorCloseReason, RegRange, WitnessEvent, WitnessEventKind,
@@ -11885,6 +11885,96 @@ impl InterpreterCore {
             _ => return None,
         };
         Some(impl_fn(self, &coerced, args))
+    }
+
+    /// Uniform per-row IFC result-label policy evaluator (E4.T4, `bd-fqlfw.4.4`).
+    ///
+    /// Evaluates a row's DECLARED [`IfcPropagation`] policy into the result
+    /// label for one intrinsic dispatch. The table row is the single source of
+    /// propagation truth, replacing hand-wired per-site joins — the omission
+    /// pattern behind the bd-0zybl under-tainting class (GetProperty wrote dst
+    /// via `write_reg` with no label join, laundering a Secret object's field
+    /// to Public). Label conventions follow the dominant register contract
+    /// (BinaryOp / UnaryOp / HostCall): the result label is a pure function of
+    /// the dispatch inputs, since the dispatch fully overwrites dst's value.
+    ///
+    /// Returns `Ok(None)` for [`IfcPropagation::Custom`] policies: those name
+    /// a hand-written propagation fn owned by the row's documented manual
+    /// site; generated glue must not guess at irregular flows (e.g. callback
+    /// lanes whose result label depends on the callback's return — bd-ooaka).
+    #[allow(dead_code)] // production caller lands at the family flip (E4 step 5)
+    fn intrinsic_result_label(
+        &self,
+        policy: &IfcPropagation,
+        receiver_label: &Label,
+        args: RegRange,
+    ) -> Result<Option<Label>, InterpreterError> {
+        Ok(Some(match policy {
+            IfcPropagation::PropagateReceiverLabel => receiver_label.clone(),
+            IfcPropagation::JoinReceiverAndArgs => {
+                receiver_label.join(&self.join_arg_range_label(args)?)
+            }
+            IfcPropagation::JoinArgs => self.join_arg_range_label(args)?,
+            IfcPropagation::Constant(class) => class.to_label(),
+            IfcPropagation::Custom(_) => return Ok(None),
+        }))
+    }
+
+    /// Register-shaped table dispatch with uniform IFC propagation (E4.T4,
+    /// `bd-fqlfw.4.4`).
+    ///
+    /// Mirrors the production `CallMethod` register shape: reads the receiver
+    /// from `receiver_reg`, dispatches `String.prototype.<method_key>` through
+    /// the generated glue ([`Self::dispatch_string_intrinsic`]), and on
+    /// success writes the result value to `dst` AND sets `dst`'s IFC label per
+    /// the row's declared [`IfcPropagation`] policy. This is the seam the
+    /// family flip (migration-plan step 5) routes the production arm through.
+    /// The legacy seam performs no label propagation for these methods — a
+    /// `secret.toUpperCase()` result kept dst's stale label — which is exactly
+    /// the hand-wiring-omission class the per-row policy retires.
+    ///
+    /// Returns `None` when the method is not a generated-dispatch row of the
+    /// String family (caller falls back to the legacy seam, unchanged). On an
+    /// `Err` dispatch outcome neither dst's value nor its label is touched,
+    /// matching the legacy arms (the error propagates before `write_reg`).
+    #[allow(dead_code)] // production caller lands at the family flip (E4 step 5)
+    fn dispatch_string_intrinsic_to_reg(
+        &mut self,
+        method_key: &str,
+        receiver_reg: u32,
+        args: RegRange,
+        dst: u32,
+    ) -> Option<Result<(), InterpreterError>> {
+        let glue = Self::string_family_glue()?;
+        let full_name = format!("String.prototype.{method_key}");
+        let row = glue.registry.get(full_name.as_str())?;
+        let receiver = match self.read_reg(receiver_reg) {
+            Ok(value) => value,
+            Err(error) => return Some(Err(error)),
+        };
+        // Capture the receiver's label before dispatch: the impl may allocate
+        // (e.g. `split`), and the policy must see the pre-dispatch state.
+        let receiver_label = match self.get_register_label(receiver_reg) {
+            Ok(label) => label.clone(),
+            Err(error) => return Some(Err(error)),
+        };
+        let value = match self.dispatch_string_intrinsic(method_key, receiver, args)? {
+            Ok(value) => value,
+            Err(error) => return Some(Err(error)),
+        };
+        let label = match self.intrinsic_result_label(&row.ifc, &receiver_label, args) {
+            Ok(label) => label,
+            Err(error) => return Some(Err(error)),
+        };
+        if let Err(error) = self.write_reg(dst, value) {
+            return Some(Err(error));
+        }
+        if let Some(label) = label
+            && let Err(error) = self.set_register_label(dst, label)
+        {
+            return Some(Err(error));
+        }
+        Some(Ok(()))
     }
 
     // ---- String.prototype semantic impl fns (single source of truth) ----
@@ -42551,5 +42641,229 @@ mod string_intrinsic_table_parity_tests {
             "padEnd",
             &cases_with_arg_sets(&pad_args),
         );
+    }
+
+    // =====================================================================
+    // E4.T4 (`bd-fqlfw.4.4`): uniform per-row IFC propagation through the
+    // generated dispatch path. The legacy seam never propagated labels for
+    // these methods (the bd-0zybl hand-wiring-omission class); the table
+    // path derives the dst label from each row's DECLARED `IfcPropagation`
+    // policy, so propagation cannot be forgotten per-site.
+    // =====================================================================
+
+    /// Acceptance for bd-fqlfw.4.4: a Secret receiver's `trim()` result is
+    /// Secret on the table path. Previously this required hand-wiring a join
+    /// at the dispatch site (and the legacy seam in fact has none — dst kept
+    /// its stale label), the exact under-tainting class bd-0zybl documented
+    /// for GetProperty.
+    #[test]
+    fn table_dispatch_propagates_secret_receiver_label_to_dst() {
+        let mut core = parity_test_core();
+        core.mutate_registers(|registers| {
+            registers[0] = Value::str("  classified  ");
+        });
+        core.set_register_label(0, Label::Secret).unwrap();
+        let args = RegRange { start: 1, count: 0 };
+        core.dispatch_string_intrinsic_to_reg("trim", 0, args, 2)
+            .expect("trim is a generated row of the String family")
+            .expect("trim dispatch succeeds");
+        assert_eq!(core.read_reg(2).unwrap(), Value::str("classified"));
+        assert_eq!(
+            core.get_register_label(2).unwrap(),
+            &Label::Secret,
+            "PropagateReceiverLabel: a Secret receiver must taint the result"
+        );
+    }
+
+    /// JoinReceiverAndArgs: a sensitive ARGUMENT also taints the result (a
+    /// Confidential index selecting into a Public string reveals the index).
+    #[test]
+    fn table_dispatch_joins_argument_labels_into_dst() {
+        let mut core = parity_test_core();
+        core.mutate_registers(|registers| {
+            registers[0] = Value::str("abcdef");
+            registers[1] = Value::Int(2);
+        });
+        core.set_register_label(1, Label::Confidential).unwrap();
+        let args = RegRange { start: 1, count: 1 };
+        core.dispatch_string_intrinsic_to_reg("charAt", 0, args, 3)
+            .expect("charAt is a generated row of the String family")
+            .expect("charAt dispatch succeeds");
+        assert_eq!(core.read_reg(3).unwrap(), Value::str("c"));
+        assert_eq!(
+            core.get_register_label(3).unwrap(),
+            &Label::Confidential,
+            "JoinReceiverAndArgs: a Confidential argument must taint the result"
+        );
+    }
+
+    /// JoinReceiverAndArgs is a least-upper-bound: the highest label among
+    /// receiver and arguments wins.
+    #[test]
+    fn table_dispatch_join_takes_least_upper_bound() {
+        let mut core = parity_test_core();
+        core.mutate_registers(|registers| {
+            registers[0] = Value::str("classified payload");
+            registers[1] = Value::str("payload");
+        });
+        core.set_register_label(0, Label::Secret).unwrap();
+        core.set_register_label(1, Label::Internal).unwrap();
+        let args = RegRange { start: 1, count: 1 };
+        core.dispatch_string_intrinsic_to_reg("indexOf", 0, args, 3)
+            .expect("indexOf is a generated row of the String family")
+            .expect("indexOf dispatch succeeds");
+        assert_eq!(core.read_reg(3).unwrap(), Value::Int(11));
+        assert_eq!(
+            core.get_register_label(3).unwrap(),
+            &Label::Secret,
+            "join(Secret receiver, Internal arg) = Secret"
+        );
+    }
+
+    /// A dispatch fully overwrites dst's value, so its label is the policy
+    /// result alone — a stale high label on the dead prior value does not
+    /// stick to the fresh Public result. Matches the BinaryOp / UnaryOp /
+    /// HostCall register-label convention.
+    #[test]
+    fn table_dispatch_overwrites_stale_dst_label_with_policy_result() {
+        let mut core = parity_test_core();
+        core.mutate_registers(|registers| {
+            registers[0] = Value::str("  public  ");
+        });
+        core.set_register_label(2, Label::Secret).unwrap();
+        let args = RegRange { start: 1, count: 0 };
+        core.dispatch_string_intrinsic_to_reg("trim", 0, args, 2)
+            .expect("trim is a generated row of the String family")
+            .expect("trim dispatch succeeds");
+        assert_eq!(core.read_reg(2).unwrap(), Value::str("public"));
+        assert_eq!(
+            core.get_register_label(2).unwrap(),
+            &Label::Public,
+            "a Public-derived result overwrites the dead value's stale label"
+        );
+    }
+
+    /// A failed dispatch (TypeError receiver) must leave dst's value AND
+    /// label untouched — the error propagates before any write.
+    #[test]
+    fn table_dispatch_error_leaves_dst_label_untouched() {
+        let mut core = parity_test_core();
+        core.mutate_registers(|registers| {
+            registers[0] = Value::Null;
+            registers[2] = Value::Int(7);
+        });
+        core.set_register_label(2, Label::Internal).unwrap();
+        let args = RegRange { start: 1, count: 0 };
+        let outcome = core
+            .dispatch_string_intrinsic_to_reg("trim", 0, args, 2)
+            .expect("trim is a generated row of the String family");
+        assert!(outcome.is_err(), "null receiver must TypeError");
+        assert_eq!(core.read_reg(2).unwrap(), Value::Int(7));
+        assert_eq!(core.get_register_label(2).unwrap(), &Label::Internal);
+    }
+
+    /// Unknown methods still decline (caller falls back to the legacy seam)
+    /// and touch neither dst's value nor its label.
+    #[test]
+    fn table_dispatch_to_reg_declines_unknown_methods() {
+        let mut core = parity_test_core();
+        core.mutate_registers(|registers| {
+            registers[0] = Value::str("abc");
+        });
+        core.set_register_label(2, Label::Confidential).unwrap();
+        let args = RegRange { start: 1, count: 0 };
+        assert!(
+            core.dispatch_string_intrinsic_to_reg("noSuchMethod", 0, args, 2)
+                .is_none(),
+            "unknown method names must fall back to the legacy seam"
+        );
+        assert_eq!(core.get_register_label(2).unwrap(), &Label::Confidential);
+    }
+
+    /// The policy evaluator covers every declared `IfcPropagation` variant,
+    /// including the ones the String family does not use yet (`JoinArgs`,
+    /// `Constant`) and the `Custom` escape hatch (which yields `None`: the
+    /// row's documented manual site owns irregular propagation).
+    #[test]
+    fn policy_evaluator_covers_every_declared_policy() {
+        use crate::flow_lattice::LabelClass;
+        let mut core = parity_test_core();
+        core.mutate_registers(|registers| {
+            registers[0] = Value::Int(1);
+            registers[1] = Value::Int(2);
+        });
+        core.set_register_label(0, Label::Internal).unwrap();
+        core.set_register_label(1, Label::Secret).unwrap();
+        let args = RegRange { start: 0, count: 2 };
+        let empty = RegRange { start: 0, count: 0 };
+        let receiver = Label::Confidential;
+        let eval = |core: &InterpreterCore, policy: &IfcPropagation, args: RegRange| {
+            core.intrinsic_result_label(policy, &receiver, args)
+                .expect("in-bounds registers")
+        };
+        assert_eq!(
+            eval(&core, &IfcPropagation::PropagateReceiverLabel, args),
+            Some(Label::Confidential)
+        );
+        assert_eq!(
+            eval(&core, &IfcPropagation::JoinReceiverAndArgs, args),
+            Some(Label::Secret),
+            "join(Confidential receiver, Internal, Secret) = Secret"
+        );
+        assert_eq!(
+            eval(&core, &IfcPropagation::JoinArgs, args),
+            Some(Label::Secret),
+            "JoinArgs ignores the receiver label"
+        );
+        assert_eq!(
+            eval(&core, &IfcPropagation::JoinArgs, empty),
+            Some(Label::Public),
+            "empty arg range joins to Public (the join identity)"
+        );
+        assert_eq!(
+            eval(&core, &IfcPropagation::Constant(LabelClass::Public), args),
+            Some(Label::Public),
+            "Constant ignores all inputs"
+        );
+        assert_eq!(
+            eval(&core, &IfcPropagation::Custom("array_reduce_ifc"), args),
+            None,
+            "Custom policies are owned by their documented manual site"
+        );
+    }
+
+    /// E4.T4 audit: every String-family row declares an auto-generated
+    /// (non-Custom) policy, and the policy matches the row's data flow —
+    /// arg-less methods propagate the receiver label; methods with arguments
+    /// join receiver and args. Locks the family against a row regressing to
+    /// hand-wired (or forgotten) propagation.
+    #[test]
+    fn string_family_ifc_policies_are_uniform_and_auto_generated() {
+        use crate::intrinsics_table::Arity;
+        let core = parity_test_core();
+        let args = RegRange { start: 0, count: 0 };
+        for row in string_prototype::ROWS {
+            match &row.arity {
+                Arity::Exact(0) => assert_eq!(
+                    row.ifc,
+                    IfcPropagation::PropagateReceiverLabel,
+                    "{}: arg-less methods propagate the receiver label",
+                    row.name
+                ),
+                _ => assert_eq!(
+                    row.ifc,
+                    IfcPropagation::JoinReceiverAndArgs,
+                    "{}: methods with arguments join receiver and args",
+                    row.name
+                ),
+            }
+            assert!(
+                core.intrinsic_result_label(&row.ifc, &Label::Public, args)
+                    .expect("in-bounds registers")
+                    .is_some(),
+                "{}: a fully-generated family must auto-propagate (no Custom rows)",
+                row.name
+            );
+        }
     }
 }

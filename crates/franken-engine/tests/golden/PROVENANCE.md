@@ -109,20 +109,30 @@ mismatch artifacts) but tracks every `*.golden`, `*.json`, `*.txt`, and
   `tests/golden/parser_boundary/*.json` files are retained for audit history
   until explicit deletion/move approval is given.
 
-### `lowering/`
+### `lowering/` *(moved to `tests/snapshots/` — bd-ub6x8.21)*
 
 - **Owning test:** `tests/golden_lowering.rs` (helper
-  `assert_lowering_golden`).
+  `assert_lowering_golden`). Migrated from the shared
+  `golden_diag::GoldenDiag` helper to `insta::assert_snapshot!`; the
+  load-bearing fixtures now live at
+  `tests/snapshots/golden_lowering__*.snap`.
 - **Subject under test:** ES2020 source → IR3 lowering output rendered
-  by `render_lowered_ir3`. Fixtures intentionally use the `.txt`
-  extension because the IR3 dump is a hand-readable text format, not
-  JSON.
+  by `render_lowered_ir3` (hand-readable text dump; instructions encoded
+  via serde_json per bd-ub6x8.9.2).
 - **Regen:**
-  `UPDATE_GOLDENS=1 cargo test -p frankenengine-engine --test golden_lowering`
+  `INSTA_UPDATE=always cargo test -p frankenengine-engine --test golden_lowering`,
+  followed by `cargo insta review` for interactive blessing.
 - **Scrubbing:** none — IR3 dump is deterministic by construction.
-- **Fixtures (6):** `async_function.txt`, `for_of_destructuring.txt`,
-  `generator_function.txt`, `nullish_coalescing.txt`,
-  `optional_chaining.txt`, `try_catch.txt`.
+- **Fixtures (6):** `golden_lowering__async_function.snap`,
+  `golden_lowering__for_of_destructuring.snap`,
+  `golden_lowering__generator_function.snap`,
+  `golden_lowering__nullish_coalescing.snap`,
+  `golden_lowering__optional_chaining.snap`,
+  `golden_lowering__try_catch.snap`. Legacy `tests/golden/lowering/*.txt`
+  files are retained for audit history until explicit deletion/move
+  approval is given (each snapshot body was verified byte-identical to
+  its legacy fixture, modulo the regen-instruction comment header, when
+  the snapshots landed).
 
 ### `parser_boundary/`
 

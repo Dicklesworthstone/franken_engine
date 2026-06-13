@@ -228,6 +228,228 @@ fn lower_script_to_ir2(source: &str) -> Ir2Module {
         .module
 }
 
+/// True for any IR2 op that derives from a call expression. Method calls
+/// lower to `CallMethod`, plain/desugared calls to `Call`, and
+/// builtin/ambient calls to `HostCall` — all three are call-derived.
+fn is_call_op(op: &frankenengine_engine::ir_contract::Ir2Op) -> bool {
+    matches!(
+        op.inner,
+        Ir1Op::Call { .. } | Ir1Op::CallMethod { .. } | Ir1Op::HostCall { .. }
+    )
+}
+
+/// True for any IR2 op that derives from a member access.
+fn is_member_op(op: &frankenengine_engine::ir_contract::Ir2Op) -> bool {
+    matches!(
+        op.inner,
+        Ir1Op::GetProperty { .. } | Ir1Op::SetProperty { .. }
+    )
+}
+
+#[test]
+fn golden_ir2_deeply_nested_member_chain_every_get_carries_span() {
+    // a.b.c.d lowers to LoadBinding + three GetProperty ops. Under the
+    // statement-granular contract each carries the whole-statement span;
+    // sub-expression precision is the documented follow-up. The load-bearing
+    // property is that EVERY member access in the chain carries a span — a
+    // security diagnostic on `d` must not be span-less.
+    let source = "a.b.c.d";
+    let ir2 = lower_script_to_ir2(source);
+    let gets: Vec<_> = ir2
+        .ops
+        .iter()
+        .filter(|op| matches!(op.inner, Ir1Op::GetProperty { .. }))
+        .collect();
+    assert_eq!(gets.len(), 3, "a.b.c.d must emit one GetProperty per `.`");
+    for get in &gets {
+        assert_eq!(
+            get.span,
+            Some(single_line_span(source)),
+            "every member access in the chain must carry the exact span"
+        );
+    }
+}
+
+#[test]
+fn golden_ir2_optional_chain_desugar_is_fully_spanned() {
+    // a?.b?.c desugars into a JumpIfNullish guard block. The whole block is
+    // emitted inside the OptionalMember span range, so every op except the
+    // statement-completion tail (Pop/Return) must carry the span — an
+    // optional access must not produce span-less ops that a diagnostic would
+    // then fail to locate.
+    let source = "a?.b?.c";
+    let ir2 = lower_script_to_ir2(source);
+    let expected = Some(single_line_span(source));
+    let mut member_ops = 0;
+    for op in &ir2.ops {
+        if matches!(op.inner, Ir1Op::Pop | Ir1Op::Return) && op.span.is_none() {
+            continue; // statement-completion tail: documented None
+        }
+        assert_eq!(
+            op.span, expected,
+            "optional-chain op {:?} must carry the chain span",
+            op.inner
+        );
+        if matches!(op.inner, Ir1Op::GetProperty { .. }) {
+            member_ops += 1;
+        }
+    }
+    assert_eq!(
+        member_ops, 2,
+        "a?.b?.c must emit two guarded GetProperty ops"
+    );
+}
+
+#[test]
+fn golden_ir2_method_call_carries_span() {
+    // obj.m(1) lowers the member receiver + a CallMethod; both must carry the
+    // statement span so a per-call authority diagnostic can point at it.
+    let source = "obj.m(1)";
+    let ir2 = lower_script_to_ir2(source);
+    let expected = Some(single_line_span(source));
+    let call = ir2
+        .ops
+        .iter()
+        .find(|op| matches!(op.inner, Ir1Op::CallMethod { .. }))
+        .expect("obj.m(1) must emit CallMethod");
+    assert_eq!(call.span, expected, "method call must carry the call span");
+    assert!(
+        ir2.ops
+            .iter()
+            .any(|op| matches!(op.inner, Ir1Op::GetProperty { .. }) && op.span == expected),
+        "the `.m` member access must carry the span too"
+    );
+}
+
+#[test]
+fn golden_ir2_jsx_desugar_createElement_call_carries_span() {
+    // Native JSX has no core AST node: `Expression::Jsx` does not exist and
+    // the lowering pipeline has no JSX arm (JSX is an FRX-track concern that
+    // desugars to `createElement(...)` calls). This golden pins the shape JSX
+    // actually reaches the core pipeline as — a `createElement` Call — and
+    // proves it carries a span, so JSX-origin authority diagnostics are
+    // span-accurate once FRX desugaring sets the call span. Native-JSX-syntax
+    // span provenance is a tracked gap (no core node), NOT a silent pass; see
+    // jsx_native_syntax_is_a_tracked_gap_not_silent below.
+    let source = "createElement(\"div\", null)";
+    let ir2 = lower_script_to_ir2(source);
+    let call = ir2
+        .ops
+        .iter()
+        .find(|op| matches!(op.inner, Ir1Op::Call { .. }))
+        .expect("createElement(...) must emit a Call");
+    assert_eq!(
+        call.span,
+        Some(single_line_span(source)),
+        "the JSX-desugar createElement call must carry its exact span"
+    );
+}
+
+#[test]
+fn jsx_native_syntax_is_a_tracked_gap_not_silent() {
+    // DW.STD: a missing capability must be enumerable, never a silent pass.
+    // Native JSX syntax (`<div/>`) is deliberately absent from the core
+    // parser/lowering — it routes through the FRX/react track. Pin that
+    // absence textually so reintroducing a core JSX node forces a conscious
+    // extension of the span-provenance goldens above rather than silently
+    // shipping span-less JSX diagnostics.
+    let lowering = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/lowering_pipeline.rs"
+    ))
+    .expect("lowering_pipeline.rs should be readable");
+    assert!(
+        !lowering.contains("Expression::Jsx"),
+        "a core Expression::Jsx lowering arm appeared — extend the Ir2Op \
+         span goldens to cover native JSX (currently FRX-desugar-only)"
+    );
+    let ast = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/ast.rs"))
+        .expect("ast.rs should be readable");
+    assert!(
+        !ast.contains("Jsx {") && !ast.contains("JsxElement"),
+        "a core JSX AST node appeared — extend native-JSX span coverage"
+    );
+}
+
+#[test]
+fn property_every_call_and_member_op_carries_inbounds_span() {
+    // Property: across a corpus of expression-statement fixtures (no imports,
+    // so GetProperty/Call ops originate only from member/call expressions),
+    // EVERY call- and member-derived IR2 op carries an in-bounds Some(span),
+    // and at least one op per fixture is spanned (anti-vacuity). A wrong or
+    // missing span here is exactly the silent-diagnostic-corruption failure
+    // class E5/E3/E8/E10.2 depend on this capstone to prevent.
+    let corpus = [
+        "obj.field",
+        "obj.a.b.c",
+        "obj.m(1, 2)",
+        "doWork(1, 2)",
+        "a?.b",
+        "a?.b?.c",
+        "fn()()",
+        "outer.inner.method(x)",
+        "createElement(\"div\", null, child)",
+        "config.server.port",
+    ];
+    for source in corpus {
+        let ir2 = lower_script_to_ir2(source);
+        let len = source.len() as u64;
+        let mut spanned = 0usize;
+        let mut call_member_ops = 0usize;
+        for op in &ir2.ops {
+            if let Some(s) = op.span {
+                spanned += 1;
+                assert!(
+                    s.start_offset <= s.end_offset && s.end_offset <= len,
+                    "span out of byte bounds for {source:?}: {s:?}"
+                );
+                assert!(
+                    s.start_line >= 1 && s.end_line >= s.start_line,
+                    "span has invalid line range for {source:?}: {s:?}"
+                );
+            }
+            if is_call_op(op) || is_member_op(op) {
+                call_member_ops += 1;
+                assert!(
+                    op.span.is_some(),
+                    "call/member op {:?} in {source:?} must carry a span \
+                     (silent None would corrupt an authority diagnostic)",
+                    op.inner
+                );
+            }
+        }
+        assert!(
+            call_member_ops >= 1,
+            "fixture {source:?} should contain at least one call/member op"
+        );
+        assert!(
+            spanned >= 1,
+            "fixture {source:?} must produce at least one spanned op (anti-vacuity)"
+        );
+    }
+}
+
+#[test]
+fn tracked_gap_bare_identifier_statement_op_is_none_not_silent() {
+    // DW.STD enumerated gap: a bare identifier reference carries no span
+    // (bd-fqlfw.1.1 deferred identifier spans), so its LoadBinding op is
+    // None when no spanned expression encloses it. Pin this so landing
+    // identifier spans flips this assertion and forces a conscious goldens
+    // update rather than silently changing diagnostic behavior.
+    let ir2 = lower_script_to_ir2("freeVariable");
+    let load = ir2
+        .ops
+        .iter()
+        .find(|op| matches!(op.inner, Ir1Op::LoadBinding { .. }))
+        .expect("bare identifier must emit a LoadBinding");
+    assert!(
+        load.span.is_none(),
+        "a bare-identifier LoadBinding unexpectedly carries a span — \
+         identifier spans landed? Update this tracked-gap pin and the \
+         Ir2Op span goldens."
+    );
+}
+
 #[test]
 fn golden_ir2_member_ops_carry_exact_member_span() {
     let source = "obj.field";

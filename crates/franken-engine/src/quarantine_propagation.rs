@@ -185,6 +185,26 @@ impl QuarantineState {
         }
     }
 
+    /// Authoritative pending decision for an extension: the maximum by
+    /// `(lamport_timestamp, evidence_hash)` among live pending decisions for
+    /// that extension (bd-80d2l). `add_decision` dedups by evidence hash
+    /// only, so during partition heal a stale decision (low lamport) and a
+    /// fresh one for the SAME extension legitimately coexist; consumers
+    /// deriving enforcement state must use this view instead of map
+    /// iteration order. Max-by-(lamport, hash) is commutative, associative,
+    /// and idempotent, so the view is stable under anti-entropy replays and
+    /// identical on every node holding the same decision set.
+    pub fn authoritative_decision(&self, extension_id: &str) -> Option<&QuarantineDecision> {
+        self.pending_decisions
+            .values()
+            .filter(|d| d.extension_id == extension_id)
+            .max_by(|a, b| {
+                a.lamport_timestamp
+                    .cmp(&b.lamport_timestamp)
+                    .then_with(|| a.evidence_hash.as_bytes().cmp(b.evidence_hash.as_bytes()))
+            })
+    }
+
     /// Get convergence progress for a decision as
     /// `(acknowledgments received, total fleet instances)`.
     pub fn convergence_progress(
@@ -531,6 +551,85 @@ mod tests {
         assert_eq!(decision.reason, "Suspicious behavior detected");
         assert_eq!(decision.lamport_timestamp, 1);
         assert!(decision.age() >= Duration::from_millis(0));
+    }
+
+    /// bd-80d2l: two live decisions for the SAME extension (e.g. a stale
+    /// SANDBOX-era decision arriving after a fresh one during partition
+    /// heal) legitimately coexist in `pending_decisions` because dedup is by
+    /// evidence hash. The authoritative view must pick the max by
+    /// (lamport_timestamp, evidence_hash), independent of insertion order.
+    #[test]
+    fn authoritative_decision_prefers_highest_lamport() {
+        let node = NodeId("origin".to_string());
+        let stale = QuarantineDecision::new(
+            "ext-1".to_string(),
+            "stale partition-era decision".to_string(),
+            node.clone(),
+            50,
+            test_security_epoch(),
+        );
+        let fresh = QuarantineDecision::new(
+            "ext-1".to_string(),
+            "post-heal decision".to_string(),
+            node.clone(),
+            1000,
+            test_security_epoch(),
+        );
+        let fresh_hash = fresh.evidence_hash;
+
+        // Insert FRESH first, then STALE: the view must not depend on
+        // insertion or map-iteration order.
+        let mut state = QuarantineState::new();
+        assert!(state.add_decision(fresh));
+        assert!(state.add_decision(stale));
+        assert_eq!(state.pending_decisions.len(), 2, "both coexist by design");
+
+        let authoritative = state
+            .authoritative_decision("ext-1")
+            .expect("extension has pending decisions");
+        assert_eq!(authoritative.lamport_timestamp, 1000);
+        assert_eq!(authoritative.evidence_hash, fresh_hash);
+
+        // Unknown extension has no authoritative decision.
+        assert!(state.authoritative_decision("ext-other").is_none());
+    }
+
+    /// bd-80d2l: equal lamport timestamps tie-break on evidence hash so the
+    /// view is total, deterministic, and node-order independent.
+    #[test]
+    fn authoritative_decision_tiebreaks_deterministically_on_hash() {
+        let node = NodeId("origin".to_string());
+        let a = QuarantineDecision::new(
+            "ext-1".to_string(),
+            "reason-a".to_string(),
+            node.clone(),
+            7,
+            test_security_epoch(),
+        );
+        let b = QuarantineDecision::new(
+            "ext-1".to_string(),
+            "reason-b".to_string(),
+            node.clone(),
+            7,
+            test_security_epoch(),
+        );
+        let winner_hash = a.evidence_hash.max(b.evidence_hash);
+
+        let mut forward = QuarantineState::new();
+        forward.add_decision(a.clone());
+        forward.add_decision(b.clone());
+        let mut reverse = QuarantineState::new();
+        reverse.add_decision(b);
+        reverse.add_decision(a);
+
+        let f = forward
+            .authoritative_decision("ext-1")
+            .expect("decision exists");
+        let r = reverse
+            .authoritative_decision("ext-1")
+            .expect("decision exists");
+        assert_eq!(f.evidence_hash, winner_hash);
+        assert_eq!(f.evidence_hash, r.evidence_hash, "order independent");
     }
 
     #[test]

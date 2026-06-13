@@ -975,13 +975,19 @@ impl ConvergenceEngine {
     }
 
     /// Record reconciliation conflict during partition healing.
+    ///
+    /// Returns the deterministically resolved action (severity-max of local
+    /// and remote — commutative and idempotent, so safe under anti-entropy
+    /// replays). Recording alone does NOT apply the resolution; use
+    /// [`Self::apply_reconciliation_conflict`] for the in-tree apply path
+    /// (bd-80d2l).
     pub fn record_reconciliation_conflict(
         &mut self,
         conflicting_extension: &str,
         local_action: ContainmentAction,
         remote_action: ContainmentAction,
         timestamp_ns: u64,
-    ) {
+    ) -> ContainmentAction {
         if let PartitionMode::Healing(ref mut info) = self.partition_mode {
             info.conflict_count = info.conflict_count.saturating_add(1);
         }
@@ -1002,6 +1008,39 @@ impl ConvergenceEngine {
             timestamp_ns,
             fields,
         );
+        resolved
+    }
+
+    /// Record a reconciliation conflict AND apply the resolved action through
+    /// [`Self::execute_decision`] (bd-80d2l): partition-heal reconciliation
+    /// previously computed the severity-max resolution but only emitted it as
+    /// an event string, leaving the apply side to out-of-tree consumers.
+    /// Execution inherits `execute_decision`'s idempotency and
+    /// monotonic-escalation guards, so a stale lower-severity resolution can
+    /// never downgrade an already-executed higher action.
+    pub fn apply_reconciliation_conflict(
+        &mut self,
+        conflicting_extension: &str,
+        local_action: ContainmentAction,
+        remote_action: ContainmentAction,
+        timestamp_ns: u64,
+    ) -> (ContainmentAction, Option<ContainmentReceipt>) {
+        let resolved = self.record_reconciliation_conflict(
+            conflicting_extension,
+            local_action,
+            remote_action,
+            timestamp_ns,
+        );
+        let decision = ConvergenceDecision {
+            extension_id: conflicting_extension.to_string(),
+            action: resolved,
+            posterior_delta: 0, // Reconciliation-driven, not threshold-driven.
+            crossed_threshold: None,
+            degraded_mode: !matches!(self.partition_mode, PartitionMode::Normal),
+            evidence_count: 0,
+        };
+        let receipt = self.execute_decision(&decision, timestamp_ns);
+        (resolved, receipt)
     }
 
     /// Get all events of a specific type.
@@ -1873,6 +1912,69 @@ mod tests {
 
         let conflicts = engine.events_of_type(&ConvergenceEventType::ReconciliationConflict);
         assert_eq!(conflicts.len(), 1);
+    }
+
+    /// bd-80d2l: the recorder must RETURN the severity-max resolution so
+    /// callers no longer re-derive it from the event string.
+    #[test]
+    fn engine_reconciliation_conflict_returns_severity_max() {
+        let mut engine = test_engine("local");
+        let resolved = engine.record_reconciliation_conflict(
+            "ext-1",
+            ContainmentAction::Sandbox,
+            ContainmentAction::Terminate,
+            11_000_000_000,
+        );
+        assert_eq!(resolved, ContainmentAction::Terminate);
+        // Commutative: swapping local/remote yields the same resolution.
+        let swapped = engine.record_reconciliation_conflict(
+            "ext-1",
+            ContainmentAction::Terminate,
+            ContainmentAction::Sandbox,
+            12_000_000_000,
+        );
+        assert_eq!(swapped, ContainmentAction::Terminate);
+    }
+
+    /// bd-80d2l: the apply variant executes the resolved action through
+    /// execute_decision (in-tree apply path for partition-heal
+    /// reconciliation) and inherits its monotonic-escalation guard.
+    #[test]
+    fn engine_apply_reconciliation_conflict_executes_resolution() {
+        let mut engine = test_engine("local");
+        let (resolved, receipt) = engine.apply_reconciliation_conflict(
+            "ext-1",
+            ContainmentAction::Sandbox,
+            ContainmentAction::Terminate,
+            11_000_000_000,
+        );
+        assert_eq!(resolved, ContainmentAction::Terminate);
+        let receipt = receipt.expect("first reconciliation apply should execute");
+        assert_eq!(receipt.action_type, ContainmentAction::Terminate);
+        assert_eq!(
+            engine.action_registry.highest_executed_action("ext-1"),
+            ContainmentAction::Terminate
+        );
+
+        // A later, lower-severity reconciliation (stale partition remnant)
+        // must record but NOT downgrade the executed action. Suspend sits
+        // strictly below the already-executed Terminate on the ladder
+        // (allow < challenge < sandbox < suspend < terminate < quarantine).
+        let (resolved2, receipt2) = engine.apply_reconciliation_conflict(
+            "ext-1",
+            ContainmentAction::Sandbox,
+            ContainmentAction::Suspend,
+            12_000_000_000,
+        );
+        assert_eq!(resolved2, ContainmentAction::Suspend);
+        assert!(
+            receipt2.is_none(),
+            "stale lower-severity resolution must not re-execute"
+        );
+        assert_eq!(
+            engine.action_registry.highest_executed_action("ext-1"),
+            ContainmentAction::Terminate
+        );
     }
 
     // -- ConvergenceEngine: telemetry --

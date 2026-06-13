@@ -12,6 +12,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{NaiveDate, SecondsFormat, Utc};
 use frankenengine_engine::ast::ParseGoal;
+use frankenengine_engine::authority_footprint::{
+    AuthorityFootprintReport, analyze_authority_footprint,
+};
 use frankenengine_engine::baseline_interpreter::{ConsoleEntry, InterpreterError};
 use frankenengine_engine::benchmark_denominator::{
     PublicationContext, PublicationGateInput, evaluate_publication_gate,
@@ -131,6 +134,7 @@ enum CommandSpec {
     Help,
     HelpTopic(HelpTopic),
     Compile(CompileArgs),
+    Check(CheckArgs),
     Run(RunArgs),
     Explain(ExplainArgs),
     Doctor(Box<DoctorArgs>),
@@ -151,6 +155,7 @@ enum CommandSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HelpTopic {
     Compile,
+    Check,
     Run,
     Explain,
     Doctor,
@@ -185,6 +190,7 @@ impl HelpTopic {
     fn render(self) -> String {
         match self {
             Self::Compile => compile_usage(),
+            Self::Check => check_usage(),
             Self::Run => run_usage(),
             Self::Explain => explain_usage(),
             Self::Doctor => doctor_usage(),
@@ -226,6 +232,21 @@ struct CompileArgs {
     decision_id: String,
     policy_id: String,
     generated_unix_ns: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CheckOutputFormat {
+    Human,
+    Json,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CheckArgs {
+    input: PathBuf,
+    parse_goal: ParseGoal,
+    format: CheckOutputFormat,
+    /// Optional bundle directory for `run_manifest.json` + `events.jsonl`.
+    out: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1355,6 +1376,7 @@ fn run(raw_args: Vec<String>) -> Result<i32, String> {
             Ok(0)
         }
         CommandSpec::Compile(args) => execute_compile(args),
+        CommandSpec::Check(args) => execute_check(args),
         CommandSpec::Run(args) => execute_run(args),
         CommandSpec::Explain(args) => execute_explain(args),
         CommandSpec::Doctor(args) => execute_doctor(*args),
@@ -1391,6 +1413,7 @@ fn parse_command(args: &[String]) -> Result<CommandSpec, String> {
         "--help" | "-h" => Ok(CommandSpec::Help),
         "version" => Ok(CommandSpec::Version),
         "compile" => parse_compile_command(&args[1..]),
+        "check" => parse_check_command(&args[1..]),
         "run" => parse_run_command(&args[1..]),
         "explain" => parse_explain_command(&args[1..]),
         "doctor" => parse_doctor_command(&args[1..]),
@@ -1416,6 +1439,7 @@ fn parse_help_command(args: &[String]) -> Result<CommandSpec, String> {
 
     match args[0].as_str() {
         "compile" => parse_leaf_help_topic("compile", HelpTopic::Compile, &args[1..]),
+        "check" => parse_leaf_help_topic("check", HelpTopic::Check, &args[1..]),
         "run" => parse_leaf_help_topic("run", HelpTopic::Run, &args[1..]),
         "explain" => parse_leaf_help_topic("explain", HelpTopic::Explain, &args[1..]),
         "doctor" => parse_leaf_help_topic("doctor", HelpTopic::Doctor, &args[1..]),
@@ -1583,6 +1607,53 @@ fn parse_compile_command(args: &[String]) -> Result<CommandSpec, String> {
         policy_id,
         generated_unix_ns,
     }))
+}
+
+fn parse_check_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Check));
+    }
+
+    let mut input: Option<PathBuf> = None;
+    let mut goal = ParseGoal::Script;
+    let mut format = CheckOutputFormat::Human;
+    let mut out: Option<PathBuf> = None;
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--input" => input = Some(PathBuf::from(next_arg(args, &mut index, "--input")?)),
+            "--goal" => goal = parse_goal(&next_arg(args, &mut index, "--goal")?)?,
+            "--format" => {
+                format = parse_check_output_format(&next_arg(args, &mut index, "--format")?)?
+            }
+            "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            value if !value.starts_with("--") && input.is_none() => {
+                input = Some(PathBuf::from(value));
+            }
+            flag => return Err(format!("unknown check flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    let input = input.ok_or_else(|| "check requires <file> or --input <path>".to_string())?;
+
+    Ok(CommandSpec::Check(CheckArgs {
+        input,
+        parse_goal: goal,
+        format,
+        out,
+    }))
+}
+
+fn parse_check_output_format(value: &str) -> Result<CheckOutputFormat, String> {
+    match value {
+        "human" | "text" => Ok(CheckOutputFormat::Human),
+        "json" => Ok(CheckOutputFormat::Json),
+        other => Err(format!(
+            "unknown check --format `{other}` (expected human|json)"
+        )),
+    }
 }
 
 fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
@@ -2873,6 +2944,43 @@ fn execute_compile(args: CompileArgs) -> Result<i32, String> {
     };
     print_json(&output)?;
     Ok(0)
+}
+
+fn execute_check(args: CheckArgs) -> Result<i32, String> {
+    let source = fs::read_to_string(&args.input)
+        .map_err(|error| format!("failed to read source `{}`: {error}", args.input.display()))?;
+    let source_label = args.input.display().to_string();
+    let report = analyze_authority_footprint(&source, source_label.as_str(), args.parse_goal);
+
+    // Optional content-addressed bundle: run_manifest.json + events.jsonl.
+    // The report carries no wall-clock/host facts, so the bundle is replay-stable.
+    if let Some(out_dir) = args.out.as_ref() {
+        write_json_file(&out_dir.join("run_manifest.json"), &report)?;
+        write_bytes_file(
+            &out_dir.join("events.jsonl"),
+            render_check_events_jsonl(&report)?.as_bytes(),
+        )?;
+    }
+
+    match args.format {
+        CheckOutputFormat::Human => println!("{}", report.render_human()),
+        CheckOutputFormat::Json => print_json(&report)?,
+    }
+
+    Ok(report.outcome().exit_code())
+}
+
+/// One JSON object per finding, newline-delimited (`events.jsonl`). Deterministic
+/// for a given report (struct field order is fixed; no wall-clock content).
+fn render_check_events_jsonl(report: &AuthorityFootprintReport) -> Result<String, String> {
+    let mut lines = String::new();
+    for finding in &report.findings {
+        let encoded = serde_json::to_string(finding)
+            .map_err(|error| format!("failed to encode check finding: {error}"))?;
+        lines.push_str(&encoded);
+        lines.push('\n');
+    }
+    Ok(lines)
 }
 
 fn execute_run(args: RunArgs) -> Result<i32, String> {
@@ -6963,6 +7071,8 @@ fn usage() -> String {
         "  frankenctl version",
         "  frankenctl compile --input <source.js> --out <artifact.json> [--goal script|module]",
         "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>]",
+        "  frankenctl check <source.js> [--goal script|module] [--format human|json] [--out <bundle-dir>]",
+        "      # inferred per-span authority footprint + ambient-authority/IFC findings",
         "  frankenctl run --input <source.js> --extension-id <id> [--goal script|module] [--out <report.json>]",
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
         "  frankenctl explain <bundle.json> [--format summary|json] [--out <path>]",
@@ -7017,6 +7127,7 @@ fn command_label(command: &CommandSpec) -> &'static str {
         CommandSpec::Help => "help",
         CommandSpec::HelpTopic(_) => "help",
         CommandSpec::Compile(_) => "compile",
+        CommandSpec::Check(_) => "check",
         CommandSpec::Run(_) => "run",
         CommandSpec::Explain(_) => "explain",
         CommandSpec::Doctor(_) => "doctor",
@@ -7059,6 +7170,9 @@ fn render_react_doctor_summary(output: &ReactDoctorCommandOutput) -> String {
 fn command_remediation(command: &str) -> &'static str {
     match command {
         "compile" => "Verify --input/--out paths and parse goal, then rerun `frankenctl compile`.",
+        "check" => {
+            "Verify the source path and parse goal (try --goal module for files with imports), then rerun `frankenctl check`."
+        }
         "run" => "Verify extension source path and `--extension-id`, then rerun `frankenctl run`.",
         "explain" => "Verify the explain bundle path, then rerun `frankenctl explain`.",
         "doctor" => {
@@ -7097,6 +7211,28 @@ fn compile_usage() -> String {
         "  frankenctl compile --input <source.js> --out <artifact.json> [--goal script|module]",
         "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>]",
         "      [--generated-unix-ns <u64>]  # fixed clock input for byte-identical proof runs",
+    ]
+    .join("\n")
+}
+
+fn check_usage() -> String {
+    [
+        "check usage:",
+        "  frankenctl check <file> [--goal script|module] [--format human|json] [--out <bundle-dir>]",
+        "  frankenctl check --input <file> [--format json] [--out <bundle-dir>]",
+        "",
+        "  Parses + lowers <file> to IR2 and reports, projected onto source spans:",
+        "    - the minimal capability footprint required by its SUPPORTED syntax,",
+        "    - each ambient-authority access rejected at the lowering boundary",
+        "      (error[FE-CAP-0001], with the implied RuntimeCapability + span),",
+        "    - IFC findings (denied flow error[FE-CAP-0002]; declassification",
+        "      obligation error[FE-CAP-0003]),",
+        "    - a least-authority suggestion.",
+        "  This is the inferred authority footprint for SUPPORTED syntax — not a proof",
+        "  of noninterference for arbitrary JS/TS. Unanalyzable constructs fail closed.",
+        "",
+        "  exit codes: 0 = clean, 1 = findings present, 2 = unanalyzable (fail-closed)",
+        "  --out <dir> writes a content-addressed run_manifest.json + events.jsonl bundle.",
     ]
     .join("\n")
 }

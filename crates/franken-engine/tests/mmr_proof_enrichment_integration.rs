@@ -570,11 +570,14 @@ fn enrichment_consistency_proof_size_bounded() {
 // ===========================================================================
 
 #[test]
-fn enrichment_mmr_peaks_single_leaf_is_leaf_hash() {
+fn enrichment_mmr_peaks_single_leaf_is_domain_wrapped_leaf() {
     let mmr = build_mmr(1);
     let peaks = mmr.peaks();
     assert_eq!(peaks.len(), 1);
-    assert_eq!(peaks[0], leaf_hash(0));
+    // Stored leaf nodes are wrapped as H(0x00 || leaf_hash) (RFC 6962), so
+    // the peak is NOT the raw caller hash but still equals the root.
+    assert_ne!(peaks[0], leaf_hash(0));
+    assert_eq!(peaks[0], mmr.root_hash().unwrap());
 }
 
 #[test]
@@ -592,16 +595,23 @@ fn enrichment_mmr_peaks_three_leaves_two_peaks() {
     let mmr = build_mmr(3);
     let peaks = mmr.peaks();
     assert_eq!(peaks.len(), 2);
-    // Second peak is the third leaf
-    assert_eq!(peaks[1], leaf_hash(2));
+    // Second peak is the third leaf's stored node: the leaf-domain wrap of
+    // the caller hash, not the raw hash itself (RFC 6962).
+    assert_ne!(peaks[1], leaf_hash(2));
+    let proof = mmr.inclusion_proof(2).unwrap();
+    verify_inclusion(&leaf_hash(2), 2, &proof).unwrap();
 }
 
 #[test]
-fn enrichment_root_hash_single_leaf_equals_leaf() {
+fn enrichment_root_hash_single_leaf_is_domain_separated() {
     let mut mmr = MerkleMountainRange::new(1);
     let h = ContentHash::compute(b"only-leaf");
     mmr.append(h);
-    assert_eq!(mmr.root_hash().unwrap(), h);
+    // Root is the leaf-domain wrap of `h`, never `h` itself (RFC 6962);
+    // inclusion verification of the raw hash still passes.
+    assert_ne!(mmr.root_hash().unwrap(), h);
+    let proof = mmr.inclusion_proof(0).unwrap();
+    verify_inclusion(&h, 0, &proof).unwrap();
 }
 
 #[test]

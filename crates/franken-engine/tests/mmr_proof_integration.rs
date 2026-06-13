@@ -130,7 +130,10 @@ fn large_mmr_size_follows_formula() {
 fn single_leaf_has_one_peak() {
     let mmr = build_mmr(1);
     assert_eq!(mmr.peaks().len(), 1);
-    assert_eq!(mmr.peaks()[0], leaf_hash(0));
+    // The stored peak is the leaf-domain wrap H(0x00 || leaf_hash), not the
+    // raw caller hash (RFC 6962 domain separation).
+    assert_ne!(mmr.peaks()[0], leaf_hash(0));
+    assert_eq!(mmr.peaks()[0], mmr.root_hash().unwrap());
 }
 
 #[test]
@@ -181,9 +184,14 @@ fn root_hash_fails_on_empty_mmr() {
 }
 
 #[test]
-fn single_leaf_root_equals_leaf_hash() {
+fn single_leaf_root_is_domain_separated_from_leaf_hash() {
     let mmr = build_mmr(1);
-    assert_eq!(mmr.root_hash().unwrap(), leaf_hash(0));
+    // Leaves are wrapped into their own hash domain, so the root of a
+    // single-leaf MMR must NOT equal the raw caller hash (RFC 6962) ...
+    assert_ne!(mmr.root_hash().unwrap(), leaf_hash(0));
+    // ... while inclusion verification of the raw caller hash still passes.
+    let proof = mmr.inclusion_proof(0).unwrap();
+    verify_inclusion(&leaf_hash(0), 0, &proof).unwrap();
 }
 
 #[test]

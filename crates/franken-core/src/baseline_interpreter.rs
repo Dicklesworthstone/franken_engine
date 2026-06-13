@@ -4645,9 +4645,12 @@ impl InterpreterCore {
                             .get(arr_id.0 as usize)
                             .map(|obj| {
                                 obj.properties.keys().fold(0u32, |current, key| {
+                                    // `n + 1` would overflow on a property key that
+                                    // parses to `u32::MAX` (e.g. "4294967295");
+                                    // saturate to match `array_like_length`.
                                     key.parse::<u32>()
                                         .ok()
-                                        .map_or(current, |n| current.max(n + 1))
+                                        .map_or(current, |n| current.max(n.saturating_add(1)))
                                 })
                             })
                             .unwrap_or(0);
@@ -4757,9 +4760,12 @@ impl InterpreterCore {
                                 .get(arr_id.0 as usize)
                                 .map(|obj| {
                                     obj.properties.keys().fold(0u32, |current, key| {
+                                        // `n + 1` would overflow on a property key
+                                        // that parses to `u32::MAX`; saturate to
+                                        // match `array_like_length`.
                                         key.parse::<u32>()
                                             .ok()
-                                            .map_or(current, |n| current.max(n + 1))
+                                            .map_or(current, |n| current.max(n.saturating_add(1)))
                                     })
                                 })
                                 .unwrap_or(0);
@@ -10858,6 +10864,52 @@ mod tests {
         assert_eq!(
             core.heap[rest_id.0 as usize].properties.get("length"),
             Some(&Value::Int(2))
+        );
+    }
+
+    #[test]
+    fn array_push_does_not_overflow_on_u32_max_index_key() {
+        // Regression (bd-qsz8t): a property key that parses to `u32::MAX`
+        // ("4294967295") fed the `ArrayPush` sparse-length fold a `n + 1`,
+        // overflowing u32 — a debug-build panic / release-build wrap. The fold
+        // now saturates (matching `array_like_length`), so the op completes
+        // instead of crashing on this adversarial key.
+        let module = test_module_with_pool(
+            vec![
+                Ir3Instruction::NewArray { dst: 1 },
+                Ir3Instruction::LoadStr {
+                    dst: 3,
+                    pool_index: 0,
+                },
+                Ir3Instruction::LoadInt { dst: 4, value: 1 },
+                Ir3Instruction::SetProperty {
+                    obj: 1,
+                    key: 3,
+                    val: 4,
+                },
+                Ir3Instruction::LoadInt { dst: 2, value: 42 },
+                Ir3Instruction::ArrayPush {
+                    array: 1,
+                    element: 2,
+                },
+                Ir3Instruction::Move { dst: 0, src: 1 },
+                Ir3Instruction::Halt,
+            ],
+            vec!["4294967295".to_string()],
+        );
+        let mut core = quickjs_test_core();
+        // The load-bearing assertion: this must not panic on the u32::MAX
+        // sparse-fold (it did before the fix in debug builds).
+        let result = core
+            .execute(&module)
+            .expect("array push must not overflow on a u32::MAX index key");
+        let arr_id = object_id_from_value(&result.value, "array push result");
+        // Saturating fold yields next_idx == u32::MAX, so the push writes at
+        // that index, overwriting the pathological key with the pushed value.
+        assert_eq!(
+            core.heap[arr_id.0 as usize].properties.get("4294967295"),
+            Some(&Value::Int(42)),
+            "push must have completed and written the element"
         );
     }
 

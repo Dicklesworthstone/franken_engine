@@ -33,6 +33,7 @@ fn pure_ir2_op(inner: Ir1Op) -> Ir2Op {
         effect: EffectBoundary::Pure,
         required_capability: None,
         flow: None,
+        span: None,
     }
 }
 
@@ -674,6 +675,7 @@ fn declassification_flow_inserts_runtime_ifc_guard_before_hostcall() {
         effect: EffectBoundary::Pure,
         required_capability: None,
         flow: None,
+        span: None,
     });
     ir2.ops.push(Ir2Op {
         inner: Ir1Op::HostCall {
@@ -687,6 +689,7 @@ fn declassification_flow_inserts_runtime_ifc_guard_before_hostcall() {
             sink_clearance: Label::Public,
             declassification_required: true,
         }),
+        span: None,
     });
 
     let ir3 = lower_ir2_to_ir3(&ir2)
@@ -2500,8 +2503,12 @@ fn enrichment_module_id_in_artifact() {
 #[test]
 fn enrichment_instanceof_lowering() {
     let parser = CanonicalEs2020Parser;
+    // Use a user-defined RHS, not `Array`: unshadowed `instanceof Array` is
+    // intentionally routed to the `Array.isArray` predicate (bd-ck8ui,
+    // 5040f7b3), so it never emits InstanceOf. A non-builtin constructor
+    // exercises the genuine InstanceOf lowering this test targets.
     let tree = parser
-        .parse("x instanceof Array;", ParseGoal::Script)
+        .parse("x instanceof Shape;", ParseGoal::Script)
         .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_instanceof.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");

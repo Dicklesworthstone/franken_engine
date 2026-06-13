@@ -53,9 +53,10 @@ use crate::hash_tiers::ContentHash;
 use crate::ifc_artifacts::{Label, ProofMethod};
 use crate::ir_contract::{
     AccessorKind, BindingId, BindingKind, CapabilityTag, EffectBoundary, FlowAnnotation, Ir0Module,
-    Ir1Literal, Ir1Module, Ir1Op, Ir1PropertyKey, Ir2Module, Ir2Op, Ir3FunctionDesc,
-    Ir3Instruction, Ir3Module, IrError, IrLevel, IteratorCloseReason, Reg, RegRange,
-    ResolvedBinding, ScopeId, ScopeKind, ScopeNode, verify_ir1_source, verify_ir3_specialization,
+    Ir1Literal, Ir1Module, Ir1Op, Ir1OpSpanEntry, Ir1PropertyKey, Ir2Module, Ir2Op,
+    Ir3FunctionDesc, Ir3Instruction, Ir3Module, IrError, IrLevel, IteratorCloseReason, Reg,
+    RegRange, ResolvedBinding, ScopeId, ScopeKind, ScopeNode, verify_ir1_source,
+    verify_ir3_specialization,
 };
 use crate::parser::{
     PARSER_DIAGNOSTIC_HASH_ALGORITHM, PARSER_DIAGNOSTIC_HASH_PREFIX,
@@ -577,6 +578,10 @@ pub fn lower_ir0_to_ir1(
     let mut synthetic_export_index = 0u32;
     let mut synthetic_import_index = 0u32;
     let mut label_counter = 0u32;
+    // bd-fqlfw.1.5: expression-span side-table for the module-level op
+    // stream; attached to `ir1.op_spans` below so `lower_ir1_to_ir2` can
+    // stamp `Ir2Op::span`.
+    let mut op_spans: Vec<Ir1OpSpanEntry> = Vec::new();
 
     for statement in &ir0.tree.body {
         match statement {
@@ -784,6 +789,7 @@ pub fn lower_ir0_to_ir1(
                         &mut binding_index,
                         root_scope_id,
                         &mut label_counter,
+                        &mut op_spans,
                     )?;
                     let binding_name =
                         make_internal_binding_name("default_export", synthetic_export_index);
@@ -904,6 +910,7 @@ pub fn lower_ir0_to_ir1(
                     &mut binding_index,
                     root_scope_id,
                     &mut label_counter,
+                    &mut op_spans,
                 )?;
             }
             Statement::Expression(_expression_statement) => {
@@ -915,6 +922,7 @@ pub fn lower_ir0_to_ir1(
                     &mut binding_index,
                     root_scope_id,
                     &mut label_counter,
+                    &mut op_spans,
                 )?;
             }
             Statement::Block(_block_statement) => {
@@ -926,6 +934,7 @@ pub fn lower_ir0_to_ir1(
                     &mut binding_index,
                     root_scope_id,
                     &mut label_counter,
+                    &mut op_spans,
                 )?;
             }
             Statement::If(_if_statement) => {
@@ -937,6 +946,7 @@ pub fn lower_ir0_to_ir1(
                     &mut binding_index,
                     root_scope_id,
                     &mut label_counter,
+                    &mut op_spans,
                 )?;
             }
             Statement::For(_for_statement) => {
@@ -948,6 +958,7 @@ pub fn lower_ir0_to_ir1(
                     &mut binding_index,
                     root_scope_id,
                     &mut label_counter,
+                    &mut op_spans,
                 )?;
             }
             Statement::While(_while_statement) => {
@@ -959,6 +970,7 @@ pub fn lower_ir0_to_ir1(
                     &mut binding_index,
                     root_scope_id,
                     &mut label_counter,
+                    &mut op_spans,
                 )?;
             }
             Statement::With(_with_statement) => {
@@ -970,6 +982,7 @@ pub fn lower_ir0_to_ir1(
                     &mut binding_index,
                     root_scope_id,
                     &mut label_counter,
+                    &mut op_spans,
                 )?;
             }
             Statement::DoWhile(_do_while_statement) => {
@@ -981,6 +994,7 @@ pub fn lower_ir0_to_ir1(
                     &mut binding_index,
                     root_scope_id,
                     &mut label_counter,
+                    &mut op_spans,
                 )?;
             }
             Statement::Return(_return_statement) => {
@@ -992,6 +1006,7 @@ pub fn lower_ir0_to_ir1(
                     &mut binding_index,
                     root_scope_id,
                     &mut label_counter,
+                    &mut op_spans,
                 )?;
             }
             Statement::Throw(_throw_statement) => {
@@ -1003,6 +1018,7 @@ pub fn lower_ir0_to_ir1(
                     &mut binding_index,
                     root_scope_id,
                     &mut label_counter,
+                    &mut op_spans,
                 )?;
             }
             Statement::TryCatch(_try_catch_statement) => {
@@ -1014,6 +1030,7 @@ pub fn lower_ir0_to_ir1(
                     &mut binding_index,
                     root_scope_id,
                     &mut label_counter,
+                    &mut op_spans,
                 )?;
             }
             Statement::Switch(_switch_statement) => {
@@ -1025,6 +1042,7 @@ pub fn lower_ir0_to_ir1(
                     &mut binding_index,
                     root_scope_id,
                     &mut label_counter,
+                    &mut op_spans,
                 )?;
             }
             Statement::Break(_break_statement) => {
@@ -1036,6 +1054,7 @@ pub fn lower_ir0_to_ir1(
                     &mut binding_index,
                     root_scope_id,
                     &mut label_counter,
+                    &mut op_spans,
                 )?;
             }
             Statement::Continue(_continue_statement) => {
@@ -1047,6 +1066,7 @@ pub fn lower_ir0_to_ir1(
                     &mut binding_index,
                     root_scope_id,
                     &mut label_counter,
+                    &mut op_spans,
                 )?;
             }
             Statement::FunctionDeclaration(_function_declaration) => {
@@ -1058,6 +1078,7 @@ pub fn lower_ir0_to_ir1(
                     &mut binding_index,
                     root_scope_id,
                     &mut label_counter,
+                    &mut op_spans,
                 )?;
             }
             Statement::ClassDeclaration(_class_declaration) => {
@@ -1069,6 +1090,7 @@ pub fn lower_ir0_to_ir1(
                     &mut binding_index,
                     root_scope_id,
                     &mut label_counter,
+                    &mut op_spans,
                 )?;
             }
             Statement::ForIn(_for_in_statement) => {
@@ -1080,6 +1102,7 @@ pub fn lower_ir0_to_ir1(
                     &mut binding_index,
                     root_scope_id,
                     &mut label_counter,
+                    &mut op_spans,
                 )?;
             }
             Statement::ForOf(_for_of_statement) => {
@@ -1091,6 +1114,7 @@ pub fn lower_ir0_to_ir1(
                     &mut binding_index,
                     root_scope_id,
                     &mut label_counter,
+                    &mut op_spans,
                 )?;
             }
             Statement::Labeled(_labeled_statement) => {
@@ -1102,6 +1126,7 @@ pub fn lower_ir0_to_ir1(
                     &mut binding_index,
                     root_scope_id,
                     &mut label_counter,
+                    &mut op_spans,
                 )?;
             }
         }
@@ -1114,6 +1139,9 @@ pub fn lower_ir0_to_ir1(
         kind: root_scope_kind,
         bindings,
     });
+    // Diagnostic provenance only: excluded from canonical_value /
+    // content_hash / serde, so attaching it never perturbs IR identity.
+    ir1.op_spans = op_spans;
 
     verify_ir1_source(&ir1, &ir0_hash).map_err(lowering_error_from_ir_error)?;
 
@@ -1418,6 +1446,7 @@ fn lower_destructuring_to_ir1(
     binding_index: &mut BindingId,
     scope_id: ScopeId,
     label_counter: &mut u32,
+    span_table: &mut Vec<Ir1OpSpanEntry>,
 ) -> Result<(), LoweringPipelineError> {
     match pattern {
         BindingPattern::Identifier(_) => {
@@ -1478,6 +1507,7 @@ fn lower_destructuring_to_ir1(
                             binding_index,
                             scope_id,
                             label_counter,
+                            span_table,
                         )?;
                     }
 
@@ -1535,6 +1565,7 @@ fn lower_destructuring_to_ir1(
                             binding_index,
                             scope_id,
                             label_counter,
+                            span_table,
                         )?;
                     }
                 }
@@ -1628,6 +1659,7 @@ fn lower_destructuring_to_ir1(
                             binding_index,
                             scope_id,
                             label_counter,
+                            span_table,
                         )?;
                     }
                 }
@@ -1678,6 +1710,7 @@ fn lower_destructuring_to_ir1(
                         binding_index,
                         scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
             }
@@ -1694,6 +1727,7 @@ fn lower_destructuring_to_ir1(
                 binding_index,
                 scope_id,
                 label_counter,
+                span_table,
             )?;
             ops.push(Ir1Op::StoreBinding {
                 binding_id: source_bid,
@@ -1721,6 +1755,7 @@ fn lower_destructuring_to_ir1(
                         binding_index,
                         scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
             }
@@ -1738,6 +1773,7 @@ fn lower_destructuring_to_ir1(
                 binding_index,
                 scope_id,
                 label_counter,
+                span_table,
             )?;
         }
     }
@@ -1791,6 +1827,7 @@ fn lower_statement_to_ir1(
     binding_index: &mut BindingId,
     scope_id: ScopeId,
     label_counter: &mut u32,
+    span_table: &mut Vec<Ir1OpSpanEntry>,
 ) -> Result<(), LoweringPipelineError> {
     lower_statement_to_ir1_with_flow(
         statement,
@@ -1800,6 +1837,7 @@ fn lower_statement_to_ir1(
         binding_index,
         scope_id,
         label_counter,
+        span_table,
         ControlFlowTargets::default(),
         &LabelContext::default(),
     )
@@ -1814,6 +1852,7 @@ fn lower_statement_to_ir1_with_flow(
     binding_index: &mut BindingId,
     scope_id: ScopeId,
     label_counter: &mut u32,
+    span_table: &mut Vec<Ir1OpSpanEntry>,
     control_flow: ControlFlowTargets,
     label_ctx: &LabelContext,
 ) -> Result<(), LoweringPipelineError> {
@@ -1827,6 +1866,7 @@ fn lower_statement_to_ir1_with_flow(
                 binding_index,
                 scope_id,
                 label_counter,
+                span_table,
             )?;
             ops.push(Ir1Op::Pop);
         }
@@ -1869,6 +1909,7 @@ fn lower_statement_to_ir1_with_flow(
                         binding_index,
                         scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 } else {
                     ops.push(Ir1Op::LoadLiteral {
@@ -1922,6 +1963,7 @@ fn lower_statement_to_ir1_with_flow(
                         binding_index,
                         scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
             }
@@ -1936,6 +1978,7 @@ fn lower_statement_to_ir1_with_flow(
                     binding_index,
                     scope_id,
                     label_counter,
+                    span_table,
                     control_flow,
                     label_ctx,
                 )?;
@@ -1950,6 +1993,7 @@ fn lower_statement_to_ir1_with_flow(
                 binding_index,
                 scope_id,
                 label_counter,
+                span_table,
             )?;
             let else_label = alloc_label(label_counter);
             let end_label = alloc_label(label_counter);
@@ -1965,6 +2009,7 @@ fn lower_statement_to_ir1_with_flow(
                 binding_index,
                 scope_id,
                 label_counter,
+                span_table,
                 control_flow,
                 label_ctx,
             )?;
@@ -1981,6 +2026,7 @@ fn lower_statement_to_ir1_with_flow(
                     binding_index,
                     scope_id,
                     label_counter,
+                    span_table,
                     control_flow,
                     label_ctx,
                 )?;
@@ -1997,6 +2043,7 @@ fn lower_statement_to_ir1_with_flow(
                     binding_index,
                     scope_id,
                     label_counter,
+                    span_table,
                     control_flow,
                     label_ctx,
                 )?;
@@ -2014,6 +2061,7 @@ fn lower_statement_to_ir1_with_flow(
                     binding_index,
                     scope_id,
                     label_counter,
+                    span_table,
                 )?;
                 ops.push(Ir1Op::JumpIfFalsy {
                     label_id: end_label,
@@ -2028,6 +2076,7 @@ fn lower_statement_to_ir1_with_flow(
                 binding_index,
                 scope_id,
                 label_counter,
+                span_table,
                 ControlFlowTargets {
                     break_label: Some(end_label),
                     continue_label: Some(continue_label),
@@ -2044,6 +2093,7 @@ fn lower_statement_to_ir1_with_flow(
                     binding_index,
                     scope_id,
                     label_counter,
+                    span_table,
                 )?;
                 ops.push(Ir1Op::Pop);
             }
@@ -2072,6 +2122,7 @@ fn lower_statement_to_ir1_with_flow(
                 binding_index,
                 scope_id,
                 label_counter,
+                span_table,
             )?;
             ops.push(Ir1Op::ForInInit);
 
@@ -2132,6 +2183,7 @@ fn lower_statement_to_ir1_with_flow(
                     binding_index,
                     scope_id,
                     label_counter,
+                    span_table,
                 )?;
             }
 
@@ -2143,6 +2195,7 @@ fn lower_statement_to_ir1_with_flow(
                 binding_index,
                 scope_id,
                 label_counter,
+                span_table,
                 ControlFlowTargets {
                     break_label: Some(end_label),
                     continue_label: Some(continue_label),
@@ -2174,6 +2227,7 @@ fn lower_statement_to_ir1_with_flow(
                 binding_index,
                 scope_id,
                 label_counter,
+                span_table,
             )?;
             ops.push(Ir1Op::ForOfInit);
 
@@ -2235,6 +2289,7 @@ fn lower_statement_to_ir1_with_flow(
                     binding_index,
                     scope_id,
                     label_counter,
+                    span_table,
                 )?;
             }
 
@@ -2246,6 +2301,7 @@ fn lower_statement_to_ir1_with_flow(
                 binding_index,
                 scope_id,
                 label_counter,
+                span_table,
                 ControlFlowTargets {
                     break_label: Some(close_label),
                     continue_label: Some(continue_label),
@@ -2284,6 +2340,7 @@ fn lower_statement_to_ir1_with_flow(
                 binding_index,
                 scope_id,
                 label_counter,
+                span_table,
             )?;
             ops.push(Ir1Op::JumpIfFalsy {
                 label_id: end_label,
@@ -2297,6 +2354,7 @@ fn lower_statement_to_ir1_with_flow(
                 binding_index,
                 scope_id,
                 label_counter,
+                span_table,
                 ControlFlowTargets {
                     break_label: Some(end_label),
                     continue_label: Some(loop_label),
@@ -2321,6 +2379,7 @@ fn lower_statement_to_ir1_with_flow(
                 binding_index,
                 scope_id,
                 label_counter,
+                span_table,
                 ControlFlowTargets {
                     break_label: Some(end_label),
                     continue_label: Some(continue_label),
@@ -2336,6 +2395,7 @@ fn lower_statement_to_ir1_with_flow(
                 binding_index,
                 scope_id,
                 label_counter,
+                span_table,
             )?;
             ops.push(Ir1Op::JumpIfFalsy {
                 label_id: end_label,
@@ -2356,6 +2416,7 @@ fn lower_statement_to_ir1_with_flow(
                     binding_index,
                     scope_id,
                     label_counter,
+                    span_table,
                 )?;
             } else {
                 ops.push(Ir1Op::LoadLiteral {
@@ -2373,6 +2434,7 @@ fn lower_statement_to_ir1_with_flow(
                 binding_index,
                 scope_id,
                 label_counter,
+                span_table,
             )?;
             ops.push(Ir1Op::Throw);
         }
@@ -2421,6 +2483,7 @@ fn lower_statement_to_ir1_with_flow(
                     binding_index,
                     scope_id,
                     label_counter,
+                    span_table,
                     inner_control_flow,
                     label_ctx,
                 )?;
@@ -2478,6 +2541,7 @@ fn lower_statement_to_ir1_with_flow(
                             binding_index,
                             scope_id,
                             label_counter,
+                            span_table,
                             inner_control_flow,
                             label_ctx,
                         )?;
@@ -2514,6 +2578,7 @@ fn lower_statement_to_ir1_with_flow(
                             binding_index,
                             scope_id,
                             label_counter,
+                            span_table,
                             control_flow,
                             label_ctx,
                         )?;
@@ -2540,6 +2605,7 @@ fn lower_statement_to_ir1_with_flow(
                             binding_index,
                             scope_id,
                             label_counter,
+                            span_table,
                             control_flow,
                             label_ctx,
                         )?;
@@ -2563,6 +2629,7 @@ fn lower_statement_to_ir1_with_flow(
                             binding_index,
                             scope_id,
                             label_counter,
+                            span_table,
                             control_flow,
                             label_ctx,
                         )?;
@@ -2583,6 +2650,7 @@ fn lower_statement_to_ir1_with_flow(
                 binding_index,
                 scope_id,
                 label_counter,
+                span_table,
                 control_flow,
                 label_ctx,
             )?;
@@ -2676,6 +2744,7 @@ fn lower_statement_to_ir1_with_flow(
                     binding_index,
                     scope_id,
                     label_counter,
+                    span_table,
                     control_flow,
                     &child,
                 )?;
@@ -2699,6 +2768,7 @@ fn lower_statement_to_ir1_with_flow(
                     binding_index,
                     scope_id,
                     label_counter,
+                    span_table,
                     control_flow,
                     &child,
                 )?;
@@ -2784,6 +2854,7 @@ fn lower_statement_to_ir1_with_flow(
                     &mut body_binding_index,
                     body_scope,
                     &mut body_label_counter,
+                    &mut Vec::new(),
                 )?;
             }
             // Snapshot which binding names already exist before body lowering
@@ -2800,6 +2871,7 @@ fn lower_statement_to_ir1_with_flow(
                     &mut body_binding_index,
                     body_scope,
                     &mut body_label_counter,
+                    &mut Vec::new(),
                 )?;
             }
             // Ensure body ends with a return.
@@ -2901,6 +2973,7 @@ fn lower_statement_to_ir1_with_flow(
                     &mut body_binding_index,
                     body_scope,
                     &mut body_label_counter,
+                    &mut Vec::new(),
                 )?;
             }
             if let Some(ctor) = constructor {
@@ -2913,6 +2986,7 @@ fn lower_statement_to_ir1_with_flow(
                         &mut body_binding_index,
                         body_scope,
                         &mut body_label_counter,
+                        &mut Vec::new(),
                     )?;
                 }
             }
@@ -2966,6 +3040,7 @@ fn lower_statement_to_ir1_with_flow(
                     binding_index,
                     scope_id,
                     label_counter,
+                    span_table,
                 )?;
                 ops.push(Ir1Op::GetProperty {
                     key: Ir1PropertyKey::Static("prototype".to_string()),
@@ -3045,6 +3120,7 @@ fn lower_statement_to_ir1_with_flow(
                         &mut m_binding_index,
                         m_scope,
                         &mut m_label_counter,
+                        &mut Vec::new(),
                     )?;
                 }
                 for stmt in &method.body.body {
@@ -3056,6 +3132,7 @@ fn lower_statement_to_ir1_with_flow(
                         &mut m_binding_index,
                         m_scope,
                         &mut m_label_counter,
+                        &mut Vec::new(),
                     )?;
                 }
                 if !matches!(m_body_ops.last(), Some(Ir1Op::Return)) {
@@ -3126,6 +3203,7 @@ fn lower_switch_to_ir1(
     binding_index: &mut BindingId,
     scope_id: ScopeId,
     label_counter: &mut u32,
+    span_table: &mut Vec<Ir1OpSpanEntry>,
     control_flow: ControlFlowTargets,
     label_ctx: &LabelContext,
 ) -> Result<(), LoweringPipelineError> {
@@ -3137,6 +3215,7 @@ fn lower_switch_to_ir1(
         binding_index,
         scope_id,
         label_counter,
+        span_table,
     )?;
     let discriminant_binding_name =
         make_internal_binding_name("switch_discriminant", *binding_index);
@@ -3172,6 +3251,7 @@ fn lower_switch_to_ir1(
                 binding_index,
                 scope_id,
                 label_counter,
+                span_table,
             )?;
             ops.push(Ir1Op::BinaryOp {
                 operator: BinaryOperator::StrictEqual,
@@ -3211,6 +3291,7 @@ fn lower_switch_to_ir1(
                 binding_index,
                 scope_id,
                 label_counter,
+                span_table,
                 switch_flow,
                 label_ctx,
             )?;
@@ -3247,7 +3328,31 @@ pub fn lower_ir1_to_ir2(
             effect,
             required_capability,
             flow,
+            span: None,
         });
+    }
+    // bd-fqlfw.1.5: stamp expression-level source spans onto IR2 ops.
+    // IR1 → IR2 is a 1:1 map by op index, so the IR1 side-table ranges apply
+    // directly. Entries are recorded post-order (inner expression before the
+    // enclosing one); explicit narrowest-range-wins keeps the innermost
+    // spanned expression's span on each op regardless of recording order.
+    if !ir1.op_spans.is_empty() {
+        let op_count = ir2.ops.len();
+        let mut best_len = vec![usize::MAX; op_count];
+        for entry in &ir1.op_spans {
+            let end = entry.op_end.min(op_count);
+            let start = entry.op_start.min(end);
+            let len = end - start;
+            if len == 0 {
+                continue;
+            }
+            for i in start..end {
+                if len < best_len[i] {
+                    best_len[i] = len;
+                    ir2.ops[i].span = Some(entry.span);
+                }
+            }
+        }
     }
     ir2.required_capabilities = required_capabilities
         .into_iter()
@@ -4923,6 +5028,7 @@ pub fn lower_ir2_to_ir3(
                 effect,
                 required_capability: cap,
                 flow,
+                span: None,
             };
             // We handle a core subset of ops that appear in function bodies.
             match &ir2_op.inner {
@@ -6583,6 +6689,7 @@ fn lower_spread_apply_hostcall_to_ir1(
     binding_index: &mut BindingId,
     root_scope_id: ScopeId,
     label_counter: &mut u32,
+    span_table: &mut Vec<Ir1OpSpanEntry>,
 ) -> Result<(), LoweringPipelineError> {
     ops.push(Ir1Op::LoadLiteral {
         value: Ir1Literal::String(capability.to_string()),
@@ -6599,6 +6706,7 @@ fn lower_spread_apply_hostcall_to_ir1(
         binding_index,
         root_scope_id,
         label_counter,
+        span_table,
     )?;
     ops.push(Ir1Op::HostCall {
         capability: "builtin:ApplyHostCall".to_string(),
@@ -6619,6 +6727,7 @@ fn lower_member_spread_call_to_reflect_apply(
     binding_index: &mut BindingId,
     root_scope_id: ScopeId,
     label_counter: &mut u32,
+    span_table: &mut Vec<Ir1OpSpanEntry>,
 ) -> Result<(), LoweringPipelineError> {
     let receiver_binding = alloc_internal_binding(
         bindings,
@@ -6635,6 +6744,7 @@ fn lower_member_spread_call_to_reflect_apply(
         binding_index,
         root_scope_id,
         label_counter,
+        span_table,
     )?;
     ops.push(Ir1Op::StoreBinding {
         binding_id: receiver_binding,
@@ -6653,6 +6763,7 @@ fn lower_member_spread_call_to_reflect_apply(
         binding_index,
         root_scope_id,
         label_counter,
+        span_table,
     )?;
     ops.push(Ir1Op::GetProperty { key });
     ops.push(Ir1Op::LoadBinding {
@@ -6667,6 +6778,7 @@ fn lower_member_spread_call_to_reflect_apply(
         binding_index,
         root_scope_id,
         label_counter,
+        span_table,
     )?;
     ops.push(Ir1Op::HostCall {
         capability: "builtin:ReflectApply".to_string(),
@@ -6687,6 +6799,7 @@ fn lower_optional_member_spread_call_to_reflect_apply(
     binding_index: &mut BindingId,
     root_scope_id: ScopeId,
     label_counter: &mut u32,
+    span_table: &mut Vec<Ir1OpSpanEntry>,
 ) -> Result<(), LoweringPipelineError> {
     let temp_obj = alloc_internal_binding(
         bindings,
@@ -6713,6 +6826,7 @@ fn lower_optional_member_spread_call_to_reflect_apply(
         binding_index,
         root_scope_id,
         label_counter,
+        span_table,
     )?;
     ops.push(Ir1Op::StoreBinding {
         binding_id: temp_obj,
@@ -6738,6 +6852,7 @@ fn lower_optional_member_spread_call_to_reflect_apply(
         binding_index,
         root_scope_id,
         label_counter,
+        span_table,
     )?;
     ops.push(Ir1Op::GetProperty { key });
     ops.push(Ir1Op::LoadBinding {
@@ -6752,6 +6867,7 @@ fn lower_optional_member_spread_call_to_reflect_apply(
         binding_index,
         root_scope_id,
         label_counter,
+        span_table,
     )?;
     ops.push(Ir1Op::HostCall {
         capability: "builtin:ReflectApply".to_string(),
@@ -6781,6 +6897,19 @@ fn lower_optional_member_spread_call_to_reflect_apply(
     Ok(())
 }
 
+/// Span-recording wrapper around [`lower_expression_to_ir1_inner`]
+/// (bd-fqlfw.1.5).
+///
+/// Captures the parse-time span of the four spanned expression variants
+/// (bd-fqlfw.1.1: `Call` / `OptionalCall` / `Member` / `OptionalMember`) and
+/// records the half-open IR1 op-index range their lowering emitted into
+/// `span_table`. Recursive expression lowering re-enters through this
+/// wrapper, so every nesting depth records its own (narrower) range;
+/// `lower_ir1_to_ir2` applies narrowest-range-wins when stamping
+/// `Ir2Op::span`. Function-body lowering passes a throwaway table because
+/// body ops embed inside a single `DeclareFunction` op and never become
+/// module-level IR2 ops.
+#[allow(clippy::too_many_arguments)]
 fn lower_expression_to_ir1(
     expression: &Expression,
     ops: &mut Vec<Ir1Op>,
@@ -6789,6 +6918,49 @@ fn lower_expression_to_ir1(
     binding_index: &mut BindingId,
     root_scope_id: ScopeId,
     label_counter: &mut u32,
+    span_table: &mut Vec<Ir1OpSpanEntry>,
+) -> Result<(), LoweringPipelineError> {
+    let expression_span = match expression {
+        Expression::Call { span, .. }
+        | Expression::OptionalCall { span, .. }
+        | Expression::Member { span, .. }
+        | Expression::OptionalMember { span, .. } => *span,
+        _ => None,
+    };
+    let op_start = ops.len();
+    lower_expression_to_ir1_inner(
+        expression,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        label_counter,
+        span_table,
+    )?;
+    if let Some(span) = expression_span {
+        let op_end = ops.len();
+        if op_end > op_start {
+            span_table.push(Ir1OpSpanEntry {
+                op_start,
+                op_end,
+                span,
+            });
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_expression_to_ir1_inner(
+    expression: &Expression,
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    root_scope_id: ScopeId,
+    label_counter: &mut u32,
+    span_table: &mut Vec<Ir1OpSpanEntry>,
 ) -> Result<(), LoweringPipelineError> {
     match expression {
         Expression::Identifier(name) => {
@@ -6871,6 +7043,7 @@ fn lower_expression_to_ir1(
                 binding_index,
                 root_scope_id,
                 label_counter,
+                span_table,
             )?;
             ops.push(Ir1Op::Await);
         }
@@ -6884,6 +7057,7 @@ fn lower_expression_to_ir1(
                     binding_index,
                     root_scope_id,
                     label_counter,
+                    span_table,
                 )?;
             } else {
                 ops.push(Ir1Op::LoadLiteral {
@@ -6915,6 +7089,7 @@ fn lower_expression_to_ir1(
                 binding_index,
                 root_scope_id,
                 label_counter,
+                span_table,
             )?;
         }
         Expression::RegExpLiteral { pattern, flags } => {
@@ -6959,6 +7134,7 @@ fn lower_expression_to_ir1(
                     binding_index,
                     root_scope_id,
                     label_counter,
+                    span_table,
                 )?;
                 ops.push(Ir1Op::StoreBinding {
                     binding_id: temp_binding,
@@ -6997,6 +7173,7 @@ fn lower_expression_to_ir1(
                     binding_index,
                     root_scope_id,
                     label_counter,
+                    span_table,
                 )?;
                 ops.push(Ir1Op::StoreBinding {
                     binding_id: temp_binding,
@@ -7025,6 +7202,7 @@ fn lower_expression_to_ir1(
                     binding_index,
                     root_scope_id,
                     label_counter,
+                    span_table,
                 )?;
                 ops.push(Ir1Op::HostCall {
                     capability: "builtin:ArrayIsArray".to_string(),
@@ -7041,6 +7219,7 @@ fn lower_expression_to_ir1(
                 binding_index,
                 root_scope_id,
                 label_counter,
+                span_table,
             )?;
             lower_expression_to_ir1(
                 right,
@@ -7050,6 +7229,7 @@ fn lower_expression_to_ir1(
                 binding_index,
                 root_scope_id,
                 label_counter,
+                span_table,
             )?;
             ops.push(Ir1Op::BinaryOp {
                 operator: *operator,
@@ -7074,6 +7254,7 @@ fn lower_expression_to_ir1(
                             binding_index,
                             root_scope_id,
                             label_counter,
+                            span_table,
                         )?;
                         let key = lower_member_property_key_to_ir1(
                             property,
@@ -7084,6 +7265,7 @@ fn lower_expression_to_ir1(
                             binding_index,
                             root_scope_id,
                             label_counter,
+                            span_table,
                         )?;
                         ops.push(Ir1Op::DeleteProperty { key });
                     }
@@ -7096,6 +7278,7 @@ fn lower_expression_to_ir1(
                             binding_index,
                             root_scope_id,
                             label_counter,
+                            span_table,
                         )?;
                         ops.push(Ir1Op::Pop);
                         ops.push(Ir1Op::LoadLiteral {
@@ -7130,6 +7313,7 @@ fn lower_expression_to_ir1(
                 binding_index,
                 root_scope_id,
                 label_counter,
+                span_table,
             )?;
             ops.push(Ir1Op::UnaryOp {
                 operator: *operator,
@@ -7198,6 +7382,7 @@ fn lower_expression_to_ir1(
                             binding_index,
                             root_scope_id,
                             label_counter,
+                            span_table,
                         )?;
                         ops.push(Ir1Op::AssignOp {
                             binding_id,
@@ -7219,6 +7404,7 @@ fn lower_expression_to_ir1(
                     binding_index,
                     root_scope_id,
                     label_counter,
+                    span_table,
                 )?;
                 ops.push(Ir1Op::AssignOp {
                     binding_id,
@@ -7252,6 +7438,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                     ops.push(Ir1Op::StoreBinding {
                         binding_id: object_binding,
@@ -7274,6 +7461,7 @@ fn lower_expression_to_ir1(
                             binding_index,
                             root_scope_id,
                             label_counter,
+                            span_table,
                         )?;
                         ops.push(Ir1Op::StoreBinding {
                             binding_id: key_binding,
@@ -7291,6 +7479,7 @@ fn lower_expression_to_ir1(
                                 binding_index,
                                 root_scope_id,
                                 label_counter,
+                                span_table,
                             )?,
                             None,
                         )
@@ -7369,6 +7558,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                     ops.push(Ir1Op::StoreBinding {
                         binding_id: rhs_binding,
@@ -7417,6 +7607,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                     ops.push(Ir1Op::StoreBinding {
                         binding_id: object_binding,
@@ -7439,6 +7630,7 @@ fn lower_expression_to_ir1(
                             binding_index,
                             root_scope_id,
                             label_counter,
+                            span_table,
                         )?;
                         ops.push(Ir1Op::StoreBinding {
                             binding_id: key_binding,
@@ -7456,6 +7648,7 @@ fn lower_expression_to_ir1(
                                 binding_index,
                                 root_scope_id,
                                 label_counter,
+                                span_table,
                             )?,
                             None,
                         )
@@ -7482,6 +7675,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                     ops.push(Ir1Op::BinaryOp {
                         operator: binary_operator,
@@ -7523,6 +7717,7 @@ fn lower_expression_to_ir1(
                     binding_index,
                     root_scope_id,
                     label_counter,
+                    span_table,
                 )?;
                 let key = lower_member_property_key_to_ir1(
                     property,
@@ -7533,6 +7728,7 @@ fn lower_expression_to_ir1(
                     binding_index,
                     root_scope_id,
                     label_counter,
+                    span_table,
                 )?;
                 lower_expression_to_ir1(
                     right,
@@ -7542,6 +7738,7 @@ fn lower_expression_to_ir1(
                     binding_index,
                     root_scope_id,
                     label_counter,
+                    span_table,
                 )?;
                 ops.push(Ir1Op::SetProperty { key });
             } else if let Expression::ArrayLiteral(elements) = left.as_ref() {
@@ -7582,6 +7779,7 @@ fn lower_expression_to_ir1(
                     binding_index,
                     root_scope_id,
                     label_counter,
+                    span_table,
                 )?;
                 ops.push(Ir1Op::StoreBinding {
                     binding_id: temp_bid,
@@ -7609,6 +7807,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                     ops.push(Ir1Op::Pop);
                 }
@@ -7650,6 +7849,7 @@ fn lower_expression_to_ir1(
                 binding_index,
                 root_scope_id,
                 label_counter,
+                span_table,
             )?;
             let else_label = alloc_label(label_counter);
             let end_label = alloc_label(label_counter);
@@ -7665,6 +7865,7 @@ fn lower_expression_to_ir1(
                 binding_index,
                 root_scope_id,
                 label_counter,
+                span_table,
             )?;
             ops.push(Ir1Op::StoreBinding {
                 binding_id: result_binding,
@@ -7682,6 +7883,7 @@ fn lower_expression_to_ir1(
                 binding_index,
                 root_scope_id,
                 label_counter,
+                span_table,
             )?;
             ops.push(Ir1Op::StoreBinding {
                 binding_id: result_binding,
@@ -7726,6 +7928,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                     return Ok(());
                 }
@@ -7740,6 +7943,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                     return Ok(());
                 }
@@ -7754,6 +7958,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                     return Ok(());
                 }
@@ -7768,6 +7973,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                     return Ok(());
                 }
@@ -7782,6 +7988,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                     return Ok(());
                 }
@@ -7798,6 +8005,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                     return Ok(());
                 }
@@ -7814,6 +8022,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                     return Ok(());
                 }
@@ -7830,6 +8039,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                     return Ok(());
                 }
@@ -7849,6 +8059,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                     return Ok(());
                 }
@@ -7868,6 +8079,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                     return Ok(());
                 }
@@ -7889,6 +8101,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                     return Ok(());
                 }
@@ -7910,6 +8123,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                     return Ok(());
                 }
@@ -7924,6 +8138,7 @@ fn lower_expression_to_ir1(
                     binding_index,
                     root_scope_id,
                     label_counter,
+                    span_table,
                 )?;
                 lower_expression_to_ir1(
                     &Expression::UndefinedLiteral,
@@ -7933,6 +8148,7 @@ fn lower_expression_to_ir1(
                     binding_index,
                     root_scope_id,
                     label_counter,
+                    span_table,
                 )?;
                 let args_array =
                     Expression::ArrayLiteral(arguments.iter().cloned().map(Some).collect());
@@ -7944,6 +8160,7 @@ fn lower_expression_to_ir1(
                     binding_index,
                     root_scope_id,
                     label_counter,
+                    span_table,
                 )?;
                 ops.push(Ir1Op::HostCall {
                     capability: "builtin:ReflectApply".to_string(),
@@ -7968,6 +8185,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
                 ops.push(Ir1Op::HostCall {
@@ -7999,6 +8217,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
                 ops.push(Ir1Op::HostCall {
@@ -8024,6 +8243,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
                 ops.push(Ir1Op::HostCall {
@@ -8049,6 +8269,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
                 ops.push(Ir1Op::HostCall {
@@ -8079,6 +8300,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
                 ops.push(Ir1Op::HostCall {
@@ -8113,6 +8335,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
                 ops.push(Ir1Op::HostCall {
@@ -8146,6 +8369,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
                 ops.push(Ir1Op::HostCall {
@@ -8179,6 +8403,7 @@ fn lower_expression_to_ir1(
                     binding_index,
                     root_scope_id,
                     label_counter,
+                    span_table,
                 )?;
                 for arg in arguments {
                     lower_expression_to_ir1(
@@ -8189,6 +8414,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
                 ops.push(Ir1Op::HostCall {
@@ -8220,6 +8446,7 @@ fn lower_expression_to_ir1(
                     binding_index,
                     root_scope_id,
                     label_counter,
+                    span_table,
                 )?;
                 for arg in arguments {
                     lower_expression_to_ir1(
@@ -8230,6 +8457,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
                 ops.push(Ir1Op::HostCall {
@@ -8260,6 +8488,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
                 ops.push(Ir1Op::HostCall {
@@ -8289,6 +8518,7 @@ fn lower_expression_to_ir1(
                     binding_index,
                     root_scope_id,
                     label_counter,
+                    span_table,
                 )?;
                 for arg in arguments {
                     lower_expression_to_ir1(
@@ -8299,6 +8529,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
                 ops.push(Ir1Op::HostCall {
@@ -8351,6 +8582,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
                 ops.push(Ir1Op::HostCall {
@@ -8372,6 +8604,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
                 let arg_count = arguments.len();
@@ -8407,6 +8640,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
                 ops.push(Ir1Op::HostCall {
@@ -8436,6 +8670,7 @@ fn lower_expression_to_ir1(
                     binding_index,
                     root_scope_id,
                     label_counter,
+                    span_table,
                 )?;
                 for arg in arguments {
                     lower_expression_to_ir1(
@@ -8446,6 +8681,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
                 ops.push(Ir1Op::HostCall {
@@ -8493,6 +8729,7 @@ fn lower_expression_to_ir1(
                     binding_index,
                     root_scope_id,
                     label_counter,
+                    span_table,
                 )?;
                 ops.push(Ir1Op::StoreBinding {
                     binding_id: temp_obj,
@@ -8520,6 +8757,7 @@ fn lower_expression_to_ir1(
                     binding_index,
                     root_scope_id,
                     label_counter,
+                    span_table,
                 )?;
                 ops.push(Ir1Op::GetProperty { key });
                 // Stack: [..., method]. Push the receiver again for CallMethod
@@ -8536,6 +8774,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
                 let arg_count = arguments.len();
@@ -8596,6 +8835,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                     // Push the method (GetProperty on the object)
                     // We need to duplicate the object ref for GetProperty
@@ -8621,6 +8861,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                     ops.push(Ir1Op::GetProperty { key });
                     // Now stack has: [... receiver_binding_val, method_val]
@@ -8638,6 +8879,7 @@ fn lower_expression_to_ir1(
                             binding_index,
                             root_scope_id,
                             label_counter,
+                            span_table,
                         )?;
                     }
                     let arg_count = arguments.len();
@@ -8660,6 +8902,7 @@ fn lower_expression_to_ir1(
                     binding_index,
                     root_scope_id,
                     label_counter,
+                    span_table,
                 )?;
                 for arg in arguments {
                     lower_expression_to_ir1(
@@ -8670,6 +8913,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
                 let arg_count = arguments.len();
@@ -8756,6 +9000,7 @@ fn lower_expression_to_ir1(
                 binding_index,
                 root_scope_id,
                 label_counter,
+                span_table,
             )?;
             let key = lower_member_property_key_to_ir1(
                 property,
@@ -8766,6 +9011,7 @@ fn lower_expression_to_ir1(
                 binding_index,
                 root_scope_id,
                 label_counter,
+                span_table,
             )?;
             ops.push(Ir1Op::GetProperty { key });
         }
@@ -8808,6 +9054,7 @@ fn lower_expression_to_ir1(
                 binding_index,
                 root_scope_id,
                 label_counter,
+                span_table,
             )?;
             ops.push(Ir1Op::StoreBinding {
                 binding_id: temp_obj,
@@ -8835,6 +9082,7 @@ fn lower_expression_to_ir1(
                 binding_index,
                 root_scope_id,
                 label_counter,
+                span_table,
             )?;
             ops.push(Ir1Op::GetProperty { key });
             ops.push(Ir1Op::StoreBinding {
@@ -8897,6 +9145,7 @@ fn lower_expression_to_ir1(
                 binding_index,
                 root_scope_id,
                 label_counter,
+                span_table,
             )?;
             ops.push(Ir1Op::StoreBinding {
                 binding_id: temp_callee,
@@ -8924,6 +9173,7 @@ fn lower_expression_to_ir1(
                     binding_index,
                     root_scope_id,
                     label_counter,
+                    span_table,
                 )?;
             }
             let arg_count = arguments.len();
@@ -8989,6 +9239,7 @@ fn lower_expression_to_ir1(
                                 binding_index,
                                 root_scope_id,
                                 label_counter,
+                                span_table,
                             )?;
                             ops.push(Ir1Op::SpreadIntoArray);
                         }
@@ -9002,6 +9253,7 @@ fn lower_expression_to_ir1(
                                 binding_index,
                                 root_scope_id,
                                 label_counter,
+                                span_table,
                             )?;
                             ops.push(Ir1Op::ArrayPush);
                         }
@@ -9026,6 +9278,7 @@ fn lower_expression_to_ir1(
                             binding_index,
                             root_scope_id,
                             label_counter,
+                            span_table,
                         )?;
                     } else {
                         ops.push(Ir1Op::LoadLiteral {
@@ -9060,6 +9313,7 @@ fn lower_expression_to_ir1(
                             binding_index,
                             root_scope_id,
                             label_counter,
+                            span_table,
                         )?;
                         ops.push(Ir1Op::SpreadIntoObject);
                     } else {
@@ -9073,6 +9327,7 @@ fn lower_expression_to_ir1(
                                 binding_index,
                                 root_scope_id,
                                 label_counter,
+                                span_table,
                             )?;
                         } else {
                             let key_str = match &prop.key {
@@ -9094,6 +9349,7 @@ fn lower_expression_to_ir1(
                             binding_index,
                             root_scope_id,
                             label_counter,
+                            span_table,
                         )?;
                         // Build a single-property temp object `{key: value}` and
                         // spread it into the target. A bare `SetProperty` here is
@@ -9123,6 +9379,7 @@ fn lower_expression_to_ir1(
                             binding_index,
                             root_scope_id,
                             label_counter,
+                            span_table,
                         )?;
                     } else {
                         let key_str = match &prop.key {
@@ -9144,6 +9401,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
                 ops.push(Ir1Op::NewObject {
@@ -9213,6 +9471,7 @@ fn lower_expression_to_ir1(
                     &mut body_binding_index,
                     body_scope,
                     &mut body_label_counter,
+                    &mut Vec::new(),
                 )?;
             }
             // Snapshot all param-introduced names (synthetics + destructured inner
@@ -9228,6 +9487,7 @@ fn lower_expression_to_ir1(
                         &mut body_binding_index,
                         body_scope,
                         &mut body_label_counter,
+                        &mut Vec::new(),
                     )?;
                 }
                 ArrowBody::Block(block) => {
@@ -9240,6 +9500,7 @@ fn lower_expression_to_ir1(
                             &mut body_binding_index,
                             body_scope,
                             &mut body_label_counter,
+                            &mut Vec::new(),
                         )?;
                     }
                 }
@@ -9333,6 +9594,7 @@ fn lower_expression_to_ir1(
                     &mut body_binding_index,
                     body_scope,
                     &mut body_label_counter,
+                    &mut Vec::new(),
                 )?;
             }
             let pre_lower_names: BTreeSet<String> = body_lookup.keys().cloned().collect();
@@ -9345,6 +9607,7 @@ fn lower_expression_to_ir1(
                     &mut body_binding_index,
                     body_scope,
                     &mut body_label_counter,
+                    &mut Vec::new(),
                 )?;
             }
             if !matches!(body_ops.last(), Some(Ir1Op::Return)) {
@@ -9414,6 +9677,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
                 ops.push(Ir1Op::HostCall {
@@ -9445,6 +9709,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
                 ops.push(Ir1Op::HostCall {
@@ -9475,6 +9740,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
                 ops.push(Ir1Op::HostCall {
@@ -9505,6 +9771,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
                 ops.push(Ir1Op::HostCall {
@@ -9533,6 +9800,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
                 ops.push(Ir1Op::HostCall {
@@ -9562,6 +9830,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
                 ops.push(Ir1Op::HostCall {
@@ -9593,6 +9862,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
                 ops.push(Ir1Op::HostCall {
@@ -9629,6 +9899,7 @@ fn lower_expression_to_ir1(
                     binding_index,
                     root_scope_id,
                     label_counter,
+                    span_table,
                 )?;
                 let args_array =
                     Expression::ArrayLiteral(arguments.iter().cloned().map(Some).collect());
@@ -9640,6 +9911,7 @@ fn lower_expression_to_ir1(
                     binding_index,
                     root_scope_id,
                     label_counter,
+                    span_table,
                 )?;
                 ops.push(Ir1Op::HostCall {
                     capability: "builtin:ReflectConstruct".to_string(),
@@ -9655,6 +9927,7 @@ fn lower_expression_to_ir1(
                 binding_index,
                 root_scope_id,
                 label_counter,
+                span_table,
             )?;
             for arg in arguments {
                 lower_expression_to_ir1(
@@ -9665,6 +9938,7 @@ fn lower_expression_to_ir1(
                     binding_index,
                     root_scope_id,
                     label_counter,
+                    span_table,
                 )?;
             }
             let arg_count = arguments.len();
@@ -9696,6 +9970,7 @@ fn lower_expression_to_ir1(
                         binding_index,
                         root_scope_id,
                         label_counter,
+                        span_table,
                     )?;
                 }
             }
@@ -9772,6 +10047,7 @@ fn lower_expression_to_ir1(
                     &mut body_binding_index,
                     body_scope,
                     &mut body_label_counter,
+                    &mut Vec::new(),
                 )?;
             }
             if let Some(ctor) = constructor {
@@ -9784,6 +10060,7 @@ fn lower_expression_to_ir1(
                         &mut body_binding_index,
                         body_scope,
                         &mut body_label_counter,
+                        &mut Vec::new(),
                     )?;
                 }
             }
@@ -9825,6 +10102,7 @@ fn lower_expression_to_ir1(
                     binding_index,
                     root_scope_id,
                     label_counter,
+                    span_table,
                 )?;
                 ops.push(Ir1Op::GetProperty {
                     key: Ir1PropertyKey::Static("prototype".to_string()),
@@ -9894,6 +10172,7 @@ fn lower_expression_to_ir1(
                         &mut m_binding_index,
                         m_scope,
                         &mut m_label_counter,
+                        &mut Vec::new(),
                     )?;
                 }
                 for stmt in &method.body.body {
@@ -9905,6 +10184,7 @@ fn lower_expression_to_ir1(
                         &mut m_binding_index,
                         m_scope,
                         &mut m_label_counter,
+                        &mut Vec::new(),
                     )?;
                 }
                 if !matches!(m_body_ops.last(), Some(Ir1Op::Return)) {
@@ -10667,6 +10947,7 @@ fn lower_member_property_key_to_ir1(
     binding_index: &mut BindingId,
     root_scope_id: ScopeId,
     label_counter: &mut u32,
+    span_table: &mut Vec<Ir1OpSpanEntry>,
 ) -> Result<Ir1PropertyKey, LoweringPipelineError> {
     if computed {
         lower_expression_to_ir1(
@@ -10677,6 +10958,7 @@ fn lower_member_property_key_to_ir1(
             binding_index,
             root_scope_id,
             label_counter,
+            span_table,
         )?;
         return Ok(Ir1PropertyKey::Dynamic);
     }
@@ -11157,6 +11439,183 @@ mod tests {
         );
     }
 
+    // ── Ir2Op span stamping (bd-fqlfw.1.5) ──────────────────────────────
+
+    fn span_for_test(line: u64) -> crate::ast::SourceSpan {
+        crate::ast::SourceSpan::new(0, 10, line, 1, line, 11)
+    }
+
+    fn ir1_with_nop_ops_and_spans(op_count: usize, op_spans: Vec<Ir1OpSpanEntry>) -> Ir1Module {
+        let mut ir1 = Ir1Module::new(ContentHash::compute(b"span-stamping-ir0"), "spans.js");
+        for _ in 0..op_count {
+            ir1.ops.push(Ir1Op::Nop);
+        }
+        ir1.op_spans = op_spans;
+        ir1
+    }
+
+    #[test]
+    fn ir2_span_stamping_narrowest_range_wins_regardless_of_order() {
+        // Outer entry covers [0, 3); inner covers [1, 2). Both recording
+        // orders must yield the same result: the inner span on op 1, the
+        // outer span on ops 0 and 2.
+        for entries in [
+            vec![
+                Ir1OpSpanEntry {
+                    op_start: 1,
+                    op_end: 2,
+                    span: span_for_test(2),
+                },
+                Ir1OpSpanEntry {
+                    op_start: 0,
+                    op_end: 3,
+                    span: span_for_test(1),
+                },
+            ],
+            vec![
+                Ir1OpSpanEntry {
+                    op_start: 0,
+                    op_end: 3,
+                    span: span_for_test(1),
+                },
+                Ir1OpSpanEntry {
+                    op_start: 1,
+                    op_end: 2,
+                    span: span_for_test(2),
+                },
+            ],
+        ] {
+            let ir1 = ir1_with_nop_ops_and_spans(3, entries);
+            let ir2 = lower_ir1_to_ir2(&ir1).expect("IR1->IR2").module;
+            assert_eq!(ir2.ops[0].span, Some(span_for_test(1)));
+            assert_eq!(ir2.ops[1].span, Some(span_for_test(2)));
+            assert_eq!(ir2.ops[2].span, Some(span_for_test(1)));
+        }
+    }
+
+    #[test]
+    fn ir2_span_stamping_clamps_out_of_bounds_entries() {
+        let ir1 = ir1_with_nop_ops_and_spans(
+            2,
+            vec![
+                Ir1OpSpanEntry {
+                    op_start: 1,
+                    op_end: 99,
+                    span: span_for_test(7),
+                },
+                Ir1OpSpanEntry {
+                    op_start: 50,
+                    op_end: 60,
+                    span: span_for_test(8),
+                },
+            ],
+        );
+        let ir2 = lower_ir1_to_ir2(&ir1).expect("IR1->IR2").module;
+        assert_eq!(ir2.ops[0].span, None);
+        assert_eq!(ir2.ops[1].span, Some(span_for_test(7)));
+    }
+
+    #[test]
+    fn ir2_span_stamping_empty_table_leaves_all_spans_none() {
+        let ir1 = ir1_with_nop_ops_and_spans(3, Vec::new());
+        let ir2 = lower_ir1_to_ir2(&ir1).expect("IR1->IR2").module;
+        assert!(ir2.ops.iter().all(|op| op.span.is_none()));
+    }
+
+    #[test]
+    fn ir2_span_is_identity_neutral_for_hash_eq_and_serde() {
+        // The span side-table and Ir2Op::span are diagnostic provenance:
+        // content hashes, equality, and serialized bytes must be identical
+        // with and without them (the bd-fqlfw.1.5 zero-churn contract).
+        let spanned = ir1_with_nop_ops_and_spans(
+            2,
+            vec![Ir1OpSpanEntry {
+                op_start: 0,
+                op_end: 2,
+                span: span_for_test(3),
+            }],
+        );
+        let unspanned = ir1_with_nop_ops_and_spans(2, Vec::new());
+        assert_eq!(spanned, unspanned);
+        assert_eq!(spanned.content_hash(), unspanned.content_hash());
+        assert_eq!(
+            serde_json::to_string(&spanned).expect("serialize ir1"),
+            serde_json::to_string(&unspanned).expect("serialize ir1"),
+        );
+
+        let ir2_spanned = lower_ir1_to_ir2(&spanned).expect("IR1->IR2").module;
+        let ir2_unspanned = lower_ir1_to_ir2(&unspanned).expect("IR1->IR2").module;
+        assert!(ir2_spanned.ops.iter().all(|op| op.span.is_some()));
+        assert!(ir2_unspanned.ops.iter().all(|op| op.span.is_none()));
+        assert_eq!(ir2_spanned, ir2_unspanned);
+        assert_eq!(ir2_spanned.content_hash(), ir2_unspanned.content_hash());
+        assert_eq!(
+            serde_json::to_string(&ir2_spanned).expect("serialize ir2"),
+            serde_json::to_string(&ir2_unspanned).expect("serialize ir2"),
+        );
+    }
+
+    #[test]
+    fn expression_lowering_records_nested_span_table_entries() {
+        // `obj.a.b` lowers the inner member (`obj.a`) before the outer one,
+        // so the side-table must hold two same-start entries with the inner
+        // (narrower) range recorded first and the outer range exactly one op
+        // wider (the outer GetProperty). Distinct span values per nesting
+        // level make narrowest-range-wins observable end-to-end in IR2.
+        let inner_span = span_for_test(2);
+        let outer_span = span_for_test(1);
+        let tree = SyntaxTree {
+            goal: ParseGoal::Script,
+            body: vec![Statement::Expression(ExpressionStatement {
+                expression: Expression::Member {
+                    object: Box::new(Expression::Member {
+                        object: Box::new(Expression::Identifier("obj".to_string())),
+                        property: Box::new(Expression::Identifier("a".to_string())),
+                        computed: false,
+                        span: Some(inner_span),
+                    }),
+                    property: Box::new(Expression::Identifier("b".to_string())),
+                    computed: false,
+                    span: Some(outer_span),
+                },
+                span: span(),
+            })],
+            span: span(),
+        };
+        let ir0 = Ir0Module::from_syntax_tree(tree, "nested_member.js");
+        let ir1 = lower_ir0_to_ir1(&ir0).expect("IR0->IR1").module;
+        assert_eq!(
+            ir1.op_spans.len(),
+            2,
+            "expected inner+outer member entries, got {:?}",
+            ir1.op_spans
+        );
+        let inner = ir1.op_spans[0];
+        let outer = ir1.op_spans[1];
+        assert_eq!(inner.span, inner_span, "inner entry recorded first");
+        assert_eq!(outer.span, outer_span, "outer entry recorded second");
+        assert_eq!(inner.op_start, outer.op_start);
+        assert_eq!(outer.op_end, inner.op_end + 1);
+        assert!(matches!(
+            ir1.ops[outer.op_end - 1],
+            Ir1Op::GetProperty { .. }
+        ));
+
+        let ir2 = lower_ir1_to_ir2(&ir1).expect("IR1->IR2").module;
+        for i in inner.op_start..inner.op_end {
+            assert_eq!(
+                ir2.ops[i].span,
+                Some(inner_span),
+                "inner-member op {i} must carry the narrower inner span"
+            );
+        }
+        assert_eq!(
+            ir2.ops[outer.op_end - 1].span,
+            Some(outer_span),
+            "the outer GetProperty must carry the outer member's span"
+        );
+    }
+
     #[test]
     fn lower_ir1_to_ir2_zero_flow_ops_reports_zero_static_coverage() {
         let ir1 = Ir1Module::new(ContentHash::compute(b"zero-flow-ir0"), "zero_flow.js");
@@ -11210,12 +11669,14 @@ mod tests {
             effect: EffectBoundary::Pure,
             required_capability: None,
             flow: None,
+            span: None,
         });
         ir2.ops.push(Ir2Op {
             inner: Ir1Op::JumpIfFalsy { label_id: 7 },
             effect: EffectBoundary::Pure,
             required_capability: None,
             flow: None,
+            span: None,
         });
         ir2.ops.push(Ir2Op {
             inner: Ir1Op::LoadLiteral {
@@ -11224,18 +11685,21 @@ mod tests {
             effect: EffectBoundary::Pure,
             required_capability: None,
             flow: None,
+            span: None,
         });
         ir2.ops.push(Ir2Op {
             inner: Ir1Op::Return,
             effect: EffectBoundary::Pure,
             required_capability: None,
             flow: None,
+            span: None,
         });
         ir2.ops.push(Ir2Op {
             inner: Ir1Op::Label { id: 7 },
             effect: EffectBoundary::Pure,
             required_capability: None,
             flow: None,
+            span: None,
         });
         ir2.ops.push(Ir2Op {
             inner: Ir1Op::LoadLiteral {
@@ -11244,12 +11708,14 @@ mod tests {
             effect: EffectBoundary::Pure,
             required_capability: None,
             flow: None,
+            span: None,
         });
         ir2.ops.push(Ir2Op {
             inner: Ir1Op::Return,
             effect: EffectBoundary::Pure,
             required_capability: None,
             flow: None,
+            span: None,
         });
 
         let ir3 = lower_ir2_to_ir3(&ir2)
@@ -11286,6 +11752,7 @@ mod tests {
             effect: EffectBoundary::Pure,
             required_capability: None,
             flow: None,
+            span: None,
         });
 
         let err = lower_ir2_to_ir3(&ir2).expect_err("missing label should fail closed");
@@ -11308,6 +11775,7 @@ mod tests {
             effect: EffectBoundary::Pure,
             required_capability: None,
             flow: None,
+            span: None,
         });
         ir2.ops.push(Ir2Op {
             inner: Ir1Op::LoadLiteral {
@@ -11316,24 +11784,28 @@ mod tests {
             effect: EffectBoundary::Pure,
             required_capability: None,
             flow: None,
+            span: None,
         });
         ir2.ops.push(Ir2Op {
             inner: Ir1Op::EndTry,
             effect: EffectBoundary::Pure,
             required_capability: None,
             flow: None,
+            span: None,
         });
         ir2.ops.push(Ir2Op {
             inner: Ir1Op::Label { id: 1 },
             effect: EffectBoundary::Pure,
             required_capability: None,
             flow: None,
+            span: None,
         });
         ir2.ops.push(Ir2Op {
             inner: Ir1Op::Return,
             effect: EffectBoundary::Pure,
             required_capability: None,
             flow: None,
+            span: None,
         });
 
         let ir3 = lower_ir2_to_ir3(&ir2)
@@ -11533,6 +12005,7 @@ mod tests {
                 sink_clearance: Label::Public,
                 declassification_required: true,
             }),
+            span: None,
         });
 
         let context = LoweringContext::new("trace-declass", "decision-declass", "policy-declass");
@@ -11585,6 +12058,7 @@ mod tests {
                     sink_clearance: Label::Public,
                     declassification_required: true,
                 }),
+                span: None,
             });
         }
 
@@ -11622,6 +12096,7 @@ mod tests {
                 sink_clearance: Label::Public,
                 declassification_required: true,
             }),
+            span: None,
         });
 
         let context = LoweringContext::new("trace-deny", "decision-deny", "policy-deny");
@@ -11660,6 +12135,7 @@ mod tests {
                 sink_clearance: Label::Public,
                 declassification_required: true,
             }),
+            span: None,
         });
 
         let context = LoweringContext::new("trace-det", "decision-det", "policy-det");

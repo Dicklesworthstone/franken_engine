@@ -88,6 +88,7 @@ fn make_ir2(source_hash: ContentHash) -> Ir2Module {
         effect: EffectBoundary::Pure,
         required_capability: None,
         flow: None,
+        span: None,
     });
     ir2.ops.push(Ir2Op {
         inner: Ir1Op::Call { arg_count: 1 },
@@ -98,6 +99,7 @@ fn make_ir2(source_hash: ContentHash) -> Ir2Module {
             sink_clearance: Label::Internal,
             declassification_required: false,
         }),
+        span: None,
     });
     ir2.required_capabilities
         .push(CapabilityTag("fs:read".to_string()));
@@ -666,6 +668,7 @@ fn ir2_op_pure_no_capability_no_flow() {
         effect: EffectBoundary::Pure,
         required_capability: None,
         flow: None,
+        span: None,
     };
     let cv1 = op.canonical_value();
     let cv2 = op.canonical_value();
@@ -683,6 +686,7 @@ fn ir2_op_with_capability_and_flow() {
             sink_clearance: Label::Secret,
             declassification_required: false,
         }),
+        span: None,
     };
     let cv1 = op.canonical_value();
     let cv2 = op.canonical_value();
@@ -698,6 +702,7 @@ fn ir2_op_serde_roundtrip() {
         effect: EffectBoundary::ReadEffect,
         required_capability: Some(CapabilityTag("db:read".to_string())),
         flow: None,
+        span: None,
     };
     let json = serde_json::to_string(&op).unwrap();
     let restored: Ir2Op = serde_json::from_str(&json).unwrap();
@@ -1253,6 +1258,7 @@ fn ir2_different_effects_produce_different_hashes() {
         effect: EffectBoundary::Pure,
         required_capability: None,
         flow: None,
+        span: None,
     });
     let mut b = Ir2Module::new(src, "test.js");
     b.ops.push(Ir2Op {
@@ -1260,6 +1266,7 @@ fn ir2_different_effects_produce_different_hashes() {
         effect: EffectBoundary::WriteEffect,
         required_capability: None,
         flow: None,
+        span: None,
     });
     assert_ne!(a.content_hash(), b.content_hash());
 }
@@ -1632,6 +1639,7 @@ fn verify_ir1_source_fails_for_missing_source_hash() {
         },
         scopes: vec![],
         ops: vec![],
+        op_spans: vec![],
     };
     let expected = ContentHash::compute(b"something");
     let err = verify_ir1_source(&ir1, &expected).unwrap_err();
@@ -2302,6 +2310,7 @@ fn capability_tag_flows_from_ir2_to_ir3() {
         effect: EffectBoundary::NetworkEffect,
         required_capability: Some(cap.clone()),
         flow: None,
+        span: None,
     });
     ir2.required_capabilities.push(cap.clone());
 
@@ -2382,6 +2391,7 @@ fn ir2_with_all_effect_boundaries() {
             effect: eb,
             required_capability: None,
             flow: None,
+            span: None,
         });
     }
     assert_eq!(ir2.ops.len(), 6);
@@ -2411,6 +2421,7 @@ fn ir2_flow_annotation_with_all_label_types() {
                 sink_clearance: Label::Public,
                 declassification_required: false,
             }),
+            span: None,
         });
     }
     let json = serde_json::to_string(&ir2).unwrap();

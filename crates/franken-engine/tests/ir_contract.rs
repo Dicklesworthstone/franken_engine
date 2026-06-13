@@ -75,6 +75,7 @@ fn make_ir2(ir1_hash: ContentHash) -> Ir2Module {
         effect: EffectBoundary::Pure,
         required_capability: None,
         flow: None,
+        span: None,
     });
     ir2.ops.push(Ir2Op {
         inner: Ir1Op::Call { arg_count: 1 },
@@ -85,6 +86,7 @@ fn make_ir2(ir1_hash: ContentHash) -> Ir2Module {
             sink_clearance: Label::Internal,
             declassification_required: false,
         }),
+        span: None,
     });
     ir2.required_capabilities
         .push(CapabilityTag("fs:read".to_string()));
@@ -520,6 +522,7 @@ fn ir2_ifc_annotations_preserved_through_roundtrip() {
             sink_clearance: Label::Public,
             declassification_required: true,
         }),
+        span: None,
     });
 
     let json = serde_json::to_string(&ir2).unwrap();
@@ -2146,6 +2149,7 @@ fn enrichment_ir2_op_pure_no_capability_serde() {
         effect: EffectBoundary::Pure,
         required_capability: None,
         flow: None,
+        span: None,
     };
     let json = serde_json::to_string(&op).unwrap();
     let recovered: Ir2Op = serde_json::from_str(&json).unwrap();
@@ -2163,6 +2167,7 @@ fn enrichment_ir2_op_with_all_fields_serde() {
             sink_clearance: Label::Public,
             declassification_required: false,
         }),
+        span: None,
     };
     let json = serde_json::to_string(&op).unwrap();
     let recovered: Ir2Op = serde_json::from_str(&json).unwrap();

@@ -873,14 +873,50 @@ impl Ir1Literal {
     }
 }
 
+/// Span side-table entry mapping a half-open range of IR1 op indices
+/// (`op_start..op_end`) to the source span of the expression whose lowering
+/// emitted them (bd-fqlfw.1.5).
+///
+/// Entries are recorded post-order during IR0 → IR1 expression lowering, so
+/// inner (narrower) expression ranges appear before the enclosing (wider)
+/// ones. Consumers that want per-op spans must apply narrowest-range-wins;
+/// `lower_ir1_to_ir2` does exactly that when stamping [`Ir2Op`] spans.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ir1OpSpanEntry {
+    /// First IR1 op index covered by this expression (inclusive).
+    pub op_start: usize,
+    /// One past the last IR1 op index covered by this expression (exclusive).
+    pub op_end: usize,
+    /// Parse-time span of the originating expression (bd-fqlfw.1.1).
+    pub span: crate::ast::SourceSpan,
+}
+
 /// IR1 module: scope-resolved, position-independent spec-level representation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
 pub struct Ir1Module {
     pub header: IrHeader,
     /// Scope tree capturing all bindings.
     pub scopes: Vec<ScopeNode>,
     /// Flattened operation sequence.
     pub ops: Vec<Ir1Op>,
+    /// In-memory span side-table for expression-derived ops (bd-fqlfw.1.5).
+    ///
+    /// Deliberately `#[serde(skip)]` and excluded from `canonical_value` /
+    /// `content_hash` / `PartialEq`: spans are diagnostic provenance, not
+    /// module identity, and serialized IR1 artifacts stay byte-identical to
+    /// the pre-span format. Populated by `lower_ir0_to_ir1`; consumed by
+    /// `lower_ir1_to_ir2` to stamp [`Ir2Op::span`]. Empty on any module that
+    /// was deserialized or hand-constructed.
+    #[serde(skip)]
+    pub op_spans: Vec<Ir1OpSpanEntry>,
+}
+
+/// `op_spans` is diagnostic provenance, not module identity — two modules
+/// that differ only in their span side-table compare equal (bd-fqlfw.1.5).
+impl PartialEq for Ir1Module {
+    fn eq(&self, other: &Self) -> bool {
+        self.header == other.header && self.scopes == other.scopes && self.ops == other.ops
+    }
 }
 
 impl Ir1Module {
@@ -904,6 +940,7 @@ impl Ir1Module {
             },
             scopes: Vec::new(),
             ops: Vec::with_capacity(ops_capacity),
+            op_spans: Vec::new(),
         }
     }
 
@@ -1005,7 +1042,7 @@ impl FlowAnnotation {
 }
 
 /// IR2 operation — capability-annotated and flow-labeled.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
 pub struct Ir2Op {
     /// The underlying IR1 operation.
     pub inner: Ir1Op,
@@ -1015,6 +1052,28 @@ pub struct Ir2Op {
     pub required_capability: Option<CapabilityTag>,
     /// IFC flow annotation (if data flows through this operation).
     pub flow: Option<FlowAnnotation>,
+    /// Source span of the expression whose lowering emitted this op
+    /// (bd-fqlfw.1.5; narrowest enclosing spanned expression wins).
+    ///
+    /// Deliberately `#[serde(skip)]` and excluded from `canonical_value` /
+    /// `content_hash` / `PartialEq`: spans are diagnostic provenance, not
+    /// op identity, and serialized IR2 artifacts stay byte-identical to the
+    /// pre-span format. `None` for statement-emitted ops, for expressions the
+    /// parser did not span (bare identifiers, bd-fqlfw.1.1 scope), and on any
+    /// module that was deserialized rather than freshly lowered.
+    #[serde(skip)]
+    pub span: Option<crate::ast::SourceSpan>,
+}
+
+/// `span` is diagnostic provenance, not op identity — two ops that differ
+/// only in their span compare equal (bd-fqlfw.1.5).
+impl PartialEq for Ir2Op {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner == other.inner
+            && self.effect == other.effect
+            && self.required_capability == other.required_capability
+            && self.flow == other.flow
+    }
 }
 
 impl Ir2Op {
@@ -3033,6 +3092,7 @@ mod tests {
             },
             effect: EffectBoundary::HostcallEffect,
             required_capability: Some(CapabilityTag("fs:read".to_string())),
+            span: None,
             flow: Some(FlowAnnotation {
                 data_label: Label::Internal,
                 sink_clearance: Label::Internal,
@@ -3058,6 +3118,7 @@ mod tests {
                 effect: EffectBoundary::Pure,
                 required_capability: None,
                 flow: None,
+                span: None,
             });
             ir2
         };
@@ -3073,6 +3134,7 @@ mod tests {
             effect: EffectBoundary::Pure,
             required_capability: None,
             flow: None,
+            span: None,
         });
         // SAFETY: Ir2Module derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&ir2).expect("serialize derived Serialize");
@@ -3590,6 +3652,7 @@ mod tests {
             effect: EffectBoundary::Pure,
             required_capability: None,
             flow: None,
+            span: None,
         });
         let ir2_hash = ir2.content_hash();
 
@@ -4172,6 +4235,7 @@ mod tests {
             },
             scopes: Vec::new(),
             ops: Vec::new(),
+            op_spans: Vec::new(),
         };
         let ir0_hash = ContentHash::compute(b"ir0");
         let err = verify_ir1_source(&ir1, &ir0_hash).unwrap_err();
@@ -4476,6 +4540,7 @@ mod tests {
             },
             effect: EffectBoundary::NetworkEffect,
             required_capability: Some(CapabilityTag("net:fetch".to_string())),
+            span: None,
             flow: Some(FlowAnnotation {
                 data_label: Label::Internal,
                 sink_clearance: Label::Public,
@@ -5151,6 +5216,7 @@ mod tests {
             },
             effect: EffectBoundary::NetworkEffect,
             required_capability: Some(CapabilityTag("net:outbound".to_string())),
+            span: None,
             flow: Some(FlowAnnotation {
                 data_label: Label::Internal,
                 sink_clearance: Label::Internal,
@@ -5187,6 +5253,7 @@ mod tests {
             effect: EffectBoundary::Pure,
             required_capability: None,
             flow: None,
+            span: None,
         });
         assert_ne!(ir2a.content_hash(), ir2b.content_hash());
     }

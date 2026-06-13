@@ -19,12 +19,17 @@
 //! that `parser_trait_ast` locks for statement spans, so any change to
 //! span computation breaks these goldens loudly.
 //!
-//! `Ir2Op.span` goldens are deliberately absent: the IR-record carry is
-//! split to `bd-fqlfw.1.5` (E1.T2b); extend this file when it lands.
+//! - IR-record layer (`bd-fqlfw.1.5`): `Ir2Op.span` carries the parse-time
+//!   span of the nearest enclosing spanned expression (Call / OptionalCall /
+//!   Member / OptionalMember), stamped narrowest-range-wins from the IR1
+//!   span side-table. Statement-emitted ops and unspanned expression kinds
+//!   honestly stay `None`.
 
 use frankenengine_engine::ast::{Expression, ParseGoal, SourceSpan, Statement};
-use frankenengine_engine::ir_contract::Ir0Module;
-use frankenengine_engine::lowering_pipeline::{LoweringPipelineError, lower_ir0_to_ir1};
+use frankenengine_engine::ir_contract::{Ir0Module, Ir1Op, Ir2Module};
+use frankenengine_engine::lowering_pipeline::{
+    LoweringPipelineError, lower_ir0_to_ir1, lower_ir1_to_ir2,
+};
 use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser};
 use frankenengine_engine::parser_api_stability::parse_module;
 
@@ -203,6 +208,130 @@ fn golden_stale_span_doctrine_stays_removed() {
         source.contains("bd-fqlfw.1.2"),
         "the AmbientAuthorityViolation span doc must reference the \
          bd-fqlfw.1.2 population contract"
+    );
+}
+
+// ── Ir2Op-layer goldens (bd-fqlfw.1.5) ──────────────────────────────────
+
+/// Lower a script source through IR0 → IR1 → IR2.
+fn lower_script_to_ir2(source: &str) -> Ir2Module {
+    let parser = CanonicalEs2020Parser;
+    let tree = parser
+        .parse(source, ParseGoal::Script)
+        .expect("fixture should parse");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "span_provenance_golden");
+    let ir1 = lower_ir0_to_ir1(&ir0)
+        .expect("IR0->IR1 should succeed")
+        .module;
+    lower_ir1_to_ir2(&ir1)
+        .expect("IR1->IR2 should succeed")
+        .module
+}
+
+#[test]
+fn golden_ir2_member_ops_carry_exact_member_span() {
+    let source = "obj.field";
+    let ir2 = lower_script_to_ir2(source);
+    let get_property = ir2
+        .ops
+        .iter()
+        .find(|op| matches!(op.inner, Ir1Op::GetProperty { .. }))
+        .expect("member lowering must emit GetProperty");
+    assert_eq!(
+        get_property.span,
+        Some(single_line_span(source)),
+        "the GetProperty op must carry the member expression's exact span"
+    );
+    // The object load sits inside the member's op range, so it carries the
+    // member span too (no narrower spanned expression encloses it).
+    let load_binding = ir2
+        .ops
+        .iter()
+        .find(|op| matches!(op.inner, Ir1Op::LoadBinding { .. }))
+        .expect("member lowering must emit the object LoadBinding");
+    assert_eq!(load_binding.span, Some(single_line_span(source)));
+}
+
+#[test]
+fn golden_ir2_call_op_carries_exact_call_span() {
+    let source = "doWork(1, 2)";
+    let ir2 = lower_script_to_ir2(source);
+    let call = ir2
+        .ops
+        .iter()
+        .find(|op| matches!(op.inner, Ir1Op::Call { .. }))
+        .expect("call lowering must emit Call");
+    assert_eq!(
+        call.span,
+        Some(single_line_span(source)),
+        "the Call op must carry the call expression's exact span"
+    );
+}
+
+#[test]
+fn golden_ir2_multi_line_ops_point_at_their_own_lines() {
+    // Line 1 holds a member access, line 2 a call. Each op must point at
+    // its own line: a GetProperty reported on line 2 (or a Call on line 1)
+    // is exactly the wrong-line diagnostic failure class this file exists
+    // to prevent.
+    let source = "const a = obj.f;\nsink(a)";
+    let ir2 = lower_script_to_ir2(source);
+    let get_property_span = ir2
+        .ops
+        .iter()
+        .find(|op| matches!(op.inner, Ir1Op::GetProperty { .. }))
+        .expect("line-1 member must emit GetProperty")
+        .span
+        .expect("GetProperty must carry a span");
+    assert_eq!(
+        (get_property_span.start_line, get_property_span.end_line),
+        (1, 1),
+        "member op must point at line 1: {get_property_span:?}"
+    );
+    // The line-2 call to an unbound callee lowers through the generic
+    // invoke hostcall (`Ir1Op::HostCall`); a bound/literal-arg call would be
+    // `Ir1Op::Call`. Either way the call op must carry line 2's span — that
+    // is the cross-line provenance this golden pins.
+    let call_span = ir2
+        .ops
+        .iter()
+        .find(|op| {
+            matches!(op.inner, Ir1Op::Call { .. } | Ir1Op::HostCall { .. })
+                && op.span.is_some_and(|s| s.start_line == 2)
+        })
+        .expect("line-2 call must emit a span-carrying Call/HostCall")
+        .span
+        .expect("call op must carry a span");
+    assert_eq!(
+        (call_span.start_line, call_span.end_line),
+        (2, 2),
+        "call op must point at line 2: {call_span:?}"
+    );
+    assert_eq!(
+        call_span.start_offset,
+        "const a = obj.f;\n".len() as u64,
+        "line-2 span must start exactly after the line-1 prefix"
+    );
+    // No line-1 member op may bleed onto line 2, and vice versa.
+    assert!(
+        !ir2.ops
+            .iter()
+            .any(|op| matches!(op.inner, Ir1Op::GetProperty { .. })
+                && op.span.is_some_and(|s| s.start_line == 2)),
+        "no GetProperty may carry a line-2 span"
+    );
+}
+
+#[test]
+fn golden_ir2_unspanned_statement_ops_stay_none() {
+    // No spanned expression kind (call/member family) appears in this
+    // fixture, so every op must honestly report `None` rather than inherit
+    // an unrelated span. Pins the CURRENT contract: literal and binding ops
+    // gain spans only once their AST nodes do (bd-fqlfw.1.1 follow-up).
+    let ir2 = lower_script_to_ir2("const a = 1");
+    assert!(
+        ir2.ops.iter().all(|op| op.span.is_none()),
+        "no op may carry a span in a fixture without call/member expressions"
     );
 }
 

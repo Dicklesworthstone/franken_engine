@@ -67,6 +67,7 @@ fn ir2(source_hash: ContentHash) -> Ir2Module {
         effect: EffectBoundary::Pure,
         required_capability: None,
         flow: None,
+        span: None,
     });
     m
 }
@@ -663,6 +664,7 @@ fn enrichment_ir2_module_with_capability_and_flow() {
             sink_clearance: Label::Secret,
             declassification_required: true,
         }),
+        span: None,
     });
     m.required_capabilities
         .push(CapabilityTag("fs:read".to_string()));

@@ -12927,6 +12927,69 @@ mod tests {
         assert_eq!(result.value, Value::Int(7));
     }
 
+    /// bd-snlhk: the IR3 lowering used to reconstruct the closure free-var
+    /// binding_id -> name map by zipping body first-appearance order against
+    /// the alphabetical `free_vars` list, silently swapping captured bindings
+    /// whenever first-use order diverged from alphabetical order. The fix
+    /// carries `free_var_ids` from IR1, paired index-wise with `free_vars`.
+    /// Two free vars first-used in REVERSE alphabetical order: the old
+    /// heuristic computed alpha - zebra = -7 instead of zebra - alpha = 7.
+    #[test]
+    fn closure_free_vars_bind_correct_names_non_alphabetical_first_use() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                "let zebra = 9;\nlet alpha = 2;\nfunction f() { return zebra - alpha; }\nf();",
+                ParseGoal::Script,
+            )
+            .expect("free-var source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "free-var-order-test.js");
+        let ctx = LoweringContext::new(
+            "trace-free-var-order",
+            "decision-free-var-order",
+            "policy-free-var-order",
+        );
+        let output = lower_ir0_to_ir3(&ir0, &ctx).expect("free-var closure should lower");
+
+        let mut core = quickjs_test_core();
+        let result = core
+            .execute(&output.ir3)
+            .expect("free-var closure should execute");
+        assert_eq!(
+            result.value,
+            Value::Int(7),
+            "zebra - alpha must bind each free var to its own value (bd-snlhk)"
+        );
+    }
+
+    /// bd-snlhk: three captured `let`s where every wrong permutation of the
+    /// (name -> value) binding yields a result different from 100 - 10 - 1.
+    #[test]
+    fn closure_free_vars_bind_three_captured_lets_exactly() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                "let cherry = 100;\nlet banana = 10;\nlet apple = 1;\nfunction g() { return cherry - banana - apple; }\ng();",
+                ParseGoal::Script,
+            )
+            .expect("three-free-var source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "free-var-three-test.js");
+        let ctx = LoweringContext::new(
+            "trace-free-var-three",
+            "decision-free-var-three",
+            "policy-free-var-three",
+        );
+        let output = lower_ir0_to_ir3(&ir0, &ctx).expect("three-free-var closure should lower");
+
+        let mut core = quickjs_test_core();
+        let result = core
+            .execute(&output.ir3)
+            .expect("three-free-var closure should execute");
+        assert_eq!(
+            result.value,
+            Value::Int(89),
+            "cherry - banana - apple must be 89 under exact binding (bd-snlhk)"
+        );
+    }
+
     #[test]
     fn static_method_on_constructor() {
         let tree = CanonicalEs2020Parser

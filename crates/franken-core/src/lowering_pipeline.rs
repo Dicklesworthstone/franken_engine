@@ -2169,15 +2169,11 @@ fn lower_statement_to_ir1_with_flow(
             }
 
             // Identify free variables: bindings created as forward
-            // references that exist in the OUTER scope's lookup.
-            let free_vars: Vec<String> = body_lookup
-                .keys()
-                .filter(|name| {
-                    !pre_lower_names.contains(name.as_str())
-                        && binding_lookup.contains_key(name.as_str())
-                })
-                .cloned()
-                .collect();
+            // references that exist in the OUTER scope's lookup. Capture the
+            // body binding-id alongside the name so the deferred IR3 pass can
+            // resolve them exactly (bd-snlhk; mirrors the engine fix).
+            let (free_vars, free_var_ids) =
+                collect_free_vars(&body_lookup, &pre_lower_names, binding_lookup);
 
             ops.push(Ir1Op::DeclareFunction {
                 name,
@@ -2185,6 +2181,7 @@ fn lower_statement_to_ir1_with_flow(
                 param_names,
                 body_ops,
                 free_vars,
+                free_var_ids,
                 is_generator: func.is_generator,
             });
             ops.push(Ir1Op::Pop);
@@ -2253,6 +2250,7 @@ fn lower_statement_to_ir1_with_flow(
                 param_names,
                 body_ops,
                 free_vars: Vec::new(),
+                free_var_ids: Vec::new(),
                 is_generator: false,
             });
 
@@ -2380,6 +2378,7 @@ fn lower_statement_to_ir1_with_flow(
                     param_names: m_param_names,
                     body_ops: m_body_ops,
                     free_vars: Vec::new(),
+                    free_var_ids: Vec::new(),
                     is_generator: false,
                 });
                 if let Some(method_binding) = method_super_binding {
@@ -2536,6 +2535,28 @@ fn lower_switch_to_ir1(
 
     ops.push(Ir1Op::Label { id: end_label });
     Ok(())
+}
+
+/// Collect free variables of a function body: names present in the body's
+/// binding lookup that were NOT declared by the body itself (params /
+/// pre-lowered names) but DO resolve in the enclosing scope. Returns the
+/// names paired index-wise with their body-scope binding ids so downstream
+/// passes get the exact id->name mapping instead of reconstructing it
+/// heuristically (bd-snlhk; mirrors the engine's bd-g0aok fix).
+fn collect_free_vars(
+    body_lookup: &BTreeMap<String, BindingId>,
+    pre_lower_names: &BTreeSet<String>,
+    outer_lookup: &BTreeMap<String, BindingId>,
+) -> (Vec<String>, Vec<BindingId>) {
+    let mut names = Vec::new();
+    let mut ids = Vec::new();
+    for (name, id) in body_lookup.iter() {
+        if !pre_lower_names.contains(name.as_str()) && outer_lookup.contains_key(name.as_str()) {
+            names.push(name.clone());
+            ids.push(*id);
+        }
+    }
+    (names, ids)
 }
 
 fn binding_kind_for_variable_declaration(kind: VariableDeclarationKind) -> BindingKind {
@@ -2751,7 +2772,8 @@ pub fn lower_ir2_to_ir3(
     let mut iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
     let mut pending_jumps = Vec::<PendingJump>::new();
     let mut catch_entry_labels = BTreeSet::<u32>::new();
-    // Deferred function bodies: (body_ir1_ops, param_names, name, free_vars, is_generator).
+    // Deferred function bodies:
+    // (body_ir1_ops, param_names, name, free_vars, free_var_ids, is_generator).
     // After the main code + Halt, each body is lowered into the instruction
     // stream and registered in function_table.  Index 0 is reserved for main.
     #[allow(clippy::type_complexity)]
@@ -2760,6 +2782,7 @@ pub fn lower_ir2_to_ir3(
         Vec<String>,
         Option<String>,
         Vec<String>,
+        Vec<BindingId>,
         bool,
     )> = Vec::new();
 
@@ -3535,6 +3558,7 @@ pub fn lower_ir2_to_ir3(
                 param_names,
                 body_ops,
                 free_vars,
+                free_var_ids,
                 is_generator,
             } => {
                 let dst = *binding_registers
@@ -3569,6 +3593,7 @@ pub fn lower_ir2_to_ir3(
                         param_names.clone(),
                         Some(name.clone()),
                         free_vars.clone(),
+                        free_var_ids.clone(),
                         *is_generator,
                     ));
                     if *is_generator {
@@ -3595,6 +3620,7 @@ pub fn lower_ir2_to_ir3(
                 param_names,
                 body_ops,
                 free_vars,
+                free_var_ids,
                 is_generator,
             } => {
                 let dst = alloc_register(&mut register_cursor);
@@ -3624,6 +3650,7 @@ pub fn lower_ir2_to_ir3(
                     param_names.clone(),
                     name.clone(),
                     free_vars.clone(),
+                    free_var_ids.clone(),
                     *is_generator,
                 ));
                 if *is_generator {
@@ -3976,11 +4003,11 @@ pub fn lower_ir2_to_ir3(
     // body can push new entries without conflicting with the borrow.
     let mut deferred_idx = 0;
     while deferred_idx < deferred_functions.len() {
-        let (body_ops, param_names, fn_name, free_vars, fn_is_generator) =
+        let (body_ops, param_names, fn_name, free_vars, free_var_ids, fn_is_generator) =
             deferred_functions[deferred_idx].clone();
         deferred_idx += 1;
-        let (body_ops, param_names, fn_name, free_vars) =
-            (&body_ops, &param_names, &fn_name, &free_vars);
+        let (body_ops, param_names, fn_name, free_vars, free_var_ids) =
+            (&body_ops, &param_names, &fn_name, &free_vars, &free_var_ids);
         let entry = ir3.instructions.len() as u32;
         let arity = param_names.len() as u32;
         let mut fn_reg: Reg = 0;
@@ -4013,58 +4040,19 @@ pub fn lower_ir2_to_ir3(
             }
         }
 
-        // Build a set of binding_ids that correspond to free variables.
-        // These will use scope-chain lookup instead of register access.
-        let free_var_binding_ids: BTreeSet<BindingId> = {
-            let param_count = param_names.len() as BindingId;
-            let mut fv_ids = BTreeSet::new();
-            // The body lowering assigned binding_ids starting from 0
-            // for params, then incrementing for each new identifier.
-            // Free variables are identifiers that got forward-reference
-            // bindings (binding_id >= param_count) with names in free_vars.
-            // We scan body_ops to find LoadBinding/StoreBinding with
-            // binding_id >= param_count and trust those are free vars.
-            if !free_vars.is_empty() {
-                for bop in body_ops.iter() {
-                    match bop {
-                        Ir1Op::LoadBinding { binding_id } | Ir1Op::StoreBinding { binding_id }
-                            if *binding_id >= param_count =>
-                        {
-                            fv_ids.insert(*binding_id);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            fv_ids
-        };
-
-        // Build binding_id → name map for free variables by scanning
-        // the body ops for the first LoadBinding of each free-var id.
-        // The name comes from the order of appearance matched against
-        // the free_vars list.
-        let fv_id_to_name: BTreeMap<BindingId, String> = {
-            let mut map = BTreeMap::new();
-            if !free_vars.is_empty() {
-                // The body lowering creates forward-reference bindings
-                // in order of first appearance.  Match them up.
-                let mut seen_ids = Vec::new();
-                for bop in body_ops.iter() {
-                    if let Ir1Op::LoadBinding { binding_id } = bop
-                        && free_var_binding_ids.contains(binding_id)
-                        && !seen_ids.contains(binding_id)
-                    {
-                        seen_ids.push(*binding_id);
-                    }
-                }
-                for (idx, bid) in seen_ids.iter().enumerate() {
-                    if let Some(name) = free_vars.get(idx) {
-                        map.insert(*bid, name.clone());
-                    }
-                }
-            }
-            map
-        };
+        // Exact free-variable binding_id -> name mapping, carried from IR1
+        // via `free_var_ids` (paired index-wise with `free_vars` by
+        // `collect_free_vars`). Replaces the old first-appearance zip
+        // heuristic, which silently mis-bound names whenever the body's
+        // first-use order diverged from the alphabetical `free_vars` order
+        // (recursion, captured `let`s, multi-free-var closures) and swept
+        // body locals into the free-var set (bd-snlhk; the engine shipped
+        // the same fix as bd-g0aok).
+        let fv_id_to_name: BTreeMap<BindingId, String> = free_var_ids
+            .iter()
+            .zip(free_vars.iter())
+            .map(|(id, name)| (*id, name.clone()))
+            .collect();
 
         // Pre-scan: detect if any child function captures free variables.
         // If so, this function must mirror its local bindings to the scope
@@ -4483,6 +4471,7 @@ pub fn lower_ir2_to_ir3(
                     param_names: inner_params,
                     name: inner_name,
                     free_vars: inner_fv,
+                    free_var_ids: inner_fv_ids,
                     is_generator: inner_gen,
                 } if !inner_body.is_empty() => {
                     let dst = *fn_binding_regs
@@ -4494,6 +4483,7 @@ pub fn lower_ir2_to_ir3(
                         inner_params.clone(),
                         Some(inner_name.clone()),
                         inner_fv.clone(),
+                        inner_fv_ids.clone(),
                         *inner_gen,
                     ));
                     if *inner_gen {
@@ -4516,6 +4506,7 @@ pub fn lower_ir2_to_ir3(
                     param_names: inner_params,
                     name: inner_name,
                     free_vars: inner_fv,
+                    free_var_ids: inner_fv_ids,
                     is_generator: inner_gen,
                 } => {
                     let dst = alloc_register(&mut fn_reg);
@@ -4525,6 +4516,7 @@ pub fn lower_ir2_to_ir3(
                         inner_params.clone(),
                         inner_name.clone(),
                         inner_fv.clone(),
+                        inner_fv_ids.clone(),
                         *inner_gen,
                     ));
                     if *inner_gen {
@@ -5097,6 +5089,7 @@ fn lower_class_expression_to_ir1(
         param_names,
         body_ops,
         free_vars: Vec::new(),
+        free_var_ids: Vec::new(),
         is_generator: false,
     });
     ops.push(Ir1Op::StoreBinding {
@@ -5220,6 +5213,7 @@ fn lower_class_expression_to_ir1(
             param_names: method_param_names,
             body_ops: method_body_ops,
             free_vars: Vec::new(),
+            free_var_ids: Vec::new(),
             is_generator: false,
         });
         if let Some(method_binding) = method_super_binding {
@@ -6539,18 +6533,14 @@ fn lower_expression_to_ir1(
                 body_ops.push(Ir1Op::Return);
             }
             let pre_lower_names: BTreeSet<String> = param_names.iter().cloned().collect();
-            let arrow_free_vars: Vec<String> = body_lookup
-                .keys()
-                .filter(|n| {
-                    !pre_lower_names.contains(n.as_str()) && binding_lookup.contains_key(n.as_str())
-                })
-                .cloned()
-                .collect();
+            let (arrow_free_vars, arrow_free_var_ids) =
+                collect_free_vars(&body_lookup, &pre_lower_names, binding_lookup);
             ops.push(Ir1Op::CreateFunction {
                 name: None,
                 param_names,
                 body_ops,
                 free_vars: arrow_free_vars,
+                free_var_ids: arrow_free_var_ids,
                 is_generator: false,
             });
         }
@@ -6601,18 +6591,14 @@ fn lower_expression_to_ir1(
                 });
                 body_ops.push(Ir1Op::Return);
             }
-            let fn_free_vars: Vec<String> = body_lookup
-                .keys()
-                .filter(|n| {
-                    !pre_lower_names.contains(n.as_str()) && binding_lookup.contains_key(n.as_str())
-                })
-                .cloned()
-                .collect();
+            let (fn_free_vars, fn_free_var_ids) =
+                collect_free_vars(&body_lookup, &pre_lower_names, binding_lookup);
             ops.push(Ir1Op::CreateFunction {
                 name: name.clone(),
                 param_names,
                 body_ops,
                 free_vars: fn_free_vars,
+                free_var_ids: fn_free_var_ids,
                 is_generator: *is_generator,
             });
         }

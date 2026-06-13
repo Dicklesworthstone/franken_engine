@@ -494,6 +494,10 @@ pub enum Ir1Op {
         /// the function body (free variables / upvalues).  The IR3
         /// lowering uses these to emit scope-chain capture instructions.
         free_vars: Vec<String>,
+        /// Body-scope binding ids paired index-wise with `free_vars`
+        /// (bd-snlhk): carries the exact id->name mapping so the deferred
+        /// IR3 pass never reconstructs it heuristically.
+        free_var_ids: Vec<BindingId>,
         /// True when the source function is a generator (`function*`).
         is_generator: bool,
     },
@@ -505,6 +509,9 @@ pub enum Ir1Op {
         body_ops: Vec<Ir1Op>,
         /// Free variables from enclosing scope (see DeclareFunction).
         free_vars: Vec<String>,
+        /// Body-scope binding ids paired index-wise with `free_vars`
+        /// (see DeclareFunction; bd-snlhk).
+        free_var_ids: Vec<BindingId>,
         /// True when the source function is a generator (`function*`).
         is_generator: bool,
     },
@@ -819,6 +826,7 @@ impl Ir1Op {
                 param_names,
                 body_ops,
                 free_vars,
+                free_var_ids,
                 is_generator,
             } => {
                 map.insert(
@@ -853,6 +861,15 @@ impl Ir1Op {
                     ),
                 );
                 map.insert(
+                    "free_var_ids".to_string(),
+                    CanonicalValue::Array(
+                        free_var_ids
+                            .iter()
+                            .map(|id| CanonicalValue::U64(u64::from(*id)))
+                            .collect(),
+                    ),
+                );
+                map.insert(
                     "is_generator".to_string(),
                     CanonicalValue::Bool(*is_generator),
                 );
@@ -862,6 +879,7 @@ impl Ir1Op {
                 param_names,
                 body_ops,
                 free_vars,
+                free_var_ids,
                 is_generator,
             } => {
                 map.insert(
@@ -892,6 +910,15 @@ impl Ir1Op {
                         free_vars
                             .iter()
                             .map(|s| CanonicalValue::String(s.clone()))
+                            .collect(),
+                    ),
+                );
+                map.insert(
+                    "free_var_ids".to_string(),
+                    CanonicalValue::Array(
+                        free_var_ids
+                            .iter()
+                            .map(|id| CanonicalValue::U64(u64::from(*id)))
                             .collect(),
                     ),
                 );

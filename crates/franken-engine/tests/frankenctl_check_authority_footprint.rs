@@ -53,11 +53,21 @@ fn check_reports_span_accurate_ambient_authority_read() {
     );
     assert_eq!(report["analyzable"], true);
 
+    // E5.T4 completeness marker: lowering fail-closed at the first ambient
+    // access, so the analysis is explicitly bounded (not silently exhaustive).
+    assert_eq!(
+        report["analysis_completeness"], "bounded_at_first_violation",
+        "analysis is explicitly bounded at the first ambient violation"
+    );
+
     let findings = report["findings"].as_array().expect("findings array");
     assert_eq!(findings.len(), 1, "first ambient violation is reported");
     assert_eq!(findings[0]["error_code"], "FE-CAP-0001");
     assert_eq!(findings[0]["accessor"], "process.env");
     assert_eq!(findings[0]["implied_capability"], "EnvRead");
+    // E5.T4 per-finding confidence marker: this is an enforcer-mirrored
+    // determination, never a heuristic guess.
+    assert_eq!(findings[0]["confidence"], "definite");
     // Span-accurate: the diagnostic points at line 2 (`process.env`).
     assert_eq!(
         findings[0]["location"]["start_line"], 2,
@@ -158,6 +168,10 @@ fn check_unparseable_source_fails_closed_exit_two() {
     let report: serde_json::Value =
         serde_json::from_str(&stdout_of(&output)).expect("json report even when fail-closed");
     assert_eq!(report["analyzable"], false);
+    assert_eq!(
+        report["analysis_completeness"], "unanalyzable",
+        "unanalyzable source is explicitly marked, never silently passed"
+    );
     assert!(
         report["fail_closed_reason"].is_string(),
         "fail_closed_reason explains why analysis refused"

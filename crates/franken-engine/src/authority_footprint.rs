@@ -119,6 +119,25 @@ impl CheckFindingKind {
     }
 }
 
+/// Soundness confidence of a finding (E5.T4 wording discipline).
+///
+/// The analyzer is intentionally binary: it emits a finding only when the
+/// runtime enforcer (`lowering_pipeline::lower_ir0_to_ir3`) makes the identical
+/// determination — it never guesses. Anything it cannot decide is fail-closed
+/// at the report level (`analysis_completeness`), not down-graded to a
+/// low-confidence finding. So every emitted finding is [`Definite`]; the variant
+/// is recorded explicitly on each finding so output can never be misread as a
+/// heuristic guess.
+///
+/// [`Definite`]: FindingConfidence::Definite
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FindingConfidence {
+    /// The runtime enforcer makes the identical determination from the same
+    /// source of truth; this is not a heuristic inference.
+    Definite,
+}
+
 /// A single `check` finding, span-accurate where the source carries a span.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckFinding {
@@ -126,6 +145,9 @@ pub struct CheckFinding {
     pub error_code: String,
     /// Finding class.
     pub kind: CheckFindingKind,
+    /// Soundness confidence — always [`FindingConfidence::Definite`]; recorded
+    /// per-finding so the output cannot be read as a heuristic guess (E5.T4).
+    pub confidence: FindingConfidence,
     /// Human-readable diagnostic message.
     pub message: String,
     /// The offending accessor as written in source (`process.env`, `eval`, …),
@@ -181,6 +203,34 @@ impl CheckOutcome {
     }
 }
 
+/// Explicit completeness marker (E5.T4): how much of the file the analyzer
+/// actually covered. The footprint must never be read as exhaustive when it is
+/// not, so the boundary is surfaced rather than implied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnalysisCompleteness {
+    /// The whole file lowered to IR2; the footprint is exhaustive for the
+    /// supported syntax of this file.
+    Complete,
+    /// Lowering fail-closed at the first ambient-authority violation; constructs
+    /// *after* that point were not analyzed. Re-run after resolving it to
+    /// surface any further footprint.
+    BoundedAtFirstViolation,
+    /// The file could not be analyzed at all (parse error / unsupported
+    /// construct); no footprint is asserted.
+    Unanalyzable,
+}
+
+impl AnalysisCompleteness {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Complete => "complete",
+            Self::BoundedAtFirstViolation => "bounded_at_first_violation",
+            Self::Unanalyzable => "unanalyzable",
+        }
+    }
+}
+
 /// The full per-file authority-footprint report. Serialized form is a pure
 /// function of the inputs (no wall-clock / host facts) so `--format json` is
 /// deterministic and `report_sha256` content-addresses the body.
@@ -191,6 +241,8 @@ pub struct AuthorityFootprintReport {
     pub source_sha256: String,
     pub parse_goal: String,
     pub disclaimer: String,
+    /// Explicit boundary of what was analyzed (E5.T4 completeness marker).
+    pub analysis_completeness: AnalysisCompleteness,
     /// Whether the file could be analyzed at all. `false` ⇒ fail-closed.
     pub analyzable: bool,
     /// Why analysis failed closed, when `!analyzable`.
@@ -233,12 +285,21 @@ impl AuthorityFootprintReport {
         let mut out = String::new();
         out.push_str(&format!("authority footprint: {}\n", self.source_path));
         out.push_str(&format!("  ({})\n", self.disclaimer));
+        out.push_str(&format!(
+            "  completeness: {}\n",
+            self.analysis_completeness.as_str()
+        ));
         if !self.analyzable {
             out.push_str(&format!(
                 "  status: UNANALYZABLE (fail-closed) — {}\n",
                 self.fail_closed_reason.as_deref().unwrap_or("unknown")
             ));
             return out;
+        }
+        if self.analysis_completeness == AnalysisCompleteness::BoundedAtFirstViolation {
+            out.push_str(
+                "  note: analysis bounded at the first ambient-authority violation; constructs after it are unanalyzed — re-run after resolving it.\n",
+            );
         }
         if self.required_capabilities.is_empty() {
             out.push_str("  minimal capabilities: <none> (pure computation)\n");
@@ -341,6 +402,11 @@ pub fn analyze_authority_footprint(
         source_sha256: source_sha256.clone(),
         parse_goal: parse_goal.as_str().to_string(),
         disclaimer: AUTHORITY_FOOTPRINT_DISCLAIMER.to_string(),
+        analysis_completeness: if analyzable {
+            AnalysisCompleteness::Complete
+        } else {
+            AnalysisCompleteness::Unanalyzable
+        },
         analyzable,
         fail_closed_reason: None,
         required_capabilities: Vec::new(),
@@ -412,11 +478,14 @@ fn report_from_ambient_violation(
     let capability = capability_for_effect(required_effect);
     let location = span.map(SourceLocation::from);
 
+    // Lowering fail-closed at this access, so anything after it is unanalyzed.
+    report.analysis_completeness = AnalysisCompleteness::BoundedAtFirstViolation;
     report.findings.push(CheckFinding {
         error_code: CheckFindingKind::AmbientAuthorityViolation
             .error_code()
             .to_string(),
         kind: CheckFindingKind::AmbientAuthorityViolation,
+        confidence: FindingConfidence::Definite,
         message: format!(
             "ambient access to `{accessor}` is rejected at the lowering boundary; it requires the `{required_effect}` effect ({capability}), which no ambient identifier may exercise"
         ),
@@ -478,6 +547,7 @@ fn report_from_clean_lowering(
         report.findings.push(CheckFinding {
             error_code: CheckFindingKind::UnauthorizedFlow.error_code().to_string(),
             kind: CheckFindingKind::UnauthorizedFlow,
+            confidence: FindingConfidence::Definite,
             message: format!(
                 "value labeled {} reaches a sink with clearance {}: {} ({})",
                 denied.source_label, denied.sink_clearance, denied.reason, denied.error_code
@@ -493,6 +563,7 @@ fn report_from_clean_lowering(
                 .error_code()
                 .to_string(),
             kind: CheckFindingKind::DeclassificationRequired,
+            confidence: FindingConfidence::Definite,
             message: format!(
                 "value labeled {} reaches a sink with clearance {}: permitted only under a signed declassification receipt (obligation {})",
                 obligation.source_label, obligation.sink_clearance, obligation.obligation_id
@@ -621,5 +692,100 @@ mod tests {
         assert_eq!(report.outcome(), CheckOutcome::Unanalyzable);
         assert_eq!(report.outcome().exit_code(), 2);
         assert!(report.fail_closed_reason.is_some());
+    }
+
+    // -- E5.T4 wording / soundness discipline -------------------------------
+
+    /// Golden: the disclaimer wording is frozen and bounded. If this changes,
+    /// the change is deliberate and must keep the claim within evidence.
+    #[test]
+    fn disclaimer_wording_is_golden() {
+        assert_eq!(
+            AUTHORITY_FOOTPRINT_DISCLAIMER,
+            "inferred authority footprint for SUPPORTED syntax; not a proof of noninterference for arbitrary JS/TS. Unanalyzable constructs fail closed."
+        );
+    }
+
+    /// No dynamic, claim-bearing output (finding messages, the least-authority
+    /// suggestion, or a fail-closed reason) may positively assert a
+    /// noninterference proof for arbitrary JS/TS or use absolute-superiority
+    /// language. The disclaimer is excluded here — it is golden-tested
+    /// separately and *denies* such a claim ("not a proof of noninterference").
+    #[test]
+    fn no_dynamic_output_overclaims_a_noninterference_proof() {
+        // Positive over-claim phrases an "authority footprint" must never make.
+        let forbidden = [
+            "proof of noninterference",
+            "complete security type-check",
+            "guarantees",
+            "guaranteed",
+            "provably secure",
+            "always safe",
+            "category-defining",
+        ];
+        let sources = [
+            "const secret = process.env.SECRET_KEY;\n", // ambient violation
+            "const a = 1;\nconst b = a + 2;\n",         // clean
+            "const x = \"unterminated;\n",              // fail-closed
+            "const fs = require(\"fs\");\n",            // ambient (fs)
+        ];
+        for source in sources {
+            let report = analyze_authority_footprint(source, "f.js", ParseGoal::Script);
+            let mut blobs = vec![report.least_authority_suggestion.clone()];
+            blobs.extend(report.findings.iter().map(|f| f.message.clone()));
+            if let Some(reason) = &report.fail_closed_reason {
+                blobs.push(reason.clone());
+            }
+            for blob in &blobs {
+                let lower = blob.to_ascii_lowercase();
+                for phrase in &forbidden {
+                    assert!(
+                        !lower.contains(phrase),
+                        "over-claim phrase `{phrase}` found in output for `{source}`: {blob}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Completeness + per-finding confidence markers are explicit for each
+    /// analysis outcome: the footprint is never silently read as exhaustive.
+    #[test]
+    fn completeness_and_confidence_markers_are_explicit() {
+        // Ambient violation → analysis is bounded at the first violation, and
+        // the finding is a definite (enforcer-mirrored) determination.
+        let ambient = analyze_authority_footprint(
+            "const secret = process.env.TOKEN;\n",
+            "f.js",
+            ParseGoal::Script,
+        );
+        assert_eq!(
+            ambient.analysis_completeness,
+            AnalysisCompleteness::BoundedAtFirstViolation
+        );
+        assert!(
+            ambient
+                .findings
+                .iter()
+                .all(|f| f.confidence == FindingConfidence::Definite),
+            "every finding carries a definite confidence marker"
+        );
+
+        // Clean lowering → complete analysis for the supported syntax.
+        let clean = analyze_authority_footprint(
+            "const a = 1;\nconst b = a + 2;\n",
+            "f.js",
+            ParseGoal::Script,
+        );
+        assert_eq!(clean.analysis_completeness, AnalysisCompleteness::Complete);
+
+        // Fail-closed → unanalyzable, never silently passed.
+        let broken =
+            analyze_authority_footprint("const x = \"unterminated;\n", "f.js", ParseGoal::Script);
+        assert_eq!(
+            broken.analysis_completeness,
+            AnalysisCompleteness::Unanalyzable
+        );
+        assert!(!broken.analyzable);
     }
 }

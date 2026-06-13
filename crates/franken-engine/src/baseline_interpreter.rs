@@ -2581,7 +2581,9 @@ enum FinallyMode {
 /// consumed locally.
 #[derive(Debug, Clone)]
 enum AbruptCompletion {
-    Exception(Value),
+    /// A thrown value plus its IFC label (bd-l0d6z): the label must survive
+    /// suspension so a later catch binding inherits the thrown value's taint.
+    Exception(Value, Label),
     Return(Value),
 }
 
@@ -2774,6 +2776,9 @@ struct CallFrame {
     /// Caller exception state saved across the call so callee control flow
     /// cannot clobber an outer in-flight abrupt completion.
     saved_pending_exception: Option<Value>,
+    /// IFC label for `saved_pending_exception` (bd-l0d6z): the thrown value's
+    /// label must survive call-boundary save/restore.
+    saved_pending_exception_label: Label,
     /// Caller return state saved for the same reason.
     saved_pending_return: Option<Value>,
     /// Count of suspended abrupt completions before entering the callee.
@@ -3899,6 +3904,7 @@ struct ModuleExecutionSnapshot {
     register_base: usize,
     catch_frames: Vec<CatchFrame>,
     pending_exception: Option<Value>,
+    pending_exception_label: Label,
     pending_return: Option<Value>,
     suspended_abrupt_completions: Vec<AbruptCompletion>,
     finally_modes: Vec<FinallyMode>,
@@ -4229,6 +4235,12 @@ pub struct InterpreterCore {
     /// A pending exception value during unwinding (set by `Throw`,
     /// consumed by `EnterCatch` or re-thrown by `EndFinally`).
     pending_exception: Option<Value>,
+    /// IFC label shadowing `pending_exception` (bd-l0d6z, fifth member of the
+    /// bd-n2mjy/bd-0zybl under-tainting family): set wherever a thrown value
+    /// becomes pending, consumed by `EnterCatch` so the catch binding inherits
+    /// the thrown value's label. Meaningful only while `pending_exception` is
+    /// `Some`; reset to `Public` when the exception is cleared.
+    pending_exception_label: Label,
     /// A pending return value during unwinding through finally blocks.
     pending_return: Option<Value>,
     /// Saved outer abrupt completion state that was temporarily suspended by a
@@ -4367,6 +4379,7 @@ impl InterpreterCore {
             register_base: 0,
             catch_frames: Vec::new(),
             pending_exception: None,
+            pending_exception_label: Label::Public,
             pending_return: None,
             suspended_abrupt_completions: Vec::new(),
             finally_modes: Vec::new(),
@@ -4936,6 +4949,7 @@ impl InterpreterCore {
             register_base: self.register_base,
             catch_frames: self.catch_frames.clone(),
             pending_exception: self.pending_exception.clone(),
+            pending_exception_label: self.pending_exception_label.clone(),
             pending_return: self.pending_return.clone(),
             suspended_abrupt_completions: self.suspended_abrupt_completions.clone(),
             finally_modes: self.finally_modes.clone(),
@@ -4952,6 +4966,7 @@ impl InterpreterCore {
         self.register_base = snapshot.register_base;
         self.catch_frames = snapshot.catch_frames;
         self.pending_exception = snapshot.pending_exception;
+        self.pending_exception_label = snapshot.pending_exception_label;
         self.pending_return = snapshot.pending_return;
         self.suspended_abrupt_completions = snapshot.suspended_abrupt_completions;
         self.finally_modes = snapshot.finally_modes;
@@ -4971,6 +4986,7 @@ impl InterpreterCore {
         self.register_base = 0;
         self.catch_frames.clear();
         self.pending_exception = None;
+        self.pending_exception_label = Label::Public;
         self.pending_return = None;
         self.suspended_abrupt_completions.clear();
         self.finally_modes.clear();
@@ -7293,6 +7309,7 @@ impl InterpreterCore {
             Ok(None)
         } else {
             self.pending_exception = None;
+            self.pending_exception_label = Label::Public;
             self.pending_return = None;
             self.suspended_abrupt_completions.clear();
             self.finally_modes.clear();
@@ -7309,6 +7326,7 @@ impl InterpreterCore {
         self.persist_closure_capture_updates(frame);
         self.restore_scope_chain_for_frame(frame);
         self.pending_exception = frame.saved_pending_exception.clone();
+        self.pending_exception_label = frame.saved_pending_exception_label.clone();
         self.pending_return = frame.saved_pending_return.clone();
     }
 
@@ -7584,6 +7602,10 @@ impl InterpreterCore {
         self.suspend_current_abrupt_completion();
         self.pending_return = None;
         self.pending_exception = Some(error_value.clone());
+        // Async rejection values do not yet carry IFC labels across the
+        // promise boundary (tracked by the bd-ooaka family); the re-entry
+        // here is engine-mediated, so the label is explicitly Public.
+        self.pending_exception_label = Label::Public;
         if let Some(frame) = self.pop_exception_target_frame() {
             self.ip = frame.catch_target;
             Ok(false)
@@ -7643,7 +7665,10 @@ impl InterpreterCore {
         }
     }
 
-    fn unwind_call_stack_to(&mut self, target_depth: usize) -> (Option<Value>, Option<Value>) {
+    fn unwind_call_stack_to(
+        &mut self,
+        target_depth: usize,
+    ) -> (Option<(Value, Label)>, Option<Value>) {
         let mut restored_pending_exception = None;
         let mut restored_pending_return = None;
         let mut restored_suspended_abrupt_depth = None;
@@ -7653,7 +7678,8 @@ impl InterpreterCore {
                 self.register_base = frame.register_base;
                 self.finally_modes.truncate(frame.saved_finally_mode_depth);
                 self.restore_scope_chain_for_frame(&frame);
-                restored_pending_exception = frame.saved_pending_exception;
+                let label = frame.saved_pending_exception_label;
+                restored_pending_exception = frame.saved_pending_exception.map(|v| (v, label));
                 restored_pending_return = frame.saved_pending_return;
                 restored_suspended_abrupt_depth = Some(frame.saved_suspended_abrupt_depth);
             }
@@ -7693,7 +7719,8 @@ impl InterpreterCore {
     fn take_current_abrupt_completion(&mut self) -> Option<AbruptCompletion> {
         if let Some(exception) = self.pending_exception.take() {
             self.pending_return = None;
-            Some(AbruptCompletion::Exception(exception))
+            let label = std::mem::replace(&mut self.pending_exception_label, Label::Public);
+            Some(AbruptCompletion::Exception(exception, label))
         } else {
             self.pending_return.take().map(AbruptCompletion::Return)
         }
@@ -7701,7 +7728,7 @@ impl InterpreterCore {
 
     fn suspend_abrupt_completion(
         &mut self,
-        pending_exception: Option<Value>,
+        pending_exception: Option<(Value, Label)>,
         pending_return: Option<Value>,
     ) {
         debug_assert!(
@@ -7710,16 +7737,16 @@ impl InterpreterCore {
         );
 
         match (pending_exception, pending_return) {
-            (Some(exception), None) => self
+            (Some((exception, label)), None) => self
                 .suspended_abrupt_completions
-                .push(AbruptCompletion::Exception(exception)),
+                .push(AbruptCompletion::Exception(exception, label)),
             (None, Some(return_val)) => self
                 .suspended_abrupt_completions
                 .push(AbruptCompletion::Return(return_val)),
             (None, None) => {}
-            (Some(exception), Some(return_val)) => {
+            (Some((exception, label)), Some(return_val)) => {
                 self.suspended_abrupt_completions
-                    .push(AbruptCompletion::Exception(exception));
+                    .push(AbruptCompletion::Exception(exception, label));
                 self.suspended_abrupt_completions
                     .push(AbruptCompletion::Return(return_val));
             }
@@ -7739,8 +7766,9 @@ impl InterpreterCore {
 
         if let Some(completion) = self.suspended_abrupt_completions.pop() {
             match completion {
-                AbruptCompletion::Exception(exception) => {
+                AbruptCompletion::Exception(exception, label) => {
                     self.pending_exception = Some(exception);
+                    self.pending_exception_label = label;
                 }
                 AbruptCompletion::Return(return_val) => {
                     self.pending_return = Some(return_val);
@@ -8297,6 +8325,9 @@ impl InterpreterCore {
                     self.suspend_current_abrupt_completion();
                     self.pending_return = None;
                     self.pending_exception = Some(thrown.clone());
+                    // Engine-constructed error values (native faults surfaced
+                    // as JS-catchable errors) carry no data-flow taint.
+                    self.pending_exception_label = Label::Public;
                     match self.pop_exception_target_frame() {
                         Some(frame) => {
                             self.ip = frame.catch_target;
@@ -8507,9 +8538,13 @@ impl InterpreterCore {
                             let Some(thrown) = self.pending_exception.clone() else {
                                 return Err(err);
                             };
+                            // Same exception, same label: capture before the
+                            // suspend resets the shadow (bd-l0d6z).
+                            let thrown_label = self.pending_exception_label.clone();
                             self.suspend_current_abrupt_completion();
                             self.pending_return = None;
                             self.pending_exception = Some(thrown.clone());
+                            self.pending_exception_label = thrown_label;
                             if let Some(frame) = self.pop_exception_target_frame() {
                                 self.ip = frame.catch_target;
                             } else {
@@ -8604,6 +8639,14 @@ impl InterpreterCore {
                     if let Value::BuiltinFunction(builtin) = &callee_val {
                         let result = self.dispatch_builtin_function(module, builtin, args, None)?;
                         self.write_reg(dst, result)?;
+                        // IFC: builtin results derive entirely from the arg
+                        // registers (incl. any callback lanes the builtin runs,
+                        // which see only values seeded from these args), so the
+                        // dst label is the join of the arg labels — mirrors the
+                        // HostCall propagation (bd-ooaka.1, fourth member of
+                        // the bd-n2mjy/bd-0zybl under-tainting family).
+                        let args_label = self.join_arg_range_label(args)?;
+                        self.set_register_label(dst, args_label)?;
                         self.ip += 1;
                         continue;
                     }
@@ -8756,6 +8799,10 @@ impl InterpreterCore {
                             super_value: Value::Undefined,
                             construct_this: None,
                             saved_pending_exception: self.pending_exception.take(),
+                            saved_pending_exception_label: std::mem::replace(
+                                &mut self.pending_exception_label,
+                                Label::Public,
+                            ),
                             saved_pending_return: self.pending_return.take(),
                             saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
                             saved_finally_mode_depth: self.finally_modes.len(),
@@ -8927,6 +8974,10 @@ impl InterpreterCore {
                                 super_value: Value::Undefined,
                                 construct_this: None,
                                 saved_pending_exception: self.pending_exception.take(),
+                                saved_pending_exception_label: std::mem::replace(
+                                    &mut self.pending_exception_label,
+                                    Label::Public,
+                                ),
                                 saved_pending_return: self.pending_return.take(),
                                 saved_suspended_abrupt_depth: self
                                     .suspended_abrupt_completions
@@ -9021,6 +9072,17 @@ impl InterpreterCore {
                             Some(receiver_val),
                         )?;
                         self.write_reg(dst, result)?;
+                        // IFC: a receiver-aware builtin's result derives from
+                        // the receiver and the arg registers (e.g. a Secret
+                        // array's reduce/map/from result is at least Secret) —
+                        // join both onto dst (bd-ooaka.1; the callback mini-
+                        // lanes see only values seeded from these registers,
+                        // so this join is a sound upper bound for anything
+                        // they compute).
+                        let result_label = self
+                            .join_arg_range_label(args)?
+                            .join(self.get_register_label(receiver)?);
+                        self.set_register_label(dst, result_label)?;
                         self.ip += 1;
                         continue;
                     }
@@ -9143,6 +9205,10 @@ impl InterpreterCore {
                             super_value: Value::Undefined,
                             construct_this: None,
                             saved_pending_exception: self.pending_exception.take(),
+                            saved_pending_exception_label: std::mem::replace(
+                                &mut self.pending_exception_label,
+                                Label::Public,
+                            ),
                             saved_pending_return: self.pending_return.take(),
                             saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
                             saved_finally_mode_depth: self.finally_modes.len(),
@@ -9263,6 +9329,10 @@ impl InterpreterCore {
                         super_value: Value::Undefined,
                         construct_this: None,
                         saved_pending_exception: self.pending_exception.take(),
+                        saved_pending_exception_label: std::mem::replace(
+                            &mut self.pending_exception_label,
+                            Label::Public,
+                        ),
                         saved_pending_return: self.pending_return.take(),
                         saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
                         saved_finally_mode_depth: self.finally_modes.len(),
@@ -10071,6 +10141,10 @@ impl InterpreterCore {
                                 super_value: Value::Undefined,
                                 construct_this: Some(this_val.clone()),
                                 saved_pending_exception: self.pending_exception.take(),
+                                saved_pending_exception_label: std::mem::replace(
+                                    &mut self.pending_exception_label,
+                                    Label::Public,
+                                ),
                                 saved_pending_return: self.pending_return.take(),
                                 saved_suspended_abrupt_depth: self
                                     .suspended_abrupt_completions
@@ -10221,9 +10295,16 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::Throw { value } => {
                     let thrown = self.read_reg(value)?;
+                    // IFC: the thrown value's confidentiality travels with the
+                    // exception (bd-l0d6z, fifth member of the bd-n2mjy /
+                    // bd-0zybl under-tainting family). Capture the source
+                    // register's label so `EnterCatch` re-establishes it on
+                    // the catch binding instead of leaving a stale label.
+                    let thrown_label = self.get_register_label(value)?.clone();
                     self.suspend_current_abrupt_completion();
                     self.pending_return = None;
                     self.pending_exception = Some(thrown.clone());
+                    self.pending_exception_label = thrown_label;
                     // Walk the catch frame stack to find the nearest valid handler.
                     // Use rposition to find the topmost matching frame by index,
                     // then truncate to remove it and any frames above it — but
@@ -10244,8 +10325,14 @@ impl InterpreterCore {
                 Ir3Instruction::EnterCatch { dst } => {
                     // Load the pending exception into the catch binding register.
                     let exception = self.pending_exception.take().unwrap_or(Value::Undefined);
+                    // Take the label BEFORE restoring a suspended completion,
+                    // which may overwrite the shadow with an outer exception's
+                    // label (bd-l0d6z).
+                    let exception_label =
+                        std::mem::replace(&mut self.pending_exception_label, Label::Public);
                     self.restore_suspended_abrupt_completion();
                     self.write_reg(dst, exception)?;
+                    self.set_register_label(dst, exception_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::EnterFinally => {
@@ -17341,14 +17428,18 @@ impl InterpreterCore {
         // context so the caller can re-route the throw through its own unwinding
         // (e.g. `ForOfNext` for `for (… of …)`). (bd-bg9l1.27.7)
         let thrown_value = match &result {
-            Err(InterpreterError::UncaughtException { .. }) => self.pending_exception.clone(),
+            Err(InterpreterError::UncaughtException { .. }) => self
+                .pending_exception
+                .clone()
+                .map(|v| (v, self.pending_exception_label.clone())),
             _ => None,
         };
         self.restore_module_execution(snapshot);
         self.active_cjs_context = saved_active_cjs_context;
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-        if let Some(value) = thrown_value {
+        if let Some((value, label)) = thrown_value {
             self.pending_exception = Some(value);
+            self.pending_exception_label = label;
         }
         result
     }
@@ -26908,6 +26999,7 @@ impl InterpreterCore {
     fn rollback_call_setup(&mut self) {
         if let Some(frame) = self.call_stack.pop() {
             self.pending_exception = frame.saved_pending_exception;
+            self.pending_exception_label = frame.saved_pending_exception_label;
             self.pending_return = frame.saved_pending_return;
             self.suspended_abrupt_completions
                 .truncate(frame.saved_suspended_abrupt_depth);
@@ -32029,6 +32121,261 @@ mod async_runtime_tests_current {
                 .expect("dst register label should exist"),
             &crate::ifc_artifacts::Label::Secret,
             "GetProperty join must not lower a dst that already holds higher taint"
+        );
+    }
+
+    /// bd-l0d6z: a thrown value's label must survive the throw->catch edge.
+    /// Before the fix `Throw` stored only the bare `Value` into
+    /// `pending_exception` and `EnterCatch` wrote it to the catch binding via
+    /// `write_reg` without touching `register_labels[dst]` — so
+    /// `try { throw secret } catch (e) { egress(e) }` laundered a Secret value
+    /// to the dst's stale prior label (typically Public). Fifth member of the
+    /// bd-n2mjy/bd-0zybl under-tainting family.
+    #[test]
+    fn throw_propagates_thrown_value_label_to_catch_binding() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::BeginTry {
+                    catch_target: 2,
+                    finally_target: None,
+                },
+                Ir3Instruction::Throw { value: 0 },
+                Ir3Instruction::EnterCatch { dst: 1 },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+
+        let mut core = test_interpreter();
+        core.mutate_registers(|r| {
+            r[0] = Value::str("secret-token".to_string());
+        });
+        core.set_register_label(0, crate::ifc_artifacts::Label::Secret)
+            .expect("thrown register label should be settable");
+        // Seed the catch binding strictly below Secret to prove EnterCatch
+        // re-establishes the thrown value's label (the bd-l0d6z bug left it
+        // at this stale Public).
+        core.set_register_label(1, crate::ifc_artifacts::Label::Public)
+            .expect("catch binding label should be settable");
+
+        core.execute(&module)
+            .expect("throw inside try should reach the catch handler");
+
+        assert_eq!(
+            core.registers[1],
+            Value::str("secret-token".to_string()),
+            "catch binding must receive the thrown value"
+        );
+        assert_eq!(
+            core.get_register_label(1)
+                .expect("catch binding label should exist"),
+            &crate::ifc_artifacts::Label::Secret,
+            "catch binding must inherit the thrown value's label (bd-l0d6z)"
+        );
+    }
+
+    /// bd-l0d6z: the catch-binding label is the THROWN value's label exactly —
+    /// a later, lower-labelled throw must not inherit an earlier exception's
+    /// higher label (no cross-contamination through the pending-exception
+    /// shadow), and a stale higher label on the binding register is
+    /// overwritten because the binding's new content is exactly the thrown
+    /// value (fresh provenance, mirroring the zero-arg HostCall reset).
+    #[test]
+    fn sequential_catches_use_each_thrown_values_own_label() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::BeginTry {
+                    catch_target: 2,
+                    finally_target: None,
+                },
+                Ir3Instruction::Throw { value: 0 },
+                Ir3Instruction::EnterCatch { dst: 1 },
+                Ir3Instruction::BeginTry {
+                    catch_target: 5,
+                    finally_target: None,
+                },
+                Ir3Instruction::Throw { value: 2 },
+                Ir3Instruction::EnterCatch { dst: 3 },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+
+        let mut core = test_interpreter();
+        core.mutate_registers(|r| {
+            r[0] = Value::str("secret-token".to_string());
+            r[2] = Value::Int(7);
+        });
+        core.set_register_label(0, crate::ifc_artifacts::Label::Secret)
+            .expect("first thrown label should be settable");
+        core.set_register_label(2, crate::ifc_artifacts::Label::Public)
+            .expect("second thrown label should be settable");
+        // Seed the second catch binding ABOVE the second thrown value's label
+        // to prove EnterCatch overwrites with the thrown value's own label.
+        core.set_register_label(3, crate::ifc_artifacts::Label::Confidential)
+            .expect("second catch binding label should be settable");
+
+        core.execute(&module)
+            .expect("both throws should reach their catch handlers");
+
+        assert_eq!(
+            core.get_register_label(1)
+                .expect("first catch binding label should exist"),
+            &crate::ifc_artifacts::Label::Secret,
+            "first catch binding carries the Secret thrown label"
+        );
+        assert_eq!(core.registers[3], Value::Int(7));
+        assert_eq!(
+            core.get_register_label(3)
+                .expect("second catch binding label should exist"),
+            &crate::ifc_artifacts::Label::Public,
+            "second catch binding must carry the second thrown value's own \
+             label, not the earlier Secret exception's"
+        );
+    }
+
+    /// bd-ooaka.1: a receiver-aware builtin's result must inherit the
+    /// receiver's label. `arr.reduce(cb, 0)` on a Secret-labeled array runs
+    /// the callback mini-lane (which tracks no labels internally) and used to
+    /// write the result via `write_reg` with no label propagation — so a
+    /// Secret array laundered to a stale Public dst, the same family as
+    /// bd-0zybl/bd-n2mjy. The fix joins receiver + arg labels onto dst at
+    /// the CallMethod builtin dispatch (a sound upper bound for anything the
+    /// mini-lane computes, since the lane only sees values seeded from those
+    /// registers).
+    #[test]
+    fn builtin_method_result_inherits_receiver_label() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 2,
+                },
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 2,
+                    args: RegRange { start: 8, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+                // Reducer callback body: (acc, cur) => acc + cur.
+                Ir3Instruction::Add {
+                    dst: 4,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::Return { value: 4 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 4,
+                arity: 4,
+                frame_size: 5,
+                name: Some("reducer".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        module.constant_pool.push("reduce".to_string());
+
+        let mut core = test_interpreter();
+        let array_id = core
+            .alloc_array_from_values(&[Value::Int(1), Value::Int(2), Value::Int(3)])
+            .expect("array allocation should succeed");
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(array_id);
+            r[8] = Value::Function(0);
+            r[9] = Value::Int(0);
+        });
+        core.set_register_label(0, crate::ifc_artifacts::Label::Secret)
+            .expect("receiver label should be settable");
+        // Seed dst strictly below Secret to prove the dispatch raises it.
+        core.set_register_label(3, crate::ifc_artifacts::Label::Public)
+            .expect("dst label should be settable");
+
+        core.execute(&module)
+            .expect("reduce over a secret array should execute");
+
+        assert_eq!(
+            core.registers[3],
+            Value::Int(6),
+            "reduce must compute 1 + 2 + 3"
+        );
+        assert_eq!(
+            core.get_register_label(3)
+                .expect("dst register label should exist"),
+            &crate::ifc_artifacts::Label::Secret,
+            "builtin method result must inherit the receiver's label (bd-ooaka.1)"
+        );
+    }
+
+    /// bd-ooaka.1: the join covers arg-derived taint too — a Public receiver
+    /// with a Secret arg (e.g. a Secret initial accumulator) must still
+    /// produce a Secret-labeled result.
+    #[test]
+    fn builtin_method_result_joins_arg_labels() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 2,
+                },
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 2,
+                    args: RegRange { start: 8, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::Add {
+                    dst: 4,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::Return { value: 4 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 4,
+                arity: 4,
+                frame_size: 5,
+                name: Some("reducer".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        module.constant_pool.push("reduce".to_string());
+
+        let mut core = test_interpreter();
+        let array_id = core
+            .alloc_array_from_values(&[Value::Int(1), Value::Int(2)])
+            .expect("array allocation should succeed");
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(array_id);
+            r[8] = Value::Function(0);
+            r[9] = Value::Int(10);
+        });
+        // Public receiver, Secret initial accumulator (arg register 9).
+        core.set_register_label(9, crate::ifc_artifacts::Label::Secret)
+            .expect("arg label should be settable");
+
+        core.execute(&module)
+            .expect("reduce with secret initial value should execute");
+
+        assert_eq!(core.registers[3], Value::Int(13));
+        assert_eq!(
+            core.get_register_label(3)
+                .expect("dst register label should exist"),
+            &crate::ifc_artifacts::Label::Secret,
+            "builtin method result must join arg labels (bd-ooaka.1)"
         );
     }
 

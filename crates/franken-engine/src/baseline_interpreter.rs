@@ -9616,6 +9616,13 @@ impl InterpreterCore {
                                     expected: "successful Proxy set trap".to_string(),
                                     got: "falsy set trap result".to_string(),
                                 });
+                            } else if let Ok(index) = key_str.parse::<u32>() {
+                                // `arr[i] = x`: grow the ES array length and the
+                                // dense-length cache the `ArrayPush` fast path
+                                // trusts. A no-op for non-arrays / proxies (the
+                                // helper guards on `is_array`, and the proxy
+                                // object itself is not an array).
+                                self.maintain_array_index_assignment(oid, index);
                             }
                         }
                         _ => {
@@ -16545,6 +16552,49 @@ impl InterpreterCore {
                 && object.is_array
             {
                 object.cached_dense_length = cached_len;
+            }
+        });
+    }
+
+    /// Maintain the array invariants after a user-level `arr[i] = x` index
+    /// assignment (the IR3 `SetProperty` path). The array builtins manage
+    /// these themselves around their `set_object_property` calls; plain index
+    /// assignment is the one path that previously left both stale, so
+    /// `a[a.length] = x; a.push(y)` overwrote `x` and lost a slot (a sibling
+    /// of the splice dense-length-cache bug):
+    ///
+    /// 1. **ES2020 array length** (23.1 array exotic `[[Set]]`): when `index`
+    ///    is at or past the current `length`, grow `length` to `index + 1`.
+    /// 2. **Dense-length cache** that the `ArrayPush` fast path trusts as the
+    ///    next write index: grow by one on a dense append (`index == dense`),
+    ///    invalidate on a sparse gap (`index > dense`), and leave it untouched
+    ///    on an in-bounds overwrite (`index < dense`). `set_object_property`
+    ///    has already invalidated on the gap case before this runs, so the
+    ///    `Some` branch here only needs the dense-append growth.
+    fn maintain_array_index_assignment(&mut self, array_id: ObjectId, index: u32) {
+        let arr_index = array_id.0 as usize;
+        self.mutate_heap(|heap| {
+            if let Some(object) = heap.get_mut(arr_index)
+                && object.is_array
+            {
+                let current_len = match object.properties.get("length") {
+                    Some(Value::Int(n)) if *n >= 0 => *n as u64,
+                    _ => 0,
+                };
+                if u64::from(index) >= current_len {
+                    let grown =
+                        i64::try_from(u64::from(index).saturating_add(1)).unwrap_or(i64::MAX);
+                    object
+                        .properties
+                        .insert("length".to_string(), Value::Int(grown));
+                }
+                if let Some(dense_len) = object.cached_dense_length {
+                    if index == dense_len {
+                        object.cached_dense_length = Some(dense_len.saturating_add(1));
+                    } else if index > dense_len {
+                        object.cached_dense_length = None;
+                    }
+                }
             }
         });
     }
@@ -32549,6 +32599,139 @@ mod async_runtime_tests_current {
             Some(2),
             "the dense-length cache must follow splice's new length, not stay stale at 5"
         );
+    }
+
+    /// Index assignment at `arr.length` must grow the ES array length and the
+    /// dense-length cache so a following `ArrayPush` appends past the new
+    /// element instead of overwriting it. Before the fix `SetProperty` left
+    /// both stale, so `a[3] = 40; a.push(50)` lost the `40` (push wrote 50 at
+    /// the stale cache index 3) and reported length 4 — a sibling of the
+    /// splice dense-cache bug.
+    #[test]
+    fn array_index_append_then_push_keeps_both_elements() {
+        let mut core = test_interpreter();
+        let arr = core
+            .alloc_array_from_values(&[Value::Int(10), Value::Int(20), Value::Int(30)])
+            .expect("array allocation should succeed");
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(arr);
+            r[1] = Value::Int(3); // key index 3 (== length)
+            r[2] = Value::Int(40); // value
+            r[3] = Value::Int(50); // push value
+        });
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                Ir3Instruction::ArrayPush {
+                    array: 0,
+                    element: 3,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+        core.execute(&module)
+            .expect("index append + push should execute");
+        let obj = core.heap.get(arr.0 as usize).expect("array on heap");
+        assert_eq!(
+            obj.properties.get("3"),
+            Some(&Value::Int(40)),
+            "a[3] must keep 40"
+        );
+        assert_eq!(
+            obj.properties.get("4"),
+            Some(&Value::Int(50)),
+            "push must append 50 at index 4"
+        );
+        assert_eq!(
+            obj.properties.get("length"),
+            Some(&Value::Int(5)),
+            "length must be 5 after one index append and one push"
+        );
+        assert_eq!(
+            obj.cached_dense_length,
+            Some(5),
+            "dense cache must track the true length"
+        );
+    }
+
+    /// Index assignment past the end makes the array sparse: `length` grows to
+    /// `index + 1` but the dense-length cache is invalidated so the
+    /// `ArrayPush` fast path falls back to a scan rather than trusting a stale
+    /// dense length.
+    #[test]
+    fn array_index_assignment_past_end_grows_length_and_invalidates_cache() {
+        let mut core = test_interpreter();
+        let arr = core
+            .alloc_array_from_values(&[Value::Int(1), Value::Int(2)])
+            .expect("array allocation should succeed");
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(arr);
+            r[1] = Value::Int(5); // gap: skips indices 2,3,4
+            r[2] = Value::Int(99);
+        });
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+        core.execute(&module)
+            .expect("sparse index set should execute");
+        let obj = core.heap.get(arr.0 as usize).expect("array on heap");
+        assert_eq!(
+            obj.properties.get("length"),
+            Some(&Value::Int(6)),
+            "length must grow to index+1 even for a sparse gap"
+        );
+        assert_eq!(
+            obj.cached_dense_length, None,
+            "a sparse gap must invalidate the dense-length cache"
+        );
+    }
+
+    /// In-bounds overwrite (`arr[i] = x` with `i < length`) changes neither the
+    /// length nor the dense-length cache.
+    #[test]
+    fn array_index_in_bounds_overwrite_leaves_length_and_cache() {
+        let mut core = test_interpreter();
+        let arr = core
+            .alloc_array_from_values(&[Value::Int(1), Value::Int(2), Value::Int(3)])
+            .expect("array allocation should succeed");
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(arr);
+            r[1] = Value::Int(1);
+            r[2] = Value::Int(99);
+        });
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+        core.execute(&module).expect("overwrite should execute");
+        let obj = core.heap.get(arr.0 as usize).expect("array on heap");
+        assert_eq!(obj.properties.get("1"), Some(&Value::Int(99)));
+        assert_eq!(
+            obj.properties.get("length"),
+            Some(&Value::Int(3)),
+            "length unchanged"
+        );
+        assert_eq!(obj.cached_dense_length, Some(3), "dense cache unchanged");
     }
 
     #[test]

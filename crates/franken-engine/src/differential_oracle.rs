@@ -16,7 +16,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use wait_timeout::ChildExt;
 
-use frankenengine_core::baseline_interpreter::QuickJsLane as CoreQuickJsLane;
+use frankenengine_core::baseline_interpreter::{
+    InterpreterConfig as CoreInterpreterConfig, QuickJsLane as CoreQuickJsLane,
+};
+use frankenengine_core::capability::RuntimeCapability as CoreRuntimeCapability;
 use frankenengine_core::ir_contract::{
     Ir0Module as CoreIr0Module, Ir3Instruction as CoreIr3Instruction, Ir3Module as CoreIr3Module,
 };
@@ -621,7 +624,20 @@ fn eval_with_franken_core(source: &str) -> Result<String, FrankenCoreBackendErro
     let mut lowering_output = core_lower_ir0_to_ir3(&ir0, &lowering_context)
         .map_err(|error| FrankenCoreBackendError::new("lower", error))?;
     patch_core_eval_completion_value(&mut lowering_output.ir3);
-    let result = CoreQuickJsLane::new()
+    // The franken-core lane is capability-gated and `QuickJsLane::new()`
+    // grants nothing, so it denied `VmDispatch` on every program — the
+    // backend could not execute even `1 + 1`. Grant the deterministic
+    // execution baseline (VM dispatch + heap allocation), matching
+    // franken-core's own `test_quickjs_config`, so the differential
+    // comparison actually exercises franken-core rather than always failing.
+    let mut config = CoreInterpreterConfig::quickjs_defaults();
+    config
+        .granted_capabilities
+        .insert(CoreRuntimeCapability::VmDispatch);
+    config
+        .granted_capabilities
+        .insert(CoreRuntimeCapability::HeapAllocate);
+    let result = CoreQuickJsLane::with_config(config)
         .execute(&lowering_output.ir3, "trace-differential-franken-core")
         .map_err(|error| FrankenCoreBackendError::new("execute", error))?;
     Ok(result.value.to_string())

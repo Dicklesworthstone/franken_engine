@@ -43,6 +43,7 @@ use frankenengine_engine::lowering_pipeline::{
     LoweringContext, LoweringPipelineOutput, lower_ir0_to_ir3,
 };
 use frankenengine_engine::module_compatibility_matrix::CompatibilityScenarioReport;
+use frankenengine_engine::package_intake::{PackageIntakeReport, onboard_package};
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParseEventIr, ParserOptions};
 use frankenengine_engine::react_doctor_preflight::{
     DoctorConfig as ReactDoctorConfig, DoctorReport as ReactDoctorReport,
@@ -135,6 +136,7 @@ enum CommandSpec {
     HelpTopic(HelpTopic),
     Compile(CompileArgs),
     Check(CheckArgs),
+    Onboard(OnboardArgs),
     Run(RunArgs),
     Explain(ExplainArgs),
     Doctor(Box<DoctorArgs>),
@@ -156,6 +158,7 @@ enum CommandSpec {
 enum HelpTopic {
     Compile,
     Check,
+    Onboard,
     Run,
     Explain,
     Doctor,
@@ -191,6 +194,7 @@ impl HelpTopic {
         match self {
             Self::Compile => compile_usage(),
             Self::Check => check_usage(),
+            Self::Onboard => onboard_usage(),
             Self::Run => run_usage(),
             Self::Explain => explain_usage(),
             Self::Doctor => doctor_usage(),
@@ -243,6 +247,19 @@ enum CheckOutputFormat {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CheckArgs {
     input: PathBuf,
+    parse_goal: ParseGoal,
+    format: CheckOutputFormat,
+    /// Optional bundle directory for `run_manifest.json` + `events.jsonl`.
+    out: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OnboardArgs {
+    /// Package directory (entry auto-detected) or an explicit entry file.
+    target: PathBuf,
+    /// Optional package root override (defaults: dir target → itself; file
+    /// target → the file's parent directory).
+    root: Option<PathBuf>,
     parse_goal: ParseGoal,
     format: CheckOutputFormat,
     /// Optional bundle directory for `run_manifest.json` + `events.jsonl`.
@@ -1377,6 +1394,7 @@ fn run(raw_args: Vec<String>) -> Result<i32, String> {
         }
         CommandSpec::Compile(args) => execute_compile(args),
         CommandSpec::Check(args) => execute_check(args),
+        CommandSpec::Onboard(args) => execute_onboard(args),
         CommandSpec::Run(args) => execute_run(args),
         CommandSpec::Explain(args) => execute_explain(args),
         CommandSpec::Doctor(args) => execute_doctor(*args),
@@ -1414,6 +1432,7 @@ fn parse_command(args: &[String]) -> Result<CommandSpec, String> {
         "version" => Ok(CommandSpec::Version),
         "compile" => parse_compile_command(&args[1..]),
         "check" => parse_check_command(&args[1..]),
+        "onboard" => parse_onboard_command(&args[1..]),
         "run" => parse_run_command(&args[1..]),
         "explain" => parse_explain_command(&args[1..]),
         "doctor" => parse_doctor_command(&args[1..]),
@@ -1440,6 +1459,7 @@ fn parse_help_command(args: &[String]) -> Result<CommandSpec, String> {
     match args[0].as_str() {
         "compile" => parse_leaf_help_topic("compile", HelpTopic::Compile, &args[1..]),
         "check" => parse_leaf_help_topic("check", HelpTopic::Check, &args[1..]),
+        "onboard" => parse_leaf_help_topic("onboard", HelpTopic::Onboard, &args[1..]),
         "run" => parse_leaf_help_topic("run", HelpTopic::Run, &args[1..]),
         "explain" => parse_leaf_help_topic("explain", HelpTopic::Explain, &args[1..]),
         "doctor" => parse_leaf_help_topic("doctor", HelpTopic::Doctor, &args[1..]),
@@ -1455,7 +1475,7 @@ fn parse_help_command(args: &[String]) -> Result<CommandSpec, String> {
         "orchestrate" => parse_leaf_help_topic("orchestrate", HelpTopic::Orchestrate, &args[1..]),
         "runtime" => parse_leaf_help_topic("runtime", HelpTopic::Runtime, &args[1..]),
         other => Err(format!(
-            "unknown help topic `{other}` (expected compile|run|explain|doctor|verify|benchmark|replay|differential-oracle|react|gates|reports|test|synth|orchestrate|runtime)"
+            "unknown help topic `{other}` (expected compile|check|onboard|run|explain|doctor|verify|benchmark|replay|differential-oracle|react|gates|reports|test|synth|orchestrate|runtime)"
         )),
     }
 }
@@ -1654,6 +1674,82 @@ fn parse_check_output_format(value: &str) -> Result<CheckOutputFormat, String> {
             "unknown check --format `{other}` (expected human|json)"
         )),
     }
+}
+
+fn parse_onboard_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Onboard));
+    }
+
+    let mut target: Option<PathBuf> = None;
+    let mut root: Option<PathBuf> = None;
+    // Packages are ES-module graphs; default the analysis goal to `module`.
+    let mut goal = ParseGoal::Module;
+    let mut format = CheckOutputFormat::Human;
+    let mut out: Option<PathBuf> = None;
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--target" => target = Some(PathBuf::from(next_arg(args, &mut index, "--target")?)),
+            "--root" => root = Some(PathBuf::from(next_arg(args, &mut index, "--root")?)),
+            "--goal" => goal = parse_goal(&next_arg(args, &mut index, "--goal")?)?,
+            "--format" => {
+                format = parse_check_output_format(&next_arg(args, &mut index, "--format")?)?
+            }
+            "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            value if !value.starts_with("--") && target.is_none() => {
+                target = Some(PathBuf::from(value));
+            }
+            flag => return Err(format!("unknown onboard flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    let target = target
+        .ok_or_else(|| "onboard requires <pkg-dir|entry-file> or --target <path>".to_string())?;
+
+    Ok(CommandSpec::Onboard(OnboardArgs {
+        target,
+        root,
+        parse_goal: goal,
+        format,
+        out,
+    }))
+}
+
+fn onboard_usage() -> String {
+    [
+        "onboard usage:",
+        "  frankenctl onboard <pkg-dir|entry.js> [--root <dir>] [--goal module|script]",
+        "      [--format human|json] [--out <bundle-dir>]",
+        "  frankenctl onboard --target <pkg-dir|entry.js> [--root <dir>] [--format json]",
+        "",
+        "  Walks the static ES-module graph reachable from the entry and reports,",
+        "  with module + source-span citations:",
+        "    - a normalized manifest proposal (entry, local modules, external deps),",
+        "    - a capability-profile proposal (each capability + the exact span(s)",
+        "      and owning module that require it),",
+        "    - a denied-ambient-authority report (error[FE-CAP-0001] across modules),",
+        "    - an IFC flow inventory (required declassifications / runtime checkpoints,",
+        "      unsupported flows, and unanalyzable modules),",
+        "    - a per-mode module-resolution report (Native/NodeCompat/BunCompat",
+        "      differences + extension-probe sequences).",
+        "",
+        "  v1 is a compiler, not a wizard: only ES `import` declarations are followed",
+        "  as graph edges; CommonJS `require`/dynamic `import()` and external (bare)",
+        "  specifiers are reported, never silently covered. This is the inferred",
+        "  authority footprint for SUPPORTED syntax — not a proof of noninterference",
+        "  for arbitrary JS/TS. Most real npm packages honestly report bounded",
+        "  coverage until language support rises.",
+        "",
+        "  If <target> is a directory, the entry is auto-detected from package.json",
+        "  (`module` then `main`) and then index.{js,mjs,cjs,ts,jsx,tsx}.",
+        "",
+        "  exit codes: 0 = clean, 1 = findings present, 2 = unanalyzable (fail-closed)",
+        "  --out <dir> writes a content-addressed run_manifest.json + events.jsonl bundle.",
+    ]
+    .join("\n")
 }
 
 fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
@@ -2981,6 +3077,185 @@ fn render_check_events_jsonl(report: &AuthorityFootprintReport) -> Result<String
         lines.push('\n');
     }
     Ok(lines)
+}
+
+fn execute_onboard(args: OnboardArgs) -> Result<i32, String> {
+    let (root_dir, entry_relative) = resolve_package_entry(&args.target, args.root.as_deref())?;
+    let root_label = root_dir.display().to_string();
+    let report = onboard_package(&root_dir, &entry_relative, &root_label, args.parse_goal);
+
+    // Optional content-addressed bundle: run_manifest.json + events.jsonl.
+    // The report carries no wall-clock/host facts beyond the root label, so the
+    // bundle is replay-stable for a fixed package + invocation.
+    if let Some(out_dir) = args.out.as_ref() {
+        write_json_file(&out_dir.join("run_manifest.json"), &report)?;
+        write_bytes_file(
+            &out_dir.join("events.jsonl"),
+            render_onboard_events_jsonl(&report)?.as_bytes(),
+        )?;
+    }
+
+    match args.format {
+        CheckOutputFormat::Human => println!("{}", report.render_human()),
+        CheckOutputFormat::Json => print_json(&report)?,
+    }
+
+    Ok(report.outcome().exit_code())
+}
+
+/// One JSON object per actionable item (denied ambient access, IFC finding,
+/// unanalyzable module, mode-divergent edge), newline-delimited. Deterministic
+/// for a given report (the report's vectors are pre-sorted; no wall-clock).
+fn render_onboard_events_jsonl(report: &PackageIntakeReport) -> Result<String, String> {
+    let mut lines = String::new();
+    let mut push = |value: serde_json::Value| -> Result<(), String> {
+        let encoded = serde_json::to_string(&value)
+            .map_err(|error| format!("failed to encode onboard event: {error}"))?;
+        lines.push_str(&encoded);
+        lines.push('\n');
+        Ok(())
+    };
+    for denied in &report.denied_ambient_authority {
+        push(serde_json::json!({
+            "event": "onboard.denied_ambient_authority",
+            "module": denied.module,
+            "accessor": denied.accessor,
+            "message": denied.message,
+        }))?;
+    }
+    for finding in &report.ifc_flow_inventory.required_declassifications {
+        push(serde_json::json!({
+            "event": "onboard.required_declassification",
+            "module": finding.module,
+            "message": finding.message,
+        }))?;
+    }
+    for finding in &report.ifc_flow_inventory.unsupported_flows {
+        push(serde_json::json!({
+            "event": "onboard.unsupported_flow",
+            "module": finding.module,
+            "message": finding.message,
+        }))?;
+    }
+    for module in &report.ifc_flow_inventory.unanalyzable_modules {
+        push(serde_json::json!({
+            "event": "onboard.unanalyzable_module",
+            "module": module.module,
+            "reason": module.reason,
+        }))?;
+    }
+    for edge in &report.module_resolution_report.edges {
+        if edge.modes_agree {
+            continue;
+        }
+        push(serde_json::json!({
+            "event": "onboard.resolution_divergence",
+            "from_module": edge.from_module,
+            "specifier": edge.specifier,
+        }))?;
+    }
+    Ok(lines)
+}
+
+/// Resolve the onboard target into `(root_dir, entry-relative-forward-slash)`.
+/// A directory target auto-detects its entry; a file target derives its root
+/// from `--root` or the file's parent directory. Fail-closed: the entry must
+/// exist and live under the root.
+fn resolve_package_entry(
+    target: &Path,
+    root_override: Option<&Path>,
+) -> Result<(PathBuf, String), String> {
+    let metadata = fs::metadata(target)
+        .map_err(|error| format!("cannot stat `{}`: {error}", target.display()))?;
+    if metadata.is_dir() {
+        let root = fs::canonicalize(target)
+            .map_err(|error| format!("cannot canonicalize root `{}`: {error}", target.display()))?;
+        let entry_abs = detect_package_entry(&root)?;
+        let entry_relative = relative_within_root(&root, &entry_abs)?;
+        Ok((root, entry_relative))
+    } else {
+        let entry_abs = fs::canonicalize(target).map_err(|error| {
+            format!("cannot canonicalize entry `{}`: {error}", target.display())
+        })?;
+        let root = match root_override {
+            Some(root) => fs::canonicalize(root).map_err(|error| {
+                format!("cannot canonicalize root `{}`: {error}", root.display())
+            })?,
+            None => entry_abs
+                .parent()
+                .map(Path::to_path_buf)
+                .ok_or_else(|| "entry file has no parent directory".to_string())?,
+        };
+        let entry_relative = relative_within_root(&root, &entry_abs)?;
+        Ok((root, entry_relative))
+    }
+}
+
+/// Detect the entry file of a package directory: package.json `module` then
+/// `main`, else the first existing `index.{js,mjs,cjs,ts,jsx,tsx}`.
+fn detect_package_entry(root: &Path) -> Result<PathBuf, String> {
+    let package_json = root.join("package.json");
+    if let Ok(contents) = fs::read_to_string(&package_json) {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents) {
+            for key in ["module", "main"] {
+                if let Some(rel) = value.get(key).and_then(|v| v.as_str()) {
+                    let candidate = root.join(rel);
+                    if candidate.is_file() {
+                        return fs::canonicalize(&candidate).map_err(|error| {
+                            format!(
+                                "cannot canonicalize entry `{}`: {error}",
+                                candidate.display()
+                            )
+                        });
+                    }
+                }
+            }
+        }
+    }
+    for name in [
+        "index.js",
+        "index.mjs",
+        "index.cjs",
+        "index.ts",
+        "index.jsx",
+        "index.tsx",
+    ] {
+        let candidate = root.join(name);
+        if candidate.is_file() {
+            return fs::canonicalize(&candidate).map_err(|error| {
+                format!(
+                    "cannot canonicalize entry `{}`: {error}",
+                    candidate.display()
+                )
+            });
+        }
+    }
+    Err(format!(
+        "no entry detected in `{}` (no package.json main/module and no index.{{js,mjs,cjs,ts,jsx,tsx}})",
+        root.display()
+    ))
+}
+
+/// Strip `root` from `entry` and return a forward-slash relative path. Errors if
+/// the entry is not under the root (fail-closed).
+fn relative_within_root(root: &Path, entry: &Path) -> Result<String, String> {
+    let relative = entry.strip_prefix(root).map_err(|_| {
+        format!(
+            "entry `{}` is not within the package root `{}`",
+            entry.display(),
+            root.display()
+        )
+    })?;
+    let mut parts = Vec::new();
+    for component in relative.components() {
+        if let std::path::Component::Normal(part) = component {
+            parts.push(part.to_string_lossy().to_string());
+        }
+    }
+    if parts.is_empty() {
+        return Err("entry resolved to the package root itself".to_string());
+    }
+    Ok(parts.join("/"))
 }
 
 fn execute_run(args: RunArgs) -> Result<i32, String> {
@@ -7073,6 +7348,8 @@ fn usage() -> String {
         "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>]",
         "  frankenctl check <source.js> [--goal script|module] [--format human|json] [--out <bundle-dir>]",
         "      # inferred per-span authority footprint + ambient-authority/IFC findings",
+        "  frankenctl onboard <pkg-dir|entry.js> [--root <dir>] [--goal module|script] [--format human|json] [--out <bundle-dir>]",
+        "      # package-level intake: manifest + capability-profile + denied-ambient + IFC + per-mode resolution",
         "  frankenctl run --input <source.js> --extension-id <id> [--goal script|module] [--out <report.json>]",
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
         "  frankenctl explain <bundle.json> [--format summary|json] [--out <path>]",
@@ -7128,6 +7405,7 @@ fn command_label(command: &CommandSpec) -> &'static str {
         CommandSpec::HelpTopic(_) => "help",
         CommandSpec::Compile(_) => "compile",
         CommandSpec::Check(_) => "check",
+        CommandSpec::Onboard(_) => "onboard",
         CommandSpec::Run(_) => "run",
         CommandSpec::Explain(_) => "explain",
         CommandSpec::Doctor(_) => "doctor",

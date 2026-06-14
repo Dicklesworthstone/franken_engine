@@ -12,3 +12,6 @@ lean_lib «IFCLatticeSpecification» where
 
 @[default_target]
 lean_lib «IFCLatticeIsomorphism» where
+
+@[default_target]
+lean_lib «SmeLabelPropagationEquivalence» where

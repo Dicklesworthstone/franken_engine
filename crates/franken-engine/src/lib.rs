@@ -509,6 +509,7 @@ pub mod simd_lexer;
 pub mod simd_morsel_kernel;
 pub mod slot_differential;
 pub mod slot_registry;
+pub mod sme;
 pub mod sorted_multisig;
 pub mod specialization_conformance;
 pub mod specialization_index;

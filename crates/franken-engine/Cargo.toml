@@ -66,6 +66,11 @@ name = "denominator_scoring"
 path = "benches/denominator_scoring.rs"
 harness = false
 
+[[bench]]
+name = "sme_vs_propagation"
+path = "benches/sme_vs_propagation.rs"
+harness = false
+
 [[test]]
 name = "cancellation_lifecycle_integration"
 path = "tests/cancellation_lifecycle_integration.rs"

@@ -1541,6 +1541,8 @@ If you only learn these seven, you can produce a complete signed artifact bundle
 | `frankenctl help [COMMAND]` | Top-level help navigation, including nested subcommand help. |
 | `frankenctl compile --input <path> --out <path> [--goal script\|module] [--trace-id …] [--decision-id …] [--policy-id …] [--generated-unix-ns …]` | Parse and lower source into a versioned compile artifact. |
 | `frankenctl run --input <path> --extension-id <id> [--goal …] [--out <path>]` | Execute source through the orchestrator and emit an execution report. |
+| `frankenctl check <file> [--goal script\|module] [--format human\|json] [--out <dir>]` | Static authority footprint for one file: minimal required capabilities + ambient-authority/IFC findings (`FE-CAP-0001/0002/0003`). |
+| `frankenctl onboard <pkg-dir\|entry> [--root <dir>] [--goal module\|script] [--format human\|json] [--out <dir>]` | Package-level capability/IFC intake: manifest, least-authority capability profile, denied-ambient list, IFC inventory, per-compatibility-mode resolution. |
 | `frankenctl doctor --input <runtime_input.json> [--summary] [--out-dir …] [--workload-id …] [--package-name …] [--target-platform …] [--signals …] [--advisories …] [--redact-key …] …` | Analyze runtime diagnostics input and emit operator artifacts. |
 | `frankenctl verify compile-artifact --input <path> [--output <path>]` | Validate compile artifact integrity and schema invariants. |
 | `frankenctl verify receipt --input <path> --receipt-id <id> [--output <path>] [--summary]` | Verify a receipt bundle against a specific receipt id. |
@@ -1564,6 +1566,40 @@ If you only learn these seven, you can produce a complete signed artifact bundle
 | `frankenctl orchestrate context-refactor [--out …]` | Orchestrate a context refactor analysis. |
 | `frankenctl orchestrate tail-latency --out-dir <dir>` | Run the tail-latency orchestration analysis. |
 | `frankenctl runtime diagnostics --input <file> [--out-dir …] [--summary]` | Render structured runtime diagnostics. |
+
+### Authority/Intake Analyzer (`check` / `onboard`)
+
+`frankenctl check` and `frankenctl onboard` project the runtime's capability and
+information-flow algebra onto static source *without running it*, so an operator
+can see what authority a file or package would need before granting any. They
+share the runtime's lowering pipeline, so each emitted finding is one the runtime
+enforcer makes identically (`confidence = "definite"`), and anything the pipeline
+cannot lower is surfaced fail-closed rather than silently passed.
+
+**When to use it.** Reviewing a single extension file (`check`) or intaking a whole
+package before granting it authority (`onboard`).
+
+```bash
+# One file: minimal capability footprint + ambient-authority/IFC findings, as JSON.
+frankenctl check ./extension.js --format json --out ./artifacts/check-bundle
+
+# A package: manifest + least-authority capability profile + IFC inventory.
+frankenctl onboard ./my-extension --format json --out ./artifacts/onboard-bundle
+```
+
+Both exit `0` (analyzed, no findings), `1` (findings present), or `2` (unanalyzable —
+fail-closed). The full capability gate emits a content-addressed bundle:
+`./scripts/run_dw_authority_check.sh ci` (set `DW_RUN_LOCAL=1` to build locally when
+`rch` is unavailable); replay a bundle with
+`./scripts/e2e/dw_authority_check_replay.sh bundle <run_dir>`.
+
+**Status:** the analyzer reports an **inferred authority footprint for supported
+syntax** — bounded by [`docs/AUTHORITY_FOOTPRINT_ANALYZED_SUBSET_V1.md`](./docs/AUTHORITY_FOOTPRINT_ANALYZED_SUBSET_V1.md),
+never a noninterference proof for arbitrary JS/TS. The runtime-side compile-time
+ambient-authority rejection it builds on is OBSERVED (`FE-CLAIM-006`); the
+end-to-end capability-typed TS-to-IR *contract* remains bounded. Operator runbook:
+[`runbooks/dw_authority_check.md`](./runbooks/dw_authority_check.md). Editor/LSP
+setup: [`docs/dueling_wizards/FRANKEN_LSP_EDITOR_SETUP.md`](./docs/dueling_wizards/FRANKEN_LSP_EDITOR_SETUP.md).
 
 ---
 

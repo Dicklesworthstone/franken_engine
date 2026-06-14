@@ -217,10 +217,10 @@ fn nearest_source<'a>(
     queue.push_back(start);
     visited.insert(start);
     while let Some(current) = queue.pop_front() {
-        if let Some(artifact) = bundle.artifacts.get(current) {
-            if category_of(artifact) == EvidenceCategory::Source {
-                return Some(artifact);
-            }
+        if let Some(artifact) = bundle.artifacts.get(current)
+            && category_of(artifact) == EvidenceCategory::Source
+        {
+            return Some(artifact);
         }
         if let Some(neighbours) = adjacency.get(current) {
             let mut sorted = neighbours.clone();

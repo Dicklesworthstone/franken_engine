@@ -23,6 +23,10 @@ name = "frankenctl"
 path = "src/bin/frankenctl.rs"
 
 [[bin]]
+name = "franken-lsp"
+path = "src/bin/franken_lsp.rs"
+
+[[bin]]
 name = "franken-decision-demo"
 path = "src/bin/franken_decision_demo.rs"
 

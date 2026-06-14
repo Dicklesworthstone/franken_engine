@@ -454,6 +454,7 @@ pub mod runtime_decision_core;
 pub mod runtime_decision_theory;
 pub mod runtime_diagnostics_cli;
 pub mod runtime_explain_bundle;
+pub mod runtime_explain_views;
 pub mod runtime_hotspot_optimization_campaign;
 pub mod runtime_image_contract;
 pub mod runtime_kernel_lane_charter;

@@ -77,6 +77,10 @@ use frankenengine_engine::runtime_explain_bundle::{
     RuntimeExplainBundle, RuntimeExplainBundleBuilder, RuntimeExplainLink, RuntimeExplainRelation,
     RuntimeExplainRole, StableArtifactRef,
 };
+use frankenengine_engine::runtime_explain_views::{
+    EXPLAIN_META_CHOSEN_ACTION, EXPLAIN_META_EXPECTED_LOSS, EXPLAIN_META_LANE,
+    EXPLAIN_META_LANE_REASON, build_explain_bundle,
+};
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::third_party_verifier::{
     BenchmarkClaimBundle, ClaimedBenchmarkOutcome, THIRD_PARTY_VERIFIER_COMPONENT,
@@ -287,6 +291,10 @@ struct ExplainArgs {
     input: PathBuf,
     format: ExplainOutputFormat,
     out: Option<PathBuf>,
+    /// Directory to emit the full derived view bundle (E3.T4): explain.md,
+    /// evidence_graph.json, replay.json, counterfactuals.json, commands.txt,
+    /// repro.lock, plus a copy of the index (explain.json).
+    emit_bundle: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1811,6 +1819,7 @@ fn parse_explain_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut input: Option<PathBuf> = None;
     let mut format = ExplainOutputFormat::Summary;
     let mut out: Option<PathBuf> = None;
+    let mut emit_bundle: Option<PathBuf> = None;
 
     let mut index = 0usize;
     while index < args.len() {
@@ -1820,6 +1829,9 @@ fn parse_explain_command(args: &[String]) -> Result<CommandSpec, String> {
                 format = parse_explain_output_format(&next_arg(args, &mut index, "--format")?)?
             }
             "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            "--emit-bundle" => {
+                emit_bundle = Some(PathBuf::from(next_arg(args, &mut index, "--emit-bundle")?))
+            }
             value if !value.starts_with("--") && input.is_none() => {
                 input = Some(PathBuf::from(value));
             }
@@ -1833,6 +1845,7 @@ fn parse_explain_command(args: &[String]) -> Result<CommandSpec, String> {
             .ok_or_else(|| "explain requires <bundle.json> or --input <bundle.json>".to_string())?,
         format,
         out,
+        emit_bundle,
     }))
 }
 
@@ -3417,6 +3430,18 @@ fn build_run_explain_bundle(
         RuntimeExplainRole::ChosenAction,
         RuntimeExplainRole::ExpectedLoss,
     ])
+    // Deterministic display metadata for the E3.T4 narrative views (ADR-0009:
+    // metadata over the index, not a new authoritative schema).
+    .with_metadata(
+        EXPLAIN_META_CHOSEN_ACTION,
+        output.containment_action.clone(),
+    )
+    .with_metadata(EXPLAIN_META_LANE, output.lane.clone())
+    .with_metadata(EXPLAIN_META_LANE_REASON, output.lane_reason.clone())
+    .with_metadata(
+        EXPLAIN_META_EXPECTED_LOSS,
+        output.expected_loss_millionths.to_string(),
+    )
     .with_metadata(
         RUNTIME_EXPLAIN_ORIGIN_SURFACE_METADATA_KEY,
         "execution_orchestrator",
@@ -3554,11 +3579,28 @@ fn content_hash_for_json<T: Serialize>(value: &T, target: &str) -> Result<Conten
 
 fn execute_explain(args: ExplainArgs) -> Result<i32, String> {
     let bundle: RuntimeExplainBundle = load_json_file(&args.input)?;
+
+    // E3.T4: emit the full derived view bundle (explain.md + evidence_graph.json
+    // + replay.json + counterfactuals.json + commands.txt + repro.lock + a copy
+    // of the index) to a directory. All views are pure projections over the
+    // index, so the directory is byte-deterministic and repro.lock-addressed.
+    if let Some(dir) = args.emit_bundle.as_ref() {
+        let views = build_explain_bundle(&bundle);
+        write_bytes_file(&dir.join("explain.md"), views.explain_md.as_bytes())?;
+        write_json_file(&dir.join("evidence_graph.json"), &views.evidence_graph)?;
+        write_json_file(&dir.join("replay.json"), &views.replay)?;
+        write_json_file(&dir.join("counterfactuals.json"), &views.counterfactuals)?;
+        write_bytes_file(&dir.join("commands.txt"), views.commands_txt.as_bytes())?;
+        write_json_file(&dir.join("repro.lock"), &views.repro_lock)?;
+        // Preserve the index alongside its views so the bundle is self-contained.
+        write_json_file(&dir.join("explain.json"), &bundle)?;
+    }
+
     match args.format {
         ExplainOutputFormat::Json => {
             if let Some(path) = args.out.as_ref() {
                 write_json_file(path, &bundle)?;
-            } else {
+            } else if args.emit_bundle.is_none() {
                 print_json(&bundle)?;
             }
         }
@@ -3566,7 +3608,7 @@ fn execute_explain(args: ExplainArgs) -> Result<i32, String> {
             let summary = render_runtime_explain_summary(&bundle, &args.input);
             if let Some(path) = args.out.as_ref() {
                 write_bytes_file(path, summary.as_bytes())?;
-            } else {
+            } else if args.emit_bundle.is_none() {
                 println!("{summary}");
             }
         }
@@ -7352,7 +7394,8 @@ fn usage() -> String {
         "      # package-level intake: manifest + capability-profile + denied-ambient + IFC + per-mode resolution",
         "  frankenctl run --input <source.js> --extension-id <id> [--goal script|module] [--out <report.json>]",
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
-        "  frankenctl explain <bundle.json> [--format summary|json] [--out <path>]",
+        "  frankenctl explain <bundle.json> [--format summary|json] [--out <path>] [--emit-bundle <dir>]",
+        "      # --emit-bundle: explain.md + evidence_graph/replay/counterfactuals.json + commands.txt + repro.lock",
         "  frankenctl doctor (--input <runtime_input.json> | --artifact-dir <artifacts/<gate>/<ts>>)",
         "      [--summary] [--out-dir <path>]",
         "      [--workload-id <id>] [--package-name <name>] [--target-platform <value>]...",
@@ -7527,8 +7570,19 @@ fn run_usage() -> String {
 fn explain_usage() -> String {
     [
         "explain usage:",
-        "  frankenctl explain <bundle.json> [--format summary|json] [--out <path>]",
+        "  frankenctl explain <bundle.json> [--format summary|json] [--out <path>] [--emit-bundle <dir>]",
         "  frankenctl explain --input <bundle.json> [--format summary|json] [--out <path>]",
+        "",
+        "  --emit-bundle <dir> writes the full derived view bundle over the index:",
+        "    explain.md          human-readable allow/deny/.../quarantine \"why\" story",
+        "                        with per-decision source links,",
+        "    evidence_graph.json source/IR/decision/receipt/evidence/replay/claim nodes + edges,",
+        "    replay.json         strict/validate modes + divergence classification,",
+        "    counterfactuals.json indexed counterfactual pointers,",
+        "    commands.txt        operator-verification commands,",
+        "    repro.lock          deterministic content-address over every indexed artifact,",
+        "    explain.json        a copy of the index itself.",
+        "  Every view is a pure projection over the index — never a second truth model.",
     ]
     .join("\n")
 }

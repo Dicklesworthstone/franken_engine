@@ -2273,6 +2273,44 @@ mod tests {
     }
 
     #[test]
+    fn test_filter_against_corpus_rejects_cosmetic_variant() {
+        let kind = ProgramKind::PlainJs;
+        let strategy = SynthesisStrategy::GrammarGuided;
+        let mut existing = make_candidate_with_novelty("corpus-attack", 700_000);
+        existing.source_text = "function attack(){return 1;}".into();
+        existing.content_hash = SynthesizedCandidate::compute_hash(
+            &existing.candidate_id,
+            kind,
+            strategy,
+            &existing.source_text,
+        );
+
+        let mut candidate = make_candidate_with_novelty("candidate-cosmetic", 700_000);
+        candidate.source_text =
+            "/* cosmetic */ function renamed_attack ( ) { return 0x1 ; }".into();
+        candidate.content_hash = SynthesizedCandidate::compute_hash(
+            &candidate.candidate_id,
+            kind,
+            strategy,
+            &candidate.source_text,
+        );
+
+        assert_ne!(existing.content_hash, candidate.content_hash);
+        assert_eq!(
+            existing.semantic_fingerprint(),
+            candidate.semantic_fingerprint()
+        );
+
+        let constraint = default_constraint();
+        let (accepted, denied) =
+            filter_candidates_against_corpus(vec![candidate], &constraint, [&existing]);
+
+        assert!(accepted.is_empty());
+        assert_eq!(denied.len(), 1);
+        assert_eq!(denied[0].1, SynthesisDenialReason::DuplicateCandidate);
+    }
+
+    #[test]
     fn test_filter_coverage_redundant() {
         let mut c = make_candidate_with_novelty("c1", 500_000);
         c.coverage_delta_millionths = 0; // zero coverage

@@ -43,7 +43,7 @@ use crate::lowering_pipeline::{
     Ir2FlowProofArtifact, LoweringContext, LoweringPipelineError, lower_ir0_to_ir3,
 };
 use crate::parser::{CanonicalEs2020Parser, ParserOptions};
-use crate::ts_normalization::prepare_source_entry_for_public_entrypoints;
+use crate::ts_normalization::{CapabilityIntent, prepare_source_entry_for_public_entrypoints};
 
 /// Schema id stamped on every emitted report and `run_manifest.json`.
 pub const AUTHORITY_FOOTPRINT_SCHEMA_VERSION: &str = "franken-engine.authority-footprint.v1";
@@ -434,6 +434,19 @@ pub fn analyze_authority_footprint(
         Err(error) => return fail_closed(format!("source ingestion failed: {error}")),
     };
 
+    // Typed hostcall capability intents (`hostcall<"cap">(args)`) are extracted by
+    // the same TS normalization the runtime ingestion uses, after which the generic
+    // type param is stripped so the ES2020 parser sees a plain call. The lowered IR2
+    // therefore carries no `required_capability` marker for them, so the extracted
+    // intents are threaded into the footprint below. They are only applied on the
+    // clean (fully-lowered) path, never the bounded path, so the report never
+    // asserts a footprint for a region the bounded path did not analyze.
+    let capability_intents: Vec<CapabilityIntent> = prepared
+        .normalization_output
+        .as_ref()
+        .map(|output| output.capability_intents.clone())
+        .unwrap_or_default();
+
     let parser = CanonicalEs2020Parser;
     let (parse_result, _event_ir) = parser.parse_with_event_ir(
         prepared.prepared_source.as_str(),
@@ -453,9 +466,12 @@ pub fn analyze_authority_footprint(
     );
 
     match lower_ir0_to_ir3(&ir0, &context) {
-        Ok(output) => {
-            report_from_clean_lowering(base(true), &output.ir2, &output.ir2_flow_proof_artifact)
-        }
+        Ok(output) => report_from_clean_lowering(
+            base(true),
+            &output.ir2,
+            &output.ir2_flow_proof_artifact,
+            &capability_intents,
+        ),
         Err(LoweringPipelineError::AmbientAuthorityViolation {
             required_effect,
             accessor,
@@ -504,12 +520,24 @@ fn report_from_ambient_violation(
     report.finalize()
 }
 
+/// A typed-hostcall capability names a declassification route when the leading
+/// segment of its tag is `declassify` (e.g. `declassify.audit`). Such a call is an
+/// IFC obligation that the runtime mediates only through a signed declassification
+/// receipt, so the analyzer surfaces it as an `FE-CAP-0003` finding.
+fn is_declassification_capability(capability: &str) -> bool {
+    capability
+        .split(|c| c == '.' || c == ':')
+        .next()
+        .is_some_and(|head| head == "declassify")
+}
+
 /// Build the report for a file that lowered cleanly: project per-op capability
 /// requirements and IFC flow facts back onto source spans.
 fn report_from_clean_lowering(
     mut report: AuthorityFootprintReport,
     ir2: &Ir2Module,
     flow_proof: &Ir2FlowProofArtifact,
+    capability_intents: &[CapabilityIntent],
 ) -> AuthorityFootprintReport {
     // Per-op required capabilities → minimal footprint with call sites.
     let mut requirements: std::collections::BTreeMap<String, Vec<SourceLocation>> =
@@ -525,6 +553,13 @@ fn report_from_clean_lowering(
     // Aggregate module-level tags that never landed on a spanned op still count.
     for tag in &ir2.required_capabilities {
         requirements.entry(tag.0.clone()).or_default();
+    }
+    // Typed-hostcall capability intents declare a required capability that survives
+    // only in the normalization output: the IR2 op is a plain call once the generic
+    // type param is stripped, so it carries no `required_capability`. They have no
+    // recoverable call-site span yet, so record them site-less.
+    for intent in capability_intents {
+        requirements.entry(intent.capability.clone()).or_default();
     }
     for (tag, mut sites) in requirements {
         sites.sort();
@@ -572,6 +607,30 @@ fn report_from_clean_lowering(
             implied_capability: None,
             location: span_for(obligation.op_index),
         });
+    }
+
+    // Typed hostcalls whose capability names a declassification route are an IFC
+    // obligation in their own right: surface them as FE-CAP-0003 so the report (and
+    // the package-level intake that aggregates these findings) records the
+    // signed-receipt requirement. Intents are pre-sorted and deduplicated by the
+    // normalization layer, so iteration order is deterministic.
+    for intent in capability_intents {
+        if is_declassification_capability(&intent.capability) {
+            report.findings.push(CheckFinding {
+                error_code: CheckFindingKind::DeclassificationRequired
+                    .error_code()
+                    .to_string(),
+                kind: CheckFindingKind::DeclassificationRequired,
+                confidence: FindingConfidence::Definite,
+                message: format!(
+                    "typed hostcall `{}` declares a declassification route: permitted only under a signed declassification receipt",
+                    intent.capability
+                ),
+                accessor: None,
+                implied_capability: None,
+                location: None,
+            });
+        }
     }
 
     report.least_authority_suggestion = if report.required_capabilities.is_empty() {

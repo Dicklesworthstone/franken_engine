@@ -284,11 +284,23 @@ pub enum TsNormalizationError {
 pub fn classify_source_language(source_label: Option<&str>, source: &str) -> SourceLanguage {
     if source_label.is_some_and(source_label_has_typescript_extension)
         || source_looks_typescript(source)
+        || source_uses_typed_hostcall_dsl(source)
     {
         SourceLanguage::TypeScript
     } else {
         SourceLanguage::JavaScript
     }
+}
+
+/// The typed-hostcall capability DSL (`hostcall<"cap">(args)`) uses TypeScript
+/// generic-call syntax: in plain JavaScript it would parse as a comparison chain,
+/// so its capability intent would be lost. Any source that uses it must run the TS
+/// normalization that extracts the capability intent and strips the generic
+/// parameter, so the analyzer and the runtime agree on the hostcall edge
+/// regardless of the file extension (e.g. a `.js` package module that declares a
+/// `hostcall<"declassify.audit">(...)` obligation).
+fn source_uses_typed_hostcall_dsl(source: &str) -> bool {
+    source.contains("hostcall<\"")
 }
 
 pub fn prepare_source_entry_for_public_entrypoints(

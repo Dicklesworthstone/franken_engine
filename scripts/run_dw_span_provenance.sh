@@ -31,31 +31,8 @@ source "$script_dir/dw/lib/dw_e2e_lib.sh"
 mode="${1:-ci}"
 dw_begin "dw_span_provenance" "$mode"
 
-# Run a cargo test command and judge pass/fail on the TEST RESULTS, not the
-# rch hook's exit code: the hook exits non-zero after an SSH-timeout retry
-# even when the delivered run is fully green (observed fleet-wide
-# 2026-06-11; see the bead filed from this gate's first run). Fail-closed
-# semantics are preserved — any FAILED result line, compile error, panic,
-# or missing 'test result: ok' line still fails the step; a wrapper-exit
-# anomaly over green results passes WITH a logged anomaly line in the step
-# log (never silent).
-dw_cargo_results() {
-  local out rc ok bad
-  out=$(mktemp)
-  if "$@" > "$out" 2>&1; then rc=0; else rc=$?; fi
-  cat "$out"
-  ok=$(grep -c '^test result: ok\.' "$out" || true)
-  bad=$(grep -cE '^test result: FAILED|^error(\[|:)|panicked at' "$out" || true)
-  rm -f "$out"
-  if [[ "$bad" -eq 0 && "$ok" -ge 1 ]]; then
-    if [[ "$rc" -ne 0 ]]; then
-      echo "[dw-anomaly] wrapper exit=$rc with fully green test results — rch hook timeout-exit bug; passing on results"
-    fi
-    return 0
-  fi
-  return $(( rc == 0 ? 1 : rc ))
-}
-
+# Judge hook-routed cargo tests by delivered test-result evidence; the shared
+# helper logs wrapper-exit anomalies without turning green test output red.
 dw_run_step "cargo test -p frankenengine-engine --test span_provenance_goldens" \
   dw_cargo_results cargo test -p frankenengine-engine --test span_provenance_goldens
 

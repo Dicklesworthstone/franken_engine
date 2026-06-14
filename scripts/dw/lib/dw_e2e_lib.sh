@@ -22,6 +22,7 @@
 #   source "$(dirname "${BASH_SOURCE[0]}")/lib/dw_e2e_lib.sh"
 #   dw_begin "<capability-slug>" "<mode>"
 #   dw_run_step "cargo test -p frankenengine-engine --test foo" cargo test ...
+#   dw_run_step "cargo test -p frankenengine-engine --test foo" dw_cargo_results cargo test ...
 #   dw_require_dep node "node --version"   # emits degraded receipt + fails closed if absent
 #   dw_finish
 
@@ -106,6 +107,28 @@ dw_run_step() {
     dw_log_event "$text" "fail" "$(printf '{"index":%d,"rc":%d,"ms":%d,"output_sha256":"%s","hint":"see %s for expected-vs-actual"}' "$DW_STEP_N" "$rc" $(( (end-start)/1000000 )) "$out_hash" "$(basename "$log_path")")"
     return "$rc"
   fi
+}
+
+# Run a cargo test command and judge pass/fail on delivered test results, not
+# only the rch hook wrapper exit. The hook can exit non-zero after an
+# SSH-timeout retry even when the delivered cargo test output is fully green.
+# Fail-closed semantics are preserved: compile errors, FAILED result lines,
+# panics, or missing `test result: ok.` still fail the step.
+dw_cargo_results() {
+  local out rc ok bad
+  out=$(mktemp)
+  if "$@" > "$out" 2>&1; then rc=0; else rc=$?; fi
+  cat "$out"
+  ok=$(grep -c '^test result: ok\.' "$out" || true)
+  bad=$(grep -cE '^test result: FAILED|^error(\[|:)|panicked at' "$out" || true)
+  rm -f "$out"
+  if [[ "$bad" -eq 0 && "$ok" -ge 1 ]]; then
+    if [[ "$rc" -ne 0 ]]; then
+      echo "[dw-anomaly] wrapper exit=$rc with fully green test results - rch hook timeout-exit bug; passing on results"
+    fi
+    return 0
+  fi
+  return $(( rc == 0 ? 1 : rc ))
 }
 
 # Require an external dependency; if absent, emit a degraded receipt and fail closed

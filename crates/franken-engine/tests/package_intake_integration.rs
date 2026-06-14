@@ -171,6 +171,17 @@ fn extensionless_edge_diverges_by_compat_mode() {
             .iter()
             .any(|m| m == "dep.js")
     );
+
+    // The mode-fragile edge is unreachable under Native/NodeCompat, so coverage
+    // is bounded and surfaced explicitly in completeness notes (no silent caps).
+    assert_eq!(report.completeness, PackageIntakeCompleteness::Bounded);
+    assert!(
+        report
+            .completeness_notes
+            .iter()
+            .any(|note| note.contains("mode-fragile")),
+        "mode-fragile divergence must be enumerated in completeness notes"
+    );
 }
 
 #[test]

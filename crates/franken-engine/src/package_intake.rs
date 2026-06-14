@@ -1025,13 +1025,36 @@ pub fn onboard_package(
             specs.join(", ")
         ));
     }
+    // Mode-fragile edges: resolve under some compatibility mode but not another
+    // (e.g. an extensionless import that BunCompat probes but Native/NodeCompat
+    // reject). Under the strict mode the target is unreachable, so the analyzed
+    // graph is mode-dependent — surfaced here rather than buried in the
+    // resolution report (no silent caps). Disjoint from unresolved_edges, which
+    // fail in *every* mode (and so agree, modes_agree = true).
+    let mode_fragile_edges: Vec<&ResolutionEdge> =
+        edges.iter().filter(|edge| !edge.modes_agree).collect();
+    if !mode_fragile_edges.is_empty() {
+        let specs: Vec<String> = mode_fragile_edges
+            .iter()
+            .map(|edge| format!("{}→`{}`", edge.from_module, edge.specifier))
+            .collect();
+        completeness_notes.push(format!(
+            "{} import edge(s) resolve differently across Native/NodeCompat/BunCompat (mode-fragile; unreachable under the stricter mode): {}",
+            mode_fragile_edges.len(),
+            specs.join(", ")
+        ));
+    }
     if !external_dependencies.is_empty() {
         completeness_notes.push(format!(
             "{} external (bare) dependency specifier(s) reported but not analyzed",
             external_dependencies.len()
         ));
     }
-    let completeness = if truncated || !bounded_modules.is_empty() || !unresolved_edges.is_empty() {
+    let completeness = if truncated
+        || !bounded_modules.is_empty()
+        || !unresolved_edges.is_empty()
+        || !mode_fragile_edges.is_empty()
+    {
         PackageIntakeCompleteness::Bounded
     } else {
         PackageIntakeCompleteness::Complete
@@ -1230,14 +1253,23 @@ mod tests {
         );
         assert!(native.error_code.is_some());
         assert_eq!(report.module_resolution_report.divergent_edge_count, 1);
-        // Divergence does not make the package incomplete by itself (dep resolved
-        // in BunCompat, so it was reached + analyzed), but the report still flags
-        // the divergence count.
+        // dep.js resolved under BunCompat, so it was reached + analyzed...
         assert!(
             report
                 .manifest_proposal
                 .modules
                 .contains(&"dep.js".to_string())
+        );
+        // ...but the edge is mode-fragile (unreachable under Native/NodeCompat),
+        // so coverage is bounded and the boundary is surfaced explicitly, never
+        // buried in the resolution report.
+        assert_eq!(report.completeness, PackageIntakeCompleteness::Bounded);
+        assert!(
+            report
+                .completeness_notes
+                .iter()
+                .any(|note| note.contains("mode-fragile")),
+            "mode-fragile edge must be enumerated in completeness notes"
         );
     }
 

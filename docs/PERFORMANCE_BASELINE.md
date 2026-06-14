@@ -240,6 +240,45 @@ problem entirely because there is exactly one buffer and recursion only appends.
 - Recursion-safety property stated explicitly (§4, and the "Reality check"). ✅
 - No code change in this bead (implementation is `bd-o4cbn.5.3`). ✅
 
+### Bench validation (H4.5)
+
+PERF-H4.5 (`bd-o4cbn.5.5`) is now encoded by
+`scripts/perf/h4_bench_validate.sh`. The validator consumes a preserved
+`real_runtime_hot_paths` timing run and applies the original H4.5 gate:
+
+- `parser_arena_materialization` mean <= 27 us.
+- `lowering_pipeline_ir3` mean <= 72 us.
+- the combined sum of those two target means drops >= 15 % vs frozen `pass1`;
+- every H4 target's post 95 % CI upper bound is below the `pass1` 95 % CI
+  lower bound;
+- no other sub-bench regresses by > 5 %, except separately-tracked known
+  regressions that are still reported.
+
+The recorded H4.5 verdict uses the preserved H7.2 timing artifact
+`tests/artifacts/perf/h7_bench/20260526T071059Z/events.jsonl`. H4 did not freeze
+a separate post-H4 Criterion artifact before later perf passes landed, so this
+is a cumulative end-state validation rather than H4-isolated attribution.
+
+| sub-bench | pass1 mean (ns) | current mean (ns) | current CI95 (ns) | delta |
+|---|---:|---:|---:|---:|
+| parser_arena_materialization *(H4 target)* | 31354.0 | 25278.0 | [25231, 25344] | -19.38 % |
+| lowering_pipeline_ir3 *(H4 target)* | 87917.0 | 68532.0 | [68449, 68658] | -22.05 % |
+| baseline_interpreter_eval | 494407.0 | 316176.0 | [315651, 316766] | -36.05 % |
+| baseline_value_string_clone | 245112.0 | 276893.0 | [276574, 277294] | +12.97 % |
+| iterator_protocol_trace | 6098.0 | 1451.0 | [1449, 1452] | -76.21 % |
+| scheduler_queue_commit | 58223.0 | 45217.0 | [45134, 45318] | -22.34 % |
+| evidence_ledger_bundle | 225145.0 | 146203.0 | [145924, 146585] | -35.06 % |
+| transport_certificate_serialization | 6675.0 | 3039.0 | [3030, 3051] | -54.47 % |
+
+**H4.5 gate verdict: PASS.** The two H4 targets move from a combined
+119271 ns to 93810 ns, a **21.35 %** drop vs `pass1`. Their post CI95 upper
+bounds are also below the corresponding `pass1` CI95 lower bounds
+(`parser_arena_materialization`: 25344 ns < 31205 ns;
+`lowering_pipeline_ir3`: 68658 ns < 87720 ns). The only >5 % cross-bench
+increase is `baseline_value_string_clone`, the documented allocator/measurement
+artifact tracked by `bd-o4cbn.15` and already handled as a `KNOWN_REGRESSIONS`
+entry in adjacent perf gates.
+
 ## EngineObjectId hex zero-alloc rewrite (H3)
 
 The H3 pass (`bd-o4cbn.2`) replaced `EngineObjectId::to_hex`'s per-byte

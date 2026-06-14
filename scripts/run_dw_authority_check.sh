@@ -19,10 +19,30 @@ source "$script_dir/dw/lib/dw_e2e_lib.sh"
 mode="${1:-ci}"
 dw_begin "dw_authority_check" "$mode"
 
+# Heavy Cargo work routes through rch by default (the franken_engine session
+# policy for shared Rust builds). When rch is unavailable (e.g. a worker-side
+# sibling-crate drift), set DW_RUN_LOCAL=1 to fall back to a local cargo build so
+# the gate still emits a real content-addressed bundle instead of hanging on rch.
+dw_cargo() {
+  if [[ "${DW_RUN_LOCAL:-0}" == "1" ]]; then
+    env RCH_CARGO_WRAPPER_BYPASS=1 CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' "$@"
+  else
+    rch exec -- env CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' "$@"
+  fi
+}
+
+dw_cargo_label() {
+  if [[ "${DW_RUN_LOCAL:-0}" == "1" ]]; then
+    printf 'DW_RUN_LOCAL env RCH_CARGO_WRAPPER_BYPASS=1 %s' "$*"
+  else
+    printf "rch exec -- env CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' %s" "$*"
+  fi
+}
+
 rch_test() {
   local test_name="$1"
-  dw_run_step "rch exec -- env CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' cargo test -p frankenengine-engine --test ${test_name} -- --nocapture" \
-    dw_cargo_results rch exec -- env CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' \
+  dw_run_step "$(dw_cargo_label cargo test -p frankenengine-engine --test "$test_name" -- --nocapture)" \
+    dw_cargo_results dw_cargo \
       cargo test -p frankenengine-engine --test "$test_name" -- --nocapture
 }
 
@@ -35,8 +55,8 @@ run_tests() {
 
 case "$mode" in
   check)
-    dw_run_step "rch exec -- env CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' cargo check -p frankenengine-engine --bin frankenctl --bin franken-lsp --test authority_footprint_capstone" \
-      rch exec -- env CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' \
+    dw_run_step "$(dw_cargo_label cargo check -p frankenengine-engine --bin frankenctl --bin franken-lsp --test authority_footprint_capstone)" \
+      dw_cargo \
         cargo check -p frankenengine-engine --bin frankenctl --bin franken-lsp --test authority_footprint_capstone
     ;;
   test|ci)

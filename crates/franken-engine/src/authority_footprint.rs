@@ -526,7 +526,7 @@ fn report_from_ambient_violation(
 /// receipt, so the analyzer surfaces it as an `FE-CAP-0003` finding.
 fn is_declassification_capability(capability: &str) -> bool {
     capability
-        .split(|c| c == '.' || c == ':')
+        .split(['.', ':'])
         .next()
         .is_some_and(|head| head == "declassify")
 }

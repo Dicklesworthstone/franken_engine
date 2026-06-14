@@ -14,13 +14,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::capability_witness::{
-    CapabilityEscrowReceiptRecord, CapabilityWitness, ConfidenceInterval, ConsistencyProofLink,
-    CustomTheoremExtension, DenialRecord, LifecycleState, PromotionTheoremInput,
-    PromotionTheoremKind, PromotionTheoremReport, ProofKind, ProofObligation, PublicationEntryKind,
-    RollbackToken, SourceCapabilitySet, WitnessBuilder, WitnessError, WitnessIndexError,
-    WitnessIndexQuery, WitnessIndexStore, WitnessPublicationConfig, WitnessPublicationError,
-    WitnessPublicationPipeline, WitnessPublicationQuery, WitnessReplayJoinQuery,
-    WitnessSchemaVersion, WitnessStore, WitnessTreeHead, WitnessValidator,
+    CapabilityEscrowReceiptRecord, CapabilityWitness, CapabilityWitnessTrustRoot,
+    ConfidenceInterval, ConsistencyProofLink, CustomTheoremExtension, DenialRecord, LifecycleState,
+    PromotionTheoremInput, PromotionTheoremKind, PromotionTheoremReport, ProofKind,
+    ProofObligation, PublicationEntryKind, RollbackToken, SourceCapabilitySet, WitnessBuilder,
+    WitnessError, WitnessIndexError, WitnessIndexQuery, WitnessIndexStore,
+    WitnessPublicationConfig, WitnessPublicationError, WitnessPublicationPipeline,
+    WitnessPublicationQuery, WitnessReplayJoinQuery, WitnessSchemaVersion, WitnessStore,
+    WitnessTreeHead, WitnessValidator,
 };
 use frankenengine_engine::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
 use frankenengine_engine::hash_tiers::ContentHash;
@@ -43,6 +44,10 @@ fn test_signing_key() -> SigningKey {
         *b = (i as u8).wrapping_mul(7).wrapping_add(13);
     }
     SigningKey::from_bytes(key).unwrap()
+}
+
+fn test_trust_root() -> CapabilityWitnessTrustRoot {
+    CapabilityWitnessTrustRoot::single_authority(test_signing_key().verification_key())
 }
 
 fn trust_theorem_report_signer(witness: &mut CapabilityWitness, signing_key: &SigningKey) {
@@ -1504,6 +1509,7 @@ fn pipeline_publish_produces_verifiable_artifact() {
         },
     )
     .unwrap();
+    pipeline.set_witness_trust_root(test_trust_root());
     let witness = build_promoted_witness(1);
     let pub_id = pipeline.publish_witness(witness, 90_000).unwrap();
     assert_eq!(pipeline.publications().len(), 1);
@@ -1533,6 +1539,7 @@ fn pipeline_second_publish_has_consistency_chain() {
         },
     )
     .unwrap();
+    pipeline.set_witness_trust_root(test_trust_root());
     pipeline
         .publish_witness(build_promoted_witness(10), 100)
         .unwrap();
@@ -1562,6 +1569,7 @@ fn pipeline_revoke_appends_signed_entry() {
         WitnessPublicationConfig::default(),
     )
     .unwrap();
+    pipeline.set_witness_trust_root(test_trust_root());
     let witness = build_promoted_witness(20);
     let wid = witness.witness_id.clone();
     pipeline.publish_witness(witness, 1_000).unwrap();
@@ -1589,6 +1597,7 @@ fn pipeline_query_filters_by_extension_and_revoked() {
         WitnessPublicationConfig::default(),
     )
     .unwrap();
+    pipeline.set_witness_trust_root(test_trust_root());
     let w1 = build_promoted_witness(31);
     let w1_ext = w1.extension_id.clone();
     let w1_id = w1.witness_id.clone();
@@ -1654,6 +1663,7 @@ fn pipeline_error_duplicate_publish_rejected() {
         WitnessPublicationConfig::default(),
     )
     .unwrap();
+    pipeline.set_witness_trust_root(test_trust_root());
     let witness = build_promoted_witness(50);
     pipeline.publish_witness(witness.clone(), 100).unwrap();
     assert!(matches!(
@@ -1671,6 +1681,7 @@ fn pipeline_error_revoke_empty_reason_rejected() {
         WitnessPublicationConfig::default(),
     )
     .unwrap();
+    pipeline.set_witness_trust_root(test_trust_root());
     let witness = build_promoted_witness(51);
     let wid = witness.witness_id.clone();
     pipeline.publish_witness(witness, 100).unwrap();
@@ -1689,6 +1700,7 @@ fn pipeline_error_revoke_already_revoked_rejected() {
         WitnessPublicationConfig::default(),
     )
     .unwrap();
+    pipeline.set_witness_trust_root(test_trust_root());
     let witness = build_promoted_witness(52);
     let wid = witness.witness_id.clone();
     pipeline.publish_witness(witness, 100).unwrap();
@@ -1730,6 +1742,7 @@ fn pipeline_checkpoints_at_configured_interval() {
         },
     )
     .unwrap();
+    pipeline.set_witness_trust_root(test_trust_root());
     pipeline
         .publish_witness(build_promoted_witness(90), 100)
         .unwrap();
@@ -1749,6 +1762,7 @@ fn pipeline_events_emitted_on_publish_and_revoke() {
         WitnessPublicationConfig::default(),
     )
     .unwrap();
+    pipeline.set_witness_trust_root(test_trust_root());
     let w = build_promoted_witness(80);
     let wid = w.witness_id.clone();
     pipeline.publish_witness(w, 100).unwrap();
@@ -2131,6 +2145,7 @@ fn end_to_end_witness_lifecycle_through_publication() {
         WitnessPublicationConfig::default(),
     )
     .unwrap();
+    pipeline.set_witness_trust_root(test_trust_root());
     let pub_id = pipeline.publish_witness(witness.clone(), 10_000).unwrap();
 
     // 8. Verify

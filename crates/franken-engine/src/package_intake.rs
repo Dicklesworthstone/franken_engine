@@ -591,6 +591,7 @@ fn syntax_str(syntax: ModuleSyntax) -> &'static str {
     match syntax {
         ModuleSyntax::EsModule => "es_module",
         ModuleSyntax::CommonJs => "common_js",
+        ModuleSyntax::Wasm => "wasm",
     }
 }
 

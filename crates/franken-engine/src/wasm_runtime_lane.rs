@@ -6,13 +6,94 @@
 //! - Efficient JS↔WASM ABI for state updates and DOM op emission.
 //! - Deterministic safe mode when resource budgets are exceeded.
 
+use crate::capability::RuntimeCapability;
 use crate::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId, derive_id};
+use crate::hash_tiers::ContentHash;
+use crate::module_resolver::{
+    ModuleRecord, ModuleSyntax, ResolvedModule, wasm_module_required_capabilities,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::fmt;
 
 fn wasm_schema() -> SchemaId {
     SchemaId::from_definition(b"wasm_runtime_lane-v1")
 }
+
+pub const WASM_MODULE_ROUTE_COMPONENT: &str = "wasm_runtime_lane";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WasmModuleImportRoute {
+    pub canonical_specifier: String,
+    pub module_id: String,
+    pub content_hash: ContentHash,
+    pub required_capabilities: BTreeSet<RuntimeCapability>,
+    pub route_component: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WasmModuleRouteError {
+    UnsupportedSyntax {
+        module_id: String,
+        syntax: ModuleSyntax,
+    },
+}
+
+impl WasmModuleImportRoute {
+    pub fn from_resolved_module(resolved: &ResolvedModule) -> Result<Self, WasmModuleRouteError> {
+        Self::from_parts(
+            resolved.canonical_specifier.clone(),
+            &resolved.record,
+            resolved.content_hash,
+        )
+    }
+
+    pub fn from_record(
+        canonical_specifier: impl Into<String>,
+        record: &ModuleRecord,
+    ) -> Result<Self, WasmModuleRouteError> {
+        Self::from_parts(canonical_specifier.into(), record, record.canonical_hash())
+    }
+
+    fn from_parts(
+        canonical_specifier: String,
+        record: &ModuleRecord,
+        content_hash: ContentHash,
+    ) -> Result<Self, WasmModuleRouteError> {
+        if record.syntax != ModuleSyntax::Wasm {
+            return Err(WasmModuleRouteError::UnsupportedSyntax {
+                module_id: record.id.clone(),
+                syntax: record.syntax,
+            });
+        }
+
+        let mut required_capabilities = record.required_capabilities.clone();
+        required_capabilities.extend(wasm_module_required_capabilities());
+
+        Ok(Self {
+            canonical_specifier,
+            module_id: record.id.clone(),
+            content_hash,
+            required_capabilities,
+            route_component: WASM_MODULE_ROUTE_COMPONENT.to_string(),
+        })
+    }
+}
+
+impl fmt::Display for WasmModuleRouteError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnsupportedSyntax { module_id, syntax } => write!(
+                f,
+                "module '{}' uses syntax '{}' and cannot route to the WebAssembly runtime lane",
+                module_id,
+                syntax.as_str()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for WasmModuleRouteError {}
 
 // ---------------------------------------------------------------------------
 // WASM-targeted signal node (compact representation)

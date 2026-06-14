@@ -1939,6 +1939,7 @@ fn module_request_style(syntax: ModuleSyntax) -> ImportStyle {
     match syntax {
         ModuleSyntax::EsModule => ImportStyle::Import,
         ModuleSyntax::CommonJs => ImportStyle::Require,
+        ModuleSyntax::Wasm => ImportStyle::Import,
     }
 }
 

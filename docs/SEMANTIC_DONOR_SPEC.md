@@ -89,6 +89,13 @@ Each entry below is binding for conformance and lockstep gates.
 - `SEM-OBJ-001`: `Object.defineProperty` invariant violations throw consistently.
 - `SEM-OBJ-002`: prototype-chain resolution order and `hasOwnProperty` distinctions are stable.
 - `SEM-OBJ-003`: non-configurable property transitions obey ECMAScript constraints.
+- `SEM-OBJ-004`: ordinary own-property key enumeration follows ECMAScript
+  `[[OwnPropertyKeys]]` order: array-index keys in ascending numeric order,
+  then non-index string keys in insertion order, then symbol keys in insertion
+  order. Current `BTreeMap`-backed object storage is deterministic but not
+  donor-equivalent for non-index string keys; this known divergence is tracked
+  by `bd-qporw` and must not be used as conformance evidence until ordered
+  storage lands or an explicit release waiver cites the gap.
 
 ### Equality/coercion/numeric
 - `SEM-EQL-001`: `NaN !== NaN`, `Object.is(NaN, NaN) === true`, `Object.is(-0, 0) === false`.
@@ -114,7 +121,11 @@ Each entry below is binding for conformance and lockstep gates.
 - `SEM-ERR-002`: native error type classification (`TypeError`, `RangeError`, etc.) is stable.
 - `SEM-JSN-001`: `JSON.stringify` key omission behavior for `undefined`, functions, and symbols is stable.
 - `SEM-JSN-002`: compound JSON arrays/objects materialize as heap-backed runtime values instead of descriptor placeholders.
-- `SEM-JSN-003`: `JSON.stringify` over compound runtime values uses deterministic own-key ordering, container-sensitive omission/nulling rules, and explicit cycle failure.
+- `SEM-JSN-003`: `JSON.stringify` over compound runtime values uses
+  donor-compatible own-key ordering per `SEM-OBJ-004`, container-sensitive
+  omission/nulling rules, and explicit cycle failure. The current deterministic
+  `BTreeMap` string-key order is a documented `bd-qporw` divergence, not
+  conformance evidence.
 - `SEM-JSN-004`: unsupported JSON extension surfaces (`reviver`, `replacer`, `space`, unsupported numeric forms) are explicit and fail closed rather than being silently approximated.
 - `SEM-REG-001`: regexp unicode class/match group behavior aligns with test262 coverage target.
 

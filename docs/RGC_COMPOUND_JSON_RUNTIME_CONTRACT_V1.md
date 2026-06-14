@@ -90,10 +90,22 @@ Supported behavior:
 - Arrays serialize by iterating indices `0..length-1`.
 - Plain objects serialize by iterating own enumerable string keys in
   `ObjectHeap` `own_property_keys()` order after filtering to strings.
-  - This yields integer-index keys first in ascending numeric order, then other
-    string keys in deterministic `BTreeMap` order.
+  - Current engine storage yields integer-index keys first in ascending numeric
+    order, then other string keys in deterministic `BTreeMap` order.
+  - This is deterministic, but it is not donor-equivalent for non-index string
+    keys. ECMAScript requires insertion order after integer-index keys; the
+    accepted divergence is tracked as `bd-qporw`.
 - Nested arrays and objects are supported recursively.
 - String escaping uses the existing JSON string escaping rules.
+
+Known divergence for this contract version:
+
+- `bd-qporw`: `Object.keys`, `Object.entries`, `for...in`,
+  `Reflect.ownKeys`, and `JSON.stringify` inherit deterministic
+  `BTreeMap` string-key order from object storage. This is an explicit
+  deterministic-runtime compromise, not conformance evidence for ECMAScript
+  `[[OwnPropertyKeys]]`. Donor-compatible behavior requires a deterministic
+  insertion-order-preserving object storage design.
 
 Unsupported-value handling:
 

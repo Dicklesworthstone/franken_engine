@@ -555,6 +555,44 @@ Three facts follow, and one **corrects the `bd-o4cbn.3.6` filing hypothesis**:
 `scripts/perf/h7_mimalloc_rss_probe.sh` to re-confirm the floor mechanism and
 the `MIMALLOC_PURGE_DELAY=0` lever.
 
+## Same-day hot-path code-drift audit (bd-bwztz)
+
+`bd-bwztz` records the 2026-06-12 same-day, same-allocator endpoint comparison
+that separates accumulated code drift from frozen-`pass1` allocator and
+environment effects. CopperFinch rebuilt the 2026-05-20 pass1 code on the same
+day as HEAD and compared both endpoints under glibc with CI-separated Criterion
+runs:
+
+| sub-bench | same-day endpoint result |
+|---|---:|
+| parser_arena_materialization | 36.2 us -> 38.4 us (+6.0 %) |
+| lowering_pipeline_ir3 | 94.3 us -> 103.6 us (+9.9 %) |
+| baseline_interpreter_eval | 512.4 us -> 540.6 us (+5.5 %) |
+| baseline_value_string_clone | 255.7 us -> 278.3 us (+8.8 %) |
+| iterator_protocol_trace | -70.7 % |
+| scheduler_queue_commit | -3.9 % |
+| evidence_ledger_bundle | -53.1 % |
+| transport_certificate_serialization | -47.1 % |
+
+Decision:
+
+- The parser, lowering, interpreter, and string-clone slowdowns are recorded as
+  quantified performance debt, not as claim-supporting evidence and not as
+  proof of a single culprit commit. The window also added substantial language
+  and IFC feature mass, so attribution requires a dedicated profile or bisect.
+- Frozen-`pass1` gates may still report the `bd-o4cbn.15`
+  `baseline_value_string_clone` allocator artifact as a known regression, but
+  they must not use a favourable frozen-`pass1` result to claim that the
+  same-day code-window drift is absent.
+- Per-optimization validation beads can still close when they prove their own
+  target and either demonstrate commit-scoped no-regression or explicitly cite
+  this audit as pre-existing debt. This prevents `bd-bwztz` from blocking
+  unrelated wins while keeping the code-window drift visible.
+- Any future gate that claims "no accumulated hot-path regression" must compare
+  same-day, same-allocator endpoint builds or an equally tight commit-scoped
+  pre/post pair. Cross-day or cross-allocator `pass1` comparisons are
+  measurement context, not sufficient proof for that claim.
+
 ## Region arena for IR lowering (ALIEN-2)
 
 The ALIEN-2 pass (`bd-o4cbn.10`) is a **Tofte/Talpin-style region** refactor of

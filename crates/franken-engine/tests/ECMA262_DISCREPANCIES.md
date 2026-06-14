@@ -263,6 +263,36 @@ test reports, not buried in const sets (see DISC-005 below).
 - **Reviewed:** 2026-05-29
 - **Next review:** 2026-06-28
 
+### DISC-013: Own-property string-key enumeration uses deterministic `BTreeMap` order instead of insertion order
+
+- **Status:** ACCEPTED
+- **ES2020 ref:** §9.1.11 (`[[OwnPropertyKeys]]`), plus callers such as
+  `Object.keys`, `Object.values`, `Object.entries`, `Reflect.ownKeys`,
+  `for...in`, and `JSON.stringify`
+- **Affected harnesses:** `tests/youtube_botguard_js_conformance.rs`,
+  `tests/object_model_integration.rs`
+- **Affected tests:** `ytbg-spike-object-keys-values-order`,
+  `ordinary_object_own_property_keys_es2020_order`
+- **Symptom:** Ordinary object storage is deterministic, but non-index string
+  keys are enumerated in `BTreeMap` lexical order rather than ECMAScript
+  insertion order. Integer-index keys still sort numerically before string
+  keys. This means `Object.keys({b:2,a:1})` can observe `a,b` from the current
+  storage model even though donor order is `b,a`.
+- **Test verdict expression:** The BotGuard spike case records donor expectation
+  `b,a|2,1`; the object-model integration test currently pins the deterministic
+  storage behavior by expecting non-index string keys `a,b` after numeric keys.
+  The pin is intentional for the current deterministic lane, not conformance
+  evidence.
+- **Rationale for ACCEPTED rather than immediate repair:** A donor-equivalent
+  fix requires deterministic insertion-order-preserving object storage across
+  both `franken-engine` and `franken-core`, plus updates to object statics,
+  `for...in`, `Reflect.ownKeys`, JSON serialization, persisted/replay shapes,
+  and goldens that froze sorted order. The current docs decision keeps the gap
+  enumerable while avoiding a broad storage redesign in a docs-only session.
+- **Tracking bead:** bd-qporw
+- **Reviewed:** 2026-06-14
+- **Next review:** 2026-09-12
+
 ## Resolved divergences
 
 - **DISC-001** — `//` comment leak in `merge_logical_lines` — RESOLVED 2026-05-28 (bd-bg9l1.27.1).
@@ -287,7 +317,7 @@ not in DISC-NNN rows.
 
 ## Adding a new divergence
 
-1. Allocate the next `DISC-NNN` ID (current max: DISC-010).
+1. Allocate the next `DISC-NNN` ID (current max: DISC-013).
 2. Fill in every required field including `Affected tests` (concrete IDs, not "various").
 3. If `Status = WILL-FIX`, link a `bd-*` tracking bead.
 4. Set `Reviewed` to today and `Next review` to today+30 (WILL-FIX/INVESTIGATING) or today+90 (ACCEPTED).

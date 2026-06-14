@@ -279,6 +279,25 @@ increase is `baseline_value_string_clone`, the documented allocator/measurement
 artifact tracked by `bd-o4cbn.15` and already handled as a `KNOWN_REGRESSIONS`
 entry in adjacent perf gates.
 
+### E2E smoke (H4.6)
+
+`scripts/perf/run_perf_h4_smoke.sh` is the H4 E2E smoke companion to the H4.5
+statistical gate. It mirrors the H3/H5/H6 smoke-script shape:
+
+- `--self-check` validates the H4 prerequisites without Cargo: the two
+  `real_runtime_hot_paths` target benches exist, the `encode_value_into` /
+  `EncodeBufferPool` APIs exist, the H4.7 golden is present, and the H4.5
+  validator exists.
+- `--quick` runs the H4.7 `perf_h4_encode_buffer_integration` golden only.
+- full mode additionally builds `hot_paths` with the canonical pass1 flags and
+  runs short Criterion liveness checks for `parser_arena_materialization`
+  (<= 27 us) and `lowering_pipeline_ir3` (<= 72 us).
+
+The smoke's output/semantic check is the checked-in H4.7 frankenctl golden:
+compile hashes remain byte-identical and strict replay completes over a captured
+trace. The H4.5 script above remains the authority for the statistical combined
+drop.
+
 ## EngineObjectId hex zero-alloc rewrite (H3)
 
 The H3 pass (`bd-o4cbn.2`) replaced `EngineObjectId::to_hex`'s per-byte

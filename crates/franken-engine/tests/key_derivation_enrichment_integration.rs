@@ -106,11 +106,23 @@ fn integ_context_empty() {
     assert!(ctx.to_canonical_bytes().is_empty());
 }
 
+/// Length-prefixed encoding of one `(key, value)` entry, mirroring
+/// `DerivationContext::to_canonical_bytes` (`len(key) u64 LE || key ||
+/// len(value) u64 LE || value`).
+fn lp_entry(key: &str, value: &str) -> Vec<u8> {
+    let mut b = Vec::new();
+    b.extend_from_slice(&(key.len() as u64).to_le_bytes());
+    b.extend_from_slice(key.as_bytes());
+    b.extend_from_slice(&(value.len() as u64).to_le_bytes());
+    b.extend_from_slice(value.as_bytes());
+    b
+}
+
 #[test]
 fn integ_context_single_entry() {
     let ctx = DerivationContext::with("key", "value");
     assert_eq!(ctx.len(), 1);
-    assert_eq!(ctx.to_canonical_bytes(), b"key=value");
+    assert_eq!(ctx.to_canonical_bytes(), lp_entry("key", "value"));
 }
 
 #[test]
@@ -119,10 +131,11 @@ fn integ_context_multiple_entries_sorted() {
     ctx.add("zebra", "z");
     ctx.add("apple", "a");
     ctx.add("mango", "m");
-    let bytes = ctx.to_canonical_bytes();
-    let s = String::from_utf8_lossy(&bytes);
-    assert!(s.starts_with("apple=a"));
-    assert!(s.ends_with("zebra=z"));
+    // BTreeMap sorts keys: apple, mango, zebra; each entry length-prefixed.
+    let mut expected = lp_entry("apple", "a");
+    expected.extend(lp_entry("mango", "m"));
+    expected.extend(lp_entry("zebra", "z"));
+    assert_eq!(ctx.to_canonical_bytes(), expected);
 }
 
 #[test]
@@ -142,15 +155,17 @@ fn integ_context_overwrite() {
     ctx.add("k", "old");
     ctx.add("k", "new");
     assert_eq!(ctx.len(), 1);
-    assert_eq!(ctx.to_canonical_bytes(), b"k=new");
+    assert_eq!(ctx.to_canonical_bytes(), lp_entry("k", "new"));
 }
 
 #[test]
-fn integ_context_nul_separator() {
+fn integ_context_length_prefixed_entries() {
     let mut ctx = DerivationContext::empty();
     ctx.add("a", "1");
     ctx.add("b", "2");
-    assert_eq!(ctx.to_canonical_bytes(), b"a=1\0b=2");
+    let mut expected = lp_entry("a", "1");
+    expected.extend(lp_entry("b", "2"));
+    assert_eq!(ctx.to_canonical_bytes(), expected);
 }
 
 #[test]

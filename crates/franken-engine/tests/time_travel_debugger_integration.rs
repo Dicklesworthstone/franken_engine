@@ -5,12 +5,15 @@
 //! why did my program get contained" and receive one structured answer,
 //! instead of reading a multi-thousand-line trace.
 
+use frankenengine_engine::baseline_interpreter::{HeapObject, ObjectId, Value};
 use frankenengine_engine::deterministic_replay::{
     NondeterminismSource, NondeterminismTrace, ReplayMode,
 };
+use frankenengine_engine::ifc_artifacts::Label;
 use frankenengine_engine::replay_time_travel::{TimeTravelConfig, TimeTravelCursor};
 use frankenengine_engine::time_travel_debugger::{
-    DebuggerEvent, DebuggerEventKind, RobotSession, SECRET_LABEL_LEVEL, TimeTravelDebugger,
+    DebuggerEvent, DebuggerEventKind, InterpreterHeapSnapshot, InterpreterRegisterSnapshot,
+    InterpreterStateSnapshot, RobotSession, SECRET_LABEL_LEVEL, TimeTravelDebugger,
 };
 
 fn make_cursor(ticks: usize) -> TimeTravelCursor {
@@ -115,6 +118,37 @@ fn incident_events() -> Vec<DebuggerEvent> {
 
 fn make_session() -> RobotSession {
     RobotSession::new(TimeTravelDebugger::new(make_cursor(16), incident_events()))
+}
+
+fn state_snapshot(tick: u64, register_value: i64, label: Label) -> InterpreterStateSnapshot {
+    let mut object = HeapObject::new();
+    object
+        .properties
+        .insert("payload".to_string(), Value::Int(register_value));
+    InterpreterStateSnapshot::new(
+        tick,
+        vec![InterpreterRegisterSnapshot {
+            register: 0,
+            value: Value::Int(register_value),
+            label: label.clone(),
+        }],
+        vec![InterpreterHeapSnapshot {
+            object_id: ObjectId(tick as u32),
+            object,
+            label,
+        }],
+    )
+}
+
+fn make_inspect_session() -> RobotSession {
+    RobotSession::new(TimeTravelDebugger::new_with_state_snapshots(
+        make_cursor(16),
+        incident_events(),
+        vec![
+            state_snapshot(5, 41, Label::Confidential),
+            state_snapshot(6, 42, Label::Secret),
+        ],
+    ))
 }
 
 #[test]
@@ -230,6 +264,56 @@ fn navigation_and_breakpoints_compose_with_time_travel() {
         second.contains("\"tick\":9"),
         "re-run after rewind: {second}"
     );
+}
+
+#[test]
+fn inspect_returns_supplied_interpreter_state_after_navigation() {
+    let script = [
+        r#"{"cmd":"goto","tick":5}"#,
+        r#"{"cmd":"inspect"}"#,
+        r#"{"cmd":"step"}"#,
+        r#"{"cmd":"inspect"}"#,
+        r#"{"cmd":"back"}"#,
+        r#"{"cmd":"inspect"}"#,
+        r#"{"cmd":"inspect","tick":6}"#,
+    ];
+    let mut first_session = make_inspect_session();
+    let mut second_session = make_inspect_session();
+    let first: Vec<String> = script
+        .iter()
+        .map(|line| first_session.handle_line(line))
+        .collect();
+    let second: Vec<String> = script
+        .iter()
+        .map(|line| second_session.handle_line(line))
+        .collect();
+
+    assert_eq!(first, second, "inspect transcripts must be deterministic");
+    assert!(first[1].contains("inspection"));
+    assert!(first[1].contains("\"tick\":5"));
+    assert!(first[1].contains("Confidential"));
+    assert!(first[3].contains("\"tick\":6"));
+    assert!(first[3].contains("Secret"));
+    assert!(first[3].contains("\"register\":0"));
+    assert!(first[3].contains("\"object_id\":6"));
+    assert!(first[5].contains("\"tick\":5"));
+    assert!(first[6].contains("\"tick\":6"));
+    for line in &first {
+        assert!(serde_json::from_str::<serde_json::Value>(line).is_ok());
+        assert!(!line.contains('\n'));
+    }
+}
+
+#[test]
+fn inspect_fails_closed_when_state_is_unavailable() {
+    let mut session = make_inspect_session();
+    let missing = session.handle_line(r#"{"cmd":"inspect"}"#);
+    assert!(missing.contains("\"ok\":false"));
+    assert!(missing.contains("snapshot unavailable at tick 0"));
+
+    let out_of_range = session.handle_line(r#"{"cmd":"inspect","tick":99}"#);
+    assert!(out_of_range.contains("\"ok\":false"));
+    assert!(out_of_range.contains("out of range"));
 }
 
 #[test]

@@ -87,7 +87,9 @@ use frankenengine_engine::third_party_verifier::{
     ThirdPartyVerificationReport, VerificationCheckResult, VerificationVerdict, VerifierEvent,
     render_report_summary, verify_benchmark_claim,
 };
-use frankenengine_engine::time_travel_debugger::{DebuggerEvent, RobotSession, TimeTravelDebugger};
+use frankenengine_engine::time_travel_debugger::{
+    DebuggerEvent, InterpreterStateSnapshot, RobotSession, TimeTravelDebugger,
+};
 use frankenengine_engine::ts_normalization::{
     SourceIngestionSummary, prepare_source_entry_for_public_entrypoints,
 };
@@ -389,6 +391,7 @@ struct ReplayDebugArgs {
     trace: PathBuf,
     script: Option<PathBuf>,
     events: Option<PathBuf>,
+    state_snapshots: Option<PathBuf>,
     checkpoint_interval: u64,
     mode: ReplayMode,
     out: Option<PathBuf>,
@@ -2264,6 +2267,7 @@ fn parse_replay_debug_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut trace: Option<PathBuf> = None;
     let mut script: Option<PathBuf> = None;
     let mut events: Option<PathBuf> = None;
+    let mut state_snapshots: Option<PathBuf> = None;
     let mut checkpoint_interval: u64 = 64;
     let mut mode = ReplayMode::Strict;
     let mut out: Option<PathBuf> = None;
@@ -2274,6 +2278,13 @@ fn parse_replay_debug_command(args: &[String]) -> Result<CommandSpec, String> {
             "--trace" => trace = Some(PathBuf::from(next_arg(args, &mut index, "--trace")?)),
             "--script" => script = Some(PathBuf::from(next_arg(args, &mut index, "--script")?)),
             "--events" => events = Some(PathBuf::from(next_arg(args, &mut index, "--events")?)),
+            "--state-snapshots" => {
+                state_snapshots = Some(PathBuf::from(next_arg(
+                    args,
+                    &mut index,
+                    "--state-snapshots",
+                )?))
+            }
             "--checkpoint-interval" => {
                 let raw = next_arg(args, &mut index, "--checkpoint-interval")?;
                 checkpoint_interval = raw
@@ -2291,6 +2302,7 @@ fn parse_replay_debug_command(args: &[String]) -> Result<CommandSpec, String> {
         trace: trace.ok_or_else(|| "replay debug requires --trace <path>".to_string())?,
         script,
         events,
+        state_snapshots,
         checkpoint_interval,
         mode,
         out,
@@ -3208,19 +3220,19 @@ fn resolve_package_entry(
 /// `main`, else the first existing `index.{js,mjs,cjs,ts,jsx,tsx}`.
 fn detect_package_entry(root: &Path) -> Result<PathBuf, String> {
     let package_json = root.join("package.json");
-    if let Ok(contents) = fs::read_to_string(&package_json) {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents) {
-            for key in ["module", "main"] {
-                if let Some(rel) = value.get(key).and_then(|v| v.as_str()) {
-                    let candidate = root.join(rel);
-                    if candidate.is_file() {
-                        return fs::canonicalize(&candidate).map_err(|error| {
-                            format!(
-                                "cannot canonicalize entry `{}`: {error}",
-                                candidate.display()
-                            )
-                        });
-                    }
+    if let Ok(contents) = fs::read_to_string(&package_json)
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents)
+    {
+        for key in ["module", "main"] {
+            if let Some(rel) = value.get(key).and_then(|v| v.as_str()) {
+                let candidate = root.join(rel);
+                if candidate.is_file() {
+                    return fs::canonicalize(&candidate).map_err(|error| {
+                        format!(
+                            "cannot canonicalize entry `{}`: {error}",
+                            candidate.display()
+                        )
+                    });
                 }
             }
         }
@@ -5896,7 +5908,12 @@ fn execute_replay_debug(args: ReplayDebugArgs) -> Result<i32, String> {
         Some(path) => load_json_file::<Vec<DebuggerEvent>>(path)?,
         None => Vec::new(),
     };
-    let debugger = TimeTravelDebugger::new(cursor, debugger_events);
+    let state_snapshots: Vec<InterpreterStateSnapshot> = match args.state_snapshots.as_ref() {
+        Some(path) => load_json_file::<Vec<InterpreterStateSnapshot>>(path)?,
+        None => Vec::new(),
+    };
+    let debugger =
+        TimeTravelDebugger::new_with_state_snapshots(cursor, debugger_events, state_snapshots);
     let mut session = RobotSession::new(debugger);
 
     let command_lines: Vec<String> = match args.script.as_ref() {
@@ -7690,6 +7707,7 @@ fn replay_debug_usage() -> String {
         "replay debug usage:",
         "  frankenctl replay debug --trace <trace.json>",
         "      [--script <commands.jsonl>] [--events <debugger_events.json>]",
+        "      [--state-snapshots <interpreter_state_snapshots.json>]",
         "      [--checkpoint-interval <ticks>] [--mode strict|best-effort|validate]",
         "      [--out <transcript.jsonl>]",
         "",
@@ -7703,6 +7721,7 @@ fn replay_debug_usage() -> String {
         "",
         "  commands: {\"cmd\":\"state\"} | {\"cmd\":\"step\"} | {\"cmd\":\"back\"} |",
         "    {\"cmd\":\"goto\",\"tick\":N} | {\"cmd\":\"run_until_break\"} |",
+        "    {\"cmd\":\"inspect\"} | {\"cmd\":\"inspect\",\"tick\":N} |",
         "    {\"cmd\":\"add_breakpoint\",\"breakpoint\":{...}} |",
         "    {\"cmd\":\"remove_breakpoint\",\"id\":N} | {\"cmd\":\"list_breakpoints\"} |",
         "    {\"cmd\":\"why\",\"tick\":N} | {\"cmd\":\"events_at\",\"tick\":N}",
@@ -7711,6 +7730,9 @@ fn replay_debug_usage() -> String {
         "  levels, capability outcomes, posterior observations) so breakpoints",
         "  like label_level_at_least / capability_denied /",
         "  malicious_posterior_above and `why` have evidence to bind to.",
+        "  --state-snapshots supplies InterpreterStateSnapshot JSON captured",
+        "  by the real interpreter replay path; inspect fails closed when the",
+        "  selected tick has no supplied snapshot.",
     ]
     .join("\n")
 }
@@ -8226,6 +8248,8 @@ mod tests {
             "commands.jsonl".to_string(),
             "--events".to_string(),
             "events.json".to_string(),
+            "--state-snapshots".to_string(),
+            "state.json".to_string(),
             "--checkpoint-interval".to_string(),
             "8".to_string(),
             "--mode".to_string(),
@@ -8240,6 +8264,7 @@ mod tests {
                 trace: PathBuf::from("trace.json"),
                 script: Some(PathBuf::from("commands.jsonl")),
                 events: Some(PathBuf::from("events.json")),
+                state_snapshots: Some(PathBuf::from("state.json")),
                 checkpoint_interval: 8,
                 mode: ReplayMode::BestEffort,
                 out: Some(PathBuf::from("transcript.jsonl")),
@@ -8262,6 +8287,7 @@ mod tests {
                 trace: PathBuf::from("trace.json"),
                 script: None,
                 events: None,
+                state_snapshots: None,
                 checkpoint_interval: 64,
                 mode: ReplayMode::Strict,
                 out: None,
@@ -8350,6 +8376,7 @@ mod tests {
                 "# agent session\n",
                 "{\"cmd\":\"state\"}\n",
                 "{\"cmd\":\"goto\",\"tick\":4}\n",
+                "{\"cmd\":\"inspect\"}\n",
                 "{\"cmd\":\"back\"}\n",
                 "\n",
                 "{\"cmd\":\"goto\",\"tick\":99}\n",
@@ -8357,6 +8384,18 @@ mod tests {
             ),
         )
         .expect("script file should write");
+        let state_snapshot_path = temp_dir.join("state.json");
+        fs::write(
+            &state_snapshot_path,
+            concat!(
+                "[",
+                "{\"tick\":4,",
+                "\"registers\":[{\"register\":0,\"value\":{\"Int\":42},\"label\":\"Secret\"}],",
+                "\"heap\":[]}",
+                "]",
+            ),
+        )
+        .expect("state snapshot file should write");
 
         let run = |out_name: &str| -> String {
             let out_path = temp_dir.join(out_name);
@@ -8364,6 +8403,7 @@ mod tests {
                 trace: trace_path.clone(),
                 script: Some(script_path.clone()),
                 events: None,
+                state_snapshots: Some(state_snapshot_path.clone()),
                 checkpoint_interval: 2,
                 mode: ReplayMode::Strict,
                 out: Some(out_path.clone()),
@@ -8378,15 +8418,18 @@ mod tests {
         assert_eq!(first, second, "transcripts must be byte-identical");
 
         let lines: Vec<&str> = first.lines().collect();
-        // 5 command lines (comment + blank skipped) -> 5 response lines.
-        assert_eq!(lines.len(), 5);
+        // 6 command lines (comment + blank skipped) -> 6 response lines.
+        assert_eq!(lines.len(), 6);
         assert!(lines[0].contains("\"tick\":0"));
         assert!(lines[1].contains("\"tick\":4"));
-        assert!(lines[2].contains("\"tick\":3"));
-        assert!(lines[3].contains("\"ok\":false"));
-        assert!(lines[3].contains("out of range"));
+        assert!(lines[2].contains("inspection"));
+        assert!(lines[2].contains("\"register\":0"));
+        assert!(lines[2].contains("Secret"));
+        assert!(lines[3].contains("\"tick\":3"));
         assert!(lines[4].contains("\"ok\":false"));
-        assert!(lines[4].contains("bad request"));
+        assert!(lines[4].contains("out of range"));
+        assert!(lines[5].contains("\"ok\":false"));
+        assert!(lines[5].contains("bad request"));
         for line in &lines {
             assert!(
                 serde_json::from_str::<serde_json::Value>(line).is_ok(),

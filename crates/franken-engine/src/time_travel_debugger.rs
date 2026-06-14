@@ -25,7 +25,9 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::baseline_interpreter::{HeapObject, ObjectId, Value};
 use crate::forensic_causation_operator::{ForensicOperator, InvestigationReport, OperatorError};
+use crate::ifc_artifacts::Label;
 use crate::ir_contract::{WitnessEvent, WitnessEventKind};
 use crate::replay_time_travel::{CursorState, TimeTravelCursor, TimeTravelError};
 
@@ -208,6 +210,51 @@ pub struct WhyReport {
     pub verdict: String,
 }
 
+/// Register value plus its IFC label as observed from the interpreter at one
+/// debugger tick.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InterpreterRegisterSnapshot {
+    pub register: u32,
+    pub value: Value,
+    pub label: Label,
+}
+
+/// Heap object plus its IFC label as observed from the interpreter at one
+/// debugger tick.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InterpreterHeapSnapshot {
+    pub object_id: ObjectId,
+    pub object: HeapObject,
+    pub label: Label,
+}
+
+/// Interpreter-state observation supplied by the real execution/replay path.
+///
+/// The debugger indexes these snapshots by tick; it does not infer register or
+/// heap values from event metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InterpreterStateSnapshot {
+    pub tick: u64,
+    pub registers: Vec<InterpreterRegisterSnapshot>,
+    pub heap: Vec<InterpreterHeapSnapshot>,
+}
+
+impl InterpreterStateSnapshot {
+    pub fn new(
+        tick: u64,
+        mut registers: Vec<InterpreterRegisterSnapshot>,
+        mut heap: Vec<InterpreterHeapSnapshot>,
+    ) -> Self {
+        registers.sort_by_key(|entry| entry.register);
+        heap.sort_by_key(|entry| entry.object_id);
+        Self {
+            tick,
+            registers,
+            heap,
+        }
+    }
+}
+
 fn causal_role_for(event: &DebuggerEvent) -> CausalRole {
     match event.kind {
         DebuggerEventKind::ContainmentAction => CausalRole::ContainmentOutcome,
@@ -239,6 +286,8 @@ pub struct TimeTravelDebugger {
     cursor: TimeTravelCursor,
     /// Security-relevant events sorted by (tick, seq).
     events: Vec<DebuggerEvent>,
+    /// Interpreter-state snapshots keyed by logical tick.
+    state_snapshots: BTreeMap<u64, InterpreterStateSnapshot>,
     breakpoints: BTreeMap<u64, Breakpoint>,
     next_breakpoint_id: u64,
     /// Index into `events` where the next `run_until_breakpoint` scan
@@ -262,13 +311,36 @@ pub struct TimeTravelDebugger {
 impl TimeTravelDebugger {
     /// Build a debugger over a navigation cursor plus a normalized event
     /// stream. Events are sorted by (tick, seq) at construction.
-    pub fn new(cursor: TimeTravelCursor, mut events: Vec<DebuggerEvent>) -> Self {
-        events.sort_by(|a, b| (a.tick, a.seq).cmp(&(b.tick, b.seq)));
+    pub fn new(cursor: TimeTravelCursor, events: Vec<DebuggerEvent>) -> Self {
+        Self::new_with_state_snapshots(cursor, events, Vec::new())
+    }
+
+    /// Build a debugger with interpreter-state snapshots supplied by the
+    /// execution/replay path. Snapshots are keyed by tick; duplicate ticks keep
+    /// the last supplied observation.
+    pub fn new_with_state_snapshots<I>(
+        cursor: TimeTravelCursor,
+        mut events: Vec<DebuggerEvent>,
+        state_snapshots: I,
+    ) -> Self
+    where
+        I: IntoIterator<Item = InterpreterStateSnapshot>,
+    {
+        events.sort_by_key(|event| (event.tick, event.seq));
+        let state_snapshots = state_snapshots
+            .into_iter()
+            .map(|snapshot| {
+                let normalized =
+                    InterpreterStateSnapshot::new(snapshot.tick, snapshot.registers, snapshot.heap);
+                (normalized.tick, normalized)
+            })
+            .collect();
         let scan_anchor_tick = cursor.current_tick();
         let scan_index = events.partition_point(|event| event.tick <= scan_anchor_tick);
         Self {
             cursor,
             events,
+            state_snapshots,
             breakpoints: BTreeMap::new(),
             next_breakpoint_id: 0,
             scan_index,
@@ -307,6 +379,12 @@ impl TimeTravelDebugger {
             .iter()
             .filter(|event| event.tick == tick)
             .collect()
+    }
+
+    /// Interpreter-state snapshot at exactly this tick, when the execution
+    /// pipeline supplied one.
+    pub fn interpreter_state_at_tick(&self, tick: u64) -> Option<&InterpreterStateSnapshot> {
+        self.state_snapshots.get(&tick)
     }
 
     /// Register a breakpoint; returns its id.
@@ -471,6 +549,7 @@ pub enum RobotRequest {
     Step,
     Back,
     Goto { tick: u64 },
+    Inspect { tick: Option<u64> },
     RunUntilBreak,
     AddBreakpoint { breakpoint: Breakpoint },
     RemoveBreakpoint { id: u64 },
@@ -507,6 +586,10 @@ pub enum RobotResponsePayload {
     },
     NoBreakHit {
         state: CursorState,
+    },
+    Inspection {
+        tick: u64,
+        snapshot: Box<InterpreterStateSnapshot>,
     },
     Why {
         report: Box<WhyReport>,
@@ -595,6 +678,24 @@ impl RobotSession {
                 }),
                 Err(error) => RobotResponse::failure(error.to_string()),
             },
+            RobotRequest::Inspect { tick } => {
+                let tick = tick.unwrap_or_else(|| self.debugger.cursor().current_tick());
+                if tick > self.debugger.cursor().total_ticks() {
+                    return RobotResponse::failure(format!(
+                        "tick {tick} out of range 0..={}",
+                        self.debugger.cursor().total_ticks()
+                    ));
+                }
+                match self.debugger.interpreter_state_at_tick(tick) {
+                    Some(snapshot) => RobotResponse::success(RobotResponsePayload::Inspection {
+                        tick,
+                        snapshot: Box::new(snapshot.clone()),
+                    }),
+                    None => RobotResponse::failure(format!(
+                        "interpreter state snapshot unavailable at tick {tick}"
+                    )),
+                }
+            }
             RobotRequest::RunUntilBreak => match self.debugger.run_until_breakpoint() {
                 Ok(Some(hit)) => RobotResponse::success(RobotResponsePayload::BreakHit {
                     hit: Box::new(hit),

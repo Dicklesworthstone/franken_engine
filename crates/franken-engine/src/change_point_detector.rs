@@ -231,11 +231,9 @@ impl CompositeAlternative {
 
         // Log-likelihood ratio
         let pre_log_lik = if is_success {
-            (pre_prob * MILLION / MILLION).max(1).min(MILLION - 1)
+            (pre_prob * MILLION / MILLION).clamp(1, MILLION - 1)
         } else {
-            ((MILLION - pre_prob) * MILLION / MILLION)
-                .max(1)
-                .min(MILLION - 1)
+            ((MILLION - pre_prob) * MILLION / MILLION).clamp(1, MILLION - 1)
         };
         let post_log_lik = if is_success {
             mle_prob
@@ -502,10 +500,10 @@ impl ChangePointDetector {
         );
 
         // Update integrated martingale if enabled
-        if let Some(ref mut ledger) = self.martingale_ledger {
-            if !ledger.is_stopped() {
-                let _verdict = ledger.append(log_lr, payload_digest, timestamp_ns)?;
-            }
+        if let Some(ref mut ledger) = self.martingale_ledger
+            && !ledger.is_stopped()
+        {
+            let _verdict = ledger.append(log_lr, payload_digest, timestamp_ns)?;
         }
 
         // Check for change-point detection

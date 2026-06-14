@@ -799,10 +799,10 @@ impl FeatureWitness {
     /// authorized against; stripping the capability witness must REJECT.
     fn check_capability_witness(&self) -> Result<(), String> {
         for op in &self.opcodes {
-            if let FeatureOpcode::HostCall { capability } = op {
-                if capability.trim().is_empty() {
-                    return Err("hostcall lowered without a capability witness".into());
-                }
+            if let FeatureOpcode::HostCall { capability } = op
+                && capability.trim().is_empty()
+            {
+                return Err("hostcall lowered without a capability witness".into());
             }
         }
         Ok(())
@@ -815,12 +815,12 @@ impl FeatureWitness {
         let mut current: BTreeMap<String, u8> = BTreeMap::new();
         for op in &self.opcodes {
             if let FeatureOpcode::IfcLabel { var, level } = op {
-                if let Some(prev) = current.get(var) {
-                    if *level < *prev {
-                        return Err(format!(
-                            "IFC label downgrade on `{var}`: {prev} -> {level} (implicit declassification)"
-                        ));
-                    }
+                if let Some(prev) = current.get(var)
+                    && *level < *prev
+                {
+                    return Err(format!(
+                        "IFC label downgrade on `{var}`: {prev} -> {level} (implicit declassification)"
+                    ));
                 }
                 current.insert(var.clone(), *level);
             }
@@ -1112,6 +1112,7 @@ pub fn break_witness(witness: &FeatureWitness) -> FeatureWitness {
 /// variants called out in the acceptance criteria (nested try, try-without-
 /// finally, throw in finally/catch, await in try/finally, yield*, for-in/for-of
 /// with break/return/throw exits, capability-gated hostcalls, and IFC flows).
+#[allow(clippy::vec_init_then_push)]
 pub fn generate_feature_programs() -> Vec<FeatureWitness> {
     use FeatureOpcode as Op;
     let mut programs = Vec::new();

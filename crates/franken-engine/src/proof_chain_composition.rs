@@ -170,14 +170,14 @@ impl ProofChain {
     /// the new pass's precondition does not match the chain's running
     /// postcondition (when the chain is non-empty).
     pub fn push(&mut self, pass: PassProof) -> Result<(), ChainError> {
-        if let Some(prev_post) = self.current_postcondition() {
-            if *prev_post != pass.precondition_hash {
-                return Err(ChainError::BoundaryMismatch {
-                    expected_precondition: *prev_post,
-                    found_precondition: pass.precondition_hash,
-                    pass_id: pass.pass_id,
-                });
-            }
+        if let Some(prev_post) = self.current_postcondition()
+            && *prev_post != pass.precondition_hash
+        {
+            return Err(ChainError::BoundaryMismatch {
+                expected_precondition: *prev_post,
+                found_precondition: pass.precondition_hash,
+                pass_id: pass.pass_id,
+            });
         }
         self.passes.push(pass);
         Ok(())

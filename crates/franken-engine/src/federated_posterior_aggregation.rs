@@ -20,8 +20,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::bayesian_posterior::{BayesianPosteriorUpdater, Evidence, Posterior, RiskState};
-use crate::fleet_immune_protocol::{EvidencePacket, NodeId, ProtocolVersion};
-use crate::hash_tiers::{AuthenticityHash, ContentHash};
+use crate::fleet_immune_protocol::NodeId;
+use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -276,9 +276,9 @@ pub enum AggregationState {
 /// in fleet-wide learning rounds.
 pub struct LocalPosteriorProvider {
     /// This node's identifier.
-    node_id: NodeId,
+    _node_id: NodeId,
     /// Current security epoch.
-    current_epoch: SecurityEpoch,
+    _current_epoch: SecurityEpoch,
     /// Local posterior state per extension.
     local_posteriors: BTreeMap<String, Posterior>,
 }
@@ -287,8 +287,8 @@ impl LocalPosteriorProvider {
     /// Create a new local posterior provider for this node.
     pub fn new(node_id: NodeId, initial_epoch: SecurityEpoch) -> Self {
         Self {
-            node_id,
-            current_epoch: initial_epoch,
+            _node_id: node_id,
+            _current_epoch: initial_epoch,
             local_posteriors: BTreeMap::new(),
         }
     }
@@ -398,7 +398,7 @@ impl LocalPosteriorProvider {
 /// aggregated updates without seeing individual node values.
 pub struct AggregationCoordinator {
     /// Coordinator node identifier.
-    coordinator_id: NodeId,
+    _coordinator_id: NodeId,
     /// Active aggregation rounds.
     active_rounds: BTreeMap<String, AggregationRound>,
     /// Security epoch.
@@ -409,7 +409,7 @@ impl AggregationCoordinator {
     /// Create a new aggregation coordinator.
     pub fn new(coordinator_id: NodeId, current_epoch: SecurityEpoch) -> Self {
         Self {
-            coordinator_id,
+            _coordinator_id: coordinator_id,
             active_rounds: BTreeMap::new(),
             current_epoch,
         }

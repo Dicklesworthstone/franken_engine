@@ -648,7 +648,7 @@ pub fn create_effect_from_hostcall_tag(
                     });
                 }
             };
-            let duration_ms = args.get(0).and_then(|s| s.parse().ok());
+            let duration_ms = args.first().and_then(|s| s.parse().ok());
             let timer_id = args.get(1).and_then(|s| s.parse().ok());
             let effect = TimerHostcallEffect {
                 operation,
@@ -658,7 +658,7 @@ pub fn create_effect_from_hostcall_tag(
             Ok(Box::new(effect))
         }
         tag if tag.starts_with("module:") => {
-            let module_path = args.get(0).unwrap_or(&String::new()).clone();
+            let module_path = args.first().cloned().unwrap_or_default();
             let import_type = if tag.contains("require") {
                 ModuleImportType::Require
             } else {

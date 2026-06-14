@@ -262,6 +262,7 @@ pub struct ErasureShard {
 }
 
 impl ErasureShard {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         shard_set_id: String,
         origin_node: NodeId,
@@ -552,6 +553,7 @@ fn validate_erasure_shard_compatibility(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_erasure_shard_hash(
     shard_set_id: &str,
     origin_node: &NodeId,
@@ -1661,10 +1663,7 @@ impl FleetProtocolState {
         let evidence_counts_by_extension = self.evidence.evidence_count.clone();
         let mut pending_intents_by_extension = BTreeMap::new();
         for (extension_id, intents) in &self.pending_intents {
-            let count = match u64::try_from(intents.len()) {
-                Ok(value) => value,
-                Err(_) => u64::MAX,
-            };
+            let count = u64::try_from(intents.len()).unwrap_or(u64::MAX);
             pending_intents_by_extension.insert(extension_id.clone(), count);
         }
 

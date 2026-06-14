@@ -550,10 +550,8 @@ impl OptimizationProofCarrier {
         let verification_results = verification_results?;
 
         // Then apply the results
-        for (proof, verification_result) in self
-            .equivalence_proofs
-            .iter_mut()
-            .zip(verification_results.into_iter())
+        for (proof, verification_result) in
+            self.equivalence_proofs.iter_mut().zip(verification_results)
         {
             match verification_result {
                 ProofResult::Verified => {

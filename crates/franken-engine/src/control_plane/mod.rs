@@ -1444,15 +1444,15 @@ impl<C: DecisionContract> DecisionAdapter for ContractDecisionAdapter<C> {
             trace_id: request.trace_id,
             ts_unix_ms: request.ts_unix_ms,
         };
-        let outcome = evaluate_contract(&self.contract, &self.posterior, &ctx).map_err(|err| {
-            self.events.push(new_event(
-                request,
-                "decision_eval",
-                "error",
-                Some(err.error_code()),
-            ));
-            err
-        })?;
+        let outcome =
+            evaluate_contract(&self.contract, &self.posterior, &ctx).inspect_err(|err| {
+                self.events.push(new_event(
+                    request,
+                    "decision_eval",
+                    "error",
+                    Some(err.error_code()),
+                ));
+            })?;
         let verdict = action_to_verdict(&outcome.action_name).ok_or_else(|| {
             self.events.push(new_event(
                 request,

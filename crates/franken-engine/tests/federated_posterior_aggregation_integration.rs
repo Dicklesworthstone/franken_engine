@@ -11,7 +11,7 @@ use frankenengine_engine::bayesian_posterior::{Evidence, Posterior, RiskState};
 use frankenengine_engine::federated_posterior_aggregation::{
     AggregatedPosteriorUpdate, AggregationCoordinator, AggregationState,
     FEDERATED_AGGREGATION_API_VERSION, FederatedAggregationError, LocalPosteriorProvider,
-    MAX_AGGREGATION_PARTICIPANTS, MIN_AGGREGATION_PARTICIPANTS, PosteriorDelta,
+    MAX_AGGREGATION_PARTICIPANTS, PosteriorDelta,
 };
 use frankenengine_engine::fleet_immune_protocol::NodeId;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -89,12 +89,14 @@ fn local_posterior_provider_manages_extension_state() {
     assert!(delta.delta_benign_millionths < 0); // Decreased belief in benign
     assert!(delta.delta_malicious_millionths > 0); // Increased belief in malicious
 
-    // Verify local posterior was updated
-    let local_posterior = provider.get_local_posterior("extension_1").unwrap();
-    assert!(local_posterior.p_malicious > 10_000); // More than default 1%
+    // Verify local posterior was updated.
+    let suspicious_posterior = provider.get_local_posterior("extension_1").unwrap().clone();
+    assert!(suspicious_posterior.p_malicious > 10_000); // More than default 1%
 
-    // Create evidence indicating normal behavior
-    let benign_evidence = Evidence {
+    // Create below-threshold normal evidence. The shared likelihood model treats
+    // this as neutral evidence (all state likelihoods stay at 1.0), so it should
+    // not undo previously observed suspicious evidence.
+    let neutral_evidence = Evidence {
         extension_id: "extension_1".to_string(),
         hostcall_rate_millionths: 500_000,  // Normal call rate
         distinct_capabilities: 2,           // Few capabilities
@@ -104,15 +106,21 @@ fn local_posterior_provider_manages_extension_state() {
         epoch: SecurityEpoch::from_raw(1),
     };
 
-    // Update with benign evidence
-    let benign_delta = provider
-        .update_local_posterior("extension_1", &benign_evidence, 800_000)
+    // Update with neutral evidence.
+    let neutral_delta = provider
+        .update_local_posterior("extension_1", &neutral_evidence, 800_000)
         .unwrap();
 
-    // Verify delta reflects decreased suspicion
-    assert!(benign_delta.is_valid());
-    assert!(benign_delta.delta_benign_millionths > 0); // Increased belief in benign
-    assert!(benign_delta.delta_malicious_millionths < 0); // Decreased belief in malicious
+    // Verify neutral evidence is recorded without changing the posterior.
+    assert!(neutral_delta.is_valid());
+    assert_eq!(neutral_delta.delta_benign_millionths, 0);
+    assert_eq!(neutral_delta.delta_anomalous_millionths, 0);
+    assert_eq!(neutral_delta.delta_malicious_millionths, 0);
+    assert_eq!(neutral_delta.delta_unknown_millionths, 0);
+    assert_eq!(
+        provider.get_local_posterior("extension_1").unwrap(),
+        &suspicious_posterior
+    );
 }
 
 /// Test aggregation coordinator manages multi-node federated learning rounds.

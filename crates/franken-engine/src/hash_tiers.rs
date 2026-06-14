@@ -15,7 +15,7 @@
 use std::fmt;
 
 use franken_engine_deterministic_derive::Deterministic;
-use franken_engine_deterministic_trait::{Deterministic, FixedLayout, FixedLayoutError};
+use franken_engine_deterministic_trait::{FixedLayout, FixedLayoutError};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

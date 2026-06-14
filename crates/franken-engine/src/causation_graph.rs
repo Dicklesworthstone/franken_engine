@@ -490,7 +490,7 @@ impl CausationGraph {
             .map(|(id, node)| (id.clone(), node.timestamp_ns()))
             .collect();
 
-        nodes.sort_by(|(_, a), (_, b)| a.cmp(b));
+        nodes.sort_by_key(|(_, timestamp)| *timestamp);
         nodes.into_iter().map(|(id, _)| id).collect()
     }
 

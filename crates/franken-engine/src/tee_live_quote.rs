@@ -33,7 +33,7 @@ use thiserror::Error;
 
 use crate::evidence_contract::{AttestationValidityWindow, TeeAttestationBinding};
 use crate::hash_tiers::ContentHash;
-use crate::signature_preimage::{Signature, SigningKey, VerificationKey, sign_preimage};
+use crate::signature_preimage::{Signature, SigningKey, sign_preimage};
 use crate::tee_attestation_policy::{TeeAttestationPolicy, TeePlatform};
 
 /// Configuration for TEE quote generation.
@@ -190,7 +190,7 @@ impl TeeQuoteGenerator {
                 safe_mode_attestation: self
                     .generate_safe_mode_record(decision_data, "TEE hardware not available"),
             },
-            TeeCapability::Error { reason } => TeeQuoteResult::Failed {
+            TeeCapability::Error { reason: _ } => TeeQuoteResult::Failed {
                 error: TeeQuoteError::HardwareNotAvailable,
             },
         }
@@ -353,7 +353,7 @@ impl TeeQuoteGenerator {
             "safe_mode_{}",
             hex::encode(
                 &ContentHash::compute(
-                    &format!(
+                    format!(
                         "{}{}",
                         reason,
                         SystemTime::now()
@@ -395,10 +395,10 @@ impl TeeQuoteGenerator {
     pub fn validate_attestation_binding(
         &self,
         binding: &TeeAttestationBinding,
-        policy: &TeeAttestationPolicy,
+        _policy: &TeeAttestationPolicy,
     ) -> Result<(), TeeQuoteError> {
         // Parse platform from binding
-        let platform = match binding.tee_platform.as_str() {
+        let _platform = match binding.tee_platform.as_str() {
             "intel_sgx" => TeePlatform::IntelSgx,
             "arm_trustzone" => TeePlatform::ArmTrustZone,
             "arm_cca" => TeePlatform::ArmCca,

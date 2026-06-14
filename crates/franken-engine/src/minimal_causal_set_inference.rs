@@ -259,7 +259,7 @@ impl CausalTracker {
 
         // For each factor, select the dependency with highest influence
         let mut minimal_deps = Vec::new();
-        for (factor, deps) in factor_deps {
+        for (_factor, deps) in factor_deps {
             if let Some(max_dep) = deps
                 .iter()
                 .max_by_key(|dep| dep.influence_magnitude_millionths)
@@ -497,10 +497,9 @@ mod tests {
 // Integration with Runtime Decision Theory
 // ---------------------------------------------------------------------------
 
-use crate::evidence_ledger::{EvidenceEntry, EvidenceEntryBuilder, Witness};
+use crate::evidence_ledger::{EvidenceEntryBuilder, Witness};
 use crate::runtime_decision_theory::{
     DecisionContext as RuntimeDecisionContext, DecisionOutcome, DecisionState, DecisionTrace,
-    LaneAction,
 };
 
 /// Extension to DecisionTrace to include minimal causal set information.
@@ -523,11 +522,11 @@ impl DecisionTraceExt for DecisionTrace {
         let mut metadata = BTreeMap::new();
 
         // Extract causal set ID from reason if present
-        if let Some(start) = self.reason.find("[causal_set: ") {
-            if let Some(end) = self.reason[start..].find(']') {
-                let causal_set_id = &self.reason[start + 13..start + end];
-                metadata.insert("causal_set_id".to_string(), causal_set_id.to_string());
-            }
+        if let Some(start) = self.reason.find("[causal_set: ")
+            && let Some(end) = self.reason[start..].find(']')
+        {
+            let causal_set_id = &self.reason[start + 13..start + end];
+            metadata.insert("causal_set_id".to_string(), causal_set_id.to_string());
         }
 
         metadata.insert("decision_sequence".to_string(), self.sequence.to_string());
@@ -920,7 +919,7 @@ impl ForensicCausationGraph {
 
     fn get_top_influential_atoms(&self, limit: usize) -> Vec<(String, i64)> {
         let mut atoms: Vec<(&String, &EvidenceAtomMetadata)> = self.evidence_atoms.iter().collect();
-        atoms.sort_by(|a, b| b.1.total_influence.cmp(&a.1.total_influence));
+        atoms.sort_by_key(|atom| std::cmp::Reverse(atom.1.total_influence));
         atoms
             .into_iter()
             .take(limit)
@@ -968,7 +967,9 @@ pub struct ForensicGraphStatistics {
 #[cfg(test)]
 mod integration_tests {
     use super::*;
-    use crate::runtime_decision_theory::{DecisionState, LatencyQuantiles, RegimeLabel};
+    use crate::runtime_decision_theory::{
+        DecisionState, LaneAction, LatencyQuantiles, RegimeLabel,
+    };
     use std::collections::BTreeMap;
 
     fn sample_decision_state() -> DecisionState {

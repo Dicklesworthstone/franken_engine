@@ -18,7 +18,7 @@
 //! and signature preimage contracts).
 
 use std::collections::BTreeMap;
-use std::fmt::{self, Write as _};
+use std::fmt;
 
 use ed25519_dalek::{
     Signature as Ed25519Signature, Signer, SigningKey as Ed25519SigningKey, Verifier,

@@ -14,7 +14,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 use wait_timeout::ChildExt;
 
 /// Static counter for generating unique worker IDs.
@@ -362,7 +362,7 @@ impl MacOSArm64WorkerManager {
         }
 
         worker.status = WorkerStatus::Busy;
-        let execution_start = SystemTime::now();
+        let _execution_start = SystemTime::now();
 
         // Prepare command
         if command.is_empty() {

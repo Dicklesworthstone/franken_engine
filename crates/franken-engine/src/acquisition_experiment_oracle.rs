@@ -67,6 +67,15 @@ fn compute_content_hash(data: &[u8]) -> ContentHash {
     ContentHash::compute(data)
 }
 
+/// Append a length-prefixed (`u64` LE length, then the bytes) field to a
+/// content-hash preimage. Length-prefixing keeps two distinct field
+/// decompositions from colliding when adjacent variable-length fields are
+/// concatenated into one hash input.
+fn push_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    buf.extend_from_slice(bytes);
+}
+
 /// Saturating subtraction for unsigned — returns absolute difference.
 fn abs_diff(a: u64, b: u64) -> u64 {
     if a >= b {
@@ -222,19 +231,24 @@ impl ExperimentProposal {
     /// Recompute and set the content hash.
     pub fn seal(&mut self) {
         let mut data = Vec::new();
-        data.extend_from_slice(self.proposal_id.as_bytes());
-        data.extend_from_slice(self.kind.as_str().as_bytes());
-        data.extend_from_slice(self.target_cell.as_bytes());
+        // Length-prefix every variable-length field so two distinct field
+        // decompositions cannot collide. Without this, proposal_id="x" /
+        // target_cell="hole_filling_y" and proposal_id="xhole_filling" /
+        // target_cell="_y" (kind="hole_filling") produce identical bytes.
+        push_len_prefixed(&mut data, self.proposal_id.as_bytes());
+        push_len_prefixed(&mut data, self.kind.as_str().as_bytes());
+        push_len_prefixed(&mut data, self.target_cell.as_bytes());
         let mut sorted_signals = self.signals.clone();
         sorted_signals.sort_by_key(|(s, _)| *s);
+        data.extend_from_slice(&(sorted_signals.len() as u64).to_le_bytes());
         for (signal, strength) in &sorted_signals {
-            data.extend_from_slice(signal.as_str().as_bytes());
+            push_len_prefixed(&mut data, signal.as_str().as_bytes());
             data.extend_from_slice(&strength.to_le_bytes());
         }
         data.extend_from_slice(&self.expected_information_gain_millionths.to_le_bytes());
         data.extend_from_slice(&self.expected_uncertainty_reduction_millionths.to_le_bytes());
         data.extend_from_slice(&self.estimated_cost_millionths.to_le_bytes());
-        data.extend_from_slice(self.justification.as_bytes());
+        push_len_prefixed(&mut data, self.justification.as_bytes());
         self.content_hash = compute_content_hash(&data);
     }
 
@@ -339,11 +353,12 @@ impl ExperimentPlan {
     /// Recompute and set the content hash.
     pub fn seal(&mut self) {
         let mut data = Vec::new();
-        data.extend_from_slice(self.plan_id.as_bytes());
+        push_len_prefixed(&mut data, self.plan_id.as_bytes());
         data.extend_from_slice(&self.epoch.as_u64().to_le_bytes());
         let mut sorted_proposal_hashes: Vec<_> =
             self.proposals.iter().map(|p| p.content_hash).collect();
         sorted_proposal_hashes.sort_unstable();
+        data.extend_from_slice(&(sorted_proposal_hashes.len() as u64).to_le_bytes());
         for ch in &sorted_proposal_hashes {
             data.extend_from_slice(ch.as_bytes());
         }
@@ -390,7 +405,7 @@ impl ExperimentOutcome {
     /// Recompute and set the content hash.
     pub fn seal(&mut self) {
         let mut data = Vec::new();
-        data.extend_from_slice(self.proposal_id.as_bytes());
+        push_len_prefixed(&mut data, self.proposal_id.as_bytes());
         data.extend_from_slice(&self.actual_information_gain_millionths.to_le_bytes());
         data.extend_from_slice(&self.surprise_millionths.to_le_bytes());
         data.extend_from_slice(&self.regret_millionths.to_le_bytes());

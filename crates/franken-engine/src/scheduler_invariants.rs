@@ -6,7 +6,6 @@
 
 use crate::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId, derive_id};
 use franken_engine_deterministic_derive::Deterministic;
-use franken_engine_deterministic_trait::Deterministic;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 

@@ -34,7 +34,7 @@ pub const ZERO_PLACEHOLDER_SCAN_POLICY_ID: &str = "franken-engine.zero-placehold
 /// a gap-site change is intentional. Composition: 7 parser
 /// (`ParserGapSiteId::ALL`) + 7 lowering (`LoweringGapSiteId::ALL`) + 4 runtime
 /// + 2 cli-docs. (Parser/lowering each gained `TryCatchFinallySemantics` when the
-/// Track-H exception-semantics inventories were promoted in 03817f08.)
+///   Track-H exception-semantics inventories were promoted in 03817f08.)
 pub const ZERO_PLACEHOLDER_SCAN_FINDING_COUNT: usize = 20;
 
 const DOCS_HELP_AUDIT_CONTRACT_JSON: &str =

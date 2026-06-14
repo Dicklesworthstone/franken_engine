@@ -44,6 +44,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Convention: 1.0 in millionths.
+#[cfg(test)]
 const MILLION: i64 = 1_000_000;
 
 // ---------------------------------------------------------------------------

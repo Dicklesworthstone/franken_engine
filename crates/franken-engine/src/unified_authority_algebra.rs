@@ -117,6 +117,7 @@ impl CapabilitySet {
     }
 
     /// Build a capability set from any iterable.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_iter<I: IntoIterator<Item = CapabilityKind>>(iter: I) -> Self {
         let mut set = BTreeSet::new();
         for kind in iter {

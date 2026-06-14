@@ -142,6 +142,7 @@ pub enum SmtSolver {
 
 /// SMT-LIB logic for policy verification.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(non_camel_case_types)]
 pub enum SmtLogic {
     /// Quantifier-free linear integer arithmetic
     QF_LIA,
@@ -413,20 +414,15 @@ impl PolicyTheoremEngine {
         let verification_results = verification_results?;
 
         // Then apply the results
-        for (theorem, verification_result) in self
-            .theorems
-            .iter_mut()
-            .zip(verification_results.into_iter())
-        {
+        for (theorem, verification_result) in self.theorems.iter_mut().zip(verification_results) {
             let status = verification_result.verification_status.clone();
 
             match status {
                 VerificationStatus::Proven => {
                     theorem.verification_status = VerificationStatus::Proven;
                     theorem.proof_carrier = Some(format!(
-                        "SMT proof for {} via {}",
-                        theorem.theorem_id,
-                        format!("{:?}", self.smt_context.solver_backend)
+                        "SMT proof for {} via {:?}",
+                        theorem.theorem_id, self.smt_context.solver_backend
                     ));
                     verified_count += 1;
                 }

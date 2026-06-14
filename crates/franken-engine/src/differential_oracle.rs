@@ -31,7 +31,7 @@ use frankenengine_core::parser::{
     ParserOptions as CoreParserOptions,
 };
 
-use crate::{HybridRouter, JsEngine, RouteReason};
+use crate::{HybridRouter, RouteReason};
 
 pub const DIFFERENTIAL_ORACLE_SCHEMA_VERSION: &str = "franken-engine.differential-oracle.v1";
 pub const DIFFERENTIAL_ORACLE_CANONICALIZATION_SCHEMA_VERSION: &str =
@@ -1025,12 +1025,7 @@ fn reference_runtimes_disagree_while_franken_agrees(
     let reference_group_count = comparison
         .groups
         .iter()
-        .filter(|group| {
-            group
-                .backends
-                .iter()
-                .any(|backend| is_reference_backend(backend))
-        })
+        .filter(|group| group.backends.iter().any(is_reference_backend))
         .count();
     reference_group_count > 1
         && comparison
@@ -1308,9 +1303,7 @@ fn canonical_exception(receipt: &DifferentialBackendReceipt) -> (Option<String>,
 
 fn canonicalize_stream(value: &str) -> String {
     let normalized = value.replace("\r\n", "\n").replace('\r', "\n");
-    normalized
-        .trim_end_matches(|ch| matches!(ch, '\n' | '\t' | ' '))
-        .to_string()
+    normalized.trim_end_matches(['\n', '\t', ' ']).to_string()
 }
 
 fn canonicalize_js_value(value: &str) -> String {
@@ -1327,13 +1320,13 @@ fn canonicalize_js_value(value: &str) -> String {
         _ => {}
     }
 
-    if let Ok(number) = trimmed.parse::<f64>() {
-        if number.is_finite() {
-            if number.fract() == 0.0 {
-                return format!("{number:.0}");
-            }
-            return number.to_string();
+    if let Ok(number) = trimmed.parse::<f64>()
+        && number.is_finite()
+    {
+        if number.fract() == 0.0 {
+            return format!("{number:.0}");
         }
+        return number.to_string();
     }
 
     strip_matching_quotes(trimmed)

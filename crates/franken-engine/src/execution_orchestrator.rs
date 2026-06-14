@@ -79,7 +79,6 @@ use crate::tropical_semiring::{
 use crate::ts_normalization::{
     SourceIngestionSummary, TsNormalizationError, prepare_source_entry_for_public_entrypoints,
 };
-use crate::unified_authority_algebra::{AuthorityLattice, BudgetEnvelope, CapabilitySet};
 
 // Canonical baseline anchors for the orchestrator-tuning regression pin
 // (see `runtime_config_default_matches_orchestrator_constants` in this file's
@@ -1816,6 +1815,7 @@ impl ExecutionOrchestrator {
             crate::ir_contract::Ir3Instruction::ImportModule { .. } => "import_module",
             crate::ir_contract::Ir3Instruction::ExportBinding { .. } => "export_binding",
             crate::ir_contract::Ir3Instruction::LoadThis { .. } => "load_this",
+            crate::ir_contract::Ir3Instruction::LoadNewTarget { .. } => "load_new_target",
             crate::ir_contract::Ir3Instruction::LoadSuper { .. } => "load_super",
             crate::ir_contract::Ir3Instruction::CallMethod { .. } => "call_method",
             &crate::ir_contract::Ir3Instruction::CreateGenerator { .. }

@@ -801,13 +801,12 @@ impl ConvergenceGate {
 
     /// Generate run manifest entry for convergence gate results.
     pub fn generate_run_manifest_entry(&self, profile_name: &str) -> Option<serde_json::Value> {
-        if let Some(latest_result) = self
+        self
             .evaluation_history
             .iter()
             .rev()
             .find(|r| r.profile_name == profile_name)
-        {
-            Some(serde_json::json!({
+            .map(|latest_result| serde_json::json!({
                 "convergence_gate": {
                     "profile_name": latest_result.profile_name,
                     "gate_verdict": latest_result.gate_verdict,
@@ -820,9 +819,6 @@ impl ConvergenceGate {
                     "partition_profile_file": self.profiles_file_path.to_string_lossy()
                 }
             }))
-        } else {
-            None
-        }
     }
 
     /// Get the latest evaluation result for a profile.

@@ -176,6 +176,7 @@ pub enum QueryStatus {
 /// Main result data from a forensic query.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
+#[allow(clippy::large_enum_variant)]
 pub enum QueryResult {
     /// Causal explanation result.
     CausalExplanation(CausalExplanationResult),
@@ -557,10 +558,9 @@ impl ForensicQueryEngine {
                 decision_id: node_decision_id,
                 ..
             } = &node.node_type
+                && node_decision_id == decision_id
             {
-                if node_decision_id == decision_id {
-                    return Ok(*node_id);
-                }
+                return Ok(*node_id);
             }
         }
         Err(QueryError::DecisionNotFound(decision_id.to_string()))
@@ -656,7 +656,7 @@ impl ForensicQueryEngine {
         &self,
         query: &ForensicQuery,
         max_depth: usize,
-        include_weak_influences: bool,
+        _include_weak_influences: bool,
     ) -> Result<ForensicQueryResult, QueryError> {
         let target_node_id = match &query.target {
             QueryTarget::Decision(decision_id) => self.find_decision_node(decision_id)?,
@@ -672,7 +672,7 @@ impl ForensicQueryEngine {
             .graph
             .nodes
             .get(&target_node_id)
-            .ok_or_else(|| QueryError::NodeNotFound(target_node_id))?
+            .ok_or(QueryError::NodeNotFound(target_node_id))?
             .clone();
 
         // Extract causal subgraph
@@ -714,8 +714,8 @@ impl ForensicQueryEngine {
     fn execute_influence_analysis(
         &self,
         query: &ForensicQuery,
-        min_threshold: InfluenceWeight,
-        rank_by_strength: bool,
+        _min_threshold: InfluenceWeight,
+        _rank_by_strength: bool,
     ) -> Result<ForensicQueryResult, QueryError> {
         // Implementation placeholder - would analyze influence patterns
         // This is a simplified version for the working implementation
@@ -752,8 +752,8 @@ impl ForensicQueryEngine {
     fn execute_counterfactual_analysis(
         &self,
         query: &ForensicQuery,
-        modified_evidence: &[EvidenceModification],
-        recompute_downstream: bool,
+        _modified_evidence: &[EvidenceModification],
+        _recompute_downstream: bool,
     ) -> Result<ForensicQueryResult, QueryError> {
         // Implementation placeholder - would perform what-if analysis
         // This is a simplified version for the working implementation
@@ -794,9 +794,9 @@ impl ForensicQueryEngine {
     fn execute_timeline_reconstruction(
         &self,
         query: &ForensicQuery,
-        start_timestamp: u64,
-        end_timestamp: u64,
-        sort_by_causation: bool,
+        _start_timestamp: u64,
+        _end_timestamp: u64,
+        _sort_by_causation: bool,
     ) -> Result<ForensicQueryResult, QueryError> {
         // Implementation placeholder - would reconstruct event timeline
         // This is a simplified version for the working implementation
@@ -825,7 +825,7 @@ impl ForensicQueryEngine {
     fn generate_causal_summary(
         &self,
         subgraph: &CausalSubgraph,
-        decision_node: &CausationNode,
+        _decision_node: &CausationNode,
     ) -> Result<CausalSummary, QueryError> {
         let mut primary_evidence = Vec::new();
         let mut activated_factors = Vec::new();
@@ -839,10 +839,8 @@ impl ForensicQueryEngine {
                     evidence_count += 1;
                     primary_evidence.push(*node_id);
                 }
-                NodeType::Decision { factor, .. } => {
-                    if !activated_factors.contains(factor) {
-                        activated_factors.push(*factor);
-                    }
+                NodeType::Decision { factor, .. } if !activated_factors.contains(factor) => {
+                    activated_factors.push(*factor);
                 }
                 _ => {}
             }
@@ -874,8 +872,8 @@ impl ForensicQueryEngine {
     /// Generate alternative paths for counterfactual analysis.
     fn generate_alternative_paths(
         &self,
-        subgraph: &CausalSubgraph,
-        decision_node: &CausationNode,
+        _subgraph: &CausalSubgraph,
+        _decision_node: &CausationNode,
     ) -> Result<Vec<AlternativePath>, QueryError> {
         // Implementation placeholder - would generate what-if scenarios
         Ok(vec![])

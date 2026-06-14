@@ -124,12 +124,15 @@ impl fmt::Display for EffectKind {
 /// declarator intended (e.g. an `Inherited` policy that ends up empty
 /// because the calling scope was empty, vs. an explicitly empty
 /// `Declared`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum EffectPolicy {
     /// The function has no declared capabilities and was assigned an empty
     /// effect set at lowering time. The default for top-level scripts that
     /// do not opt into any capability surface.
+    #[default]
     Empty,
     /// The function inherits its calling scope's effect set. The default
     /// for closures whose declarator does not explicitly narrow or widen.
@@ -313,12 +316,6 @@ impl EffectAnnotation {
         buf.push(self.policy as u8);
         buf.extend_from_slice(&self.effects.canonical_bytes());
         buf
-    }
-}
-
-impl Default for EffectPolicy {
-    fn default() -> Self {
-        Self::Empty
     }
 }
 

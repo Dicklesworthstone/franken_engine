@@ -25,7 +25,7 @@ use crate::signature_preimage::{
     SIGNATURE_SENTINEL, Signature, SignaturePreimage, SigningKey, VerificationKey, sign_object,
     verify_signature,
 };
-use crate::tee_attestation_policy::{AttestationQuote, TeeAttestationPolicy, TeePlatform};
+use crate::tee_attestation_policy::AttestationQuote;
 use franken_engine_deterministic_trait::FixedLayout;
 
 // ---------------------------------------------------------------------------
@@ -34,11 +34,6 @@ use franken_engine_deterministic_trait::FixedLayout;
 
 const READMISSION_DECISION_SCHEMA_DEF: &[u8] = b"FrankenEngine.ReAdmissionDecision.v1";
 const READMISSION_RECEIPT_SCHEMA_DEF: &[u8] = b"FrankenEngine.ReAdmissionReceipt.v1";
-const QUARANTINE_DEESCALATION_ZONE: &str = "quarantine-deescalation";
-
-/// Fixed-point unit: 1_000_000 = 1.0 for deterministic decimal calculations.
-const MILLIONTHS: u64 = 1_000_000;
-
 fn readmission_decision_schema_id() -> SchemaId {
     SchemaId::from_definition(READMISSION_DECISION_SCHEMA_DEF)
 }
@@ -240,6 +235,7 @@ pub struct ReAdmissionDecision {
 
 impl ReAdmissionDecision {
     /// Creates a new re-admission decision.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         epoch: SecurityEpoch,
         original_quarantine_id: EngineObjectId,
@@ -327,6 +323,7 @@ impl ReAdmissionDecision {
     }
 
     /// Computes content hash for deterministic ID generation.
+    #[allow(clippy::too_many_arguments)]
     fn compute_decision_content_hash(
         original_quarantine_id: &EngineObjectId,
         original_quarantine_reason: &QuarantineReason,
@@ -395,7 +392,7 @@ impl ReAdmissionReceipt {
             ObjectDomain::EvidenceRecord,
             "readmission_receipt",
             &schema_version,
-            &*decision.decision_id.as_bytes(),
+            decision.decision_id.as_bytes(),
         )
         .map_err(|e| {
             ReAdmissionError::IdGeneration(format!("Failed to derive receipt ID: {}", e))

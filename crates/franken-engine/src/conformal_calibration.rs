@@ -324,7 +324,7 @@ fn quantile_rank(n: u64, alpha: Alpha) -> u64 {
     let numerator = (n as u128 + 1) * coverage; // (n+1)(1-α)·1e6
     // ceil(numerator / 1e6)
     let million = MILLION as u128;
-    ((numerator + million - 1) / million) as u64
+    numerator.div_ceil(million) as u64
 }
 
 // ---------------------------------------------------------------------------

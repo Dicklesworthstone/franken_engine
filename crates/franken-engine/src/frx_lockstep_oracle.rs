@@ -1640,11 +1640,11 @@ fn is_console_output_difference(divergence: &FrxDivergenceDetail) -> bool {
         || divergence
             .react_signature
             .as_ref()
-            .map_or(false, |sig| sig.event.contains("console_output"))
+            .is_some_and(|sig| sig.event.contains("console_output"))
         || divergence
             .franken_signature
             .as_ref()
-            .map_or(false, |sig| sig.event.contains("console_output"))
+            .is_some_and(|sig| sig.event.contains("console_output"))
 }
 
 fn classify_console_output_divergence(divergence: &FrxDivergenceDetail) -> DivergenceEvidenceAtom {

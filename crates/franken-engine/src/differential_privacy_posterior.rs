@@ -89,14 +89,6 @@ impl PrivacyParameters {
         })
     }
 
-    /// Default conservative privacy parameters.
-    pub fn default() -> Self {
-        Self {
-            epsilon_millionths: DEFAULT_EPSILON_MILLIONTHS,
-            delta_millionths: DEFAULT_DELTA_MILLIONTHS,
-        }
-    }
-
     /// Strong privacy parameters (lower epsilon, lower delta).
     pub fn strong_privacy() -> Self {
         Self {
@@ -180,6 +172,15 @@ impl PrivacyParameters {
             estimate = new_estimate;
         }
         estimate
+    }
+}
+
+impl Default for PrivacyParameters {
+    fn default() -> Self {
+        Self {
+            epsilon_millionths: DEFAULT_EPSILON_MILLIONTHS,
+            delta_millionths: DEFAULT_DELTA_MILLIONTHS,
+        }
     }
 }
 
@@ -379,8 +380,7 @@ impl NoiseGenerator for DeterministicTestNoiseGenerator {
         // Simple deterministic "noise" for testing - not secure!
         self.counter += 1;
         let pseudo_random = (self.counter * 1664525 + 1013904223) % (1u64 << 31);
-        let normalized = (pseudo_random as i64 - (1i64 << 30)) * scale_millionths / (1i64 << 29);
-        normalized
+        (pseudo_random as i64 - (1i64 << 30)) * scale_millionths / (1i64 << 29)
     }
 }
 

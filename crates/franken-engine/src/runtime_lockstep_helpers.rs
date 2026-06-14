@@ -6,15 +6,11 @@
 #![forbid(unsafe_code)]
 
 use std::fs;
-#[cfg(unix)]
-use std::os::unix::process::ExitStatusExt;
-#[cfg(windows)]
-use std::os::windows::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use chrono::{SecondsFormat, Utc};
+use chrono::Utc;
 
 use crate::frx_lockstep_oracle::{
     FrxLockstepRunContext, RuntimeBenchmarkResult, create_runtime_benchmark_trace,
@@ -195,7 +191,7 @@ fn count_trace_files(base_dir: &Path) -> Result<usize, std::io::Error> {
                     && path
                         .file_name()
                         .and_then(|name| name.to_str())
-                        .map_or(false, |name| name.ends_with(".trace.json"))
+                        .is_some_and(|name| name.ends_with(".trace.json"))
                 {
                     count += 1;
                 }
@@ -260,6 +256,10 @@ pub fn verify_trace_completeness(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+    #[cfg(windows)]
+    use std::os::windows::process::ExitStatusExt;
     use std::process::{Command, Stdio};
 
     #[test]

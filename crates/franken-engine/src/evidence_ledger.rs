@@ -101,6 +101,7 @@ pub(crate) fn sign_evidence_preimage(preimage: &[u8]) -> Signature {
 
 /// The Ed25519 verification key paired with [`sign_evidence_preimage`], for
 /// asymmetric verification of evidence signed by the engine's default signer.
+#[allow(dead_code)]
 pub(crate) fn shared_evidence_verification_key() -> VerificationKey {
     DEFAULT_EVIDENCE_VERIFICATION_KEY.clone()
 }

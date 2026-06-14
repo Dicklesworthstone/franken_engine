@@ -225,7 +225,7 @@ impl CrossPlatformReproducibilityTester {
         let expected_content_hash = platform_results
             .values()
             .find(|r| r.success)
-            .map(|r| r.content_hash.clone());
+            .map(|r| r.content_hash);
 
         Ok(ReproducibilityTestResult {
             test_input,

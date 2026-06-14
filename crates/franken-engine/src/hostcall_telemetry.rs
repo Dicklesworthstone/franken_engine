@@ -120,10 +120,6 @@ impl HostcallType {
             Self::EnvRead
         } else if tag == "heap_allocate" {
             Self::MemAlloc
-        } else if tag == "ifc.check_flow" {
-            Self::Builtin
-        } else if tag.starts_with("module:") || tag.starts_with("module.") || tag == "module_load" {
-            Self::Builtin
         } else {
             Self::Builtin
         }
@@ -440,6 +436,7 @@ impl Default for RecorderConfig {
 /// - `timestamp_ns` is monotonically non-decreasing.
 /// - Append-only log with bounded capacity (backpressure on full).
 /// - Supports snapshot/checkpoint for replay alignment.
+///
 /// Per-reason counts of telemetry records the recorder refused to append
 /// (and therefore dropped). Each [`TelemetryRecorder::record`] call that
 /// returns `Err(TelemetryError::…)` increments the matching counter BEFORE

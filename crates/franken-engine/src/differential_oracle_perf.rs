@@ -46,13 +46,13 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::HybridRouter;
 use crate::differential_oracle::{
     DifferentialBackend, DifferentialComparisonMode, DifferentialComparisonVerdict,
     DifferentialHostFacts, DifferentialOracleInput, ExternalRuntimeSpec, VersionProbe,
     capture_external_version, capture_host_facts, current_unix_ns, run_command_with_timeout,
     run_differential_oracle, sha256_hex,
 };
-use crate::{HybridRouter, JsEngine};
 
 pub const DIFFERENTIAL_PERF_SCHEMA_VERSION: &str = "franken-engine.differential-oracle-perf.v1";
 
@@ -395,19 +395,18 @@ pub fn compute_sample_stats(samples: &[u64]) -> Option<PerfSampleStats> {
         sum_sq_dev / (n - 1)
     };
     let stddev = isqrt_u128(variance);
-    let cv_millionths = if mean == 0 {
-        0
-    } else {
-        u32::try_from(stddev.saturating_mul(u128::from(MILLIONTHS)) / mean).unwrap_or(u32::MAX)
-    };
+    let cv_millionths = stddev
+        .saturating_mul(u128::from(MILLIONTHS))
+        .checked_div(mean)
+        .map(|value| u32::try_from(value).unwrap_or(u32::MAX))
+        .unwrap_or(0);
     // ci95 half-width = 1.96 * stddev / sqrt(n), computed in millionths so
     // sqrt(n) keeps six fractional digits of precision.
     let sqrt_n_millionths = isqrt_u128(n.saturating_mul(1_000_000_000_000));
-    let ci_half = if sqrt_n_millionths == 0 {
-        0
-    } else {
-        stddev.saturating_mul(1_960_000) / sqrt_n_millionths
-    };
+    let ci_half = stddev
+        .saturating_mul(1_960_000)
+        .checked_div(sqrt_n_millionths)
+        .unwrap_or(0);
     let mean_u64 = u64::try_from(mean).unwrap_or(u64::MAX);
     let ci_half_u64 = u64::try_from(ci_half).unwrap_or(u64::MAX);
     Some(PerfSampleStats {
@@ -442,7 +441,7 @@ pub fn geometric_mean_millionths(ratios: &[u64]) -> Option<u64> {
     if ratios.is_empty() {
         return None;
     }
-    if ratios.iter().any(|&r| r == 0) {
+    if ratios.contains(&0) {
         return None;
     }
     let log_sum: f64 = ratios

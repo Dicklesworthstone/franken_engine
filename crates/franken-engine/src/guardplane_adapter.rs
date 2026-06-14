@@ -18,15 +18,14 @@ use crate::baseline_interpreter::{
 };
 use crate::bayesian_posterior::{BayesianPosteriorUpdater, Evidence, Posterior, RiskState};
 use crate::eprocess_guardrail::{
-    EProcessGuardrail, ExpectedLossMatrix, GuardrailRegistry, GuardrailState, ResetReceipt,
-    ThresholdLikelihoodRatio,
+    EProcessGuardrail, ExpectedLossMatrix, GuardrailRegistry, ThresholdLikelihoodRatio,
 };
 use crate::expected_loss_selector::{
     ContainmentAction as SelectorContainmentAction, ExpectedLossSelector, LossMatrix,
 };
 use crate::fleet_convergence::ContainmentThresholds;
 use crate::fleet_immune_protocol::ContainmentAction as ThresholdContainmentAction;
-use crate::martingale_decision_ledger::{MartingaleVerdict, StoppingThreshold};
+use crate::martingale_decision_ledger::StoppingThreshold;
 use crate::runtime_config::RuntimeConfig;
 use crate::security_epoch::SecurityEpoch;
 
@@ -542,7 +541,7 @@ impl GuardplaneAdapter {
 
         // Unified substrate decision path (AA.1/AA.2)
         // Convert evidence to likelihood ratio and feed to martingale
-        let lr_millionths = self.evidence_to_likelihood_ratio(&evidence);
+        let _lr_millionths = self.evidence_to_likelihood_ratio(&evidence);
         let observation_millionths = (evidence.resource_score_millionths
             + evidence.timing_anomaly_millionths
             + evidence.denial_rate_millionths)

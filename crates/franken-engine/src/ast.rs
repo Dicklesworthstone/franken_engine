@@ -5,8 +5,6 @@
 
 #![allow(clippy::clone_on_copy)]
 
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -1110,6 +1108,25 @@ pub enum MethodKind {
     Set,
 }
 
+/// Property definition kind inside an object literal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ObjectPropertyKind {
+    #[default]
+    Data,
+    Get,
+    Set,
+}
+
+impl ObjectPropertyKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Data => "data",
+            Self::Get => "get",
+            Self::Set => "set",
+        }
+    }
+}
+
 /// A single method definition inside a class body.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MethodDefinition {
@@ -1313,6 +1330,8 @@ pub struct ObjectProperty {
     pub value: Expression,
     pub computed: bool,
     pub shorthand: bool,
+    #[serde(default)]
+    pub kind: ObjectPropertyKind,
 }
 
 impl ObjectProperty {
@@ -1322,6 +1341,7 @@ impl ObjectProperty {
             ("value", self.value.canonical_value()),
             ("computed", CanonicalValue::Bool(self.computed)),
             ("shorthand", CanonicalValue::Bool(self.shorthand)),
+            ("kind", CanonicalValue::str(self.kind.as_str())),
         ])
     }
 }
@@ -1421,6 +1441,10 @@ pub enum Expression {
         span: Option<SourceSpan>,
     },
     This,
+    /// `new.target` meta-property.
+    NewTarget,
+    /// `import.meta` module meta-property.
+    ImportMeta,
     ArrayLiteral(Vec<Option<Expression>>),
     ObjectLiteral(Vec<ObjectProperty>),
     ArrowFunction {
@@ -1600,6 +1624,12 @@ impl Expression {
                 ("kind", CanonicalValue::str("this")),
                 ("value", CanonicalValue::Null),
             ]),
+            Self::NewTarget => {
+                CanonicalValue::map_from_entries([("kind", CanonicalValue::str("new_target"))])
+            }
+            Self::ImportMeta => {
+                CanonicalValue::map_from_entries([("kind", CanonicalValue::str("import_meta"))])
+            }
             Self::ArrayLiteral(elements) => CanonicalValue::map_from_entries([
                 ("kind", CanonicalValue::str("array")),
                 (
@@ -1736,6 +1766,8 @@ impl std::fmt::Display for Expression {
             Self::NullLiteral => write!(f, "null"),
             Self::UndefinedLiteral => write!(f, "undefined"),
             Self::This => write!(f, "this"),
+            Self::NewTarget => write!(f, "new.target"),
+            Self::ImportMeta => write!(f, "import.meta"),
             Self::Raw(value) => write!(f, "{value}"),
             Self::RegExpLiteral { pattern, flags } => write!(f, "/{pattern}/{flags}"),
             Self::Super => write!(f, "super"),
@@ -3141,6 +3173,7 @@ mod tests {
             value: Expression::NumericLiteral(1),
             computed: false,
             shorthand: true,
+            kind: ObjectPropertyKind::Data,
         }]);
         match expr.canonical_value() {
             CanonicalValue::Map(map) => {
@@ -3165,6 +3198,7 @@ mod tests {
             value: Expression::NumericLiteral(42),
             computed: true,
             shorthand: false,
+            kind: ObjectPropertyKind::Data,
         };
         match prop.canonical_value() {
             CanonicalValue::Map(map) => {
@@ -3172,6 +3206,10 @@ mod tests {
                 assert!(map.contains_key("value"));
                 assert_eq!(map.get("computed"), Some(&CanonicalValue::Bool(true)));
                 assert_eq!(map.get("shorthand"), Some(&CanonicalValue::Bool(false)));
+                assert_eq!(
+                    map.get("kind"),
+                    Some(&CanonicalValue::String("data".to_string()))
+                );
             }
             _ => panic!("expected map"),
         }
@@ -4688,6 +4726,7 @@ mod tests {
             value: Expression::NumericLiteral(42),
             computed: true,
             shorthand: false,
+            kind: ObjectPropertyKind::Data,
         };
         let json = serde_json::to_string(&prop).expect("serialize derived Serialize");
         let restored: ObjectProperty =

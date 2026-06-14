@@ -26,9 +26,9 @@
 )]
 
 use frankenengine_engine::ast::{
-    AssignmentOperator, BindingPattern, Expression, ExpressionStatement, ObjectProperty, ParseGoal,
-    SourceSpan, Statement, SyntaxTree, VariableDeclaration, VariableDeclarationKind,
-    VariableDeclarator,
+    AssignmentOperator, BindingPattern, Expression, ExpressionStatement, ObjectProperty,
+    ObjectPropertyKind, ParseGoal, SourceSpan, Statement, SyntaxTree, VariableDeclaration,
+    VariableDeclarationKind, VariableDeclarator,
 };
 use frankenengine_engine::baseline_interpreter::{LaneChoice, LaneRouter, Value};
 use frankenengine_engine::ir_contract::Ir0Module;
@@ -605,6 +605,7 @@ fn ir3_execution_of_logical_compound_member_assignment_preserves_result_semantic
                 value: initial,
                 computed: false,
                 shorthand: false,
+                kind: ObjectPropertyKind::Data,
             }])),
         ));
         body.push(expr_stmt(Expression::Assignment {

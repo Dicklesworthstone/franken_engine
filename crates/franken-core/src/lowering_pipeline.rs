@@ -2953,7 +2953,9 @@ pub fn lower_ir2_to_ir3(
             }
             Ir1Op::Call { arg_count } => {
                 let count = *arg_count as usize;
-                if count > value_stack.len() {
+                // Stack layout: [..., callee, arg0, arg1, ...]; we pop `count`
+                // args plus the callee, so `count + 1` slots must be present.
+                if count.saturating_add(1) > value_stack.len() {
                     return Err(LoweringPipelineError::InvariantViolation {
                         detail: "Value stack underflow in Call",
                     });
@@ -2986,7 +2988,13 @@ pub fn lower_ir2_to_ir3(
             Ir1Op::CallMethod { arg_count } => {
                 let count = *arg_count as usize;
                 // Stack layout: [..., callee, receiver, arg0, arg1, ...]
-                // Pop args first, then receiver, then callee.
+                // Pop args first, then receiver, then callee, so `count + 2`
+                // slots must be present.
+                if count.saturating_add(2) > value_stack.len() {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "Value stack underflow in CallMethod",
+                    });
+                }
                 let mut args = Vec::with_capacity(count);
                 for _ in 0..count {
                     args.push(value_stack.pop().unwrap_or(0));
@@ -7284,6 +7292,53 @@ mod tests {
             err,
             LoweringPipelineError::InvariantViolation {
                 detail: "lowered control-flow references missing label",
+            }
+        );
+    }
+
+    #[test]
+    fn lower_ir2_to_ir3_call_fails_closed_when_callee_missing() {
+        // A `Call` needs `arg_count + 1` stack slots (the args plus the callee).
+        // With an empty value stack, even `arg_count == 0` must fail closed on
+        // the absent callee rather than silently defaulting it to register 0.
+        let mut ir2 = Ir2Module::new(ContentHash::compute(b"call-underflow"), "call_underflow.js");
+        ir2.ops.push(Ir2Op {
+            inner: Ir1Op::Call { arg_count: 0 },
+            effect: EffectBoundary::Pure,
+            required_capability: None,
+            flow: None,
+        });
+
+        let err = lower_ir2_to_ir3(&ir2).expect_err("missing callee should fail closed");
+        assert_eq!(
+            err,
+            LoweringPipelineError::InvariantViolation {
+                detail: "Value stack underflow in Call",
+            }
+        );
+    }
+
+    #[test]
+    fn lower_ir2_to_ir3_call_method_fails_closed_on_underflow() {
+        // A `CallMethod` needs `arg_count + 2` stack slots (the args plus the
+        // receiver and the callee). An empty stack must fail closed instead of
+        // popping defaulted register-0 values for the receiver and callee.
+        let mut ir2 = Ir2Module::new(
+            ContentHash::compute(b"call-method-underflow"),
+            "call_method_underflow.js",
+        );
+        ir2.ops.push(Ir2Op {
+            inner: Ir1Op::CallMethod { arg_count: 0 },
+            effect: EffectBoundary::Pure,
+            required_capability: None,
+            flow: None,
+        });
+
+        let err = lower_ir2_to_ir3(&ir2).expect_err("missing receiver/callee should fail closed");
+        assert_eq!(
+            err,
+            LoweringPipelineError::InvariantViolation {
+                detail: "Value stack underflow in CallMethod",
             }
         );
     }

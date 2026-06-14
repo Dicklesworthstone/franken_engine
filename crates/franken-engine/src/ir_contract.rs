@@ -10,8 +10,6 @@
 //! Every level provides canonical serialization via [`deterministic_serde::CanonicalValue`] and
 //! content-addressed hashing via [`hash_tiers::ContentHash`].
 
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{AssignmentOperator, BinaryOperator, SyntaxTree, UnaryOperator};
@@ -456,6 +454,8 @@ pub enum Ir1Op {
     Throw,
     /// Load `this` binding.
     LoadThis,
+    /// Load `new.target` binding.
+    LoadNewTarget,
     /// Load `super` binding for accessing parent class.
     LoadSuper,
     /// Declare a function and bind it.  When `body_ops` is non-empty the
@@ -680,6 +680,9 @@ impl Ir1Op {
             Self::Throw => CanonicalValue::map_from_entries([("op", CanonicalValue::str("throw"))]),
             Self::LoadThis => {
                 CanonicalValue::map_from_entries([("op", CanonicalValue::str("load_this"))])
+            }
+            Self::LoadNewTarget => {
+                CanonicalValue::map_from_entries([("op", CanonicalValue::str("load_new_target"))])
             }
             Self::LoadSuper => {
                 CanonicalValue::map_from_entries([("op", CanonicalValue::str("load_super"))])
@@ -1352,6 +1355,8 @@ pub enum Ir3Instruction {
     Halt,
     /// Load the current `this` binding into a register.
     LoadThis { dst: Reg },
+    /// Load the current `new.target` binding into a register.
+    LoadNewTarget { dst: Reg },
     /// Load the current `super` binding into a register.
     LoadSuper { dst: Reg },
 
@@ -1676,6 +1681,10 @@ impl Ir3Instruction {
             Self::Halt => CanonicalValue::map_from_entries([("op", CanonicalValue::str("halt"))]),
             Self::LoadThis { dst } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("load_this")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+            ]),
+            Self::LoadNewTarget { dst } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("load_new_target")),
                 ("dst", CanonicalValue::U64(u64::from(*dst))),
             ]),
             Self::LoadSuper { dst } => CanonicalValue::map_from_entries([
@@ -2824,6 +2833,7 @@ impl Default for IrVerifier {
 mod tests {
     use super::*;
     use crate::ast::{ExpressionStatement, ParseGoal, SourceSpan, Statement, SyntaxTree};
+    use std::collections::BTreeMap;
 
     fn make_span() -> SourceSpan {
         SourceSpan::new(0, 10, 1, 1, 1, 11)

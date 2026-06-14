@@ -584,6 +584,48 @@ fn conformance_eval_rethrow_reaches_outer_catch() {
 }
 
 #[test]
+fn conformance_source_finally_order_matches_node_ground_truth() {
+    // Expected values were checked against Node for bd-8enww.4.4. These cases
+    // pin the observable completion order without shelling out during the test.
+    let cases = [
+        (
+            "normal-path",
+            r#"let log = ""; try { log = log + "try"; } finally { log = log + ":finally"; } log;"#,
+            "try:finally",
+        ),
+        (
+            "caught-throw",
+            r#"let log = ""; try { throw "x"; } catch (e) { log = log + "catch:" + e; } finally { log = log + ":finally"; } log;"#,
+            "catch:x:finally",
+        ),
+        (
+            "rethrown-catch",
+            r#"let log = ""; try { try { log = log + "try"; throw "x"; } catch (e) { log = log + ":catch"; throw "y"; } finally { log = log + ":finally"; } } catch (e) { log = log + ":outer:" + e; } log;"#,
+            "try:catch:finally:outer:y",
+        ),
+        (
+            "return-override",
+            r#"function f() { try { return "try"; } finally { return "finally"; } } f();"#,
+            "finally",
+        ),
+        (
+            "break-through-finally",
+            r#"let log = ""; outer: while (true) { try { log = log + "try"; break outer; } finally { log = log + ":finally"; } } log;"#,
+            "try:finally",
+        ),
+        (
+            "continue-through-finally",
+            r#"let log = ""; for (let i = 0; i < 2; i = i + 1) { try { log = log + "try" + i; continue; } finally { log = log + ":finally" + i + ";"; } } log;"#,
+            "try0:finally0;try1:finally1;",
+        ),
+    ];
+
+    for (name, source, expected) in cases {
+        assert_eq!(eval_source(source), expected, "{name}");
+    }
+}
+
+#[test]
 fn conformance_eval_catches_thrown_object_values() {
     assert_eq!(
         eval_router_value(r#"try { throw { message: "botguard" }; } catch (e) { e.message; }"#),

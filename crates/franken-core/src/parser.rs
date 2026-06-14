@@ -4536,7 +4536,7 @@ fn try_parse_conditional(
             // Found ternary `?`. Now find the matching `:` at the same depth.
             let test_src = expr[..i].trim();
             let rest = &expr[i + 1..];
-            if let Some(colon_idx) = find_top_level_colon(rest) {
+            if let Some(colon_idx) = find_ternary_colon(rest) {
                 let consequent_src = rest[..colon_idx].trim();
                 let alternate_src = rest[colon_idx + 1..].trim();
                 if test_src.is_empty() || consequent_src.is_empty() || alternate_src.is_empty() {
@@ -4630,9 +4630,104 @@ fn find_top_level_colon(s: &str) -> Option<usize> {
     None
 }
 
+/// Find the `:` that matches the *first* top-level `?` of a ternary, given the
+/// slice *after* that `?`. Unlike [`find_top_level_colon`], this skips the `:`
+/// of any nested ternary by tracking `?` depth, so `b ? c : d : e` returns the
+/// index of the second (outer) `:`, grouping `a ? b ? c : d : e` as
+/// `a ? (b ? c : d) : e`. `?.` (optional chaining) and `??` (nullish) are not
+/// ternary `?`. (A dedicated finder rather than changing `find_top_level_colon`,
+/// which labeled statements and object/type patterns also rely on.)
+fn find_ternary_colon(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut depth_paren: i64 = 0;
+    let mut depth_bracket: i64 = 0;
+    let mut depth_brace: i64 = 0;
+    let mut in_quote: Option<u8> = None;
+    let mut escaped = false;
+    let mut question_depth: i64 = 0;
+    let mut i: usize = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = in_quote {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == q {
+                in_quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match b {
+            b'\'' | b'"' | b'`' => {
+                in_quote = Some(b);
+                i += 1;
+                continue;
+            }
+            b'(' => depth_paren += 1,
+            b')' => depth_paren -= 1,
+            b'[' => depth_bracket += 1,
+            b']' => depth_bracket -= 1,
+            b'{' => depth_brace += 1,
+            b'}' => depth_brace -= 1,
+            _ => {}
+        }
+        if depth_paren == 0 && depth_bracket == 0 && depth_brace == 0 {
+            if b == b'?' {
+                match bytes.get(i + 1).copied() {
+                    // Nullish `??` — skip both bytes, not a ternary `?`.
+                    Some(b'?') => {
+                        i += 2;
+                        continue;
+                    }
+                    // Optional chaining `?.` — not a ternary `?`.
+                    Some(b'.') => {}
+                    _ => question_depth += 1,
+                }
+            } else if b == b':' {
+                if question_depth == 0 {
+                    return Some(i);
+                }
+                question_depth -= 1;
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
 // Binary expression parsing with precedence scanning
 // ---------------------------------------------------------------------------
+
+/// Whether `b`, as the last significant byte before a `+`/`-`, means that
+/// `+`/`-` is a unary sign rather than a binary operator. True for operator and
+/// open-delimiter/separator bytes (after which an operand has not yet appeared).
+fn is_operator_context_byte(b: u8) -> bool {
+    matches!(
+        b,
+        b'+' | b'-'
+            | b'*'
+            | b'/'
+            | b'%'
+            | b'<'
+            | b'>'
+            | b'='
+            | b'&'
+            | b'|'
+            | b'^'
+            | b'~'
+            | b'!'
+            | b'('
+            | b'['
+            | b'{'
+            | b','
+            | b';'
+            | b':'
+            | b'?'
+    )
+}
 
 /// Try to find and parse a binary expression by locating the lowest-precedence
 /// top-level operator and recursively parsing left and right operands.
@@ -4744,7 +4839,17 @@ fn try_parse_binary(
                 // Make sure we have non-empty operands on both sides.
                 let lhs = expr[..i].trim();
                 let rhs = expr[i + len..].trim();
-                if !lhs.is_empty() && !rhs.is_empty() {
+                // A `+`/`-` in unary position (no left operand, or the
+                // preceding significant byte is itself an operator) is a sign
+                // belonging to the right operand, not a binary split point —
+                // e.g. the `-` in `2 * -3`, `a - -b`, or `2 ** -1`. Skipping it
+                // lets the real binary operator win the split.
+                let unary_sign = matches!(op, BinaryOperator::Add | BinaryOperator::Subtract)
+                    && lhs
+                        .as_bytes()
+                        .last()
+                        .is_none_or(|&c| is_operator_context_byte(c));
+                if !lhs.is_empty() && !rhs.is_empty() && !unary_sign {
                     best_op = Some(op);
                     best_pos = i;
                     best_len = len;
@@ -6962,6 +7067,60 @@ fn find_top_level_else(s: &str) -> Option<usize> {
     None
 }
 
+/// Split a C-style `for` header into `(init, condition, update)` on the first
+/// two *top-level* semicolons (ignoring `;` inside `()`/`[]`/`{}`/quotes).
+/// Anything after the second top-level `;` stays in `update` (matching the
+/// previous `splitn(3, ';')` leniency). Returns `None` if fewer than two
+/// top-level semicolons are present.
+fn split_for_header(header: &str) -> Option<(&str, &str, &str)> {
+    let bytes = header.as_bytes();
+    let mut depth_paren: i64 = 0;
+    let mut depth_bracket: i64 = 0;
+    let mut depth_brace: i64 = 0;
+    let mut in_quote: Option<u8> = None;
+    let mut escaped = false;
+    let mut semis: [usize; 2] = [0, 0];
+    let mut count: usize = 0;
+    let mut i: usize = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = in_quote {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == q {
+                in_quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match b {
+            b'\'' | b'"' | b'`' => in_quote = Some(b),
+            b'(' => depth_paren += 1,
+            b')' => depth_paren -= 1,
+            b'[' => depth_bracket += 1,
+            b']' => depth_bracket -= 1,
+            b'{' => depth_brace += 1,
+            b'}' => depth_brace -= 1,
+            b';' if depth_paren == 0 && depth_bracket == 0 && depth_brace == 0 && count < 2 => {
+                semis[count] = i;
+                count += 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    if count < 2 {
+        return None;
+    }
+    Some((
+        &header[..semis[0]],
+        &header[semis[0] + 1..semis[1]],
+        &header[semis[1] + 1..],
+    ))
+}
+
 fn parse_for_statement(
     statement: &str,
     goal: ParseGoal,
@@ -6986,11 +7145,13 @@ fn parse_for_statement(
         return Ok(forin);
     }
 
-    // Split header by semicolons: init; condition; update
-    let parts: Vec<&str> = header_src.splitn(3, ';').collect();
-    let (init_src, cond_src, update_src) = match parts.len() {
-        3 => (parts[0].trim(), parts[1].trim(), parts[2].trim()),
-        _ => {
+    // Split header by top-level semicolons: init; condition; update. The split
+    // must be nesting-aware so a `;` inside an arrow/block body or a string in
+    // a header clause (e.g. `for (let f = () => { a; return b; }; i < n; i++)`)
+    // does not mis-split the three parts.
+    let (init_src, cond_src, update_src) = match split_for_header(header_src) {
+        Some((init, cond, update)) => (init.trim(), cond.trim(), update.trim()),
+        None => {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "for statement header must have three semicolon-separated parts",

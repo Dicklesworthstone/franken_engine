@@ -1551,6 +1551,8 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
         | Expression::NullLiteral
         | Expression::UndefinedLiteral
         | Expression::This
+        | Expression::NewTarget
+        | Expression::ImportMeta
         | Expression::Super
         | Expression::Raw(_)
         | Expression::RegExpLiteral { .. }
@@ -1759,6 +1761,8 @@ fn collect_identifier_refs(expr: &Expression, out: &mut Vec<String>) {
         | Expression::NullLiteral
         | Expression::UndefinedLiteral
         | Expression::This
+        | Expression::NewTarget
+        | Expression::ImportMeta
         | Expression::Super
         | Expression::Raw(_)
         | Expression::RegExpLiteral { .. }
@@ -3894,7 +3898,7 @@ mod tests {
 
     #[test]
     fn await_in_object_literal_detected() {
-        use crate::ast::ObjectProperty;
+        use crate::ast::{ObjectProperty, ObjectPropertyKind};
         let tree = make_tree(
             ParseGoal::Script,
             vec![expr_stmt(
@@ -3903,6 +3907,7 @@ mod tests {
                     value: Expression::Await(Box::new(Expression::Identifier("p".to_string()))),
                     computed: false,
                     shorthand: false,
+                    kind: ObjectPropertyKind::Data,
                 }]),
                 1,
             )],
@@ -4210,12 +4215,13 @@ mod tests {
 
     #[test]
     fn collect_refs_from_object_literal() {
-        use crate::ast::ObjectProperty;
+        use crate::ast::{ObjectProperty, ObjectPropertyKind};
         let expr = Expression::ObjectLiteral(vec![ObjectProperty {
             key: Expression::StringLiteral("k".to_string()),
             value: Expression::Identifier("v".to_string()),
             computed: false,
             shorthand: false,
+            kind: ObjectPropertyKind::Data,
         }]);
         let mut refs = Vec::new();
         collect_identifier_refs(&expr, &mut refs);

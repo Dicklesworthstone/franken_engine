@@ -27,6 +27,7 @@ use frankenengine_engine::baseline_interpreter::{
     LaneReason, LaneRouter, ObjectId, QuickJsLane, V8Lane, Value,
 };
 use frankenengine_engine::capability::RuntimeCapability;
+use frankenengine_engine::deterministic_replay::NondeterminismSource;
 use frankenengine_engine::ir_contract::{
     CapabilityTag, Ir3Instruction, Ir3Module, IrHeader, IrLevel, IrSchemaVersion, RegRange,
     WitnessEventKind,
@@ -67,12 +68,14 @@ fn quickjs_execute(
 
 /// Match the private `test_quickjs_config()` helper inside `baseline_interpreter.rs`:
 /// production `quickjs_defaults` intentionally starts with an empty capability set,
-/// so tests that actually drive VM dispatch + heap allocation must grant both here.
+/// so tests that drive VM dispatch, heap allocation, and direct builtin
+/// hostcalls must grant those capabilities here.
 fn baseline_test_config() -> InterpreterConfig {
     let mut config = InterpreterConfig::quickjs_defaults();
     config.granted_capabilities = BTreeSet::from([
         RuntimeCapability::VmDispatch,
         RuntimeCapability::HeapAllocate,
+        RuntimeCapability::Builtin,
     ]);
     config
 }
@@ -119,6 +122,81 @@ fn decode_value_string(s: &str) -> Value {
             }
         }
     }
+}
+
+#[test]
+fn performance_global_now_is_deterministic_number() {
+    let mut interpreter = baseline_test_interpreter();
+    assert_eq!(
+        interpreter
+            .evaluate_expression("typeof performance")
+            .unwrap(),
+        Value::str("object")
+    );
+    assert_eq!(
+        interpreter
+            .evaluate_expression("typeof performance.now")
+            .unwrap(),
+        Value::str("function")
+    );
+    assert_eq!(
+        interpreter
+            .evaluate_expression("typeof performance.now()")
+            .unwrap(),
+        Value::str("number")
+    );
+
+    let first = baseline_test_interpreter()
+        .evaluate_expression("performance.now()")
+        .unwrap();
+    let replay = baseline_test_interpreter()
+        .evaluate_expression("performance.now()")
+        .unwrap();
+    assert_eq!(first, replay);
+}
+
+#[test]
+fn performance_now_records_deterministic_timer_trace() {
+    let mut first_core = baseline_test_interpreter();
+    let first_result = first_core
+        .execute(&test_module(vec![
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("builtin:PerformanceNow".to_string()),
+                args: RegRange { start: 0, count: 0 },
+                dst: 0,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .unwrap();
+
+    let timer_event = first_result
+        .nondeterminism_trace
+        .events
+        .iter()
+        .find(|event| event.source == NondeterminismSource::TimerRead)
+        .expect("performance.now should record a timer-read trace event");
+    let payload = String::from_utf8(timer_event.value.clone()).unwrap();
+    assert!(payload.contains("clock_source=deterministic_instruction_tick"));
+    assert!(payload.contains("base_tick=0"));
+    assert!(payload.contains("consumed_ticks="));
+
+    let mut replay_core = baseline_test_interpreter();
+    let replay_result = replay_core
+        .execute(&test_module(vec![
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("builtin:PerformanceNow".to_string()),
+                args: RegRange { start: 0, count: 0 },
+                dst: 0,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .unwrap();
+
+    assert_eq!(first_result.value, replay_result.value);
+    assert_eq!(
+        first_result.nondeterminism_trace.events,
+        replay_result.nondeterminism_trace.events
+    );
 }
 
 // ===========================================================================
@@ -1738,6 +1816,123 @@ fn math_round_negative_half_semantics_regression() {
             panic!("Math.round(-0.5) inconsistent behavior suggests implementation issues");
         }
     }
+}
+
+/// A unary `+`/`-` that follows a higher-or-equal-precedence binary operator
+/// must bind to its right operand, not be treated as a binary split point. The
+/// string-slicing binary parser picks the lowest-precedence top-level operator;
+/// without a unary-position guard `2 * -3` splits at the `-` (lhs `"2 *"`),
+/// which falls through to a string literal and yields NaN instead of -6.
+#[test]
+fn arithmetic_unary_sign_after_higher_precedence_operator() {
+    let mut interp = baseline_test_interpreter();
+    for (src, expected) in [
+        ("2 * -3", -6.0),
+        ("10 - -3", 13.0),
+        ("8 / -2", -4.0),
+        ("2 ** -1", 0.5),
+        ("7 % -4", 3.0),
+        ("3 * +2", 6.0),
+        ("4 + -1", 3.0),
+    ] {
+        let got = interp
+            .evaluate_expression(src)
+            .unwrap_or_else(|e| panic!("`{src}` errored: {e:?}"));
+        let n = match &got {
+            Value::Int(n) => *n as f64,
+            Value::Float(f) => f.inner(),
+            other => panic!("`{src}` produced a non-numeric value: {other:?}"),
+        };
+        assert_eq!(
+            n, expected,
+            "`{src}` should evaluate to {expected}, got {got:?}"
+        );
+    }
+}
+
+/// `a ? b ? c : d : e` must group as `a ? (b ? c : d) : e`. The ternary parser
+/// pairs the first top-level `?` with the first top-level `:`, which (without
+/// nested-`?` tracking) is the *inner* ternary's colon, mis-grouping the tree.
+#[test]
+fn ternary_nested_in_consequent_groups_correctly() {
+    let mut interp = baseline_test_interpreter();
+    // outer truthy -> inner ternary `0 ? 20 : 30` -> inner falsy -> 30
+    let got = interp
+        .evaluate_expression("1 ? 0 ? 20 : 30 : 40")
+        .expect("nested ternary should evaluate");
+    assert!(
+        matches!(got, Value::Int(30)),
+        "`1 ? 0 ? 20 : 30 : 40` should be 30, got {got:?}"
+    );
+    // outer falsy -> outer alternate 40
+    let got2 = interp
+        .evaluate_expression("0 ? 0 ? 20 : 30 : 40")
+        .expect("nested ternary should evaluate");
+    assert!(
+        matches!(got2, Value::Int(40)),
+        "`0 ? 0 ? 20 : 30 : 40` should be 40, got {got2:?}"
+    );
+}
+
+/// JS `ToInt32` (used by every bitwise/shift op) must reduce modulo 2^32
+/// (wrapping), not saturate the way Rust's `f64 as i32` does. A float operand
+/// whose magnitude exceeds 2^31 must wrap, e.g. `3000000000.5 | 0` is
+/// `-1294967296`, never `i32::MAX`.
+#[test]
+fn bitwise_ops_apply_wrapping_to_int32() {
+    let mut interp = baseline_test_interpreter();
+    for (src, expected) in [
+        ("3000000000.5 | 0", -1_294_967_296_i64),
+        ("5000000000.7 >> 0", 705_032_704),
+        ("5.9 | 0", 5),
+    ] {
+        let got = interp
+            .evaluate_expression(src)
+            .unwrap_or_else(|e| panic!("`{src}` errored: {e:?}"));
+        assert_eq!(
+            got,
+            Value::Int(expected),
+            "`{src}` should wrap to {expected}, got {got:?}"
+        );
+    }
+}
+
+/// `Math.round` must use the spec algorithm, not `floor(x + 0.5)`, which is
+/// wrong for the largest double below 0.5 (`0.49999999999999994 + 0.5` rounds
+/// up to exactly 1.0, so the naive form returns 1 instead of 0).
+#[test]
+fn math_round_largest_double_below_half_is_zero() {
+    let mut interp = baseline_test_interpreter();
+    let got = interp
+        .evaluate_expression("Math.round(0.49999999999999994)")
+        .expect("Math.round should evaluate");
+    match got {
+        Value::Int(0) => {}
+        Value::Float(f) if f.inner() == 0.0 => {}
+        other => panic!("Math.round(0.49999999999999994) should be 0, got {other:?}"),
+    }
+}
+
+#[test]
+fn object_literal_getter_invoked_on_property_access() {
+    let mut interp = baseline_test_interpreter();
+    let got = interp
+        .evaluate_expression(
+            "(() => { let o = { base: 10, get v() { return this.base + 1; } }; return o.v; })()",
+        )
+        .expect("object-literal getter should evaluate");
+    assert_eq!(got, Value::Int(11));
+}
+
+#[test]
+fn object_literal_setter_invoked_on_property_assignment() {
+    let mut interp = baseline_test_interpreter();
+    let got = interp
+        .evaluate_expression(
+            "(() => { let o = { set v(x) { this.seen = x; } }; o.v = 17; return o.seen; })()",
+        )
+        .expect("object-literal setter should evaluate");
+    assert_eq!(got, Value::Int(17));
 }
 
 #[test]

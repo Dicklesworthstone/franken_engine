@@ -30,7 +30,28 @@ fn to_fixed_zero_digits_rounds_to_integer() {
 
 #[test]
 fn to_fixed_default_digits_is_zero() {
-    assert_eq!(eval("let n = 2.5; n.toFixed();"), "2");
+    // Default fractionDigits is 0. 2.5 is an exact dyadic tie: per ES2023
+    // 21.1.3.3 the tie breaks toward the larger n ("3"), NOT to-even ("2").
+    assert_eq!(eval("let n = 2.5; n.toFixed();"), "3");
+}
+
+// ---- exact-dyadic-tie rounding (round-half-up, not banker's) -------------
+
+#[test]
+fn to_fixed_ties_round_half_up() {
+    assert_eq!(eval("(0.5).toFixed(0);"), "1");
+    assert_eq!(eval("(1.5).toFixed(0);"), "2");
+    assert_eq!(eval("(2.5).toFixed(0);"), "3");
+    assert_eq!(eval("(0.25).toFixed(1);"), "0.3");
+    assert_eq!(eval("(0.125).toFixed(2);"), "0.13");
+}
+
+#[test]
+fn to_fixed_rounding_carry_and_negatives() {
+    assert_eq!(eval("(9.5).toFixed(0);"), "10");
+    assert_eq!(eval("(-2.5).toFixed(0);"), "-3");
+    // 1.005 is really 1.00499999...; the exact value rounds down.
+    assert_eq!(eval("(1.005).toFixed(2);"), "1.00");
 }
 
 // ---- toString (optional radix) -------------------------------------------

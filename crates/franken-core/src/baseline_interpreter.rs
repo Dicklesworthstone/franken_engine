@@ -6070,29 +6070,34 @@ impl InterpreterCore {
         }
     }
 
+    /// ECMAScript `ToInt32` for a floating-point operand (ECMA-262 §7.1.6):
+    /// truncate toward zero, reduce modulo 2^32, and reinterpret the low 32
+    /// bits as signed. Rust's `f64 as i32` cast *saturates* (since 1.45), so
+    /// every operand whose magnitude exceeds 2^31 would collapse to
+    /// `i32::MAX` — wrong for JS bitwise/shift semantics, which require
+    /// modular wrapping (e.g. `(3000000000.5) | 0` is `-1294967296`, not
+    /// `2147483647`). NaN and ±Infinity map to 0. `f64 % 2^32` via
+    /// `rem_euclid` is exact (IEEE `fmod` is exact), so this is precise for
+    /// every finite input, including magnitudes past 2^53.
+    fn js_to_int32(value: f64) -> i32 {
+        if !value.is_finite() {
+            return 0;
+        }
+        (value.trunc().rem_euclid(4_294_967_296.0) as u32) as i32
+    }
+
     fn eval_bit_not(&self, src: u32) -> Result<Value, InterpreterError> {
         let value = self.read_reg(src)?;
         // JS bitwise ops: ToInt32 conversion
         let number = match &value {
             Value::Int(n) => *n as i32,
-            Value::Float(f) => {
-                let v = f.inner();
-                if v.is_nan() || v.is_infinite() {
-                    0
-                } else {
-                    v as i32
-                }
-            }
+            Value::Float(f) => Self::js_to_int32(f.inner()),
             _ => {
                 let n = Self::coerce_to_float(&value).ok_or(InterpreterError::TypeError {
                     expected: "number-coercible primitive".to_string(),
                     got: value.type_name().to_string(),
                 })?;
-                if n.is_nan() || n.is_infinite() {
-                    0
-                } else {
-                    n as i32
-                }
+                Self::js_to_int32(n)
             }
         };
         Ok(Value::Int((!number) as i64))
@@ -6191,28 +6196,18 @@ impl InterpreterCore {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
 
-        // JS ToInt32: convert to float then truncate
+        // JS ToInt32: truncate toward zero then reduce modulo 2^32 (wrapping,
+        // not saturating — see `js_to_int32`).
         let to_i32 = |v: &Value| -> Result<i32, InterpreterError> {
             match v {
                 Value::Int(n) => Ok(*n as i32),
-                Value::Float(f) => {
-                    let fv = f.inner();
-                    if fv.is_nan() || fv.is_infinite() {
-                        Ok(0)
-                    } else {
-                        Ok(fv as i32)
-                    }
-                }
+                Value::Float(f) => Ok(Self::js_to_int32(f.inner())),
                 _ => {
                     let n = Self::coerce_to_float(v).ok_or(InterpreterError::TypeError {
                         expected: "number".to_string(),
                         got: v.type_name().to_string(),
                     })?;
-                    if n.is_nan() || n.is_infinite() {
-                        Ok(0)
-                    } else {
-                        Ok(n as i32)
-                    }
+                    Ok(Self::js_to_int32(n))
                 }
             }
         };

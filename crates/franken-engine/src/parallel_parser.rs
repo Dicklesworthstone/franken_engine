@@ -68,10 +68,6 @@ struct CanonicalEncoder {
 }
 
 impl CanonicalEncoder {
-    fn new() -> Self {
-        Self { buffer: Vec::new() }
-    }
-
     fn with_capacity(capacity: usize) -> Self {
         Self {
             buffer: Vec::with_capacity(capacity),

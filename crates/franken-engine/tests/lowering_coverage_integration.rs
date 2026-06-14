@@ -26,10 +26,10 @@ use frankenengine_engine::ast::{
     ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, BlockStatement, BreakStatement,
     CatchClause, ContinueStatement, DoWhileStatement, ExportDeclaration, ExportKind, Expression,
     ExpressionStatement, ForStatement, FunctionDeclaration, FunctionParam, IfStatement,
-    ImportClause, ImportDeclaration, ObjectProperty, ParseGoal, ReturnStatement, SourceSpan,
-    Statement, SwitchCase, SwitchStatement, SyntaxTree, ThrowStatement, TryCatchStatement,
-    UnaryOperator, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
-    WhileStatement,
+    ImportClause, ImportDeclaration, ObjectProperty, ObjectPropertyKind, ParseGoal,
+    ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement, SyntaxTree,
+    ThrowStatement, TryCatchStatement, UnaryOperator, VariableDeclaration, VariableDeclarationKind,
+    VariableDeclarator, WhileStatement,
 };
 use frankenengine_engine::ir_contract::{
     BindingKind, Ir0Module, Ir1Op, Ir1PropertyKey, Ir3Instruction, IrLevel, ScopeKind,
@@ -2205,12 +2205,14 @@ fn lowering_object_literal() {
                 value: Expression::NumericLiteral(1),
                 computed: false,
                 shorthand: false,
+                kind: ObjectPropertyKind::Data,
             },
             ObjectProperty {
                 key: Expression::Identifier("y".to_string()),
                 value: Expression::NumericLiteral(2),
                 computed: false,
                 shorthand: false,
+                kind: ObjectPropertyKind::Data,
             },
         ]))],
     );
@@ -2238,6 +2240,7 @@ fn lowering_object_literal_computed_key() {
                 value: Expression::NumericLiteral(42),
                 computed: true,
                 shorthand: false,
+                kind: ObjectPropertyKind::Data,
             },
         ]))],
     );
@@ -2758,6 +2761,7 @@ fn witness_invariants_pass_for_expressions() {
                 value: Expression::NumericLiteral(1),
                 computed: false,
                 shorthand: false,
+                kind: ObjectPropertyKind::Data,
             }]),
         ),
     ];

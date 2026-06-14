@@ -21,9 +21,10 @@ use crate::ast::{
     ExportKind, Expression, ExpressionStatement, ForInStatement, ForOfStatement, ForStatement,
     FunctionDeclaration, FunctionParam, IfStatement, ImportClause, ImportDeclaration,
     ImportSpecifier, LabeledStatement, MethodDefinition, MethodKind, ObjectPatternProperty,
-    ObjectProperty, ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement,
-    SyntaxTree, ThrowStatement, TryCatchStatement, UnaryOperator, VariableDeclaration,
-    VariableDeclarationKind, VariableDeclarator, WhileStatement, WithStatement,
+    ObjectProperty, ObjectPropertyKind, ReturnStatement, SourceSpan, Statement, SwitchCase,
+    SwitchStatement, SyntaxTree, ThrowStatement, TryCatchStatement, UnaryOperator,
+    VariableDeclaration, VariableDeclarationKind, VariableDeclarator, WhileStatement,
+    WithStatement,
 };
 use crate::deterministic_serde::{self, CanonicalValue};
 
@@ -5247,7 +5248,7 @@ fn try_parse_conditional(
             // Found ternary `?`. Now find the matching `:` at the same depth.
             let test_src = expr[..i].trim();
             let rest = &expr[i + 1..];
-            if let Some(colon_idx) = find_top_level_colon(rest) {
+            if let Some(colon_idx) = find_ternary_colon(rest) {
                 let consequent_src = rest[..colon_idx].trim();
                 let alternate_src = rest[colon_idx + 1..].trim();
                 if test_src.is_empty() || consequent_src.is_empty() || alternate_src.is_empty() {
@@ -5341,9 +5342,104 @@ fn find_top_level_colon(s: &str) -> Option<usize> {
     None
 }
 
+/// Find the `:` that matches the *first* top-level `?` of a ternary, given the
+/// slice *after* that `?`. Unlike [`find_top_level_colon`], this skips the `:`
+/// of any nested ternary by tracking `?` depth, so `b ? c : d : e` returns the
+/// index of the second (outer) `:`, grouping `a ? b ? c : d : e` as
+/// `a ? (b ? c : d) : e`. `?.` (optional chaining) and `??` (nullish) are not
+/// ternary `?`. (A dedicated finder rather than changing `find_top_level_colon`,
+/// which labeled statements and object/type patterns also rely on.)
+fn find_ternary_colon(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut depth_paren: i64 = 0;
+    let mut depth_bracket: i64 = 0;
+    let mut depth_brace: i64 = 0;
+    let mut in_quote: Option<u8> = None;
+    let mut escaped = false;
+    let mut question_depth: i64 = 0;
+    let mut i: usize = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = in_quote {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == q {
+                in_quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match b {
+            b'\'' | b'"' | b'`' => {
+                in_quote = Some(b);
+                i += 1;
+                continue;
+            }
+            b'(' => depth_paren += 1,
+            b')' => depth_paren -= 1,
+            b'[' => depth_bracket += 1,
+            b']' => depth_bracket -= 1,
+            b'{' => depth_brace += 1,
+            b'}' => depth_brace -= 1,
+            _ => {}
+        }
+        if depth_paren == 0 && depth_bracket == 0 && depth_brace == 0 {
+            if b == b'?' {
+                match bytes.get(i + 1).copied() {
+                    // Nullish `??` — skip both bytes, not a ternary `?`.
+                    Some(b'?') => {
+                        i += 2;
+                        continue;
+                    }
+                    // Optional chaining `?.` — not a ternary `?`.
+                    Some(b'.') => {}
+                    _ => question_depth += 1,
+                }
+            } else if b == b':' {
+                if question_depth == 0 {
+                    return Some(i);
+                }
+                question_depth -= 1;
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
 // Binary expression parsing with precedence scanning
 // ---------------------------------------------------------------------------
+
+/// Whether `b`, as the last significant byte before a `+`/`-`, means that
+/// `+`/`-` is a unary sign rather than a binary operator. True for operator and
+/// open-delimiter/separator bytes (after which an operand has not yet appeared).
+fn is_operator_context_byte(b: u8) -> bool {
+    matches!(
+        b,
+        b'+' | b'-'
+            | b'*'
+            | b'/'
+            | b'%'
+            | b'<'
+            | b'>'
+            | b'='
+            | b'&'
+            | b'|'
+            | b'^'
+            | b'~'
+            | b'!'
+            | b'('
+            | b'['
+            | b'{'
+            | b','
+            | b';'
+            | b':'
+            | b'?'
+    )
+}
 
 /// Try to find and parse a binary expression by locating the lowest-precedence
 /// top-level operator and recursively parsing left and right operands.
@@ -5448,7 +5544,17 @@ fn try_parse_binary(
                 // Make sure we have non-empty operands on both sides.
                 let lhs = expr[..i].trim();
                 let rhs = expr[i + len..].trim();
-                if !lhs.is_empty() && !rhs.is_empty() {
+                // A `+`/`-` in unary position (no left operand, or the
+                // preceding significant byte is itself an operator) is a sign
+                // belonging to the right operand, not a binary split point —
+                // e.g. the `-` in `2 * -3`, `a - -b`, or `2 ** -1`. Skipping it
+                // lets the real binary operator win the split.
+                let unary_sign = matches!(op, BinaryOperator::Add | BinaryOperator::Subtract)
+                    && lhs
+                        .as_bytes()
+                        .last()
+                        .is_none_or(|&c| is_operator_context_byte(c));
+                if !lhs.is_empty() && !rhs.is_empty() && !unary_sign {
                     best_op = Some(op);
                     best_pos = i;
                     best_len = len;
@@ -6021,10 +6127,11 @@ fn try_parse_postfix(
                 context,
             )));
         }
-        if let Some(message) = unsupported_meta_property_message(object_src, property_src) {
-            return Some(Err(unsupported_expression_syntax_error(
-                message, span, context,
-            )));
+        if object_src == "new" && property_src == "target" {
+            return Some(Ok(Expression::NewTarget));
+        }
+        if object_src == "import" && property_src == "meta" {
+            return Some(Ok(Expression::ImportMeta));
         }
         if !object_src.is_empty() && is_identifier(property_src) {
             let object = match parse_expression(object_src, span, context, recursion_depth + 1) {
@@ -6090,14 +6197,6 @@ fn unsupported_expression_syntax_error(
     )
 }
 
-fn unsupported_meta_property_message(object_src: &str, property_src: &str) -> Option<&'static str> {
-    match (object_src, property_src) {
-        ("import", "meta") => Some("import.meta meta-property is not supported"),
-        ("new", "target") => Some("new.target meta-property is not supported"),
-        _ => None,
-    }
-}
-
 fn contains_optional_chain(expression: &Expression) -> bool {
     match expression {
         Expression::OptionalCall { .. } | Expression::OptionalMember { .. } => true,
@@ -6150,6 +6249,8 @@ fn contains_optional_chain(expression: &Expression) -> bool {
         | Expression::NullLiteral
         | Expression::UndefinedLiteral
         | Expression::This
+        | Expression::NewTarget
+        | Expression::ImportMeta
         | Expression::Super
         | Expression::Function { .. }
         | Expression::Raw(_)
@@ -6242,12 +6343,10 @@ fn find_first_top_level_paren_pair(s: &str) -> Option<(usize, usize)> {
                     paren += 1;
                 }
             }
-            b')' => {
-                if open.is_some() {
-                    paren -= 1;
-                    if paren == 0 {
-                        return Some((open.unwrap(), i));
-                    }
+            b')' if open.is_some() => {
+                paren -= 1;
+                if paren == 0 {
+                    return Some((open.unwrap(), i));
                 }
             }
             _ => {}
@@ -6549,6 +6648,7 @@ fn parse_object_literal(
                 value: spread,
                 computed: false,
                 shorthand: true,
+                kind: ObjectPropertyKind::Data,
             });
         } else if let Some(colon_idx) = find_top_level_colon(p) {
             // Split on first top-level colon for key:value.
@@ -6576,6 +6676,17 @@ fn parse_object_literal(
                 value,
                 computed,
                 shorthand: false,
+                kind: ObjectPropertyKind::Data,
+            });
+        } else if let Some((key, value, computed, kind)) =
+            try_parse_object_accessor(p, span, context, recursion_depth)?
+        {
+            properties.push(ObjectProperty {
+                key,
+                value,
+                computed,
+                shorthand: false,
+                kind,
             });
         } else if let Some((key, value, computed)) =
             try_parse_object_method(p, span, context, recursion_depth)?
@@ -6587,6 +6698,7 @@ fn parse_object_literal(
                 value,
                 computed,
                 shorthand: false,
+                kind: ObjectPropertyKind::Data,
             });
         } else {
             // Shorthand property: { x } means { x: x }
@@ -6597,10 +6709,60 @@ fn parse_object_literal(
                 value,
                 computed: false,
                 shorthand: true,
+                kind: ObjectPropertyKind::Data,
             });
         }
     }
     Ok(Expression::ObjectLiteral(properties))
+}
+
+fn object_accessor_tail<'a>(part: &'a str, prefix: &str) -> Option<&'a str> {
+    let rest = part.strip_prefix(prefix)?;
+    let first = rest.chars().next()?;
+    first.is_whitespace().then(|| rest.trim_start())
+}
+
+fn try_parse_object_accessor(
+    part: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+    recursion_depth: u64,
+) -> ParseResult<Option<(Expression, Expression, bool, ObjectPropertyKind)>> {
+    for (prefix, kind) in [
+        ("get", ObjectPropertyKind::Get),
+        ("set", ObjectPropertyKind::Set),
+    ] {
+        let Some(rest) = object_accessor_tail(part, prefix) else {
+            continue;
+        };
+        if rest.starts_with('[') {
+            if let Some((key_inner, after)) = extract_balanced(rest, '[', ']') {
+                let after = after.trim_start();
+                if after.starts_with('(') {
+                    let key =
+                        parse_expression(key_inner.trim(), span, context, recursion_depth + 1)?;
+                    let value =
+                        parse_function_expression(after, span, context, recursion_depth + 1)?;
+                    return Ok(Some((key, value, true, kind)));
+                }
+            }
+            return Ok(None);
+        }
+
+        let Some(paren_idx) = rest.find('(') else {
+            return Ok(None);
+        };
+        let key_src = rest[..paren_idx].trim();
+        if key_src.is_empty() {
+            return Ok(None);
+        }
+        let key = parse_expression(key_src, span, context, recursion_depth + 1)?;
+        let value =
+            parse_function_expression(&rest[paren_idx..], span, context, recursion_depth + 1)?;
+        return Ok(Some((key, value, false, kind)));
+    }
+
+    Ok(None)
 }
 
 /// Try to parse an object-literal method shorthand:
@@ -6610,10 +6772,8 @@ fn parse_object_literal(
 /// expression, or `Ok(None)` when `part` is not a method definition so the
 /// caller can fall back to shorthand-identifier handling.
 ///
-/// Getter/setter (`get`/`set`), `async`, and generator (`*`) method forms are
-/// intentionally not recognized here — their key is not a bare identifier, so
-/// they return `None` and fall through unchanged rather than being silently
-/// reinterpreted as plain data methods.
+/// `async` and generator (`*`) method forms are intentionally not recognized
+/// here. Getter/setter forms are handled by `try_parse_object_accessor`.
 fn try_parse_object_method(
     part: &str,
     span: &SourceSpan,
@@ -8393,6 +8553,60 @@ fn parse_expression_allowing_sequence(
     parse_expression(src, span, context, 1)
 }
 
+/// Split a C-style `for` header into `(init, condition, update)` on the first
+/// two *top-level* semicolons (ignoring `;` inside `()`/`[]`/`{}`/quotes).
+/// Anything after the second top-level `;` stays in `update` (matching the
+/// previous `splitn(3, ';')` leniency). Returns `None` if fewer than two
+/// top-level semicolons are present.
+fn split_for_header(header: &str) -> Option<(&str, &str, &str)> {
+    let bytes = header.as_bytes();
+    let mut depth_paren: i64 = 0;
+    let mut depth_bracket: i64 = 0;
+    let mut depth_brace: i64 = 0;
+    let mut in_quote: Option<u8> = None;
+    let mut escaped = false;
+    let mut semis: [usize; 2] = [0, 0];
+    let mut count: usize = 0;
+    let mut i: usize = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = in_quote {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == q {
+                in_quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match b {
+            b'\'' | b'"' | b'`' => in_quote = Some(b),
+            b'(' => depth_paren += 1,
+            b')' => depth_paren -= 1,
+            b'[' => depth_bracket += 1,
+            b']' => depth_bracket -= 1,
+            b'{' => depth_brace += 1,
+            b'}' => depth_brace -= 1,
+            b';' if depth_paren == 0 && depth_bracket == 0 && depth_brace == 0 && count < 2 => {
+                semis[count] = i;
+                count += 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    if count < 2 {
+        return None;
+    }
+    Some((
+        &header[..semis[0]],
+        &header[semis[0] + 1..semis[1]],
+        &header[semis[1] + 1..],
+    ))
+}
+
 fn parse_for_statement(
     statement: &str,
     goal: ParseGoal,
@@ -8417,11 +8631,13 @@ fn parse_for_statement(
         return Ok(forin);
     }
 
-    // Split header by semicolons: init; condition; update
-    let parts: Vec<&str> = header_src.splitn(3, ';').collect();
-    let (init_src, cond_src, update_src) = match parts.len() {
-        3 => (parts[0].trim(), parts[1].trim(), parts[2].trim()),
-        _ => {
+    // Split header by top-level semicolons: init; condition; update. The split
+    // must be nesting-aware so a `;` inside an arrow/block body or a string in
+    // a header clause (e.g. `for (let f = () => { a; return b; }; i < n; i++)`)
+    // does not mis-split the three parts.
+    let (init_src, cond_src, update_src) = match split_for_header(header_src) {
+        Some((init, cond, update)) => (init.trim(), cond.trim(), update.trim()),
+        None => {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "for statement header must have three semicolon-separated parts",
@@ -9139,6 +9355,7 @@ fn parse_function_expression(
 /// clause, and braced body — from a `class ...` source. Used by both the
 /// declaration (`parse_class_declaration`) and expression
 /// (`parse_class_expression`) entry points so the two never diverge.
+#[allow(clippy::type_complexity)]
 fn parse_class_parts(
     statement: &str,
     span: &SourceSpan,
@@ -14193,6 +14410,41 @@ process.exit(attackSucceeded ? 0 : 1);"#,
     #[test]
     fn find_top_level_colon_none() {
         assert_eq!(find_top_level_colon("abc"), None);
+    }
+
+    #[test]
+    fn find_ternary_colon_skips_nested_question() {
+        // Non-nested: the only top-level colon.
+        assert_eq!(find_ternary_colon(" b : c"), Some(3));
+        // Consequent-nested: the inner `?`'s colon is skipped, the outer wins.
+        // Slice is the tail after the outer `?` of `a ? b ? c : d : e`.
+        let rest = " b ? c : d : e";
+        let idx = find_ternary_colon(rest).expect("outer colon");
+        assert_eq!(&rest[idx..idx + 1], ":");
+        assert_eq!(rest[..idx].trim(), "b ? c : d");
+        assert_eq!(rest[idx + 1..].trim(), "e");
+        // `?.` and `??` are not ternary `?`.
+        assert_eq!(find_ternary_colon("a ?? b : c"), Some(7));
+        assert_eq!(find_ternary_colon("a?.b : c"), Some(5));
+    }
+
+    #[test]
+    fn split_for_header_is_nesting_aware() {
+        assert_eq!(
+            split_for_header("i = 0; i < n; i++"),
+            Some(("i = 0", " i < n", " i++"))
+        );
+        // A `;` inside an arrow/block body must not split the header.
+        let header = "let f = () => { a; return b; }; i < n; i++";
+        assert_eq!(
+            split_for_header(header),
+            Some(("let f = () => { a; return b; }", " i < n", " i++"))
+        );
+        // Empty clauses are still two top-level semicolons.
+        assert_eq!(split_for_header(";;"), Some(("", "", "")));
+        // Fewer than two top-level semicolons -> None.
+        assert_eq!(split_for_header("i < n"), None);
+        assert_eq!(split_for_header("a; b"), None);
     }
 
     // -----------------------------------------------------------------------

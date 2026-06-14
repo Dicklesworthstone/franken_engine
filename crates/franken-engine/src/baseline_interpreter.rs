@@ -258,10 +258,12 @@ const KNOWN_PROMISE_SUBCAPS: &[&str] = &[
 /// extension cannot inflate the audit log to arbitrary size via a single
 /// long `HostCall` argument (bd-hxukn defense-in-depth).
 const CAPABILITY_TAG_RECORD_BYTE_CAP: usize = 256;
+const IMPORT_META_URL_VALUE: &str = "frankenengine://module/import-meta";
+const IMPORT_META_DIRNAME_VALUE: &str = "frankenengine://module/";
 
 fn classify_hostcall_capability(tag: &str) -> HostcallCapabilityClass {
     if tag.starts_with("promise:") {
-        if KNOWN_PROMISE_SUBCAPS.iter().any(|known| *known == tag) {
+        if KNOWN_PROMISE_SUBCAPS.contains(&tag) {
             HostcallCapabilityClass::InternalAllowed
         } else {
             // bd-hxukn: refuse unknown `promise:*` tags at the gate
@@ -270,12 +272,41 @@ fn classify_hostcall_capability(tag: &str) -> HostcallCapabilityClass {
             // closed at the gate.
             HostcallCapabilityClass::Unknown
         }
-    } else if tag == "ifc.check_flow" {
+    } else if tag == "ifc.check_flow"
+        || builtin_prototype_capability_name(tag).is_some()
+        || builtin_instanceof_capability_name(tag).is_some()
+    {
         HostcallCapabilityClass::InternalAllowed
     } else if let Some(capability) = RuntimeCapability::from_tag_str(tag) {
         HostcallCapabilityClass::Runtime(capability)
     } else {
         HostcallCapabilityClass::Unknown
+    }
+}
+
+fn builtin_prototype_capability_name(tag: &str) -> Option<&'static str> {
+    tag.strip_prefix("builtin:proto:")
+        .and_then(canonical_builtin_prototype_name)
+}
+
+fn builtin_instanceof_capability_name(tag: &str) -> Option<&'static str> {
+    tag.strip_prefix("builtin:instanceof:")
+        .and_then(canonical_builtin_prototype_name)
+}
+
+fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
+    match name {
+        "Array" => Some("Array"),
+        "Map" => Some("Map"),
+        "Set" => Some("Set"),
+        "Error" => Some("Error"),
+        "TypeError" => Some("TypeError"),
+        "RangeError" => Some("RangeError"),
+        "ReferenceError" => Some("ReferenceError"),
+        "SyntaxError" => Some("SyntaxError"),
+        "EvalError" => Some("EvalError"),
+        "URIError" => Some("URIError"),
+        _ => None,
     }
 }
 
@@ -608,6 +639,8 @@ mod arc_str_serde {
 #[serde(rename_all = "snake_case")]
 pub enum BuiltinFunctionKind {
     Require,
+    FunctionConstructor,
+    GeneratedFunction,
     IteratorNext,
     IteratorSelf,
     ConsoleLog,
@@ -843,6 +876,9 @@ pub enum BuiltinFunctionKind {
     /// internal `__timestamp` in milliseconds, or NaN for a non-Date receiver
     /// (bd-cseei).
     DateGetTime,
+    /// `performance.now()` — deterministic virtual-clock read for replayable
+    /// sandbox execution (bd-8enww.5.3).
+    PerformanceNow,
     /// `DataView.prototype.getUint8(byteOffset)` over shared ArrayBuffer bytes
     /// (bd-8enww.2.6).
     DataViewGetUint8,
@@ -944,10 +980,32 @@ pub struct BuiltinFunction {
 }
 
 impl BuiltinFunction {
+    fn new_kind(kind: BuiltinFunctionKind) -> Self {
+        Self {
+            kind,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn require(module_specifier: impl Into<String>) -> Self {
         Self {
             kind: BuiltinFunctionKind::Require,
             module_specifier: module_specifier.into(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn function_constructor() -> Self {
+        Self::new_kind(BuiltinFunctionKind::FunctionConstructor)
+    }
+
+    fn generated_function(artifact_id: u32) -> Self {
+        Self {
+            kind: BuiltinFunctionKind::GeneratedFunction,
+            module_specifier: artifact_id.to_string(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -1646,6 +1704,15 @@ impl BuiltinFunction {
         }
     }
 
+    fn performance_now() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::PerformanceNow,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn data_view_get_uint8() -> Self {
         Self {
             kind: BuiltinFunctionKind::DataViewGetUint8,
@@ -1955,6 +2022,8 @@ impl BuiltinFunction {
     fn display_name(&self) -> &'static str {
         match self.kind {
             BuiltinFunctionKind::Require => "require",
+            BuiltinFunctionKind::FunctionConstructor => "Function",
+            BuiltinFunctionKind::GeneratedFunction => "anonymous",
             BuiltinFunctionKind::IteratorNext => "next",
             BuiltinFunctionKind::IteratorSelf => "@@iterator",
             BuiltinFunctionKind::ConsoleLog => "log",
@@ -2037,6 +2106,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::MapClear => "clear",
             BuiltinFunctionKind::SetClear => "clear",
             BuiltinFunctionKind::DateGetTime => "getTime",
+            BuiltinFunctionKind::PerformanceNow => "now",
             BuiltinFunctionKind::DataViewGetUint8 => "getUint8",
             BuiltinFunctionKind::DataViewSetUint8 => "setUint8",
             BuiltinFunctionKind::DataViewGetInt32 => "getInt32",
@@ -2328,6 +2398,9 @@ pub struct HeapObject {
     pub data_view: Option<DataViewView>,
     /// Whether this object has been frozen via Object.freeze().
     pub is_frozen: bool,
+    /// Whether this object is the engine-owned `import.meta` contract object.
+    #[serde(default)]
+    pub is_import_meta: bool,
 }
 
 impl HeapObject {
@@ -2432,6 +2505,14 @@ struct CjsModuleContext {
     module_object: ObjectId,
     exports_object: ObjectId,
     module_specifier: String,
+}
+
+#[derive(Debug, Clone)]
+struct GeneratedFunctionArtifact {
+    parameter_source: String,
+    body_source: String,
+    compiled_module: Ir3Module,
+    function_index: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -2723,9 +2804,15 @@ impl ScopeChain {
 
     /// Resolve a mutable binding by walking outward from innermost scope.
     fn resolve_mut(&mut self, name: &str) -> Option<&mut ScopeBinding> {
-        for frame in self.frames.iter_mut().rev() {
+        self.resolve_mut_with_index(name)
+            .map(|(_, binding)| binding)
+    }
+
+    /// Resolve a mutable binding and report the frame index it came from.
+    fn resolve_mut_with_index(&mut self, name: &str) -> Option<(usize, &mut ScopeBinding)> {
+        for (idx, frame) in self.frames.iter_mut().enumerate().rev() {
             if let Some(binding) = frame.get_mut(name) {
-                return Some(binding);
+                return Some((idx, binding));
             }
         }
         None
@@ -2766,6 +2853,9 @@ struct CallFrame {
     /// calls, `undefined` for plain calls, or the newly allocated object for
     /// constructor calls.  Arrow functions inherit from the defining frame.
     this_value: Value,
+    /// The `new.target` value for this call frame. Constructor calls set this
+    /// to the invoked constructor value; non-constructor calls use undefined.
+    new_target_value: Value,
     /// The `super` value for this call frame. Set to the parent class constructor
     /// for class methods, `undefined` otherwise.
     super_value: Value,
@@ -2920,6 +3010,7 @@ impl EvidenceLog {
     /// the `frankenctl evidence export` path that wants wall-clock
     /// stamping) MUST adapt to inject their own clock value; the engine no
     /// longer reaches for `SystemTime` here.
+    #[allow(clippy::too_many_arguments)]
     pub fn add_receipt(
         &mut self,
         extension_id: ExtensionId,
@@ -3910,6 +4001,7 @@ struct ModuleExecutionSnapshot {
     finally_modes: Vec<FinallyMode>,
     scope_chain: ScopeChain,
     pending_captures: Vec<u32>,
+    generated_functions: Vec<GeneratedFunctionArtifact>,
     current_module_specifier: Option<String>,
 }
 
@@ -4171,6 +4263,7 @@ pub enum ExecutionSeed {
         registers: Vec<Value>,
         heap: Vec<HeapObject>,
         function_prototypes: BTreeMap<u32, ObjectId>,
+        builtin_prototypes: BTreeMap<String, ObjectId>,
     },
 }
 
@@ -4196,6 +4289,8 @@ pub struct InterpreterCore {
     iteration_traces: Vec<IterationTrace>,
     /// Lazily allocated prototype objects for constructor functions. SEED-SURFACE.
     function_prototypes: SeedTrackedField<BTreeMap<u32, ObjectId>>,
+    /// Lazily allocated prototype objects for modeled builtin constructors. SEED-SURFACE.
+    builtin_prototypes: SeedTrackedField<BTreeMap<String, ObjectId>>,
     /// Current seed epoch for lazy materialization.
     seed_epoch: u64,
     /// Pending lazy seeds to materialize on next write.
@@ -4260,6 +4355,8 @@ pub struct InterpreterCore {
     scope_chain: ScopeChain,
     /// Closure store: maps closure IDs to captured environments.
     closures: Vec<ClosureValue>,
+    /// Function-constructor artifacts compiled from runtime strings.
+    generated_functions: Vec<GeneratedFunctionArtifact>,
     /// Pending capture names for the next `CreateClosure` instruction.
     pending_captures: Vec<u32>,
     /// Generator object store.
@@ -4355,16 +4452,19 @@ impl InterpreterCore {
         let trace_id = trace_id.into();
         // perf: hot path - avoid clone by reusing trace_id for nondeterminism_trace
         let nondeterminism_trace = NondeterminismTrace::new(&trace_id);
+        let scope_chain = ScopeChain::new();
+        let estimated_memory_bytes = Self::estimate_scope_chain_bytes(&scope_chain.frames);
         Self {
             config,
             hook: None,
             registers: SeedTrackedField::new(vec![Value::Undefined; max_regs]),
             call_stack: Vec::new(),
             heap: SeedTrackedField::new(Vec::new()),
-            estimated_memory_bytes: 0,
+            estimated_memory_bytes,
             iterators: Vec::new(),
             iteration_traces: Vec::new(),
             function_prototypes: SeedTrackedField::new(BTreeMap::new()),
+            builtin_prototypes: SeedTrackedField::new(BTreeMap::new()),
             seed_epoch: 0,
             pending_lazy_seeds: Vec::new(),
             ip: 0,
@@ -4385,8 +4485,9 @@ impl InterpreterCore {
             finally_modes: Vec::new(),
             last_pre_run_seed: None,
             last_post_run_seed: None,
-            scope_chain: ScopeChain::new(),
+            scope_chain,
             closures: Vec::new(),
+            generated_functions: Vec::new(),
             pending_captures: Vec::new(),
             generators: Vec::new(),
             generator_yielded: false,
@@ -4465,6 +4566,14 @@ impl InterpreterCore {
         f(&mut self.function_prototypes.value)
     }
 
+    pub(crate) fn mutate_builtin_prototypes<R>(
+        &mut self,
+        f: impl FnOnce(&mut BTreeMap<String, ObjectId>) -> R,
+    ) -> R {
+        self.before_seed_surface_write();
+        f(&mut self.builtin_prototypes.value)
+    }
+
     fn before_seed_surface_write(&mut self) {
         self.materialize_pending_lazy_seeds_with_current_state();
         self.seed_epoch = self.seed_epoch.wrapping_add(1);
@@ -4482,6 +4591,7 @@ impl InterpreterCore {
                     registers: self.registers.value.clone(),
                     heap: self.heap.value.clone(),
                     function_prototypes: self.function_prototypes.value.clone(),
+                    builtin_prototypes: self.builtin_prototypes.value.clone(),
                 };
             }
             keepers.push(std::rc::Rc::downgrade(&strong));
@@ -4522,14 +4632,21 @@ impl InterpreterCore {
                     registers,
                     heap,
                     function_prototypes,
-                } => Some((registers.clone(), heap.clone(), function_prototypes.clone())),
+                    builtin_prototypes,
+                } => Some((
+                    registers.clone(),
+                    heap.clone(),
+                    function_prototypes.clone(),
+                    builtin_prototypes.clone(),
+                )),
             }
         };
 
-        if let Some((registers, heap, function_prototypes)) = restore {
+        if let Some((registers, heap, function_prototypes, builtin_prototypes)) = restore {
             self.mutate_registers(|r| *r = registers);
             self.mutate_heap(|h| *h = heap);
             self.mutate_function_prototypes(|fp| *fp = function_prototypes);
+            self.mutate_builtin_prototypes(|bp| *bp = builtin_prototypes);
         }
         Ok(())
     }
@@ -4955,6 +5072,7 @@ impl InterpreterCore {
             finally_modes: self.finally_modes.clone(),
             scope_chain: self.scope_chain.clone(),
             pending_captures: self.pending_captures.clone(),
+            generated_functions: self.generated_functions.clone(),
             current_module_specifier: self.current_module_specifier.clone(),
         }
     }
@@ -4972,6 +5090,7 @@ impl InterpreterCore {
         self.finally_modes = snapshot.finally_modes;
         self.scope_chain = snapshot.scope_chain;
         self.pending_captures = snapshot.pending_captures;
+        self.generated_functions = snapshot.generated_functions;
         self.current_module_specifier = snapshot.current_module_specifier;
     }
 
@@ -4992,6 +5111,7 @@ impl InterpreterCore {
         self.finally_modes.clear();
         self.scope_chain = ScopeChain::new();
         self.pending_captures.clear();
+        self.generated_functions.clear();
         self.current_module_specifier = Some(module_specifier.to_string());
         self.sync_estimated_memory_bytes()?;
         self.inject_runtime_globals()?;
@@ -5047,10 +5167,19 @@ impl InterpreterCore {
                 Value::BuiltinFunction(BuiltinFunction::promise_any()),
             ),
         ])?);
+        let performance = Value::Object(self.alloc_object_with_properties(&[(
+            "now",
+            Value::BuiltinFunction(BuiltinFunction::performance_now()),
+        )])?);
 
         self.inject_runtime_global_binding("process", process)?;
         self.inject_runtime_global_binding("console", console)?;
         self.inject_runtime_global_binding("Promise", promise)?;
+        self.inject_runtime_global_binding("performance", performance)?;
+        self.inject_runtime_global_binding(
+            "Function",
+            Value::BuiltinFunction(BuiltinFunction::function_constructor()),
+        )?;
 
         Ok(())
     }
@@ -5060,6 +5189,7 @@ impl InterpreterCore {
         name: &str,
         value: Value,
     ) -> Result<(), InterpreterError> {
+        let previous_scope_bytes = self.scope_chain_memory_bytes();
         let replaced = {
             let frame = self.scope_chain.current_mut()?;
             let binding_name = name.to_string();
@@ -5072,7 +5202,7 @@ impl InterpreterCore {
             replaced
         };
 
-        if let Err(err) = self.sync_estimated_memory_bytes() {
+        if let Err(err) = self.apply_scope_chain_memory_delta(previous_scope_bytes) {
             if let Ok(frame) = self.scope_chain.current_mut() {
                 if let Some(old_binding) = replaced {
                     frame.bindings.insert(name.to_string(), old_binding);
@@ -5080,7 +5210,6 @@ impl InterpreterCore {
                     frame.bindings.remove(name);
                 }
             }
-            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
             return Err(err);
         }
 
@@ -5099,6 +5228,7 @@ impl InterpreterCore {
             module_specifier.unwrap_or_default(),
         ));
 
+        let previous_scope_bytes = self.scope_chain_memory_bytes();
         let mut replaced = Vec::with_capacity(5);
         {
             let frame = self.scope_chain.current_mut()?;
@@ -5118,7 +5248,7 @@ impl InterpreterCore {
                 replaced.push((name, replaced_binding));
             }
         }
-        if let Err(err) = self.sync_estimated_memory_bytes() {
+        if let Err(err) = self.apply_scope_chain_memory_delta(previous_scope_bytes) {
             if let Ok(current) = self.scope_chain.current_mut() {
                 for (name, old) in replaced {
                     if let Some(old_binding) = old {
@@ -5128,7 +5258,6 @@ impl InterpreterCore {
                     }
                 }
             }
-            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
             return Err(err);
         }
         Ok(())
@@ -5619,6 +5748,106 @@ impl InterpreterCore {
         Ok(default_value)
     }
 
+    fn construct_generated_function(
+        &mut self,
+        module: &Ir3Module,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let mut parts = Vec::with_capacity(args.count as usize);
+        for index in 0..args.count {
+            let value = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
+            parts.push(self.value_to_string(&value));
+        }
+
+        let body_source = parts.pop().unwrap_or_default();
+        let parameter_source = parts.join(",");
+        let generated_source = Self::function_constructor_source(&parameter_source, &body_source);
+        self.run_pre_allocation_hook(module, AllocKind::Function, generated_source.len())?;
+
+        let parser_source = ParserSource {
+            label: "<function-constructor>".to_string(),
+            text: generated_source,
+        };
+        let syntax_tree = CanonicalEs2020Parser
+            .parse_with_options(parser_source, ParseGoal::Script, &ParserOptions::default())
+            .map_err(|error| InterpreterError::ModuleParseFailed {
+                specifier: "<function-constructor>".to_string(),
+                error: error.to_string(),
+            })?;
+        let ir0 = Ir0Module::from_syntax_tree(syntax_tree, "<function-constructor>");
+        let lowering_ctx = LoweringContext::new(
+            &self.trace_id,
+            "function-constructor",
+            "baseline_interpreter",
+        );
+        let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_ctx).map_err(|error| {
+            InterpreterError::ModuleLoweringFailed {
+                specifier: "<function-constructor>".to_string(),
+                error: error.to_string(),
+            }
+        })?;
+        let function_index = lowering_output
+            .ir3
+            .function_table
+            .iter()
+            .position(|desc| desc.name.as_deref() == Some("anonymous"))
+            .ok_or_else(|| InterpreterError::ModuleLoweringFailed {
+                specifier: "<function-constructor>".to_string(),
+                error: "generated function descriptor missing".to_string(),
+            })?;
+        let artifact_id = u32::try_from(self.generated_functions.len()).map_err(|_| {
+            InterpreterError::TypeError {
+                expected: "generated function artifact capacity".to_string(),
+                got: format!("exceeded u32::MAX ({})", self.generated_functions.len()),
+            }
+        })?;
+        self.generated_functions.push(GeneratedFunctionArtifact {
+            parameter_source,
+            body_source,
+            compiled_module: lowering_output.ir3,
+            function_index: function_index as u32,
+        });
+
+        Ok(Value::BuiltinFunction(BuiltinFunction::generated_function(
+            artifact_id,
+        )))
+    }
+
+    fn function_constructor_source(parameter_source: &str, body_source: &str) -> String {
+        format!("function anonymous({parameter_source}) {{\n{body_source}\n}}")
+    }
+
+    fn call_generated_function_artifact(
+        &self,
+        builtin: &BuiltinFunction,
+    ) -> Result<Value, InterpreterError> {
+        let artifact_id =
+            builtin
+                .module_specifier
+                .parse::<usize>()
+                .map_err(|_| InterpreterError::TypeError {
+                    expected: "generated function artifact id".to_string(),
+                    got: builtin.module_specifier.clone(),
+                })?;
+        let artifact = self.generated_functions.get(artifact_id).ok_or_else(|| {
+            InterpreterError::TypeError {
+                expected: "generated function artifact".to_string(),
+                got: format!("missing artifact#{artifact_id}"),
+            }
+        })?;
+        Err(InterpreterError::TypeError {
+            expected: "generated function invocation semantics (bd-8enww.3.3)".to_string(),
+            got: format!(
+                "compiled artifact#{} params={} body_bytes={} function_index={} functions={}",
+                artifact_id,
+                artifact.parameter_source,
+                artifact.body_source.len(),
+                artifact.function_index,
+                artifact.compiled_module.function_table.len()
+            ),
+        })
+    }
+
     fn dispatch_builtin_function(
         &mut self,
         module: &Ir3Module,
@@ -5649,6 +5878,10 @@ impl InterpreterCore {
                 self.current_module_specifier = previous_module_specifier;
                 result
             }
+            BuiltinFunctionKind::FunctionConstructor => {
+                self.construct_generated_function(module, args)
+            }
+            BuiltinFunctionKind::GeneratedFunction => self.call_generated_function_artifact(builtin),
             BuiltinFunctionKind::IteratorNext => {
                 let iterator_handle =
                     builtin
@@ -5815,18 +6048,7 @@ impl InterpreterCore {
                     Some(arg) => Self::coerce_to_number(&arg).unwrap_or(0).clamp(0, 100) as usize,
                     None => 0,
                 };
-                let out = if num.is_nan() {
-                    "NaN".to_string()
-                } else if num.is_infinite() {
-                    if num.is_sign_positive() {
-                        "Infinity".to_string()
-                    } else {
-                        "-Infinity".to_string()
-                    }
-                } else {
-                    format!("{num:.digits$}")
-                };
-                Ok(Value::str(out))
+                Ok(Value::str(number_to_fixed_string(num, digits)))
             }
             BuiltinFunctionKind::NumberToString => {
                 // ES2020 20.1.3.6: string form, optional radix (2..=36),
@@ -7044,6 +7266,9 @@ impl InterpreterCore {
                 }
                 Ok(Value::Float(f64::NAN.into()))
             }
+            BuiltinFunctionKind::PerformanceNow => {
+                self.dispatch_builtin_hostcall("builtin:PerformanceNow", args, Some(module))
+            }
             BuiltinFunctionKind::DataViewGetUint8 => self.data_view_get_integer(
                 receiver.unwrap_or(Value::Undefined),
                 args,
@@ -7285,6 +7510,9 @@ impl InterpreterCore {
         // not leak into the caller's unwind state.
         self.catch_frames
             .retain(|frame| frame.call_depth < current_depth);
+        let previous_scope_bytes = self.scope_chain_memory_bytes();
+        let previous_closure_bytes = self.closures_memory_bytes();
+        let previous_call_stack_bytes = self.call_stack_memory_bytes();
         if let Some(frame) = self.call_stack.pop() {
             // ES2020 §9.2.2 step 13: if this is a constructor call and the
             // return value is not an object, use the allocated `this` object
@@ -7299,13 +7527,17 @@ impl InterpreterCore {
             };
             let async_function_id = frame.async_function_id;
             self.restore_call_frame_state(&frame);
+            self.apply_scope_closure_call_stack_memory_delta(
+                previous_scope_bytes,
+                previous_closure_bytes,
+                previous_call_stack_bytes,
+            )?;
             if let Some(async_id) = async_function_id {
                 self.settle_async_function(async_id, Ok(effective_val))?;
             } else {
                 self.write_reg(frame.return_reg, effective_val)?;
             }
             self.ip = frame.return_ip;
-            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
             Ok(None)
         } else {
             self.pending_exception = None;
@@ -7313,7 +7545,6 @@ impl InterpreterCore {
             self.pending_return = None;
             self.suspended_abrupt_completions.clear();
             self.finally_modes.clear();
-            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
             Ok(Some(return_val))
         }
     }
@@ -7373,10 +7604,19 @@ impl InterpreterCore {
                 expected: "async function frame".to_string(),
                 got: "missing async function id".to_string(),
             })?;
+        let previous_scope_bytes = self.scope_chain_memory_bytes();
+        let previous_closure_bytes = self.closures_memory_bytes();
+        let previous_call_stack_bytes = self
+            .call_stack_memory_bytes()
+            .saturating_add(Self::estimate_call_frame_bytes(&frame));
         self.restore_call_frame_state(&frame);
+        self.apply_scope_closure_call_stack_memory_delta(
+            previous_scope_bytes,
+            previous_closure_bytes,
+            previous_call_stack_bytes,
+        )?;
         self.settle_async_function(async_id, resolution)?;
         self.ip = frame.return_ip;
-        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         Ok(None)
     }
 
@@ -7423,7 +7663,7 @@ impl InterpreterCore {
         let async_depth = async_frame_index + 1;
         self.catch_frames
             .retain(|frame| frame.call_depth < async_depth);
-        let _ = self.unwind_call_stack_to(async_depth);
+        let _ = self.unwind_call_stack_to(async_depth)?;
         let frame = self
             .call_stack
             .pop()
@@ -7606,7 +7846,7 @@ impl InterpreterCore {
         // promise boundary (tracked by the bd-ooaka family); the re-entry
         // here is engine-mediated, so the label is explicitly Public.
         self.pending_exception_label = Label::Public;
-        if let Some(frame) = self.pop_exception_target_frame() {
+        if let Some(frame) = self.pop_exception_target_frame()? {
             self.ip = frame.catch_target;
             Ok(false)
         } else if self.reject_nearest_async_boundary(error_value.clone())? {
@@ -7653,11 +7893,69 @@ impl InterpreterCore {
         }
     }
 
+    fn propagate_scope_binding_update_to_closure_captures(
+        &mut self,
+        frame_index: usize,
+        name: &str,
+        value: &Value,
+    ) -> Vec<(usize, ScopeBinding)> {
+        let mut previous = Vec::new();
+        for (closure_index, closure) in self.closures.iter_mut().enumerate() {
+            if let Some(frame) = closure.captured_env.get_mut(frame_index)
+                && let Some(binding) = frame.get_mut(name)
+            {
+                previous.push((closure_index, binding.clone()));
+                binding.value = value.clone();
+                binding.initialized = true;
+            }
+        }
+        previous
+    }
+
+    fn restore_closure_capture_bindings(
+        &mut self,
+        frame_index: usize,
+        name: &str,
+        previous: Vec<(usize, ScopeBinding)>,
+    ) {
+        for (closure_index, old_binding) in previous {
+            if let Some(binding) = self
+                .closures
+                .get_mut(closure_index)
+                .and_then(|closure| closure.captured_env.get_mut(frame_index))
+                .and_then(|frame| frame.get_mut(name))
+            {
+                *binding = old_binding;
+            }
+        }
+    }
+
+    fn merge_captured_scope_frames_into_saved_chain(
+        saved: &mut [ScopeFrame],
+        captured: &[ScopeFrame],
+        captured_depth: usize,
+    ) {
+        let merge_depth = captured_depth.min(saved.len()).min(captured.len());
+        for frame_index in 0..merge_depth {
+            for (name, captured_binding) in &captured[frame_index].bindings {
+                if let Some(saved_binding) = saved[frame_index].get_mut(name) {
+                    *saved_binding = captured_binding.clone();
+                }
+            }
+        }
+    }
+
     fn restore_scope_chain_for_frame(&mut self, frame: &CallFrame) {
         // Restore scope chain. For closure calls, restore the full saved chain;
         // for plain calls, just pop to the caller depth.
         if let Some(saved) = &frame.saved_scope_chain {
-            self.scope_chain.frames = saved.clone();
+            let mut restored = saved.clone();
+            Self::merge_captured_scope_frames_into_saved_chain(
+                &mut restored,
+                &self.scope_chain.frames,
+                frame.captured_scope_depth,
+            );
+            self.scope_chain.frames = restored;
         } else {
             while self.scope_chain.depth() > frame.saved_scope_depth {
                 self.scope_chain.pop();
@@ -7668,7 +7966,10 @@ impl InterpreterCore {
     fn unwind_call_stack_to(
         &mut self,
         target_depth: usize,
-    ) -> (Option<(Value, Label)>, Option<Value>) {
+    ) -> Result<(Option<(Value, Label)>, Option<Value>), InterpreterError> {
+        let previous_scope_bytes = self.scope_chain_memory_bytes();
+        let previous_closure_bytes = self.closures_memory_bytes();
+        let previous_call_stack_bytes = self.call_stack_memory_bytes();
         let mut restored_pending_exception = None;
         let mut restored_pending_return = None;
         let mut restored_suspended_abrupt_depth = None;
@@ -7687,8 +7988,12 @@ impl InterpreterCore {
         if let Some(depth) = restored_suspended_abrupt_depth {
             self.suspended_abrupt_completions.truncate(depth);
         }
-        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-        (restored_pending_exception, restored_pending_return)
+        self.apply_scope_closure_call_stack_memory_delta(
+            previous_scope_bytes,
+            previous_closure_bytes,
+            previous_call_stack_bytes,
+        )?;
+        Ok((restored_pending_exception, restored_pending_return))
     }
 
     fn pop_current_try_frame(&mut self) -> Option<CatchFrame> {
@@ -7702,18 +8007,21 @@ impl InterpreterCore {
         Some(frame)
     }
 
-    fn pop_exception_target_frame(&mut self) -> Option<CatchFrame> {
+    fn pop_exception_target_frame(&mut self) -> Result<Option<CatchFrame>, InterpreterError> {
         let current_depth = self.call_stack.len();
-        let idx = self
+        let Some(idx) = self
             .catch_frames
             .iter()
-            .rposition(|f| f.call_depth <= current_depth)?;
+            .rposition(|f| f.call_depth <= current_depth)
+        else {
+            return Ok(None);
+        };
         let frame = self.catch_frames[idx].clone();
         self.catch_frames.truncate(idx);
         let (restored_pending_exception, restored_pending_return) =
-            self.unwind_call_stack_to(frame.call_depth);
+            self.unwind_call_stack_to(frame.call_depth)?;
         self.suspend_abrupt_completion(restored_pending_exception, restored_pending_return);
-        Some(frame)
+        Ok(Some(frame))
     }
 
     fn take_current_abrupt_completion(&mut self) -> Option<AbruptCompletion> {
@@ -8328,7 +8636,7 @@ impl InterpreterCore {
                     // Engine-constructed error values (native faults surfaced
                     // as JS-catchable errors) carry no data-flow taint.
                     self.pending_exception_label = Label::Public;
-                    match self.pop_exception_target_frame() {
+                    match self.pop_exception_target_frame()? {
                         Some(frame) => {
                             self.ip = frame.catch_target;
                             // Re-enter dispatch at the handler.
@@ -8490,6 +8798,9 @@ impl InterpreterCore {
                     let value = self.read_reg(src)?;
                     let iterator = self.init_for_in_iterator(value)?;
                     self.write_reg(dst, iterator)?;
+                    // Carry the iterable's IFC label onto the iterator register
+                    // so the keys it yields stay tainted.
+                    self.propagate_unary_operation_label(src, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::ForInNext {
@@ -8497,9 +8808,14 @@ impl InterpreterCore {
                     value_dst,
                     done_target,
                 } => {
-                    let iterator = self.read_reg(iterator)?;
+                    let iterator_reg = iterator;
+                    let iterator = self.read_reg(iterator_reg)?;
                     if let Some(value) = self.advance_for_in_iterator(iterator)? {
                         self.write_reg(value_dst, value)?;
+                        // Each bound key derives from the iterable; carry its
+                        // IFC label onto the loop variable (sibling of the
+                        // reduce/array-from callback-lane fix, bd-ooaka.1).
+                        self.propagate_unary_operation_label(iterator_reg, value_dst)?;
                         self.ip += 1;
                     } else {
                         self.ip = done_target as usize;
@@ -8509,6 +8825,8 @@ impl InterpreterCore {
                     let value = self.read_reg(src)?;
                     let iterator = self.init_for_of_iterator(Some(module), value)?;
                     self.write_reg(dst, iterator)?;
+                    // Carry the iterable's IFC label onto the iterator register.
+                    self.propagate_unary_operation_label(src, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::ForOfNext {
@@ -8516,10 +8834,16 @@ impl InterpreterCore {
                     value_dst,
                     done_target,
                 } => {
-                    let iterator = self.read_reg(iterator)?;
+                    let iterator_reg = iterator;
+                    let iterator = self.read_reg(iterator_reg)?;
                     match self.advance_for_of_iterator(Some(module), iterator) {
                         Ok(Some(value)) => {
                             self.write_reg(value_dst, value)?;
+                            // Each bound element derives from the iterable; carry
+                            // its label onto the loop variable so a
+                            // `for (const x of secret) egress(x)` cannot launder
+                            // the taint (sibling of bd-ooaka.1).
+                            self.propagate_unary_operation_label(iterator_reg, value_dst)?;
                             self.ip += 1;
                         }
                         Ok(None) => {
@@ -8545,7 +8869,7 @@ impl InterpreterCore {
                             self.pending_return = None;
                             self.pending_exception = Some(thrown.clone());
                             self.pending_exception_label = thrown_label;
-                            if let Some(frame) = self.pop_exception_target_frame() {
+                            if let Some(frame) = self.pop_exception_target_frame()? {
                                 self.ip = frame.catch_target;
                             } else {
                                 if self.reject_nearest_async_boundary(thrown.clone())? {
@@ -8796,6 +9120,7 @@ impl InterpreterCore {
                             register_base: self.register_base,
                             function_index: Some(func_idx),
                             this_value: call_this,
+                            new_target_value: Value::Undefined,
                             super_value: Value::Undefined,
                             construct_this: None,
                             saved_pending_exception: self.pending_exception.take(),
@@ -8971,6 +9296,7 @@ impl InterpreterCore {
                                 register_base: self.register_base,
                                 function_index: Some(func_idx),
                                 this_value: call_this,
+                                new_target_value: Value::Undefined,
                                 super_value: Value::Undefined,
                                 construct_this: None,
                                 saved_pending_exception: self.pending_exception.take(),
@@ -9202,6 +9528,7 @@ impl InterpreterCore {
                             register_base: self.register_base,
                             function_index: Some(func_idx),
                             this_value: receiver_val.clone(),
+                            new_target_value: Value::Undefined,
                             super_value: Value::Undefined,
                             construct_this: None,
                             saved_pending_exception: self.pending_exception.take(),
@@ -9326,6 +9653,7 @@ impl InterpreterCore {
                         register_base: self.register_base,
                         function_index: Some(func_idx),
                         this_value: receiver_val.clone(),
+                        new_target_value: Value::Undefined,
                         super_value: Value::Undefined,
                         construct_this: None,
                         saved_pending_exception: self.pending_exception.take(),
@@ -9616,7 +9944,7 @@ impl InterpreterCore {
                                     expected: "successful Proxy set trap".to_string(),
                                     got: "falsy set trap result".to_string(),
                                 });
-                            } else if let Ok(index) = key_str.parse::<u32>() {
+                            } else if let Some(index) = Self::canonical_array_index_key(&key_str) {
                                 // `arr[i] = x`: grow the ES array length and the
                                 // dense-length cache the `ArrayPush` fast path
                                 // trusts. A no-op for non-arrays / proxies (the
@@ -9719,6 +10047,12 @@ impl InterpreterCore {
                                         obj.properties.keys().fold(0u32, |current, key| {
                                             key.parse::<u32>()
                                                 .ok()
+                                                // u32::MAX is not a valid array
+                                                // index (see
+                                                // canonical_array_index_property);
+                                                // excluding it keeps `n + 1` from
+                                                // overflowing. (bd-qsz8t)
+                                                .filter(|&n| n != u32::MAX)
                                                 .map_or(current, |n| current.max(n + 1))
                                         });
                                     // Capture cache miss decision for deterministic replay
@@ -9850,13 +10184,20 @@ impl InterpreterCore {
                                     obj.properties.keys().fold(0u32, |current, key| {
                                         key.parse::<u32>()
                                             .ok()
+                                            // u32::MAX is not a valid array index;
+                                            // excluding it keeps `n + 1` from
+                                            // overflowing. (bd-qsz8t)
+                                            .filter(|&n| n != u32::MAX)
                                             .map_or(current, |n| current.max(n + 1))
                                     })
                                 })
                                 .unwrap_or(0);
                             for elem in elements {
                                 self.set_object_property(arr_id, next_idx.to_string(), elem)?;
-                                next_idx += 1;
+                                // Saturate: the fold can yield u32::MAX when the
+                                // largest valid index (u32::MAX - 1) is present,
+                                // so a bare `+= 1` would overflow. (bd-qsz8t)
+                                next_idx = next_idx.saturating_add(1);
                             }
                             self.set_object_property(
                                 arr_id,
@@ -10059,6 +10400,13 @@ impl InterpreterCore {
                 Ir3Instruction::Construct { callee, args, dst } => {
                     let callee_val = self.read_reg(callee)?;
 
+                    if let Value::BuiltinFunction(builtin) = &callee_val {
+                        let result = self.dispatch_builtin_function(module, builtin, args, None)?;
+                        self.write_reg(dst, result)?;
+                        self.ip += 1;
+                        continue;
+                    }
+
                     // Resolve function index and optional captured environment.
                     let (func_idx, captured_env, closure_id) = match &callee_val {
                         Value::Function(idx) => (*idx, None, None),
@@ -10102,13 +10450,25 @@ impl InterpreterCore {
 
                             // Allocate the `this` object for the constructor.
                             let prototype = self.ensure_function_prototype(func_idx)?;
-                            let this_id = self.alloc_object_with_prototype(Some(prototype))?;
+                            let builtin_parent = self.builtin_subclass_ancestor_name(prototype)?;
+                            let this_id = if builtin_parent.as_deref() == Some("Array") {
+                                self.alloc_array_with_prototype(Some(prototype))?
+                            } else {
+                                self.alloc_object_with_prototype(Some(prototype))?
+                            };
                             let this_index = this_id.0 as usize;
                             self.mutate_heap(|heap| {
                                 if let Some(this_obj) = heap.get_mut(this_index) {
                                     this_obj.constructor_function = Some(func_idx);
                                 }
                             });
+                            if let Some(builtin_name) = builtin_parent.as_deref() {
+                                self.initialize_builtin_subclass_instance(
+                                    this_id,
+                                    builtin_name,
+                                    args,
+                                )?;
+                            }
                             let this_val = Value::Object(this_id);
 
                             let mut arg_vals = Vec::new();
@@ -10145,6 +10505,7 @@ impl InterpreterCore {
                                 register_base: self.register_base,
                                 function_index: Some(func_idx),
                                 this_value: this_val.clone(),
+                                new_target_value: callee_val.clone(),
                                 super_value: Value::Undefined,
                                 construct_this: Some(this_val.clone()),
                                 saved_pending_exception: self.pending_exception.take(),
@@ -10273,6 +10634,14 @@ impl InterpreterCore {
                     self.write_reg(dst, this_val)?;
                     self.ip += 1;
                 }
+                Ir3Instruction::LoadNewTarget { dst } => {
+                    let new_target = self
+                        .call_stack
+                        .last()
+                        .map_or(Value::Undefined, |f| f.new_target_value.clone());
+                    self.write_reg(dst, new_target)?;
+                    self.ip += 1;
+                }
                 Ir3Instruction::LoadSuper { dst } => {
                     let super_val = self
                         .call_stack
@@ -10316,7 +10685,7 @@ impl InterpreterCore {
                     // Use rposition to find the topmost matching frame by index,
                     // then truncate to remove it and any frames above it — but
                     // NOT frames below it (which belong to outer try blocks).
-                    if let Some(frame) = self.pop_exception_target_frame() {
+                    if let Some(frame) = self.pop_exception_target_frame()? {
                         self.ip = frame.catch_target;
                     } else {
                         // No catch handler found — uncaught exception.
@@ -10369,7 +10738,7 @@ impl InterpreterCore {
                                     _ => "[object]".to_string(),
                                 };
                                 // Look for another catch frame to propagate to.
-                                if let Some(frame) = self.pop_exception_target_frame() {
+                                if let Some(frame) = self.pop_exception_target_frame()? {
                                     self.ip = frame.catch_target;
                                 } else if self.reject_nearest_async_boundary(thrown.clone())? {
                                     continue;
@@ -10456,13 +10825,13 @@ impl InterpreterCore {
                             }
                         }
                     }
+                    let previous_closure_bytes = self.closures_memory_bytes();
                     self.closures.push(ClosureValue {
                         function_index,
                         captured_env,
                     });
-                    if let Err(err) = self.sync_estimated_memory_bytes() {
+                    if let Err(err) = self.apply_closures_memory_delta(previous_closure_bytes) {
                         self.closures.pop();
-                        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
                         return Err(err);
                     }
                     self.pending_captures.clear();
@@ -10488,13 +10857,13 @@ impl InterpreterCore {
                             got: format!("exceeded u32::MAX ({})", self.closures.len()),
                         }
                     })?;
+                    let previous_closure_bytes = self.closures_memory_bytes();
                     self.closures.push(ClosureValue {
                         function_index,
                         captured_env,
                     });
-                    if let Err(err) = self.sync_estimated_memory_bytes() {
+                    if let Err(err) = self.apply_closures_memory_delta(previous_closure_bytes) {
                         self.closures.pop();
-                        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
                         return Err(err);
                     }
                     self.pending_captures.clear();
@@ -10518,13 +10887,13 @@ impl InterpreterCore {
                             got: format!("exceeded u32::MAX ({})", self.closures.len()),
                         }
                     })?;
+                    let previous_closure_bytes = self.closures_memory_bytes();
                     self.closures.push(ClosureValue {
                         function_index,
                         captured_env,
                     });
-                    if let Err(err) = self.sync_estimated_memory_bytes() {
+                    if let Err(err) = self.apply_closures_memory_delta(previous_closure_bytes) {
                         self.closures.pop();
-                        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
                         return Err(err);
                     }
                     self.pending_captures.clear();
@@ -10548,13 +10917,13 @@ impl InterpreterCore {
                             got: format!("exceeded u32::MAX ({})", self.closures.len()),
                         }
                     })?;
+                    let previous_closure_bytes = self.closures_memory_bytes();
                     self.closures.push(ClosureValue {
                         function_index,
                         captured_env,
                     });
-                    if let Err(err) = self.sync_estimated_memory_bytes() {
+                    if let Err(err) = self.apply_closures_memory_delta(previous_closure_bytes) {
                         self.closures.pop();
-                        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
                         return Err(err);
                     }
                     self.pending_captures.clear();
@@ -10660,22 +11029,26 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::PushScope => {
+                    let previous_scope_bytes = self.scope_chain_memory_bytes();
                     self.scope_chain.push(self.config.max_scope_depth)?;
-                    if let Err(err) = self.sync_estimated_memory_bytes() {
+                    if let Err(err) = self.apply_scope_chain_memory_delta(previous_scope_bytes) {
                         self.scope_chain.pop();
-                        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
                         return Err(err);
                     }
                     if let Err(err) = self.inject_active_cjs_bindings() {
+                        let previous_scope_bytes = self.scope_chain_memory_bytes();
                         self.scope_chain.pop();
-                        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                        self.apply_scope_chain_memory_delta(previous_scope_bytes)?;
                         return Err(err);
                     }
                     self.ip += 1;
                 }
                 Ir3Instruction::PopScope => {
+                    let previous_scope_bytes = self.scope_chain_memory_bytes();
                     let popped = self.scope_chain.pop();
-                    self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                    if popped.is_some() {
+                        self.apply_scope_chain_memory_delta(previous_scope_bytes)?;
+                    }
                     debug_assert!(popped.is_some() || self.scope_chain.depth() == 1);
                     self.ip += 1;
                 }
@@ -10689,11 +11062,12 @@ impl InterpreterCore {
                         .cloned()
                         .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
                     let binding_kind = BindingKind::from_u8(kind)?;
+                    let previous_scope_bytes = self.scope_chain_memory_bytes();
                     let replaced = self
                         .scope_chain
                         .current_mut()?
                         .declare(name.clone(), binding_kind);
-                    if let Err(err) = self.sync_estimated_memory_bytes() {
+                    if let Err(err) = self.apply_scope_chain_memory_delta(previous_scope_bytes) {
                         if let Ok(current) = self.scope_chain.current_mut() {
                             if let Some(old) = replaced {
                                 current.bindings.insert(name, old);
@@ -10701,7 +11075,6 @@ impl InterpreterCore {
                                 current.bindings.remove(&name);
                             }
                         }
-                        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
                         return Err(err);
                     }
                     self.ip += 1;
@@ -10738,8 +11111,14 @@ impl InterpreterCore {
                 } => {
                     let name = Self::scoped_constant_name(module, name_pool_index);
                     let val = self.read_reg(src)?;
+                    let previous_scope_bytes = self.scope_chain_memory_bytes();
+                    let previous_closure_bytes = self.closures_memory_bytes();
                     let mut previous = None;
-                    if let Some(binding) = self.scope_chain.resolve_mut(name.as_ref()) {
+                    let mut closure_previous = Vec::new();
+                    let mut frame_index = None;
+                    if let Some((resolved_frame_index, binding)) =
+                        self.scope_chain.resolve_mut_with_index(name.as_ref())
+                    {
                         if !binding.initialized {
                             return Err(InterpreterError::UninitializedBinding {
                                 name: name.into_owned(),
@@ -10751,17 +11130,32 @@ impl InterpreterCore {
                             });
                         }
                         previous = Some(binding.clone());
-                        binding.value = val;
+                        binding.value = val.clone();
+                        frame_index = Some(resolved_frame_index);
+                        closure_previous = self.propagate_scope_binding_update_to_closure_captures(
+                            resolved_frame_index,
+                            name.as_ref(),
+                            &val,
+                        );
                     }
                     // Silently ignore stores to undeclared variables
                     // (strict mode would throw, but baseline is lenient).
-                    if let Err(err) = self.sync_estimated_memory_bytes() {
+                    if let Err(err) = self.apply_scope_and_closure_memory_delta(
+                        previous_scope_bytes,
+                        previous_closure_bytes,
+                    ) {
                         if let Some(old_binding) = previous
                             && let Some(binding) = self.scope_chain.resolve_mut(name.as_ref())
                         {
                             *binding = old_binding;
                         }
-                        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                        if let Some(frame_index) = frame_index {
+                            self.restore_closure_capture_bindings(
+                                frame_index,
+                                name.as_ref(),
+                                closure_previous,
+                            );
+                        }
                         return Err(err);
                     }
                     self.ip += 1;
@@ -10772,19 +11166,19 @@ impl InterpreterCore {
                 } => {
                     let name = Self::scoped_constant_name(module, name_pool_index);
                     let val = self.read_reg(src)?;
+                    let previous_scope_bytes = self.scope_chain_memory_bytes();
                     let mut previous = None;
                     if let Some(binding) = self.scope_chain.resolve_mut(name.as_ref()) {
                         previous = Some(binding.clone());
                         binding.value = val;
                         binding.initialized = true;
                     }
-                    if let Err(err) = self.sync_estimated_memory_bytes() {
+                    if let Err(err) = self.apply_scope_chain_memory_delta(previous_scope_bytes) {
                         if let Some(old_binding) = previous
                             && let Some(binding) = self.scope_chain.resolve_mut(name.as_ref())
                         {
                             *binding = old_binding;
                         }
-                        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
                         return Err(err);
                     }
                     self.ip += 1;
@@ -11094,30 +11488,35 @@ impl InterpreterCore {
         }
     }
 
+    /// ECMAScript `ToInt32` for a floating-point operand (ECMA-262 §7.1.6):
+    /// truncate toward zero, reduce modulo 2^32, and reinterpret the low 32
+    /// bits as signed. Rust's `f64 as i32` cast *saturates* (since 1.45), so
+    /// every operand whose magnitude exceeds 2^31 would collapse to
+    /// `i32::MAX` — wrong for JS bitwise/shift semantics, which require
+    /// modular wrapping (e.g. `(3000000000.5) | 0` is `-1294967296`, not
+    /// `2147483647`). NaN and ±Infinity map to 0. `f64 % 2^32` via
+    /// `rem_euclid` is exact (IEEE `fmod` is exact), so this is precise for
+    /// every finite input, including magnitudes past 2^53.
+    fn js_to_int32(value: f64) -> i32 {
+        if !value.is_finite() {
+            return 0;
+        }
+        (value.trunc().rem_euclid(4_294_967_296.0) as u32) as i32
+    }
+
     fn eval_bit_not(&self, src: u32) -> Result<Value, InterpreterError> {
         let value = self.read_reg(src)?;
         // JS bitwise ops: ToInt32 conversion
         let number = match &value {
             Value::Int(n) => *n as i32,
-            Value::Float(f) => {
-                let v = f.inner();
-                if v.is_nan() || v.is_infinite() {
-                    0
-                } else {
-                    v as i32
-                }
-            }
+            Value::Float(f) => Self::js_to_int32(f.inner()),
             _ => {
                 let n =
                     Self::coerce_to_float(&value).ok_or_else(|| InterpreterError::TypeError {
                         expected: "number-coercible primitive".to_string(),
                         got: value.type_name().to_string(),
                     })?;
-                if n.is_nan() || n.is_infinite() {
-                    0
-                } else {
-                    n as i32
-                }
+                Self::js_to_int32(n)
             }
         };
         Ok(Value::Int((!number) as i64))
@@ -11216,29 +11615,19 @@ impl InterpreterCore {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
 
-        // JS ToInt32: convert to float then truncate
+        // JS ToInt32: truncate toward zero then reduce modulo 2^32 (wrapping,
+        // not saturating — see `js_to_int32`).
         let to_i32 = |v: &Value| -> Result<i32, InterpreterError> {
             match v {
                 Value::Int(n) => Ok(*n as i32),
-                Value::Float(f) => {
-                    let fv = f.inner();
-                    if fv.is_nan() || fv.is_infinite() {
-                        Ok(0)
-                    } else {
-                        Ok(fv as i32)
-                    }
-                }
+                Value::Float(f) => Ok(Self::js_to_int32(f.inner())),
                 _ => {
                     let n =
                         Self::coerce_to_float(v).ok_or_else(|| InterpreterError::TypeError {
                             expected: "number".to_string(),
                             got: v.type_name().to_string(),
                         })?;
-                    if n.is_nan() || n.is_infinite() {
-                        Ok(0)
-                    } else {
-                        Ok(n as i32)
-                    }
+                    Ok(Self::js_to_int32(n))
                 }
             }
         };
@@ -11793,8 +12182,6 @@ impl InterpreterCore {
         }
     }
 
-    /// Construct an error object (`Error` or a subclass) with the given `name`
-    /// and a `message` derived from the first argument. Shared by the
     /// Map a host [`InterpreterError`] to the JS error-constructor name it
     /// should surface as when it escapes into a JS `try`/`catch` block
     /// (bd-8enww.4.3). Returns `None` for engine faults and resource limits
@@ -11828,11 +12215,9 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let name = Self::js_catchable_error_name(err).unwrap_or("Error");
         let message = err.to_string();
-        let error_id = self.alloc_object_with_prototype(None)?;
-        self.set_object_property(error_id, "name".to_string(), Value::str(name))?;
-        self.set_object_property(error_id, "message".to_string(), Value::str(message))?;
-        let stack_trace = self.format_stack_trace();
-        self.set_object_property(error_id, "stack".to_string(), Value::str(stack_trace))?;
+        let prototype = self.ensure_builtin_prototype(name)?;
+        let error_id = self.alloc_object_with_prototype(Some(prototype))?;
+        self.initialize_error_like_object(error_id, name, message)?;
         Ok(Value::Object(error_id))
     }
 
@@ -11842,31 +12227,25 @@ impl InterpreterCore {
         name: &str,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        let message = if args.count > 0 {
-            let msg_val = self.read_reg(args.start)?;
-            match msg_val {
-                Value::Str(s) => s.to_string(),
-                Value::Int(i) => i.to_string(),
-                Value::Float(f) => f.inner().to_string(),
-                Value::Bool(b) => b.to_string(),
-                Value::Null => "null".to_string(),
-                Value::Undefined => "undefined".to_string(),
-                _ => name.to_string(),
-            }
-        } else {
-            String::new()
-        };
-
-        // Create a new Error object via the capability-checked allocator.
-        let error_id = self.alloc_object_with_prototype(None)?;
-        self.set_object_property(error_id, "name".to_string(), Value::str(name))?;
-        self.set_object_property(error_id, "message".to_string(), Value::str(message))?;
-
-        // Generate and set stack trace property (bd-2fx18)
-        let stack_trace = self.format_stack_trace();
-        self.set_object_property(error_id, "stack".to_string(), Value::str(stack_trace))?;
+        let message = self.error_message_from_args(name, args)?;
+        let prototype = self.ensure_builtin_prototype(name)?;
+        let error_id = self.alloc_object_with_prototype(Some(prototype))?;
+        self.initialize_error_like_object(error_id, name, message)?;
 
         Ok(Value::Object(error_id))
+    }
+
+    fn initialize_error_like_object(
+        &mut self,
+        object_id: ObjectId,
+        name: &str,
+        message: String,
+    ) -> Result<(), InterpreterError> {
+        self.set_object_property(object_id, "name".to_string(), Value::str(name))?;
+        self.set_object_property(object_id, "message".to_string(), Value::str(message))?;
+        let stack_trace = self.format_stack_trace();
+        self.set_object_property(object_id, "stack".to_string(), Value::str(stack_trace))?;
+        Ok(())
     }
 
     fn alloc_iterator_result_object(
@@ -13636,6 +14015,9 @@ impl InterpreterCore {
                 got: format!("depth {depth}"),
             });
         }
+        if self.is_import_meta_object(object_id)? {
+            return self.import_meta_property_value(key);
+        }
         let Some((target, handler)) = self.active_proxy_record(object_id)? else {
             return self.prototype_chain_get_with_receiver(module, object_id, key, receiver);
         };
@@ -13665,6 +14047,13 @@ impl InterpreterCore {
             return Err(InterpreterError::TypeError {
                 expected: "bounded Proxy set recursion".to_string(),
                 got: format!("depth {depth}"),
+            });
+        }
+        if self.is_import_meta_object(object_id)? {
+            self.record_import_meta_contract_access(key, false);
+            return Err(InterpreterError::TypeError {
+                expected: "read-only import.meta contract field".to_string(),
+                got: format!("import.meta.{key}"),
             });
         }
         let Some((target, handler)) = self.active_proxy_record(object_id)? else {
@@ -13753,6 +14142,67 @@ impl InterpreterCore {
         }
 
         self.proxy_aware_delete_property(module, target, key, depth + 1)
+    }
+
+    fn ordinary_own_property_key_values(
+        &self,
+        object_id: ObjectId,
+    ) -> Result<Vec<Value>, InterpreterError> {
+        let object = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        Ok(object
+            .properties
+            .keys()
+            .map(|key| Value::str(key.as_str()))
+            .collect())
+    }
+
+    fn proxy_aware_own_property_keys(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+        depth: u32,
+    ) -> Result<Vec<Value>, InterpreterError> {
+        if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
+            return Err(InterpreterError::TypeError {
+                expected: "bounded Proxy ownKeys recursion".to_string(),
+                got: format!("depth {depth}"),
+            });
+        }
+        let Some((target, handler)) = self.active_proxy_record(object_id)? else {
+            return self.ordinary_own_property_key_values(object_id);
+        };
+
+        if let Some(result) =
+            self.invoke_proxy_trap(module, handler, "ownKeys", vec![Value::Object(target)])?
+        {
+            let key_values = match result {
+                Value::Object(result_id) => {
+                    self.array_like_argument_values(Value::Object(result_id))?
+                }
+                other => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "array-like object returned by Proxy.ownKeys".to_string(),
+                        got: other.type_name().to_string(),
+                    });
+                }
+            };
+            let mut seen = BTreeSet::new();
+            for key_value in &key_values {
+                let key = self.property_key_from_value(key_value);
+                if !seen.insert(key.clone()) {
+                    return Err(InterpreterError::TypeError {
+                        expected: "unique Proxy.ownKeys result keys".to_string(),
+                        got: format!("duplicate key {key}"),
+                    });
+                }
+            }
+            return Ok(key_values);
+        }
+
+        self.proxy_aware_own_property_keys(module, target, depth + 1)
     }
 
     // -- Promise hostcall dispatch ------------------------------------------
@@ -14300,13 +14750,13 @@ impl InterpreterCore {
                         got: format!("exceeded u32::MAX ({})", self.closures.len()),
                     }
                 })?;
+                let previous_closure_bytes = self.closures_memory_bytes();
                 self.closures.push(ClosureValue {
                     function_index,
                     captured_env: Vec::new(),
                 });
-                if let Err(err) = self.sync_estimated_memory_bytes() {
+                if let Err(err) = self.apply_closures_memory_delta(previous_closure_bytes) {
                     self.closures.pop();
-                    self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
                     return Err(err);
                 }
                 Ok(Some(crate::closure_model::ClosureHandle(closure_id)))
@@ -16897,11 +17347,16 @@ impl InterpreterCore {
         Ok(Value::Iterator(handle))
     }
 
-    fn canonical_array_index_property(key: &str, length: usize) -> Option<usize> {
+    fn canonical_array_index_key(key: &str) -> Option<u32> {
         let index = key.parse::<u32>().ok()?;
         if index == u32::MAX || index.to_string() != key {
             return None;
         }
+        Some(index)
+    }
+
+    fn canonical_array_index_property(key: &str, length: usize) -> Option<usize> {
+        let index = Self::canonical_array_index_key(key)?;
         let index = usize::try_from(index).ok()?;
         (index < length).then_some(index)
     }
@@ -16998,6 +17453,10 @@ impl InterpreterCore {
                     instruction_pointer += 1;
                 }
                 Ir3Instruction::LoadUndefined { dst } => {
+                    Self::write_local_register(&mut local_registers, dst, Value::Undefined)?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::LoadNewTarget { dst } => {
                     Self::write_local_register(&mut local_registers, dst, Value::Undefined)?;
                     instruction_pointer += 1;
                 }
@@ -17227,6 +17686,10 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::LoadThis { dst } => {
                     Self::write_local_register(&mut local_registers, dst, this_arg.clone())?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::LoadNewTarget { dst } => {
+                    Self::write_local_register(&mut local_registers, dst, Value::Undefined)?;
                     instruction_pointer += 1;
                 }
                 Ir3Instruction::Move { dst, src } => {
@@ -17780,10 +18243,10 @@ impl InterpreterCore {
     fn sub_unsigned_decimal(lhs: &str, rhs: &str) -> String {
         let mut borrow = 0i16;
         let mut out = Vec::with_capacity(lhs.len());
-        let mut left = lhs.as_bytes().iter().rev();
+        let left = lhs.as_bytes().iter().rev();
         let mut right = rhs.as_bytes().iter().rev();
 
-        while let Some(l) = left.next() {
+        for l in left {
             let mut digit = i16::from(l.saturating_sub(b'0')) - borrow;
             let r = right
                 .next()
@@ -18369,6 +18832,81 @@ impl InterpreterCore {
         outcome
     }
 
+    fn deterministic_performance_now(&mut self) -> Value {
+        const DETERMINISTIC_PERFORMANCE_BASE_TICK: u64 = 0;
+
+        let consumed_ticks = self.instructions_executed;
+        let payload = format!(
+            "clock_source=deterministic_instruction_tick;base_tick={DETERMINISTIC_PERFORMANCE_BASE_TICK};consumed_ticks={consumed_ticks}"
+        );
+        self.nondeterminism_trace.capture(
+            NondeterminismSource::TimerRead,
+            payload.into_bytes(),
+            consumed_ticks,
+            "baseline_interpreter",
+        );
+        Value::Float(Float64::new(
+            DETERMINISTIC_PERFORMANCE_BASE_TICK as f64 + consumed_ticks as f64,
+        ))
+    }
+
+    fn alloc_import_meta_object(&mut self) -> Result<Value, InterpreterError> {
+        let object_id = self.alloc_object_with_properties(&[
+            ("url", Value::str(IMPORT_META_URL_VALUE)),
+            ("dirname", Value::str(IMPORT_META_DIRNAME_VALUE)),
+        ])?;
+        let index = object_id.0 as usize;
+        self.mutate_heap(|heap| {
+            if let Some(object) = heap.get_mut(index) {
+                object.is_import_meta = true;
+            }
+        });
+        Ok(Value::Object(object_id))
+    }
+
+    fn is_import_meta_object(&self, object_id: ObjectId) -> Result<bool, InterpreterError> {
+        self.heap
+            .get(object_id.0 as usize)
+            .map(|object| object.is_import_meta)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })
+    }
+
+    fn record_import_meta_contract_access(&mut self, key: &str, allowed: bool) {
+        let tag = format!("builtin:ImportMeta.{key}");
+        let recordable_tag = recordable_capability_tag(&tag);
+        let decision = if allowed { "granted" } else { "denied" };
+        self.emit_witness(
+            WitnessEventKind::CapabilityChecked,
+            Some(&format!("{decision}:{}", recordable_tag.as_ref())),
+        );
+        self.hostcall_decisions.push(HostcallDecisionRecord {
+            seq: self.hostcall_decisions.len() as u64,
+            capability: CapabilityTag(recordable_tag.into_owned()),
+            allowed,
+            instruction_index: self.ip as u32,
+        });
+    }
+
+    fn import_meta_property_value(&mut self, key: &str) -> Result<Value, InterpreterError> {
+        match key {
+            "url" => {
+                self.record_import_meta_contract_access(key, true);
+                Ok(Value::str(IMPORT_META_URL_VALUE))
+            }
+            "dirname" => {
+                self.record_import_meta_contract_access(key, true);
+                Ok(Value::str(IMPORT_META_DIRNAME_VALUE))
+            }
+            _ => {
+                self.record_import_meta_contract_access(key, false);
+                Err(InterpreterError::TypeError {
+                    expected: "allow-listed import.meta field (url, dirname)".to_string(),
+                    got: format!("import.meta.{key}"),
+                })
+            }
+        }
+    }
+
     fn dispatch_hostcall_with_value_args(
         &mut self,
         cap: &str,
@@ -18451,7 +18989,43 @@ impl InterpreterCore {
         args: RegRange,
         module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
+        if let Some(name) = builtin_prototype_capability_name(cap) {
+            if args.count != 0 {
+                return Err(InterpreterError::TypeError {
+                    expected: "zero builtin prototype hostcall arguments".to_string(),
+                    got: format!("{} argument(s)", args.count),
+                });
+            }
+            return Ok(Value::Object(self.ensure_builtin_prototype(name)?));
+        }
+
+        if let Some(name) = builtin_instanceof_capability_name(cap) {
+            if args.count != 1 {
+                return Err(InterpreterError::TypeError {
+                    expected: "one builtin instanceof hostcall argument".to_string(),
+                    got: format!("{} argument(s)", args.count),
+                });
+            }
+            let candidate = self.read_reg(args.start)?;
+            let Value::Object(object_id) = candidate else {
+                return Ok(Value::Bool(false));
+            };
+            let prototype = self.ensure_builtin_prototype(name)?;
+            return Ok(Value::Bool(
+                self.prototype_chain_contains(object_id, prototype)?,
+            ));
+        }
+
         match cap {
+            "builtin:ImportMeta" => {
+                if args.count != 0 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "zero import.meta hostcall arguments".to_string(),
+                        got: format!("{} argument(s)", args.count),
+                    });
+                }
+                self.alloc_import_meta_object()
+            }
             "builtin:ApplyHostCall" => {
                 if args.count < 2 {
                     return Err(InterpreterError::TypeError {
@@ -19515,14 +20089,21 @@ impl InterpreterCore {
                         Value::Int(n) => Ok(Value::Int(n)), // Integer is already rounded
                         other => {
                             let input = Self::coerce_to_float(&other).unwrap_or(f64::NAN);
-                            // Implement JavaScript Math.round semantics:
-                            // Round towards positive infinity for ties (0.5 cases)
+                            // JavaScript `Math.round`: nearest integer, ties
+                            // toward +Infinity. `floor(x + 0.5)` is WRONG for
+                            // arguments just below 0.5 — e.g.
+                            // `0.49999999999999994 + 0.5` rounds up to exactly
+                            // `1.0`, so the naive form returns 1 instead of 0.
+                            // Round off the true fractional part instead.
                             let val = if input.is_nan() || input.is_infinite() {
                                 input
-                            } else if input == -0.5 {
-                                -0.0 // Special case: -0.5 rounds to -0
                             } else {
-                                (input + 0.5).floor()
+                                let floor = input.floor();
+                                if input - floor >= 0.5 {
+                                    floor + 1.0
+                                } else {
+                                    floor
+                                }
                             };
                             // Check if the result fits in an integer range
                             if val.is_finite() && val >= i64::MIN as f64 && val <= i64::MAX as f64 {
@@ -19854,6 +20435,7 @@ impl InterpreterCore {
 
                 Ok(Value::Float(Float64::new(DETERMINISTIC_EPOCH_MS as f64)))
             }
+            "builtin:PerformanceNow" => Ok(self.deterministic_performance_now()),
             "builtin:Date" => {
                 // Date() / new Date([ms]) constructor — returns a Date object.
                 // With no argument, uses a fixed epoch (2026-01-01T00:00:00Z) for
@@ -20986,7 +21568,7 @@ impl InterpreterCore {
                     Value::Bool(b) => b.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
-                    other => format!("{}", other.type_name()),
+                    other => other.type_name().to_string(),
                 };
                 if let Some(existing) = self.symbol_registry.get(&key) {
                     return Ok(Value::Object(*existing));
@@ -21358,20 +21940,8 @@ impl InterpreterCore {
                 ))
             }
             "builtin:ReflectOwnKeys" => {
-                // Reflect.ownKeys(target) — returns an array of the target's own
-                // property keys (bd-v93ds). Mirrors Object.keys over the heap
-                // object's own-property map (the engine models keys as strings).
                 let target = self.read_object_argument(args, 0, "Reflect.ownKeys target object")?;
-                let keys: Vec<Value> = self
-                    .heap
-                    .get(target.0 as usize)
-                    .map(|obj| {
-                        obj.properties
-                            .keys()
-                            .map(|k| Value::str(k.as_str()))
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
+                let keys = self.proxy_aware_own_property_keys(module, target, 0)?;
                 let array_id = self.alloc_array_from_values(&keys)?;
                 Ok(Value::Object(array_id))
             }
@@ -21430,7 +22000,8 @@ impl InterpreterCore {
             }
             "builtin:Map" => {
                 // Map([iterable]) constructor implementation
-                let map_id = self.alloc_object_with_prototype(None)?;
+                let prototype = self.ensure_builtin_prototype("Map")?;
+                let map_id = self.alloc_object_with_prototype(Some(prototype))?;
                 let entries_id = self.alloc_object_with_prototype(None)?;
 
                 // Mark as Map type
@@ -21451,7 +22022,8 @@ impl InterpreterCore {
             }
             "builtin:Set" => {
                 // Set([iterable]) constructor implementation
-                let set_id = self.alloc_object_with_prototype(None)?;
+                let prototype = self.ensure_builtin_prototype("Set")?;
+                let set_id = self.alloc_object_with_prototype(Some(prototype))?;
                 let values_id = self.alloc_object_with_prototype(None)?;
 
                 self.set_object_property(set_id, "__type".to_string(), Value::str("Set"))?;
@@ -24533,27 +25105,19 @@ impl InterpreterCore {
                 };
 
                 let digits = if args.count > 1 {
+                    // Clamp at the integer level: a bare `n as usize` sign-loses
+                    // on a negative argument (e.g. -1 -> usize::MAX -> .min(20)
+                    // == 20), so clamp before the cast. (bd-qsz8t review)
                     match self.read_reg(args.start + 1)? {
-                        Value::Int(n) => (n as usize).min(20), // Max 20 digits
-                        Value::Float(f) => (f.inner() as usize).min(20),
+                        Value::Int(n) => n.clamp(0, 20) as usize, // Max 20 digits
+                        Value::Float(f) => (f.inner() as i64).clamp(0, 20) as usize,
                         _ => 0,
                     }
                 } else {
                     0
                 };
 
-                if num.is_nan() {
-                    Ok(Value::str("NaN"))
-                } else if num.is_infinite() {
-                    if num.is_sign_positive() {
-                        Ok(Value::str("Infinity"))
-                    } else {
-                        Ok(Value::str("-Infinity"))
-                    }
-                } else {
-                    let formatted = format!("{:.precision$}", num, precision = digits);
-                    Ok(Value::str(formatted))
-                }
+                Ok(Value::str(number_to_fixed_string(num, digits)))
             }
 
             "builtin:ArrayPrototypeCopyWithin" => {
@@ -26817,6 +27381,12 @@ impl InterpreterCore {
         }
     }
 
+    fn estimate_property_entry_bytes(key: &str, value: &Value) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(Self::estimate_string_bytes(key))
+            .saturating_add(Self::estimate_value_bytes(value))
+    }
+
     fn estimate_scope_frame_bytes(frame: &ScopeFrame) -> u64 {
         let bindings = frame
             .bindings
@@ -26840,6 +27410,7 @@ impl InterpreterCore {
     fn estimate_call_frame_bytes(frame: &CallFrame) -> u64 {
         MEMORY_ESTIMATE_CALL_FRAME_BASE_BYTES
             .saturating_add(Self::estimate_value_bytes(&frame.this_value))
+            .saturating_add(Self::estimate_value_bytes(&frame.new_target_value))
             .saturating_add(
                 frame
                     .construct_this
@@ -26873,11 +27444,7 @@ impl InterpreterCore {
         let properties = object
             .properties
             .iter()
-            .map(|(key, value)| {
-                MEMORY_ESTIMATE_MAP_ENTRY_BYTES
-                    .saturating_add(Self::estimate_string_bytes(key))
-                    .saturating_add(Self::estimate_value_bytes(value))
-            })
+            .map(|(key, value)| Self::estimate_property_entry_bytes(key, value))
             .sum::<u64>();
         let array_buffer_bytes = object
             .array_buffer
@@ -26938,6 +27505,30 @@ impl InterpreterCore {
         MEMORY_ESTIMATE_GENERATOR_BASE_BYTES.saturating_add(registers)
     }
 
+    fn estimate_closure_bytes(closure: &ClosureValue) -> u64 {
+        MEMORY_ESTIMATE_CLOSURE_BASE_BYTES
+            .saturating_add(Self::estimate_scope_chain_bytes(&closure.captured_env))
+    }
+
+    fn estimate_closures_bytes(closures: &[ClosureValue]) -> u64 {
+        closures.iter().map(Self::estimate_closure_bytes).sum()
+    }
+
+    fn scope_chain_memory_bytes(&self) -> u64 {
+        Self::estimate_scope_chain_bytes(&self.scope_chain.frames)
+    }
+
+    fn closures_memory_bytes(&self) -> u64 {
+        Self::estimate_closures_bytes(&self.closures)
+    }
+
+    fn call_stack_memory_bytes(&self) -> u64 {
+        self.call_stack
+            .iter()
+            .map(Self::estimate_call_frame_bytes)
+            .sum()
+    }
+
     fn heap_object_count_u32(&self) -> u32 {
         u32::try_from(self.heap.len()).unwrap_or(u32::MAX)
     }
@@ -26967,15 +27558,7 @@ impl InterpreterCore {
                     .sum::<u64>(),
             )
             .saturating_add(Self::estimate_scope_chain_bytes(&self.scope_chain.frames))
-            .saturating_add(
-                self.closures
-                    .iter()
-                    .map(|closure| {
-                        MEMORY_ESTIMATE_CLOSURE_BASE_BYTES
-                            .saturating_add(Self::estimate_scope_chain_bytes(&closure.captured_env))
-                    })
-                    .sum::<u64>(),
-            )
+            .saturating_add(Self::estimate_closures_bytes(&self.closures))
             .saturating_add(
                 self.call_stack
                     .iter()
@@ -27003,6 +27586,64 @@ impl InterpreterCore {
         }
         self.estimated_memory_bytes = requested_bytes;
         Ok(requested_bytes)
+    }
+
+    fn apply_memory_component_delta(
+        &mut self,
+        previous_component_bytes: u64,
+        next_component_bytes: u64,
+    ) -> Result<u64, InterpreterError> {
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_component_bytes)
+            .saturating_add(next_component_bytes);
+        if requested_bytes > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
+        self.estimated_memory_bytes = requested_bytes;
+        Ok(requested_bytes)
+    }
+
+    fn apply_scope_chain_memory_delta(
+        &mut self,
+        previous_scope_bytes: u64,
+    ) -> Result<u64, InterpreterError> {
+        self.apply_memory_component_delta(previous_scope_bytes, self.scope_chain_memory_bytes())
+    }
+
+    fn apply_closures_memory_delta(
+        &mut self,
+        previous_closure_bytes: u64,
+    ) -> Result<u64, InterpreterError> {
+        self.apply_memory_component_delta(previous_closure_bytes, self.closures_memory_bytes())
+    }
+
+    fn apply_scope_and_closure_memory_delta(
+        &mut self,
+        previous_scope_bytes: u64,
+        previous_closure_bytes: u64,
+    ) -> Result<u64, InterpreterError> {
+        self.apply_memory_component_delta(
+            previous_scope_bytes.saturating_add(previous_closure_bytes),
+            self.scope_chain_memory_bytes()
+                .saturating_add(self.closures_memory_bytes()),
+        )
+    }
+
+    fn apply_scope_closure_call_stack_memory_delta(
+        &mut self,
+        previous_scope_bytes: u64,
+        previous_closure_bytes: u64,
+        previous_call_stack_bytes: u64,
+    ) -> Result<u64, InterpreterError> {
+        self.apply_memory_component_delta(
+            previous_scope_bytes
+                .saturating_add(previous_closure_bytes)
+                .saturating_add(previous_call_stack_bytes),
+            self.scope_chain_memory_bytes()
+                .saturating_add(self.closures_memory_bytes())
+                .saturating_add(self.call_stack_memory_bytes()),
+        )
     }
 
     fn check_temporary_memory_budget(&self, temporary_bytes: u64) -> Result<(), InterpreterError> {
@@ -27165,7 +27806,7 @@ impl InterpreterCore {
         object_id: ObjectId,
         f: impl FnOnce(&mut [u8]) -> R,
     ) -> Result<R, InterpreterError> {
-        let outcome = self.mutate_heap(|heap| {
+        self.mutate_heap(|heap| {
             let object = heap
                 .get_mut(object_id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
@@ -27186,8 +27827,7 @@ impl InterpreterCore {
                         got,
                     })?;
             Ok(f(&mut backing.bytes))
-        });
-        outcome
+        })
     }
 
     fn alloc_typed_array_view_object(
@@ -27550,7 +28190,13 @@ impl InterpreterCore {
                 expected: "iterator table capacity".into(),
                 got: format!("exceeded u32::MAX ({})", self.iterators.len()),
             })?;
+        let iterator_bytes = Self::estimate_iterator_bytes(&iterator);
+        let requested_bytes = self.estimated_memory_bytes.saturating_add(iterator_bytes);
+        if requested_bytes > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
         self.iterators.push(iterator);
+        self.estimated_memory_bytes = requested_bytes;
         Ok(handle)
     }
 
@@ -27649,18 +28295,34 @@ impl InterpreterCore {
         value: Value,
     ) -> Result<(), InterpreterError> {
         let heap_index = object_id.0 as usize;
-        let mut previous = None;
+        let object = self
+            .heap
+            .get(heap_index)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        if object.is_frozen {
+            return Err(InterpreterError::TypeError {
+                expected: "mutable object".to_string(),
+                got: "frozen object".to_string(),
+            });
+        }
 
-        // First, perform the property set operation
+        let previous_bytes = object.properties.get(&key).map_or(0, |previous| {
+            Self::estimate_property_entry_bytes(&key, previous)
+        });
+        let new_bytes = Self::estimate_property_entry_bytes(&key, &value);
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_bytes)
+            .saturating_add(new_bytes);
+        if requested_bytes > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
+
         self.mutate_heap(|heap| {
             if let Some(object) = heap.get_mut(heap_index) {
-                if object.is_frozen {
-                    return; // Will handle error below
-                }
-
-                // Check if setting this property would make array sparse
+                // Check if setting this property would make array sparse.
                 if object.is_array && key != "length" && object.cached_dense_length.is_some() {
-                    if let Ok(index) = key.parse::<u32>() {
+                    if let Some(index) = Self::canonical_array_index_key(&key) {
                         let current_len = object.cached_dense_length.unwrap_or(0);
                         // If setting an index that skips elements, array becomes sparse
                         if index > current_len {
@@ -27672,36 +28334,10 @@ impl InterpreterCore {
                     }
                 }
 
-                previous = object.properties.insert(key.clone(), value.clone());
+                object.properties.insert(key, value);
             }
         });
-
-        // Check for frozen object error after mutation
-        if let Some(object) = self.heap.get(heap_index) {
-            if object.is_frozen {
-                return Err(InterpreterError::TypeError {
-                    expected: "mutable object".to_string(),
-                    got: "frozen object".to_string(),
-                });
-            }
-        } else {
-            return Err(InterpreterError::ObjectNotFound { id: object_id.0 });
-        }
-
-        // Handle memory sync error with rollback
-        if let Err(err) = self.sync_estimated_memory_bytes() {
-            self.mutate_heap(|heap| {
-                if let Some(object) = heap.get_mut(heap_index) {
-                    if let Some(prev_value) = previous {
-                        object.properties.insert(key, prev_value);
-                    } else {
-                        object.properties.remove(&key);
-                    }
-                }
-            });
-            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-            return Err(err);
-        }
+        self.estimated_memory_bytes = requested_bytes;
 
         // Trigger write barrier for GC correctness when setting object properties
         self.gc_write_barrier(object_id);
@@ -27725,6 +28361,10 @@ impl InterpreterCore {
             return Err(InterpreterError::ObjectNotFound { id: object_id.0 });
         }
 
+        let removed_bytes = self.heap[heap_index]
+            .properties
+            .get(key)
+            .map_or(0, |value| Self::estimate_property_entry_bytes(key, value));
         let mut removed = None;
         self.mutate_heap(|heap| {
             if let Some(object) = heap.get_mut(heap_index) {
@@ -27739,7 +28379,9 @@ impl InterpreterCore {
                 removed = object.properties.remove(key);
             }
         });
-        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+        if removed.is_some() {
+            self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(removed_bytes);
+        }
         Ok(removed.is_some())
     }
 
@@ -27750,6 +28392,140 @@ impl InterpreterCore {
             let prototype = self.alloc_object_with_prototype(None)?;
             self.mutate_function_prototypes(|fp| fp.insert(func_idx, prototype));
             Ok(prototype)
+        }
+    }
+
+    fn ensure_builtin_prototype(&mut self, name: &str) -> Result<ObjectId, InterpreterError> {
+        let canonical =
+            canonical_builtin_prototype_name(name).ok_or_else(|| InterpreterError::TypeError {
+                expected: "known builtin constructor prototype".to_string(),
+                got: name.to_string(),
+            })?;
+        if let Some(existing) = self.builtin_prototypes.get(canonical) {
+            return Ok(*existing);
+        }
+
+        let parent = match canonical {
+            "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError" | "EvalError"
+            | "URIError" => Some(self.ensure_builtin_prototype("Error")?),
+            _ => None,
+        };
+        let prototype = self.alloc_object_with_prototype(parent)?;
+        self.mutate_builtin_prototypes(|bp| {
+            bp.insert(canonical.to_string(), prototype);
+        });
+        Ok(prototype)
+    }
+
+    fn builtin_subclass_ancestor_name(
+        &self,
+        prototype: ObjectId,
+    ) -> Result<Option<String>, InterpreterError> {
+        let prototype_names: BTreeMap<ObjectId, String> = self
+            .builtin_prototypes
+            .iter()
+            .map(|(name, object_id)| (*object_id, name.clone()))
+            .collect();
+        let mut current = self
+            .heap
+            .get(prototype.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: prototype.0 })?
+            .prototype;
+        let mut depth = 0u32;
+        let mut visited = BTreeSet::new();
+        visited.insert(prototype);
+
+        while let Some(object_id) = current {
+            if let Some(name) = prototype_names.get(&object_id) {
+                return Ok(Some(name.clone()));
+            }
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(object_id) {
+                return Ok(None);
+            }
+            current = self
+                .heap
+                .get(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
+                .prototype;
+            depth += 1;
+        }
+
+        Ok(None)
+    }
+
+    fn initialize_builtin_subclass_instance(
+        &mut self,
+        object_id: ObjectId,
+        builtin_name: &str,
+        args: RegRange,
+    ) -> Result<(), InterpreterError> {
+        match builtin_name {
+            "Error" | "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError"
+            | "EvalError" | "URIError" => {
+                let message = self.error_message_from_args(builtin_name, args)?;
+                self.initialize_error_like_object(object_id, builtin_name, message)?;
+            }
+            "Map" => {
+                let entries_id = self.alloc_object_with_prototype(None)?;
+                self.set_object_property(object_id, "__type".to_string(), Value::str("Map"))?;
+                self.set_object_property(
+                    object_id,
+                    "__entries".to_string(),
+                    Value::Object(entries_id),
+                )?;
+                self.set_object_property(object_id, "size".to_string(), Value::Int(0))?;
+                if args.count > 0 {
+                    let iterable = self.read_reg(args.start)?;
+                    self.seed_map_entries_from_iterable(
+                        entries_id,
+                        Some(object_id),
+                        iterable,
+                        false,
+                    )?;
+                }
+            }
+            "Set" => {
+                let values_id = self.alloc_object_with_prototype(None)?;
+                self.set_object_property(object_id, "__type".to_string(), Value::str("Set"))?;
+                self.set_object_property(
+                    object_id,
+                    "__values".to_string(),
+                    Value::Object(values_id),
+                )?;
+                self.set_object_property(object_id, "size".to_string(), Value::Int(0))?;
+                if args.count > 0 {
+                    let iterable = self.read_reg(args.start)?;
+                    self.seed_set_values_from_iterable(
+                        values_id,
+                        Some(object_id),
+                        iterable,
+                        false,
+                    )?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn error_message_from_args(
+        &self,
+        name: &str,
+        args: RegRange,
+    ) -> Result<String, InterpreterError> {
+        if args.count > 0 {
+            let msg_val = self.read_reg(args.start)?;
+            Ok(match msg_val {
+                Value::Str(s) => s.to_string(),
+                Value::Int(i) => i.to_string(),
+                Value::Float(f) => f.inner().to_string(),
+                Value::Bool(b) => b.to_string(),
+                Value::Null => "null".to_string(),
+                Value::Undefined => "undefined".to_string(),
+                _ => name.to_string(),
+            })
+        } else {
+            Ok(String::new())
         }
     }
 
@@ -27945,7 +28721,7 @@ impl InterpreterCore {
         match c {
             '{' => self.json_parse_object(chars, pos, depth),
             '[' => self.json_parse_array(chars, pos, depth),
-            '"' => Ok(Self::json_parse_string(chars, pos).map(|s| Value::str(s))),
+            '"' => Ok(Self::json_parse_string(chars, pos).map(Value::str)),
             't' => {
                 if chars[*pos..].starts_with(&['t', 'r', 'u', 'e']) {
                     *pos += 4;
@@ -28877,6 +29653,238 @@ impl LaneRouter {
     /// Get reference to current profiling data.
     pub fn profiling_data(&self) -> Option<&crate::profiling::Profiler> {
         None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Number.prototype.toFixed (exact-decimal, round-half-up)
+// ---------------------------------------------------------------------------
+
+/// The exact number of fractional decimal digits in the terminating decimal
+/// expansion of a finite, non-negative `f64`.
+///
+/// Every finite `f64` is a dyadic rational `m * 2^e`. When `e < 0` (after
+/// reducing out trailing powers of two) the value terminates after exactly
+/// `-e` decimal places, because `2^e = 5^(-e) / 10^(-e)`. The bound is at most
+/// 1074 (the smallest positive subnormal, `2^-1074`).
+fn exact_fractional_digit_count(value: f64) -> usize {
+    debug_assert!(value.is_finite() && value >= 0.0);
+    if value == 0.0 {
+        return 0;
+    }
+    let bits = value.to_bits();
+    let raw_exponent = ((bits >> 52) & 0x7ff) as i64;
+    let mantissa_field = bits & 0x000f_ffff_ffff_ffff;
+    let (mantissa, exp2) = if raw_exponent == 0 {
+        // Subnormal: value = mantissa_field * 2^-1074.
+        (mantissa_field, -1074_i64)
+    } else {
+        // Normal: value = (2^52 | mantissa_field) * 2^(raw_exponent - 1075).
+        ((1u64 << 52) | mantissa_field, raw_exponent - 1075)
+    };
+    // Reduce out powers of two so `exp2` reflects the true terminating place.
+    let exp2 = exp2 + i64::from(mantissa.trailing_zeros());
+    if exp2 >= 0 { 0 } else { (-exp2) as usize }
+}
+
+/// Add one to a non-negative ASCII decimal digit string, propagating carry and
+/// growing the string by one digit on overflow (e.g. `"99"` -> `"100"`).
+fn increment_decimal_digits(digits: &str) -> String {
+    let mut bytes: Vec<u8> = digits.as_bytes().to_vec();
+    let mut index = bytes.len();
+    while index > 0 {
+        index -= 1;
+        if bytes[index] == b'9' {
+            bytes[index] = b'0';
+        } else {
+            bytes[index] += 1;
+            return String::from_utf8(bytes).expect("ascii digits remain ascii");
+        }
+    }
+    // Carried out of the most significant digit.
+    let mut result = String::with_capacity(bytes.len() + 1);
+    result.push('1');
+    result.push_str(std::str::from_utf8(&bytes).expect("ascii digits remain ascii"));
+    result
+}
+
+/// `Number.prototype.toFixed(digits)` per ECMAScript (ES2023 21.1.3.3).
+///
+/// Implemented with exact decimal arithmetic so that exact dyadic ties round
+/// half *up* (toward the larger magnitude) rather than to-even, matching the
+/// spec's "if there are two such `n`, pick the larger `n`" tie-break. Rust's
+/// `format!("{:.n$}")` uses round-half-to-even, which diverges on exact ties
+/// such as `(2.5).toFixed(0)` ("3" per spec, not "2") and `(0.25).toFixed(1)`
+/// ("0.3", not "0.2").
+///
+/// `digits` is the (already validated/clamped) fraction-digit count. The
+/// magnitude is rendered to its exact terminating decimal expansion — Rust's
+/// float formatter is exact when asked for at least the true number of
+/// fractional digits, so no `format!` rounding is ever applied — and then
+/// rounded to `digits` places by inspecting the single decimal digit at the
+/// cut, which fully determines round-half-up for a non-negative value.
+fn number_to_fixed_string(num: f64, digits: usize) -> String {
+    if num.is_nan() {
+        return "NaN".to_string();
+    }
+    if num.is_infinite() {
+        return if num.is_sign_positive() {
+            "Infinity".to_string()
+        } else {
+            "-Infinity".to_string()
+        };
+    }
+    // Sign is handled separately on the magnitude. `num < 0.0` is false for
+    // -0.0, so `(-0).toFixed(2)` yields "0.00" as the spec requires.
+    let negative = num < 0.0;
+    let magnitude = num.abs();
+
+    // Exact terminating decimal expansion of the magnitude (never rounded).
+    let exact_frac_len = exact_fractional_digit_count(magnitude);
+    let exact = format!("{magnitude:.exact_frac_len$}");
+    let (int_part, frac_part) = match exact.split_once('.') {
+        Some((int_part, frac_part)) => (int_part, frac_part),
+        None => (exact.as_str(), ""),
+    };
+
+    // Case A: the exact expansion is already at or below the requested
+    // precision — pad with trailing zeros, no rounding possible.
+    if frac_part.len() <= digits {
+        if digits == 0 {
+            return format_signed(negative, int_part);
+        }
+        let mut body = String::with_capacity(int_part.len() + 1 + digits);
+        body.push_str(int_part);
+        body.push('.');
+        body.push_str(frac_part);
+        for _ in frac_part.len()..digits {
+            body.push('0');
+        }
+        return format_signed(negative, &body);
+    }
+
+    // Case B: must round. For a non-negative value, round-half-up keeps the
+    // truncated value when the first dropped digit is < 5 and increments it
+    // otherwise (>=5 covers both "above the half" and the exact tie, which the
+    // spec breaks upward).
+    let round_up = frac_part.as_bytes()[digits] >= b'5';
+    let mut combined = String::with_capacity(int_part.len() + digits);
+    combined.push_str(int_part);
+    combined.push_str(&frac_part[..digits]);
+    if round_up {
+        combined = increment_decimal_digits(&combined);
+    }
+
+    // Re-split into integer/fraction, guaranteeing at least one integer digit.
+    let min_len = digits + 1;
+    if combined.len() < min_len {
+        let mut padded = String::with_capacity(min_len);
+        for _ in combined.len()..min_len {
+            padded.push('0');
+        }
+        padded.push_str(&combined);
+        combined = padded;
+    }
+    let split_at = combined.len() - digits;
+    let int_str = combined[..split_at].trim_start_matches('0');
+    let int_final = if int_str.is_empty() { "0" } else { int_str };
+    if digits == 0 {
+        format_signed(negative, int_final)
+    } else {
+        let frac_str = &combined[split_at..];
+        format_signed(negative, &format!("{int_final}.{frac_str}"))
+    }
+}
+
+/// Prefix `body` with `-` when `negative`.
+///
+/// The spec fixes the sign from `x < 0` on the *original* value before
+/// rounding, so a strictly-negative input that rounds to zero magnitude still
+/// renders with a leading `-` (e.g. `(-0.0001).toFixed(2)` -> `"-0.00"`).
+/// Negative zero never reaches here with `negative == true` because
+/// `-0.0 < 0.0` is false, so `(-0).toFixed(2)` -> `"0.00"`.
+fn format_signed(negative: bool, body: &str) -> String {
+    if negative {
+        format!("-{body}")
+    } else {
+        body.to_string()
+    }
+}
+
+#[cfg(test)]
+mod number_to_fixed_tests {
+    use super::number_to_fixed_string;
+
+    #[test]
+    fn exact_dyadic_ties_round_half_up_not_to_even() {
+        // The whole point: Rust's `{:.0}` would give "2"/"0"/"2"/"4" (to-even).
+        assert_eq!(number_to_fixed_string(2.5, 0), "3");
+        assert_eq!(number_to_fixed_string(0.5, 0), "1");
+        assert_eq!(number_to_fixed_string(1.5, 0), "2");
+        assert_eq!(number_to_fixed_string(3.5, 0), "4");
+        // Sub-integer dyadic ties: `{:.1}` would give "0.2"/"0.6" (to-even).
+        assert_eq!(number_to_fixed_string(0.25, 1), "0.3");
+        assert_eq!(number_to_fixed_string(0.125, 2), "0.13");
+        assert_eq!(number_to_fixed_string(0.625, 2), "0.63");
+    }
+
+    #[test]
+    fn rounding_carry_propagates() {
+        assert_eq!(number_to_fixed_string(9.5, 0), "10");
+        assert_eq!(number_to_fixed_string(99.5, 0), "100");
+        assert_eq!(number_to_fixed_string(0.95, 1), "0.9"); // 0.95 is below the tie
+        assert_eq!(number_to_fixed_string(9.95, 1), "9.9"); // 9.95 is below the tie
+    }
+
+    #[test]
+    fn non_tie_values_round_by_exact_value() {
+        // 1.005 is actually 1.00499999...; the spec rounds the exact value.
+        assert_eq!(number_to_fixed_string(1.005, 2), "1.00");
+        // 0.15 is actually 0.1499999...; rounds down at 1 digit.
+        assert_eq!(number_to_fixed_string(0.15, 1), "0.1");
+        // 1.231 is 1.231000...09; third fraction digit < 5 -> truncates.
+        assert_eq!(number_to_fixed_string(1.231, 2), "1.23");
+        // 1.238 is 1.237999...; third fraction digit >= 5 -> rounds up.
+        assert_eq!(number_to_fixed_string(1.238, 2), "1.24");
+        assert_eq!(number_to_fixed_string(3.7, 0), "4");
+    }
+
+    #[test]
+    fn negative_values_keep_sign_per_spec() {
+        assert_eq!(number_to_fixed_string(-2.5, 0), "-3");
+        assert_eq!(number_to_fixed_string(-0.25, 1), "-0.3");
+        // Strictly-negative input that rounds to zero magnitude keeps its sign.
+        assert_eq!(number_to_fixed_string(-0.0001, 2), "-0.00");
+        // Negative zero is not < 0, so no sign.
+        assert_eq!(number_to_fixed_string(-0.0, 2), "0.00");
+    }
+
+    #[test]
+    fn padding_and_zero_digits() {
+        assert_eq!(number_to_fixed_string(1.0, 0), "1");
+        assert_eq!(number_to_fixed_string(1.0, 3), "1.000");
+        assert_eq!(number_to_fixed_string(0.0, 2), "0.00");
+        assert_eq!(number_to_fixed_string(2.5, 4), "2.5000");
+    }
+
+    #[test]
+    fn high_digit_counts_do_not_overflow() {
+        // `digits` up to 100: a naive value * 10^digits would overflow f64,
+        // but the exact-decimal path renders the true expansion then pads.
+        let out = number_to_fixed_string(0.5, 50);
+        assert_eq!(out.len(), "0.".len() + 50);
+        assert!(out.starts_with("0.5"));
+        assert!(out.ends_with('0'));
+        // 1/8 is exactly representable: exact at 3 places, zero-padded beyond.
+        let eighth = number_to_fixed_string(0.125, 10);
+        assert_eq!(eighth, "0.1250000000");
+    }
+
+    #[test]
+    fn non_finite_inputs() {
+        assert_eq!(number_to_fixed_string(f64::NAN, 2), "NaN");
+        assert_eq!(number_to_fixed_string(f64::INFINITY, 2), "Infinity");
+        assert_eq!(number_to_fixed_string(f64::NEG_INFINITY, 2), "-Infinity");
     }
 }
 
@@ -31442,6 +32450,84 @@ mod async_runtime_tests_current {
     }
 
     #[test]
+    fn reflect_own_keys_executes_proxy_own_keys_trap() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::NewArray { dst: 0 },
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::ArrayPush {
+                    array: 0,
+                    element: 1,
+                },
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 1,
+                },
+                Ir3Instruction::ArrayPush {
+                    array: 0,
+                    element: 1,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 1,
+                frame_size: 2,
+                name: Some("proxy_own_keys_trap".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        module.constant_pool.push("trap-b".to_string());
+        module.constant_pool.push("trap-a".to_string());
+
+        let mut core = test_interpreter();
+        let target = core
+            .alloc_object_with_prototype(None)
+            .expect("target allocation should succeed");
+        let handler = core
+            .alloc_object_with_prototype(None)
+            .expect("handler allocation should succeed");
+        core.set_object_property(target, "target-only".to_string(), Value::Int(1))
+            .expect("target setup should succeed");
+        core.set_object_property(handler, "ownKeys".to_string(), Value::Function(0))
+            .expect("handler ownKeys trap write should succeed");
+
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(target);
+            r[1] = Value::Object(handler);
+        });
+        let proxy = core
+            .dispatch_builtin_hostcall("builtin:Proxy", RegRange { start: 0, count: 2 }, None)
+            .expect("Proxy constructor should allocate proxy");
+        let Value::Object(proxy_id) = proxy else {
+            panic!("Proxy constructor should return object");
+        };
+
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(proxy_id);
+        });
+        let keys = core
+            .dispatch_builtin_hostcall(
+                "builtin:ReflectOwnKeys",
+                RegRange { start: 0, count: 1 },
+                Some(&module),
+            )
+            .expect("Reflect.ownKeys should execute ownKeys trap");
+        let Value::Object(keys_id) = keys else {
+            panic!("Reflect.ownKeys should return an array object");
+        };
+
+        assert_eq!(
+            core.read_array_like_values(keys_id),
+            vec![Value::str("trap-b"), Value::str("trap-a")]
+        );
+    }
+
+    #[test]
     fn proxy_get_property_instruction_executes_get_trap() {
         let mut module = test_module_with_functions(
             vec![
@@ -32174,6 +33260,52 @@ mod async_runtime_tests_current {
         );
     }
 
+    /// for-of binds each element out of the iterable; the loop variable must
+    /// inherit the iterable's IFC label so `for (const x of secret) egress(x)`
+    /// cannot launder the taint. Sibling of the reduce/array-from callback-lane
+    /// fix (bd-ooaka.1) and the GetProperty join (bd-0zybl): before the fix
+    /// `ForOfInit`/`ForOfNext` wrote their dst via `write_reg` without touching
+    /// `register_labels`, so the element landed at the dst's stale prior label.
+    #[test]
+    fn for_of_propagates_iterable_label_to_loop_variable() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::ForOfInit { src: 0, dst: 1 },
+                Ir3Instruction::ForOfNext {
+                    iterator: 1,
+                    value_dst: 2,
+                    done_target: 3,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+
+        let mut core = test_interpreter();
+        let secret_arr = core
+            .alloc_array_from_values(&[Value::Int(7), Value::Int(8)])
+            .expect("array allocation should succeed");
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(secret_arr);
+        });
+        core.set_register_label(0, crate::ifc_artifacts::Label::Secret)
+            .expect("iterable label should be settable");
+        // Seed the loop-variable dst strictly below Secret to prove the bind
+        // raises it; a no-op propagation would leave it Public.
+        core.set_register_label(2, crate::ifc_artifacts::Label::Public)
+            .expect("dst label should be settable");
+
+        core.execute(&module)
+            .expect("for-of over a secret array should execute");
+
+        assert_eq!(
+            core.get_register_label(2)
+                .expect("loop-variable label should exist"),
+            &crate::ifc_artifacts::Label::Secret,
+            "for-of loop variable must inherit (join) the iterable's label"
+        );
+    }
+
     /// bd-l0d6z: a thrown value's label must survive the throw->catch edge.
     /// Before the fix `Throw` stored only the bare `Value` into
     /// `pending_exception` and `EnterCatch` wrote it to the catch binding via
@@ -32732,6 +33864,55 @@ mod async_runtime_tests_current {
             "length unchanged"
         );
         assert_eq!(obj.cached_dense_length, Some(3), "dense cache unchanged");
+    }
+
+    #[test]
+    fn array_u32_max_property_does_not_extend_length_before_push() {
+        let mut core = test_interpreter();
+        let arr = core
+            .alloc_array_from_values(&[])
+            .expect("array allocation should succeed");
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(arr);
+            r[1] = Value::str("4294967295");
+            r[2] = Value::Int(1);
+            r[3] = Value::Int(2);
+        });
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                Ir3Instruction::ArrayPush {
+                    array: 0,
+                    element: 3,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+
+        core.execute(&module)
+            .expect("u32::MAX ordinary property + push should execute");
+
+        let obj = core.heap.get(arr.0 as usize).expect("array on heap");
+        assert_eq!(
+            obj.properties.get("4294967295"),
+            Some(&Value::Int(1)),
+            "u32::MAX key must remain an ordinary property"
+        );
+        assert_eq!(
+            obj.properties.get("0"),
+            Some(&Value::Int(2)),
+            "push must append at index 0, not after u32::MAX"
+        );
+        assert_eq!(
+            obj.properties.get("length"),
+            Some(&Value::Int(1)),
+            "u32::MAX key must not extend array length"
+        );
     }
 
     #[test]
@@ -36820,10 +38001,11 @@ mod tests {
 
     #[test]
     fn alloc_object_and_heap_size() {
-        let config = InterpreterConfig::quickjs_defaults();
+        let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "test");
         assert_eq!(core.heap_size(), 0);
-        assert_eq!(core.estimated_memory_bytes(), 0);
+        let seed_bytes = InterpreterCore::estimate_scope_chain_bytes(&core.scope_chain.frames);
+        assert_eq!(core.estimated_memory_bytes(), seed_bytes);
         let id = core
             .alloc_object_with_prototype(None)
             .expect("operation should succeed for valid inputs");
@@ -36839,7 +38021,7 @@ mod tests {
 
     #[test]
     fn alloc_object_with_prototype_respects_heap_budget() {
-        let mut config = InterpreterConfig::quickjs_defaults();
+        let mut config = test_quickjs_config();
         config.max_heap_objects = 2;
         let mut core = InterpreterCore::new(config, "heap-budget");
         assert_eq!(
@@ -36865,7 +38047,7 @@ mod tests {
 
     #[test]
     fn custom_heap_budget_allows_limit_then_fails() {
-        let mut config = InterpreterConfig::quickjs_defaults();
+        let mut config = test_quickjs_config();
         config.max_heap_objects = 10;
         let mut core = InterpreterCore::new(config, "custom-heap-budget");
         for expected in 0_u32..10 {
@@ -36888,7 +38070,7 @@ mod tests {
 
     #[test]
     fn estimated_memory_bytes_tracks_property_growth() {
-        let config = InterpreterConfig::quickjs_defaults();
+        let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "memory-estimate");
         let oid = core
             .alloc_object_with_prototype(None)
@@ -36900,6 +38082,508 @@ mod tests {
         core.sync_estimated_memory_bytes()
             .expect("operation should succeed for valid inputs");
         assert!(core.estimated_memory_bytes() > before);
+    }
+
+    #[test]
+    fn set_and_remove_object_property_update_memory_incrementally() {
+        let config = test_quickjs_config();
+        let mut core = InterpreterCore::new(config, "property-memory-delta");
+        let oid = core
+            .alloc_object_with_prototype(None)
+            .expect("operation should succeed for valid inputs");
+        let before_insert = core.estimated_memory_bytes();
+
+        let key = "payload".to_string();
+        let value = Value::str("hello world");
+        let value_bytes = InterpreterCore::estimate_property_entry_bytes(&key, &value);
+        core.set_object_property(oid, key.clone(), value)
+            .expect("property insert should fit budget");
+        assert_eq!(core.estimated_memory_bytes(), before_insert + value_bytes);
+        assert_eq!(
+            core.recompute_estimated_memory_bytes(),
+            core.estimated_memory_bytes(),
+            "property insert delta must match full recompute"
+        );
+
+        let replacement = Value::str("x");
+        let replacement_bytes = InterpreterCore::estimate_property_entry_bytes(&key, &replacement);
+        core.set_object_property(oid, key.clone(), replacement)
+            .expect("property replacement should fit budget");
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            before_insert + replacement_bytes
+        );
+        assert_eq!(
+            core.recompute_estimated_memory_bytes(),
+            core.estimated_memory_bytes(),
+            "property replacement delta must match full recompute"
+        );
+
+        assert!(
+            core.remove_object_property(oid, &key)
+                .expect("property removal should succeed")
+        );
+        assert_eq!(core.estimated_memory_bytes(), before_insert);
+        assert_eq!(
+            core.recompute_estimated_memory_bytes(),
+            core.estimated_memory_bytes(),
+            "property removal delta must match full recompute"
+        );
+    }
+
+    #[test]
+    fn set_object_property_budget_failure_preserves_state() {
+        let config = test_quickjs_config();
+        let mut core = InterpreterCore::new(config, "property-memory-budget");
+        let oid = core
+            .alloc_object_with_prototype(None)
+            .expect("operation should succeed for valid inputs");
+        let before = core.estimated_memory_bytes();
+        let key = "payload".to_string();
+        let value = Value::str("x".repeat(128));
+        let entry_bytes = InterpreterCore::estimate_property_entry_bytes(&key, &value);
+        core.config.max_total_memory_bytes = before.saturating_add(entry_bytes).saturating_sub(1);
+
+        let err = core
+            .set_object_property(oid, key.clone(), value)
+            .expect_err("property write should exceed the memory budget");
+        assert!(matches!(err, InterpreterError::MemoryBudgetExceeded { .. }));
+        assert_eq!(core.estimated_memory_bytes(), before);
+        assert!(
+            !core.heap[oid.0 as usize].properties.contains_key(&key),
+            "rejected property write must not mutate the object"
+        );
+    }
+
+    #[test]
+    fn alloc_iterator_updates_memory_incrementally() {
+        let config = test_quickjs_config();
+        let mut core = InterpreterCore::new(config, "iterator-memory-delta");
+        let iterator = RuntimeIteratorState::ForIn(RuntimeForInState {
+            object_id: ObjectId(0),
+            keys: vec!["alpha".to_string(), "beta".to_string()],
+            next_index: 0,
+            deleted_keys: BTreeSet::new(),
+            done: false,
+            closed: false,
+            trace_index: 0,
+        });
+        let iterator_bytes = InterpreterCore::estimate_iterator_bytes(&iterator);
+        let before = core.estimated_memory_bytes();
+        let handle = core
+            .alloc_iterator(iterator)
+            .expect("iterator allocation should fit budget");
+        assert_eq!(handle, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            before.saturating_add(iterator_bytes)
+        );
+        assert_eq!(
+            core.recompute_estimated_memory_bytes(),
+            core.estimated_memory_bytes(),
+            "iterator allocation delta must match full recompute"
+        );
+    }
+
+    #[test]
+    fn scope_chain_mutations_update_memory_incrementally() {
+        let config = test_quickjs_config();
+        let mut core = InterpreterCore::new(config, "scope-memory-delta");
+        let initial_memory = core.estimated_memory_bytes();
+
+        let previous_scope_bytes = core.scope_chain_memory_bytes();
+        core.scope_chain
+            .push(core.config.max_scope_depth)
+            .expect("scope push should fit depth budget");
+        core.apply_scope_chain_memory_delta(previous_scope_bytes)
+            .expect("empty scope frame should fit memory budget");
+        assert!(core.estimated_memory_bytes() > initial_memory);
+        assert_eq!(
+            core.recompute_estimated_memory_bytes(),
+            core.estimated_memory_bytes(),
+            "scope push delta must match full recompute"
+        );
+
+        let previous_scope_bytes = core.scope_chain_memory_bytes();
+        core.scope_chain
+            .current_mut()
+            .expect("current scope should exist")
+            .declare("payload".to_string(), BindingKind::Let);
+        {
+            let binding = core
+                .scope_chain
+                .current_mut()
+                .expect("current scope should exist")
+                .get_mut("payload")
+                .expect("declared binding should exist");
+            binding.value = Value::str("hello world");
+            binding.initialized = true;
+        }
+        core.apply_scope_chain_memory_delta(previous_scope_bytes)
+            .expect("binding growth should fit memory budget");
+        assert_eq!(
+            core.recompute_estimated_memory_bytes(),
+            core.estimated_memory_bytes(),
+            "scope binding delta must match full recompute"
+        );
+
+        let previous_scope_bytes = core.scope_chain_memory_bytes();
+        let popped = core.scope_chain.pop();
+        assert!(popped.is_some());
+        core.apply_scope_chain_memory_delta(previous_scope_bytes)
+            .expect("scope pop should lower committed memory");
+        assert_eq!(core.scope_chain.depth(), 1);
+        assert_eq!(
+            core.recompute_estimated_memory_bytes(),
+            core.estimated_memory_bytes(),
+            "scope pop delta must match full recompute"
+        );
+    }
+
+    #[test]
+    fn scope_capture_updates_update_memory_incrementally() {
+        let config = test_quickjs_config();
+        let mut core = InterpreterCore::new(config, "scope-capture-memory-delta");
+        core.scope_chain
+            .current_mut()
+            .expect("current scope should exist")
+            .declare("payload".to_string(), BindingKind::Let);
+        {
+            let binding = core
+                .scope_chain
+                .current_mut()
+                .expect("current scope should exist")
+                .get_mut("payload")
+                .expect("declared binding should exist");
+            binding.value = Value::str("short");
+            binding.initialized = true;
+        }
+        core.sync_estimated_memory_bytes()
+            .expect("seed scope binding should fit memory budget");
+
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: core.scope_chain.snapshot(),
+        });
+        core.sync_estimated_memory_bytes()
+            .expect("seed closure capture should fit memory budget");
+
+        let previous_scope_bytes = core.scope_chain_memory_bytes();
+        let previous_closure_bytes = core.closures_memory_bytes();
+        let replacement = Value::str("a longer captured payload");
+        let frame_index = if let Some((frame_index, binding)) =
+            core.scope_chain.resolve_mut_with_index("payload")
+        {
+            binding.value = replacement.clone();
+            binding.initialized = true;
+            Some(frame_index)
+        } else {
+            None
+        };
+        if let Some(frame_index) = frame_index {
+            core.propagate_scope_binding_update_to_closure_captures(
+                frame_index,
+                "payload",
+                &replacement,
+            );
+        }
+        core.apply_scope_and_closure_memory_delta(previous_scope_bytes, previous_closure_bytes)
+            .expect("scope and closure capture growth should fit memory budget");
+        assert_eq!(
+            core.recompute_estimated_memory_bytes(),
+            core.estimated_memory_bytes(),
+            "scope and closure capture deltas must match full recompute"
+        );
+    }
+
+    #[test]
+    fn closure_allocation_updates_memory_incrementally() {
+        let config = test_quickjs_config();
+        let mut core = InterpreterCore::new(config, "closure-memory-delta");
+        core.scope_chain
+            .current_mut()
+            .expect("current scope should exist")
+            .declare("payload".to_string(), BindingKind::Let);
+        {
+            let binding = core
+                .scope_chain
+                .current_mut()
+                .expect("current scope should exist")
+                .get_mut("payload")
+                .expect("declared binding should exist");
+            binding.value = Value::str("captured payload");
+            binding.initialized = true;
+        }
+        core.sync_estimated_memory_bytes()
+            .expect("seed scope binding should fit memory budget");
+
+        let closure = ClosureValue {
+            function_index: 7,
+            captured_env: core.scope_chain.snapshot(),
+        };
+        let closure_bytes = InterpreterCore::estimate_closure_bytes(&closure);
+        let before = core.estimated_memory_bytes();
+        let previous_closure_bytes = core.closures_memory_bytes();
+        core.closures.push(closure);
+        core.apply_closures_memory_delta(previous_closure_bytes)
+            .expect("closure allocation should fit memory budget");
+
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            before.saturating_add(closure_bytes)
+        );
+        assert_eq!(
+            core.recompute_estimated_memory_bytes(),
+            core.estimated_memory_bytes(),
+            "closure allocation delta must match full recompute"
+        );
+    }
+
+    #[test]
+    fn complete_return_updates_call_components_incrementally() {
+        let config = test_quickjs_config();
+        let mut core = InterpreterCore::new(config, "return-memory-delta");
+        core.scope_chain
+            .current_mut()
+            .expect("current scope should exist")
+            .declare("payload".to_string(), BindingKind::Let);
+        {
+            let binding = core
+                .scope_chain
+                .current_mut()
+                .expect("current scope should exist")
+                .get_mut("payload")
+                .expect("declared binding should exist");
+            binding.value = Value::str("short");
+            binding.initialized = true;
+        }
+        let saved_scope = core.scope_chain.snapshot();
+        core.closures.push(ClosureValue {
+            function_index: 7,
+            captured_env: saved_scope.clone(),
+        });
+
+        {
+            let binding = core
+                .scope_chain
+                .current_mut()
+                .expect("current scope should exist")
+                .get_mut("payload")
+                .expect("declared binding should exist");
+            binding.value = Value::str("expanded captured payload");
+            binding.initialized = true;
+        }
+        core.call_stack.push(CallFrame {
+            return_ip: 123,
+            return_reg: 0,
+            register_base: 0,
+            function_index: Some(7),
+            this_value: Value::str("receiver"),
+            new_target_value: Value::Undefined,
+            super_value: Value::Undefined,
+            construct_this: None,
+            saved_pending_exception: None,
+            saved_pending_exception_label: Label::Public,
+            saved_pending_return: None,
+            saved_suspended_abrupt_depth: 0,
+            saved_finally_mode_depth: 0,
+            saved_scope_depth: saved_scope.len(),
+            saved_scope_chain: Some(saved_scope),
+            closure_id: Some(0),
+            captured_scope_depth: 1,
+            async_function_id: None,
+        });
+        core.sync_estimated_memory_bytes()
+            .expect("seed call-frame state should fit memory budget");
+
+        let outcome = core
+            .complete_return(Value::str("done"))
+            .expect("return should complete");
+        assert_eq!(outcome, None);
+        assert_eq!(core.ip, 123);
+        assert!(core.call_stack.is_empty());
+        assert_eq!(
+            core.read_reg(0).expect("return register"),
+            Value::str("done")
+        );
+        assert_eq!(
+            core.recompute_estimated_memory_bytes(),
+            core.estimated_memory_bytes,
+            "call return deltas must match full recompute"
+        );
+    }
+
+    #[test]
+    fn complete_async_frame_updates_call_components_incrementally() {
+        let config = test_quickjs_config();
+        let mut core = InterpreterCore::new(config, "async-return-memory-delta");
+        core.scope_chain
+            .current_mut()
+            .expect("current scope should exist")
+            .declare("payload".to_string(), BindingKind::Let);
+        {
+            let binding = core
+                .scope_chain
+                .current_mut()
+                .expect("current scope should exist")
+                .get_mut("payload")
+                .expect("declared binding should exist");
+            binding.value = Value::str("short");
+            binding.initialized = true;
+        }
+        let saved_scope = core.scope_chain.snapshot();
+        core.closures.push(ClosureValue {
+            function_index: 7,
+            captured_env: saved_scope.clone(),
+        });
+
+        {
+            let binding = core
+                .scope_chain
+                .current_mut()
+                .expect("current scope should exist")
+                .get_mut("payload")
+                .expect("declared binding should exist");
+            binding.value = Value::str("expanded async payload");
+            binding.initialized = true;
+        }
+        let result_promise = core.promise_store.create().0;
+        let async_function_id = core.async_functions.len() as u32;
+        core.async_functions.push(AsyncFunctionObject {
+            function_index: 7,
+            closure_index: Some(0),
+            saved_ip: 0,
+            saved_registers: Vec::new(),
+            saved_register_base: 0,
+            phase: AsyncFunctionPhase::Executing,
+            result_promise,
+        });
+        core.call_stack.push(CallFrame {
+            return_ip: 321,
+            return_reg: 0,
+            register_base: 0,
+            function_index: Some(7),
+            this_value: Value::str("receiver"),
+            new_target_value: Value::Undefined,
+            super_value: Value::Undefined,
+            construct_this: None,
+            saved_pending_exception: None,
+            saved_pending_exception_label: Label::Public,
+            saved_pending_return: None,
+            saved_suspended_abrupt_depth: 0,
+            saved_finally_mode_depth: 0,
+            saved_scope_depth: saved_scope.len(),
+            saved_scope_chain: Some(saved_scope),
+            closure_id: Some(0),
+            captured_scope_depth: 1,
+            async_function_id: Some(async_function_id),
+        });
+        core.sync_estimated_memory_bytes()
+            .expect("seed async call-frame state should fit memory budget");
+
+        let frame = core.call_stack.pop().expect("async frame should exist");
+        let outcome = core
+            .complete_async_frame(frame, Ok(Value::str("done")))
+            .expect("async completion should settle promise");
+        assert_eq!(outcome, None);
+        assert_eq!(core.ip, 321);
+        assert!(core.call_stack.is_empty());
+        assert!(matches!(
+            core.async_functions[async_function_id as usize].phase,
+            AsyncFunctionPhase::Completed
+        ));
+        let promise = core
+            .promise_store
+            .get(crate::promise_model::PromiseHandle(result_promise))
+            .expect("async result promise should exist");
+        assert_eq!(
+            promise.state,
+            crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Str(
+                "done".to_string(),
+            ))
+        );
+        assert_eq!(
+            core.recompute_estimated_memory_bytes(),
+            core.estimated_memory_bytes,
+            "async call-frame deltas must match full recompute"
+        );
+    }
+
+    #[test]
+    fn unwind_call_stack_updates_call_components_incrementally() {
+        let config = test_quickjs_config();
+        let mut core = InterpreterCore::new(config, "unwind-memory-delta");
+        core.scope_chain
+            .current_mut()
+            .expect("current scope should exist")
+            .declare("payload".to_string(), BindingKind::Let);
+        {
+            let binding = core
+                .scope_chain
+                .current_mut()
+                .expect("current scope should exist")
+                .get_mut("payload")
+                .expect("declared binding should exist");
+            binding.value = Value::str("short");
+            binding.initialized = true;
+        }
+        let saved_scope = core.scope_chain.snapshot();
+        core.closures.push(ClosureValue {
+            function_index: 7,
+            captured_env: saved_scope.clone(),
+        });
+
+        {
+            let binding = core
+                .scope_chain
+                .current_mut()
+                .expect("current scope should exist")
+                .get_mut("payload")
+                .expect("declared binding should exist");
+            binding.value = Value::str("expanded unwind payload");
+            binding.initialized = true;
+        }
+        core.suspended_abrupt_completions
+            .push(AbruptCompletion::Return(Value::str("inner")));
+        core.call_stack.push(CallFrame {
+            return_ip: 777,
+            return_reg: 0,
+            register_base: 4,
+            function_index: Some(7),
+            this_value: Value::str("receiver"),
+            new_target_value: Value::Undefined,
+            super_value: Value::Undefined,
+            construct_this: None,
+            saved_pending_exception: Some(Value::str("outer error")),
+            saved_pending_exception_label: Label::Public,
+            saved_pending_return: None,
+            saved_suspended_abrupt_depth: 0,
+            saved_finally_mode_depth: 0,
+            saved_scope_depth: saved_scope.len(),
+            saved_scope_chain: Some(saved_scope),
+            closure_id: Some(0),
+            captured_scope_depth: 1,
+            async_function_id: None,
+        });
+        core.sync_estimated_memory_bytes()
+            .expect("seed unwind call-frame state should fit memory budget");
+
+        let (restored_exception, restored_return) = core
+            .unwind_call_stack_to(0)
+            .expect("unwind should restore caller state");
+        assert_eq!(
+            restored_exception.map(|(value, _)| value),
+            Some(Value::str("outer error"))
+        );
+        assert_eq!(restored_return, None);
+        assert_eq!(core.register_base, 4);
+        assert!(core.call_stack.is_empty());
+        assert!(core.suspended_abrupt_completions.is_empty());
+        assert_eq!(
+            core.recompute_estimated_memory_bytes(),
+            core.estimated_memory_bytes,
+            "unwind deltas must match full recompute"
+        );
     }
 
     #[test]
@@ -41453,6 +43137,73 @@ mod tests {
     }
 
     #[test]
+    fn bitwise_to_int32_wraps_floats_past_2_pow_31() {
+        // Rust's `f64 as i32` saturates; JS `ToInt32` wraps modulo 2^32. A
+        // float operand whose magnitude exceeds 2^31 must wrap, not collapse
+        // to i32::MAX.
+        let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test");
+
+        // (3000000000.5) | 0 == -1294967296 (was 2147483647 when saturating).
+        core.set_register(0, Value::Float(Float64::new(3_000_000_000.5)))
+            .expect("set reg 0");
+        core.set_register(1, Value::Int(0)).expect("set reg 1");
+        assert_eq!(
+            core.eval_bitwise(0, 1, "|").expect("bitwise or"),
+            Value::Int(-1_294_967_296)
+        );
+
+        // (5000000000.7) >> 0 == 705032704.
+        core.set_register(0, Value::Float(Float64::new(5_000_000_000.7)))
+            .expect("set reg 0");
+        core.set_register(1, Value::Int(0)).expect("set reg 1");
+        assert_eq!(
+            core.eval_bitwise(0, 1, ">>").expect("shift right"),
+            Value::Int(705_032_704)
+        );
+
+        // ~(3000000000.5) == 1294967295 (was -2147483648 when saturating).
+        core.set_register(0, Value::Float(Float64::new(3_000_000_000.5)))
+            .expect("set reg 0");
+        assert_eq!(
+            core.eval_bit_not(0).expect("bit not"),
+            Value::Int(1_294_967_295)
+        );
+
+        // In-range floats are unaffected: (5.9 | 0) == 5.
+        core.set_register(0, Value::Float(Float64::new(5.9)))
+            .expect("set reg 0");
+        core.set_register(1, Value::Int(0)).expect("set reg 1");
+        assert_eq!(
+            core.eval_bitwise(0, 1, "|").expect("bitwise or"),
+            Value::Int(5)
+        );
+    }
+
+    #[test]
+    fn math_round_just_below_half_rounds_to_zero() {
+        // `floor(x + 0.5)` returns 1 for 0.49999999999999994 because the sum
+        // rounds up to exactly 1.0; the correct Math.round is 0.
+        let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test");
+        core.set_register(0, Value::Float(Float64::new(0.499_999_999_999_999_94)))
+            .expect("set reg 0");
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 53, // MathRound
+                args: RegRange { start: 0, count: 1 },
+                dest: 1,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .expect("execute module");
+        let result = core.read_register(1).expect("read result");
+        match result {
+            Value::Int(0) => {}
+            Value::Float(f) => assert_eq!(f.inner(), 0.0, "should be 0, got {result:?}"),
+            _ => panic!("Math.round(0.49999999999999994) should be 0, got {result:?}"),
+        }
+    }
+
+    #[test]
     fn math_round_negative_half_semantics() {
         // Test JavaScript Math.round negative half semantics
         // JavaScript uses floor(x + 0.5), not Rust's round away from zero
@@ -42611,14 +44362,15 @@ mod tests {
         // between the previous slot's bytes and the new slot's bytes — no
         // full recompute, no drift relative to the source-of-truth.
         let mut interp = InterpreterCore::new(test_quickjs_config(), "test-trace");
-        assert_eq!(interp.estimated_memory_bytes, 0);
+        let seed_bytes = interp.estimated_memory_bytes;
+        assert_eq!(interp.recompute_estimated_memory_bytes(), seed_bytes);
 
         let payload = "hello-world".to_string();
         let payload_bytes = InterpreterCore::estimate_value_bytes(&Value::str(payload.clone()));
         assert!(payload_bytes > 0, "string value must contribute bytes");
 
         interp.write_reg(0, Value::str(payload)).expect("write_reg");
-        assert_eq!(interp.estimated_memory_bytes, payload_bytes);
+        assert_eq!(interp.estimated_memory_bytes, seed_bytes + payload_bytes);
         // Source-of-truth recompute must agree — no drift introduced by
         // the incremental update.
         assert_eq!(
@@ -42631,14 +44383,15 @@ mod tests {
     fn write_reg_replacing_string_with_undefined_subtracts_bytes() {
         let mut interp = InterpreterCore::new(test_quickjs_config(), "test-trace");
         let payload = Value::str("x".repeat(64));
+        let seed_bytes = interp.estimated_memory_bytes;
         let initial_bytes = InterpreterCore::estimate_value_bytes(&payload);
         interp.write_reg(0, payload).expect("write_reg string");
-        assert_eq!(interp.estimated_memory_bytes, initial_bytes);
+        assert_eq!(interp.estimated_memory_bytes, seed_bytes + initial_bytes);
 
         interp
             .write_reg(0, Value::Undefined)
             .expect("write_reg undefined");
-        assert_eq!(interp.estimated_memory_bytes, 0);
+        assert_eq!(interp.estimated_memory_bytes, seed_bytes);
         assert_eq!(
             interp.recompute_estimated_memory_bytes(),
             interp.estimated_memory_bytes,
@@ -42654,6 +44407,7 @@ mod tests {
         let mut config = test_quickjs_config();
         config.max_total_memory_bytes = 64;
         let mut interp = InterpreterCore::new(config, "test-trace");
+        let seed_bytes = interp.estimated_memory_bytes;
 
         let huge = Value::str("x".repeat(1024));
         let result = interp.write_reg(0, huge);
@@ -42667,7 +44421,7 @@ mod tests {
             "rejected write must not mutate the register"
         );
         assert_eq!(
-            interp.estimated_memory_bytes, 0,
+            interp.estimated_memory_bytes, seed_bytes,
             "rejected write must not move the running total"
         );
     }
@@ -42785,14 +44539,13 @@ mod class_feature_bd_bg9l1_16_tests {
     }
 
     #[test]
-    fn new_target_fails_closed_until_supported() {
-        let err =
-            eval_class_source("class TargetProbe { constructor(){ this.target = new.target; } }\n")
-                .expect_err("new.target must fail closed until the meta-property is implemented");
-        assert!(
-            err.contains("new.target meta-property is not supported") || err.contains("new.target"),
-            "new.target rejection should name the unsupported meta-property, got: {err}"
-        );
+    fn new_target_reports_constructor_in_constructor_body() {
+        let value = eval_class_source(concat!(
+            "class TargetProbe { constructor(){ this.target = typeof new.target; } }\n",
+            "let probe = new TargetProbe(); probe.target;\n",
+        ))
+        .expect("new.target should evaluate inside constructor bodies");
+        assert_eq!(value, "function");
     }
 }
 
@@ -42823,6 +44576,7 @@ mod lazy_seed_tests {
             registers: core.registers.value.clone(),
             heap: core.heap.value.clone(),
             function_prototypes: core.function_prototypes.value.clone(),
+            builtin_prototypes: core.builtin_prototypes.value.clone(),
         }))
     }
 
@@ -42881,6 +44635,10 @@ mod lazy_seed_tests {
             eager.function_prototypes.len(),
             lazy.function_prototypes.len()
         );
+        assert_eq!(
+            eager.builtin_prototypes.len(),
+            lazy.builtin_prototypes.len()
+        );
 
         // Check register values specifically
         for i in 0..eager.registers.len().min(lazy.registers.len()) {
@@ -42927,6 +44685,27 @@ mod lazy_seed_tests {
             }
             ExecutionSeed::Lazy { .. } => {
                 panic!("function_prototypes write should have materialized the seed")
+            }
+        }
+        assert!(core.seed_epoch > pre_epoch);
+    }
+
+    #[test]
+    fn builtin_prototypes_mutation_also_materializes() {
+        let mut core = test_core();
+        let seed = core.capture_execution_seed();
+        let pre_epoch = core.seed_epoch;
+        core.mutate_builtin_prototypes(|bp| {
+            bp.insert("Error".to_string(), ObjectId(123));
+        });
+        match &*seed.borrow() {
+            ExecutionSeed::Materialized {
+                builtin_prototypes, ..
+            } => {
+                assert!(builtin_prototypes.is_empty());
+            }
+            ExecutionSeed::Lazy { .. } => {
+                panic!("builtin_prototypes write should have materialized the seed")
             }
         }
         assert!(core.seed_epoch > pre_epoch);

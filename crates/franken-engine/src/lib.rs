@@ -2009,6 +2009,7 @@ fn ir3_destination_register(instr: &Ir3Instruction) -> Option<u32> {
         | Ir3Instruction::ImportModule { dst, .. }
         | Ir3Instruction::NewObject { dst }
         | Ir3Instruction::NewArray { dst }
+        | Ir3Instruction::LoadNewTarget { dst }
         | Ir3Instruction::Lt { dst, .. }
         | Ir3Instruction::Lte { dst, .. }
         | Ir3Instruction::Gt { dst, .. }

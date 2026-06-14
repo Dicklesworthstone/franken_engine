@@ -1,6 +1,7 @@
 use frankenengine_engine::ast::{
     AssignmentOperator, BinaryOperator, BlockStatement, Expression, FunctionDeclaration,
-    ObjectProperty, ParseGoal, ReturnStatement, SourceSpan, Statement, SyntaxTree, UnaryOperator,
+    ObjectProperty, ObjectPropertyKind, ParseGoal, ReturnStatement, SourceSpan, Statement,
+    SyntaxTree, UnaryOperator,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction, Ir3Module};
@@ -84,6 +85,7 @@ fn test_constructor_with_arguments() {
                 value: Expression::NumericLiteral(1),
                 computed: false,
                 shorthand: false,
+                kind: ObjectPropertyKind::Data,
             }]),
         ],
     };

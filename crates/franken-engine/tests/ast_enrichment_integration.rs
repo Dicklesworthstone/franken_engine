@@ -986,6 +986,7 @@ fn enrichment_object_literal_computed_key() {
         value: num(42),
         computed: true,
         shorthand: false,
+        kind: ObjectPropertyKind::Data,
     }]);
     let json = serde_json::to_string(&expr).unwrap();
     let restored: Expression = serde_json::from_str(&json).unwrap();

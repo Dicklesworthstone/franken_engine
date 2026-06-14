@@ -41,10 +41,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::{
     ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, ExportKind, Expression,
-    ImportClause, MethodKind, ObjectPatternProperty, ParseGoal, SourceSpan, Statement,
-    UnaryOperator, VariableDeclarationKind,
+    ImportClause, MethodKind, ObjectPatternProperty, ObjectPropertyKind, ParseGoal, SourceSpan,
+    Statement, UnaryOperator, VariableDeclarationKind,
 };
-use crate::effect_set::{EffectKind, EffectPolicy, EffectSet};
+use crate::effect_set::{EffectKind, EffectSet};
 use crate::flow_lattice::{
     Clearance, DeclassificationObligation, FlowCheckResult as LatticeFlowCheckResult,
     Ir2FlowLattice, LabelClass,
@@ -1786,14 +1786,11 @@ fn push_param_slot<'a>(
     param_names: &mut Vec<String>,
     destructure_params: &mut Vec<(String, &'a BindingPattern)>,
 ) {
-    match &param.pattern {
-        BindingPattern::Rest(inner) => {
-            if let Some(name) = inner.as_identifier() {
-                param_names.push(name.to_string());
-                return;
-            }
-        }
-        _ => {}
+    if let BindingPattern::Rest(inner) = &param.pattern
+        && let Some(name) = inner.as_identifier()
+    {
+        param_names.push(name.to_string());
+        return;
     }
 
     match param.name() {
@@ -3031,26 +3028,34 @@ fn lower_statement_to_ir1_with_flow(
                     key: Ir1PropertyKey::Static("prototype".to_string()),
                 });
 
-                // Load parent constructor
-                lower_expression_to_ir1(
-                    super_class,
-                    ops,
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    scope_id,
-                    label_counter,
-                    span_table,
-                )?;
-                ops.push(Ir1Op::GetProperty {
-                    key: Ir1PropertyKey::Static("prototype".to_string()),
-                });
+                if let Some(capability) = builtin_prototype_capability(super_class, binding_lookup)
+                {
+                    ops.push(Ir1Op::HostCall {
+                        capability,
+                        arg_count: 0,
+                    });
+                } else {
+                    // Load parent constructor
+                    lower_expression_to_ir1(
+                        super_class,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                    ops.push(Ir1Op::GetProperty {
+                        key: Ir1PropertyKey::Static("prototype".to_string()),
+                    });
+                }
 
                 // Set Child.prototype.__proto__ = Parent.prototype
                 ops.push(Ir1Op::SetProperty {
                     key: Ir1PropertyKey::Static("__proto__".to_string()),
                 });
-                ops.push(Ir1Op::Pop);
+                ops.push(Ir1Op::Discard);
             }
 
             // Attach non-constructor methods to the constructor's prototype.
@@ -3180,8 +3185,9 @@ fn lower_statement_to_ir1_with_flow(
                     }
                 }
                 // Discard (not Pop): SetProperty leaves the method value on the
-                // stack; DefineAccessor mirrors that completion discipline so
-                // discarding it cannot clobber the constructor binding (bd-62un6).
+                // stack while DefineAccessor leaves the target object; in both
+                // cases this discards the method definition completion without
+                // clobbering the constructor binding (bd-62un6).
                 ops.push(Ir1Op::Discard);
             }
         }
@@ -3193,7 +3199,6 @@ fn lower_statement_to_ir1_with_flow(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 fn lower_switch_to_ir1(
     switch_stmt: &crate::ast::SwitchStatement,
@@ -3346,9 +3351,9 @@ pub fn lower_ir1_to_ir2(
             if len == 0 {
                 continue;
             }
-            for i in start..end {
-                if len < best_len[i] {
-                    best_len[i] = len;
+            for (i, best) in best_len.iter_mut().enumerate().take(end).skip(start) {
+                if len < *best {
+                    *best = len;
                     ir2.ops[i].span = Some(entry.span);
                 }
             }
@@ -3662,6 +3667,43 @@ pub fn lower_ir2_to_ir3(
     }
     if let Some(binding_id) = name_to_binding_id.get("console") {
         scoped_runtime_binding_ids.insert(*binding_id);
+    }
+    if let Some(binding_id) = name_to_binding_id.get("Function") {
+        scoped_runtime_binding_ids.insert(*binding_id);
+    }
+
+    let top_level_function_decl_names: BTreeSet<String> = ir2
+        .ops
+        .iter()
+        .filter_map(|op| match &op.inner {
+            Ir1Op::DeclareFunction { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+    let shared_top_level_capture_names: BTreeSet<String> =
+        ir2.ops
+            .iter()
+            .flat_map(|op| match &op.inner {
+                Ir1Op::CreateFunction { free_vars, .. }
+                | Ir1Op::DeclareFunction { free_vars, .. } => free_vars.clone(),
+                _ => Vec::new(),
+            })
+            .filter(|name| name_to_binding_id.contains_key(name))
+            .collect();
+    for name in &shared_top_level_capture_names {
+        if let Some(binding_id) = name_to_binding_id.get(name) {
+            scoped_runtime_binding_ids.insert(*binding_id);
+        }
+    }
+    if !shared_top_level_capture_names.is_empty() {
+        ir3.instructions.push(Ir3Instruction::PushScope);
+        for name in &shared_top_level_capture_names {
+            let pool_idx = push_constant_optimized(&mut constant_pool, name);
+            ir3.instructions.push(Ir3Instruction::DeclareBinding {
+                name_pool_index: pool_idx,
+                kind: 0,
+            });
+        }
     }
 
     for (op_index, op) in ir2.ops.iter().enumerate() {
@@ -4308,7 +4350,7 @@ pub fn lower_ir2_to_ir3(
                     func,
                     kind: *kind,
                 });
-                value_stack.push(func);
+                value_stack.push(obj);
             }
             Ir1Op::DeleteProperty { key } => {
                 let (obj, key_reg) = match key {
@@ -4441,6 +4483,11 @@ pub fn lower_ir2_to_ir3(
                 ir3.instructions.push(Ir3Instruction::LoadThis { dst });
                 value_stack.push(dst);
             }
+            Ir1Op::LoadNewTarget => {
+                let dst = alloc_register(&mut register_cursor);
+                ir3.instructions.push(Ir3Instruction::LoadNewTarget { dst });
+                value_stack.push(dst);
+            }
             Ir1Op::LoadSuper => {
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions.push(Ir3Instruction::LoadSuper { dst });
@@ -4460,13 +4507,17 @@ pub fn lower_ir2_to_ir3(
                 let dst = *binding_registers
                     .entry(*binding_id)
                     .or_insert_with(|| alloc_register(&mut register_cursor));
+                let temp_free_vars: Vec<&String> = free_vars
+                    .iter()
+                    .filter(|fv| !shared_top_level_capture_names.contains(*fv))
+                    .collect();
                 {
                     // If the function has free variables, put the current
                     // scope's bindings onto the scope chain so
                     // CreateClosure can capture them.
-                    if !free_vars.is_empty() {
+                    if !temp_free_vars.is_empty() {
                         ir3.instructions.push(Ir3Instruction::PushScope);
-                        for fv in free_vars {
+                        for &fv in &temp_free_vars {
                             let pool_idx = push_constant_optimized(&mut constant_pool, fv);
                             ir3.instructions.push(Ir3Instruction::DeclareBinding {
                                 name_pool_index: pool_idx,
@@ -4519,7 +4570,16 @@ pub fn lower_ir2_to_ir3(
                             capture_count: free_vars.len() as u32,
                         });
                     }
-                    if !free_vars.is_empty() {
+                    if top_level_function_decl_names.contains(name)
+                        && shared_top_level_capture_names.contains(name)
+                    {
+                        let pool_idx = push_constant_optimized(&mut constant_pool, name);
+                        ir3.instructions.push(Ir3Instruction::StoreScoped {
+                            src: dst,
+                            name_pool_index: pool_idx,
+                        });
+                    }
+                    if !temp_free_vars.is_empty() {
                         ir3.instructions.push(Ir3Instruction::PopScope);
                     }
                 }
@@ -4536,11 +4596,15 @@ pub fn lower_ir2_to_ir3(
                 rest_param_index,
             } => {
                 let dst = alloc_register(&mut register_cursor);
+                let temp_free_vars: Vec<&String> = free_vars
+                    .iter()
+                    .filter(|fv| !shared_top_level_capture_names.contains(*fv))
+                    .collect();
                 // If the function has free variables, put them on the
                 // scope chain before capturing.
-                if !free_vars.is_empty() {
+                if !temp_free_vars.is_empty() {
                     ir3.instructions.push(Ir3Instruction::PushScope);
-                    for fv in free_vars {
+                    for &fv in &temp_free_vars {
                         let pool_idx = push_constant_optimized(&mut constant_pool, fv);
                         ir3.instructions.push(Ir3Instruction::DeclareBinding {
                             name_pool_index: pool_idx,
@@ -4592,7 +4656,7 @@ pub fn lower_ir2_to_ir3(
                         capture_count: free_vars.len() as u32,
                     });
                 }
-                if !free_vars.is_empty() {
+                if !temp_free_vars.is_empty() {
                     ir3.instructions.push(Ir3Instruction::PopScope);
                 }
                 value_stack.push(dst);
@@ -4891,6 +4955,10 @@ pub fn lower_ir2_to_ir3(
         }
     }
 
+    if !shared_top_level_capture_names.is_empty() {
+        ir3.instructions.push(Ir3Instruction::PopScope);
+    }
+
     if !matches!(ir3.instructions.last(), Some(Ir3Instruction::Halt)) {
         ir3.instructions.push(Ir3Instruction::Halt);
     }
@@ -4972,7 +5040,7 @@ pub fn lower_ir2_to_ir3(
         // captured-`let` write-back (bd-p89tp), and was the root fragility the
         // bd-ut6ku `AssignOp` patch worked around. Resolving by exact id needs
         // no body_ops scan and is order-independent.
-        let free_var_binding_ids: BTreeSet<BindingId> = free_var_ids.iter().copied().collect();
+        let _free_var_binding_ids: BTreeSet<BindingId> = free_var_ids.iter().copied().collect();
         let fv_id_to_name: BTreeMap<BindingId, String> = free_var_ids
             .iter()
             .copied()
@@ -5396,11 +5464,16 @@ pub fn lower_ir2_to_ir3(
                         func,
                         kind: *kind,
                     });
-                    fn_value_stack.push(func);
+                    fn_value_stack.push(obj);
                 }
                 Ir1Op::LoadThis => {
                     let dst = alloc_register(&mut fn_reg);
                     ir3.instructions.push(Ir3Instruction::LoadThis { dst });
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::LoadNewTarget => {
+                    let dst = alloc_register(&mut fn_reg);
+                    ir3.instructions.push(Ir3Instruction::LoadNewTarget { dst });
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::LoadSuper => {
@@ -6965,18 +7038,17 @@ fn lower_expression_to_ir1_inner(
     match expression {
         Expression::Identifier(name) => {
             // Check for ambient authority violation on direct identifier access
-            if let Some(required_effect) = required_effect_for_ambient_authority(name, None) {
-                if let Err(caller_profile) =
+            if let Some(required_effect) = required_effect_for_ambient_authority(name, None)
+                && let Err(caller_profile) =
                     check_ambient_authority_allowed(required_effect, root_scope_id)
-                {
-                    return Err(LoweringPipelineError::AmbientAuthorityViolation {
-                        required_effect,
-                        caller_profile,
-                        accessor: name.clone(),
-                        // Bare-identifier access; AST identifiers carry no span.
-                        span: None,
-                    });
-                }
+            {
+                return Err(LoweringPipelineError::AmbientAuthorityViolation {
+                    required_effect,
+                    caller_profile,
+                    accessor: name.clone(),
+                    // Bare-identifier access; AST identifiers carry no span.
+                    span: None,
+                });
             }
 
             // Identifier references look up an existing binding or create
@@ -7206,6 +7278,27 @@ fn lower_expression_to_ir1_inner(
                 )?;
                 ops.push(Ir1Op::HostCall {
                     capability: "builtin:ArrayIsArray".to_string(),
+                    arg_count: 1,
+                });
+                return Ok(());
+            }
+
+            if *operator == BinaryOperator::Instanceof
+                && let Some(capability) =
+                    builtin_instanceof_capability(right.as_ref(), binding_lookup)
+            {
+                lower_expression_to_ir1(
+                    left,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
+                )?;
+                ops.push(Ir1Op::HostCall {
+                    capability,
                     arg_count: 1,
                 });
                 return Ok(());
@@ -8551,20 +8644,19 @@ fn lower_expression_to_ir1_inner(
                 // ambient-authority arm and `require('fs')` slipped through. Run
                 // the same check here, before the special-case, so an unsanctioned
                 // caller is fail-closed-rejected instead of silently allowed.
-                if let Some(required_effect) = required_effect_for_ambient_authority(name, None) {
-                    if let Err(caller_profile) =
+                if let Some(required_effect) = required_effect_for_ambient_authority(name, None)
+                    && let Err(caller_profile) =
                         check_ambient_authority_allowed(required_effect, root_scope_id)
-                    {
-                        return Err(LoweringPipelineError::AmbientAuthorityViolation {
-                            required_effect,
-                            caller_profile,
-                            accessor: name.clone(),
-                            // The callee identifier carries no span, but the
-                            // enclosing call does (bd-fqlfw.1.1): point the
-                            // denial at the `require(...)` call site.
-                            span: *span,
-                        });
-                    }
+                {
+                    return Err(LoweringPipelineError::AmbientAuthorityViolation {
+                        required_effect,
+                        caller_profile,
+                        accessor: name.clone(),
+                        // The callee identifier carries no span, but the
+                        // enclosing call does (bd-fqlfw.1.1): point the
+                        // denial at the `require(...)` call site.
+                        span: *span,
+                    });
                 }
                 let arg_count = arguments.len();
                 if arg_count > u32::MAX as usize {
@@ -8935,27 +9027,22 @@ fn lower_expression_to_ir1_inner(
             span,
         } => {
             // Check for ambient authority violation on member access
-            if let Expression::Identifier(object_name) = object.as_ref() {
-                if !*computed {
-                    if let Expression::Identifier(prop_name) = property.as_ref() {
-                        if let Some(required_effect) =
-                            required_effect_for_ambient_authority(object_name, Some(prop_name))
-                        {
-                            if let Err(caller_profile) =
-                                check_ambient_authority_allowed(required_effect, root_scope_id)
-                            {
-                                return Err(LoweringPipelineError::AmbientAuthorityViolation {
-                                    required_effect,
-                                    caller_profile,
-                                    accessor: format!("{object_name}.{prop_name}"),
-                                    // Member nodes carry parse-time spans since
-                                    // bd-fqlfw.1.1; the denial points at source.
-                                    span: *span,
-                                });
-                            }
-                        }
-                    }
-                }
+            if let Expression::Identifier(object_name) = object.as_ref()
+                && !*computed
+                && let Expression::Identifier(prop_name) = property.as_ref()
+                && let Some(required_effect) =
+                    required_effect_for_ambient_authority(object_name, Some(prop_name))
+                && let Err(caller_profile) =
+                    check_ambient_authority_allowed(required_effect, root_scope_id)
+            {
+                return Err(LoweringPipelineError::AmbientAuthorityViolation {
+                    required_effect,
+                    caller_profile,
+                    accessor: format!("{object_name}.{prop_name}"),
+                    // Member nodes carry parse-time spans since
+                    // bd-fqlfw.1.1; the denial points at source.
+                    span: *span,
+                });
             }
 
             if math_object_property_name(object, property, *computed, binding_lookup) == Some("PI")
@@ -9213,6 +9300,15 @@ fn lower_expression_to_ir1_inner(
         Expression::This => {
             ops.push(Ir1Op::LoadThis);
         }
+        Expression::NewTarget => {
+            ops.push(Ir1Op::LoadNewTarget);
+        }
+        Expression::ImportMeta => {
+            ops.push(Ir1Op::HostCall {
+                capability: "builtin:ImportMeta".to_string(),
+                arg_count: 0,
+            });
+        }
         Expression::Super => {
             ops.push(Ir1Op::LoadSuper);
         }
@@ -9292,15 +9388,22 @@ fn lower_expression_to_ir1_inner(
             }
         }
         Expression::ObjectLiteral(properties) => {
-            // Check if any property is a spread ({...obj})
+            // Check if any property needs incremental construction. Data-only
+            // literals can use the compact batch path; spreads and accessors
+            // must preserve the target object while applying each entry.
             let has_spread = properties
                 .iter()
                 .any(|prop| matches!(&prop.value, Expression::SpreadElement(_)));
+            let has_accessor = properties
+                .iter()
+                .any(|prop| prop.kind != ObjectPropertyKind::Data);
+            let needs_incremental = has_spread || has_accessor;
 
-            if has_spread {
-                // With spreads, use incremental approach:
+            if needs_incremental {
+                // With spreads/accessors, use incremental approach:
                 // 1. Create empty object
-                // 2. For each property: SetProperty or SpreadIntoObject
+                // 2. For each property: data temp+spread, direct accessor define,
+                //    or source spread
                 ops.push(Ir1Op::NewObject { count: 0 });
                 for prop in properties {
                     if let Expression::SpreadElement(inner) = &prop.value {
@@ -9317,54 +9420,101 @@ fn lower_expression_to_ir1_inner(
                         )?;
                         ops.push(Ir1Op::SpreadIntoObject);
                     } else {
-                        // Normal property - emit key and value, then set
-                        if prop.computed {
-                            lower_expression_to_ir1(
-                                &prop.key,
-                                ops,
-                                bindings,
-                                binding_lookup,
-                                binding_index,
-                                root_scope_id,
-                                label_counter,
-                                span_table,
-                            )?;
-                        } else {
-                            let key_str = match &prop.key {
-                                Expression::Identifier(name) => name.clone(),
-                                Expression::StringLiteral(s) => s.clone(),
-                                Expression::NumericLiteral(n) => n.to_string(),
-                                Expression::BigIntLiteral(n) => n.clone(),
-                                other => format!("{other:?}"),
-                            };
-                            ops.push(Ir1Op::LoadLiteral {
-                                value: Ir1Literal::String(key_str),
-                            });
+                        match prop.kind {
+                            ObjectPropertyKind::Data => {
+                                // Normal property - emit key and value, then set.
+                                if prop.computed {
+                                    lower_expression_to_ir1(
+                                        &prop.key,
+                                        ops,
+                                        bindings,
+                                        binding_lookup,
+                                        binding_index,
+                                        root_scope_id,
+                                        label_counter,
+                                        span_table,
+                                    )?;
+                                } else {
+                                    let key_str = match &prop.key {
+                                        Expression::Identifier(name) => name.clone(),
+                                        Expression::StringLiteral(s) => s.clone(),
+                                        Expression::NumericLiteral(n) => n.to_string(),
+                                        Expression::BigIntLiteral(n) => n.clone(),
+                                        other => format!("{other:?}"),
+                                    };
+                                    ops.push(Ir1Op::LoadLiteral {
+                                        value: Ir1Literal::String(key_str),
+                                    });
+                                }
+                                lower_expression_to_ir1(
+                                    &prop.value,
+                                    ops,
+                                    bindings,
+                                    binding_lookup,
+                                    binding_index,
+                                    root_scope_id,
+                                    label_counter,
+                                    span_table,
+                                )?;
+                                // Build a single-property temp object `{key: value}` and
+                                // spread it into the target. A bare `SetProperty` here is
+                                // WRONG for an object literal (bd-oca1s): its Ir1->Ir3
+                                // lowering pushes the assigned *value* back on the stack
+                                // (correct for an `obj.x = v` assignment expression, which
+                                // evaluates to `v`), which CONSUMES the target object — so
+                                // `{...o, b: 2}` left the value `2`, not the object, on the
+                                // stack and `p.a` then faulted "expected object, got
+                                // number". `SpreadIntoObject` instead preserves the target
+                                // (it pops source+target and pushes the target back, like
+                                // the spread arm above), and ES2018 override ordering is
+                                // preserved because temp objects merge in source order.
+                                ops.push(Ir1Op::NewObject { count: 1 });
+                                ops.push(Ir1Op::SpreadIntoObject);
+                            }
+                            ObjectPropertyKind::Get | ObjectPropertyKind::Set => {
+                                let property_key = if prop.computed {
+                                    lower_expression_to_ir1(
+                                        &prop.key,
+                                        ops,
+                                        bindings,
+                                        binding_lookup,
+                                        binding_index,
+                                        root_scope_id,
+                                        label_counter,
+                                        span_table,
+                                    )?;
+                                    Ir1PropertyKey::Dynamic
+                                } else {
+                                    let key_str = match &prop.key {
+                                        Expression::Identifier(name) => name.clone(),
+                                        Expression::StringLiteral(s) => s.clone(),
+                                        Expression::NumericLiteral(n) => n.to_string(),
+                                        Expression::BigIntLiteral(n) => n.clone(),
+                                        other => format!("{other:?}"),
+                                    };
+                                    Ir1PropertyKey::Static(key_str)
+                                };
+                                lower_expression_to_ir1(
+                                    &prop.value,
+                                    ops,
+                                    bindings,
+                                    binding_lookup,
+                                    binding_index,
+                                    root_scope_id,
+                                    label_counter,
+                                    span_table,
+                                )?;
+                                let kind = match prop.kind {
+                                    ObjectPropertyKind::Get => AccessorKind::Get,
+                                    ObjectPropertyKind::Set => AccessorKind::Set,
+                                    ObjectPropertyKind::Data => unreachable!(),
+                                };
+                                ops.push(Ir1Op::DefineAccessor {
+                                    key: property_key,
+                                    kind,
+                                });
+                            }
                         }
-                        lower_expression_to_ir1(
-                            &prop.value,
-                            ops,
-                            bindings,
-                            binding_lookup,
-                            binding_index,
-                            root_scope_id,
-                            label_counter,
-                            span_table,
-                        )?;
-                        // Build a single-property temp object `{key: value}` and
-                        // spread it into the target. A bare `SetProperty` here is
-                        // WRONG for an object literal (bd-oca1s): its Ir1->Ir3
-                        // lowering pushes the assigned *value* back on the stack
-                        // (correct for an `obj.x = v` assignment expression, which
-                        // evaluates to `v`), which CONSUMES the target object — so
-                        // `{...o, b: 2}` left the value `2`, not the object, on the
-                        // stack and `p.a` then faulted "expected object, got
-                        // number". `SpreadIntoObject` instead preserves the target
-                        // (it pops source+target and pushes the target back, like
-                        // the spread arm above), and ES2018 override ordering is
-                        // preserved because temp objects merge in source order.
-                        ops.push(Ir1Op::NewObject { count: 1 });
-                        ops.push(Ir1Op::SpreadIntoObject);
                     }
                 }
             } else {
@@ -10094,23 +10244,31 @@ fn lower_expression_to_ir1_inner(
                 ops.push(Ir1Op::GetProperty {
                     key: Ir1PropertyKey::Static("prototype".to_string()),
                 });
-                lower_expression_to_ir1(
-                    super_class,
-                    ops,
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    root_scope_id,
-                    label_counter,
-                    span_table,
-                )?;
-                ops.push(Ir1Op::GetProperty {
-                    key: Ir1PropertyKey::Static("prototype".to_string()),
-                });
+                if let Some(capability) = builtin_prototype_capability(super_class, binding_lookup)
+                {
+                    ops.push(Ir1Op::HostCall {
+                        capability,
+                        arg_count: 0,
+                    });
+                } else {
+                    lower_expression_to_ir1(
+                        super_class,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                    ops.push(Ir1Op::GetProperty {
+                        key: Ir1PropertyKey::Static("prototype".to_string()),
+                    });
+                }
                 ops.push(Ir1Op::SetProperty {
                     key: Ir1PropertyKey::Static("__proto__".to_string()),
                 });
-                ops.push(Ir1Op::Pop);
+                ops.push(Ir1Op::Discard);
             }
 
             for method in body.iter().filter(|m| m.kind != MethodKind::Constructor) {
@@ -10223,8 +10381,9 @@ fn lower_expression_to_ir1_inner(
                     _ => ops.push(Ir1Op::SetProperty { key: property_key }),
                 }
                 // Discard (not Pop): SetProperty leaves the method value on the
-                // stack; DefineAccessor mirrors that completion discipline so
-                // discarding it cannot clobber the constructor binding (bd-62un6).
+                // stack while DefineAccessor leaves the target object; in both
+                // cases this discards the method definition completion without
+                // clobbering the constructor binding (bd-62un6).
                 ops.push(Ir1Op::Discard);
             }
 
@@ -10278,6 +10437,51 @@ fn symbol_iterator_member(
         }
         (true, Expression::StringLiteral(name)) => name == "iterator",
         _ => false,
+    }
+}
+
+fn builtin_prototype_capability(
+    expression: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<String> {
+    builtin_constructor_name(expression, binding_lookup).map(|name| format!("builtin:proto:{name}"))
+}
+
+fn builtin_instanceof_capability(
+    expression: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<String> {
+    builtin_constructor_name(expression, binding_lookup).and_then(|name| {
+        if name == "Array" {
+            None
+        } else {
+            Some(format!("builtin:instanceof:{name}"))
+        }
+    })
+}
+
+fn builtin_constructor_name(
+    expression: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Identifier(name) = expression else {
+        return None;
+    };
+    if binding_lookup.contains_key(name.as_str()) {
+        return None;
+    }
+    match name.as_str() {
+        "Array" => Some("Array"),
+        "Map" => Some("Map"),
+        "Set" => Some("Set"),
+        "Error" => Some("Error"),
+        "TypeError" => Some("TypeError"),
+        "RangeError" => Some("RangeError"),
+        "ReferenceError" => Some("ReferenceError"),
+        "SyntaxError" => Some("SyntaxError"),
+        "EvalError" => Some("EvalError"),
+        "URIError" => Some("URIError"),
+        _ => None,
     }
 }
 
@@ -14251,6 +14455,7 @@ mod tests {
             value: Expression::NumericLiteral(1),
             computed: false,
             shorthand: false,
+            kind: ObjectPropertyKind::Data,
         }]));
         let result = lower_ir0_to_ir1(&ir0).expect("object should lower");
         assert!(
@@ -14259,6 +14464,43 @@ mod tests {
                 .ops
                 .iter()
                 .any(|op| matches!(op, Ir1Op::NewObject { count: 1 }))
+        );
+    }
+
+    #[test]
+    fn lower_object_literal_accessor_emits_define_accessor() {
+        let getter = Expression::Function {
+            name: None,
+            params: Vec::new(),
+            body: BlockStatement {
+                body: vec![Statement::Return(ReturnStatement {
+                    argument: Some(Expression::NumericLiteral(11)),
+                    span: span(),
+                })],
+                span: span(),
+            },
+            is_async: false,
+            is_generator: false,
+        };
+        let ir0 = expr_ir0(Expression::ObjectLiteral(vec![ObjectProperty {
+            key: Expression::Identifier("v".into()),
+            value: getter,
+            computed: false,
+            shorthand: false,
+            kind: ObjectPropertyKind::Get,
+        }]));
+        let result = lower_ir0_to_ir1(&ir0).expect("object getter should lower");
+        assert!(
+            result.module.ops.iter().any(|op| {
+                matches!(
+                    op,
+                    Ir1Op::DefineAccessor {
+                        key: Ir1PropertyKey::Static(key),
+                        kind: AccessorKind::Get,
+                    } if key == "v"
+                )
+            }),
+            "object getter literal must lower to DefineAccessor"
         );
     }
 

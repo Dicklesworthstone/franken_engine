@@ -604,6 +604,8 @@ impl ParserArena {
             | Expression::OptionalCall { .. }
             | Expression::OptionalMember { .. }
             | Expression::This
+            | Expression::NewTarget
+            | Expression::ImportMeta
             | Expression::Super
             | Expression::ArrayLiteral(_)
             | Expression::ObjectLiteral(_)
@@ -827,6 +829,8 @@ fn estimate_expression_slots(expression: &Expression) -> usize {
         | Expression::BooleanLiteral(_)
         | Expression::NullLiteral
         | Expression::UndefinedLiteral
+        | Expression::NewTarget
+        | Expression::ImportMeta
         | Expression::Raw(_) => 1,
         Expression::Await(inner) => 1usize.saturating_add(estimate_expression_slots(inner)),
         _ => 0,
@@ -885,6 +889,8 @@ fn expression_kind_name(expression: &Expression) -> &'static str {
         Expression::OptionalCall { .. } => "optional_call",
         Expression::OptionalMember { .. } => "optional_member",
         Expression::This => "this",
+        Expression::NewTarget => "new_target",
+        Expression::ImportMeta => "import_meta",
         Expression::ArrayLiteral(_) => "array_literal",
         Expression::ObjectLiteral(_) => "object_literal",
         Expression::ArrowFunction { .. } => "arrow_function",

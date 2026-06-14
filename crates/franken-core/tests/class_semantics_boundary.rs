@@ -662,8 +662,10 @@ fn proxy_constructor_revocation() {
 
 #[test]
 fn proxy_invariant_constructor_property() {
-    let mut target = OrdinaryObject::default();
-    target.constructable = true;
+    let mut target = OrdinaryObject {
+        constructable: true,
+        ..Default::default()
+    };
     target
         .define_own_property(
             str_key("length"),

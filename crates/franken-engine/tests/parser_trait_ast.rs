@@ -1388,27 +1388,71 @@ fn parser_tagged_meta_frontier_accepts_tagged_template_expressions() {
 }
 
 #[test]
-fn parser_tagged_meta_frontier_rejects_new_target_meta_property() {
+fn parser_tagged_meta_frontier_accepts_new_target_meta_property() {
     let parser = CanonicalEs2020Parser;
     let source = "const target = new.target";
-    let err = parser
+    let tree = parser
         .parse(source, ParseGoal::Script)
-        .expect_err("new.target should fail");
-    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
-    assert_eq!(err.message, "new.target meta-property is not supported");
-    assert_eq!(err.span, Some(single_line_source_span(source)));
+        .expect("new.target should parse");
+    let Statement::VariableDeclaration(declaration) = &tree.body[0] else {
+        panic!("expected variable declaration for new.target source");
+    };
+    assert!(matches!(
+        declaration
+            .declarations
+            .first()
+            .and_then(|declarator| declarator.initializer.as_ref()),
+        Some(Expression::NewTarget)
+    ));
+    assert_eq!(tree.span, single_line_source_span(source));
 }
 
 #[test]
-fn parser_tagged_meta_frontier_rejects_import_meta_property() {
+fn parser_tagged_meta_frontier_accepts_import_meta_property() {
     let parser = CanonicalEs2020Parser;
     let source = "const meta = import.meta";
-    let err = parser
+    let tree = parser
         .parse(source, ParseGoal::Module)
-        .expect_err("import.meta should fail");
-    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
-    assert_eq!(err.message, "import.meta meta-property is not supported");
-    assert_eq!(err.span, Some(single_line_source_span(source)));
+        .expect("import.meta should parse in module goal");
+    let Statement::VariableDeclaration(declaration) = &tree.body[0] else {
+        panic!("expected variable declaration for import.meta source");
+    };
+    assert!(matches!(
+        declaration
+            .declarations
+            .first()
+            .and_then(|declarator| declarator.initializer.as_ref()),
+        Some(Expression::ImportMeta)
+    ));
+    assert_eq!(tree.span, single_line_source_span(source));
+}
+
+#[test]
+fn parser_tagged_meta_frontier_accepts_import_meta_member_access() {
+    let parser = CanonicalEs2020Parser;
+    let source = "const href = import.meta.url";
+    let tree = parser
+        .parse(source, ParseGoal::Module)
+        .expect("import.meta.url should parse in module goal");
+    let Statement::VariableDeclaration(declaration) = &tree.body[0] else {
+        panic!("expected variable declaration for import.meta.url source");
+    };
+    let Some(Expression::Member {
+        object,
+        property,
+        computed,
+        ..
+    }) = declaration
+        .declarations
+        .first()
+        .and_then(|declarator| declarator.initializer.as_ref())
+    else {
+        panic!("expected import.meta.url to parse as member expression");
+    };
+    assert!(matches!(object.as_ref(), Expression::ImportMeta));
+    assert!(matches!(property.as_ref(), Expression::Identifier(name) if name == "url"));
+    assert!(!computed);
+    assert_eq!(tree.span, single_line_source_span(source));
 }
 
 #[test]

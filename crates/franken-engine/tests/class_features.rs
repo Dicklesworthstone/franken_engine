@@ -9,9 +9,10 @@ use frankenengine_engine::ast::{
 };
 use frankenengine_engine::ir_contract::{Ir0Module, Ir1Op, Ir1PropertyKey, Ir3Instruction};
 use frankenengine_engine::lowering_pipeline::{
-    LoweringPipelineError, lower_ir0_to_ir1, lower_ir1_to_ir2, lower_ir2_to_ir3,
+    LoweringContext, LoweringPipelineError, lower_ir0_to_ir1, lower_ir0_to_ir3, lower_ir1_to_ir2,
+    lower_ir2_to_ir3,
 };
-use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser, ParseErrorCode};
+use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser};
 
 fn span() -> SourceSpan {
     SourceSpan::new(0, 1, 1, 1, 1, 2)
@@ -295,13 +296,44 @@ fn class_method_super_expression_lowers_to_load_super() {
 }
 
 #[test]
-fn new_target_meta_property_fails_closed_until_supported() {
+fn new_target_meta_property_lowers_to_explicit_load() {
     let parser = CanonicalEs2020Parser;
-    let err = parser
-        .parse("const target = new.target", ParseGoal::Script)
-        .expect_err("new.target should fail closed");
-    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
-    assert_eq!(err.message, "new.target meta-property is not supported");
+    let tree = parser
+        .parse(
+            "class TargetProbe { constructor(){ this.target = typeof new.target; } }",
+            ParseGoal::Script,
+        )
+        .expect("new.target should parse");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "new-target-class-test.js");
+    let context = LoweringContext::new(
+        "trace-new-target",
+        "decision-new-target",
+        "policy-new-target",
+    );
+    let lowered = lower_ir0_to_ir3(&ir0, &context).expect("new.target should lower");
+    assert!(
+        lowered
+            .ir3
+            .instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::LoadNewTarget { .. })),
+        "constructor body should load new.target explicitly"
+    );
+}
+
+#[test]
+fn import_meta_meta_property_lowers_to_builtin_contract_hostcall() {
+    let ops = lower_expr_to_ir1(Expression::ImportMeta).expect("import.meta should lower");
+    assert!(
+        ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::HostCall {
+                capability,
+                arg_count: 0
+            } if capability == "builtin:ImportMeta"
+        )),
+        "import.meta should lower through the capability-gated typed contract hostcall"
+    );
 }
 
 mod class_runtime_execution_tests {
@@ -344,10 +376,10 @@ mod class_runtime_execution_tests {
     /// Returns the interpreter `ExecutionResult`, or a stage-labelled error string
     /// (`parse:` / `ir0->ir1:` / ... / `execute:`) so a regression surfaces with its
     /// failing stage.
-    fn run_source(source: &str) -> Result<ExecutionResult, String> {
+    fn run_source_with_goal(source: &str, goal: ParseGoal) -> Result<ExecutionResult, String> {
         let parser = CanonicalEs2020Parser;
         let tree = parser
-            .parse(source, ParseGoal::Script)
+            .parse(source, goal)
             .map_err(|e| format!("parse: {e:?}"))?;
         let ir0 = Ir0Module::from_syntax_tree(tree, "class-features-runtime");
         let ir1 = lower_ir0_to_ir1(&ir0).map_err(|e| format!("ir0->ir1: {e:?}"))?;
@@ -369,9 +401,21 @@ mod class_runtime_execution_tests {
             .map_err(|e| format!("execute: {e:?}"))
     }
 
+    fn run_source(source: &str) -> Result<ExecutionResult, String> {
+        run_source_with_goal(source, ParseGoal::Script)
+    }
+
+    fn run_module(source: &str) -> Result<ExecutionResult, String> {
+        run_source_with_goal(source, ParseGoal::Module)
+    }
+
     /// Run source and require successful execution, returning the result.
     fn run_ok(source: &str) -> ExecutionResult {
         run_source(source).unwrap_or_else(|e| panic!("class source should execute cleanly: {e}"))
+    }
+
+    fn run_module_ok(source: &str) -> ExecutionResult {
+        run_module(source).unwrap_or_else(|e| panic!("module source should execute cleanly: {e}"))
     }
 
     /// Run source and require a fail-closed rejection, returning the error string.
@@ -383,6 +427,49 @@ mod class_runtime_execution_tests {
             ),
             Err(err) => err,
         }
+    }
+
+    fn run_module_err(source: &str) -> String {
+        match run_module(source) {
+            Ok(result) => panic!(
+                "expected a fail-closed rejection, but execution produced {:?}",
+                result.value
+            ),
+            Err(err) => err,
+        }
+    }
+
+    // -- Positive: import.meta typed contract --
+
+    #[test]
+    fn import_meta_url_resolves_to_documented_contract() {
+        let result = run_module_ok("import.meta.url;\n");
+        assert_eq!(
+            result.value,
+            Value::str("frankenengine://module/import-meta"),
+            "import.meta.url must resolve through the documented deterministic contract"
+        );
+    }
+
+    #[test]
+    fn import_meta_unknown_field_fails_closed() {
+        let err = run_module_err("import.meta.env;\n");
+        assert!(
+            err.starts_with("execute:")
+                && err.contains("allow-listed import.meta field")
+                && err.contains("import.meta.env"),
+            "unknown import.meta fields must fail closed with contract context, got: {err}"
+        );
+    }
+
+    #[test]
+    fn import_meta_replay_is_deterministic() {
+        let first = run_module_ok("import.meta.url;\n").value;
+        let second = run_module_ok("import.meta.url;\n").value;
+        assert_eq!(
+            first, second,
+            "re-running the same module must replay the same import.meta contract value"
+        );
     }
 
     // -- Positive: real class semantics that execute end-to-end --

@@ -618,6 +618,30 @@ impl CanonicalEvidenceEmitter {
         &self,
         request: &EvidenceEmissionRequest,
     ) -> Result<EvidenceLedger, EvidenceEmissionError> {
+        // Feature weights must be finite. serde_json serializes NaN / +Inf / -Inf
+        // all to JSON `null` (see `compute_artifact_hash_with_buffer`), so a
+        // non-finite weight would collapse otherwise-distinct evidence entries to
+        // an identical `artifact_hash` — and thus `chain_hash` — breaking the
+        // injectivity the tamper-evidence chain relies on. The underlying
+        // EvidenceLedger validator checks posterior / expected-loss / calibration
+        // finiteness but not `top_features` (true for the default `franken-evidence`
+        // crate path), so we fail closed here at the engine emission boundary
+        // before any hash is minted. Sign is unconstrained: a feature contribution
+        // may legitimately be negative.
+        let non_finite_features: Vec<String> = request
+            .top_features
+            .iter()
+            .filter(|(_, weight)| !weight.is_finite())
+            .map(|(name, weight)| {
+                format!("top_feature '{name}' weight must be finite, got {weight}")
+            })
+            .collect();
+        if !non_finite_features.is_empty() {
+            return Err(EvidenceEmissionError::ValidationFailed {
+                errors: non_finite_features,
+            });
+        }
+
         let mut builder = EvidenceLedgerBuilder::new()
             .ts_unix_ms(request.ts_unix_ms)
             .component(format!("{}:{}", COMPONENT_NAME, request.category))
@@ -1703,6 +1727,48 @@ mod tests {
             .expect("operation should succeed for valid inputs");
         let features = &em.entries()[0].ledger_entry.top_features;
         assert!(!features.is_empty());
+    }
+
+    /// Regression (fresh-eyes, RedAnchor): a non-finite `top_feature` weight must
+    /// be rejected at emission and must never reach the artifact hash. serde_json
+    /// serializes NaN / +Inf / -Inf all to JSON `null`, so without this guard the
+    /// three distinct entries below would each serialize identically and collide
+    /// to one `artifact_hash` (and thus `chain_hash`), breaking the injectivity
+    /// the tamper-evidence chain relies on. The underlying EvidenceLedger
+    /// validator (default `franken-evidence` crate path) checks posterior /
+    /// expected-loss / calibration finiteness but not `top_features`, so the guard
+    /// lives at the engine emission boundary. Sign is unconstrained: a negative
+    /// feature contribution is valid.
+    #[test]
+    fn non_finite_top_feature_weight_is_rejected_fail_closed() {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut em = emitter();
+            let mut cx = mock_cx();
+            let mut req = make_request(ActionCategory::DecisionContract, "allow");
+            req.top_features = vec![("severity".to_string(), bad)];
+            let result = em.emit(&mut cx, &req);
+            assert!(
+                matches!(result, Err(EvidenceEmissionError::ValidationFailed { .. })),
+                "non-finite top_feature weight must fail closed with ValidationFailed"
+            );
+            assert!(
+                em.entries().is_empty(),
+                "no evidence entry may be recorded when a non-finite weight is rejected"
+            );
+        }
+
+        // Finite weights — including a negative contribution — remain valid and
+        // produce a recorded entry.
+        let mut em = emitter();
+        let mut cx = mock_cx();
+        let mut req = make_request(ActionCategory::DecisionContract, "allow");
+        req.top_features = vec![
+            ("severity".to_string(), 0.8),
+            ("benign_signal".to_string(), -0.4),
+        ];
+        em.emit(&mut cx, &req)
+            .expect("finite top_feature weights (incl. negative) are valid");
+        assert_eq!(em.entries()[0].ledger_entry.top_features.len(), 2);
     }
 
     #[test]

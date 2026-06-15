@@ -854,6 +854,10 @@ mod standalone {
             action: String,
             value: f64,
         },
+        InvalidTopFeature {
+            name: String,
+            value: f64,
+        },
         CalibrationOutOfRange {
             value: f64,
         },
@@ -896,6 +900,12 @@ mod standalone {
                     write!(
                         f,
                         "expected_loss for '{action}' must be finite, got {value}"
+                    )
+                }
+                Self::InvalidTopFeature { name, value } => {
+                    write!(
+                        f,
+                        "top_feature weight for '{name}' must be finite, got {value}"
                     )
                 }
                 Self::CalibrationOutOfRange { value } => {
@@ -992,6 +1002,21 @@ mod standalone {
                     errors.push(EvidenceValidationError::NegativeExpectedLoss {
                         action: action.clone(),
                         value: loss,
+                    });
+                }
+            }
+
+            // Feature weights must be finite. serde_json serializes NaN/Inf/-Inf
+            // all to JSON `null`, so a non-finite weight would collapse distinct
+            // entries to an identical `artifact_hash` (and thus `chain_hash`),
+            // breaking the injectivity the tamper-evidence chain relies on.
+            // Sign is unconstrained: a feature contribution may legitimately be
+            // negative. Fail closed at `build()` before any hash is minted.
+            for (name, weight) in &self.top_features {
+                if !weight.is_finite() {
+                    errors.push(EvidenceValidationError::InvalidTopFeature {
+                        name: name.clone(),
+                        value: *weight,
                     });
                 }
             }

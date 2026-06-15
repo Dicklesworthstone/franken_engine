@@ -233,22 +233,41 @@ pub struct ContainmentReceipt {
     pub signature: AuthenticityHash,
 }
 
+/// Append `bytes` to `buf` with a fixed-width `u64` length prefix.
+///
+/// Variable-length fields fed into an authenticity preimage MUST be
+/// length-prefixed; otherwise two distinct field decompositions of the same
+/// concatenated byte stream produce an identical preimage (e.g.
+/// `action_id="ab", extension_id="c"` would collide with `"a", "bc"`), which
+/// makes the HMAC tag transferable between distinct receipts.
+fn append_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    buf.extend_from_slice(bytes);
+}
+
 impl ContainmentReceipt {
     /// Compute the signing preimage for this receipt.
+    ///
+    /// Every variable-length field is length-prefixed (and the evidence list
+    /// carries an explicit element count) so the preimage is an injective
+    /// encoding of the receipt — no two distinct receipts share a preimage.
     pub fn signing_preimage(&self) -> Vec<u8> {
         let mut preimage = Vec::new();
-        preimage.extend_from_slice(self.action_id.as_bytes());
-        preimage.extend_from_slice(self.extension_id.as_bytes());
+        append_len_prefixed(&mut preimage, self.action_id.as_bytes());
+        append_len_prefixed(&mut preimage, self.extension_id.as_bytes());
         preimage.extend_from_slice(&[self.action_type.severity()]);
         // Sort evidence_ids for determinism before signing.
         let mut sorted_evidence = self.evidence_ids.clone();
         sorted_evidence.sort();
+        // Explicit count, then each id length-prefixed: ["ab","c"] must not
+        // collide with ["a","bc"] or with a single id "abc".
+        preimage.extend_from_slice(&(sorted_evidence.len() as u64).to_le_bytes());
         for eid in &sorted_evidence {
-            preimage.extend_from_slice(eid.as_bytes());
+            append_len_prefixed(&mut preimage, eid.as_bytes());
         }
         preimage.extend_from_slice(&self.posterior_snapshot.to_le_bytes());
         preimage.extend_from_slice(&self.policy_version.to_le_bytes());
-        preimage.extend_from_slice(self.node_id.as_str().as_bytes());
+        append_len_prefixed(&mut preimage, self.node_id.as_str().as_bytes());
         preimage.extend_from_slice(&self.epoch.as_u64().to_le_bytes());
         preimage.extend_from_slice(&self.timestamp_ns.to_le_bytes());
         preimage.push(u8::from(self.degraded_mode));
@@ -1472,6 +1491,57 @@ mod tests {
 
         assert!(receipt.verify_signature(key));
         assert!(!receipt.verify_signature(b"wrong-key"));
+    }
+
+    #[test]
+    fn receipt_preimage_is_injective_across_field_boundaries() {
+        // Two receipts that share the *concatenation* of their variable-length
+        // fields but split it differently must NOT share a signing preimage —
+        // otherwise an HMAC tag computed for one is valid for the other.
+        let base = ContainmentReceipt {
+            action_id: "ab".into(),
+            extension_id: "c".into(),
+            action_type: ContainmentAction::Sandbox,
+            evidence_ids: vec!["trace-1".into()],
+            posterior_snapshot: 300_000,
+            policy_version: 1,
+            node_id: test_node("local"),
+            epoch: SecurityEpoch::from_raw(1),
+            timestamp_ns: 1_000_000_000,
+            degraded_mode: false,
+            escalation_depth: 0,
+            signature: AuthenticityHash::compute_keyed(b"placeholder", b"placeholder"),
+        };
+
+        // action_id/extension_id boundary shift: "ab"/"c" vs "a"/"bc".
+        let shifted = ContainmentReceipt {
+            action_id: "a".into(),
+            extension_id: "bc".into(),
+            ..base.clone()
+        };
+        assert_ne!(base.signing_preimage(), shifted.signing_preimage());
+
+        // evidence-list shape ambiguity: ["ab","c"] (two ids) vs ["abc"] (one).
+        let two_ids = ContainmentReceipt {
+            evidence_ids: vec!["ab".into(), "c".into()],
+            ..base.clone()
+        };
+        let one_id = ContainmentReceipt {
+            evidence_ids: vec!["abc".into()],
+            ..base.clone()
+        };
+        assert_ne!(two_ids.signing_preimage(), one_id.signing_preimage());
+
+        // And a forged-tag transfer is rejected end-to-end.
+        let key = b"fleet-key";
+        let mut signed = base.clone();
+        signed.signature = AuthenticityHash::compute_keyed(key, &signed.signing_preimage());
+        let forged = ContainmentReceipt {
+            signature: signed.signature.clone(),
+            ..shifted
+        };
+        assert!(signed.verify_signature(key));
+        assert!(!forged.verify_signature(key));
     }
 
     #[test]

@@ -1013,11 +1013,24 @@ fn falsification_hook(
     }
 }
 
+/// Append a variable-length field to a `Sha256` preimage with a fixed-width
+/// `u64` length prefix, so adjacent variable-length fields cannot be re-split
+/// into a colliding decomposition. Cf. commits 7f500570 / 1d3e0542.
+fn hash_field(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+
 fn predicate_hash(assumption_id: &str, dependencies: &BTreeSet<String>) -> String {
+    // The predicate hash is an assumption identity, so its preimage must be
+    // injective. Bare-concatenating `assumption_id` with the dependency strings
+    // (no length prefix, no count) collided — e.g. `("a", {"b","c"})` and
+    // `("ab", {"c"})` both hashed `abc`. Length- and count-prefix every field.
     let mut hasher = Sha256::new();
-    hasher.update(assumption_id.as_bytes());
+    hash_field(&mut hasher, assumption_id.as_bytes());
+    hasher.update((dependencies.len() as u64).to_le_bytes());
     for dependency in dependencies {
-        hasher.update(dependency.as_bytes());
+        hash_field(&mut hasher, dependency.as_bytes());
     }
     format!("sha256:{}", hex::encode(hasher.finalize()))
 }
@@ -1028,8 +1041,22 @@ mod tests {
 
     use super::{
         SEMANTIC_TWIN_SCHEMA_VERSION, SemanticTwinSpecification, TwinMeasurementContract,
-        TwinSpecError, TwinStateSnapshot,
+        TwinSpecError, TwinStateSnapshot, predicate_hash,
     };
+
+    #[test]
+    fn predicate_hash_is_injective_across_dependency_boundary() {
+        // bd-jxzft: assumption_id and the dependency set were bare-concatenated
+        // with no length or count prefix, so ("a", {"b","c"}) and ("ab", {"c"})
+        // both hashed "abc". Length- and count-prefixing pins them apart.
+        let deps_ab: BTreeSet<String> = ["b".to_string(), "c".to_string()].into_iter().collect();
+        let deps_c: BTreeSet<String> = ["c".to_string()].into_iter().collect();
+        assert_ne!(
+            predicate_hash("a", &deps_ab),
+            predicate_hash("ab", &deps_c),
+            "assumption_id / dependency boundary must not collide"
+        );
+    }
 
     #[test]
     fn default_spec_is_valid_and_identified() {

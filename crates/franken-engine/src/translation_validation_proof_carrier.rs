@@ -210,11 +210,12 @@ impl TranslationValidationProof {
         validation_timestamp_ns: u64,
         zone: &str,
     ) -> Result<EngineObjectId, crate::engine_object_id::IdError> {
+        // Length-prefix the digests (reusing the module helper) instead of
+        // `|`-delimiting: a `|` inside a digest would otherwise let two distinct
+        // (source, target) pairs derive the same proof id.
         let mut canonical = Vec::new();
-        canonical.extend_from_slice(source_code_digest.as_bytes());
-        canonical.push(b'|');
-        canonical.extend_from_slice(target_code_digest.as_bytes());
-        canonical.push(b'|');
+        append_str(&mut canonical, source_code_digest);
+        append_str(&mut canonical, target_code_digest);
         canonical.extend_from_slice(&validation_timestamp_ns.to_be_bytes());
 
         let schema_id =
@@ -723,9 +724,12 @@ impl TranslationValidationEngine {
         // specs being compared — not a placeholder string.
         let test_case_digest = {
             use sha2::{Digest, Sha256};
+            // Length-prefix the two digests instead of `|`-joining so distinct
+            // (source, target) pairs cannot collide to the same test-case digest.
             let mut hasher = Sha256::new();
+            hasher.update((source_spec.code_digest.len() as u64).to_be_bytes());
             hasher.update(source_spec.code_digest.as_bytes());
-            hasher.update(b"|");
+            hasher.update((target_spec.code_digest.len() as u64).to_be_bytes());
             hasher.update(target_spec.code_digest.as_bytes());
             format!("{:x}", hasher.finalize())
         };
@@ -1300,6 +1304,20 @@ mod tests {
         .expect("valid proof ID");
 
         assert_eq!(proof_id, proof_id2);
+    }
+
+    #[test]
+    fn test_derive_proof_id_injective_across_digest_boundary() {
+        // ("a|","b") and ("a","|b") share the concatenation of the two digests
+        // but are distinct (source, target) pairs; length-prefixing must keep
+        // their derived proof ids apart (the `|`-delimiter boundary collision).
+        let ts = 1234567890_000_000_000u64;
+        let zone = "test_zone";
+        let a = TranslationValidationProof::derive_proof_id("a|", "b", ts, zone)
+            .expect("valid proof ID");
+        let b = TranslationValidationProof::derive_proof_id("a", "|b", ts, zone)
+            .expect("valid proof ID");
+        assert_ne!(a, b);
     }
 
     #[test]

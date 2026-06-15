@@ -26,6 +26,13 @@ use crate::global_coherence_checker::{
 };
 use crate::hash_tiers::ContentHash;
 
+/// Append `bytes` to `buf` with a fixed-width `u32` length prefix so adjacent
+/// variable-length fields cannot fuse and let distinct inputs share a hash.
+fn append_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+    buf.extend_from_slice(bytes);
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -121,16 +128,12 @@ impl FallbackAction {
         let mut canonical = Vec::new();
         // Length-prefix all variable-length strings to prevent delimiter
         // collisions (e.g. component containing ',' fusing with next).
-        let kind_bytes = format!("{kind}");
-        canonical.extend_from_slice(&(kind_bytes.len() as u32).to_le_bytes());
-        canonical.extend_from_slice(kind_bytes.as_bytes());
+        append_len_prefixed(&mut canonical, format!("{kind}").as_bytes());
         canonical.extend_from_slice(&(target_components.len() as u32).to_le_bytes());
         for comp in target_components {
-            canonical.extend_from_slice(&(comp.len() as u32).to_le_bytes());
-            canonical.extend_from_slice(comp.as_bytes());
+            append_len_prefixed(&mut canonical, comp.as_bytes());
         }
-        canonical.extend_from_slice(&(description.len() as u32).to_le_bytes());
-        canonical.extend_from_slice(description.as_bytes());
+        append_len_prefixed(&mut canonical, description.as_bytes());
         ContentHash::compute(&canonical)
     }
 }
@@ -1244,25 +1247,24 @@ impl ObstructionCertifier {
         witness_fragments: &[WitnessFragment],
         kind_tag: &str,
     ) -> ContentHash {
+        // Length-prefix all variable-length strings and count every collection,
+        // mirroring `compute_rationale_hash`. The previous `,`/`/`/`:`/`;`
+        // delimiters were collision-prone: a witness component containing `,`
+        // (or a fragment field containing the field delimiters) would fuse with
+        // its neighbour and let distinct certificates share a hash.
         let mut canonical = Vec::new();
-        canonical.extend_from_slice(OBSTRUCTION_CERT_SCHEMA_VERSION.as_bytes());
-        canonical.push(b'|');
-        canonical.extend_from_slice(format!("{violation_id}").as_bytes());
-        canonical.push(b'|');
-        canonical.extend_from_slice(kind_tag.as_bytes());
-        canonical.push(b'|');
+        append_len_prefixed(&mut canonical, OBSTRUCTION_CERT_SCHEMA_VERSION.as_bytes());
+        append_len_prefixed(&mut canonical, format!("{violation_id}").as_bytes());
+        append_len_prefixed(&mut canonical, kind_tag.as_bytes());
+        canonical.extend_from_slice(&(witness_components.len() as u32).to_le_bytes());
         for comp in witness_components {
-            canonical.extend_from_slice(comp.as_bytes());
-            canonical.push(b',');
+            append_len_prefixed(&mut canonical, comp.as_bytes());
         }
-        canonical.push(b'|');
+        canonical.extend_from_slice(&(witness_fragments.len() as u32).to_le_bytes());
         for frag in witness_fragments {
-            canonical.extend_from_slice(frag.component_id.as_bytes());
-            canonical.push(b'/');
-            canonical.extend_from_slice(frag.contract_aspect.as_bytes());
-            canonical.push(b':');
-            canonical.extend_from_slice(frag.contract_value.as_bytes());
-            canonical.push(b';');
+            append_len_prefixed(&mut canonical, frag.component_id.as_bytes());
+            append_len_prefixed(&mut canonical, frag.contract_aspect.as_bytes());
+            append_len_prefixed(&mut canonical, frag.contract_value.as_bytes());
         }
         ContentHash::compute(&canonical)
     }

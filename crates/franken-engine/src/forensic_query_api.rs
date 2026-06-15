@@ -881,12 +881,24 @@ impl ForensicQueryEngine {
 
     /// Compute cache key for a query.
     fn compute_cache_key(&self, query: &ForensicQuery) -> Result<String, QueryError> {
-        // Simple cache key based on query content
+        // Cache key based on query content. Length-prefix each variable field so
+        // a boundary shift between query_id and the serialized type/target cannot
+        // alias two distinct queries onto the same cache entry (returning a stale
+        // result for the wrong query).
         let mut hash_data = Vec::new();
-
-        hash_data.extend_from_slice(query.query_id.as_bytes());
-        hash_data.extend_from_slice(serde_json::to_string(&query.query_type)?.as_bytes());
-        hash_data.extend_from_slice(serde_json::to_string(&query.target)?.as_bytes());
+        let append = |buf: &mut Vec<u8>, bytes: &[u8]| {
+            buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+            buf.extend_from_slice(bytes);
+        };
+        append(&mut hash_data, query.query_id.as_bytes());
+        append(
+            &mut hash_data,
+            serde_json::to_string(&query.query_type)?.as_bytes(),
+        );
+        append(
+            &mut hash_data,
+            serde_json::to_string(&query.target)?.as_bytes(),
+        );
 
         let hash = ContentHash::compute(&hash_data);
         Ok(format!(

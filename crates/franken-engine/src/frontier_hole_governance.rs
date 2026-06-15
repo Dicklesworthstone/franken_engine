@@ -21,6 +21,24 @@ use crate::hash_tiers::ContentHash;
 use crate::runtime_config::{GovernanceConfig as RuntimeGovernanceConfig, RuntimeConfig};
 use crate::security_epoch::SecurityEpoch;
 
+/// Append a variable-length field to a `Sha256` content-hash preimage with a
+/// fixed-width `u64` length prefix.
+///
+/// Content/seal hashes in this module commit to the identity of a value, so
+/// their preimages must be injective: distinct field tuples must never share a
+/// preimage. Separating adjacent variable-length fields with a byte delimiter
+/// (`|`, `=`, ...) is *not* injective whenever a field can legally contain the
+/// delimiter — e.g. `ids = ["a|blk:b"]` and `ids = ["a", "b"]` both serialize
+/// to `|blk:a|blk:b`, letting two distinct inputs forge an identical hash.
+/// Length-prefixing every variable-length field (and count-prefixing every
+/// collection) removes that ambiguity. Fixed-width fields (`u64`/`u32` via
+/// `to_le_bytes`, single-byte booleans) are already self-delimiting and need no
+/// prefix. Cf. the same fix applied crate-wide in commits 7f500570 / 1d3e0542.
+fn hash_field(h: &mut Sha256, bytes: &[u8]) {
+    h.update((bytes.len() as u64).to_le_bytes());
+    h.update(bytes);
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -103,20 +121,16 @@ impl SupportBoundary {
     pub fn content_hash(&self) -> ContentHash {
         let mut h = Sha256::new();
         h.update(b"support_boundary:");
-        h.update(self.surface.as_bytes());
-        h.update(b"|full:");
+        hash_field(&mut h, self.surface.as_bytes());
         h.update(if self.fully_supported { b"1" } else { b"0" });
-        h.update(b"|cov:");
         h.update(self.coverage_millionths.to_le_bytes());
-        h.update(b"|pers:");
         h.update(self.persistent_holes.to_le_bytes());
-        h.update(b"|struct:");
         h.update(self.structural_holes.to_le_bytes());
         let mut sorted_ids: Vec<_> = self.blocking_hole_ids.iter().collect();
         sorted_ids.sort();
+        h.update((sorted_ids.len() as u64).to_le_bytes());
         for id in &sorted_ids {
-            h.update(b"|blk:");
-            h.update(id.as_bytes());
+            hash_field(&mut h, id.as_bytes());
         }
         ContentHash::compute(&h.finalize())
     }
@@ -207,14 +221,10 @@ impl GovernanceHoleEntry {
     pub fn content_hash(&self) -> ContentHash {
         let mut h = Sha256::new();
         h.update(b"gov_hole_entry:");
-        h.update(self.hole_id.as_bytes());
-        h.update(b"|surf:");
-        h.update(self.surface.as_bytes());
-        h.update(b"|pers:");
+        hash_field(&mut h, self.hole_id.as_bytes());
+        hash_field(&mut h, self.surface.as_bytes());
         h.update(if self.is_persistent { b"1" } else { b"0" });
-        h.update(b"|struct:");
         h.update(if self.is_structural { b"1" } else { b"0" });
-        h.update(b"|pmil:");
         h.update(self.persistence_millionths.to_le_bytes());
         ContentHash::compute(&h.finalize())
     }
@@ -331,16 +341,12 @@ impl RatchetState {
     pub fn seal(&mut self) {
         let mut h = Sha256::new();
         h.update(b"ratchet_state:");
-        h.update(b"|overall:");
         h.update(self.overall_level_millionths.to_le_bytes());
-        h.update(b"|ep:");
         h.update(self.last_epoch.as_u64().to_le_bytes());
-        h.update(b"|init:");
         h.update(if self.initialized { b"1" } else { b"0" });
+        h.update((self.surface_levels.len() as u64).to_le_bytes());
         for (k, v) in &self.surface_levels {
-            h.update(b"|s:");
-            h.update(k.as_bytes());
-            h.update(b"=");
+            hash_field(&mut h, k.as_bytes());
             h.update(v.to_le_bytes());
         }
         self.content_hash = ContentHash::compute(&h.finalize());
@@ -380,20 +386,16 @@ impl GovernanceDecision {
     pub fn seal(&mut self) {
         let mut h = Sha256::new();
         h.update(b"governance_decision:");
-        h.update(self.decision_id.as_bytes());
-        h.update(b"|cat:");
-        h.update(format!("{}", self.claim_category).as_bytes());
-        h.update(b"|surf:");
-        h.update(self.surface.as_bytes());
-        h.update(b"|act:");
-        h.update(format!("{}", self.action).as_bytes());
-        h.update(b"|sev:");
-        h.update(format!("{}", self.max_severity).as_bytes());
+        hash_field(&mut h, self.decision_id.as_bytes());
+        hash_field(&mut h, format!("{}", self.claim_category).as_bytes());
+        hash_field(&mut h, self.surface.as_bytes());
+        hash_field(&mut h, format!("{}", self.action).as_bytes());
+        hash_field(&mut h, format!("{}", self.max_severity).as_bytes());
         let mut sorted_reasons = self.reasons.clone();
         sorted_reasons.sort();
+        h.update((sorted_reasons.len() as u64).to_le_bytes());
         for r in &sorted_reasons {
-            h.update(b"|r:");
-            h.update(r.as_bytes());
+            hash_field(&mut h, r.as_bytes());
         }
         self.content_hash = ContentHash::compute(&h.finalize());
     }
@@ -466,35 +468,30 @@ impl GovernanceReport {
     pub fn seal(&mut self) {
         let mut h = Sha256::new();
         h.update(b"governance_report:");
-        h.update(self.report_id.as_bytes());
-        h.update(b"|ep:");
+        hash_field(&mut h, self.report_id.as_bytes());
         h.update(self.epoch.as_u64().to_le_bytes());
-        h.update(b"|out:");
-        h.update(format!("{}", self.outcome).as_bytes());
-        h.update(b"|total:");
+        hash_field(&mut h, format!("{}", self.outcome).as_bytes());
         h.update(self.total_holes.to_le_bytes());
-        h.update(b"|act:");
         h.update(self.actionable_holes.to_le_bytes());
         let mut sorted_dec_hashes: Vec<_> = self.decisions.iter().map(|d| d.content_hash).collect();
         sorted_dec_hashes.sort();
+        h.update((sorted_dec_hashes.len() as u64).to_le_bytes());
         for ch in &sorted_dec_hashes {
-            h.update(b"|dec:");
             h.update(ch.as_bytes());
         }
         let mut sorted_bnd_hashes: Vec<_> =
             self.boundaries.iter().map(|b| b.content_hash()).collect();
         sorted_bnd_hashes.sort();
+        h.update((sorted_bnd_hashes.len() as u64).to_le_bytes());
         for ch in &sorted_bnd_hashes {
-            h.update(b"|bnd:");
             h.update(ch.as_bytes());
         }
         let mut sorted_mandatory = self.mandatory_experiments.clone();
         sorted_mandatory.sort();
+        h.update((sorted_mandatory.len() as u64).to_le_bytes());
         for experiment in &sorted_mandatory {
-            h.update(b"|exp:");
-            h.update(experiment.as_bytes());
+            hash_field(&mut h, experiment.as_bytes());
         }
-        h.update(b"|ratchet:");
         h.update(self.ratchet.content_hash.as_bytes());
         self.content_hash = ContentHash::compute(&h.finalize());
     }
@@ -938,24 +935,15 @@ pub fn summarize(report: &GovernanceReport) -> GovernanceSummary {
 
     let mut h = Sha256::new();
     h.update(b"gov_summary:");
-    h.update(report.report_id.as_bytes());
-    h.update(b"|ep:");
+    hash_field(&mut h, report.report_id.as_bytes());
     h.update(report.epoch.as_u64().to_le_bytes());
-    h.update(b"|out:");
-    h.update(format!("{}", report.outcome).as_bytes());
-    h.update(b"|total:");
+    hash_field(&mut h, format!("{}", report.outcome).as_bytes());
     h.update(report.total_holes.to_le_bytes());
-    h.update(b"|act:");
     h.update(report.actionable_holes.to_le_bytes());
-    h.update(b"|dec:");
     h.update(decisions_count.to_le_bytes());
-    h.update(b"|supp:");
     h.update(suppressed.to_le_bytes());
-    h.update(b"|allow:");
     h.update(allowed.to_le_bytes());
-    h.update(b"|exp:");
     h.update(mandatory_experiments_count.to_le_bytes());
-    h.update(b"|cov:");
     h.update(overall_coverage_millionths.to_le_bytes());
 
     GovernanceSummary {
@@ -1593,6 +1581,49 @@ mod tests {
         };
         let b2 = b1.clone();
         assert_eq!(b1.content_hash(), b2.content_hash());
+    }
+
+    /// bd-klvmy: content-hash preimages must be injective. Before length-prefixing,
+    /// adjacent variable-length fields were byte-delimiter-joined, so two distinct
+    /// field decompositions of the same byte stream collided to an identical hash.
+    /// These assertions pin the previously-colliding inputs to *distinct* hashes.
+    #[test]
+    fn content_hash_is_injective_across_field_boundaries() {
+        let base = SupportBoundary {
+            surface: "parser".into(),
+            fully_supported: false,
+            coverage_millionths: 0,
+            persistent_holes: 0,
+            structural_holes: 0,
+            blocking_hole_ids: vec![],
+            boundary_statement: String::new(),
+        };
+        // blocking_hole_ids: one id that contains the old "|blk:" separator vs.
+        // two ids — both old-serialized to the same "|blk:a|blk:b" suffix.
+        let one_id = SupportBoundary {
+            blocking_hole_ids: vec!["a|blk:b".into()],
+            ..base.clone()
+        };
+        let two_ids = SupportBoundary {
+            blocking_hole_ids: vec!["a".into(), "b".into()],
+            ..base.clone()
+        };
+        assert_ne!(
+            one_id.content_hash(),
+            two_ids.content_hash(),
+            "blocking_hole_ids list decomposition must not collide"
+        );
+
+        // GovernanceHoleEntry.hole_id / surface were two adjacent variable-length
+        // fields separated only by "|surf:": (hole_id="x", surface="y|surf:z")
+        // collided with (hole_id="x|surf:y", surface="z").
+        let split_a = make_hole("x", "y|surf:z", false, false);
+        let split_b = make_hole("x|surf:y", "z", false, false);
+        assert_ne!(
+            split_a.content_hash(),
+            split_b.content_hash(),
+            "hole_id/surface field boundary must not collide"
+        );
     }
 
     // --- Report ---

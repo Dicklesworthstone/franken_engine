@@ -49,6 +49,7 @@ pub mod authority_footprint;
 pub mod baseline_interpreter;
 pub mod bayesian_error_recovery;
 pub mod bayesian_posterior;
+pub mod behavioral_diff;
 pub mod benchmark_behavior_equivalence;
 pub mod benchmark_coverage_saturation;
 pub mod benchmark_coverage_saturation_gate;

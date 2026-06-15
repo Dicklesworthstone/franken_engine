@@ -291,3 +291,118 @@ fn onboard_static_package_aggregates_reports_and_bundle_events() {
         "bundle events should include mode divergence"
     );
 }
+
+#[test]
+fn diff_behavior_reports_added_authority_ifc_and_boundary_signal() {
+    let dir = tempdir().expect("tempdir");
+    let before_root = dir.path().join("pkg-v1");
+    let after_root = dir.path().join("pkg-v2");
+    fs::create_dir_all(&before_root).expect("before root");
+    fs::create_dir_all(&after_root).expect("after root");
+
+    fs::write(
+        before_root.join("index.js"),
+        "import { value } from \"./pure.js\";\nexport const out = value;\n",
+    )
+    .expect("write before index");
+    fs::write(before_root.join("pure.js"), "export const value = 1;\n").expect("write before pure");
+
+    fs::write(
+        after_root.join("index.js"),
+        "import { exfil } from \"./net.js\";\nimport { secret } from \"./env.js\";\nexport const out = [exfil, secret];\n",
+    )
+    .expect("write after index");
+    fs::write(
+        after_root.join("net.js"),
+        "export const exfil = hostcall<\"network_egress\">(\"https://example.test\");\n",
+    )
+    .expect("write after net");
+    fs::write(
+        after_root.join("env.js"),
+        "export const secret = process.env.SECRET_KEY;\n",
+    )
+    .expect("write after env");
+    let bundle = dir.path().join("diff-bundle");
+
+    let output = run_frankenctl(&[
+        "diff-behavior",
+        before_root.to_str().unwrap(),
+        after_root.to_str().unwrap(),
+        "--before-label",
+        "pkg@1.0.0",
+        "--after-label",
+        "pkg@1.0.1",
+        "--format",
+        "json",
+        "--out",
+        bundle.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "authority delta should exit 1\nstdout={}\nstderr={}",
+        stdout_string(&output),
+        stderr_string(&output)
+    );
+    let report = parse_stdout_json(&output);
+    assert_eq!(
+        report["schema_version"],
+        "franken-engine.behavioral-diff.v1"
+    );
+    assert_eq!(report["before"]["label"], "pkg@1.0.0");
+    assert_eq!(report["after"]["label"], "pkg@1.0.1");
+    assert_eq!(report["severity"], "critical");
+    assert!(
+        report["disclaimer"]
+            .as_str()
+            .unwrap()
+            .contains("not a proof of package safety"),
+        "diff report must preserve bounded signal wording"
+    );
+    assert_content_hash(&report, "report_sha256");
+
+    let added_caps = report["capability_delta"]["added"]
+        .as_array()
+        .expect("added capabilities");
+    assert!(
+        added_caps
+            .iter()
+            .any(|cap| cap["capability_tag"] == "network_egress"
+                && cap["capability"] == "NetworkEgress"),
+        "network egress addition should be reported: {added_caps:?}"
+    );
+    assert!(
+        added_caps
+            .iter()
+            .any(|cap| cap["capability_tag"] == "env_read" && cap["capability"] == "EnvRead"),
+        "env read addition should be reported: {added_caps:?}"
+    );
+
+    let ambient_added = report["ambient_authority_delta"]["added"]
+        .as_array()
+        .expect("ambient added");
+    assert!(
+        ambient_added
+            .iter()
+            .any(|entry| entry["module"] == "env.js" && entry["accessor"] == "process.env"),
+        "ambient process.env access should be reported: {ambient_added:?}"
+    );
+    assert_eq!(report["boundary_delta"]["boundary_grew"], true);
+
+    let manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(bundle.join("run_manifest.json")).unwrap())
+            .expect("run_manifest.json parses");
+    assert_eq!(manifest["report_sha256"], report["report_sha256"]);
+    assert!(bundle.join("behavior_diff_report.json").is_file());
+    assert!(bundle.join("before_intake_report.json").is_file());
+    assert!(bundle.join("after_intake_report.json").is_file());
+    let events = fs::read_to_string(bundle.join("events.jsonl")).expect("events.jsonl exists");
+    assert!(
+        events.contains("\"event\":\"diff_behavior.capability_added\""),
+        "bundle events should include capability additions"
+    );
+    assert!(
+        events.contains("\"event\":\"diff_behavior.ambient_authority_added\""),
+        "bundle events should include ambient-authority additions"
+    );
+}

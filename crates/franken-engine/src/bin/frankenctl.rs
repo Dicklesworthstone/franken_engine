@@ -16,6 +16,7 @@ use frankenengine_engine::authority_footprint::{
     AuthorityFootprintReport, analyze_authority_footprint,
 };
 use frankenengine_engine::baseline_interpreter::{ConsoleEntry, InterpreterError};
+use frankenengine_engine::behavioral_diff::{BehavioralDiffReport, diff_package_behavior};
 use frankenengine_engine::benchmark_denominator::{
     PublicationContext, PublicationGateInput, evaluate_publication_gate,
 };
@@ -143,6 +144,7 @@ enum CommandSpec {
     Compile(CompileArgs),
     Check(CheckArgs),
     Onboard(OnboardArgs),
+    DiffBehavior(DiffBehaviorArgs),
     Run(RunArgs),
     Explain(ExplainArgs),
     Doctor(Box<DoctorArgs>),
@@ -165,6 +167,7 @@ enum HelpTopic {
     Compile,
     Check,
     Onboard,
+    DiffBehavior,
     Run,
     Explain,
     Doctor,
@@ -201,6 +204,7 @@ impl HelpTopic {
             Self::Compile => compile_usage(),
             Self::Check => check_usage(),
             Self::Onboard => onboard_usage(),
+            Self::DiffBehavior => diff_behavior_usage(),
             Self::Run => run_usage(),
             Self::Explain => explain_usage(),
             Self::Doctor => doctor_usage(),
@@ -269,6 +273,20 @@ struct OnboardArgs {
     parse_goal: ParseGoal,
     format: CheckOutputFormat,
     /// Optional bundle directory for `run_manifest.json` + `events.jsonl`.
+    out: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DiffBehaviorArgs {
+    before: PathBuf,
+    after: PathBuf,
+    before_root: Option<PathBuf>,
+    after_root: Option<PathBuf>,
+    before_label: Option<String>,
+    after_label: Option<String>,
+    parse_goal: ParseGoal,
+    format: CheckOutputFormat,
+    /// Optional bundle directory for diff + per-side intake reports.
     out: Option<PathBuf>,
 }
 
@@ -1406,6 +1424,7 @@ fn run(raw_args: Vec<String>) -> Result<i32, String> {
         CommandSpec::Compile(args) => execute_compile(args),
         CommandSpec::Check(args) => execute_check(args),
         CommandSpec::Onboard(args) => execute_onboard(args),
+        CommandSpec::DiffBehavior(args) => execute_diff_behavior(args),
         CommandSpec::Run(args) => execute_run(args),
         CommandSpec::Explain(args) => execute_explain(args),
         CommandSpec::Doctor(args) => execute_doctor(*args),
@@ -1444,6 +1463,7 @@ fn parse_command(args: &[String]) -> Result<CommandSpec, String> {
         "compile" => parse_compile_command(&args[1..]),
         "check" => parse_check_command(&args[1..]),
         "onboard" => parse_onboard_command(&args[1..]),
+        "diff-behavior" => parse_diff_behavior_command(&args[1..]),
         "run" => parse_run_command(&args[1..]),
         "explain" => parse_explain_command(&args[1..]),
         "doctor" => parse_doctor_command(&args[1..]),
@@ -1471,6 +1491,9 @@ fn parse_help_command(args: &[String]) -> Result<CommandSpec, String> {
         "compile" => parse_leaf_help_topic("compile", HelpTopic::Compile, &args[1..]),
         "check" => parse_leaf_help_topic("check", HelpTopic::Check, &args[1..]),
         "onboard" => parse_leaf_help_topic("onboard", HelpTopic::Onboard, &args[1..]),
+        "diff-behavior" => {
+            parse_leaf_help_topic("diff-behavior", HelpTopic::DiffBehavior, &args[1..])
+        }
         "run" => parse_leaf_help_topic("run", HelpTopic::Run, &args[1..]),
         "explain" => parse_leaf_help_topic("explain", HelpTopic::Explain, &args[1..]),
         "doctor" => parse_leaf_help_topic("doctor", HelpTopic::Doctor, &args[1..]),
@@ -1486,7 +1509,7 @@ fn parse_help_command(args: &[String]) -> Result<CommandSpec, String> {
         "orchestrate" => parse_leaf_help_topic("orchestrate", HelpTopic::Orchestrate, &args[1..]),
         "runtime" => parse_leaf_help_topic("runtime", HelpTopic::Runtime, &args[1..]),
         other => Err(format!(
-            "unknown help topic `{other}` (expected compile|check|onboard|run|explain|doctor|verify|benchmark|replay|differential-oracle|react|gates|reports|test|synth|orchestrate|runtime)"
+            "unknown help topic `{other}` (expected compile|check|onboard|diff-behavior|run|explain|doctor|verify|benchmark|replay|differential-oracle|react|gates|reports|test|synth|orchestrate|runtime)"
         )),
     }
 }
@@ -1729,6 +1752,75 @@ fn parse_onboard_command(args: &[String]) -> Result<CommandSpec, String> {
     }))
 }
 
+fn parse_diff_behavior_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::DiffBehavior));
+    }
+
+    let mut before: Option<PathBuf> = None;
+    let mut after: Option<PathBuf> = None;
+    let mut before_root: Option<PathBuf> = None;
+    let mut after_root: Option<PathBuf> = None;
+    let mut before_label: Option<String> = None;
+    let mut after_label: Option<String> = None;
+    let mut goal = ParseGoal::Module;
+    let mut format = CheckOutputFormat::Human;
+    let mut out: Option<PathBuf> = None;
+    let mut positionals: Vec<PathBuf> = Vec::new();
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--before" => before = Some(PathBuf::from(next_arg(args, &mut index, "--before")?)),
+            "--after" => after = Some(PathBuf::from(next_arg(args, &mut index, "--after")?)),
+            "--before-root" => {
+                before_root = Some(PathBuf::from(next_arg(args, &mut index, "--before-root")?))
+            }
+            "--after-root" => {
+                after_root = Some(PathBuf::from(next_arg(args, &mut index, "--after-root")?))
+            }
+            "--before-label" => before_label = Some(next_arg(args, &mut index, "--before-label")?),
+            "--after-label" => after_label = Some(next_arg(args, &mut index, "--after-label")?),
+            "--goal" => goal = parse_goal(&next_arg(args, &mut index, "--goal")?)?,
+            "--format" => {
+                format = parse_check_output_format(&next_arg(args, &mut index, "--format")?)?
+            }
+            "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            value if !value.starts_with("--") => positionals.push(PathBuf::from(value)),
+            flag => return Err(format!("unknown diff-behavior flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    if before.is_none() {
+        before = positionals.first().cloned();
+    }
+    if after.is_none() {
+        after = positionals.get(1).cloned();
+    }
+    if positionals.len() > 2 {
+        return Err(
+            "diff-behavior accepts at most two positional paths: <before> <after>".to_string(),
+        );
+    }
+
+    let before =
+        before.ok_or_else(|| "diff-behavior requires a before package/path".to_string())?;
+    let after = after.ok_or_else(|| "diff-behavior requires an after package/path".to_string())?;
+
+    Ok(CommandSpec::DiffBehavior(DiffBehaviorArgs {
+        before,
+        after,
+        before_root,
+        after_root,
+        before_label,
+        after_label,
+        parse_goal: goal,
+        format,
+        out,
+    }))
+}
+
 fn onboard_usage() -> String {
     [
         "onboard usage:",
@@ -1759,6 +1851,33 @@ fn onboard_usage() -> String {
         "",
         "  exit codes: 0 = clean, 1 = findings present, 2 = unanalyzable (fail-closed)",
         "  --out <dir> writes a content-addressed run_manifest.json + events.jsonl bundle.",
+    ]
+    .join("\n")
+}
+
+fn diff_behavior_usage() -> String {
+    [
+        "diff-behavior usage:",
+        "  frankenctl diff-behavior <before-pkg|entry.js> <after-pkg|entry.js> [--goal module|script]",
+        "      [--before-root <dir>] [--after-root <dir>] [--before-label <label>] [--after-label <label>]",
+        "      [--format human|json] [--out <bundle-dir>]",
+        "  frankenctl diff-behavior --before <pkg> --after <pkg> [--format json]",
+        "",
+        "  Reuses `frankenctl onboard` package intake for both versions, then emits",
+        "  a content-addressed behavioral delta over the supported analyzable subset:",
+        "    - added/removed capability and hostcall tags,",
+        "    - new denied ambient-authority accesses,",
+        "    - new IFC declassification obligations or denied flows,",
+        "    - external dependency, mode-divergence, and unanalyzable-surface growth,",
+        "    - severity ranking (ProcessSpawn or NetworkEgress additions are critical).",
+        "",
+        "  This is a supply-chain signal for the supported subset, not a proof of",
+        "  package safety. External packages, dynamic import/require, native addons,",
+        "  and unanalyzable modules are listed as boundary growth instead of covered.",
+        "",
+        "  exit codes: 0 = unchanged, 1 = deltas present, 2 = unanalyzable (fail-closed)",
+        "  --out <dir> writes behavior_diff_report.json, before/after intake reports,",
+        "  run_manifest.json, and events.jsonl.",
     ]
     .join("\n")
 }
@@ -3128,6 +3247,41 @@ fn execute_onboard(args: OnboardArgs) -> Result<i32, String> {
     Ok(report.outcome().exit_code())
 }
 
+fn execute_diff_behavior(args: DiffBehaviorArgs) -> Result<i32, String> {
+    let (before_root, before_entry) =
+        resolve_package_entry(&args.before, args.before_root.as_deref())?;
+    let (after_root, after_entry) = resolve_package_entry(&args.after, args.after_root.as_deref())?;
+    let before_label = args
+        .before_label
+        .unwrap_or_else(|| args.before.display().to_string());
+    let after_label = args
+        .after_label
+        .unwrap_or_else(|| args.after.display().to_string());
+
+    let before_report =
+        onboard_package(&before_root, &before_entry, &before_label, args.parse_goal);
+    let after_report = onboard_package(&after_root, &after_entry, &after_label, args.parse_goal);
+    let report = diff_package_behavior(&before_label, &before_report, &after_label, &after_report);
+
+    if let Some(out_dir) = args.out.as_ref() {
+        write_json_file(&out_dir.join("run_manifest.json"), &report)?;
+        write_json_file(&out_dir.join("behavior_diff_report.json"), &report)?;
+        write_json_file(&out_dir.join("before_intake_report.json"), &before_report)?;
+        write_json_file(&out_dir.join("after_intake_report.json"), &after_report)?;
+        write_bytes_file(
+            &out_dir.join("events.jsonl"),
+            render_diff_behavior_events_jsonl(&report)?.as_bytes(),
+        )?;
+    }
+
+    match args.format {
+        CheckOutputFormat::Human => println!("{}", report.render_human()),
+        CheckOutputFormat::Json => print_json(&report)?,
+    }
+
+    Ok(report.outcome().exit_code())
+}
+
 /// One JSON object per actionable item (denied ambient access, IFC finding,
 /// unanalyzable module, mode-divergent edge), newline-delimited. Deterministic
 /// for a given report (the report's vectors are pre-sorted; no wall-clock).
@@ -3177,6 +3331,86 @@ fn render_onboard_events_jsonl(report: &PackageIntakeReport) -> Result<String, S
             "event": "onboard.resolution_divergence",
             "from_module": edge.from_module,
             "specifier": edge.specifier,
+        }))?;
+    }
+    Ok(lines)
+}
+
+fn render_diff_behavior_events_jsonl(report: &BehavioralDiffReport) -> Result<String, String> {
+    let mut lines = String::new();
+    let mut push = |value: serde_json::Value| -> Result<(), String> {
+        let encoded = serde_json::to_string(&value)
+            .map_err(|error| format!("failed to encode diff-behavior event: {error}"))?;
+        lines.push_str(&encoded);
+        lines.push('\n');
+        Ok(())
+    };
+
+    for capability in &report.capability_delta.added {
+        push(serde_json::json!({
+            "event": "diff_behavior.capability_added",
+            "capability_tag": &capability.capability_tag,
+            "capability": capability.capability,
+            "sites": &capability.sites,
+        }))?;
+    }
+    for capability in &report.capability_delta.removed {
+        push(serde_json::json!({
+            "event": "diff_behavior.capability_removed",
+            "capability_tag": &capability.capability_tag,
+            "capability": capability.capability,
+        }))?;
+    }
+    for finding in &report.ambient_authority_delta.added {
+        push(serde_json::json!({
+            "event": "diff_behavior.ambient_authority_added",
+            "module": &finding.module,
+            "accessor": &finding.accessor,
+            "implied_capability": finding.implied_capability,
+            "message": &finding.message,
+        }))?;
+    }
+    for finding in &report.ifc_delta.added_required_declassifications {
+        push(serde_json::json!({
+            "event": "diff_behavior.required_declassification_added",
+            "module": &finding.module,
+            "message": &finding.message,
+        }))?;
+    }
+    for finding in &report.ifc_delta.added_unsupported_flows {
+        push(serde_json::json!({
+            "event": "diff_behavior.unsupported_flow_added",
+            "module": &finding.module,
+            "message": &finding.message,
+        }))?;
+    }
+    for dep in &report.boundary_delta.added_external_dependencies {
+        push(serde_json::json!({
+            "event": "diff_behavior.external_dependency_added",
+            "specifier": &dep.specifier,
+            "sites": &dep.sites,
+        }))?;
+    }
+    for module in &report.boundary_delta.added_unanalyzable_modules {
+        push(serde_json::json!({
+            "event": "diff_behavior.unanalyzable_module_added",
+            "module": &module.module,
+            "reason": &module.reason,
+        }))?;
+    }
+    for edge in &report.boundary_delta.added_resolution_divergences {
+        push(serde_json::json!({
+            "event": "diff_behavior.resolution_divergence_added",
+            "from_module": &edge.from_module,
+            "specifier": &edge.specifier,
+            "outcomes": &edge.outcomes,
+        }))?;
+    }
+    if report.delta_count == 0 {
+        push(serde_json::json!({
+            "event": "diff_behavior.unchanged",
+            "before": &report.before.report_sha256,
+            "after": &report.after.report_sha256,
         }))?;
     }
     Ok(lines)
@@ -7409,6 +7643,8 @@ fn usage() -> String {
         "      # inferred per-span authority footprint + ambient-authority/IFC findings",
         "  frankenctl onboard <pkg-dir|entry.js> [--root <dir>] [--goal module|script] [--format human|json] [--out <bundle-dir>]",
         "      # package-level intake: manifest + capability-profile + denied-ambient + IFC + per-mode resolution",
+        "  frankenctl diff-behavior <before-pkg|entry.js> <after-pkg|entry.js> [--format human|json] [--out <bundle-dir>]",
+        "      # supply-chain behavioral delta over package authority/IFC intake reports",
         "  frankenctl run --input <source.js> --extension-id <id> [--goal script|module] [--out <report.json>]",
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
         "  frankenctl explain <bundle.json> [--format summary|json] [--out <path>] [--emit-bundle <dir>]",
@@ -7466,6 +7702,7 @@ fn command_label(command: &CommandSpec) -> &'static str {
         CommandSpec::Compile(_) => "compile",
         CommandSpec::Check(_) => "check",
         CommandSpec::Onboard(_) => "onboard",
+        CommandSpec::DiffBehavior(_) => "diff-behavior",
         CommandSpec::Run(_) => "run",
         CommandSpec::Explain(_) => "explain",
         CommandSpec::Doctor(_) => "doctor",

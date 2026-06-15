@@ -2,10 +2,10 @@
 # check_dw_authority_doc_drift.sh — DW.DOCS doc-drift guard for the E5
 # authority/intake analyzer (bd-fqlfw.5.6).
 #
-# Fails closed if the operator-facing docs (runbook + analyzed-subset doc) quote a
-# CLI surface, an exit code, a gate script, or a claim ID that no longer matches
-# the shipped source of truth. Keeps `runbooks/dw_authority_check.md` and
-# `docs/AUTHORITY_FOOTPRINT_ANALYZED_SUBSET_V1.md` honest against the code.
+# Fails closed if the operator-facing docs (the runbook, the README Command
+# Reference section, the franken-lsp setup doc, and the analyzed-subset doc) quote a
+# CLI surface, an exit code, a finding/claim ID, a gate/replay script, or a bounded
+# wording that no longer matches the shipped source of truth.
 #
 # Usage: scripts/check_dw_authority_doc_drift.sh   (exit 0 = no drift, 1 = drift)
 set -euo pipefail

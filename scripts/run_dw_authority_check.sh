@@ -7,8 +7,10 @@
 #   - authority/intake capstone assertions,
 #   - franken-lsp diagnostics/hover/code-lens protocol assertions.
 #
-# Heavy Cargo work is routed through rch, matching the franken_engine session
-# policy for shared Rust builds.
+# Heavy Cargo work is routed through rch by default, matching the franken_engine
+# session policy for shared Rust builds. Set DW_RUN_LOCAL=1 to fall back to a local
+# cargo build (e.g. when rch workers are unavailable); the gate still emits the same
+# content-addressed bundle.
 set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$script_dir/.."

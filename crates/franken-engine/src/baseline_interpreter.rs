@@ -4979,8 +4979,10 @@ impl InterpreterCore {
             _ => current_seed,
         };
         self.last_pre_run_seed = Some(seed.clone());
+        let previous_register_bytes = self.registers_memory_bytes();
+        let previous_heap_bytes = self.heap_memory_bytes();
         self.reset_execution_state_from_seed(&seed)?;
-        self.sync_estimated_memory_bytes()?;
+        self.apply_register_heap_memory_delta(previous_register_bytes, previous_heap_bytes)?;
         // perf: hot path - avoid double clone of source_label
         let entry_specifier = module.header.source_label.clone();
         self.ensure_module_record(module, &entry_specifier)?;
@@ -5096,6 +5098,9 @@ impl InterpreterCore {
 
     fn prepare_module_execution(&mut self, module_specifier: &str) -> Result<(), InterpreterError> {
         let max_regs = self.config.max_registers as usize;
+        let previous_register_bytes = self.registers_memory_bytes();
+        let previous_scope_bytes = self.scope_chain_memory_bytes();
+        let previous_call_stack_bytes = self.call_stack_memory_bytes();
         self.mutate_registers(|r| {
             r.clear();
             r.resize(max_regs, Value::Undefined);
@@ -5113,7 +5118,11 @@ impl InterpreterCore {
         self.pending_captures.clear();
         self.generated_functions.clear();
         self.current_module_specifier = Some(module_specifier.to_string());
-        self.sync_estimated_memory_bytes()?;
+        self.apply_register_scope_call_stack_memory_delta(
+            previous_register_bytes,
+            previous_scope_bytes,
+            previous_call_stack_bytes,
+        )?;
         self.inject_runtime_globals()?;
         Ok(())
     }
@@ -8350,6 +8359,26 @@ impl InterpreterCore {
         self.enforce_hook_action(hook.pre_import(&ctx, specifier))
     }
 
+    fn restore_generator_caller_state(
+        &mut self,
+        caller_ip: usize,
+        caller_register_base: usize,
+        caller_scope: Vec<ScopeFrame>,
+        previous_register_bytes: u64,
+        previous_scope_bytes: u64,
+        previous_generator_bytes: u64,
+    ) -> Result<(), InterpreterError> {
+        self.ip = caller_ip;
+        self.register_base = caller_register_base;
+        self.scope_chain.frames = caller_scope;
+        self.apply_register_scope_generator_memory_delta(
+            previous_register_bytes,
+            previous_scope_bytes,
+            previous_generator_bytes,
+        )?;
+        Ok(())
+    }
+
     /// Step a generator: resume from its saved state, run until Yield or
     /// Return, then snapshot the state back. Returns the {value, done} object.
     fn generator_next(
@@ -8388,6 +8417,10 @@ impl InterpreterCore {
         let caller_scope = self.snapshot_scope_chain()?;
         let caller_scope_bytes = Self::estimate_scope_chain_bytes(&caller_scope);
 
+        let previous_resume_register_bytes = self.registers_memory_bytes();
+        let previous_resume_scope_bytes = self.scope_chain_memory_bytes();
+        let previous_resume_generator_bytes = self.generators_memory_bytes();
+
         let (is_start, func_idx, closure_idx) = {
             let gobj = &mut self.generators[gen_id as usize];
             let is_start = gobj.phase == GeneratorPhase::SuspendedStart;
@@ -8419,7 +8452,7 @@ impl InterpreterCore {
                     )?;
                 }
                 self.scope_chain.push(self.config.max_scope_depth)?;
-                self.sync_estimated_memory_bytes()?;
+                self.apply_scope_chain_memory_delta(previous_resume_scope_bytes)?;
 
                 self.register_base = self.registers.len();
                 let req_len = self.register_base + self.config.max_registers as usize;
@@ -8430,12 +8463,16 @@ impl InterpreterCore {
             })();
 
             if let Err(err) = start_result {
-                self.ip = caller_ip;
-                self.register_base = caller_register_base;
-                self.scope_chain.frames = caller_scope;
                 let gobj = &mut self.generators[gen_id as usize];
                 gobj.phase = GeneratorPhase::SuspendedStart;
-                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                self.restore_generator_caller_state(
+                    caller_ip,
+                    caller_register_base,
+                    caller_scope,
+                    previous_resume_register_bytes,
+                    previous_resume_scope_bytes,
+                    previous_resume_generator_bytes,
+                )?;
                 return Err(err);
             }
         } else {
@@ -8459,6 +8496,11 @@ impl InterpreterCore {
                     r[saved_base + i] = val;
                 }
             });
+            self.apply_register_scope_generator_memory_delta(
+                previous_resume_register_bytes,
+                previous_resume_scope_bytes,
+                previous_resume_generator_bytes,
+            )?;
         }
 
         // bd-hoplz: clear the yield marker; the `Yield` handler re-sets it on a
@@ -8476,13 +8518,20 @@ impl InterpreterCore {
                     Ok(v) => v.clone(),
                     _ => Value::Undefined,
                 };
+                let previous_register_bytes = self.registers_memory_bytes();
+                let previous_scope_bytes = self.scope_chain_memory_bytes();
+                let previous_generator_bytes = self.generators_memory_bytes();
                 let gobj = &mut self.generators[gen_id as usize];
                 gobj.phase = GeneratorPhase::Completed;
 
-                self.ip = caller_ip;
-                self.register_base = caller_register_base;
-                self.scope_chain.frames = caller_scope;
-                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                self.restore_generator_caller_state(
+                    caller_ip,
+                    caller_register_base,
+                    caller_scope,
+                    previous_register_bytes,
+                    previous_scope_bytes,
+                    previous_generator_bytes,
+                )?;
 
                 let result_id = self.alloc_object_with_prototype(None)?;
                 self.set_object_property(result_id, "value".to_string(), return_val)?;
@@ -8495,27 +8544,41 @@ impl InterpreterCore {
                 let saved_regs: Vec<Value> =
                     self.registers[self.register_base..self.register_base + max_regs].to_vec();
 
+                let previous_register_bytes = self.registers_memory_bytes();
+                let previous_scope_bytes = self.scope_chain_memory_bytes();
+                let previous_generator_bytes = self.generators_memory_bytes();
                 let gobj = &mut self.generators[gen_id as usize];
                 gobj.saved_ip = self.ip;
                 gobj.saved_registers = saved_regs;
                 gobj.saved_register_base = self.register_base;
                 gobj.phase = GeneratorPhase::SuspendedYield;
 
-                self.ip = caller_ip;
-                self.register_base = caller_register_base;
-                self.scope_chain.frames = caller_scope;
-                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                self.restore_generator_caller_state(
+                    caller_ip,
+                    caller_register_base,
+                    caller_scope,
+                    previous_register_bytes,
+                    previous_scope_bytes,
+                    previous_generator_bytes,
+                )?;
 
                 Ok(yielded_val.clone())
             }
             Err(InterpreterError::Halted) => {
+                let previous_register_bytes = self.registers_memory_bytes();
+                let previous_scope_bytes = self.scope_chain_memory_bytes();
+                let previous_generator_bytes = self.generators_memory_bytes();
                 let gobj = &mut self.generators[gen_id as usize];
                 gobj.phase = GeneratorPhase::Completed;
 
-                self.ip = caller_ip;
-                self.register_base = caller_register_base;
-                self.scope_chain.frames = caller_scope;
-                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                self.restore_generator_caller_state(
+                    caller_ip,
+                    caller_register_base,
+                    caller_scope,
+                    previous_register_bytes,
+                    previous_scope_bytes,
+                    previous_generator_bytes,
+                )?;
 
                 let result_id = self.alloc_object_with_prototype(None)?;
                 {
@@ -8525,13 +8588,20 @@ impl InterpreterCore {
                 Ok(Value::Object(result_id))
             }
             Err(_) => {
+                let previous_register_bytes = self.registers_memory_bytes();
+                let previous_scope_bytes = self.scope_chain_memory_bytes();
+                let previous_generator_bytes = self.generators_memory_bytes();
                 let gobj = &mut self.generators[gen_id as usize];
                 gobj.phase = GeneratorPhase::Completed;
 
-                self.ip = caller_ip;
-                self.register_base = caller_register_base;
-                self.scope_chain.frames = caller_scope;
-                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                self.restore_generator_caller_state(
+                    caller_ip,
+                    caller_register_base,
+                    caller_scope,
+                    previous_register_bytes,
+                    previous_scope_bytes,
+                    previous_generator_bytes,
+                )?;
 
                 result
             }
@@ -9113,6 +9183,9 @@ impl InterpreterCore {
                         } else {
                             Value::Undefined
                         };
+                        let previous_scope_bytes = self.scope_chain_memory_bytes();
+                        let previous_closure_bytes = self.closures_memory_bytes();
+                        let previous_call_stack_bytes = self.call_stack_memory_bytes();
 
                         self.call_stack.push(CallFrame {
                             return_ip: self.ip + 1,
@@ -9144,12 +9217,16 @@ impl InterpreterCore {
 
                         if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
                             self.async_functions.pop();
-                            self.rollback_call_setup();
+                            self.rollback_call_setup_state();
                             return Err(err);
                         }
-                        if let Err(err) = self.sync_estimated_memory_bytes() {
+                        if let Err(err) = self.apply_scope_closure_call_stack_memory_delta(
+                            previous_scope_bytes,
+                            previous_closure_bytes,
+                            previous_call_stack_bytes,
+                        ) {
                             self.async_functions.pop();
-                            self.rollback_call_setup();
+                            self.rollback_call_setup_state();
                             return Err(err);
                         }
 
@@ -9289,6 +9366,9 @@ impl InterpreterCore {
                             } else {
                                 Value::Undefined
                             };
+                            let previous_scope_bytes = self.scope_chain_memory_bytes();
+                            let previous_closure_bytes = self.closures_memory_bytes();
+                            let previous_call_stack_bytes = self.call_stack_memory_bytes();
 
                             self.call_stack.push(CallFrame {
                                 return_ip: self.ip + 1,
@@ -9323,11 +9403,15 @@ impl InterpreterCore {
 
                             // Push a fresh scope for the callee's locals.
                             if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
-                                self.rollback_call_setup();
+                                self.rollback_call_setup_state();
                                 return Err(err);
                             }
-                            if let Err(err) = self.sync_estimated_memory_bytes() {
-                                self.rollback_call_setup();
+                            if let Err(err) = self.apply_scope_closure_call_stack_memory_delta(
+                                previous_scope_bytes,
+                                previous_closure_bytes,
+                                previous_call_stack_bytes,
+                            ) {
+                                self.rollback_call_setup_state();
                                 return Err(err);
                             }
 
@@ -9521,6 +9605,9 @@ impl InterpreterCore {
                             } else {
                                 None
                             };
+                        let previous_scope_bytes = self.scope_chain_memory_bytes();
+                        let previous_closure_bytes = self.closures_memory_bytes();
+                        let previous_call_stack_bytes = self.call_stack_memory_bytes();
 
                         self.call_stack.push(CallFrame {
                             return_ip: self.ip + 1,
@@ -9552,12 +9639,16 @@ impl InterpreterCore {
 
                         if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
                             self.async_functions.pop();
-                            self.rollback_call_setup();
+                            self.rollback_call_setup_state();
                             return Err(err);
                         }
-                        if let Err(err) = self.sync_estimated_memory_bytes() {
+                        if let Err(err) = self.apply_scope_closure_call_stack_memory_delta(
+                            previous_scope_bytes,
+                            previous_closure_bytes,
+                            previous_call_stack_bytes,
+                        ) {
                             self.async_functions.pop();
-                            self.rollback_call_setup();
+                            self.rollback_call_setup_state();
                             return Err(err);
                         }
 
@@ -9647,6 +9738,9 @@ impl InterpreterCore {
                     } else {
                         None
                     };
+                    let previous_scope_bytes = self.scope_chain_memory_bytes();
+                    let previous_closure_bytes = self.closures_memory_bytes();
+                    let previous_call_stack_bytes = self.call_stack_memory_bytes();
                     self.call_stack.push(CallFrame {
                         return_ip: self.ip + 1,
                         return_reg: dst,
@@ -9675,11 +9769,15 @@ impl InterpreterCore {
                         self.scope_chain.frames = env;
                     }
                     if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
-                        self.rollback_call_setup();
+                        self.rollback_call_setup_state();
                         return Err(err);
                     }
-                    if let Err(err) = self.sync_estimated_memory_bytes() {
-                        self.rollback_call_setup();
+                    if let Err(err) = self.apply_scope_closure_call_stack_memory_delta(
+                        previous_scope_bytes,
+                        previous_closure_bytes,
+                        previous_call_stack_bytes,
+                    ) {
+                        self.rollback_call_setup_state();
                         return Err(err);
                     }
 
@@ -10154,6 +10252,12 @@ impl InterpreterCore {
                     let result_values: Vec<Value> = elements.into_iter().skip(start_idx).collect();
                     let result_id = self.alloc_array_from_values(&result_values)?;
                     self.write_reg(dst, Value::Object(result_id))?;
+                    // IFC: the sliced array derives its contents from `array`
+                    // and its length from `start`, so join both source labels
+                    // onto dst (mirrors GetProperty joining the container
+                    // label). Without this, `secretArr.slice(0)` would read as
+                    // Public.
+                    self.propagate_binary_operation_label(array, start, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::SpreadIntoArray { array, iterable } => {
@@ -10403,6 +10507,15 @@ impl InterpreterCore {
                     if let Value::BuiltinFunction(builtin) = &callee_val {
                         let result = self.dispatch_builtin_function(module, builtin, args, None)?;
                         self.write_reg(dst, result)?;
+                        // IFC: a `new Builtin(...)` result derives entirely from
+                        // its argument registers, so the dst label is the join
+                        // of the arg labels — same contract as the `Call`
+                        // builtin arm. Without this, `new Array(secretLen)` /
+                        // `new String(secret)` would read as Public and leak via
+                        // a later egress hostcall (same under-tainting family as
+                        // bd-n2mjy / bd-0zybl / bd-ooaka.1).
+                        let args_label = self.join_arg_range_label(args)?;
+                        self.set_register_label(dst, args_label)?;
                         self.ip += 1;
                         continue;
                     }
@@ -10499,6 +10612,9 @@ impl InterpreterCore {
                             } else {
                                 None
                             };
+                            let previous_scope_bytes = self.scope_chain_memory_bytes();
+                            let previous_closure_bytes = self.closures_memory_bytes();
+                            let previous_call_stack_bytes = self.call_stack_memory_bytes();
                             self.call_stack.push(CallFrame {
                                 return_ip: self.ip + 1,
                                 return_reg: dst,
@@ -10530,11 +10646,15 @@ impl InterpreterCore {
                                 self.scope_chain.frames = env;
                             }
                             if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
-                                self.rollback_call_setup();
+                                self.rollback_call_setup_state();
                                 return Err(err);
                             }
-                            if let Err(err) = self.sync_estimated_memory_bytes() {
-                                self.rollback_call_setup();
+                            if let Err(err) = self.apply_scope_closure_call_stack_memory_delta(
+                                previous_scope_bytes,
+                                previous_closure_bytes,
+                                previous_call_stack_bytes,
+                            ) {
+                                self.rollback_call_setup_state();
                                 return Err(err);
                             }
 
@@ -11488,20 +11608,28 @@ impl InterpreterCore {
         }
     }
 
-    /// ECMAScript `ToInt32` for a floating-point operand (ECMA-262 §7.1.6):
-    /// truncate toward zero, reduce modulo 2^32, and reinterpret the low 32
-    /// bits as signed. Rust's `f64 as i32` cast *saturates* (since 1.45), so
-    /// every operand whose magnitude exceeds 2^31 would collapse to
-    /// `i32::MAX` — wrong for JS bitwise/shift semantics, which require
-    /// modular wrapping (e.g. `(3000000000.5) | 0` is `-1294967296`, not
-    /// `2147483647`). NaN and ±Infinity map to 0. `f64 % 2^32` via
-    /// `rem_euclid` is exact (IEEE `fmod` is exact), so this is precise for
-    /// every finite input, including magnitudes past 2^53.
-    fn js_to_int32(value: f64) -> i32 {
+    /// ECMAScript `ToUint32` for a floating-point operand (ECMA-262 §7.1.7):
+    /// truncate toward zero and reduce modulo 2^32. Rust's `f64 as u32` cast
+    /// *saturates* (since 1.45), so any operand outside `[0, 2^32)` would clamp
+    /// to `0` / `u32::MAX` instead of wrapping — wrong for JS semantics
+    /// (e.g. `Math.clz32(2**32)` is `32`, not `0`; `Math.clz32(-1.5)` is `0`,
+    /// not `32`). NaN and ±Infinity map to 0. `f64 % 2^32` via `rem_euclid` is
+    /// exact (IEEE `fmod` is exact), so this is precise for every finite input,
+    /// including magnitudes past 2^53.
+    fn js_to_uint32(value: f64) -> u32 {
         if !value.is_finite() {
             return 0;
         }
-        (value.trunc().rem_euclid(4_294_967_296.0) as u32) as i32
+        value.trunc().rem_euclid(4_294_967_296.0) as u32
+    }
+
+    /// ECMAScript `ToInt32` for a floating-point operand (ECMA-262 §7.1.6):
+    /// `ToUint32` reinterpreted as signed. Saturating `f64 as i32` would
+    /// collapse every operand whose magnitude exceeds 2^31 to `i32::MAX` —
+    /// wrong for JS bitwise/shift semantics, which require modular wrapping
+    /// (e.g. `(3000000000.5) | 0` is `-1294967296`, not `2147483647`).
+    fn js_to_int32(value: f64) -> i32 {
+        Self::js_to_uint32(value) as i32
     }
 
     fn eval_bit_not(&self, src: u32) -> Result<Value, InterpreterError> {
@@ -17901,6 +18029,10 @@ impl InterpreterCore {
 
         let snapshot = self.snapshot_module_execution();
         let saved_active_cjs_context = self.active_cjs_context.clone();
+        let setup_previous_register_bytes = self.registers_memory_bytes();
+        let setup_previous_scope_bytes = self.scope_chain_memory_bytes();
+        let setup_previous_call_stack_bytes = self.call_stack_memory_bytes();
+        let mut wrapper_memory_committed = false;
         let result = (|| -> Result<Value, InterpreterError> {
             self.registers =
                 SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
@@ -17913,7 +18045,12 @@ impl InterpreterCore {
             self.suspended_abrupt_completions.clear();
             self.finally_modes.clear();
             self.current_module_specifier = Some(module.header.source_label.clone());
-            self.sync_estimated_memory_bytes()?;
+            self.apply_register_scope_call_stack_memory_delta(
+                setup_previous_register_bytes,
+                setup_previous_scope_bytes,
+                setup_previous_call_stack_bytes,
+            )?;
+            wrapper_memory_committed = true;
             self.write_reg(0, receiver)?;
             self.write_reg(1, callee)?;
             for (index, argument) in arguments.into_iter().enumerate() {
@@ -17947,9 +18084,18 @@ impl InterpreterCore {
                 .map(|v| (v, self.pending_exception_label.clone())),
             _ => None,
         };
+        let previous_register_bytes = self.registers_memory_bytes();
+        let previous_scope_bytes = self.scope_chain_memory_bytes();
+        let previous_call_stack_bytes = self.call_stack_memory_bytes();
         self.restore_module_execution(snapshot);
         self.active_cjs_context = saved_active_cjs_context;
-        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+        if wrapper_memory_committed {
+            self.apply_register_scope_call_stack_memory_delta(
+                previous_register_bytes,
+                previous_scope_bytes,
+                previous_call_stack_bytes,
+            )?;
+        }
         if let Some((value, label)) = thrown_value {
             self.pending_exception = Some(value);
             self.pending_exception_label = label;
@@ -18004,6 +18150,10 @@ impl InterpreterCore {
 
         let snapshot = self.snapshot_module_execution();
         let saved_active_cjs_context = self.active_cjs_context.clone();
+        let setup_previous_register_bytes = self.registers_memory_bytes();
+        let setup_previous_scope_bytes = self.scope_chain_memory_bytes();
+        let setup_previous_call_stack_bytes = self.call_stack_memory_bytes();
+        let mut wrapper_memory_committed = false;
         let result = (|| -> Result<Value, InterpreterError> {
             self.registers =
                 SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
@@ -18016,7 +18166,12 @@ impl InterpreterCore {
             self.suspended_abrupt_completions.clear();
             self.finally_modes.clear();
             self.current_module_specifier = Some(module.header.source_label.clone());
-            self.sync_estimated_memory_bytes()?;
+            self.apply_register_scope_call_stack_memory_delta(
+                setup_previous_register_bytes,
+                setup_previous_scope_bytes,
+                setup_previous_call_stack_bytes,
+            )?;
+            wrapper_memory_committed = true;
             self.write_reg(0, constructor)?;
             for (index, argument) in arguments.into_iter().enumerate() {
                 let register = 1u32
@@ -18034,9 +18189,18 @@ impl InterpreterCore {
             }
             self.run_loop(&wrapper)
         })();
+        let previous_register_bytes = self.registers_memory_bytes();
+        let previous_scope_bytes = self.scope_chain_memory_bytes();
+        let previous_call_stack_bytes = self.call_stack_memory_bytes();
         self.restore_module_execution(snapshot);
         self.active_cjs_context = saved_active_cjs_context;
-        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+        if wrapper_memory_committed {
+            self.apply_register_scope_call_stack_memory_delta(
+                previous_register_bytes,
+                previous_scope_bytes,
+                previous_call_stack_bytes,
+            )?;
+        }
         result
     }
 
@@ -22682,9 +22846,14 @@ impl InterpreterCore {
                 // Iterate through all provided character codes
                 for i in 0..args.count {
                     let char_code_val = self.read_reg(args.start + i)?;
+                    // ECMA `String.fromCharCode` applies ToUint16 to each code
+                    // unit. `f64 as u32` saturates, so float operands route
+                    // through `js_to_uint32` (modular); `fromCharCode(-1.5)`
+                    // must yield code unit 0xFFFF, not 0x0000. The `& 0xFFFF`
+                    // below then completes ToUint16.
                     let char_code = match char_code_val {
                         Value::Int(n) => n as u32,
-                        Value::Float(f) => f.inner() as u32,
+                        Value::Float(f) => Self::js_to_uint32(f.inner()),
                         _ => 0, // Invalid character codes become null char
                     };
 
@@ -23437,15 +23606,19 @@ impl InterpreterCore {
                 let x_val = self.read_reg(args.start)?;
                 let y_val = self.read_reg(args.start + 1)?;
 
+                // ECMA `Math.imul` is ToUint32 on both operands, then a
+                // wrapping 32-bit signed multiply. `f64 as i32` saturates, so
+                // float operands >= 2^31 must route through `js_to_int32`
+                // (modular) — e.g. `Math.imul(2**31, 2)` is `0`, not `-2`.
                 let x = match x_val {
                     Value::Int(n) => n as i32,
-                    Value::Float(f) => f.inner() as i32,
+                    Value::Float(f) => Self::js_to_int32(f.inner()),
                     _ => 0,
                 };
 
                 let y = match y_val {
                     Value::Int(n) => n as i32,
-                    Value::Float(f) => f.inner() as i32,
+                    Value::Float(f) => Self::js_to_int32(f.inner()),
                     _ => 0,
                 };
 
@@ -24041,11 +24214,15 @@ impl InterpreterCore {
                     return Ok(Value::Int(32)); // All zeros if no argument
                 }
 
+                // ECMA `Math.clz32` is `clz` over ToUint32(x). `f64 as u32`
+                // saturates, so float/string operands must route through
+                // `js_to_uint32` (modular) — e.g. `Math.clz32(2**32)` is `32`
+                // (ToUint32 = 0), not `0`, and `Math.clz32(-1.5)` is `0`.
                 let val = self.read_reg(args.start)?;
                 let num = match val {
                     Value::Int(n) => n as u32,
-                    Value::Float(f) => f.inner() as u32,
-                    Value::Str(s) => s.parse::<f64>().unwrap_or(0.0) as u32,
+                    Value::Float(f) => Self::js_to_uint32(f.inner()),
+                    Value::Str(s) => Self::js_to_uint32(s.parse::<f64>().unwrap_or(0.0)),
                     Value::Bool(true) => 1,
                     Value::Bool(false) => 0,
                     Value::Null => 0,
@@ -27505,6 +27682,10 @@ impl InterpreterCore {
         MEMORY_ESTIMATE_GENERATOR_BASE_BYTES.saturating_add(registers)
     }
 
+    fn estimate_generators_bytes(generators: &[GeneratorObject]) -> u64 {
+        generators.iter().map(Self::estimate_generator_bytes).sum()
+    }
+
     fn estimate_closure_bytes(closure: &ClosureValue) -> u64 {
         MEMORY_ESTIMATE_CLOSURE_BASE_BYTES
             .saturating_add(Self::estimate_scope_chain_bytes(&closure.captured_env))
@@ -27512,6 +27693,14 @@ impl InterpreterCore {
 
     fn estimate_closures_bytes(closures: &[ClosureValue]) -> u64 {
         closures.iter().map(Self::estimate_closure_bytes).sum()
+    }
+
+    fn registers_memory_bytes(&self) -> u64 {
+        self.registers.iter().map(Self::estimate_value_bytes).sum()
+    }
+
+    fn heap_memory_bytes(&self) -> u64 {
+        self.heap.iter().map(Self::estimate_heap_object_bytes).sum()
     }
 
     fn scope_chain_memory_bytes(&self) -> u64 {
@@ -27527,6 +27716,10 @@ impl InterpreterCore {
             .iter()
             .map(Self::estimate_call_frame_bytes)
             .sum()
+    }
+
+    fn generators_memory_bytes(&self) -> u64 {
+        Self::estimate_generators_bytes(&self.generators)
     }
 
     fn heap_object_count_u32(&self) -> u32 {
@@ -27546,6 +27739,7 @@ impl InterpreterCore {
         }
     }
 
+    #[cfg(test)]
     fn recompute_estimated_memory_bytes(&self) -> u64 {
         self.heap
             .iter()
@@ -27571,14 +27765,10 @@ impl InterpreterCore {
                     .map(Self::estimate_iterator_bytes)
                     .sum::<u64>(),
             )
-            .saturating_add(
-                self.generators
-                    .iter()
-                    .map(Self::estimate_generator_bytes)
-                    .sum::<u64>(),
-            )
+            .saturating_add(Self::estimate_generators_bytes(&self.generators))
     }
 
+    #[cfg(test)]
     fn sync_estimated_memory_bytes(&mut self) -> Result<u64, InterpreterError> {
         let requested_bytes = self.recompute_estimated_memory_bytes();
         if requested_bytes > self.config.max_total_memory_bytes {
@@ -27609,6 +27799,18 @@ impl InterpreterCore {
         previous_scope_bytes: u64,
     ) -> Result<u64, InterpreterError> {
         self.apply_memory_component_delta(previous_scope_bytes, self.scope_chain_memory_bytes())
+    }
+
+    fn apply_register_heap_memory_delta(
+        &mut self,
+        previous_register_bytes: u64,
+        previous_heap_bytes: u64,
+    ) -> Result<u64, InterpreterError> {
+        self.apply_memory_component_delta(
+            previous_register_bytes.saturating_add(previous_heap_bytes),
+            self.registers_memory_bytes()
+                .saturating_add(self.heap_memory_bytes()),
+        )
     }
 
     fn apply_closures_memory_delta(
@@ -27643,6 +27845,38 @@ impl InterpreterCore {
             self.scope_chain_memory_bytes()
                 .saturating_add(self.closures_memory_bytes())
                 .saturating_add(self.call_stack_memory_bytes()),
+        )
+    }
+
+    fn apply_register_scope_call_stack_memory_delta(
+        &mut self,
+        previous_register_bytes: u64,
+        previous_scope_bytes: u64,
+        previous_call_stack_bytes: u64,
+    ) -> Result<u64, InterpreterError> {
+        self.apply_memory_component_delta(
+            previous_register_bytes
+                .saturating_add(previous_scope_bytes)
+                .saturating_add(previous_call_stack_bytes),
+            self.registers_memory_bytes()
+                .saturating_add(self.scope_chain_memory_bytes())
+                .saturating_add(self.call_stack_memory_bytes()),
+        )
+    }
+
+    fn apply_register_scope_generator_memory_delta(
+        &mut self,
+        previous_register_bytes: u64,
+        previous_scope_bytes: u64,
+        previous_generator_bytes: u64,
+    ) -> Result<u64, InterpreterError> {
+        self.apply_memory_component_delta(
+            previous_register_bytes
+                .saturating_add(previous_scope_bytes)
+                .saturating_add(previous_generator_bytes),
+            self.registers_memory_bytes()
+                .saturating_add(self.scope_chain_memory_bytes())
+                .saturating_add(self.generators_memory_bytes()),
         )
     }
 
@@ -27687,7 +27921,7 @@ impl InterpreterCore {
         Ok(self.scope_chain.snapshot())
     }
 
-    fn rollback_call_setup(&mut self) {
+    fn rollback_call_setup_state(&mut self) {
         if let Some(frame) = self.call_stack.pop() {
             self.pending_exception = frame.saved_pending_exception;
             self.pending_exception_label = frame.saved_pending_exception_label;
@@ -27703,7 +27937,24 @@ impl InterpreterCore {
                 }
             }
         }
-        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+    }
+
+    fn rollback_call_setup(&mut self) {
+        let previous_scope_bytes = self.scope_chain_memory_bytes();
+        let previous_closure_bytes = self.closures_memory_bytes();
+        let previous_call_stack_bytes = self.call_stack_memory_bytes();
+        self.rollback_call_setup_state();
+        let previous_component_bytes = previous_scope_bytes
+            .saturating_add(previous_closure_bytes)
+            .saturating_add(previous_call_stack_bytes);
+        let next_component_bytes = self
+            .scope_chain_memory_bytes()
+            .saturating_add(self.closures_memory_bytes())
+            .saturating_add(self.call_stack_memory_bytes());
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_component_bytes)
+            .saturating_add(next_component_bytes);
     }
 
     fn alloc_array_buffer_object(
@@ -33215,6 +33466,93 @@ mod async_runtime_tests_current {
         );
     }
 
+    /// IFC: `new Builtin(secret)` must taint the constructed value at least
+    /// Secret. The `Construct` builtin arm wrote the result via `write_reg`
+    /// but — unlike the byte-identical `Call` builtin arm — never joined the
+    /// argument labels onto the dst, so a constructed value laundered Secret
+    /// args to a stale Public dst. Constructor sibling of bd-n2mjy / bd-ooaka.1.
+    #[test]
+    fn construct_builtin_joins_arg_label_onto_dst() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Construct {
+                    callee: 3,
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 2,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+
+        let mut core = test_interpreter();
+        core.mutate_registers(|r| {
+            r[0] = Value::Int(42);
+            // `IteratorSelf` is a guaranteed-Ok, no-receiver builtin; the
+            // specific builtin is irrelevant — we exercise the arm's label join.
+            r[3] = Value::BuiltinFunction(BuiltinFunction::iterator_self(0));
+        });
+        core.set_register_label(0, crate::ifc_artifacts::Label::Secret)
+            .expect("arg label should be settable");
+        // Seed dst strictly below Secret to prove the construct raises it.
+        core.set_register_label(2, crate::ifc_artifacts::Label::Public)
+            .expect("dst label should be settable");
+
+        core.execute(&module)
+            .expect("constructing a builtin should execute");
+
+        assert_eq!(
+            core.get_register_label(2)
+                .expect("dst register label should exist"),
+            &crate::ifc_artifacts::Label::Secret,
+            "Construct-builtin dst must inherit (join) the args' labels"
+        );
+    }
+
+    /// IFC: slicing a Secret array must taint the resulting array at least
+    /// Secret. The dedicated `ArraySlice` opcode built a fresh array from the
+    /// source's elements but never propagated the source label, so
+    /// `secretArr.slice(0)` laundered to a Public dst. `GetProperty` joins the
+    /// container label for exactly this reason; the slice is analogous.
+    #[test]
+    fn array_slice_propagates_source_array_label_onto_dst() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::ArraySlice {
+                    array: 0,
+                    start: 1,
+                    dst: 2,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+
+        let mut core = test_interpreter();
+        let arr = core
+            .alloc_array_from_values(&[Value::Int(1), Value::Int(2), Value::Int(3)])
+            .expect("test array allocation should succeed");
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(arr);
+            r[1] = Value::Int(0);
+        });
+        core.set_register_label(0, crate::ifc_artifacts::Label::Secret)
+            .expect("array label should be settable");
+        // Seed dst strictly below Secret to prove the slice raises it.
+        core.set_register_label(2, crate::ifc_artifacts::Label::Public)
+            .expect("dst label should be settable");
+
+        core.execute(&module)
+            .expect("slicing a secret array should execute");
+
+        assert_eq!(
+            core.get_register_label(2)
+                .expect("dst register label should exist"),
+            &crate::ifc_artifacts::Label::Secret,
+            "ArraySlice dst must inherit (join) the source array's label"
+        );
+    }
+
     /// bd-0zybl: the label propagation is a JOIN, not a bare overwrite — a dst
     /// already carrying higher taint than the object must not be lowered by a
     /// property read (over-taint is safe; under-taint is the security bug).
@@ -38587,6 +38925,86 @@ mod tests {
     }
 
     #[test]
+    fn rollback_call_setup_updates_call_components_incrementally() {
+        let config = test_quickjs_config();
+        let mut core = InterpreterCore::new(config, "rollback-call-memory-delta");
+        core.scope_chain
+            .current_mut()
+            .expect("current scope should exist")
+            .declare("payload".to_string(), BindingKind::Let);
+        {
+            let binding = core
+                .scope_chain
+                .current_mut()
+                .expect("current scope should exist")
+                .get_mut("payload")
+                .expect("declared binding should exist");
+            binding.value = Value::str("caller payload");
+            binding.initialized = true;
+        }
+        let saved_scope = core.scope_chain.snapshot();
+        core.closures.push(ClosureValue {
+            function_index: 7,
+            captured_env: saved_scope.clone(),
+        });
+
+        {
+            let binding = core
+                .scope_chain
+                .current_mut()
+                .expect("current scope should exist")
+                .get_mut("payload")
+                .expect("declared binding should exist");
+            binding.value = Value::str("callee setup payload that must roll back");
+            binding.initialized = true;
+        }
+        core.suspended_abrupt_completions
+            .push(AbruptCompletion::Return(Value::str("inner")));
+        core.finally_modes.push(FinallyMode::Return);
+        core.call_stack.push(CallFrame {
+            return_ip: 909,
+            return_reg: 0,
+            register_base: 8,
+            function_index: Some(7),
+            this_value: Value::str("receiver"),
+            new_target_value: Value::Undefined,
+            super_value: Value::Undefined,
+            construct_this: None,
+            saved_pending_exception: Some(Value::str("outer error")),
+            saved_pending_exception_label: Label::Public,
+            saved_pending_return: None,
+            saved_suspended_abrupt_depth: 0,
+            saved_finally_mode_depth: 0,
+            saved_scope_depth: saved_scope.len(),
+            saved_scope_chain: Some(saved_scope),
+            closure_id: Some(0),
+            captured_scope_depth: 1,
+            async_function_id: None,
+        });
+        core.sync_estimated_memory_bytes()
+            .expect("seed rollback call-frame state should fit memory budget");
+
+        core.rollback_call_setup();
+
+        assert!(core.call_stack.is_empty());
+        assert!(core.suspended_abrupt_completions.is_empty());
+        assert!(core.finally_modes.is_empty());
+        assert_eq!(core.pending_exception, Some(Value::str("outer error")));
+        let restored_payload = core
+            .scope_chain
+            .frames
+            .last()
+            .and_then(|frame| frame.get("payload"))
+            .map(|binding| binding.value.clone());
+        assert_eq!(restored_payload, Some(Value::str("caller payload")));
+        assert_eq!(
+            core.recompute_estimated_memory_bytes(),
+            core.estimated_memory_bytes,
+            "rollback deltas must match full recompute"
+        );
+    }
+
+    #[test]
     fn new_object_instruction_returns_memory_budget_exceeded() {
         let mut config = InterpreterConfig::quickjs_defaults();
         config.max_heap_objects = 0;
@@ -38852,6 +39270,162 @@ mod tests {
         assert_eq!(
             result_object.properties.get("value"),
             Some(&Value::str(payload))
+        );
+    }
+
+    #[test]
+    fn generator_next_updates_memory_incrementally() {
+        let mut module = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 0,
+                },
+                Ir3Instruction::Yield {
+                    value: 0,
+                    delegate: false,
+                    resume_dst: 1,
+                },
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 1,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec!["yield-payload".to_string(), "return-payload".to_string()],
+        );
+        module.function_table.push(Ir3FunctionDesc {
+            entry: 0,
+            arity: 0,
+            frame_size: 4,
+            name: Some("memory_delta_generator".to_string()),
+            is_generator: true,
+            rest_param_index: None,
+        });
+
+        let mut core = InterpreterCore::new(test_quickjs_config(), "generator-memory-delta");
+        core.generators.push(GeneratorObject {
+            function_index: 0,
+            closure_index: None,
+            saved_ip: 0,
+            saved_registers: Vec::new(),
+            saved_register_base: 0,
+            phase: GeneratorPhase::SuspendedStart,
+        });
+        core.sync_estimated_memory_bytes()
+            .expect("seed generator object should fit memory budget");
+
+        let first = core
+            .generator_next(&module, 0, Value::Undefined)
+            .expect("initial generator resume should yield");
+        assert_eq!(core.generators[0].phase, GeneratorPhase::SuspendedYield);
+        assert_eq!(
+            core.recompute_estimated_memory_bytes(),
+            core.estimated_memory_bytes,
+            "yield suspension deltas must match full recompute"
+        );
+        let Value::Object(first_result_id) = first else {
+            panic!("expected first generator.next() to return a result object");
+        };
+        let first_result = &core.heap[first_result_id.0 as usize];
+        assert_eq!(
+            first_result.properties.get("value"),
+            Some(&Value::str("yield-payload"))
+        );
+        assert_eq!(
+            first_result.properties.get("done"),
+            Some(&Value::Bool(false))
+        );
+
+        let second = core
+            .generator_next(&module, 0, Value::Undefined)
+            .expect("second generator resume should complete");
+        assert_eq!(core.generators[0].phase, GeneratorPhase::Completed);
+        assert_eq!(
+            core.recompute_estimated_memory_bytes(),
+            core.estimated_memory_bytes,
+            "completion deltas must match full recompute"
+        );
+        let Value::Object(second_result_id) = second else {
+            panic!("expected second generator.next() to return a result object");
+        };
+        let second_result = &core.heap[second_result_id.0 as usize];
+        assert_eq!(
+            second_result.properties.get("value"),
+            Some(&Value::str("return-payload"))
+        );
+        assert_eq!(
+            second_result.properties.get("done"),
+            Some(&Value::Bool(true))
+        );
+    }
+
+    #[test]
+    fn inline_wrappers_restore_memory_incrementally() {
+        let mut module = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 0,
+                },
+                Ir3Instruction::Return { value: 0 },
+                Ir3Instruction::LoadThis { dst: 0 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec!["method-result".to_string()],
+        );
+        module.function_table.extend([
+            Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 2,
+                name: Some("inline_method_target".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            },
+            Ir3FunctionDesc {
+                entry: 2,
+                arity: 0,
+                frame_size: 2,
+                name: Some("inline_construct_target".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            },
+        ]);
+
+        let mut core = InterpreterCore::new(test_quickjs_config(), "inline-wrapper-memory");
+        core.sync_estimated_memory_bytes()
+            .expect("empty interpreter state should fit memory budget");
+
+        let method_result = core
+            .invoke_inline_method_call(
+                Some(&module),
+                Value::Function(0),
+                Value::Undefined,
+                Vec::new(),
+            )
+            .expect("inline method wrapper should execute");
+        assert_eq!(method_result, Value::str("method-result"));
+        assert_eq!(
+            core.recompute_estimated_memory_bytes(),
+            core.estimated_memory_bytes,
+            "method wrapper restore delta must match full recompute"
+        );
+
+        let construct_result = core
+            .invoke_inline_construct(Some(&module), Value::Function(1), Vec::new())
+            .expect("inline construct wrapper should execute");
+        let Value::Object(constructed_id) = construct_result else {
+            panic!("inline construct wrapper should return constructed object");
+        };
+        assert_eq!(
+            core.heap[constructed_id.0 as usize].constructor_function,
+            Some(1)
+        );
+        assert_eq!(
+            core.recompute_estimated_memory_bytes(),
+            core.estimated_memory_bytes,
+            "construct wrapper restore delta must match full recompute"
         );
     }
 

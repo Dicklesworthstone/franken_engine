@@ -88,6 +88,26 @@ fn string_from_char_code() {
 }
 
 #[test]
+fn math_and_string_builtins_use_modular_float_coercion() {
+    // ECMA `Math.imul`/`Math.clz32`/`String.fromCharCode` apply modular
+    // ToInt32/ToUint32/ToUint16 to their operands. Rust's `f64 as i32`/`as u32`
+    // *saturates*, so before the fix any float operand outside the 32-bit range
+    // clamped instead of wrapping. These cases all exercise the float branch.
+
+    // Math.imul: ToUint32(2**31)=2147483648 -> int32 -2147483648; *2 wraps to 0
+    // (saturating gave i32::MAX*2 wrapping = -2).
+    assert_eq!(eval("Math.imul(2147483648.5, 2);"), "0");
+
+    // Math.clz32: ToUint32(2**32)=0 -> clz32(0)=32 (saturating gave clz32(MAX)=0).
+    assert_eq!(eval("Math.clz32(4294967296.5);"), "32");
+    // Math.clz32(-1.5): ToUint32=0xFFFFFFFF -> clz32=0 (saturating gave 0->32).
+    assert_eq!(eval("Math.clz32(-1.5);"), "0");
+
+    // String.fromCharCode: ToUint16(-1.5)=0xFFFF (saturating gave 0x0000).
+    assert_eq!(eval("String.fromCharCode(-1.5).charCodeAt(0);"), "65535");
+}
+
+#[test]
 fn static_globals_are_shadowable() {
     // A user binding named `Object` must NOT be reinterpreted as the global.
     assert_eq!(

@@ -2,10 +2,9 @@ import Lake
 open Lake DSL
 
 package «frankenengine-ifc-proofs» where
-  version := v!"0.1.0"
 
 require mathlib from git
-  "https://github.com/leanprover-community/mathlib4.git"
+  "https://github.com/leanprover-community/mathlib4.git" @ "v4.7.0"
 
 @[default_target]
 lean_lib «IFCLatticeSpecification» where

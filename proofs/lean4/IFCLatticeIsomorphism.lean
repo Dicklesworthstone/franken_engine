@@ -19,7 +19,7 @@ Related: bd-cixqu.7.3, ADR-0006, ADR-0007
 -/
 
 import Mathlib.Order.Hom.Lattice
-import Mathlib.Order.Lattice.Basic
+import Mathlib.Order.Lattice
 import Mathlib.Data.Fin.Basic
 import Mathlib.Data.Fintype.Card
 import Mathlib.Tactic.FinCases

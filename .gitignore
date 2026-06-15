@@ -167,6 +167,9 @@ fix_convergence_test.py
 # Remote compilation helper local config
 .rch/
 
+# Lean proof build cache
+proofs/lean4/.lake/
+
 # Stray scratch files at root
 /tests_leak.rs
 /test_tla.rs

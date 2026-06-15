@@ -95,7 +95,8 @@ import os
 
 root = os.environ["LEAN_INPUT_DIR"]
 paths = {"lakefile.lean", "lean-toolchain"}
-for dirpath, _dirnames, filenames in os.walk(root):
+for dirpath, dirnames, filenames in os.walk(root):
+    dirnames[:] = [name for name in dirnames if name != ".lake"]
     for name in filenames:
         if name.endswith(".lean"):
             rel = os.path.relpath(os.path.join(dirpath, name), root)
@@ -122,7 +123,10 @@ emit_proof_bundle() {
     local producer_version="${PROOF_PRODUCER_VERSION:-lean:unknown;lake:unknown}"
     local timeout_policy="${PROOF_TIMEOUT_POLICY:-per-run lake build timeout}"
     local timeout_seconds="${PROOF_TIMEOUT_SECONDS:-$TIMEOUT_SECONDS}"
-    local input_hashes_json="${PROOF_INPUT_HASHES_JSON:-{}}"
+    local input_hashes_json="${PROOF_INPUT_HASHES_JSON:-}"
+    if [[ -z "$input_hashes_json" ]]; then
+        input_hashes_json="{}"
+    fi
     local command_desc="${PROOF_COMMAND:-cd proofs/lean4 && lake build}"
 
     local now_utc

@@ -185,25 +185,39 @@ pub struct LeaseUsageReceipt {
     pub content_hash: ContentHash,
 }
 
+/// Append a field's `Display` form to a content-hash preimage with a fixed-width
+/// `u64` length prefix.
+///
+/// This receipt hash commits to the identity of a lease use, so its preimage
+/// must be injective. The previous `format!("{}|{}|…")` join over the free-form
+/// `receipt_id`/`lease_id`/`extension_id`/`capability`/`scope` strings was not
+/// injective — a field containing `|` lets two distinct receipts collide (e.g.
+/// `lease_id="a|b", extension_id="c"` and `lease_id="a", extension_id="b|c"`
+/// both serialize to `…a|b|c…`). Length-prefixing each field removes the
+/// ambiguity. Cf. the same fix crate-wide in commits 7f500570 / 1d3e0542.
+fn hash_display(preimage: &mut Vec<u8>, value: &dyn std::fmt::Display) {
+    let rendered = value.to_string();
+    preimage.extend_from_slice(&(rendered.len() as u64).to_le_bytes());
+    preimage.extend_from_slice(rendered.as_bytes());
+}
+
 impl LeaseUsageReceipt {
     fn compute_hash(&self) -> ContentHash {
-        // Pipe-delimited fixed-order preimage (module-local precedent:
+        // Length-prefixed fixed-order preimage (module-local precedent:
         // expected_loss_selector receipt preimages).
-        let preimage = format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
-            CAPABILITY_LEASE_SCHEMA_VERSION,
-            self.receipt_id,
-            self.lease_id,
-            self.extension_id,
-            self.capability,
-            self.scope,
-            self.tick,
-            self.p_malicious_millionths,
-            self.risk_price_millionths,
-            self.decision_kind,
-            self.remaining_budget_millionths,
-        );
-        ContentHash::compute(preimage.as_bytes())
+        let mut preimage: Vec<u8> = Vec::new();
+        hash_display(&mut preimage, &CAPABILITY_LEASE_SCHEMA_VERSION);
+        hash_display(&mut preimage, &self.receipt_id);
+        hash_display(&mut preimage, &self.lease_id);
+        hash_display(&mut preimage, &self.extension_id);
+        hash_display(&mut preimage, &self.capability);
+        hash_display(&mut preimage, &self.scope);
+        hash_display(&mut preimage, &self.tick);
+        hash_display(&mut preimage, &self.p_malicious_millionths);
+        hash_display(&mut preimage, &self.risk_price_millionths);
+        hash_display(&mut preimage, &self.decision_kind);
+        hash_display(&mut preimage, &self.remaining_budget_millionths);
+        ContentHash::compute(&preimage)
     }
 }
 
@@ -540,6 +554,36 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lease_receipt_hash_is_injective_across_id_field_boundary() {
+        // bd-g52tf: receipt_id/lease_id/extension_id/capability/scope were
+        // '|'-joined free-form strings, so (lease_id="a|b", extension_id="c") and
+        // (lease_id="a", extension_id="b|c") produced the same preimage.
+        // Length-prefixing each field pins them to distinct hashes.
+        let mk = |lease_id: &str, extension_id: &str| {
+            let receipt = LeaseUsageReceipt {
+                receipt_id: "r#0".to_string(),
+                lease_id: lease_id.to_string(),
+                extension_id: extension_id.to_string(),
+                capability: "cap".to_string(),
+                scope: "scope".to_string(),
+                tick: 0,
+                p_malicious_millionths: 0,
+                risk_price_millionths: 0,
+                decision_kind: "allow".to_string(),
+                remaining_budget_millionths: 0,
+                policy_epoch: 0,
+                content_hash: ContentHash::compute(b"placeholder"),
+            };
+            receipt.compute_hash()
+        };
+        assert_ne!(
+            mk("a|b", "c"),
+            mk("a", "b|c"),
+            "lease_id/extension_id field boundary must not collide"
+        );
+    }
 
     fn lease(lease_id: &str) -> CapabilityLease {
         CapabilityLease {

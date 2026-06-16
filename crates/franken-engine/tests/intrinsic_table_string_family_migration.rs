@@ -21,8 +21,10 @@
 use frankenengine_engine::HybridRouter;
 use frankenengine_engine::intrinsics_codegen::{DispatchTarget, generate_glue};
 use frankenengine_engine::intrinsics_table::{
-    ReceiverKind, ThisCoercion, string_prototype, validate_table,
+    Arity, GapStatus, IfcPropagation, ReceiverKind, ThisCoercion, string_prototype, validate_table,
 };
+
+use std::collections::BTreeSet;
 
 fn ev(src: &str) -> String {
     let mut engine = HybridRouter::default();
@@ -128,6 +130,126 @@ fn family_covers_the_exact_legacy_method_set() {
     ];
     expected.sort_unstable();
     assert_eq!(names, expected);
+}
+
+#[test]
+fn one_table_row_to_generated_glue_snapshot_is_stable() {
+    let glue = generate_glue(string_prototype::ROWS).expect("glue");
+    let row = glue
+        .registry
+        .get("String.prototype.charAt")
+        .expect("charAt row");
+    let dispatch = glue
+        .dispatch
+        .iter()
+        .find(|entry| entry.name == row.name)
+        .expect("charAt dispatch entry");
+    let gap = glue
+        .gap_entries
+        .iter()
+        .find(|entry| entry.name == row.name)
+        .expect("charAt gap entry");
+    let impl_fn = match &dispatch.target {
+        DispatchTarget::Generated { impl_fn } => *impl_fn,
+        other => panic!("charAt must route to generated glue, got {other:?}"),
+    };
+
+    let snapshot = format!(
+        "name={};receiver={:?};this={:?};arity={:?};ifc={:?};dispatch={};gap={:?};conformance={}",
+        row.name,
+        row.receiver,
+        row.this_coercion,
+        row.arity,
+        row.ifc,
+        impl_fn,
+        gap.status,
+        gap.conformance
+    );
+
+    assert_eq!(
+        snapshot,
+        "name=String.prototype.charAt;receiver=String;this=ToString;arity=Range { min: 0, max: 1 };ifc=JoinReceiverAndArgs;dispatch=string_char_at_impl;gap=Resolved;conformance=test262:built-ins/String/prototype/charAt"
+    );
+}
+
+#[test]
+fn generated_glue_contains_identifiers_not_semantic_bodies() {
+    let glue = generate_glue(string_prototype::ROWS).expect("glue");
+
+    for entry in &glue.dispatch {
+        let impl_fn = match &entry.target {
+            DispatchTarget::Generated { impl_fn } => impl_fn,
+            DispatchTarget::Manual { site } => {
+                panic!(
+                    "{}: String family must not use manual site {site}",
+                    entry.name
+                )
+            }
+        };
+
+        assert!(
+            impl_fn
+                .chars()
+                .all(|ch| ch.is_ascii_lowercase() || ch == '_'),
+            "{}: generated dispatch target must be a plain Rust identifier, got `{impl_fn}`",
+            entry.name
+        );
+        for forbidden in ["fn ", "match ", "Value", "=>", "{", "}", ";"] {
+            assert!(
+                !impl_fn.contains(forbidden),
+                "{}: generated dispatch target smuggles semantic text `{forbidden}` in `{impl_fn}`",
+                entry.name
+            );
+        }
+    }
+}
+
+#[test]
+fn every_table_row_generates_gap_inventory_entry_without_drift() {
+    let glue = generate_glue(string_prototype::ROWS).expect("glue");
+    let row_names: BTreeSet<&str> = string_prototype::ROWS.iter().map(|row| row.name).collect();
+    let gap_names: BTreeSet<&str> = glue.gap_entries.iter().map(|entry| entry.name).collect();
+
+    assert_eq!(gap_names, row_names);
+    for row in string_prototype::ROWS {
+        let entry = glue
+            .gap_entries
+            .iter()
+            .find(|entry| entry.name == row.name)
+            .expect("every row yields a gap entry");
+        assert_eq!(entry.status, row.gap_status, "{}", row.name);
+        assert_eq!(entry.conformance, row.conformance, "{}", row.name);
+        assert!(
+            !entry.conformance.is_empty(),
+            "{}: generated gap-inventory entry must carry a conformance anchor",
+            row.name
+        );
+        assert!(
+            !matches!(&entry.status, GapStatus::Planned),
+            "{}: migrated String row must not remain planned",
+            row.name
+        );
+    }
+}
+
+#[test]
+fn string_rows_declare_secret_safe_ifc_policies_per_row() {
+    for row in string_prototype::ROWS {
+        match &row.arity {
+            Arity::Exact(0) => assert_eq!(
+                row.ifc,
+                IfcPropagation::PropagateReceiverLabel,
+                "{}: arg-free String method should propagate the receiver label",
+                row.name
+            ),
+            _ => assert_eq!(
+                row.ifc,
+                IfcPropagation::JoinReceiverAndArgs,
+                "{}: argument-reading String method must join receiver and argument labels",
+                row.name
+            ),
+        }
+    }
 }
 
 // ------------------------------------------------- end-to-end coexist proof

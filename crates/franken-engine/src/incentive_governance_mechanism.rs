@@ -29,6 +29,33 @@ pub const DEFAULT_PUBLISHER_BOND: i64 = 100_000;
 pub const DEFAULT_CHALLENGE_WINDOW_EPOCHS: u64 = 10;
 
 // ---------------------------------------------------------------------------
+// Content-hash preimage helpers
+// ---------------------------------------------------------------------------
+//
+// The `compute_id` / `compute_hash` functions below must be *injective*:
+// distinct logical inputs must never share a preimage. Feeding a free-form
+// `String` (an id, a condition) into the hasher with no length marker, or
+// looping over a collection with no count marker, breaks that — `("ab","c")`
+// then collides with `("a","bc")`, and a 2-entry table with a crafted
+// `condition` can alias a 1-entry table. These helpers length-prefix every
+// variable field and count-prefix every collection (the pattern already used
+// by `MechanismSafetyCertificate::compute_hash` further down, and by
+// `hash_len_prefixed` in the sibling `semantic_canonical_basis` module).
+
+/// Feed `bytes` into `h` with a fixed-width `u64` little-endian length prefix
+/// so that adjacent variable-length fields cannot share a preimage.
+fn update_len_prefixed(h: &mut Sha256, bytes: &[u8]) {
+    h.update((bytes.len() as u64).to_le_bytes());
+    h.update(bytes);
+}
+
+/// Feed a `u64` little-endian count prefix so the boundaries between the
+/// (variable-length) items of a collection cannot be re-segmented.
+fn update_count(h: &mut Sha256, count: usize) {
+    h.update((count as u64).to_le_bytes());
+}
+
+// ---------------------------------------------------------------------------
 // GovernanceRole — participants in the mechanism
 // ---------------------------------------------------------------------------
 
@@ -177,10 +204,11 @@ pub struct PayoffTable {
 impl PayoffTable {
     pub fn compute_id(&self) -> String {
         let mut h = Sha256::new();
+        update_count(&mut h, self.entries.len());
         for e in &self.entries {
-            h.update(e.role.to_string().as_bytes());
-            h.update(e.action.to_string().as_bytes());
-            h.update(e.condition.as_bytes());
+            update_len_prefixed(&mut h, e.role.to_string().as_bytes());
+            update_len_prefixed(&mut h, e.action.to_string().as_bytes());
+            update_len_prefixed(&mut h, e.condition.as_bytes());
             h.update(e.payoff_millionths.to_le_bytes());
         }
         h.update(self.epoch.as_u64().to_le_bytes());
@@ -283,9 +311,10 @@ pub struct StrategicStressTest {
 impl StrategicStressTest {
     pub fn compute_id(&self) -> String {
         let mut h = Sha256::new();
+        update_count(&mut h, self.scenarios.len());
         for s in &self.scenarios {
-            h.update(s.scenario_id.as_bytes());
-            h.update(s.behavior.to_string().as_bytes());
+            update_len_prefixed(&mut h, s.scenario_id.as_bytes());
+            update_len_prefixed(&mut h, s.behavior.to_string().as_bytes());
         }
         h.update(self.epoch.as_u64().to_le_bytes());
         format!("sst-{}", hex::encode(&h.finalize()[..16]))
@@ -376,9 +405,10 @@ pub struct EnforcementPolicy {
 impl EnforcementPolicy {
     pub fn compute_id(&self) -> String {
         let mut h = Sha256::new();
+        update_count(&mut h, self.rules.len());
         for r in &self.rules {
-            h.update(r.rule_id.as_bytes());
-            h.update(r.trigger_action.to_string().as_bytes());
+            update_len_prefixed(&mut h, r.rule_id.as_bytes());
+            update_len_prefixed(&mut h, r.trigger_action.to_string().as_bytes());
             h.update(r.penalty_millionths.to_le_bytes());
         }
         h.update(self.challenge_window_epochs.to_le_bytes());
@@ -422,10 +452,10 @@ pub struct MechanismSpec {
 impl MechanismSpec {
     pub fn compute_id(&self) -> String {
         let mut h = Sha256::new();
-        h.update(self.name.as_bytes());
-        h.update(self.payoff_table.table_id.as_bytes());
-        h.update(self.enforcement_policy.policy_id.as_bytes());
-        h.update(self.stress_test.test_id.as_bytes());
+        update_len_prefixed(&mut h, self.name.as_bytes());
+        update_len_prefixed(&mut h, self.payoff_table.table_id.as_bytes());
+        update_len_prefixed(&mut h, self.enforcement_policy.policy_id.as_bytes());
+        update_len_prefixed(&mut h, self.stress_test.test_id.as_bytes());
         h.update(self.epoch.as_u64().to_le_bytes());
         format!("ms-{}", hex::encode(&h.finalize()[..16]))
     }
@@ -898,6 +928,60 @@ mod tests {
         };
         assert_eq!(mk().table_id, mk().table_id);
         assert!(mk().table_id.starts_with("pt-"));
+    }
+
+    #[test]
+    fn compute_id_preimage_is_injective_bd_rn3lo() {
+        // Regression (bd-rn3lo): the compute_id family fed free-form ids /
+        // conditions into the hasher with no length prefix over uncounted
+        // loops, so distinct logical inputs could share an id.
+
+        // (1) Helper-level: ("ab","c") must not alias ("a","bc").
+        let mut a = Sha256::new();
+        update_len_prefixed(&mut a, b"ab");
+        update_len_prefixed(&mut a, b"c");
+        let mut b = Sha256::new();
+        update_len_prefixed(&mut b, b"a");
+        update_len_prefixed(&mut b, b"bc");
+        assert_ne!(a.finalize(), b.finalize());
+
+        // The count prefix separates a 1-item run from a 2-item run.
+        let mut one = Sha256::new();
+        update_count(&mut one, 1);
+        let mut two = Sha256::new();
+        update_count(&mut two, 2);
+        assert_ne!(one.finalize(), two.finalize());
+
+        // (2) MechanismSpec-level: name + table_id form two adjacent free-string
+        // ids; shifting the boundary between them must change the id.
+        let mk = |name: &str, table_id: &str| {
+            MechanismSpec {
+                spec_id: String::new(),
+                name: name.into(),
+                payoff_table: PayoffTable {
+                    table_id: table_id.into(),
+                    entries: vec![],
+                    epoch: test_epoch(),
+                },
+                enforcement_policy: EnforcementPolicy {
+                    policy_id: "p".into(),
+                    rules: vec![],
+                    challenge_window_epochs: 1,
+                    publisher_bond_millionths: 0,
+                    epoch: test_epoch(),
+                },
+                property_verifications: vec![],
+                stress_test: StrategicStressTest {
+                    test_id: "s".into(),
+                    scenarios: vec![],
+                    epoch: test_epoch(),
+                },
+                epoch: test_epoch(),
+            }
+            .compute_id()
+        };
+        // Same concatenated bytes "abc", different name/table_id split.
+        assert_ne!(mk("ab", "c"), mk("a", "bc"));
     }
 
     #[test]

@@ -25,6 +25,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::hash_tiers::ContentHash;
 
+/// Append a variable-length field to a content-hash preimage with a fixed-width
+/// `u64` length prefix, so adjacent variable-length fields cannot be re-split
+/// into a colliding decomposition. Cf. commits 7f500570 / 1d3e0542.
+fn hash_field(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    buf.extend_from_slice(bytes);
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -569,18 +577,34 @@ impl RepairDiff {
     }
 
     fn compute_hash(edits: &[RepairEdit]) -> ContentHash {
-        let mut parts = Vec::new();
+        // The diff hash is a content-addressing identity, so its preimage must be
+        // injective. The previous `parts.join("|")` over `format!("insert:{}:{}",
+        // pos, tokens.join(","))` was not — a token containing the delimiter
+        // re-split the join, so e.g. `[Insert{0,["x"]}, Skip{0,0}]` collided with
+        // `[Insert{0,["x|skip:0:0"]}]`. Build a length-/count-prefixed byte
+        // preimage instead (cf. commits 7f500570 / 1d3e0542): count the edits,
+        // tag each variant, append fixed-width position/count, and count- then
+        // length-prefix the free-form tokens.
+        let mut buf: Vec<u8> = Vec::new();
+        buf.extend_from_slice(&(edits.len() as u64).to_le_bytes());
         for edit in edits {
             match edit {
                 RepairEdit::Skip { position, count } => {
-                    parts.push(format!("skip:{position}:{count}"));
+                    buf.push(0);
+                    buf.extend_from_slice(&position.to_le_bytes());
+                    buf.extend_from_slice(&count.to_le_bytes());
                 }
                 RepairEdit::Insert { position, tokens } => {
-                    parts.push(format!("insert:{position}:{}", tokens.join(",")));
+                    buf.push(1);
+                    buf.extend_from_slice(&position.to_le_bytes());
+                    buf.extend_from_slice(&(tokens.len() as u64).to_le_bytes());
+                    for token in tokens {
+                        hash_field(&mut buf, token.as_bytes());
+                    }
                 }
             }
         }
-        ContentHash::compute(parts.join("|").as_bytes())
+        ContentHash::compute(&buf)
     }
 
     /// Whether no edits were applied.
@@ -1586,6 +1610,37 @@ mod tests {
         let diff = RepairDiff::build(test_hash(), edits);
         assert!(!diff.is_empty());
         assert_eq!(diff.edits.len(), 2);
+    }
+
+    #[test]
+    fn repair_diff_hash_is_injective_across_token_boundary() {
+        // bd-bdas5: a token containing the '|' delimiter re-split the old
+        // parts.join("|"), so [Insert{0,["x"]}, Skip{0,0}] collided with
+        // [Insert{0,["x|skip:0:0"]}] (both -> "insert:0:x|skip:0:0").
+        let two = RepairDiff::build(
+            test_hash(),
+            vec![
+                RepairEdit::Insert {
+                    position: 0,
+                    tokens: vec!["x".to_string()],
+                },
+                RepairEdit::Skip {
+                    position: 0,
+                    count: 0,
+                },
+            ],
+        );
+        let one = RepairDiff::build(
+            test_hash(),
+            vec![RepairEdit::Insert {
+                position: 0,
+                tokens: vec!["x|skip:0:0".to_string()],
+            }],
+        );
+        assert_ne!(
+            two.diff_hash, one.diff_hash,
+            "token/edit boundary must not collide"
+        );
     }
 
     #[test]

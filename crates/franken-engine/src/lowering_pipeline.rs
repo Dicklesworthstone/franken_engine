@@ -1186,6 +1186,24 @@ fn alloc_label(counter: &mut u32) -> u32 {
     id
 }
 
+fn alloc_finally_forwarder(
+    forwarders: &mut Vec<(u32, u32)>,
+    target: Option<u32>,
+    label_counter: &mut u32,
+) -> Option<u32> {
+    let target = target?;
+    if let Some((via_label, _)) = forwarders
+        .iter()
+        .find(|(_, actual_target)| *actual_target == target)
+    {
+        return Some(*via_label);
+    }
+
+    let via_label = alloc_label(label_counter);
+    forwarders.push((via_label, target));
+    Some(via_label)
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct ControlFlowTargets {
     break_label: Option<u32>,
@@ -1240,6 +1258,31 @@ impl LabelContext {
             });
         }
         child.pending.clear();
+        child
+    }
+
+    fn remap_abrupt_targets(
+        &self,
+        break_forwarders: &[(u32, u32)],
+        continue_forwarders: &[(u32, u32)],
+    ) -> Self {
+        let mut child = self.clone();
+        for frame in &mut child.frames {
+            if let Some(via_label) = break_forwarders.iter().find_map(|(via_label, actual)| {
+                (*actual == frame.break_target).then_some(*via_label)
+            }) {
+                frame.break_target = via_label;
+            }
+            if let Some(continue_target) = frame.continue_target {
+                if let Some(via_label) =
+                    continue_forwarders.iter().find_map(|(via_label, actual)| {
+                        (*actual == continue_target).then_some(*via_label)
+                    })
+                {
+                    frame.continue_target = Some(via_label);
+                }
+            }
+        }
         child
     }
 }
@@ -2442,21 +2485,49 @@ fn lower_statement_to_ir1_with_flow(
             } else {
                 None
             };
+            let mut break_finally_forwarders = Vec::new();
+            let mut continue_finally_forwarders = Vec::new();
             let break_via_finally_label = if tc.finalizer.is_some() {
-                control_flow.break_label.map(|_| alloc_label(label_counter))
+                alloc_finally_forwarder(
+                    &mut break_finally_forwarders,
+                    control_flow.break_label,
+                    label_counter,
+                )
             } else {
                 None
             };
             let continue_via_finally_label = if tc.finalizer.is_some() {
-                control_flow
-                    .continue_label
-                    .map(|_| alloc_label(label_counter))
+                alloc_finally_forwarder(
+                    &mut continue_finally_forwarders,
+                    control_flow.continue_label,
+                    label_counter,
+                )
             } else {
                 None
             };
+            if tc.finalizer.is_some() {
+                for frame in &label_ctx.frames {
+                    alloc_finally_forwarder(
+                        &mut break_finally_forwarders,
+                        Some(frame.break_target),
+                        label_counter,
+                    );
+                    alloc_finally_forwarder(
+                        &mut continue_finally_forwarders,
+                        frame.continue_target,
+                        label_counter,
+                    );
+                }
+            }
             let inner_control_flow = ControlFlowTargets {
                 break_label: break_via_finally_label.or(control_flow.break_label),
                 continue_label: continue_via_finally_label.or(control_flow.continue_label),
+            };
+            let inner_label_ctx = if tc.finalizer.is_some() {
+                label_ctx
+                    .remap_abrupt_targets(&break_finally_forwarders, &continue_finally_forwarders)
+            } else {
+                label_ctx.clone()
             };
             // When there is a catch handler, allocate a distinct catch label.
             // When there is only a finally (no catch), route exceptions
@@ -2482,7 +2553,7 @@ fn lower_statement_to_ir1_with_flow(
                     label_counter,
                     span_table,
                     inner_control_flow,
-                    label_ctx,
+                    &inner_label_ctx,
                 )?;
             }
             ops.push(Ir1Op::EndTry);
@@ -2540,7 +2611,7 @@ fn lower_statement_to_ir1_with_flow(
                             label_counter,
                             span_table,
                             inner_control_flow,
-                            label_ctx,
+                            &inner_label_ctx,
                         )?;
                     }
                     if let Some((param, previous)) = catch_binding_restore {
@@ -2587,9 +2658,7 @@ fn lower_statement_to_ir1_with_flow(
                 });
             }
             if let Some(finalizer) = &tc.finalizer {
-                if let (Some(via_break_label), Some(actual_break_label)) =
-                    (break_via_finally_label, control_flow.break_label)
-                {
+                for (via_break_label, actual_break_label) in break_finally_forwarders {
                     ops.push(Ir1Op::Label {
                         id: via_break_label,
                     });
@@ -2611,9 +2680,7 @@ fn lower_statement_to_ir1_with_flow(
                         label_id: actual_break_label,
                     });
                 }
-                if let (Some(via_continue_label), Some(actual_continue_label)) =
-                    (continue_via_finally_label, control_flow.continue_label)
-                {
+                for (via_continue_label, actual_continue_label) in continue_finally_forwarders {
                     ops.push(Ir1Op::Label {
                         id: via_continue_label,
                     });

@@ -614,9 +614,29 @@ fn conformance_source_finally_order_matches_node_ground_truth() {
             "try:finally",
         ),
         (
+            "labeled-block-break-through-finally",
+            r#"let log = ""; outer: { try { log = log + "try"; break outer; } finally { log = log + ":finally"; } log = log + ":after"; } log;"#,
+            "try:finally",
+        ),
+        (
+            "labeled-catch-break-through-finally",
+            r#"let log = ""; outer: { try { throw "x"; } catch (e) { log = log + "catch:" + e; break outer; } finally { log = log + ":finally"; } log = log + ":after"; } log;"#,
+            "catch:x:finally",
+        ),
+        (
             "continue-through-finally",
             r#"let log = ""; for (let i = 0; i < 2; i = i + 1) { try { log = log + "try" + i; continue; } finally { log = log + ":finally" + i + ";"; } } log;"#,
             "try0:finally0;try1:finally1;",
+        ),
+        (
+            "labeled-continue-through-finally",
+            r#"let log = ""; outer: for (let i = 0; i < 2; i = i + 1) { try { log = log + "try" + i; continue outer; } finally { log = log + ":finally" + i + ";"; } } log;"#,
+            "try0:finally0;try1:finally1;",
+        ),
+        (
+            "labeled-catch-continue-through-finally",
+            r#"let log = ""; outer: for (let i = 0; i < 2; i = i + 1) { try { throw i; } catch (e) { log = log + "catch" + e; continue outer; } finally { log = log + ":finally" + i + ";"; } } log;"#,
+            "catch0:finally0;catch1:finally1;",
         ),
     ];
 

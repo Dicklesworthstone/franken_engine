@@ -2336,6 +2336,20 @@ Adding a new module, gate, or test is a constrained operation in this repo. The 
 7. Add a matching `crates/franken-engine/tests/<module>_integration.rs` (and optionally `<module>_enrichment_integration.rs` for the deeper enrichment layer).
 8. Run the compile gate: `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`.
 
+### Adding a builtin / prototype method
+
+Adding a JavaScript builtin (`String.prototype.charAt`, `Date.now`, …) does *not*
+require editing the interpreter dispatch by hand. The declarative intrinsic
+table makes it **one `IntrinsicRow` plus one hand-written impl fn**: the row
+(name, receiver, arity, capability, IFC policy, impl-fn identifier, conformance
+ref, gap status) is data that codegen expands into the registry, dispatch arm,
+and gap-inventory entry; the impl fn holds the semantics. The result's
+information-flow label is derived from the row's declared `IfcPropagation` policy
+at the dispatch seam, so propagation cannot be forgotten per-site. See the
+worked example and the IFC-policy decision guide in
+[`docs/INTRINSIC_TABLE_CONTRIBUTOR_GUIDE.md`](./docs/INTRINSIC_TABLE_CONTRIBUTOR_GUIDE.md);
+verify with `./scripts/run_dw_intrinsic_table.sh ci`.
+
 ### Adding a new gate
 
 1. Author `docs/<gate>_v1.json` (machine-readable contract) and `docs/<GATE>_V1.md` (operator companion).

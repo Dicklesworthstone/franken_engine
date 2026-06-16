@@ -261,14 +261,25 @@ impl BuildDescriptor {
 
     /// Compute a canonical content hash of this descriptor.
     pub fn content_hash(&self) -> ContentHash {
+        // Injective preimage: ContentHash fields are fixed-width, but the
+        // free-form `toolchain_version` must be length-prefixed (it sits
+        // between two fixed hashes), and the `build_flags` / `dependency_hashes`
+        // collections must be count-prefixed with each variable field
+        // length-prefixed, so e.g. build_flags ["ab","c"] cannot alias
+        // ["a","bc"] and the two collections cannot blur across their boundary.
         let mut buf = Vec::new();
         buf.extend_from_slice(self.toolchain_hash.as_bytes());
+        buf.extend_from_slice(&(self.toolchain_version.len() as u64).to_le_bytes());
         buf.extend_from_slice(self.toolchain_version.as_bytes());
         buf.extend_from_slice(self.source_hash.as_bytes());
+        buf.extend_from_slice(&(self.build_flags.len() as u64).to_le_bytes());
         for flag in &self.build_flags {
+            buf.extend_from_slice(&(flag.len() as u64).to_le_bytes());
             buf.extend_from_slice(flag.as_bytes());
         }
+        buf.extend_from_slice(&(self.dependency_hashes.len() as u64).to_le_bytes());
         for (dep_name, dep_hash) in &self.dependency_hashes {
+            buf.extend_from_slice(&(dep_name.len() as u64).to_le_bytes());
             buf.extend_from_slice(dep_name.as_bytes());
             buf.extend_from_slice(dep_hash.as_bytes());
         }
@@ -2733,6 +2744,25 @@ mod tests {
         bd1.build_flags.push("--debug".to_string());
         let h2 = bd1.content_hash();
         assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn build_descriptor_content_hash_injective_over_flags_bd_2qma0() {
+        // Regression (bd-2qma0): build_flags were concatenated into the
+        // preimage with no count or length prefix, so a different split of the
+        // same bytes collided — ["ab","c"] aliased ["a","bc"]. The count +
+        // length prefixes must keep them distinct.
+        let mut a = test_build_descriptor();
+        a.build_flags = vec!["ab".to_string(), "c".to_string()];
+        let mut b = test_build_descriptor();
+        b.build_flags = vec!["a".to_string(), "bc".to_string()];
+        assert_ne!(a.content_hash(), b.content_hash());
+
+        // And a single flag "abc" must differ from two flags ["ab","c"]
+        // (count prefix distinguishes arity).
+        let mut one = test_build_descriptor();
+        one.build_flags = vec!["abc".to_string()];
+        assert_ne!(a.content_hash(), one.content_hash());
     }
 
     #[test]

@@ -733,6 +733,9 @@ fn compile_module(
     let mut hasher = Sha256::new();
     hasher.update(module.source_hash.as_bytes());
     hasher.update(graph.graph_hash.as_bytes());
+    // Length-prefix the free-form engine_version so its boundary with the
+    // following fixed-width policy_revision is unambiguous (injective preimage).
+    hasher.update((config.engine_version.len() as u64).to_le_bytes());
     hasher.update(config.engine_version.as_bytes());
     hasher.update(config.policy_revision.to_le_bytes());
     hasher.update(config.target.to_string().as_bytes());

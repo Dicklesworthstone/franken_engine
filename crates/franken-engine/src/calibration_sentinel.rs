@@ -402,21 +402,35 @@ pub struct PromotionDecision {
     pub content_hash: ContentHash,
 }
 
+/// Append a variable-length field to a `Sha256` content-hash preimage with a
+/// fixed-width `u64` length prefix.
+///
+/// The decision hash commits to a promotion decision's identity, so its
+/// preimage must be injective. Separating adjacent variable-length fields with
+/// a byte delimiter (`:`/`|`) is not injective when a field can contain the
+/// delimiter — `decision_id="a:b", cell_id="c"` and `decision_id="a",
+/// cell_id="b:c"` both serialize to `…a:b:c…`, and `suppression_reasons=["a|b"]`
+/// collides with `["a","b"]`. Length-prefixing each variable-length field and
+/// count-prefixing the reasons removes the ambiguity. Cf. the same fix
+/// crate-wide in commits 7f500570 / 1d3e0542.
+fn hash_field(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+
 impl PromotionDecision {
     /// Compute a deterministic content hash for this decision.
     pub fn compute_hash(&self) -> ContentHash {
         let mut hasher = Sha256::new();
         hasher.update(COMPONENT.as_bytes());
         hasher.update(b":decision:");
-        hasher.update(self.decision_id.as_bytes());
-        hasher.update(b":");
-        hasher.update(self.cell_id.as_bytes());
-        hasher.update(b":");
-        hasher.update(self.rule.as_str().as_bytes());
+        hash_field(&mut hasher, self.decision_id.as_bytes());
+        hash_field(&mut hasher, self.cell_id.as_bytes());
+        hash_field(&mut hasher, self.rule.as_str().as_bytes());
         hasher.update(if self.allowed { b"allowed" } else { b"blocked" });
+        hasher.update((self.suppression_reasons.len() as u64).to_le_bytes());
         for reason in &self.suppression_reasons {
-            hasher.update(b"|");
-            hasher.update(reason.as_bytes());
+            hash_field(&mut hasher, reason.as_bytes());
         }
         let result = hasher.finalize();
         let mut out = [0u8; 32];
@@ -1005,6 +1019,28 @@ fn sha256_bytes(data: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn promotion_decision_hash_is_injective_across_id_boundary() {
+        // bd-ndjoh: decision_id and cell_id were ':'-joined, so ("a:b","c") and
+        // ("a","b:c") both hashed "…a:b:c…". Length-prefixing pins them apart.
+        let mk = |decision_id: &str, cell_id: &str| {
+            PromotionDecision {
+                decision_id: decision_id.to_string(),
+                cell_id: cell_id.to_string(),
+                rule: PromotionRule::FailClosed,
+                allowed: true,
+                suppression_reasons: Vec::new(),
+                content_hash: ContentHash::compute(b"placeholder"),
+            }
+            .compute_hash()
+        };
+        assert_ne!(
+            mk("a:b", "c"),
+            mk("a", "b:c"),
+            "decision_id/cell_id field boundary must not collide"
+        );
+    }
 
     // -- Helper functions ---------------------------------------------------
 

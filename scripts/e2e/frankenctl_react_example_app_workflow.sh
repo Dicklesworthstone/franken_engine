@@ -168,11 +168,9 @@ fi
 mkdir -p "$run_dir" "$step_logs_dir" "$fixtures_dir" "$support_bundle_dir"
 
 cat >"$compile_source_path" <<'EOF'
-export const ExampleApp = () => (
-  <section data-example="react-example-app">
-    <h1>FrankenEngine React example-app workflow</h1>
-  </section>
-);
+<section data-example="react-example-app">
+  <h1>FrankenEngine React example-app workflow</h1>
+</section>
 EOF
 
 cat >"$build_entry_path" <<'EOF'
@@ -499,6 +497,16 @@ build_example_report() {
           artifact_path: $contract_path
         },
         {
+          journey_id: "compile_only_tsx",
+          outcome: "pass",
+          command: $compile_command,
+          capability_id: $compile[0].capability_id,
+          support_status: $compile[0].support_status,
+          generated_code: $compile[0].compilation.generated_code,
+          receipt_component: $compile[0].compilation.receipt.component,
+          artifact_path: $compile_path
+        },
+        {
           journey_id: "doctor_support_bundle",
           outcome: "pass",
           command: $doctor_command,
@@ -524,16 +532,6 @@ build_example_report() {
         }
       ],
       fail_closed_journeys: [
-        {
-          journey_id: "compile_only_tsx",
-          outcome: "expected_fail_closed",
-          command: $compile_command,
-          capability_id: $compile[0].capability_id,
-          support_status: $compile[0].support_status,
-          error_code: $compile[0].diagnostic.error_code,
-          product_surface_bead: $compile[0].diagnostic.product_surface_bead,
-          artifact_path: $compile_path
-        },
         {
           journey_id: "ssr_entrypoint",
           outcome: "expected_fail_closed",
@@ -664,7 +662,7 @@ run_artifact_flow() {
 
   run_step \
     "cargo run -q -p frankenengine-engine --bin frankenctl -- react compile --input ${compile_source_path} --source-form tsx --runtime automatic --trace-id ${compile_trace_id} --decision-id ${compile_decision_id} --policy-id ${compile_policy_id}" \
-    "25" \
+    "0" \
     "${compile_report_path}" \
     cargo run -q -p frankenengine-engine --bin frankenctl -- react compile \
       --input "${compile_source_path}" \
@@ -674,7 +672,7 @@ run_artifact_flow() {
       --decision-id "${compile_decision_id}" \
       --policy-id "${compile_policy_id}" \
       --out "${compile_report_path}" || return $?
-  append_event "react_compile_report_emitted" "deferred" "expected_fail_closed" "${compile_trace_id}" "${compile_decision_id}" "${compile_policy_id}" "$(json_quote "FE-RGC-016A-CAP-0005")" "$(json_quote "${compile_report_path}")"
+  append_event "react_compile_report_emitted" "shipped" "pass" "${compile_trace_id}" "${compile_decision_id}" "${compile_policy_id}" "null" "$(json_quote "${compile_report_path}")"
 
   run_step \
     "cargo run -q -p frankenengine-engine --bin frankenctl -- react build --entry ${build_entry_path} --target ssr --trace-id ${ssr_trace_id} --decision-id ${ssr_decision_id} --policy-id ${ssr_policy_id}" \

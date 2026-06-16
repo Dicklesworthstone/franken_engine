@@ -150,7 +150,7 @@ fi
 mkdir -p "$run_dir" "$step_logs_dir" "$fixtures_dir" "$support_bundle_dir"
 
 cat >"$compile_source_path" <<'EOF'
-export const WorkflowApp = () => <section data-workflow="react-cli">React CLI workflow</section>;
+<section data-workflow="react-cli">React CLI workflow</section>
 EOF
 
 cat >"$build_entry_path" <<'EOF'
@@ -456,7 +456,7 @@ run_artifact_flow() {
 
   run_step \
     "cargo run -q -p frankenengine-engine --bin frankenctl -- react compile --input ${compile_source_path} --source-form tsx --runtime automatic --trace-id ${compile_trace_id} --decision-id ${compile_decision_id} --policy-id ${compile_policy_id}" \
-    "25" \
+    "0" \
     "${compile_report_path}" \
     cargo run -q -p frankenengine-engine --bin frankenctl -- react compile \
       --input "${compile_source_path}" \
@@ -466,7 +466,7 @@ run_artifact_flow() {
       --decision-id "${compile_decision_id}" \
       --policy-id "${compile_policy_id}" \
       --out "${compile_report_path}" || return $?
-  append_event "react_compile_report_emitted" "deferred" "expected_fail_closed" "${compile_trace_id}" "${compile_decision_id}" "${compile_policy_id}" "$(json_quote "FE-RGC-016A-CAP-0005")" "$(json_quote "${compile_report_path}")"
+  append_event "react_compile_report_emitted" "shipped" "pass" "${compile_trace_id}" "${compile_decision_id}" "${compile_policy_id}" "null" "$(json_quote "${compile_report_path}")"
 
   run_step \
     "cargo run -q -p frankenengine-engine --bin frankenctl -- react build --entry ${build_entry_path} --target ssr --trace-id ${build_trace_id} --decision-id ${build_decision_id} --policy-id ${build_policy_id}" \

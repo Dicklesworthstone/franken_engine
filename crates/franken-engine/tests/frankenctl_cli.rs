@@ -668,10 +668,10 @@ fn frankenctl_react_doctor_emits_machine_readable_support_report() {
 }
 
 #[test]
-fn frankenctl_react_compile_fails_closed_with_contract_guidance() {
+fn frankenctl_react_compile_emits_generated_code_and_receipt() {
     let source_path = temp_path("frankenctl_react_compile_source", "tsx");
     let report_path = temp_path("frankenctl_react_compile_report", "json");
-    write_source(&source_path, "export const App = () => <div>Hello</div>;\n");
+    write_source(&source_path, "<div>Hello</div>\n");
 
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args([
@@ -695,7 +695,7 @@ fn frankenctl_react_compile_fails_closed_with_contract_guidance() {
         .output()
         .expect("react compile should execute");
 
-    assert_eq!(output.status.code(), Some(25));
+    assert_eq!(output.status.code(), Some(0));
     let stdout_json = parse_stdout_json(&output);
     assert_eq!(
         stdout_json["schema_version"].as_str(),
@@ -705,14 +705,35 @@ fn frankenctl_react_compile_fails_closed_with_contract_guidance() {
         stdout_json["capability_id"].as_str(),
         Some("tsx-automatic-runtime-compile")
     );
-    assert_eq!(stdout_json["support_status"].as_str(), Some("deferred"));
-    assert_eq!(
-        stdout_json["diagnostic"]["error_code"].as_str(),
-        Some("FE-RGC-016A-CAP-0005")
-    );
+    assert_eq!(stdout_json["support_status"].as_str(), Some("shipped"));
+    assert_eq!(stdout_json["shipped"].as_bool(), Some(true));
+    assert_eq!(stdout_json["blocked"].as_bool(), Some(false));
+    assert_eq!(stdout_json["diagnostic"]["error_code"].as_str(), Some("OK"));
     assert_eq!(
         stdout_json["request"]["runtime_mode"].as_str(),
         Some("automatic")
+    );
+    assert_eq!(stdout_json["compilation"]["language"].as_str(), Some("tsx"));
+    assert_eq!(
+        stdout_json["compilation"]["runtime_mode"].as_str(),
+        Some("automatic")
+    );
+    assert!(
+        stdout_json["compilation"]["generated_code"]
+            .as_str()
+            .expect("generated code should be a string")
+            .contains("div")
+    );
+    assert!(
+        stdout_json["compilation"]["input_hash"]
+            .as_str()
+            .expect("input hash should be present")
+            .len()
+            >= 64
+    );
+    assert_eq!(
+        stdout_json["compilation"]["receipt"]["component"].as_str(),
+        Some("react_compilation_pipeline")
     );
     let output_json: serde_json::Value =
         serde_json::from_slice(&fs::read(&report_path).expect("react report should exist"))

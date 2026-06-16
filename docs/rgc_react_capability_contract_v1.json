@@ -39,7 +39,7 @@
     {
       "surface_bead": "bd-1lsy.10.12.1",
       "name": "Real frankenctl contract for React compile/build workflows",
-      "ship_status": "planned"
+      "ship_status": "shipped"
     },
     {
       "surface_bead": "bd-1lsy.10.12.2",
@@ -58,7 +58,7 @@
       "source_form": "jsx",
       "runtime_mode": "classic_runtime",
       "entry_surface": "compile_contract",
-      "support_status": "deferred",
+      "support_status": "shipped",
       "owning_implementation_bead": "bd-1lsy.3.6.1",
       "parity_gate_bead": "bd-1lsy.9.7.1",
       "product_surface_bead": "bd-1lsy.10.12.1",
@@ -73,7 +73,7 @@
       "user_visible_diagnostic": {
         "error_code": "FE-RGC-016A-CAP-0001",
         "diagnostic_surface": "frankenctl react compile/build",
-        "message_template": "JSX classic-runtime compile support is not yet shipped; reject the request and route the user to unsupported-surface guidance.",
+        "message_template": "JSX classic-runtime compile support is shipped through frankenctl react compile and emits native pipeline output.",
         "remediation_bead": "bd-1lsy.10.11.2"
       },
       "unsupported_surface_policy": {
@@ -91,7 +91,7 @@
       "source_form": "tsx",
       "runtime_mode": "classic_runtime",
       "entry_surface": "compile_contract",
-      "support_status": "deferred",
+      "support_status": "shipped",
       "owning_implementation_bead": "bd-1lsy.3.6.1",
       "parity_gate_bead": "bd-1lsy.9.7.1",
       "product_surface_bead": "bd-1lsy.10.12.1",
@@ -106,7 +106,7 @@
       "user_visible_diagnostic": {
         "error_code": "FE-RGC-016A-CAP-0002",
         "diagnostic_surface": "frankenctl react compile/build",
-        "message_template": "TSX classic-runtime compile support is not yet shipped; reject the request and route the user to unsupported-surface guidance.",
+        "message_template": "TSX classic-runtime compile support is shipped through frankenctl react compile and emits native pipeline output.",
         "remediation_bead": "bd-1lsy.10.11.2"
       },
       "unsupported_surface_policy": {
@@ -157,7 +157,7 @@
       "source_form": "jsx",
       "runtime_mode": "automatic_runtime",
       "entry_surface": "compile_contract",
-      "support_status": "deferred",
+      "support_status": "shipped",
       "owning_implementation_bead": "bd-1lsy.3.6.2",
       "parity_gate_bead": "bd-1lsy.9.7.1",
       "product_surface_bead": "bd-1lsy.10.12.1",
@@ -172,7 +172,7 @@
       "user_visible_diagnostic": {
         "error_code": "FE-RGC-016A-CAP-0004",
         "diagnostic_surface": "frankenctl react compile/build",
-        "message_template": "JSX automatic-runtime compile support is not yet shipped; reject the request and route the user to unsupported-surface guidance.",
+        "message_template": "JSX automatic-runtime compile support is shipped through frankenctl react compile and emits native pipeline output.",
         "remediation_bead": "bd-1lsy.10.11.2"
       },
       "unsupported_surface_policy": {
@@ -190,7 +190,7 @@
       "source_form": "tsx",
       "runtime_mode": "automatic_runtime",
       "entry_surface": "compile_contract",
-      "support_status": "deferred",
+      "support_status": "shipped",
       "owning_implementation_bead": "bd-1lsy.3.6.2",
       "parity_gate_bead": "bd-1lsy.9.7.1",
       "product_surface_bead": "bd-1lsy.10.12.1",
@@ -205,7 +205,7 @@
       "user_visible_diagnostic": {
         "error_code": "FE-RGC-016A-CAP-0005",
         "diagnostic_surface": "frankenctl react compile/build",
-        "message_template": "TSX automatic-runtime compile support is not yet shipped; reject the request and route the user to unsupported-surface guidance.",
+        "message_template": "TSX automatic-runtime compile support is shipped through frankenctl react compile and emits native pipeline output.",
         "remediation_bead": "bd-1lsy.10.11.2"
       },
       "unsupported_surface_policy": {

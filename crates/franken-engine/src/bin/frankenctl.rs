@@ -40,12 +40,18 @@ use frankenengine_engine::fleet_trace_total_order::{
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::Ir0Module;
+use frankenengine_engine::jsx_tsx_parser::JsxRuntimeMode;
 use frankenengine_engine::lowering_pipeline::{
     LoweringContext, LoweringPipelineOutput, lower_ir0_to_ir3,
 };
 use frankenengine_engine::module_compatibility_matrix::CompatibilityScenarioReport;
 use frankenengine_engine::package_intake::{PackageIntakeReport, onboard_package};
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParseEventIr, ParserOptions};
+use frankenengine_engine::react_compilation_pipeline::{
+    ReactCompileConfig, ReactCompileEvidence, ReactCompileResult,
+    ReactInputLanguage as ReactPipelineInputLanguage, compile_react_source,
+    generate_compilation_evidence,
+};
 use frankenengine_engine::react_doctor_preflight::{
     DoctorConfig as ReactDoctorConfig, DoctorReport as ReactDoctorReport,
     PreflightResult as ReactPreflightResult, SupportBundle as ReactSupportBundle,
@@ -1308,7 +1314,32 @@ struct ReactCliReportOutput {
     request: ReactCliRequest,
     diagnostic: ReactCliDiagnostic,
     required_artifacts: Vec<String>,
+    compilation: Option<ReactCliCompilationOutput>,
     output: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ReactCliCompilationOutput {
+    language: String,
+    runtime_mode: String,
+    generated_code: String,
+    source_map: Option<String>,
+    input_hash: String,
+    generated_code_hash: String,
+    config_hash: String,
+    feature_families: Vec<String>,
+    transform_counts: BTreeMap<String, u32>,
+    receipt: ReactCliCompilationReceiptOutput,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ReactCliCompilationReceiptOutput {
+    schema_version: String,
+    component: String,
+    input_hash: String,
+    output_hash: String,
+    config_hash: String,
+    process_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -6290,9 +6321,15 @@ fn execute_react_compile(args: ReactCompileArgs) -> Result<i32, String> {
             args.input.display()
         ));
     }
+    let source = fs::read_to_string(&args.input).map_err(|error| {
+        format!(
+            "failed to read React input `{}`: {error}",
+            args.input.display()
+        )
+    })?;
     let contract = parse_react_capability_contract()?;
     let row = select_react_compile_row(&contract, args.source_form, args.runtime_mode)?;
-    let output = build_react_cli_report(
+    let mut output = build_react_cli_report(
         &args.trace_id,
         &args.decision_id,
         &args.policy_id,
@@ -6306,6 +6343,24 @@ fn execute_react_compile(args: ReactCompileArgs) -> Result<i32, String> {
         row,
         args.out.as_ref(),
     );
+    if output.shipped {
+        let language = react_pipeline_language(args.source_form)?;
+        let config = react_compile_config(args.source_form, args.runtime_mode);
+        let result = compile_react_source(&source, language, &config).map_err(|error| {
+            format!(
+                "react compile failed for `{}`: {error}",
+                args.input.display()
+            )
+        })?;
+        let evidence = generate_compilation_evidence(&result, &config, language)
+            .map_err(|error| format!("react compile evidence generation failed: {error}"))?;
+        output.compilation = Some(build_react_cli_compilation_output(
+            &result,
+            &evidence,
+            language,
+            args.runtime_mode,
+        ));
+    }
 
     if let Some(path) = &args.out {
         write_json_file(path, &output)?;
@@ -6485,7 +6540,7 @@ fn execute_react_contract(args: ReactContractArgs) -> Result<i32, String> {
             ReactCliCommandContract {
                 name: "react compile".to_string(),
                 output_schema_version: REACT_CLI_REPORT_SCHEMA_VERSION.to_string(),
-                behavior: "fail_closed_until_capability_row_is_shipped".to_string(),
+                behavior: "execute_shipped_compile_rows_else_fail_closed".to_string(),
                 usage: "frankenctl react compile --input <path> --source-form <jsx|tsx|jsx-fragment> [--runtime <classic|automatic>] [--out <report.json>]".to_string(),
             },
             ReactCliCommandContract {
@@ -7045,6 +7100,7 @@ fn build_react_cli_report(
     row: &ReactCapabilityRow,
     out: Option<&PathBuf>,
 ) -> ReactCliReportOutput {
+    let shipped = row.support_status == "shipped";
     ReactCliReportOutput {
         schema_version: REACT_CLI_REPORT_SCHEMA_VERSION.to_string(),
         trace_id: trace_id.to_string(),
@@ -7052,30 +7108,112 @@ fn build_react_cli_report(
         policy_id: policy_id.to_string(),
         command: command.to_string(),
         support_status: row.support_status.clone(),
-        shipped: row.support_status == "shipped",
-        blocked: row.support_status != "shipped",
+        shipped,
+        blocked: !shipped,
         capability_id: row.capability_id.clone(),
         request,
-        diagnostic: ReactCliDiagnostic {
-            error_code: row.user_visible_diagnostic.error_code.clone(),
+        diagnostic: build_react_cli_diagnostic(row, shipped),
+        required_artifacts: row.required_artifacts.clone(),
+        compilation: None,
+        output: out.map(|path| path.display().to_string()),
+    }
+}
+
+fn build_react_cli_diagnostic(row: &ReactCapabilityRow, shipped: bool) -> ReactCliDiagnostic {
+    if shipped {
+        return ReactCliDiagnostic {
+            error_code: "OK".to_string(),
             diagnostic_surface: row.user_visible_diagnostic.diagnostic_surface.clone(),
-            message: row.user_visible_diagnostic.message_template.clone(),
+            message: format!(
+                "React capability `{}` is shipped; the request executed through the native React compilation pipeline.",
+                row.capability_id
+            ),
             remediation_bead: row.user_visible_diagnostic.remediation_bead.clone(),
-            fallback_mode: row.unsupported_surface_policy.fallback_mode.clone(),
-            waiver_required: row.unsupported_surface_policy.waiver_required,
-            max_waiver_age_hours: row.unsupported_surface_policy.max_waiver_age_hours,
-            user_visible_diagnostics_required: row
-                .unsupported_surface_policy
-                .user_visible_diagnostics_required,
+            fallback_mode: "execute_native_react_pipeline".to_string(),
+            waiver_required: false,
+            max_waiver_age_hours: 0,
+            user_visible_diagnostics_required: false,
             target_milestone: row.unsupported_surface_policy.target_milestone.clone(),
-            claim_language_state: row.unsupported_surface_policy.claim_language_state.clone(),
+            claim_language_state: "shipped".to_string(),
             owning_implementation_bead: row.owning_implementation_bead.clone(),
             parity_gate_bead: row.parity_gate_bead.clone(),
             product_surface_bead: row.product_surface_bead.clone(),
             verification_lane: row.verification_lane.clone(),
+        };
+    }
+
+    ReactCliDiagnostic {
+        error_code: row.user_visible_diagnostic.error_code.clone(),
+        diagnostic_surface: row.user_visible_diagnostic.diagnostic_surface.clone(),
+        message: row.user_visible_diagnostic.message_template.clone(),
+        remediation_bead: row.user_visible_diagnostic.remediation_bead.clone(),
+        fallback_mode: row.unsupported_surface_policy.fallback_mode.clone(),
+        waiver_required: row.unsupported_surface_policy.waiver_required,
+        max_waiver_age_hours: row.unsupported_surface_policy.max_waiver_age_hours,
+        user_visible_diagnostics_required: row
+            .unsupported_surface_policy
+            .user_visible_diagnostics_required,
+        target_milestone: row.unsupported_surface_policy.target_milestone.clone(),
+        claim_language_state: row.unsupported_surface_policy.claim_language_state.clone(),
+        owning_implementation_bead: row.owning_implementation_bead.clone(),
+        parity_gate_bead: row.parity_gate_bead.clone(),
+        product_surface_bead: row.product_surface_bead.clone(),
+        verification_lane: row.verification_lane.clone(),
+    }
+}
+
+fn react_pipeline_language(
+    source_form: ReactSourceForm,
+) -> Result<ReactPipelineInputLanguage, String> {
+    match source_form {
+        ReactSourceForm::Jsx => Ok(ReactPipelineInputLanguage::Jsx),
+        ReactSourceForm::Tsx => Ok(ReactPipelineInputLanguage::Tsx),
+        ReactSourceForm::JsxFragment => Err(
+            "react compile fragment lowering is still contract-gated; use --source-form jsx or tsx"
+                .to_string(),
+        ),
+    }
+}
+
+fn react_compile_config(
+    source_form: ReactSourceForm,
+    runtime_mode: Option<ReactRuntimeMode>,
+) -> ReactCompileConfig {
+    let mut config = ReactCompileConfig::default();
+    config.lowering_config.runtime_mode = match runtime_mode {
+        Some(ReactRuntimeMode::Classic) => JsxRuntimeMode::Classic,
+        Some(ReactRuntimeMode::Automatic) | None => JsxRuntimeMode::Automatic,
+    };
+    config.lowering_config.source_file = Some(source_form.as_str().to_string());
+    config
+}
+
+fn build_react_cli_compilation_output(
+    result: &ReactCompileResult,
+    evidence: &ReactCompileEvidence,
+    language: ReactPipelineInputLanguage,
+    runtime_mode: Option<ReactRuntimeMode>,
+) -> ReactCliCompilationOutput {
+    ReactCliCompilationOutput {
+        language: language.as_str().to_string(),
+        runtime_mode: runtime_mode
+            .map(|mode| mode.as_str().to_string())
+            .unwrap_or_else(|| "automatic".to_string()),
+        generated_code: result.generated_code.clone(),
+        source_map: result.source_map.clone(),
+        input_hash: evidence.input_spec.source_hash.to_hex(),
+        generated_code_hash: evidence.output_spec.code_hash.to_hex(),
+        config_hash: result.metadata.config_hash.to_hex(),
+        feature_families: result.metadata.feature_families.clone(),
+        transform_counts: result.metadata.transform_counts.clone(),
+        receipt: ReactCliCompilationReceiptOutput {
+            schema_version: evidence.compile_receipt.schema_version.clone(),
+            component: evidence.compile_receipt.component.clone(),
+            input_hash: evidence.compile_receipt.input_hash.to_hex(),
+            output_hash: evidence.compile_receipt.output_hash.to_hex(),
+            config_hash: evidence.compile_receipt.config_hash.to_hex(),
+            process_hash: evidence.compile_receipt.process_hash.to_hex(),
         },
-        required_artifacts: row.required_artifacts.clone(),
-        output: out.map(|path| path.display().to_string()),
     }
 }
 
@@ -8054,10 +8192,10 @@ fn react_usage() -> String {
         "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>]",
         "",
         "notes:",
-        "  react compile/build currently fail closed with deterministic unsupported-surface guidance",
-        "  until the owning implementation and parity-gate beads are actually shipped.",
+        "  react compile executes shipped JSX/TSX capability rows and emits native pipeline output;",
+        "  unshipped compile rows and all react build targets still fail closed with guidance.",
         "  react doctor consumes a machine-readable mismatch catalog and emits support guidance",
-        "  even while compile/build surfaces remain blocked.",
+        "  for unsupported React product surfaces.",
     ]
     .join("\n")
 }
@@ -8071,7 +8209,7 @@ fn react_compile_usage() -> String {
         "",
         "behavior:",
         "  emits a deterministic react-cli report tied to the embedded React capability contract",
-        "  and exits non-zero until the requested capability row is shipped.",
+        "  and includes generated code plus receipt metadata for shipped compile rows.",
     ]
     .join("\n")
 }
@@ -8917,7 +9055,7 @@ mod tests {
     }
 
     #[test]
-    fn execute_react_compile_returns_blocked_exit_code_for_unshipped_capability() {
+    fn execute_react_compile_emits_native_pipeline_output_for_shipped_capability() {
         let input = std::env::temp_dir().join(format!(
             "frankenctl-react-compile-{}.tsx",
             current_unix_ns()
@@ -8926,8 +9064,7 @@ mod tests {
             "frankenctl-react-compile-report-{}.json",
             current_unix_ns()
         ));
-        fs::write(&input, "export const App = () => <div>Hello</div>;\n")
-            .expect("react compile fixture should write");
+        fs::write(&input, "<div>Hello</div>\n").expect("react compile fixture should write");
 
         let exit_code = execute_react_compile(ReactCompileArgs {
             input: input.clone(),
@@ -8940,11 +9077,19 @@ mod tests {
         })
         .expect("react compile execution should succeed");
 
-        assert_eq!(exit_code, 25);
+        assert_eq!(exit_code, 0);
         let output: serde_json::Value =
             load_json_file(&out).expect("react compile output should parse");
-        assert_eq!(output["support_status"].as_str(), Some("deferred"));
-        assert_eq!(output["blocked"].as_bool(), Some(true));
+        assert_eq!(output["support_status"].as_str(), Some("shipped"));
+        assert_eq!(output["blocked"].as_bool(), Some(false));
+        assert_eq!(output["diagnostic"]["error_code"].as_str(), Some("OK"));
+        assert_eq!(output["compilation"]["language"].as_str(), Some("tsx"));
+        assert!(
+            output["compilation"]["generated_code"]
+                .as_str()
+                .expect("generated code should be present")
+                .contains("div")
+        );
 
         let _ = fs::remove_file(input);
         let _ = fs::remove_file(out);

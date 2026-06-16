@@ -265,10 +265,10 @@
     {
       "surface_id": "runtime.react_compile_contract",
       "area": "runtime",
-      "entry_surface": "frankenctl react compile/build",
-      "support_status": "deferred",
-      "claim_language_state": "target_only",
-      "current_behavior": "React compile/build commands currently emit deterministic machine-readable rejection guidance instead of claiming shipped compile/build support.",
+      "entry_surface": "frankenctl react compile",
+      "support_status": "shipped",
+      "claim_language_state": "shipped",
+      "current_behavior": "React compile executes shipped JSX/TSX classic and automatic capability rows through the native React compilation pipeline. Fragment lowering remains deferred in the detailed React capability contract, and build targets are tracked by the separate React execution entrypoints row.",
       "evidence_sources": [
         "docs/RGC_REACT_CAPABILITY_CONTRACT_V1.md",
         "docs/rgc_react_capability_contract_v1.json",
@@ -282,7 +282,6 @@
       "linked_capability_ids": [
         "jsx-classic-runtime-compile",
         "tsx-classic-runtime-compile",
-        "fragment-lowering-contract",
         "jsx-automatic-runtime-compile",
         "tsx-automatic-runtime-compile"
       ],
@@ -291,17 +290,17 @@
       ],
       "mode_matrix_row_id": null,
       "user_visible_diagnostic": {
-        "error_code": "FE-RGC-016A-CAP-0001",
-        "diagnostic_surface": "frankenctl react compile/build",
-        "message_template": "React compile/build support is not yet shipped; keep the public wording target-only and fail closed with deterministic guidance.",
-        "remediation": "Use `frankenctl react contract` to inspect the capability matrix, then narrow the request to a documented shipped surface or wait for the owning implementation and parity beads.",
+        "error_code": null,
+        "diagnostic_surface": "frankenctl react compile",
+        "message_template": "React JSX/TSX compile is shipped for classic and automatic runtime rows and emits generated code plus receipt metadata.",
+        "remediation": "Use `frankenctl react contract` to inspect exact capability rows; route fragment lowering or build-target requests to their fail-closed rows until those rows ship.",
         "remediation_bead": "bd-1lsy.10.11.2"
       },
       "fallback_policy": {
-        "fallback_mode": "reject_with_guidance",
-        "waiver_required": true,
-        "max_waiver_age_hours": 168,
-        "user_visible_diagnostics_required": true,
+        "fallback_mode": "execute_native_react_pipeline",
+        "waiver_required": false,
+        "max_waiver_age_hours": null,
+        "user_visible_diagnostics_required": false,
         "remediation_bead": "bd-1lsy.10.11.2",
         "target_milestone": "M5"
       }

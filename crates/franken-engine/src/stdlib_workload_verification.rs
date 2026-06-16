@@ -285,6 +285,14 @@ impl ScenarioResult {
             &[0u8]
         });
         combined_data.extend_from_slice(&self.observed_cost_millionths.to_le_bytes());
+        // Commit to every semantic field: the observed deopt risk is an
+        // independent measured metric (set from decision.deopt_risk_millionths,
+        // not derived from the fields above), and `details` records the failure
+        // explanation. Omitting them let two distinct results — e.g. identical
+        // except a 50_000 vs 700_000 deopt risk — share this tamper-evident seal.
+        // `details` is the trailing field, so its bytes need no length prefix.
+        combined_data.extend_from_slice(&self.observed_deopt_risk_millionths.to_le_bytes());
+        combined_data.extend_from_slice(self.details.as_bytes());
         self.content_hash = ContentHash::compute(&combined_data);
     }
 }
@@ -980,6 +988,32 @@ mod tests {
         );
         let b = a.clone();
         assert_eq!(a.content_hash(), b.content_hash());
+    }
+
+    #[test]
+    fn scenario_result_seal_commits_to_observed_deopt_risk() {
+        // bd-gp344: observed_deopt_risk_millionths was omitted from the seal, so
+        // two results identical except their deopt risk shared a tamper-evident
+        // hash. Sealing over it pins them to distinct hashes.
+        let mk = |risk: u64| {
+            let mut r = ScenarioResult {
+                scenario_id: "s1".to_string(),
+                outcome: WorkloadOutcome::Pass,
+                actual_strategy: DispatchStrategy::InlinedCallback,
+                mutation_honored: true,
+                observed_cost_millionths: 100_000,
+                observed_deopt_risk_millionths: risk,
+                details: String::new(),
+                content_hash: ContentHash::compute(b""),
+            };
+            r.seal();
+            r.content_hash
+        };
+        assert_ne!(
+            mk(50_000),
+            mk(700_000),
+            "seal must commit to observed_deopt_risk_millionths"
+        );
     }
 
     #[test]

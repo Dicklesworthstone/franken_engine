@@ -82,6 +82,21 @@ pub struct EnvironmentSnapshot {
     pub snapshot_hash: ContentHash,
 }
 
+/// Append a variable-length field to a `Sha256` content-hash preimage with a
+/// fixed-width `u64` length prefix.
+///
+/// The snapshot hash commits to the identity of an environment, so its preimage
+/// must be injective. Concatenating adjacent variable-length `String` fields
+/// (or looping a map with no count prefix) is not injective — e.g. `os="ab",
+/// cpu_model="c"` and `os="a", cpu_model="bc"` both serialize to `abc`.
+/// Length-prefixing each variable-length field and count-prefixing the map
+/// removes the ambiguity; fixed-width fields (`u32`/`u64` via `to_le_bytes`) are
+/// self-delimiting. Cf. the same fix crate-wide in commits 7f500570 / 1d3e0542.
+fn hash_field(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+
 impl EnvironmentSnapshot {
     /// Create a new snapshot and compute its hash.
     pub fn new(
@@ -94,15 +109,16 @@ impl EnvironmentSnapshot {
         extra: BTreeMap<String, String>,
     ) -> Self {
         let mut hasher = Sha256::new();
-        hasher.update(os.as_bytes());
-        hasher.update(cpu_model.as_bytes());
+        hash_field(&mut hasher, os.as_bytes());
+        hash_field(&mut hasher, cpu_model.as_bytes());
         hasher.update(logical_cores.to_le_bytes());
         hasher.update(memory_bytes.to_le_bytes());
-        hasher.update(runtime_version.as_bytes());
-        hasher.update(engine_version.as_bytes());
+        hash_field(&mut hasher, runtime_version.as_bytes());
+        hash_field(&mut hasher, engine_version.as_bytes());
+        hasher.update((extra.len() as u64).to_le_bytes());
         for (k, v) in &extra {
-            hasher.update(k.as_bytes());
-            hasher.update(v.as_bytes());
+            hash_field(&mut hasher, k.as_bytes());
+            hash_field(&mut hasher, v.as_bytes());
         }
         let snapshot_hash = ContentHash::compute(&hasher.finalize());
         Self {
@@ -1108,6 +1124,30 @@ fn isqrt(n: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn environment_snapshot_hash_is_injective_across_field_boundary() {
+        // bd-fmdcp: os and cpu_model were bare-concatenated into the snapshot
+        // hash, so ("ab","c") and ("a","bc") both hashed "abc". Length-prefixing
+        // each field pins them to distinct hashes (other fields equal).
+        let mk = |os: &str, cpu_model: &str| {
+            EnvironmentSnapshot::new(
+                os.to_string(),
+                cpu_model.to_string(),
+                1,
+                1,
+                "rt".to_string(),
+                "eng".to_string(),
+                BTreeMap::new(),
+            )
+            .snapshot_hash
+        };
+        assert_ne!(
+            mk("ab", "c"),
+            mk("a", "bc"),
+            "os/cpu_model field boundary must not collide"
+        );
+    }
 
     fn epoch(n: u64) -> SecurityEpoch {
         SecurityEpoch::from_raw(n)

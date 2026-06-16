@@ -151,9 +151,9 @@
       "reason": "The support boundary is a documentation policy claim and the source span is validated by this gate.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 2363,
+        "end_line": 2413,
         "must_contain": "Unsupported-surface usage voids reproduction assistance",
-        "start_line": 2363
+        "start_line": 2413
       },
       "verification_command": "./scripts/run_claim_to_proof_matrix_gate.sh ci"
     },
@@ -449,9 +449,9 @@
       "reason": "Cross-platform matrix gate validates deterministic execution across Linux, macOS, and Windows platforms with content hash verification.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 1723,
+        "end_line": 1759,
         "must_contain": "Cross-platform matrix",
-        "start_line": 1723
+        "start_line": 1759
       },
       "verification_command": "./scripts/run_rgc_cross_platform_matrix_gate.sh ci"
     },
@@ -468,9 +468,9 @@
       "reason": "Sibling repo reuse contract is now machine-enforced. M.1 (bd-cixqu.13.1, commit 87418e94) added a full-integration lane to scripts/test_standalone_build.sh that records pass/skipped/failed for each of the six declared siblings; the smoke at scripts/e2e/sibling_integration_smoke.sh asserts the lane's structured output. Reproducibility bundle at artifacts/reproducibility_bundles/FE-CLAIM-024/ self-attests via env.json + manifest.json + repro.lock per docs/REPRODUCIBILITY_CONTRACT.md.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 2071,
+        "end_line": 2107,
         "must_contain": "Sibling Repositories (Binding Reuse Contract)",
-        "start_line": 2071
+        "start_line": 2107
       },
       "verification_command": "./scripts/test_standalone_build.sh full-integration"
     }

@@ -24,6 +24,17 @@ fn to_fixed_rounds_to_digits() {
 }
 
 #[test]
+fn to_fixed_truncates_fractional_digits() {
+    assert_eq!(eval("(1.5).toFixed(2.9);"), "1.50");
+    assert_eq!(eval("(1.5).toFixed('2.9');"), "1.50");
+}
+
+#[test]
+fn to_fixed_keeps_nan_digits_at_zero() {
+    assert_eq!(eval("(1.5).toFixed(0 / 0);"), "2");
+}
+
+#[test]
 fn to_fixed_zero_digits_rounds_to_integer() {
     assert_eq!(eval("let n = 3.7; n.toFixed(0);"), "4");
 }

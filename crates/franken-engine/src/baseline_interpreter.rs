@@ -6054,7 +6054,7 @@ impl InterpreterCore {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let num = Self::number_receiver_to_f64(&receiver);
                 let digits = match self.builtin_arg(args, 0)? {
-                    Some(arg) => Self::coerce_to_number(&arg).unwrap_or(0).clamp(0, 100) as usize,
+                    Some(arg) => Self::value_as_integer(&arg).clamp(0, 100) as usize,
                     None => 0,
                 };
                 Ok(Value::str(number_to_fixed_string(num, digits)))
@@ -12707,7 +12707,7 @@ impl InterpreterCore {
         // scalar offsets, consistent with this engine's other string
         // methods (charCodeAt/at/includes).
         let index = match self.builtin_arg(args, 0)? {
-            Some(arg) => Self::coerce_to_number(&arg).unwrap_or(0),
+            Some(arg) => Self::value_as_integer(&arg),
             None => 0,
         };
         if index < 0 {
@@ -12799,9 +12799,7 @@ impl InterpreterCore {
         };
         let char_len = this_str.chars().count();
         let from = match self.builtin_arg(args, 1)? {
-            Some(arg) => Self::coerce_to_number(&arg)
-                .unwrap_or(0)
-                .clamp(0, char_len as i64) as usize,
+            Some(arg) => Self::value_as_integer(&arg).clamp(0, char_len as i64) as usize,
             None => 0,
         };
         let haystack: String = this_str.chars().skip(from).collect();
@@ -12820,9 +12818,7 @@ impl InterpreterCore {
         };
         let char_len = this_str.chars().count();
         let from = match self.builtin_arg(args, 1)? {
-            Some(arg) => Self::coerce_to_number(&arg)
-                .unwrap_or(0)
-                .clamp(0, char_len as i64) as usize,
+            Some(arg) => Self::value_as_integer(&arg).clamp(0, char_len as i64) as usize,
             None => 0,
         };
         let tail: String = this_str.chars().skip(from).collect();
@@ -12843,9 +12839,7 @@ impl InterpreterCore {
         let char_len = this_str.chars().count();
         let end = match self.builtin_arg(args, 1)? {
             Some(Value::Undefined) | None => char_len,
-            Some(arg) => Self::coerce_to_number(&arg)
-                .unwrap_or(char_len as i64)
-                .clamp(0, char_len as i64) as usize,
+            Some(arg) => Self::value_as_integer(&arg).clamp(0, char_len as i64) as usize,
         };
         let head: String = this_str.chars().take(end).collect();
         Ok(Value::Bool(head.ends_with(&search)))
@@ -12866,9 +12860,7 @@ impl InterpreterCore {
         let chars: Vec<char> = this_str.chars().collect();
         let needle: Vec<char> = search.chars().collect();
         let from = match self.builtin_arg(args, 1)? {
-            Some(arg) => Self::coerce_to_number(&arg)
-                .unwrap_or(0)
-                .clamp(0, chars.len() as i64) as usize,
+            Some(arg) => Self::value_as_integer(&arg).clamp(0, chars.len() as i64) as usize,
             None => 0,
         };
         let result = if needle.is_empty() {
@@ -12905,10 +12897,8 @@ impl InterpreterCore {
         let chars: Vec<char> = this_str.chars().collect();
         let needle: Vec<char> = search.chars().collect();
         let from = match self.builtin_arg(args, 1)? {
-            Some(arg) => Self::coerce_to_number(&arg)
-                .unwrap_or(chars.len() as i64)
-                .clamp(0, chars.len() as i64) as usize,
-            None => chars.len(),
+            Some(Value::Undefined) | None => chars.len(),
+            Some(arg) => Self::value_as_integer(&arg).clamp(0, chars.len() as i64) as usize,
         };
         let result = if needle.is_empty() {
             from.min(chars.len()) as i64
@@ -12941,14 +12931,20 @@ impl InterpreterCore {
         // empty/inverted range yields "". (bd-9a8cz.1)
         let chars: Vec<char> = this_str.chars().collect();
         let len = chars.len() as i64;
-        let normalize = |n: i64| -> i64 { if n < 0 { (len + n).max(0) } else { n.min(len) } };
+        let normalize = |n: i64| -> i64 {
+            if n < 0 {
+                len.saturating_add(n).max(0)
+            } else {
+                n.min(len)
+            }
+        };
         let start = match self.builtin_arg(args, 0)? {
             Some(Value::Undefined) | None => 0,
-            Some(arg) => normalize(Self::coerce_to_number(&arg).unwrap_or(0)),
+            Some(arg) => normalize(Self::value_as_integer(&arg)),
         };
         let end = match self.builtin_arg(args, 1)? {
             Some(Value::Undefined) | None => len,
-            Some(arg) => normalize(Self::coerce_to_number(&arg).unwrap_or(0)),
+            Some(arg) => normalize(Self::value_as_integer(&arg)),
         };
         let result: String = if start < end {
             chars[start as usize..end as usize].iter().collect()
@@ -12970,11 +12966,11 @@ impl InterpreterCore {
         let clamp_idx = |n: i64| -> i64 { n.clamp(0, len) };
         let start = match self.builtin_arg(args, 0)? {
             Some(Value::Undefined) | None => 0,
-            Some(arg) => clamp_idx(Self::coerce_to_number(&arg).unwrap_or(0)),
+            Some(arg) => clamp_idx(Self::value_as_integer(&arg)),
         };
         let end = match self.builtin_arg(args, 1)? {
             Some(Value::Undefined) | None => len,
-            Some(arg) => clamp_idx(Self::coerce_to_number(&arg).unwrap_or(0)),
+            Some(arg) => clamp_idx(Self::value_as_integer(&arg)),
         };
         let (lo, hi) = if start <= end {
             (start, end)
@@ -13025,7 +13021,7 @@ impl InterpreterCore {
         // is clamped to 0 (matching the existing receiver-less handler);
         // an allocation guard rejects pathological sizes. (bd-9a8cz.1)
         let count = match self.builtin_arg(args, 0)? {
-            Some(arg) => Self::coerce_to_number(&arg).unwrap_or(0).max(0) as usize,
+            Some(arg) => Self::value_as_integer(&arg).max(0) as usize,
             None => 0,
         };
         if this_str.len().saturating_mul(count) > 10_000_000 {
@@ -16683,7 +16679,7 @@ impl InterpreterCore {
     ) -> Result<String, InterpreterError> {
         let cur_len = value.chars().count();
         let target = match self.builtin_arg(args, 0)? {
-            Some(arg) => Self::coerce_to_number(&arg).unwrap_or(0).max(0) as usize,
+            Some(arg) => Self::value_as_integer(&arg).max(0) as usize,
             None => 0,
         };
         let pad = match self.builtin_arg(args, 1)? {
@@ -16695,6 +16691,19 @@ impl InterpreterCore {
         }
         let fill_needed = target - cur_len;
         let pad_chars: Vec<char> = pad.chars().collect();
+        let cycle_bytes: usize = pad_chars.iter().map(|ch| ch.len_utf8()).sum();
+        let full_cycles = fill_needed / pad_chars.len();
+        let remainder = fill_needed % pad_chars.len();
+        let remainder_bytes: usize = pad_chars
+            .iter()
+            .take(remainder)
+            .map(|ch| ch.len_utf8())
+            .sum();
+        let projected_len = value
+            .len()
+            .saturating_add(full_cycles.saturating_mul(cycle_bytes))
+            .saturating_add(remainder_bytes);
+        self.check_string_limit(projected_len)?;
         let filler: String = (0..fill_needed)
             .map(|i| pad_chars[i % pad_chars.len()])
             .collect();
@@ -16724,7 +16733,7 @@ impl InterpreterCore {
         index: Option<Value>,
     ) -> Result<Value, InterpreterError> {
         let string_val = Self::require_object_coercible_to_string(&receiver)?;
-        let index = index.as_ref().and_then(Self::coerce_to_number).unwrap_or(0);
+        let index = index.as_ref().map(Self::value_as_integer).unwrap_or(0);
         if index < 0 {
             return Ok(Value::str(""));
         }
@@ -16740,7 +16749,7 @@ impl InterpreterCore {
         index: Option<Value>,
     ) -> Result<Value, InterpreterError> {
         let string_val = Self::require_object_coercible_to_string(&receiver)?;
-        let index = index.as_ref().and_then(Self::coerce_to_number).unwrap_or(0);
+        let index = index.as_ref().map(Self::value_as_integer).unwrap_or(0);
         if index < 0 {
             return Ok(Value::Float(Float64::new(f64::NAN)));
         }
@@ -17194,18 +17203,33 @@ impl InterpreterCore {
         Ok(Some(self.read_reg(reg)?))
     }
 
-    /// `ToIntegerOrInfinity`-style coercion for the integer index arguments
-    /// (`fromIndex`/`start`/`end`) of the non-callback `Array.prototype`
-    /// methods: integers pass through, floats truncate toward zero (`NaN` → 0),
-    /// everything else contributes 0.
+    fn f64_as_integer(value: f64) -> i64 {
+        if value.is_nan() {
+            0
+        } else {
+            value.trunc() as i64
+        }
+    }
+
+    /// `ToIntegerOrInfinity`-style coercion for integer index/count arguments:
+    /// numbers and numeric strings truncate toward zero, `NaN` contributes 0,
+    /// and non-numeric values fall back to the existing primitive defaults.
     fn value_as_integer(value: &Value) -> i64 {
         match value {
             Value::Int(n) => *n,
-            Value::Float(f) => {
-                let v = f.inner();
-                if v.is_nan() { 0 } else { v.trunc() as i64 }
-            }
+            Value::Float(f) => Self::f64_as_integer(f.inner()),
             Value::Bool(true) => 1,
+            Value::Str(s) => {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    0
+                } else {
+                    trimmed
+                        .parse::<f64>()
+                        .map(Self::f64_as_integer)
+                        .unwrap_or(0)
+                }
+            }
             _ => 0,
         }
     }

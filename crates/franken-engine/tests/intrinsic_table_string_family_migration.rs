@@ -141,6 +141,23 @@ fn e2e_char_index_family_still_serves() {
 }
 
 #[test]
+fn e2e_char_index_family_truncates_fractional_indices() {
+    assert_eq!(ev("'abc'.charAt(1.9)"), "b");
+    assert_eq!(ev("'abc'.charCodeAt(1.9)"), "98");
+    assert_eq!(ev("'abc'.codePointAt(1.9)"), "98");
+    assert_eq!(ev("'abc'.charAt('1.9')"), "b");
+    assert_eq!(ev("'abc'.charCodeAt('1.9')"), "98");
+    assert_eq!(ev("'abc'.codePointAt('1.9')"), "98");
+}
+
+#[test]
+fn e2e_char_index_family_keeps_nan_indices_at_zero() {
+    assert_eq!(ev("'abc'.charAt(0 / 0)"), "a");
+    assert_eq!(ev("'abc'.charCodeAt(0 / 0)"), "97");
+    assert_eq!(ev("'abc'.codePointAt(0 / 0)"), "97");
+}
+
+#[test]
 fn e2e_case_and_trim_family_still_serves() {
     assert_eq!(ev("'aBc'.toUpperCase()"), "ABC");
     assert_eq!(ev("'AbC'.toLowerCase()"), "abc");
@@ -160,10 +177,47 @@ fn e2e_search_family_still_serves() {
 }
 
 #[test]
+fn e2e_search_family_truncates_fractional_positions() {
+    assert_eq!(ev("'abc'.includes('a', 1.9)"), "false");
+    assert_eq!(ev("'abc'.includes('a', '1.9')"), "false");
+    assert_eq!(ev("'abc'.startsWith('b', 1.9)"), "true");
+    assert_eq!(ev("'abc'.startsWith('b', '1.9')"), "true");
+    assert_eq!(ev("'abcd'.endsWith('bc', 3.9)"), "true");
+    assert_eq!(ev("'abcd'.endsWith('bc', '3.9')"), "true");
+    assert_eq!(ev("'abcabc'.indexOf('a', 1.9)"), "3");
+    assert_eq!(ev("'abcabc'.indexOf('a', '1.9')"), "3");
+    assert_eq!(ev("'ababa'.lastIndexOf('a', 1.9)"), "0");
+    assert_eq!(ev("'ababa'.lastIndexOf('a', '1.9')"), "0");
+}
+
+#[test]
+fn e2e_search_family_keeps_nan_positions_at_zero() {
+    assert_eq!(ev("'abc'.includes('a', 0 / 0)"), "true");
+    assert_eq!(ev("'abc'.startsWith('a', 0 / 0)"), "true");
+    assert_eq!(ev("'abc'.endsWith('a', 0 / 0)"), "false");
+    assert_eq!(ev("'abcabc'.indexOf('a', 0 / 0)"), "0");
+    assert_eq!(ev("'ababa'.lastIndexOf('a', 0 / 0)"), "0");
+}
+
+#[test]
 fn e2e_slice_family_still_serves() {
     assert_eq!(ev("'hello'.slice(1, 3)"), "el");
     assert_eq!(ev("'hello'.slice(-2)"), "lo");
     assert_eq!(ev("'hello'.substring(3, 1)"), "el");
+}
+
+#[test]
+fn e2e_slice_family_truncates_fractional_bounds() {
+    assert_eq!(ev("'abcd'.slice(1.9, 3.9)"), "bc");
+    assert_eq!(ev("'abcd'.substring(1.9, 3.9)"), "bc");
+    assert_eq!(ev("'abcd'.slice('1.9', '3.9')"), "bc");
+    assert_eq!(ev("'abcd'.substring('1.9', '3.9')"), "bc");
+}
+
+#[test]
+fn e2e_slice_family_keeps_nan_bounds_at_zero() {
+    assert_eq!(ev("'abcd'.slice(0 / 0, 2)"), "ab");
+    assert_eq!(ev("'abcd'.substring(0 / 0, 2)"), "ab");
 }
 
 #[test]
@@ -179,6 +233,38 @@ fn e2e_repeat_pad_family_still_serves() {
     assert_eq!(ev("'ab'.repeat(3)"), "ababab");
     assert_eq!(ev("'7'.padStart(3, '0')"), "007");
     assert_eq!(ev("'7'.padEnd(3, '0')"), "700");
+}
+
+#[test]
+fn e2e_repeat_pad_family_truncates_fractional_lengths() {
+    assert_eq!(ev("'x'.repeat(2.9)"), "xx");
+    assert_eq!(ev("'7'.padStart(2.9, '0')"), "07");
+    assert_eq!(ev("'7'.padEnd(2.9, '0')"), "70");
+    assert_eq!(ev("'x'.repeat('2.9')"), "xx");
+    assert_eq!(ev("'7'.padStart('2.9', '0')"), "07");
+    assert_eq!(ev("'7'.padEnd('2.9', '0')"), "70");
+}
+
+#[test]
+fn e2e_repeat_pad_family_keeps_nan_lengths_at_zero() {
+    assert_eq!(ev("'x'.repeat(0 / 0)"), "");
+    assert_eq!(ev("'7'.padStart(0 / 0, '0')"), "7");
+    assert_eq!(ev("'7'.padEnd(0 / 0, '0')"), "7");
+}
+
+#[test]
+fn e2e_repeat_pad_family_rejects_huge_pad_lengths_before_allocation() {
+    let pad_start = ev("'x'.padStart(1e300, '0')");
+    assert!(
+        pad_start.contains("string allocation size exceeded"),
+        "unexpected padStart result: {pad_start}"
+    );
+
+    let pad_end = ev("'x'.padEnd(1e300, '0')");
+    assert!(
+        pad_end.contains("string allocation size exceeded"),
+        "unexpected padEnd result: {pad_end}"
+    );
 }
 
 #[test]

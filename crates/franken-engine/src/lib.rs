@@ -270,6 +270,7 @@ pub mod kernel_synthesis_contract;
 pub mod kernelized_shift_guard;
 pub mod key_attestation;
 pub mod key_derivation;
+pub mod kl_rate_limited_adversary;
 pub mod lab_runtime;
 pub mod lamport_evidence_annotation;
 pub mod lamport_total_order_merger;

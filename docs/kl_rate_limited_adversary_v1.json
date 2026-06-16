@@ -1,0 +1,20 @@
+{
+  "schema_version": "franken-engine.kl-rate-limited-adversary.v1",
+  "parameterization_id": "kl-rate-limited-adversary-v1",
+  "units": "microln",
+  "initial_budget_microln": 1000000,
+  "saturation_threshold_microln": 50000,
+  "depletion_rates_microln": {
+    "prompt_injection": 80000,
+    "capability_probe": 120000,
+    "prototype_pollution": 150000,
+    "supply_chain_backdoor": 220000,
+    "ambient_authority": 100000,
+    "typed_effect_laundering": 130000
+  },
+  "saturation_receipt": {
+    "content_hash": "sha256 over schema, budget, operation, class, event, requested/applied depletion, remaining budget, threshold, truncation flags, class allocation and class spend",
+    "signature": "AuthenticityHash::compute_keyed over receipt content_hash, event_index, and budget_id",
+    "logging": "structured fields include schema_version, component, budget_id, operation, attack_class, event_index, remaining_after_microln, saturated, and content_hash"
+  }
+}

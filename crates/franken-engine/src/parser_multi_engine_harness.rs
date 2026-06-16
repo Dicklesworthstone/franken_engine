@@ -920,35 +920,51 @@ fn auto_bead_id_from_fingerprint(fingerprint: &str) -> String {
     format!("bd-auto-{normalized}")
 }
 
+/// Append a variable-length field to a `Sha256` run-id preimage with a
+/// fixed-width `u64` length prefix, so adjacent variable-length fields (and
+/// uncounted collections) cannot be re-split into a colliding decomposition.
+/// Cf. commits 7f500570 / 1d3e0542.
+fn hash_field(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+
 fn derive_run_id(
     config: &MultiEngineHarnessConfig,
     catalog_hash: &str,
     fixtures: &[HarnessFixtureSpec],
 ) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(catalog_hash.as_bytes());
+    hash_field(&mut hasher, catalog_hash.as_bytes());
     hasher.update(config.seed.to_le_bytes());
-    hasher.update(config.locale.as_bytes());
-    hasher.update(config.timezone.as_bytes());
+    hash_field(&mut hasher, config.locale.as_bytes());
+    hash_field(&mut hasher, config.timezone.as_bytes());
 
     // Sort engines by engine_id for deterministic run ID.
     let mut sorted_engines: Vec<_> = config.engines.iter().collect();
     sorted_engines.sort_by(|a, b| a.engine_id.cmp(&b.engine_id));
+    hasher.update((sorted_engines.len() as u64).to_le_bytes());
     for engine in &sorted_engines {
-        hasher.update(engine.engine_id.as_bytes());
-        hasher.update(engine.version_pin.as_bytes());
-        hasher.update(engine.kind.as_str().as_bytes());
-        if let Some(command) = engine.command.as_ref() {
-            hasher.update(command.as_bytes());
+        hash_field(&mut hasher, engine.engine_id.as_bytes());
+        hash_field(&mut hasher, engine.version_pin.as_bytes());
+        hash_field(&mut hasher, engine.kind.as_str().as_bytes());
+        match engine.command.as_ref() {
+            Some(command) => {
+                hasher.update([1u8]);
+                hash_field(&mut hasher, command.as_bytes());
+            }
+            None => hasher.update([0u8]),
         }
+        hasher.update((engine.args.len() as u64).to_le_bytes());
         for arg in &engine.args {
-            hasher.update(arg.as_bytes());
+            hash_field(&mut hasher, arg.as_bytes());
         }
     }
 
+    hasher.update((fixtures.len() as u64).to_le_bytes());
     for fixture in fixtures {
-        hasher.update(fixture.id.as_bytes());
-        hasher.update(fixture.expected_hash.as_bytes());
+        hash_field(&mut hasher, fixture.id.as_bytes());
+        hash_field(&mut hasher, fixture.expected_hash.as_bytes());
     }
 
     format!("sha256:{}", hex::encode(hasher.finalize()))
@@ -2051,6 +2067,24 @@ fn saturating_u64(value: u128) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn derive_run_id_is_injective_across_locale_timezone_boundary() {
+        // bd-avgrw: locale and timezone were bare-concatenated into the run-id
+        // preimage, so (locale="a", timezone="bc") and (locale="ab", timezone="c")
+        // both hashed "abc". Length-prefixing pins them to distinct run ids.
+        let mk = |locale: &str, timezone: &str| {
+            let mut config = MultiEngineHarnessConfig::with_defaults(0);
+            config.locale = locale.to_string();
+            config.timezone = timezone.to_string();
+            derive_run_id(&config, "catalog", &[])
+        };
+        assert_ne!(
+            mk("a", "bc"),
+            mk("ab", "c"),
+            "locale/timezone field boundary must not collide"
+        );
+    }
 
     #[test]
     fn derive_engine_seed_is_stable() {

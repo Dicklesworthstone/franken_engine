@@ -32,6 +32,27 @@ use crate::security_epoch::SecurityEpoch;
 use crate::spectral_fleet_convergence::{ConvergenceCertificate, GossipTopology, SpectralAnalyzer};
 
 // ---------------------------------------------------------------------------
+// Signing/hash preimage helpers
+// ---------------------------------------------------------------------------
+//
+// Preimages that are signed or content-hashed must be *injective*: distinct
+// logical inputs must never share a preimage. Concatenating adjacent free-form
+// `String`s, or looping over a collection with no count marker, breaks that —
+// `("ab","c")` collides with `("a","bc")`. These helpers append self-delimiting
+// fields; fixed-width fields (numerics) need no prefix.
+
+/// Append `bytes` with a fixed-width `u64` little-endian length prefix.
+fn push_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    buf.extend_from_slice(bytes);
+}
+
+/// Append a `u64` little-endian count prefix for a collection.
+fn push_count(buf: &mut Vec<u8>, count: usize) {
+    buf.extend_from_slice(&(count as u64).to_le_bytes());
+}
+
+// ---------------------------------------------------------------------------
 // ContainmentThresholds — policy-defined decision thresholds
 // ---------------------------------------------------------------------------
 
@@ -236,19 +257,25 @@ pub struct ContainmentReceipt {
 impl ContainmentReceipt {
     /// Compute the signing preimage for this receipt.
     pub fn signing_preimage(&self) -> Vec<u8> {
+        // Injective preimage: the free-form id fields are length-prefixed and
+        // the evidence_ids collection is count-prefixed so distinct receipts
+        // can never share a signing preimage (e.g. action_id="ab",ext="c" must
+        // not alias action_id="a",ext="bc", and evidence_ids ["ab","c"] must
+        // not alias ["a","bc"]). Fixed-width fields need no prefix.
         let mut preimage = Vec::new();
-        preimage.extend_from_slice(self.action_id.as_bytes());
-        preimage.extend_from_slice(self.extension_id.as_bytes());
+        push_len_prefixed(&mut preimage, self.action_id.as_bytes());
+        push_len_prefixed(&mut preimage, self.extension_id.as_bytes());
         preimage.extend_from_slice(&[self.action_type.severity()]);
         // Sort evidence_ids for determinism before signing.
         let mut sorted_evidence = self.evidence_ids.clone();
         sorted_evidence.sort();
+        push_count(&mut preimage, sorted_evidence.len());
         for eid in &sorted_evidence {
-            preimage.extend_from_slice(eid.as_bytes());
+            push_len_prefixed(&mut preimage, eid.as_bytes());
         }
         preimage.extend_from_slice(&self.posterior_snapshot.to_le_bytes());
         preimage.extend_from_slice(&self.policy_version.to_le_bytes());
-        preimage.extend_from_slice(self.node_id.as_str().as_bytes());
+        push_len_prefixed(&mut preimage, self.node_id.as_str().as_bytes());
         preimage.extend_from_slice(&self.epoch.as_u64().to_le_bytes());
         preimage.extend_from_slice(&self.timestamp_ns.to_le_bytes());
         preimage.push(u8::from(self.degraded_mode));
@@ -2430,6 +2457,34 @@ mod tests {
         let mut other = base.clone();
         other.extension_id = "ext-2".into();
         assert_ne!(base.signing_preimage(), other.signing_preimage());
+    }
+
+    #[test]
+    fn receipt_signing_preimage_injective_across_id_and_evidence_boundaries_bd_133bg() {
+        // Regression (bd-133bg): action_id+extension_id were concatenated with
+        // no length prefix and evidence_ids looped with no count prefix, so
+        // distinct receipts could share a signing preimage (-> same signature).
+        let mk = |action_id: &str, extension_id: &str, evidence: Vec<&str>| {
+            ContainmentReceipt {
+                action_id: action_id.into(),
+                extension_id: extension_id.into(),
+                action_type: ContainmentAction::Sandbox,
+                evidence_ids: evidence.into_iter().map(String::from).collect(),
+                posterior_snapshot: 300_000,
+                policy_version: 1,
+                node_id: test_node("local"),
+                epoch: SecurityEpoch::GENESIS,
+                timestamp_ns: 1_000,
+                degraded_mode: false,
+                escalation_depth: 0,
+                signature: AuthenticityHash::compute_keyed(b"k", b"v"),
+            }
+            .signing_preimage()
+        };
+        // id boundary: ("ab","c") must not alias ("a","bc").
+        assert_ne!(mk("ab", "c", vec![]), mk("a", "bc", vec![]));
+        // evidence-list boundary: ["ab","c"] must not alias ["a","bc"].
+        assert_ne!(mk("x", "y", vec!["ab", "c"]), mk("x", "y", vec!["a", "bc"]));
     }
 
     #[test]

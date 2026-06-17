@@ -194,6 +194,9 @@ run_selftest() {
   run_case "$tmp_root" degraded_missing_optional
   run_case "$tmp_root" blocked_contradictory_queue
   run_case "$tmp_root" contaminated_local_fallback
+  run_case "$tmp_root" current_bd_o4cbn_9_7_ledger_no_verdict
+  run_case "$tmp_root" current_bd_o4cbn_1_4_h1_bench_no_verdict
+  run_case "$tmp_root" current_bd_fqlfw_2_4_perf_arm_no_verdict_degraded
 
   printf 'rch_remote_compile_stall_bundle_smoke_artifacts=%s\n' "$tmp_root"
 }

@@ -28,7 +28,11 @@ set -euo pipefail
 #   - fingerprint.json          host/toolchain/git fingerprint of this run
 #   - summary.md                1-page before/after table + verdict
 #
-# Usage: scripts/perf/h1_bench_validate.sh   (run from repo root)
+# Usage:
+#   scripts/perf/h1_bench_validate.sh
+#
+# This script does not run Cargo locally. It submits `cargo bench` itself
+# through rch so the command classifies as cargo_bench.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
@@ -36,7 +40,16 @@ cd "$REPO_ROOT"
 GROUP="real_runtime_hot_paths"
 TARGET_BENCH="evidence_ledger_bundle"
 PASS1_DIR="tests/artifacts/perf/20260520T214829Z-prof-pass1"
-CRIT_DIR="target/criterion"
+RUN_TS="${H1_BENCH_VALIDATE_RUN_TS:-$(date -u +%Y%m%dT%H%M%SZ)}"
+CARGO_TARGET_DIR_DEFAULT="/tmp/rch_target_franken_engine_h1_bench_validate_${USER:-agent}_${RUN_TS}"
+EFFECTIVE_CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$CARGO_TARGET_DIR_DEFAULT}"
+CRIT_DIR="$EFFECTIVE_CARGO_TARGET_DIR/criterion"
+RCH_EXEC_TIMEOUT_SECONDS="${RCH_EXEC_TIMEOUT_SECONDS:-5400}"
+RCH_LOG_DIR="${H1_BENCH_VALIDATE_RCH_LOG_DIR:-tests/artifacts/perf/h1_bench/rch_logs}"
+PASS1_RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc"
+UNIT_SEPARATOR=$'\037'
+PASS1_ENCODED_RUSTFLAGS="-Cforce-frame-pointers=yes${UNIT_SEPARATOR}-Clinker=cc"
+export RCH_BUILD_TIMEOUT_SEC="$RCH_EXEC_TIMEOUT_SECONDS"
 
 BENCHES=(
     parser_arena_materialization
@@ -49,39 +62,107 @@ BENCHES=(
     transport_certificate_serialization
 )
 
-RUN_TS="$(date -u +%Y%m%dT%H%M%SZ)"
 RUN_DIR="tests/artifacts/perf/h1_bench/${RUN_TS}"
 mkdir -p "$RUN_DIR"
 echo "[h1.4] run dir: $RUN_DIR"
 
-# ---------------------------------------------------------------------------
-# 1. Build the bench with the identical pass1 flags.
-# ---------------------------------------------------------------------------
-echo "[h1.4] building hot_paths bench (pass1 flags)..."
-RCH_CARGO_WRAPPER_BYPASS=1 \
-RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc" \
-CARGO_INCREMENTAL=0 \
-"${CARGO:-/home/ubuntu/.cargo/bin/cargo}" bench --bench hot_paths --no-run
+strip_ansi_file() {
+    sed -E 's/\x1B\[[0-9;]*[[:alpha:]]//g' "$1"
+}
 
-# ---------------------------------------------------------------------------
-# 2. Locate the freshest bench binary.
-# ---------------------------------------------------------------------------
-HOT_NEW="$(
-    find target/release/deps -maxdepth 1 -type f -name 'hot_paths-*' ! -name '*.d' \
-        | sort \
-        | tail -1
-)"
-if [[ -z "$HOT_NEW" ]]; then
-    echo "[h1.4] no hot_paths bench binary found under target/release/deps" >&2
+reject_rch_local_fallback() {
+    local log_path="$1"
+    if strip_ansi_file "$log_path" | grep -Eiq 'Remote execution failed: .*running locally|Remote toolchain failure, falling back to local|falling back to local|fallback to local|local fallback|running locally|\[RCH\] local \(|Failed to query daemon:.*running locally|Dependency preflight blocked remote execution|RCH-E326'; then
+        echo "[h1.4] refusing result: rch reported local fallback or dependency-preflight failure" >&2
+        return 1
+    fi
+}
+
+if ! command -v rch >/dev/null 2>&1; then
+    echo "[h1.4] rch is required for H1.4 heavy bench validation" >&2
+    exit 2
+fi
+
+mkdir -p "$RCH_LOG_DIR"
+rch_log_path="${RCH_LOG_DIR}/${RUN_TS}.log"
+remote_target_dir="$EFFECTIVE_CARGO_TARGET_DIR"
+echo "[h1.4] heavy validation must run remotely through rch"
+printf '[h1.4] probe command: RCH_REQUIRE_REMOTE=1 RCH_BUILD_TIMEOUT_SEC=%q rch diagnose --dry-run --json -- env RCH_CARGO_WRAPPER_BYPASS=1 CARGO_ENCODED_RUSTFLAGS=%q CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=%q %q bench --bench hot_paths -- --save-baseline post_h1 %q\n' \
+    "$RCH_BUILD_TIMEOUT_SEC" \
+    "$PASS1_ENCODED_RUSTFLAGS" \
+    "$remote_target_dir" \
+    "${CARGO:-/home/ubuntu/.cargo/bin/cargo}" \
+    "$GROUP"
+
+# The probe proves the exact heavy command is classified as cargo_bench and
+# selected for remote execution before any benchmark work starts.
+if ! RCH_REQUIRE_REMOTE=1 \
+    RCH_BUILD_TIMEOUT_SEC="$RCH_EXEC_TIMEOUT_SECONDS" \
+    rch diagnose --dry-run --json -- \
+    env \
+    RCH_CARGO_WRAPPER_BYPASS=1 \
+    CARGO_ENCODED_RUSTFLAGS="$PASS1_ENCODED_RUSTFLAGS" \
+    CARGO_INCREMENTAL=0 \
+    CARGO_TARGET_DIR="${remote_target_dir}" \
+    "${CARGO:-/home/ubuntu/.cargo/bin/cargo}" bench --bench hot_paths -- \
+    --save-baseline post_h1 "$GROUP" \
+    >"$RUN_DIR/rch_dry_run.json"; then
+    echo "[h1.4] rch dry-run rejected the hot_paths bench; see $RUN_DIR/rch_dry_run.json" >&2
     exit 1
 fi
-echo "[h1.4] bench binary: $HOT_NEW"
+python3 - "$RUN_DIR/rch_dry_run.json" <<'PYRCHDRY'
+import json
+import sys
 
-# ---------------------------------------------------------------------------
-# 3. Run the full group, saving as Criterion baseline `post_h1`.
-# ---------------------------------------------------------------------------
-echo "[h1.4] running benchmark group (save-baseline post_h1)..."
-"$HOT_NEW" --bench --save-baseline post_h1 "$GROUP" 2>&1 | tee "$RUN_DIR/bench_output.txt"
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as f:
+    report = json.load(f)
+
+dry_run = report.get("data", {}).get("dry_run", {})
+classification = report.get("data", {}).get("classification", {})
+if dry_run.get("would_offload") is not True:
+    reason = dry_run.get("reason") or classification.get("reason") or "unknown"
+    raise SystemExit(f"rch dry-run would not offload hot_paths bench: {reason}")
+PYRCHDRY
+
+echo "[h1.4] remote cargo bench command:" | tee "$rch_log_path"
+printf 'RCH_REQUIRE_REMOTE=1 RCH_BUILD_TIMEOUT_SEC=%q timeout %q rch exec -- env RCH_CARGO_WRAPPER_BYPASS=1 CARGO_ENCODED_RUSTFLAGS=%q CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=%q %q bench --bench hot_paths -- --save-baseline post_h1 %q\n' \
+    "$RCH_EXEC_TIMEOUT_SECONDS" \
+    "$RCH_EXEC_TIMEOUT_SECONDS" \
+    "$PASS1_ENCODED_RUSTFLAGS" \
+    "$remote_target_dir" \
+    "${CARGO:-/home/ubuntu/.cargo/bin/cargo}" \
+    "$GROUP" \
+    | tee -a "$rch_log_path"
+
+run_status=0
+if ! RCH_REQUIRE_REMOTE=1 \
+    RCH_BUILD_TIMEOUT_SEC="$RCH_EXEC_TIMEOUT_SECONDS" \
+    timeout "$RCH_EXEC_TIMEOUT_SECONDS" \
+    rch exec -- \
+    env \
+    RCH_CARGO_WRAPPER_BYPASS=1 \
+    CARGO_ENCODED_RUSTFLAGS="$PASS1_ENCODED_RUSTFLAGS" \
+    CARGO_INCREMENTAL=0 \
+    CARGO_TARGET_DIR="${remote_target_dir}" \
+    "${CARGO:-/home/ubuntu/.cargo/bin/cargo}" bench --bench hot_paths -- \
+    --save-baseline post_h1 "$GROUP" \
+    2>&1 | tee "$RUN_DIR/bench_output.txt" | tee -a "$rch_log_path"; then
+    run_status=1
+fi
+
+if ! reject_rch_local_fallback "$rch_log_path"; then
+    exit 1
+fi
+if [[ "$run_status" != "0" ]]; then
+    exit "$run_status"
+fi
+if [[ ! -s "$CRIT_DIR/$GROUP/$TARGET_BENCH/post_h1/estimates.json" ]]; then
+    echo "[h1.4] missing synced Criterion estimates under $CRIT_DIR" >&2
+    echo "[h1.4] rch should sync custom CARGO_TARGET_DIR criterion/** artifacts for cargo bench; treat this as an artifact-sync failure" >&2
+    exit 1
+fi
+echo "[h1.4] using Criterion output synced back from rch target: $CRIT_DIR"
 
 # ---------------------------------------------------------------------------
 # 4. Reconstruct the pass1 Criterion baseline from saved estimates so that
@@ -100,22 +181,60 @@ for fn in "${BENCHES[@]}"; do
     fi
 done
 
-echo "[h1.4] criterion diff vs pass1 (target bench)..."
-"$HOT_NEW" --bench --load-baseline post_h1 --baseline pass1 \
-    "$GROUP/$TARGET_BENCH" 2>&1 | tee "$RUN_DIR/criterion_diff_pass1.txt" || \
-    echo "[h1.4] (criterion --baseline diff non-fatal; authoritative verdict is computed below)"
+{
+    echo "# PERF-H1.4 computed pass1 comparison"
+    echo
+    echo "Remote-only mode submits cargo bench directly through rch, so this file"
+    echo "records the authoritative computed comparison from synced Criterion"
+    echo "estimates instead of running the benchmark binary locally for Criterion's"
+    echo "interactive --baseline diff."
+} >"$RUN_DIR/criterion_diff_pass1.txt"
 
 # ---------------------------------------------------------------------------
 # 5. Fingerprint for this run.
 # ---------------------------------------------------------------------------
-python3 - "$RUN_DIR" <<'PYFP'
-import json, subprocess, sys, time, platform
-run_dir = sys.argv[1]
+python3 - "$RUN_DIR" "${RUN_DIR}/rch_dry_run.json" "$rch_log_path" "$remote_target_dir" "$PASS1_RUSTFLAGS" "$PASS1_ENCODED_RUSTFLAGS" <<'PYFP'
+import json, os, subprocess, sys, time, platform
+(
+    run_dir,
+    rch_dry_run_path,
+    rch_log_path,
+    cargo_target_dir,
+    pass1_rustflags,
+    pass1_encoded_rustflags,
+) = sys.argv[1:7]
 def sh(*a):
     try:
         return subprocess.check_output(a, text=True, stderr=subprocess.DEVNULL).strip()
     except Exception:
         return ""
+
+def load_rch_dry_run(path):
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            report = json.load(f)
+    except Exception:
+        return {"path": path, "parse_error": True}
+    data = report.get("data", {})
+    classification = data.get("classification", {})
+    dry_run = data.get("dry_run", {})
+    worker_selection = data.get("worker_selection", {})
+    return {
+        "path": path,
+        "command": data.get("command"),
+        "normalized_command": data.get("normalized_command"),
+        "classification_kind": classification.get("kind"),
+        "classification_confidence": classification.get("confidence"),
+        "would_offload": dry_run.get("would_offload"),
+        "worker": worker_selection.get("worker"),
+        "reason": dry_run.get("reason") or worker_selection.get("reason"),
+        "daemon": data.get("daemon", {}),
+        "local_capabilities": data.get("local_capabilities", {}),
+    }
+
+host_scope = "local_postprocess_host"
 fp = {
     "run_id": f"{int(time.time())}_{int(time.time()*1e6)%1000000}",
     "captured_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -123,14 +242,28 @@ fp = {
     "git_dirty": bool(sh("git", "status", "--porcelain")),
     "bead": "PERF-H1.4 (bd-o4cbn.1.4)",
     "baseline_ref": "20260520T214829Z-prof-pass1",
+    "execution": {
+        "mode": "rch_remote",
+        "cargo_target_dir": cargo_target_dir,
+        "build_timeout_sec": os.environ.get("RCH_BUILD_TIMEOUT_SEC", ""),
+        "rch_log_path": rch_log_path,
+        "rch_dry_run": load_rch_dry_run(rch_dry_run_path),
+        "remote_fingerprint_note": (
+            "hardware/toolchain below describe the local post-processing host; "
+            "remote worker selection/classification evidence is in execution.rch_dry_run "
+            "and the rch log"
+        ),
+    },
     "hardware": {
+        "scope": host_scope,
         "cpu_model": next((l.split(":",1)[1].strip() for l in open("/proc/cpuinfo")
                            if l.startswith("model name")), ""),
         "kernel": platform.release(),
     },
-    "toolchain": {"rustc": sh("rustc", "--version"), "python": platform.python_version()},
+    "toolchain": {"scope": host_scope, "rustc": sh("rustc", "--version"), "python": platform.python_version()},
     "build_flags": {
-        "RUSTFLAGS": "-C force-frame-pointers=yes -C linker=cc",
+        "RUSTFLAGS_SEMANTICS": pass1_rustflags,
+        "CARGO_ENCODED_RUSTFLAGS": pass1_encoded_rustflags,
         "CARGO_INCREMENTAL": "0",
     },
 }
@@ -141,6 +274,7 @@ PYFP
 # 6. Authoritative verdict: compare post_h1 estimates vs pass1 estimates,
 #    write events.jsonl + summary.md, copy target post estimates, set exit code.
 # ---------------------------------------------------------------------------
+set +e
 python3 - "$RUN_DIR" "$CRIT_DIR" "$GROUP" "$TARGET_BENCH" "$PASS1_DIR" "${BENCHES[@]}" <<'PYVERDICT'
 import json, os, sys, time
 
@@ -233,6 +367,18 @@ if not os.path.exists(tgt_post):
 import shutil
 shutil.copy(tgt_post, os.path.join(run_dir, "criterion_evidence_ledger_bundle_post_h1.json"))
 
+# computed diff artifact
+with open(os.path.join(run_dir, "criterion_diff_pass1.txt"), "a") as f:
+    f.write("\n## Computed Target Comparison\n\n")
+    for fn, base, post, delta_pct, note in rows:
+        if fn == target:
+            f.write(f"{group}/{fn}\n")
+            f.write(f"  pass1 mean: {base['mean']:.1f} ns\n")
+            f.write(f"  post_h1 mean: {post['mean']:.1f} ns\n")
+            f.write(f"  delta: {delta_pct:+.2f}%\n")
+            f.write(f"  post_h1 CI95: [{post['lo']:.1f}, {post['hi']:.1f}] ns\n")
+            f.write(f"  verdict: {note}\n")
+
 # summary.md
 with open(os.path.join(run_dir, "summary.md"), "w") as f:
     f.write(f"# PERF-H1.4 Bench Validation — {target_run_id}\n\n")
@@ -262,6 +408,7 @@ print(f"[h1.4] target drop = {target_drop_pct:.2f}%  overall = "
 sys.exit(0 if all_pass else 1)
 PYVERDICT
 VERDICT_RC=$?
+set -e
 
 echo "[h1.4] artifacts written to $RUN_DIR"
 ls -1 "$RUN_DIR"

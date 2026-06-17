@@ -1,0 +1,26 @@
+{
+  "schema_version": "franken-engine.swarm-artifact-doctor-perf-rch-contract.v1",
+  "required_files": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md",
+    "bench_output.txt",
+    "summary.md",
+    "target_estimate.json"
+  ],
+  "required_manifest_fields": [
+    {
+      "path": "final_verdict",
+      "code": "missing_final_verdict",
+      "detail": "run_manifest.json lacks an explicit final_verdict; partial perf/RCH bundles are not closeout evidence",
+      "remediation": "Record the terminal source/test/bench verdict, or classify the run as no-verdict transport evidence before closeout."
+    },
+    {
+      "path": "artifact_paths.target_estimate_json",
+      "code": "missing_target_estimate_path",
+      "detail": "run_manifest.json lacks artifact_paths.target_estimate_json for the perf estimate receipt",
+      "remediation": "Regenerate the closeout bundle with the perf target estimate artifact path."
+    }
+  ]
+}

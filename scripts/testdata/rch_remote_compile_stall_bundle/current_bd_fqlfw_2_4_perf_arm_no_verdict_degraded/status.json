@@ -1,0 +1,33 @@
+{
+  "api_version": "1.0",
+  "timestamp": "2026-06-16T05:01:54Z",
+  "command": "status",
+  "success": true,
+  "data": {
+    "schema_version": "v1",
+    "daemon": {
+      "active_builds": [
+        {
+          "id": 29889417506193489,
+          "project_id": "franken_engine-5d919732",
+          "worker_id": "vmi1227854",
+          "command": "RCH_REQUIRE_REMOTE=1 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 RUSTFLAGS='-C linker=cc -C debuginfo=0' CARGO_TARGET_DIR=/tmp/rch_target_bolddove_bd_fqlfw_2_4_smoke_20260616 rch exec --json --no-self-healing -- cargo test -p frankenengine-engine --test differential_oracle_perf_integration perf_arm_emits_report_events_and_honest_denominators -- --nocapture",
+          "last_progress_at": "2026-06-16T04:58:29Z",
+          "progress_age_secs": 205,
+          "last_heartbeat_at": "2026-06-16T05:01:54Z",
+          "heartbeat_phase": "execute",
+          "heartbeat_detail": "remote_exec_start",
+          "detector_progress_stale": true,
+          "detector_confidence": 0.25
+        }
+      ],
+      "workers": [
+        {
+          "id": "vmi1227854",
+          "status": "healthy",
+          "pressure_state": "healthy"
+        }
+      ]
+    }
+  }
+}

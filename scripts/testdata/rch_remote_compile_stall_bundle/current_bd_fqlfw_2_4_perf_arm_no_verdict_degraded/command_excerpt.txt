@@ -1,0 +1,4 @@
+Selected worker: vmi1227854
+Executing command remotely: cargo test -p frankenengine-engine --test differential_oracle_perf_integration perf_arm_emits_report_events_and_honest_denominators -- --nocapture
+Compiling frankenengine-engine v0.1.0
+No compiler diagnostic or test verdict was emitted before build 29889417506193489 was cancelled.

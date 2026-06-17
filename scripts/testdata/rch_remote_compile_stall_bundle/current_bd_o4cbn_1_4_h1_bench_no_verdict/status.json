@@ -1,0 +1,33 @@
+{
+  "api_version": "1.0",
+  "timestamp": "2026-06-16T19:48:00Z",
+  "command": "status",
+  "success": true,
+  "data": {
+    "schema_version": "v1",
+    "daemon": {
+      "active_builds": [
+        {
+          "id": 29890796996001804,
+          "project_id": "franken_engine-5d919732",
+          "worker_id": "vmi1156319",
+          "command": "RCH_REQUIRE_REMOTE=1 RCH_BUILD_TIMEOUT_SEC=5400 timeout 5400 rch exec -- env RCH_CARGO_WRAPPER_BYPASS=1 CARGO_ENCODED_RUSTFLAGS=$'-Cforce-frame-pointers=yes\\037-Clinker=cc' CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_h1_bench_validate_ubuntu_20260616T193800Z /home/ubuntu/.cargo/bin/cargo bench --bench hot_paths -- --save-baseline post_h1 real_runtime_hot_paths",
+          "last_progress_at": "2026-06-16T19:41:46Z",
+          "progress_age_secs": 374,
+          "last_heartbeat_at": "2026-06-16T19:47:56Z",
+          "heartbeat_phase": "execute",
+          "heartbeat_detail": "remote_exec_start",
+          "detector_progress_stale": true,
+          "detector_confidence": 0.25
+        }
+      ],
+      "workers": [
+        {
+          "id": "vmi1156319",
+          "status": "healthy",
+          "pressure_state": "healthy"
+        }
+      ]
+    }
+  }
+}

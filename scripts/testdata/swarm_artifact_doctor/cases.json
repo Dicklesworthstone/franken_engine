@@ -13,6 +13,30 @@
       }
     },
     {
+      "case_id": "complete_perf_rch_closeout",
+      "contract": "perf_rch_contract.json",
+      "expected": {
+        "status": "pass",
+        "errors": 0,
+        "warnings": 0,
+        "required_codes": [],
+        "exit_code": 0
+      }
+    },
+    {
+      "case_id": "partial_perf_rch_no_verdict",
+      "contract": "perf_rch_contract.json",
+      "expected": {
+        "status": "fail",
+        "errors": 1,
+        "warnings": 0,
+        "required_codes": [
+          "missing_final_verdict"
+        ],
+        "exit_code": 42
+      }
+    },
+    {
       "case_id": "missing_manifest",
       "contract": true,
       "expected": {

@@ -23,12 +23,6 @@
 )]
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
-
-// golden_diag lives under tests/_support/ (bd-ub6x8.18); pulled in via #[path]
-// so cargo does not compile it as a standalone integration-test binary.
-#[path = "_support/golden_diag.rs"]
-mod golden_diag;
 
 use frankenengine_engine::policy_theorem_compiler::{
     AuthorityGrant, Capability, CompilationResult, CompilerError, Constraint, Counterexample,
@@ -110,15 +104,6 @@ fn signing_pair() -> (
     (sk, vk)
 }
 
-fn policy_compiler_golden_path(test_name: &str) -> PathBuf {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("tests");
-    path.push("golden");
-    path.push("policy_theorem_compiler");
-    path.push(format!("{test_name}.json"));
-    path
-}
-
 fn canonical_policy_result_json(result: &CompilationResult) -> String {
     let mut json =
         serde_json::to_string_pretty(result).expect("policy theorem result should serialize");
@@ -126,17 +111,10 @@ fn canonical_policy_result_json(result: &CompilationResult) -> String {
     json
 }
 
-/// Assert policy compilation result matches golden file.
-/// UPDATE_GOLDENS + read-or-panic + .actual sweep is delegated to
-/// golden_diag::GoldenDiag (bd-ub6x8.3).
-fn assert_policy_compiler_golden(result: &CompilationResult, test_name: &str) {
-    let golden_file = policy_compiler_golden_path(test_name);
+/// Assert policy compilation result matches the insta snapshot.
+fn assert_policy_compiler_snapshot(result: &CompilationResult, test_name: &str) {
     let actual_json = canonical_policy_result_json(result);
-    golden_diag::GoldenDiag {
-        framework_name: "Policy theorem compiler golden",
-        regen_env_var: "UPDATE_GOLDENS",
-    }
-    .assert_golden_match(&actual_json, &golden_file, test_name, None);
+    insta::assert_snapshot!(test_name, actual_json);
 }
 
 fn complex_policy_with_constraints() -> PolicyIr {
@@ -674,7 +652,7 @@ fn compile_valid_policy_all_passes() {
 fn golden_compile_valid_policy_result() {
     let compiler = PolicyTheoremCompiler::new();
     let result = compiler.compile(&valid_policy()).unwrap();
-    assert_policy_compiler_golden(&result, "valid_policy_all_passes");
+    assert_policy_compiler_snapshot(&result, "valid_policy_all_passes");
 }
 
 #[test]
@@ -684,7 +662,7 @@ fn golden_compile_complex_constraints_result() {
         .compile(&complex_policy_with_constraints())
         .unwrap();
     assert!(result.all_passed);
-    assert_policy_compiler_golden(&result, "complex_constraints_all_passes");
+    assert_policy_compiler_snapshot(&result, "complex_constraints_all_passes");
 }
 
 #[test]
@@ -695,7 +673,7 @@ fn golden_compile_failure_counterexamples_result() {
         .unwrap();
     assert!(!result.all_passed);
     assert_eq!(result.counterexamples.len(), 4);
-    assert_policy_compiler_golden(&result, "failure_counterexamples");
+    assert_policy_compiler_snapshot(&result, "failure_counterexamples");
 }
 
 #[test]

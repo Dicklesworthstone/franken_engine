@@ -1693,13 +1693,7 @@ fn evidence_ledger_cli_writes_real_artifacts_and_structured_logs() {
 // ---------------------------------------------------------------------------
 
 use regex::Regex;
-use std::path::Path;
 use std::sync::LazyLock;
-
-// golden_diag lives under tests/_support/ (bd-ub6x8.18); pulled in via #[path]
-// so cargo does not compile it as a standalone integration-test binary.
-#[path = "_support/golden_diag.rs"]
-mod golden_diag;
 
 // Hoisted scrub patterns (bd-ub6x8.13).
 static SCRUB_UUID: LazyLock<Regex> = LazyLock::new(|| {
@@ -1711,19 +1705,12 @@ static SCRUB_EVIDENCE_HASH: LazyLock<Regex> =
 static SCRUB_ENTRY_ID: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#""entry_id": "[^"]+""#).unwrap());
 
-/// Assert evidence entry matches golden file with scrubbed dynamic values.
-/// UPDATE_GOLDENS + read-or-panic + .actual sweep is delegated to
-/// golden_diag::GoldenDiag (bd-ub6x8.3).
-fn assert_evidence_golden(test_name: &str, entry: &EvidenceEntry) {
-    let golden_path = Path::new("tests/golden/evidence_ledger").join(format!("{test_name}.golden"));
+/// Assert evidence entry matches its insta snapshot with scrubbed dynamic values.
+fn assert_evidence_snapshot(test_name: &str, entry: &EvidenceEntry) {
     let actual =
         serde_json::to_string_pretty(entry).expect("EvidenceEntry should serialize to JSON");
     let scrubbed_actual = scrub_evidence_dynamic_fields(&actual);
-    golden_diag::GoldenDiag {
-        framework_name: "Evidence ledger golden",
-        regen_env_var: "UPDATE_GOLDENS",
-    }
-    .assert_golden_match(&scrubbed_actual, &golden_path, test_name, None);
+    insta::assert_snapshot!(test_name, scrubbed_actual);
 }
 
 /// Scrub dynamic values from evidence entry JSON for stable golden comparison.
@@ -1784,7 +1771,7 @@ fn golden_evidence_entry_security_action_sandbox() {
     .build()
     .expect("Evidence entry should build successfully");
 
-    assert_evidence_golden("security_action_sandbox", &entry);
+    assert_evidence_snapshot("security_action_sandbox", &entry);
 }
 
 #[test]
@@ -1818,7 +1805,7 @@ fn golden_evidence_entry_capability_decision_deny() {
     .build()
     .expect("Evidence entry should build successfully");
 
-    assert_evidence_golden("capability_decision_deny", &entry);
+    assert_evidence_snapshot("capability_decision_deny", &entry);
 }
 
 #[test]
@@ -1869,7 +1856,7 @@ fn golden_evidence_entry_policy_update() {
     .build()
     .expect("Evidence entry should build successfully");
 
-    assert_evidence_golden("policy_update", &entry);
+    assert_evidence_snapshot("policy_update", &entry);
 }
 
 #[test]
@@ -1918,7 +1905,7 @@ fn golden_evidence_entry_extension_lifecycle_terminate() {
     .build()
     .expect("Evidence entry should build successfully");
 
-    assert_evidence_golden("extension_lifecycle_terminate", &entry);
+    assert_evidence_snapshot("extension_lifecycle_terminate", &entry);
 }
 
 #[test]
@@ -1940,5 +1927,5 @@ fn golden_evidence_entry_minimal_contract_evaluation() {
     .build()
     .expect("Minimal evidence entry should build successfully");
 
-    assert_evidence_golden("minimal_contract_evaluation", &entry);
+    assert_evidence_snapshot("minimal_contract_evaluation", &entry);
 }

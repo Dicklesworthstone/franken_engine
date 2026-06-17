@@ -7,9 +7,6 @@ use frankenengine_engine::test262_conformance_runner::{
 };
 use serde::Serialize;
 
-// bd-ub6x8.6.3: migrated from tests/golden_vectors/ to tests/golden/wire_vectors/.
-const EXPECTED: &str = include_str!("golden/wire_vectors/test262_runner_accounting_v1.json");
-
 #[derive(Debug, Serialize)]
 struct CategoryCase {
     path: &'static str,
@@ -77,5 +74,5 @@ fn test262_runner_accounting_matches_golden() {
     };
 
     let actual = format!("{}\n", serde_json::to_string_pretty(&snapshot).unwrap());
-    assert_eq!(actual, EXPECTED);
+    insta::assert_snapshot!("test262_runner_accounting", actual);
 }

@@ -1804,6 +1804,9 @@ impl ExecutionOrchestrator {
             crate::ir_contract::Ir3Instruction::EnterCatch { .. } => "enter_catch",
             crate::ir_contract::Ir3Instruction::EnterFinally => "enter_finally",
             crate::ir_contract::Ir3Instruction::EndFinally => "end_finally",
+            crate::ir_contract::Ir3Instruction::DiscardAbruptCompletion => {
+                "discard_abrupt_completion"
+            }
             crate::ir_contract::Ir3Instruction::CreateClosure { .. } => "create_closure",
             crate::ir_contract::Ir3Instruction::PushCapture { .. } => "push_capture",
             crate::ir_contract::Ir3Instruction::PushScope => "push_scope",

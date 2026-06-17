@@ -80,6 +80,17 @@ fn make_failing_result(scenario_id: &str, outcome: WorkloadOutcome) -> ScenarioR
     r
 }
 
+fn expected_mutation_contract_honored(
+    contract: MutationContract,
+    strategy: DispatchStrategy,
+) -> bool {
+    !contract.permits_in_place_mutation()
+        || matches!(
+            strategy,
+            DispatchStrategy::InterpreterCallback | DispatchStrategy::FallbackSlow
+        )
+}
+
 /// Build a DispatchTrace with decisions for specified method/callback pairs.
 fn make_trace(pairs: &[(StdlibMethod, CallbackKind)]) -> DispatchTrace {
     let decisions: Vec<DispatchDecision> =
@@ -484,15 +495,16 @@ fn enrichment_verify_scenario_unexpected_fallback() {
 }
 
 // ---------------------------------------------------------------------------
-// check_mutation_contract: always true in current implementation
+// check_mutation_contract: MayMutate requires live-callback strategies
 // ---------------------------------------------------------------------------
 
 #[test]
 fn enrichment_check_mutation_contract_all_pass() {
     for contract in MutationContract::ALL {
         for strategy in DispatchStrategy::ALL {
-            assert!(
+            assert_eq!(
                 check_mutation_contract(*contract, strategy),
+                expected_mutation_contract_honored(*contract, *strategy),
                 "contract={contract}, strategy={strategy}"
             );
         }

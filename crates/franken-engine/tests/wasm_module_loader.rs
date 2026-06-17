@@ -10,7 +10,8 @@ use frankenengine_engine::module_resolver::{
     ResolutionErrorCode, wasm_module_required_capabilities,
 };
 use frankenengine_engine::wasm_runtime_lane::{
-    WASM_MODULE_ROUTE_COMPONENT, WasmModuleImportRoute, WasmModuleRouteError,
+    WASM_MODULE_ROUTE_COMPONENT, WasmBoundaryValue, WasmModuleImportRoute, WasmModuleRouteError,
+    WasmValueType,
 };
 
 fn context() -> ResolutionContext {
@@ -19,6 +20,34 @@ fn context() -> ResolutionContext {
         "decision-wasm-loader",
         "policy-wasm-loader",
     )
+}
+
+fn wasm_fixture(bytes: &[u8]) -> String {
+    String::from_utf8(bytes.to_vec()).expect("test wasm fixture should be utf-8 compatible")
+}
+
+fn const_i32_answer_wasm() -> String {
+    wasm_fixture(&[
+        0x00, 0x61, 0x73, 0x6d, // magic
+        0x01, 0x00, 0x00, 0x00, // version
+        0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f, // type: () -> i32
+        0x03, 0x02, 0x01, 0x00, // function: type 0
+        0x07, 0x0a, 0x01, 0x06, b'a', b'n', b's', b'w', b'e', b'r', 0x00,
+        0x00, // export answer
+        0x0a, 0x06, 0x01, 0x04, 0x00, 0x41, 0x2a, 0x0b, // body: i32.const 42
+    ])
+}
+
+fn param_i32_const_wasm() -> String {
+    wasm_fixture(&[
+        0x00, 0x61, 0x73, 0x6d, // magic
+        0x01, 0x00, 0x00, 0x00, // version
+        0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f, // type: (i32) -> i32
+        0x03, 0x02, 0x01, 0x00, // function: type 0
+        0x07, 0x0b, 0x01, 0x07, b'e', b'c', b'h', b'o', b'i', b's', b'h', 0x00,
+        0x00, // export echoish
+        0x0a, 0x06, 0x01, 0x04, 0x00, 0x41, 0x07, 0x0b, // body: i32.const 7
+    ])
 }
 
 fn register_wasm_fixture() -> DeterministicModuleResolver {
@@ -33,7 +62,7 @@ fn register_wasm_fixture() -> DeterministicModuleResolver {
     resolver
         .register_workspace_module(
             "/app/math.wasm",
-            ModuleDefinition::new(ModuleSyntax::EsModule, "\0asm deterministic fixture"),
+            ModuleDefinition::new(ModuleSyntax::EsModule, const_i32_answer_wasm()),
         )
         .unwrap();
     resolver
@@ -89,6 +118,14 @@ fn granted_wasm_import_routes_to_wasm_runtime_lane() {
         route.required_capabilities,
         wasm_module_required_capabilities()
     );
+    let export = route
+        .abi
+        .function_exports
+        .get("answer")
+        .expect("answer export should be typed");
+    assert_eq!(export.signature.params, Vec::<WasmValueType>::new());
+    assert_eq!(export.signature.results, vec![WasmValueType::I32]);
+    assert_eq!(export.const_body, Some(vec![WasmBoundaryValue::I32(42)]));
 }
 
 #[test]
@@ -152,6 +189,92 @@ fn wasm_import_replay_is_byte_identical() {
 }
 
 #[test]
+fn wasm_export_call_returns_deterministic_typed_result() {
+    let resolver = register_wasm_fixture();
+    let request = ModuleRequest::new("/app/main.mjs", ImportStyle::Import);
+    let chain = resolver
+        .resolve_chain(&request, &context(), &wasm_policy())
+        .expect("explicit wasm grants should allow the dependency chain");
+    let wasm = chain
+        .iter()
+        .find(|outcome| outcome.module.canonical_specifier == "/app/math.wasm")
+        .expect("wasm dependency should be present in the chain");
+
+    let route = WasmModuleImportRoute::from_resolved_module(&wasm.module)
+        .expect("wasm module should route");
+
+    assert_eq!(
+        route
+            .call_export("answer", &[])
+            .expect("answer should be callable"),
+        vec![WasmBoundaryValue::I32(42)]
+    );
+}
+
+#[test]
+fn wasm_export_call_rejects_wrong_parameter_type() {
+    let mut resolver = DeterministicModuleResolver::new("/app");
+    resolver
+        .register_workspace_module(
+            "/app/typed.wasm",
+            ModuleDefinition::new(ModuleSyntax::Wasm, param_i32_const_wasm()),
+        )
+        .unwrap();
+    let request = ModuleRequest::new("/app/typed.wasm", ImportStyle::Import);
+    let resolved = resolver
+        .resolve(&request, &context(), &wasm_policy())
+        .expect("typed wasm module should resolve");
+    let route = WasmModuleImportRoute::from_resolved_module(&resolved.module)
+        .expect("typed wasm module should route");
+
+    assert_eq!(
+        route
+            .call_export("echoish", &[WasmBoundaryValue::I32(9)])
+            .expect("i32 argument should pass boundary type check"),
+        vec![WasmBoundaryValue::I32(7)]
+    );
+
+    let err = route
+        .call_export("echoish", &[WasmBoundaryValue::I64(9)])
+        .expect_err("i64 argument should fail the i32 boundary contract");
+    assert_eq!(
+        err,
+        WasmModuleRouteError::ParameterTypeMismatch {
+            module_id: "/app/typed.wasm".to_string(),
+            export_name: "echoish".to_string(),
+            parameter_index: 0,
+            expected: WasmValueType::I32,
+            actual: WasmValueType::I64,
+        }
+    );
+}
+
+#[test]
+fn invalid_wasm_module_fails_closed_at_route_boundary() {
+    let mut resolver = DeterministicModuleResolver::new("/app");
+    resolver
+        .register_workspace_module(
+            "/app/bad.wasm",
+            ModuleDefinition::new(ModuleSyntax::Wasm, "\0asm deterministic fixture"),
+        )
+        .unwrap();
+    let request = ModuleRequest::new("/app/bad.wasm", ImportStyle::Import);
+    let resolved = resolver
+        .resolve(&request, &context(), &wasm_policy())
+        .expect("resolver should only classify the wasm module");
+
+    let err = WasmModuleImportRoute::from_resolved_module(&resolved.module)
+        .expect_err("invalid wasm bytes should fail closed before runtime routing");
+    assert_eq!(
+        err,
+        WasmModuleRouteError::InvalidWasmModule {
+            module_id: "/app/bad.wasm".to_string(),
+            reason: "unsupported wasm version".to_string(),
+        }
+    );
+}
+
+#[test]
 fn non_wasm_module_cannot_route_to_wasm_lane() {
     let resolver = register_wasm_fixture();
     let request = ModuleRequest::new("/app/main.mjs", ImportStyle::Import);
@@ -174,10 +297,7 @@ fn non_wasm_module_cannot_route_to_wasm_lane() {
 fn esm_loader_accepts_wasm_module_record() {
     let mut graph = ModuleGraph::new();
     graph
-        .add_module(EsmModule::wasm(
-            "/app/math.wasm",
-            "\0asm deterministic fixture",
-        ))
+        .add_module(EsmModule::wasm("/app/math.wasm", const_i32_answer_wasm()))
         .expect("wasm module should enter the ESM graph");
 
     let linked = graph.link().expect("single wasm module should link");

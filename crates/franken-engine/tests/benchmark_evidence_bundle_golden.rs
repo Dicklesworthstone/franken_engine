@@ -6,7 +6,6 @@
 #![forbid(unsafe_code)]
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 
 use frankenengine_engine::benchmark_evidence_bundle::{
     BenchmarkRun, BundleConfig, EnvironmentSnapshot, EvidenceBundle, ParityTarget, ParityVerdict,
@@ -14,14 +13,6 @@ use frankenengine_engine::benchmark_evidence_bundle::{
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
-
-// golden_diag lives under tests/_support/ (bd-ub6x8.18); pulled in via #[path]
-// so cargo does not compile it as a standalone integration-test binary.
-#[path = "_support/golden_diag.rs"]
-mod golden_diag;
-
-// Inline assert_golden + summarize_golden_diff replaced by the shared
-// GoldenDiag helper (bd-ub6x8.3).
 
 // ---------------------------------------------------------------------------
 // Test fixture helpers
@@ -169,16 +160,10 @@ fn golden_bundle_report_deterministic_output() {
     let report = generate_report(&bundle, &config);
 
     // Serialize to JSON with consistent formatting
-    let report_json =
-        serde_json::to_string_pretty(&report).expect("BundleReport should be JSON serializable");
+    let report_json = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&report).expect("BundleReport should be JSON serializable")
+    );
 
-    // Assert against golden snapshot via shared GoldenDiag helper.
-    let test_name = "bundle_report_output";
-    let fixture_path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/golden/{test_name}.golden"));
-    golden_diag::GoldenDiag {
-        framework_name: "Benchmark evidence bundle golden",
-        regen_env_var: "UPDATE_GOLDENS",
-    }
-    .assert_golden_match(&report_json, &fixture_path, test_name, None);
+    insta::assert_snapshot!("bundle_report_output", report_json);
 }

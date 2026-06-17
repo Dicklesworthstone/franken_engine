@@ -66,7 +66,7 @@ fn scrub_golden_output(input: &str) -> String {
     scrubbed
 }
 
-fn assert_golden(test_name: &str, actual: &str) {
+fn assert_parser_boundary_snapshot(test_name: &str, actual: &str) {
     insta::assert_snapshot!(test_name, actual);
 }
 
@@ -226,7 +226,7 @@ fn parser_boundary_golden_regression_test() {
             serde_json::to_string_pretty(&result).expect("should serialize golden result");
         let scrubbed = scrub_golden_output(&json_output);
 
-        assert_golden(&format!("parser_boundary_case_{:02}", i), &scrubbed);
+        assert_parser_boundary_snapshot(&format!("parser_boundary_case_{:02}", i), &scrubbed);
     }
 }
 
@@ -240,14 +240,14 @@ fn parser_boundary_known_regression_cases() {
     let result = run_parser_boundary_golden(&max_recursion);
     let json_output = serde_json::to_string_pretty(&result).unwrap();
     let scrubbed = scrub_golden_output(&json_output);
-    assert_golden("parser_boundary_max_recursion", &scrubbed);
+    assert_parser_boundary_snapshot("parser_boundary_max_recursion", &scrubbed);
 
     // Case 2: Minimal valid module
     let minimal_module = vec![0x01, 0x00, 0x00, 0x00];
     let result = run_parser_boundary_golden(&minimal_module);
     let json_output = serde_json::to_string_pretty(&result).unwrap();
     let scrubbed = scrub_golden_output(&json_output);
-    assert_golden("parser_boundary_minimal_module", &scrubbed);
+    assert_parser_boundary_snapshot("parser_boundary_minimal_module", &scrubbed);
 }
 
 #[test]

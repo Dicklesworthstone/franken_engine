@@ -1,0 +1,23 @@
+---
+source: tests/deterministic_serde_golden.rs
+expression: actual
+---
+{
+  "value": {
+    "Map": {
+      "alpha": {
+        "U64": 1
+      },
+      "beta": {
+        "U64": 1
+      },
+      "mu": {
+        "U64": 1
+      },
+      "zeta": {
+        "U64": 1
+      }
+    }
+  },
+  "expected_sha256_hex": "600ead5a002bab82f9348436f3f295151ccead63cd2c3ef5615a1423ee436497"
+}

@@ -11,10 +11,6 @@ use frankenengine_engine::ir_contract::{
 };
 use serde::Serialize;
 
-// bd-ub6x8.6.3: migrated from tests/golden_vectors/ to tests/golden/wire_vectors/.
-const EXPECTED: &str =
-    include_str!("golden/wire_vectors/baseline_malformed_dispatch_fail_closed.json");
-
 #[derive(Debug, Serialize)]
 struct ErrorSnapshot {
     kind: &'static str,
@@ -160,5 +156,5 @@ fn baseline_malformed_dispatch_fail_closed_matches_golden() {
     };
 
     let actual = format!("{}\n", serde_json::to_string_pretty(&snapshot).unwrap());
-    assert_eq!(actual, EXPECTED);
+    insta::assert_snapshot!("baseline_malformed_dispatch_fail_closed", actual);
 }

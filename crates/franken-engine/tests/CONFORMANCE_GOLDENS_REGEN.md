@@ -105,8 +105,10 @@ engine-internal serializer), the right move is to:
 - File a follow-up bead under [bd-85qfs](https://).
 - Decide *per-corpus* whether `UPDATE_GOLDENS=1` is acceptable for
   that corpus.
-- Wire it up using the `tests/_support/golden_diag.rs::GoldenDiag`
-  helper (the same one the general golden suite uses post-bd-ub6x8.3).
+- Wire it up with an explicit per-corpus `insta` snapshot or
+  deterministic writer. Use `tests/_support/golden_diag.rs` only for
+  shared scrub rules and CLI binary resolution; the old `GoldenDiag`
+  fixture-comparison API was retired in bd-ub6x8.21.
 
 ## Related Docs
 

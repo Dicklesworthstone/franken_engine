@@ -8,8 +8,6 @@
 
 #![forbid(unsafe_code)]
 
-use std::path::PathBuf;
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -17,12 +15,6 @@ use frankenengine_engine::jsx_tsx_parser::{JsxNode, JsxParserConfig, JsxRuntimeM
 use frankenengine_engine::react_jsx_lowering::{
     BuildMode, ReactLoweringConfig, ReactLoweringResult, lower_jsx_to_react,
 };
-
-// golden_diag lives under tests/_support/ so cargo does NOT compile it as a
-// standalone (empty) integration-test binary (bd-ub6x8.18). Sibling callers
-// pull it in via the same #[path] attribute.
-#[path = "_support/golden_diag.rs"]
-mod golden_diag;
 
 /// Test case configuration for React compilation golden tests.
 #[derive(Debug, Clone)]
@@ -193,16 +185,6 @@ fn react_compilation_test_cases() -> Vec<ReactCompilationTestCase> {
     ]
 }
 
-/// Get the path to the golden file for a test case.
-fn golden_file_path(test_name: &str) -> PathBuf {
-    // bd-ub6x8.6.2: migrated from tests/goldens/react_compilation/ to tests/golden/react_compilation/.
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("golden")
-        .join("react_compilation")
-        .join(format!("{}.json", test_name))
-}
-
 /// Convert a typed fixture into a comparison value with source coordinates stripped.
 fn normalized_fixture_value(fixture: &ReactCompilationFixture) -> Value {
     let mut value =
@@ -277,19 +259,13 @@ fn compile_to_fixture(test_case: &ReactCompilationTestCase) -> ReactCompilationF
 fn test_react_compilation_golden(test_case: &ReactCompilationTestCase) {
     let current_fixture = compile_to_fixture(test_case);
 
-    // Use improved golden diagnostics with span normalization
+    // Keep span normalization before snapshot comparison so source coordinates
+    // do not make the fixture depend on parser implementation details.
     let current_value = normalized_fixture_value(&current_fixture);
     let actual_json = serde_json::to_string_pretty(&current_value)
         .expect("React fixture should serialize to JSON");
 
-    let diag = golden_diag::GoldenDiag::react();
-    let fixture_path = golden_file_path(test_case.name);
-    let hint = format!(
-        "React compilation: mode={:?}, dev={}, jsx_source='{}'",
-        test_case.runtime_mode, test_case.is_dev, test_case.jsx_source
-    );
-
-    diag.assert_golden_match(&actual_json, &fixture_path, test_case.name, Some(&hint));
+    insta::assert_snapshot!(test_case.name, actual_json);
 }
 
 #[cfg(test)]

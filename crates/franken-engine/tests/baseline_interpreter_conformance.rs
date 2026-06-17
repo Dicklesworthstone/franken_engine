@@ -11,8 +11,6 @@ use frankenengine_engine::ir_contract::{
 };
 
 const BASELINE_INTERPRETER: &str = include_str!("../src/baseline_interpreter.rs");
-// bd-ub6x8.6.3: migrated from tests/golden_vectors/ to tests/golden/wire_vectors/.
-const DISPATCH_ARMS_GOLDEN: &str = include_str!("golden/wire_vectors/baseline_dispatch_arms.txt");
 
 fn render_dispatch_arm_snapshot(source: &str) -> String {
     let mut capabilities = Vec::new();
@@ -77,10 +75,8 @@ fn builtin_ids_for(capability: &str) -> Vec<u32> {
 
 #[test]
 fn baseline_dispatch_arm_snapshot_matches_golden() {
-    assert_eq!(
-        render_dispatch_arm_snapshot(BASELINE_INTERPRETER),
-        DISPATCH_ARMS_GOLDEN
-    );
+    let actual = render_dispatch_arm_snapshot(BASELINE_INTERPRETER);
+    insta::assert_snapshot!("baseline_dispatch_arm_snapshot", actual);
 }
 
 #[test]

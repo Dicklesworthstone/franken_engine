@@ -88,14 +88,14 @@ fn render_instruction(instruction: &Ir3Instruction) -> String {
 /// The bless/review/`.snap.new`-sibling flow is insta-native (bd-ub6x8.21);
 /// the per-case `name` becomes the snapshot name so each case keeps a
 /// distinct fixture, matching the prior one-file-per-case layout.
-fn assert_lowering_golden(case: &LoweringGoldenCase) {
+fn assert_lowering_snapshot(case: &LoweringGoldenCase) {
     let actual = render_lowered_ir3(case);
     insta::assert_snapshot!(case.name, actual);
 }
 
 #[test]
 fn golden_lowering_optional_chaining() {
-    assert_lowering_golden(&LoweringGoldenCase {
+    assert_lowering_snapshot(&LoweringGoldenCase {
         name: "optional_chaining",
         source: "null?.value;\n",
         goal: ParseGoal::Script,
@@ -104,7 +104,7 @@ fn golden_lowering_optional_chaining() {
 
 #[test]
 fn golden_lowering_nullish_coalescing() {
-    assert_lowering_golden(&LoweringGoldenCase {
+    assert_lowering_snapshot(&LoweringGoldenCase {
         name: "nullish_coalescing",
         source: "null ?? 42;\n",
         goal: ParseGoal::Script,
@@ -113,7 +113,7 @@ fn golden_lowering_nullish_coalescing() {
 
 #[test]
 fn golden_lowering_try_catch() {
-    assert_lowering_golden(&LoweringGoldenCase {
+    assert_lowering_snapshot(&LoweringGoldenCase {
         name: "try_catch",
         source: "try { throw 1; } catch (error) { error; }\n",
         goal: ParseGoal::Script,
@@ -122,7 +122,7 @@ fn golden_lowering_try_catch() {
 
 #[test]
 fn golden_lowering_async_function() {
-    assert_lowering_golden(&LoweringGoldenCase {
+    assert_lowering_snapshot(&LoweringGoldenCase {
         name: "async_function",
         source: "async function load() { return 1; }\n",
         goal: ParseGoal::Script,
@@ -131,7 +131,7 @@ fn golden_lowering_async_function() {
 
 #[test]
 fn golden_lowering_generator_function() {
-    assert_lowering_golden(&LoweringGoldenCase {
+    assert_lowering_snapshot(&LoweringGoldenCase {
         name: "generator_function",
         source: "function* gen() { yield 1; }\n",
         goal: ParseGoal::Script,
@@ -140,7 +140,7 @@ fn golden_lowering_generator_function() {
 
 #[test]
 fn golden_lowering_for_of_destructuring() {
-    assert_lowering_golden(&LoweringGoldenCase {
+    assert_lowering_snapshot(&LoweringGoldenCase {
         name: "for_of_destructuring",
         source: "for (const [first] of pairs) { first; }\n",
         goal: ParseGoal::Script,

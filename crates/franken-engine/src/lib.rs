@@ -340,6 +340,7 @@ pub mod optimized_metadata_substrate;
 pub mod oracle_release_gate;
 pub mod orchestration_context_contract;
 pub mod outcome_capability_narrowing;
+pub mod pac_bayes_bound;
 pub mod package_intake;
 pub mod parallel_interference_gate;
 pub mod parallel_parser;

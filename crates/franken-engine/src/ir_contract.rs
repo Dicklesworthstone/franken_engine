@@ -520,6 +520,9 @@ pub enum Ir1Op {
     EnterFinally,
     /// End a finally block.  Lowered to `Ir3Instruction::EndFinally`.
     EndFinally,
+    /// Discard the pending throw/return for a finally block whose own
+    /// break/continue completion overrides the in-flight completion.
+    DiscardAbruptCompletion,
     /// Pop/discard top-of-stack value. At module (top-level) scope this also
     /// records the discarded value as the script's expression-statement
     /// completion value (moved into register 0).
@@ -790,6 +793,10 @@ impl Ir1Op {
             Self::EndFinally => {
                 CanonicalValue::map_from_entries([("op", CanonicalValue::str("end_finally"))])
             }
+            Self::DiscardAbruptCompletion => CanonicalValue::map_from_entries([(
+                "op",
+                CanonicalValue::str("discard_abrupt_completion"),
+            )]),
             Self::Pop => CanonicalValue::map_from_entries([("op", CanonicalValue::str("pop"))]),
             Self::Discard => {
                 CanonicalValue::map_from_entries([("op", CanonicalValue::str("discard"))])
@@ -1381,6 +1388,9 @@ pub enum Ir3Instruction {
     /// End a finally block.  If a pending exception exists, re-throw it;
     /// otherwise continue to the next instruction.
     EndFinally,
+    /// Discard pending exception/return state when a break/continue issued
+    /// from inside a finally body overrides the previous completion.
+    DiscardAbruptCompletion,
 
     // ── Closure / scope-chain instructions ────────────────────────────
     /// Create a closure from a function index and the current environment.
@@ -1725,6 +1735,10 @@ impl Ir3Instruction {
             Self::EndFinally => {
                 CanonicalValue::map_from_entries([("op", CanonicalValue::str("end_finally"))])
             }
+            Self::DiscardAbruptCompletion => CanonicalValue::map_from_entries([(
+                "op",
+                CanonicalValue::str("discard_abrupt_completion"),
+            )]),
             Self::Mod { dst, lhs, rhs } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("mod")),
                 ("dst", CanonicalValue::U64(u64::from(*dst))),
@@ -3335,6 +3349,7 @@ mod tests {
             Ir3Instruction::EnterCatch { dst: 0 },
             Ir3Instruction::EnterFinally,
             Ir3Instruction::EndFinally,
+            Ir3Instruction::DiscardAbruptCompletion,
         ];
         for instr in &instructions {
             let cv = instr.canonical_value();
@@ -4528,6 +4543,7 @@ mod tests {
             Ir3Instruction::EnterCatch { dst: 5 },
             Ir3Instruction::EnterFinally,
             Ir3Instruction::EndFinally,
+            Ir3Instruction::DiscardAbruptCompletion,
         ];
         for instr in &instrs {
             let json = serde_json::to_string(instr).expect("serialize derived Serialize");
@@ -5014,6 +5030,10 @@ mod tests {
                 "delete_property",
             ),
             (Ir3Instruction::Halt, "halt"),
+            (
+                Ir3Instruction::DiscardAbruptCompletion,
+                "discard_abrupt_completion",
+            ),
         ];
         for (instr, expected_op) in &cases {
             let cv = instr.canonical_value();

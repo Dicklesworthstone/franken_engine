@@ -57,22 +57,46 @@ crate-test root.
   `tests/golden/wire_vectors/optimal_stopping_certificate_v1.json` file is
   retained for audit history until an explicit deletion/move approval is given.
 
-### `baseline_dispatch_arms.txt`, `baseline_malformed_dispatch_fail_closed.json`
+### `baseline_malformed_dispatch_golden__baseline_malformed_dispatch_fail_closed.snap` *(moved to `tests/snapshots/` — bd-ub6x8.21)*
 
-- **Owning tests:** `tests/baseline_malformed_dispatch_golden.rs`,
-  `tests/baseline_interpreter_conformance.rs`.
-- **Subject under test:** baseline-interpreter dispatch arm enumeration
-  (text) and malformed-dispatch fail-closed contract (JSON).
+- **Owning test:** `tests/baseline_malformed_dispatch_golden.rs`.
+  Migrated from the embedded `EXPECTED` include of
+  `tests/golden/wire_vectors/baseline_malformed_dispatch_fail_closed.json`
+  to `insta::assert_snapshot!`.
+- **Subject under test:** malformed baseline-interpreter dispatch inputs,
+  including fail-closed binding-kind and UTF-16 boundary behavior.
 - **Regen:**
-  `UPDATE_GOLDENS=1 cargo test -p frankenengine-engine --test baseline_malformed_dispatch_golden`
-  and `... --test baseline_interpreter_conformance`.
+  `INSTA_UPDATE=always cargo test -p frankenengine-engine --test baseline_malformed_dispatch_golden`,
+  followed by `cargo insta review` for interactive blessing.
+- **Legacy audit fixture retained:**
+  `tests/golden/wire_vectors/baseline_malformed_dispatch_fail_closed.json`
+  remains on disk until explicit deletion/move approval is given.
 
-### `benchmark_diagnostics_output_v1.json`
+### `baseline_interpreter_conformance__baseline_dispatch_arm_snapshot.snap` *(moved to `tests/snapshots/` — bd-ub6x8.21)*
+
+- **Owning test:** `tests/baseline_interpreter_conformance.rs`.
+  Migrated from the embedded `DISPATCH_ARMS_GOLDEN` include of
+  `tests/golden/wire_vectors/baseline_dispatch_arms.txt` to
+  `insta::assert_snapshot!`.
+- **Subject under test:** baseline-interpreter dispatch arm enumeration
+  (text), including total, unique, and duplicate-count invariants.
+- **Regen:**
+  `INSTA_UPDATE=always cargo test -p frankenengine-engine --test baseline_interpreter_conformance baseline_dispatch_arm_snapshot_matches_golden -- --nocapture`,
+  followed by `cargo insta review` for interactive blessing.
+- **Legacy audit fixture retained:**
+  `tests/golden/wire_vectors/baseline_dispatch_arms.txt` remains on disk until
+  explicit deletion/move approval is given.
+
+### `benchmark_runtime_diagnostics_snapshot__benchmark_and_runtime_diagnostics_outputs_match_golden.snap` *(moved to `tests/snapshots/` — bd-ub6x8.21)*
 
 - **Owning test:** `tests/benchmark_runtime_diagnostics_snapshot.rs`.
-- **Subject under test:** runtime-diagnostics snapshot wire format v1.
+- **Subject under test:** combined benchmark-evidence bundle report and
+  runtime-diagnostics output snapshot for the diagnostics wire surface.
 - **Regen:**
-  `UPDATE_GOLDENS=1 cargo test -p frankenengine-engine --test benchmark_runtime_diagnostics_snapshot`
+  `INSTA_UPDATE=always cargo test -p frankenengine-engine --test benchmark_runtime_diagnostics_snapshot`,
+  followed by `cargo insta review` for interactive blessing. The legacy
+  `tests/golden/wire_vectors/benchmark_diagnostics_output_v1.json` file is
+  retained for audit history until an explicit deletion/move approval is given.
 
 ### `deterministic_serde.json`
 
@@ -83,13 +107,20 @@ crate-test root.
   owning suite with `UPDATE_GOLDENS=1` if the schema intentionally
   changes.
 
-### `extension_host_lifecycle_authority_decisions.json`
+### `extension_host_lifecycle_integration__authority_decision_sequence.snap` *(moved to `tests/snapshots/` — bd-ub6x8.21)*
 
 - **Owning test:** `tests/extension_host_lifecycle_integration.rs`.
+  Migrated from the embedded include of
+  `tests/golden/wire_vectors/extension_host_lifecycle_authority_decisions.json`
+  to `insta::assert_snapshot!`.
 - **Subject under test:** extension-host lifecycle authority decision
   ledger format.
 - **Regen:**
-  `UPDATE_GOLDENS=1 cargo test -p frankenengine-engine --test extension_host_lifecycle_integration`
+  `INSTA_UPDATE=always cargo test -p frankenengine-engine --test extension_host_lifecycle_integration authority_decision_sequence_matches_golden_snapshot -- --nocapture`,
+  followed by `cargo insta review` for interactive blessing.
+- **Legacy audit fixture retained:**
+  `tests/golden/wire_vectors/extension_host_lifecycle_authority_decisions.json`
+  remains on disk until explicit deletion/move approval is given.
 
 ### `revocation_check_event_schema.json`, `revocation_check_event_v1_wire.json`, `signed_revocation_check_event_v1_wire.json`
 
@@ -99,30 +130,52 @@ crate-test root.
 - **Regen:**
   `UPDATE_GOLDENS=1 cargo test -p frankenengine-engine --test revocation_enforcement_integration`
 
-### `semantic_flattening_inventory_hashes_v1.json`
+### `semantic_flattening_inventory_golden__semantic_flattening_inventory_hashes.snap` *(moved to `tests/snapshots/` — bd-ub6x8.21)*
 
 - **Owning test:** `tests/semantic_flattening_inventory_golden.rs`.
+  Migrated from the embedded `EXPECTED` include of
+  `tests/golden/wire_vectors/semantic_flattening_inventory_hashes_v1.json`
+  to `insta::assert_snapshot!`; the test still decodes the serialized
+  JSON and checks per-occurrence hash stability after the snapshot assertion.
 - **Subject under test:** semantic-flattening inventory hash table —
   any drift in the canonical flattening yields a different inventory
   hash and the golden trips.
 - **Regen:**
-  `UPDATE_GOLDENS=1 cargo test -p frankenengine-engine --test semantic_flattening_inventory_golden`
+  `INSTA_UPDATE=always cargo test -p frankenengine-engine --test semantic_flattening_inventory_golden`,
+  followed by `cargo insta review` for interactive blessing.
+- **Legacy audit fixture retained:**
+  `tests/golden/wire_vectors/semantic_flattening_inventory_hashes_v1.json`
+  remains on disk until explicit deletion/move approval is given.
 
-### `seqlock_fastpath_recovery_surface.json`
+### `seqlock_fastpath_golden__seqlock_fastpath_recovery_surface.snap` *(moved to `tests/snapshots/` — bd-ub6x8.21)*
 
-- **Owning test:** `tests/seqlock_fastpath_golden.rs`.
+- **Owning test:** `tests/seqlock_fastpath_golden.rs`. Migrated from the
+  embedded `EXPECTED` include of
+  `tests/golden/wire_vectors/seqlock_fastpath_recovery_surface.json` to
+  `insta::assert_snapshot!`.
 - **Subject under test:** seqlock-fastpath recovery surface — the
   observable state after the seqlock fast-path retry contract fires.
 - **Regen:**
-  `UPDATE_GOLDENS=1 cargo test -p frankenengine-engine --test seqlock_fastpath_golden`
+  `INSTA_UPDATE=always cargo test -p frankenengine-engine --test seqlock_fastpath_golden`,
+  followed by `cargo insta review` for interactive blessing.
+- **Legacy audit fixture retained:**
+  `tests/golden/wire_vectors/seqlock_fastpath_recovery_surface.json` remains
+  on disk until explicit deletion/move approval is given.
 
-### `test262_runner_accounting_v1.json`
+### `test262_runner_conformance_golden__test262_runner_accounting.snap` *(moved to `tests/snapshots/` — bd-ub6x8.21)*
 
-- **Owning test:** `tests/test262_runner_conformance_golden.rs`.
+- **Owning test:** `tests/test262_runner_conformance_golden.rs`. Migrated
+  from the embedded `EXPECTED` include of
+  `tests/golden/wire_vectors/test262_runner_accounting_v1.json` to
+  `insta::assert_snapshot!`.
 - **Subject under test:** test262 conformance-runner accounting wire
   format v1.
 - **Regen:**
-  `UPDATE_GOLDENS=1 cargo test -p frankenengine-engine --test test262_runner_conformance_golden`
+  `INSTA_UPDATE=always cargo test -p frankenengine-engine --test test262_runner_conformance_golden`,
+  followed by `cargo insta review` for interactive blessing.
+- **Legacy audit fixture retained:**
+  `tests/golden/wire_vectors/test262_runner_accounting_v1.json` remains on
+  disk until explicit deletion/move approval is given.
 
 ## Toolchain
 

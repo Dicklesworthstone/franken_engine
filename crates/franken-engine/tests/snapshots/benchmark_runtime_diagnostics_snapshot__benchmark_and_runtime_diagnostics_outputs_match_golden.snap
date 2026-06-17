@@ -1,0 +1,171 @@
+---
+source: tests/benchmark_runtime_diagnostics_snapshot.rs
+expression: actual
+---
+{
+  "coverage_gap": "benchmark and runtime diagnostics output golden surface",
+  "benchmark_report": {
+    "schema_version": "franken-engine.benchmark-evidence-bundle.v1",
+    "bundle_id": "benchmark-diagnostics-golden-v1",
+    "status": "sealed",
+    "epoch": 8,
+    "total_workloads": 2,
+    "total_effective_runs": 10,
+    "total_warmup_runs": 0,
+    "workload_stats": [
+      {
+        "workload_id": "startup-smoke",
+        "category": "cold_start",
+        "stats": {
+          "count": 5,
+          "min_us": 1000,
+          "max_us": 1040,
+          "mean_us": 1020,
+          "median_us": 1020,
+          "stddev_us": 15,
+          "cv_millionths": 14705,
+          "p95_us": 1040,
+          "p99_us": 1040
+        },
+        "parity_verdicts": 1,
+        "all_parity_passed": true
+      },
+      {
+        "workload_id": "diagnostic-render",
+        "category": "application",
+        "stats": {
+          "count": 5,
+          "min_us": 2000,
+          "max_us": 2080,
+          "mean_us": 2040,
+          "median_us": 2040,
+          "stddev_us": 31,
+          "cv_millionths": 15196,
+          "p95_us": 2080,
+          "p99_us": 2080
+        },
+        "parity_verdicts": 1,
+        "all_parity_passed": true
+      }
+    ],
+    "parity_verdict_count": 2,
+    "parity_pass_count": 2,
+    "environment_drift_count": 0,
+    "categories": [
+      "application",
+      "cold_start"
+    ],
+    "has_reproducibility_pack": false,
+    "verdict": {
+      "verdict": "pass",
+      "workload_count": 2,
+      "total_runs": 10,
+      "categories": [
+        "application",
+        "cold_start"
+      ]
+    },
+    "report_hash": [
+      255,
+      245,
+      184,
+      163,
+      142,
+      206,
+      65,
+      151,
+      69,
+      69,
+      120,
+      179,
+      196,
+      92,
+      138,
+      66,
+      138,
+      176,
+      116,
+      136,
+      139,
+      144,
+      98,
+      93,
+      163,
+      38,
+      11,
+      35,
+      88,
+      246,
+      232,
+      90
+    ]
+  },
+  "runtime_diagnostics": {
+    "snapshot_timestamp_ns": 123456789,
+    "loaded_extensions": [
+      {
+        "extension_id": "ext-alpha",
+        "containment_state": "Sandboxed"
+      },
+      {
+        "extension_id": "ext-zeta",
+        "containment_state": "Running"
+      }
+    ],
+    "active_policies": [
+      "policy-diagnostics",
+      "policy-runtime"
+    ],
+    "security_epoch": 42,
+    "gc_pressure": [
+      {
+        "extension_id": "ext-alpha",
+        "used_bytes": 1536,
+        "budget_bytes": 1024,
+        "pressure_millionths": 1000000,
+        "over_budget": true
+      },
+      {
+        "extension_id": "ext-zeta",
+        "used_bytes": 768,
+        "budget_bytes": 1024,
+        "pressure_millionths": 750000,
+        "over_budget": false
+      }
+    ],
+    "scheduler_lanes": [
+      {
+        "lane": "io",
+        "queue_depth": 3,
+        "max_depth": 12,
+        "utilization_millionths": 250000,
+        "tasks_submitted": 64,
+        "tasks_scheduled": 64,
+        "tasks_completed": 63,
+        "tasks_timed_out": 0
+      },
+      {
+        "lane": "ready",
+        "queue_depth": 8,
+        "max_depth": 32,
+        "utilization_millionths": 250000,
+        "tasks_submitted": 144,
+        "tasks_scheduled": 140,
+        "tasks_completed": 132,
+        "tasks_timed_out": 2
+      }
+    ],
+    "logs": [
+      {
+        "trace_id": "trace-benchmark-diagnostics-golden",
+        "decision_id": "decision-benchmark-diagnostics-golden",
+        "policy_id": "policy-benchmark-diagnostics-golden",
+        "component": "runtime_diagnostics_cli",
+        "event": "runtime_diagnostics_snapshot",
+        "outcome": "pass",
+        "error_code": null
+      }
+    ]
+  },
+  "runtime_diagnostics_summary": "snapshot_timestamp_ns: 123456789\nsecurity_epoch: 42\nloaded_extensions: 2\n  - ext-alpha [sandboxed]\n  - ext-zeta [running]\nactive_policies: 2\n  - policy-diagnostics\n  - policy-runtime\ngc_pressure_rows: 2\n  - ext-alpha pressure=1000000 over_budget=true\n  - ext-zeta pressure=750000 over_budget=false\nscheduler_lanes: 2\n  - io queue_depth=3 utilization=250000\n  - ready queue_depth=8 utilization=250000"
+}

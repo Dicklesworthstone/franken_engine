@@ -1,0 +1,10 @@
+---
+source: tests/deterministic_serde_golden.rs
+expression: actual
+---
+{
+  "value": {
+    "Bool": false
+  },
+  "expected_sha256_hex": "9b4fb24edd6d1d8830e272398263cdbf026b97392cc35387b991dc0248a628f9"
+}

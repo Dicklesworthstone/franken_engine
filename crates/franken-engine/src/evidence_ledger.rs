@@ -3930,18 +3930,14 @@ mod tests {
                 .signature
                 .to_bytes(),
         );
-        let snapshot_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/golden/evidence_h1_fixed_signature.hex");
-        if std::env::var("UPDATE_GOLDENS").is_ok() {
-            std::fs::write(&snapshot_path, &observed_sig_hex).unwrap();
-        } else {
-            let golden = std::fs::read_to_string(&snapshot_path)
-                .expect("golden must exist; re-run with UPDATE_GOLDENS=1 the first time");
-            assert_eq!(
-                observed_sig_hex,
-                golden.trim(),
-                "evidence signature must match the golden; if intentional, UPDATE_GOLDENS=1"
+        insta::with_settings!({
+            snapshot_path => "../tests/snapshots",
+            prepend_module_to_snapshot => false,
+        }, {
+            insta::assert_snapshot!(
+                "evidence_ledger__evidence_entry_signature_unchanged_post_cache",
+                observed_sig_hex
             );
-        }
+        });
     }
 }

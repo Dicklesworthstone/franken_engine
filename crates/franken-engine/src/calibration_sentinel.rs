@@ -2001,26 +2001,15 @@ mod tests {
         let json_output =
             serde_json::to_string_pretty(&report).expect("SentinelReport should serialize to JSON");
 
-        // Check for golden file update mode
-        let golden_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/golden/build_report_output.golden");
-
-        if std::env::var("UPDATE_GOLDENS").is_ok() {
-            // Write new golden file
-            std::fs::write(&golden_path, &json_output)
-                .expect("Should be able to write golden file");
-            println!("Updated golden file: {}", golden_path.display());
-        } else {
-            // Read expected output and compare
-            let expected = std::fs::read_to_string(&golden_path)
-                .expect("Golden file should exist. Run with UPDATE_GOLDENS=1 to create it.");
-
-            assert_eq!(
-                expected.trim(),
-                json_output.trim(),
-                "build_report output has changed. If this is intentional, run: UPDATE_GOLDENS=1 cargo test"
+        insta::with_settings!({
+            snapshot_path => "../tests/snapshots",
+            prepend_module_to_snapshot => false,
+        }, {
+            insta::assert_snapshot!(
+                "calibration_sentinel__golden_build_report_deterministic_output",
+                json_output
             );
-        }
+        });
 
         // Additional validation of output structure (schema validation)
         assert!(

@@ -62,6 +62,11 @@ path = "benches/hot_paths.rs"
 harness = false
 
 [[bench]]
+name = "evidence_ledger_batch"
+path = "benches/evidence_ledger_batch.rs"
+harness = false
+
+[[bench]]
 name = "denominator_scoring"
 path = "benches/denominator_scoring.rs"
 harness = false

@@ -1,0 +1,10 @@
+---
+source: tests/ast_parser_golden_integration.rs
+expression: scrubbed_actual
+---
+{
+  "code": "EmptySource",
+  "message": "source is empty after whitespace normalization",
+  "source_label": "<inline>",
+  "span": null
+}

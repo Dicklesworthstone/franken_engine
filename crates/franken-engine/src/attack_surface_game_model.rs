@@ -1072,23 +1072,17 @@ mod tests {
             })
             .build();
         let report = generate_report(&[compiler, runtime], &epoch);
-        let actual = serde_json::to_string_pretty(&report).expect("report should serialize") + "\n";
-        let golden_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/golden/attack_surface_game_model_generate_report_expected.json");
+        let actual = serde_json::to_string_pretty(&report).expect("report should serialize");
 
-        if std::env::var_os("UPDATE_GOLDENS").is_some() {
-            std::fs::create_dir_all(
-                golden_path
-                    .parent()
-                    .expect("golden fixture path should have a parent"),
-            )
-            .expect("golden directory should be writable");
-            std::fs::write(&golden_path, &actual).expect("golden fixture should be writable");
-        }
-
-        let expected =
-            std::fs::read_to_string(&golden_path).expect("golden fixture should be readable");
-        assert_eq!(expected, actual);
+        insta::with_settings!({
+            snapshot_path => "../tests/snapshots",
+            prepend_module_to_snapshot => false,
+        }, {
+            insta::assert_snapshot!(
+                "attack_surface_game_model__generate_report_golden_snapshot",
+                actual
+            );
+        });
     }
 
     // -- ActionSpace tests --

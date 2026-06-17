@@ -1553,6 +1553,12 @@ struct ConformanceMinimizationOutcome {
     summary: ConformanceMinimizationSummary,
 }
 
+struct AlignedConformanceReduction {
+    source_segments: Vec<String>,
+    expected_lines: Vec<String>,
+    actual_lines: Vec<String>,
+}
+
 fn build_ifc_conformance_summary(
     run: &ConformanceRunResult,
 ) -> Option<IfcConformanceEvidenceSummaryLine> {
@@ -1854,10 +1860,17 @@ fn minimize_conformance_case(
     let expected_lines = split_output_lines(expected);
     let actual_lines = split_output_lines(actual);
 
-    let minimized_source_segments =
-        minimize_source_segments(&source_segments, failure_class, expected, actual);
-    let (mut minimized_expected_lines, mut minimized_actual_lines) =
-        reduce_output_lines(&expected_lines, &actual_lines, failure_class);
+    let aligned_reduction = minimize_aligned_source_outputs(
+        &source_segments,
+        &expected_lines,
+        &actual_lines,
+        failure_class,
+    );
+    let (mut minimized_expected_lines, mut minimized_actual_lines) = reduce_output_lines(
+        &aligned_reduction.expected_lines,
+        &aligned_reduction.actual_lines,
+        failure_class,
+    );
     minimize_lines_greedy(
         &mut minimized_expected_lines,
         &minimized_actual_lines,
@@ -1871,7 +1884,7 @@ fn minimize_conformance_case(
         false,
     );
 
-    let minimized_source = join_source_segments(&minimized_source_segments);
+    let minimized_source = join_source_segments(&aligned_reduction.source_segments);
     let minimized_expected_output =
         canonicalize_conformance_output(&join_output_lines(&minimized_expected_lines));
     let minimized_actual_output =
@@ -1950,19 +1963,63 @@ fn join_output_lines(lines: &[String]) -> String {
     lines.join("\n")
 }
 
-fn minimize_source_segments(
-    original: &[String],
-    _failure_class: ConformanceFailureClass,
-    _expected: &str,
-    _actual: &str,
-) -> Vec<String> {
-    // Cannot minimize source segments without re-evaluation engine
-    // to generate new expected/actual outputs. Returning unminimized.
-    if original.is_empty() {
-        vec!["void 0".to_string()]
-    } else {
-        original.to_vec()
+fn minimize_aligned_source_outputs(
+    original_source: &[String],
+    original_expected: &[String],
+    original_actual: &[String],
+    failure_class: ConformanceFailureClass,
+) -> AlignedConformanceReduction {
+    let mut reduction = AlignedConformanceReduction {
+        source_segments: if original_source.is_empty() {
+            vec!["void 0".to_string()]
+        } else {
+            original_source.to_vec()
+        },
+        expected_lines: original_expected.to_vec(),
+        actual_lines: original_actual.to_vec(),
+    };
+
+    let aligned_len = reduction.source_segments.len();
+    if aligned_len <= 1
+        || aligned_len != reduction.expected_lines.len()
+        || aligned_len != reduction.actual_lines.len()
+    {
+        return reduction;
     }
+
+    let mut improved = true;
+    while improved && reduction.source_segments.len() > 1 {
+        improved = false;
+        for idx in 0..reduction.source_segments.len() {
+            let candidate_source = without_index(&reduction.source_segments, idx);
+            let candidate_expected = without_index(&reduction.expected_lines, idx);
+            let candidate_actual = without_index(&reduction.actual_lines, idx);
+            if candidate_expected.is_empty() || candidate_actual.is_empty() {
+                continue;
+            }
+
+            let expected_payload = join_output_lines(&candidate_expected);
+            let actual_payload = join_output_lines(&candidate_actual);
+            if preserves_failure_class(&expected_payload, &actual_payload, failure_class) {
+                reduction.source_segments = candidate_source;
+                reduction.expected_lines = candidate_expected;
+                reduction.actual_lines = candidate_actual;
+                improved = true;
+                break;
+            }
+        }
+    }
+
+    reduction
+}
+
+fn without_index(items: &[String], index: usize) -> Vec<String> {
+    items
+        .iter()
+        .enumerate()
+        .filter(|(pos, _)| *pos != index)
+        .map(|(_, item)| item.clone())
+        .collect()
 }
 
 fn reduce_output_lines(
@@ -3717,6 +3774,47 @@ expiry_date = "2030-01-01"
             outcome.minimized_actual_output
         );
         assert_eq!(outcome.summary.strategy, "greedy-delta-debugging");
+    }
+
+    #[test]
+    fn minimize_conformance_case_reduces_aligned_source_segments() {
+        let source = r#"franken_print("setup");
+franken_print("target");
+franken_print("cleanup");"#;
+        let expected = "setup\nleft\ncleanup";
+        let actual = "setup\nright\ncleanup";
+        let outcome = minimize_conformance_case(
+            source,
+            expected,
+            actual,
+            ConformanceFailureClass::Behavioral,
+        );
+
+        assert_eq!(outcome.minimized_source, r#"franken_print("target")"#);
+        assert_eq!(outcome.minimized_expected_output, "left");
+        assert_eq!(outcome.minimized_actual_output, "right");
+        assert_eq!(outcome.summary.original_source_lines, 3);
+        assert_eq!(outcome.summary.minimized_source_lines, 1);
+        assert!(outcome.summary.preserved_failure_class);
+    }
+
+    #[test]
+    fn minimize_conformance_case_keeps_unaligned_source_segments() {
+        let source = "var a = 1;\nvar b = 2;\nvar c = 3;";
+        let outcome = minimize_conformance_case(
+            source,
+            "result: true",
+            "result: false",
+            ConformanceFailureClass::Behavioral,
+        );
+
+        assert_eq!(outcome.summary.original_source_lines, 3);
+        assert_eq!(outcome.summary.minimized_source_lines, 3);
+        assert_eq!(
+            outcome.minimized_source,
+            "var a = 1;\nvar b = 2;\nvar c = 3"
+        );
+        assert!(outcome.summary.preserved_failure_class);
     }
 
     // ── reduce_output_lines ────────────────────────────────────────────

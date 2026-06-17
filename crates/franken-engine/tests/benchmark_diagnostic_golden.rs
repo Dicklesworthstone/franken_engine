@@ -1,6 +1,6 @@
 //! Golden tests for benchmark evidence and diagnostic output formats.
 //!
-//! These tests capture known-good benchmark and diagnostic outputs and compare them against current outputs
+//! These tests capture known-good benchmark and diagnostic outputs as insta snapshots
 //! to detect format changes that could break monitoring/analysis pipelines and external tooling integration.
 //!
 //! Test pattern: Execute benchmark and diagnostic binaries with representative inputs, scrub timing values
@@ -113,8 +113,7 @@ const BENCHMARK_DIAGNOSTIC_TEST_CASES: &[BenchmarkDiagnosticTestCase] = &[
         &["--version"],
         "benchmark_export_version",
         "benchmark",
-    )
-    .expect_failure(), // Version flag might not be implemented
+    ),
     // Runtime diagnostics tests
     BenchmarkDiagnosticTestCase::new(
         "runtime_diagnostics",
@@ -243,16 +242,6 @@ fn capture_benchmark_diagnostic_output(
     })
 }
 
-/// Get the path to the golden file for a test case.
-fn golden_file_path(test_case: &BenchmarkDiagnosticTestCase) -> PathBuf {
-    // bd-ub6x8.6.2: migrated from tests/goldens/benchmark_diagnostic/ to tests/golden/benchmark_diagnostic/.
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("golden")
-        .join("benchmark_diagnostic")
-        .join(format!("{}.json", test_case.name))
-}
-
 /// Test a single benchmark/diagnostic test case against its golden output.
 fn test_benchmark_diagnostic_golden(test_case: &BenchmarkDiagnosticTestCase) {
     let current_output = capture_benchmark_diagnostic_output(test_case)
@@ -269,23 +258,8 @@ fn test_benchmark_diagnostic_golden(test_case: &BenchmarkDiagnosticTestCase) {
         panic!("Expected failure but got success for {}", test_case.name);
     }
 
-    let fixture_path = golden_file_path(test_case);
     let content = serde_json::to_string_pretty(&current_output).expect("JSON serialization");
-
-    let diag = golden_diag::GoldenDiag {
-        framework_name: "Benchmark/diagnostic golden",
-        regen_env_var: "UPDATE_GOLDENS",
-    };
-
-    diag.assert_golden_match(
-        &content,
-        &fixture_path,
-        test_case.name,
-        Some(&format!(
-            "{} {} output",
-            test_case.category, test_case.binary
-        )),
-    );
+    insta::assert_snapshot!(test_case.name, content);
 }
 
 #[cfg(test)]

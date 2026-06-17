@@ -924,6 +924,78 @@ mod tests {
     }
 
     #[test]
+    fn legacy_signed_evidence_entry_json_remains_per_entry_shape() {
+        let entry = entry(7);
+        assert!(
+            entry.signed_envelope.is_some(),
+            "legacy evidence entries carry the per-entry signature envelope"
+        );
+
+        let value = serde_json::to_value(&entry).expect("serialize legacy signed entry");
+        assert!(
+            value.get("signed_envelope").is_some(),
+            "legacy signed entry must retain signed_envelope"
+        );
+        for merkle_only_key in [
+            "inclusion_proof",
+            "merkle_root",
+            "root_signature",
+            "merkle_root_signature",
+        ] {
+            assert!(
+                value.get(merkle_only_key).is_none(),
+                "legacy signed entry must not expose Merkle-only key {merkle_only_key}"
+            );
+        }
+
+        let back: EvidenceEntry =
+            serde_json::from_value(value).expect("legacy signed evidence entry deserializes");
+        assert_eq!(back, entry);
+    }
+
+    #[test]
+    fn merkle_signed_envelope_json_deserializes_with_handoff_fields_populated() {
+        let envs = batch_of(3).finalize().expect("finalize");
+        let value = serde_json::to_value(&envs[1]).expect("serialize Merkle envelope");
+
+        assert!(
+            value.get("inclusion_proof").is_some(),
+            "Merkle envelope must expose inclusion_proof for downstream handoff"
+        );
+        assert!(
+            value.get("root_signature").is_some(),
+            "Merkle envelope must expose the signed-root signature"
+        );
+        assert!(
+            value.get("merkle_root").is_some(),
+            "Merkle envelope must expose the signed Merkle root"
+        );
+        assert!(
+            value.get("merkle_root_signature").is_none(),
+            "current wire key is root_signature, not the stale merkle_root_signature name"
+        );
+
+        let proof = value
+            .get("inclusion_proof")
+            .expect("inclusion proof key checked above");
+        assert_eq!(proof.get("leaf_index").and_then(|v| v.as_u64()), Some(1));
+        assert_eq!(proof.get("tree_size").and_then(|v| v.as_u64()), Some(3));
+        assert!(
+            proof
+                .get("path")
+                .and_then(|v| v.as_array())
+                .is_some_and(|path| !path.is_empty()),
+            "three-entry Merkle proof must include at least one audit-path step"
+        );
+
+        let back: MerkleSignedEnvelope =
+            serde_json::from_value(value).expect("Merkle envelope deserializes");
+        assert_eq!(back, envs[1]);
+        back.verify()
+            .expect("deserialized Merkle envelope verifies");
+    }
+
+    #[test]
     fn batch_len_and_is_empty_track_entries() {
         let mut b = SessionSigningBatch::new(
             "p",

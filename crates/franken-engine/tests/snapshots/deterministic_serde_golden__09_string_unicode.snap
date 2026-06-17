@@ -1,0 +1,10 @@
+---
+source: tests/deterministic_serde_golden.rs
+expression: actual
+---
+{
+  "value": {
+    "String": "naïve café 🎷"
+  },
+  "expected_sha256_hex": "e049b4f9568c8546a4953b936705c2d9f35ae8f63584fe5db06b6cc3849bc33a"
+}

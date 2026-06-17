@@ -7,9 +7,6 @@ use frankenengine_engine::semantic_flattening_inventory::{
 };
 use serde::{Deserialize, Serialize};
 
-// bd-ub6x8.6.3: migrated from tests/golden_vectors/ to tests/golden/wire_vectors/.
-const EXPECTED: &str =
-    include_str!("golden/wire_vectors/semantic_flattening_inventory_hashes_v1.json");
 const FIXTURE_SCHEMA_VERSION: &str = "franken-engine.semantic-flattening-inventory-hashes.v1";
 const GOLDEN_EPOCH: u64 = 13;
 
@@ -244,13 +241,10 @@ fn semantic_flattening_inventory_hashes_match_golden() {
     let expected = golden_set();
     let actual_json = serde_json::to_string_pretty(&expected).expect("serialize golden set") + "\n";
 
-    if actual_json != EXPECTED {
-        eprintln!("{actual_json}");
-    }
-    assert_eq!(actual_json, EXPECTED);
+    insta::assert_snapshot!("semantic_flattening_inventory_hashes", actual_json);
 
     let decoded: SemanticFlatteningGoldenSet =
-        serde_json::from_str(EXPECTED).expect("golden set should decode");
+        serde_json::from_str(&actual_json).expect("serialized golden set should decode");
     assert_eq!(decoded, expected);
     assert_eq!(decoded.cases.len(), 5);
 

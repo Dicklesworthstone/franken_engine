@@ -7,15 +7,9 @@
 //! deterministic ordering, and golden artifact tests for JSON output stability.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 use std::sync::LazyLock;
 
 use regex::Regex;
-
-// golden_diag lives under tests/_support/ (bd-ub6x8.18); pulled in via #[path]
-// so cargo does not compile it as a standalone integration-test binary.
-#[path = "_support/golden_diag.rs"]
-mod golden_diag;
 
 // Hoisted scrub patterns (bd-ub6x8.13).
 static SCRUB_CONTENT_HASH: LazyLock<Regex> =
@@ -123,19 +117,11 @@ fn scrub_escalation_dynamic_fields(json: &str) -> String {
     scrubbed
 }
 
-/// Assert escalation log matches golden file with scrubbed dynamic values.
-/// UPDATE_GOLDENS + read-or-panic + .actual sweep is delegated to
-/// golden_diag::GoldenDiag (bd-ub6x8.3).
-fn assert_escalation_golden(test_name: &str, log: &EscalationLog) {
-    let golden_path =
-        Path::new("tests/golden/resource_escalation").join(format!("{test_name}.golden"));
+/// Assert escalation log matches its insta snapshot with scrubbed dynamic values.
+fn assert_escalation_snapshot(test_name: &str, log: &EscalationLog) {
     let actual = serde_json::to_string_pretty(log).expect("EscalationLog should serialize to JSON");
     let scrubbed_actual = scrub_escalation_dynamic_fields(&actual);
-    golden_diag::GoldenDiag {
-        framework_name: "Resource escalation golden",
-        regen_env_var: "UPDATE_GOLDENS",
-    }
-    .assert_golden_match(&scrubbed_actual, &golden_path, test_name, None);
+    insta::assert_snapshot!(test_name, scrubbed_actual);
 }
 
 // ---------------------------------------------------------------------------
@@ -154,7 +140,7 @@ fn golden_escalation_log_complete_sequence() {
     log.add_event(sample_suspend_event());
     log.add_event(sample_terminate_event());
 
-    assert_escalation_golden("complete_sequence", &log);
+    assert_escalation_snapshot("complete_sequence", &log);
 }
 
 #[test]
@@ -185,7 +171,7 @@ fn golden_escalation_log_early_termination() {
         }),
     });
 
-    assert_escalation_golden("early_termination", &log);
+    assert_escalation_snapshot("early_termination", &log);
 }
 
 #[test]
@@ -218,7 +204,7 @@ fn golden_escalation_log_repeated_violations() {
         }),
     });
 
-    assert_escalation_golden("repeated_violations", &log);
+    assert_escalation_snapshot("repeated_violations", &log);
 }
 
 #[test]
@@ -249,7 +235,7 @@ fn golden_escalation_log_shed_decision() {
 
     log.add_event(sample_terminate_event());
 
-    assert_escalation_golden("shed_decision", &log);
+    assert_escalation_snapshot("shed_decision", &log);
 }
 
 #[test]
@@ -272,7 +258,7 @@ fn golden_escalation_log_minimal_single_dimension() {
         }),
     });
 
-    assert_escalation_golden("minimal_single_dimension", &log);
+    assert_escalation_snapshot("minimal_single_dimension", &log);
 }
 
 // ---------------------------------------------------------------------------

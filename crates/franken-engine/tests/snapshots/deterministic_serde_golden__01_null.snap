@@ -1,0 +1,8 @@
+---
+source: tests/deterministic_serde_golden.rs
+expression: actual
+---
+{
+  "value": "Null",
+  "expected_sha256_hex": "beead77994cf573341ec17b58bbf7eb34d2711c993c1d976b128b3188dc1829a"
+}

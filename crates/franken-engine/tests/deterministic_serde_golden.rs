@@ -8,12 +8,12 @@
 //! byte-identical to the allocating `encode_value` across recursion, dirty
 //! buffers, long reuse runs, and separate threads.
 //!
-//! Goldens live in `tests/golden/deterministic_serde/*.json`, each holding
-//! `{ "value": <CanonicalValue>, "expected_sha256_hex": "<hex>" }`. To
-//! intentionally regenerate them (e.g. after a deliberate format change), run:
+//! Snapshots live in `tests/snapshots/deterministic_serde_golden__*.snap`,
+//! each holding `{ "value": <CanonicalValue>, "expected_sha256_hex": "<hex>" }`.
+//! To intentionally regenerate them (e.g. after a deliberate format change), run:
 //!
 //! ```bash
-//! UPDATE_GOLDENS=1 cargo test --test deterministic_serde_golden
+//! INSTA_UPDATE=always cargo test --test deterministic_serde_golden
 //! ```
 //!
 //! API note: the bead draft referenced an aspirational `encode_into_with_buffer`
@@ -21,13 +21,12 @@
 //! `encode_value_into(buf, value)` plus the allocating `encode_value(value)`.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 
 use frankenengine_engine::deterministic_serde::{
     CanonicalF64, CanonicalValue, EncodeBufferPool, encode_value, encode_value_into,
 };
 use proptest::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 #[derive(Serialize, Deserialize)]
@@ -38,10 +37,6 @@ struct GoldenPair {
 
 fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
-}
-
-fn goldens_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/deterministic_serde")
 }
 
 fn s(x: &str) -> CanonicalValue {
@@ -173,52 +168,21 @@ fn golden_corpus() -> Vec<(&'static str, CanonicalValue)> {
     ]
 }
 
-fn blessing() -> bool {
-    std::env::var("UPDATE_GOLDENS").is_ok()
+fn snapshot_name(fixture_name: &str) -> &str {
+    fixture_name
+        .strip_suffix(".json")
+        .expect("deterministic serde fixture names must end in .json")
 }
 
 fn run_golden(name: &str, value: &CanonicalValue) {
     let buf = encode_value(value);
-    let live_hash = sha256_hex(&buf);
-    let path = goldens_dir().join(name);
+    let pair = GoldenPair {
+        value: value.clone(),
+        expected_sha256_hex: sha256_hex(&buf),
+    };
+    let actual = serde_json::to_string_pretty(&pair).expect("serialize golden snapshot");
 
-    if blessing() {
-        std::fs::create_dir_all(goldens_dir()).expect("create goldens dir");
-        let pair = GoldenPair {
-            value: value.clone(),
-            expected_sha256_hex: live_hash,
-        };
-        std::fs::write(
-            &path,
-            serde_json::to_string_pretty(&pair).expect("serialize golden"),
-        )
-        .expect("write golden");
-        return;
-    }
-
-    let content = std::fs::read_to_string(&path).unwrap_or_else(|_| {
-        panic!(
-            "missing golden {}; regenerate with UPDATE_GOLDENS=1",
-            path.display()
-        )
-    });
-    let mut deserializer = serde_json::Deserializer::from_str(&content);
-    deserializer.disable_recursion_limit();
-    let pair = GoldenPair::deserialize(&mut deserializer).expect("parse golden");
-
-    // (a) Encoder stability: the *stored* value must still encode to the stored hash.
-    let stored_hash = sha256_hex(&encode_value(&pair.value));
-    assert_eq!(
-        stored_hash, pair.expected_sha256_hex,
-        "canonical encoding for {name} produced an unexpected hash. \
-         If intentional, re-run with UPDATE_GOLDENS=1; otherwise this is a \
-         load-bearing content_hash regression.",
-    );
-    // (b) Constructor stability: the live in-code shape must match the committed golden.
-    assert_eq!(
-        live_hash, pair.expected_sha256_hex,
-        "live constructor for {name} diverged from the committed golden value",
-    );
+    insta::assert_snapshot!(snapshot_name(name), actual);
 }
 
 // ---------------------------------------------------------------------------
@@ -227,20 +191,11 @@ fn run_golden(name: &str, value: &CanonicalValue) {
 
 #[test]
 fn canonical_encoding_byte_identical_against_golden() {
-    for (name, value) in golden_corpus() {
-        run_golden(name, &value);
-    }
+    let corpus = golden_corpus();
+    assert_eq!(corpus.len(), 20, "deterministic serde corpus size drifted");
 
-    if !blessing() {
-        let count = std::fs::read_dir(goldens_dir())
-            .expect("goldens dir must exist")
-            .filter_map(Result::ok)
-            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
-            .count();
-        assert!(
-            count >= 20,
-            "expected at least 20 golden files; found {count}"
-        );
+    for (name, value) in corpus {
+        run_golden(name, &value);
     }
 }
 

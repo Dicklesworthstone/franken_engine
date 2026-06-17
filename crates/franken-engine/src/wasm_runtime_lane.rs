@@ -29,6 +29,7 @@ pub struct WasmModuleImportRoute {
     pub content_hash: ContentHash,
     pub required_capabilities: BTreeSet<RuntimeCapability>,
     pub route_component: String,
+    pub abi: WasmModuleAbi,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -36,6 +37,31 @@ pub enum WasmModuleRouteError {
     UnsupportedSyntax {
         module_id: String,
         syntax: ModuleSyntax,
+    },
+    InvalidWasmModule {
+        module_id: String,
+        reason: String,
+    },
+    UnknownExport {
+        module_id: String,
+        export_name: String,
+    },
+    UnsupportedExportBody {
+        module_id: String,
+        export_name: String,
+    },
+    ParameterArityMismatch {
+        module_id: String,
+        export_name: String,
+        expected: usize,
+        actual: usize,
+    },
+    ParameterTypeMismatch {
+        module_id: String,
+        export_name: String,
+        parameter_index: usize,
+        expected: WasmValueType,
+        actual: WasmValueType,
     },
 }
 
@@ -69,6 +95,12 @@ impl WasmModuleImportRoute {
 
         let mut required_capabilities = record.required_capabilities.clone();
         required_capabilities.extend(wasm_module_required_capabilities());
+        let abi = WasmModuleAbi::from_source(&record.source).map_err(|reason| {
+            WasmModuleRouteError::InvalidWasmModule {
+                module_id: record.id.clone(),
+                reason,
+            }
+        })?;
 
         Ok(Self {
             canonical_specifier,
@@ -76,7 +108,56 @@ impl WasmModuleImportRoute {
             content_hash,
             required_capabilities,
             route_component: WASM_MODULE_ROUTE_COMPONENT.to_string(),
+            abi,
         })
+    }
+
+    pub fn call_export(
+        &self,
+        export_name: &str,
+        arguments: &[WasmBoundaryValue],
+    ) -> Result<Vec<WasmBoundaryValue>, WasmModuleRouteError> {
+        let export = self.abi.function_exports.get(export_name).ok_or_else(|| {
+            WasmModuleRouteError::UnknownExport {
+                module_id: self.module_id.clone(),
+                export_name: export_name.to_string(),
+            }
+        })?;
+
+        if export.signature.params.len() != arguments.len() {
+            return Err(WasmModuleRouteError::ParameterArityMismatch {
+                module_id: self.module_id.clone(),
+                export_name: export_name.to_string(),
+                expected: export.signature.params.len(),
+                actual: arguments.len(),
+            });
+        }
+
+        for (parameter_index, (expected, actual)) in export
+            .signature
+            .params
+            .iter()
+            .zip(arguments.iter().map(WasmBoundaryValue::value_type))
+            .enumerate()
+        {
+            if *expected != actual {
+                return Err(WasmModuleRouteError::ParameterTypeMismatch {
+                    module_id: self.module_id.clone(),
+                    export_name: export_name.to_string(),
+                    parameter_index,
+                    expected: *expected,
+                    actual,
+                });
+            }
+        }
+
+        export
+            .const_body
+            .clone()
+            .ok_or_else(|| WasmModuleRouteError::UnsupportedExportBody {
+                module_id: self.module_id.clone(),
+                export_name: export_name.to_string(),
+            })
     }
 }
 
@@ -89,11 +170,560 @@ impl fmt::Display for WasmModuleRouteError {
                 module_id,
                 syntax.as_str()
             ),
+            Self::InvalidWasmModule { module_id, reason } => {
+                write!(
+                    f,
+                    "module '{}' is not a supported wasm module: {}",
+                    module_id, reason
+                )
+            }
+            Self::UnknownExport {
+                module_id,
+                export_name,
+            } => write!(
+                f,
+                "module '{}' does not export wasm function '{}'",
+                module_id, export_name
+            ),
+            Self::UnsupportedExportBody {
+                module_id,
+                export_name,
+            } => write!(
+                f,
+                "module '{}' export '{}' is typed but not callable by the deterministic wasm lane",
+                module_id, export_name
+            ),
+            Self::ParameterArityMismatch {
+                module_id,
+                export_name,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "module '{}' export '{}' expected {} wasm argument(s), got {}",
+                module_id, export_name, expected, actual
+            ),
+            Self::ParameterTypeMismatch {
+                module_id,
+                export_name,
+                parameter_index,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "module '{}' export '{}' parameter {} expected {}, got {}",
+                module_id, export_name, parameter_index, expected, actual
+            ),
         }
     }
 }
 
 impl std::error::Error for WasmModuleRouteError {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WasmValueType {
+    I32,
+    I64,
+    F32,
+    F64,
+}
+
+impl WasmValueType {
+    fn from_type_byte(byte: u8) -> Result<Self, String> {
+        match byte {
+            0x7f => Ok(Self::I32),
+            0x7e => Ok(Self::I64),
+            0x7d => Ok(Self::F32),
+            0x7c => Ok(Self::F64),
+            other => Err(format!("unsupported wasm value type 0x{other:02x}")),
+        }
+    }
+
+    fn const_opcode(self) -> u8 {
+        match self {
+            Self::I32 => 0x41,
+            Self::I64 => 0x42,
+            Self::F32 => 0x43,
+            Self::F64 => 0x44,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::I32 => "i32",
+            Self::I64 => "i64",
+            Self::F32 => "f32",
+            Self::F64 => "f64",
+        }
+    }
+}
+
+impl fmt::Display for WasmValueType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WasmBoundaryValue {
+    I32(i32),
+    I64(i64),
+    F32Bits(u32),
+    F64Bits(u64),
+}
+
+impl WasmBoundaryValue {
+    pub fn value_type(&self) -> WasmValueType {
+        match self {
+            Self::I32(_) => WasmValueType::I32,
+            Self::I64(_) => WasmValueType::I64,
+            Self::F32Bits(_) => WasmValueType::F32,
+            Self::F64Bits(_) => WasmValueType::F64,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WasmFunctionSignature {
+    pub params: Vec<WasmValueType>,
+    pub results: Vec<WasmValueType>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WasmFunctionImport {
+    pub module: String,
+    pub name: String,
+    pub type_index: u32,
+    pub signature: WasmFunctionSignature,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WasmFunctionExport {
+    pub name: String,
+    pub function_index: u32,
+    pub type_index: u32,
+    pub signature: WasmFunctionSignature,
+    pub const_body: Option<Vec<WasmBoundaryValue>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WasmModuleAbi {
+    pub function_imports: Vec<WasmFunctionImport>,
+    pub function_exports: BTreeMap<String, WasmFunctionExport>,
+}
+
+impl WasmModuleAbi {
+    pub fn from_source(source: &str) -> Result<Self, String> {
+        WasmBinaryParser::new(source.as_bytes()).parse()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ParsedFunctionExport {
+    name: String,
+    function_index: u32,
+    type_index: u32,
+    signature: WasmFunctionSignature,
+}
+
+struct WasmBinaryParser<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+    types: Vec<WasmFunctionSignature>,
+    function_type_indices: Vec<u32>,
+    function_imports: Vec<WasmFunctionImport>,
+    pending_function_exports: Vec<ParsedFunctionExport>,
+    local_const_bodies: BTreeMap<u32, Vec<WasmBoundaryValue>>,
+}
+
+impl<'a> WasmBinaryParser<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self {
+            bytes,
+            offset: 0,
+            types: Vec::new(),
+            function_type_indices: Vec::new(),
+            function_imports: Vec::new(),
+            pending_function_exports: Vec::new(),
+            local_const_bodies: BTreeMap::new(),
+        }
+    }
+
+    fn parse(mut self) -> Result<WasmModuleAbi, String> {
+        self.read_magic_and_version()?;
+        while self.offset < self.bytes.len() {
+            let section_id = self.read_u8()?;
+            let section_len = self.read_u32_leb()? as usize;
+            let section = self.read_bytes(section_len)?;
+            let mut reader = WasmSectionReader::new(section);
+            match section_id {
+                0 => {}
+                1 => self.parse_type_section(&mut reader)?,
+                2 => self.parse_import_section(&mut reader)?,
+                3 => self.parse_function_section(&mut reader)?,
+                7 => self.parse_export_section(&mut reader)?,
+                10 => self.parse_code_section(&mut reader)?,
+                _ => {}
+            }
+            reader.ensure_finished("section")?;
+        }
+
+        let mut function_exports = BTreeMap::new();
+        for export in self.pending_function_exports {
+            let local_index = export
+                .function_index
+                .checked_sub(self.function_imports.len() as u32);
+            let const_body =
+                local_index.and_then(|index| self.local_const_bodies.get(&index).cloned());
+            function_exports.insert(
+                export.name.clone(),
+                WasmFunctionExport {
+                    name: export.name,
+                    function_index: export.function_index,
+                    type_index: export.type_index,
+                    signature: export.signature,
+                    const_body,
+                },
+            );
+        }
+
+        Ok(WasmModuleAbi {
+            function_imports: self.function_imports,
+            function_exports,
+        })
+    }
+
+    fn read_magic_and_version(&mut self) -> Result<(), String> {
+        let magic = self.read_bytes(4)?;
+        if magic != [0x00, 0x61, 0x73, 0x6d] {
+            return Err("missing wasm magic".to_string());
+        }
+        let version = self.read_bytes(4)?;
+        if version != [0x01, 0x00, 0x00, 0x00] {
+            return Err("unsupported wasm version".to_string());
+        }
+        Ok(())
+    }
+
+    fn read_u8(&mut self) -> Result<u8, String> {
+        if self.offset >= self.bytes.len() {
+            return Err("unexpected end of wasm module".to_string());
+        }
+        let byte = self.bytes[self.offset];
+        self.offset += 1;
+        Ok(byte)
+    }
+
+    fn read_bytes(&mut self, len: usize) -> Result<&'a [u8], String> {
+        let end = self
+            .offset
+            .checked_add(len)
+            .ok_or_else(|| "wasm section length overflow".to_string())?;
+        if end > self.bytes.len() {
+            return Err("wasm section exceeds module length".to_string());
+        }
+        let slice = &self.bytes[self.offset..end];
+        self.offset = end;
+        Ok(slice)
+    }
+
+    fn read_u32_leb(&mut self) -> Result<u32, String> {
+        let (value, len) = read_u32_leb_from(&self.bytes[self.offset..])?;
+        self.offset += len;
+        Ok(value)
+    }
+
+    fn parse_type_section(&mut self, reader: &mut WasmSectionReader<'_>) -> Result<(), String> {
+        let count = reader.read_u32_leb()? as usize;
+        for _ in 0..count {
+            let form = reader.read_u8()?;
+            if form != 0x60 {
+                return Err(format!("unsupported wasm type form 0x{form:02x}"));
+            }
+            let param_count = reader.read_u32_leb()? as usize;
+            let mut params = Vec::with_capacity(param_count);
+            for _ in 0..param_count {
+                params.push(WasmValueType::from_type_byte(reader.read_u8()?)?);
+            }
+            let result_count = reader.read_u32_leb()? as usize;
+            let mut results = Vec::with_capacity(result_count);
+            for _ in 0..result_count {
+                results.push(WasmValueType::from_type_byte(reader.read_u8()?)?);
+            }
+            self.types.push(WasmFunctionSignature { params, results });
+        }
+        Ok(())
+    }
+
+    fn parse_import_section(&mut self, reader: &mut WasmSectionReader<'_>) -> Result<(), String> {
+        let count = reader.read_u32_leb()? as usize;
+        for _ in 0..count {
+            let module = reader.read_name()?;
+            let name = reader.read_name()?;
+            let kind = reader.read_u8()?;
+            match kind {
+                0x00 => {
+                    let type_index = reader.read_u32_leb()?;
+                    let signature = self.signature(type_index)?.clone();
+                    self.function_imports.push(WasmFunctionImport {
+                        module,
+                        name,
+                        type_index,
+                        signature,
+                    });
+                }
+                other => {
+                    return Err(format!(
+                        "unsupported wasm import kind 0x{other:02x} for {module}.{name}"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn parse_function_section(&mut self, reader: &mut WasmSectionReader<'_>) -> Result<(), String> {
+        let count = reader.read_u32_leb()? as usize;
+        self.function_type_indices.reserve(count);
+        for _ in 0..count {
+            let type_index = reader.read_u32_leb()?;
+            self.signature(type_index)?;
+            self.function_type_indices.push(type_index);
+        }
+        Ok(())
+    }
+
+    fn parse_export_section(&mut self, reader: &mut WasmSectionReader<'_>) -> Result<(), String> {
+        let count = reader.read_u32_leb()? as usize;
+        for _ in 0..count {
+            let name = reader.read_name()?;
+            let kind = reader.read_u8()?;
+            let index = reader.read_u32_leb()?;
+            if kind == 0x00 {
+                let type_index = self.function_type_index(index)?;
+                let signature = self.signature(type_index)?.clone();
+                self.pending_function_exports.push(ParsedFunctionExport {
+                    name,
+                    function_index: index,
+                    type_index,
+                    signature,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn parse_code_section(&mut self, reader: &mut WasmSectionReader<'_>) -> Result<(), String> {
+        let count = reader.read_u32_leb()? as usize;
+        if count != self.function_type_indices.len() {
+            return Err(format!(
+                "code section has {} bodies but function section has {} entries",
+                count,
+                self.function_type_indices.len()
+            ));
+        }
+        for local_index in 0..count {
+            let body_len = reader.read_u32_leb()? as usize;
+            let body = reader.read_bytes(body_len)?;
+            let type_index = self.function_type_indices[local_index];
+            let signature = self.signature(type_index)?;
+            if let Some(values) = decode_const_body(body, signature)? {
+                self.local_const_bodies.insert(local_index as u32, values);
+            }
+        }
+        Ok(())
+    }
+
+    fn function_type_index(&self, function_index: u32) -> Result<u32, String> {
+        let import_count = self.function_imports.len() as u32;
+        if function_index < import_count {
+            return Ok(self.function_imports[function_index as usize].type_index);
+        }
+        let local_index = function_index
+            .checked_sub(import_count)
+            .ok_or_else(|| "function index underflow".to_string())?
+            as usize;
+        self.function_type_indices
+            .get(local_index)
+            .copied()
+            .ok_or_else(|| format!("function index {function_index} is out of bounds"))
+    }
+
+    fn signature(&self, type_index: u32) -> Result<&WasmFunctionSignature, String> {
+        self.types
+            .get(type_index as usize)
+            .ok_or_else(|| format!("type index {type_index} is out of bounds"))
+    }
+}
+
+struct WasmSectionReader<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> WasmSectionReader<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn read_u8(&mut self) -> Result<u8, String> {
+        if self.offset >= self.bytes.len() {
+            return Err("unexpected end of wasm section".to_string());
+        }
+        let byte = self.bytes[self.offset];
+        self.offset += 1;
+        Ok(byte)
+    }
+
+    fn read_bytes(&mut self, len: usize) -> Result<&'a [u8], String> {
+        let end = self
+            .offset
+            .checked_add(len)
+            .ok_or_else(|| "wasm section offset overflow".to_string())?;
+        if end > self.bytes.len() {
+            return Err("wasm subsection exceeds section length".to_string());
+        }
+        let slice = &self.bytes[self.offset..end];
+        self.offset = end;
+        Ok(slice)
+    }
+
+    fn read_u32_leb(&mut self) -> Result<u32, String> {
+        let (value, len) = read_u32_leb_from(&self.bytes[self.offset..])?;
+        self.offset += len;
+        Ok(value)
+    }
+
+    fn read_i32_leb(&mut self) -> Result<i32, String> {
+        let (value, len) = read_i32_leb_from(&self.bytes[self.offset..])?;
+        self.offset += len;
+        Ok(value)
+    }
+
+    fn read_i64_leb(&mut self) -> Result<i64, String> {
+        let (value, len) = read_i64_leb_from(&self.bytes[self.offset..])?;
+        self.offset += len;
+        Ok(value)
+    }
+
+    fn read_name(&mut self) -> Result<String, String> {
+        let len = self.read_u32_leb()? as usize;
+        let bytes = self.read_bytes(len)?;
+        std::str::from_utf8(bytes)
+            .map(str::to_string)
+            .map_err(|_| "wasm name is not utf-8".to_string())
+    }
+
+    fn ensure_finished(&self, context: &str) -> Result<(), String> {
+        if self.offset == self.bytes.len() {
+            Ok(())
+        } else {
+            Err(format!(
+                "{} parser left {} trailing byte(s)",
+                context,
+                self.bytes.len() - self.offset
+            ))
+        }
+    }
+}
+
+fn decode_const_body(
+    body: &[u8],
+    signature: &WasmFunctionSignature,
+) -> Result<Option<Vec<WasmBoundaryValue>>, String> {
+    let mut reader = WasmSectionReader::new(body);
+    let local_decl_count = reader.read_u32_leb()?;
+    if local_decl_count != 0 {
+        return Ok(None);
+    }
+
+    let mut values = Vec::with_capacity(signature.results.len());
+    for result_type in &signature.results {
+        let opcode = reader.read_u8()?;
+        if opcode != result_type.const_opcode() {
+            return Ok(None);
+        }
+        let value = match result_type {
+            WasmValueType::I32 => WasmBoundaryValue::I32(reader.read_i32_leb()?),
+            WasmValueType::I64 => WasmBoundaryValue::I64(reader.read_i64_leb()?),
+            WasmValueType::F32 => {
+                let bytes = reader.read_bytes(4)?;
+                WasmBoundaryValue::F32Bits(u32::from_le_bytes(
+                    bytes.try_into().expect("f32 const width"),
+                ))
+            }
+            WasmValueType::F64 => {
+                let bytes = reader.read_bytes(8)?;
+                WasmBoundaryValue::F64Bits(u64::from_le_bytes(
+                    bytes.try_into().expect("f64 const width"),
+                ))
+            }
+        };
+        values.push(value);
+    }
+
+    let end_opcode = reader.read_u8()?;
+    if end_opcode != 0x0b {
+        return Ok(None);
+    }
+    reader.ensure_finished("const wasm body")?;
+    Ok(Some(values))
+}
+
+fn read_u32_leb_from(bytes: &[u8]) -> Result<(u32, usize), String> {
+    let mut result = 0u32;
+    let mut shift = 0;
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        result |= ((byte & 0x7f) as u32) << shift;
+        if byte & 0x80 == 0 {
+            return Ok((result, index + 1));
+        }
+        shift += 7;
+        if shift >= 35 {
+            return Err("u32 leb128 is too long".to_string());
+        }
+    }
+    Err("unterminated u32 leb128".to_string())
+}
+
+fn read_i32_leb_from(bytes: &[u8]) -> Result<(i32, usize), String> {
+    let mut result = 0i32;
+    let mut shift = 0;
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        result |= ((byte & 0x7f) as i32) << shift;
+        shift += 7;
+        if byte & 0x80 == 0 {
+            if shift < 32 && (byte & 0x40) != 0 {
+                result |= !0 << shift;
+            }
+            return Ok((result, index + 1));
+        }
+        if shift >= 35 {
+            return Err("i32 leb128 is too long".to_string());
+        }
+    }
+    Err("unterminated i32 leb128".to_string())
+}
+
+fn read_i64_leb_from(bytes: &[u8]) -> Result<(i64, usize), String> {
+    let mut result = 0i64;
+    let mut shift = 0;
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        result |= ((byte & 0x7f) as i64) << shift;
+        shift += 7;
+        if byte & 0x80 == 0 {
+            if shift < 64 && (byte & 0x40) != 0 {
+                result |= !0 << shift;
+            }
+            return Ok((result, index + 1));
+        }
+        if shift >= 70 {
+            return Err("i64 leb128 is too long".to_string());
+        }
+    }
+    Err("unterminated i64 leb128".to_string())
+}
 
 // ---------------------------------------------------------------------------
 // WASM-targeted signal node (compact representation)

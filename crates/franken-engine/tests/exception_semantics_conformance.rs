@@ -585,8 +585,9 @@ fn conformance_eval_rethrow_reaches_outer_catch() {
 
 #[test]
 fn conformance_source_finally_order_matches_node_ground_truth() {
-    // Expected values were checked against Node for bd-8enww.4.4. These cases
-    // pin the observable completion order without shelling out during the test.
+    // Expected values were checked against donor JS runtime behavior for
+    // bd-8enww.4.4. The stale-frame cleanup cases were smoke-checked with Bun
+    // in this environment because `node` resolves to a Bun shim.
     let cases = [
         (
             "normal-path",
@@ -609,6 +610,41 @@ fn conformance_source_finally_order_matches_node_ground_truth() {
             "finally",
         ),
         (
+            "finally-throw-overrides-try-return",
+            r#"function f() { try { return "try"; } finally { throw "final"; } } try { f(); } catch (e) { e; }"#,
+            "final",
+        ),
+        (
+            "finally-throw-overrides-catch-return",
+            r#"function f() { try { throw "try"; } catch (e) { return "catch"; } finally { throw "final"; } } try { f(); } catch (e) { e; }"#,
+            "final",
+        ),
+        (
+            "finally-return-overrides-try-throw",
+            r#"function f() { try { throw "try"; } finally { return "final"; } } f();"#,
+            "final",
+        ),
+        (
+            "finally-return-overrides-catch-throw",
+            r#"function f() { try { throw "try"; } catch (e) { throw "catch"; } finally { return "final"; } } f();"#,
+            "final",
+        ),
+        (
+            "return-clears-catch-frame",
+            r#"function f() { try { return "ret"; } catch (e) { return "bad"; } } let log = f(); try { throw "x"; } catch (e) { log = log + ":caught:" + e; } log;"#,
+            "ret:caught:x",
+        ),
+        (
+            "return-clears-finally-frame",
+            r#"let log = ""; function f() { try { log = log + "try"; return "ret"; } finally { log = log + ":finally"; } } let result = f(); log = log + ":" + result; try { throw "x"; } catch (e) { log = log + ":caught:" + e; } log;"#,
+            "try:finally:ret:caught:x",
+        ),
+        (
+            "return-from-catch-clears-finally-frame",
+            r#"let log = ""; function f() { try { throw "x"; } catch (e) { log = log + "catch:" + e; return "ret"; } finally { log = log + ":finally"; } } let result = f(); log = log + ":" + result; try { throw "y"; } catch (e) { log = log + ":caught:" + e; } log;"#,
+            "catch:x:finally:ret:caught:y",
+        ),
+        (
             "break-through-finally",
             r#"let log = ""; outer: while (true) { try { log = log + "try"; break outer; } finally { log = log + ":finally"; } } log;"#,
             "try:finally",
@@ -624,6 +660,46 @@ fn conformance_source_finally_order_matches_node_ground_truth() {
             "catch:x:finally",
         ),
         (
+            "finally-break-overrides-throw",
+            r#"let log = ""; outer: { try { log = log + "try"; throw "x"; } finally { log = log + ":finally"; break outer; } log = log + ":after"; } log = log + ":done"; log;"#,
+            "try:finally:done",
+        ),
+        (
+            "finally-break-overrides-return",
+            r#"let log = ""; function f() { outer: { try { log = log + "try"; return "ret"; } finally { log = log + ":finally"; break outer; } } log = log + ":after"; return "after"; } let result = f(); log + ":" + result;"#,
+            "try:finally:after:after",
+        ),
+        (
+            "finally-break-overrides-throw-clears-pending",
+            r#"let log = ""; outer: { try { throw "x"; } finally { log = log + "finally;"; break outer; } } try { log = log + "normal"; } finally { log = log + ":cleanup"; } log;"#,
+            "finally;normal:cleanup",
+        ),
+        (
+            "local-finally-break-preserves-outer-throw",
+            r#"let log = ""; try { try { throw "outer"; } finally { inner: { try { throw "inner"; } finally { break inner; } } log = log + "after;"; } } catch (e) { log = log + "caught:" + e; } log;"#,
+            "after;caught:outer",
+        ),
+        (
+            "nested-finally-break-exiting-outer-finally-overrides-outer-throw",
+            r#"let log = ""; outer: { try { throw "outer"; } finally { try { throw "inner"; } finally { log = log + "inner;"; break outer; } log = log + "bad"; } } log = log + "done"; log;"#,
+            "inner;done",
+        ),
+        (
+            "labeled-block-break-clears-finally-frame",
+            r#"let log = ""; outer: { try { log = log + "try"; break outer; } finally { log = log + ":finally"; } } try { throw "x"; } catch (e) { log = log + ":caught:" + e; } log;"#,
+            "try:finally:caught:x",
+        ),
+        (
+            "labeled-catch-break-clears-finally-frame",
+            r#"let log = ""; outer: { try { throw "x"; } catch (e) { log = log + "catch:" + e; break outer; } finally { log = log + ":finally"; } } try { throw "y"; } catch (e) { log = log + ":caught:" + e; } log;"#,
+            "catch:x:finally:caught:y",
+        ),
+        (
+            "labeled-try-catch-break-clears-catch-frame",
+            r#"let log = ""; outer: { try { log = log + "try"; break outer; } catch (e) { log = log + "bad"; } } try { throw "x"; } catch (e) { log = log + ":caught:" + e; } log;"#,
+            "try:caught:x",
+        ),
+        (
             "continue-through-finally",
             r#"let log = ""; for (let i = 0; i < 2; i = i + 1) { try { log = log + "try" + i; continue; } finally { log = log + ":finally" + i + ";"; } } log;"#,
             "try0:finally0;try1:finally1;",
@@ -637,6 +713,41 @@ fn conformance_source_finally_order_matches_node_ground_truth() {
             "labeled-catch-continue-through-finally",
             r#"let log = ""; outer: for (let i = 0; i < 2; i = i + 1) { try { throw i; } catch (e) { log = log + "catch" + e; continue outer; } finally { log = log + ":finally" + i + ";"; } } log;"#,
             "catch0:finally0;catch1:finally1;",
+        ),
+        (
+            "finally-continue-overrides-throw",
+            r#"let log = ""; for (let i = 0; i < 2; i = i + 1) { try { log = log + "try" + i; throw "x"; } finally { log = log + ":finally" + i + ";"; continue; } log = log + "bad"; } log;"#,
+            "try0:finally0;try1:finally1;",
+        ),
+        (
+            "finally-continue-overrides-throw-clears-pending",
+            r#"let log = ""; for (let i = 0; i < 1; i = i + 1) { try { throw "x"; } finally { log = log + "finally;"; continue; } } try { log = log + "normal"; } finally { log = log + ":cleanup"; } log;"#,
+            "finally;normal:cleanup",
+        ),
+        (
+            "local-finally-continue-preserves-outer-return",
+            r#"function f() { try { return "outer"; } finally { for (let i = 0; i < 1; i = i + 1) { try { throw "inner"; } finally { continue; } } } } f();"#,
+            "outer",
+        ),
+        (
+            "nested-finally-continue-exiting-outer-finally-overrides-outer-return",
+            r#"let log = ""; function f() { outer: for (let i = 0; i < 1; i = i + 1) { try { return "outer"; } finally { for (let j = 0; j < 1; j = j + 1) { try { throw "inner"; } finally { log = log + "inner;"; continue outer; } } log = log + "bad"; } } return "done"; } let result = f(); log + result;"#,
+            "inner;done",
+        ),
+        (
+            "labeled-continue-clears-finally-frame",
+            r#"let log = ""; outer: for (let i = 0; i < 2; i = i + 1) { try { log = log + "try" + i; continue outer; } finally { log = log + ":finally" + i + ";"; } } try { throw "z"; } catch (e) { log = log + "caught:" + e; } log;"#,
+            "try0:finally0;try1:finally1;caught:z",
+        ),
+        (
+            "labeled-catch-continue-clears-finally-frame",
+            r#"let log = ""; outer: for (let i = 0; i < 2; i = i + 1) { try { throw i; } catch (e) { log = log + "catch" + e; continue outer; } finally { log = log + ":finally" + i + ";"; } } try { throw "z"; } catch (e) { log = log + "caught:" + e; } log;"#,
+            "catch0:finally0;catch1:finally1;caught:z",
+        ),
+        (
+            "labeled-try-catch-continue-clears-catch-frame",
+            r#"let log = ""; outer: for (let i = 0; i < 2; i = i + 1) { try { log = log + "try" + i + ";"; continue outer; } catch (e) { log = log + "bad"; } } try { throw "z"; } catch (e) { log = log + "caught:" + e; } log;"#,
+            "try0;try1;caught:z",
         ),
     ];
 

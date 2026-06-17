@@ -2485,47 +2485,93 @@ fn lower_statement_to_ir1_with_flow(
             } else {
                 None
             };
-            let mut break_finally_forwarders = Vec::new();
-            let mut continue_finally_forwarders = Vec::new();
-            let break_via_finally_label = if tc.finalizer.is_some() {
+            let has_handler = tc.handler.is_some();
+            let has_finalizer = tc.finalizer.is_some();
+            let try_needs_abrupt_exit_forwarders = has_handler || has_finalizer;
+            let mut try_break_finally_forwarders = Vec::new();
+            let mut try_continue_finally_forwarders = Vec::new();
+            let mut catch_break_finally_forwarders = Vec::new();
+            let mut catch_continue_finally_forwarders = Vec::new();
+            let break_via_finally_label = if try_needs_abrupt_exit_forwarders {
                 alloc_finally_forwarder(
-                    &mut break_finally_forwarders,
+                    &mut try_break_finally_forwarders,
                     control_flow.break_label,
                     label_counter,
                 )
             } else {
                 None
             };
-            let continue_via_finally_label = if tc.finalizer.is_some() {
+            let continue_via_finally_label = if try_needs_abrupt_exit_forwarders {
                 alloc_finally_forwarder(
-                    &mut continue_finally_forwarders,
+                    &mut try_continue_finally_forwarders,
                     control_flow.continue_label,
                     label_counter,
                 )
             } else {
                 None
             };
-            if tc.finalizer.is_some() {
+            if try_needs_abrupt_exit_forwarders {
                 for frame in &label_ctx.frames {
                     alloc_finally_forwarder(
-                        &mut break_finally_forwarders,
+                        &mut try_break_finally_forwarders,
                         Some(frame.break_target),
                         label_counter,
                     );
                     alloc_finally_forwarder(
-                        &mut continue_finally_forwarders,
+                        &mut try_continue_finally_forwarders,
                         frame.continue_target,
                         label_counter,
                     );
                 }
             }
-            let inner_control_flow = ControlFlowTargets {
+            let try_control_flow = ControlFlowTargets {
                 break_label: break_via_finally_label.or(control_flow.break_label),
                 continue_label: continue_via_finally_label.or(control_flow.continue_label),
             };
-            let inner_label_ctx = if tc.finalizer.is_some() {
-                label_ctx
-                    .remap_abrupt_targets(&break_finally_forwarders, &continue_finally_forwarders)
+            let try_label_ctx = if try_needs_abrupt_exit_forwarders {
+                label_ctx.remap_abrupt_targets(
+                    &try_break_finally_forwarders,
+                    &try_continue_finally_forwarders,
+                )
+            } else {
+                label_ctx.clone()
+            };
+            let catch_control_flow = if has_finalizer && tc.handler.is_some() {
+                let catch_break_via_finally_label = alloc_finally_forwarder(
+                    &mut catch_break_finally_forwarders,
+                    control_flow.break_label,
+                    label_counter,
+                );
+                let catch_continue_via_finally_label = alloc_finally_forwarder(
+                    &mut catch_continue_finally_forwarders,
+                    control_flow.continue_label,
+                    label_counter,
+                );
+                for frame in &label_ctx.frames {
+                    alloc_finally_forwarder(
+                        &mut catch_break_finally_forwarders,
+                        Some(frame.break_target),
+                        label_counter,
+                    );
+                    alloc_finally_forwarder(
+                        &mut catch_continue_finally_forwarders,
+                        frame.continue_target,
+                        label_counter,
+                    );
+                }
+                ControlFlowTargets {
+                    break_label: catch_break_via_finally_label.or(control_flow.break_label),
+                    continue_label: catch_continue_via_finally_label
+                        .or(control_flow.continue_label),
+                }
+            } else {
+                control_flow
+            };
+            let catch_label_ctx = if has_finalizer && tc.handler.is_some() {
+                label_ctx.remap_abrupt_targets(
+                    &catch_break_finally_forwarders,
+                    &catch_continue_finally_forwarders,
+                )
             } else {
                 label_ctx.clone()
             };
@@ -2552,9 +2598,71 @@ fn lower_statement_to_ir1_with_flow(
                     scope_id,
                     label_counter,
                     span_table,
-                    inner_control_flow,
-                    &inner_label_ctx,
+                    try_control_flow,
+                    &try_label_ctx,
                 )?;
+            }
+            let has_try_abrupt_exit_forwarders = !try_break_finally_forwarders.is_empty()
+                || !try_continue_finally_forwarders.is_empty();
+            let normal_try_complete_label =
+                has_try_abrupt_exit_forwarders.then(|| alloc_label(label_counter));
+            if let Some(normal_try_complete_label) = normal_try_complete_label {
+                ops.push(Ir1Op::Jump {
+                    label_id: normal_try_complete_label,
+                });
+                for (via_break_label, actual_break_label) in try_break_finally_forwarders {
+                    ops.push(Ir1Op::Label {
+                        id: via_break_label,
+                    });
+                    ops.push(Ir1Op::EndTry);
+                    if let Some(finalizer) = &tc.finalizer {
+                        for inner in &finalizer.body {
+                            lower_statement_to_ir1_with_flow(
+                                inner,
+                                ops,
+                                bindings,
+                                binding_lookup,
+                                binding_index,
+                                scope_id,
+                                label_counter,
+                                span_table,
+                                control_flow,
+                                label_ctx,
+                            )?;
+                        }
+                    }
+                    ops.push(Ir1Op::Jump {
+                        label_id: actual_break_label,
+                    });
+                }
+                for (via_continue_label, actual_continue_label) in try_continue_finally_forwarders {
+                    ops.push(Ir1Op::Label {
+                        id: via_continue_label,
+                    });
+                    ops.push(Ir1Op::EndTry);
+                    if let Some(finalizer) = &tc.finalizer {
+                        for inner in &finalizer.body {
+                            lower_statement_to_ir1_with_flow(
+                                inner,
+                                ops,
+                                bindings,
+                                binding_lookup,
+                                binding_index,
+                                scope_id,
+                                label_counter,
+                                span_table,
+                                control_flow,
+                                label_ctx,
+                            )?;
+                        }
+                    }
+                    ops.push(Ir1Op::Jump {
+                        label_id: actual_continue_label,
+                    });
+                }
+                ops.push(Ir1Op::Label {
+                    id: normal_try_complete_label,
+                });
             }
             ops.push(Ir1Op::EndTry);
             // Normal completion: jump past catch to finally (or end).
@@ -2610,8 +2718,8 @@ fn lower_statement_to_ir1_with_flow(
                             scope_id,
                             label_counter,
                             span_table,
-                            inner_control_flow,
-                            &inner_label_ctx,
+                            catch_control_flow,
+                            &catch_label_ctx,
                         )?;
                     }
                     if let Some((param, previous)) = catch_binding_restore {
@@ -2623,6 +2731,70 @@ fn lower_statement_to_ir1_with_flow(
                     }
                 }
                 if catch_requires_finally_guard {
+                    let has_catch_finally_forwarders = !catch_break_finally_forwarders.is_empty()
+                        || !catch_continue_finally_forwarders.is_empty();
+                    let normal_catch_complete_label =
+                        has_catch_finally_forwarders.then(|| alloc_label(label_counter));
+                    if let Some(normal_catch_complete_label) = normal_catch_complete_label {
+                        ops.push(Ir1Op::Jump {
+                            label_id: normal_catch_complete_label,
+                        });
+                        if let Some(finalizer) = &tc.finalizer {
+                            for (via_break_label, actual_break_label) in
+                                catch_break_finally_forwarders
+                            {
+                                ops.push(Ir1Op::Label {
+                                    id: via_break_label,
+                                });
+                                ops.push(Ir1Op::EndTry);
+                                for inner in &finalizer.body {
+                                    lower_statement_to_ir1_with_flow(
+                                        inner,
+                                        ops,
+                                        bindings,
+                                        binding_lookup,
+                                        binding_index,
+                                        scope_id,
+                                        label_counter,
+                                        span_table,
+                                        control_flow,
+                                        label_ctx,
+                                    )?;
+                                }
+                                ops.push(Ir1Op::Jump {
+                                    label_id: actual_break_label,
+                                });
+                            }
+                            for (via_continue_label, actual_continue_label) in
+                                catch_continue_finally_forwarders
+                            {
+                                ops.push(Ir1Op::Label {
+                                    id: via_continue_label,
+                                });
+                                ops.push(Ir1Op::EndTry);
+                                for inner in &finalizer.body {
+                                    lower_statement_to_ir1_with_flow(
+                                        inner,
+                                        ops,
+                                        bindings,
+                                        binding_lookup,
+                                        binding_index,
+                                        scope_id,
+                                        label_counter,
+                                        span_table,
+                                        control_flow,
+                                        label_ctx,
+                                    )?;
+                                }
+                                ops.push(Ir1Op::Jump {
+                                    label_id: actual_continue_label,
+                                });
+                            }
+                        }
+                        ops.push(Ir1Op::Label {
+                            id: normal_catch_complete_label,
+                        });
+                    }
                     ops.push(Ir1Op::EndTry);
                     // After catch: enter the same finally block used by the
                     // surrounding try. The nested guard ensures abrupt exits
@@ -2634,6 +2806,38 @@ fn lower_statement_to_ir1_with_flow(
             }
             // Emit finally block if present.
             if let Some(fl) = finally_label {
+                let mut finalizer_break_forwarders = Vec::new();
+                let mut finalizer_continue_forwarders = Vec::new();
+                let finalizer_break_via_label = alloc_finally_forwarder(
+                    &mut finalizer_break_forwarders,
+                    control_flow.break_label,
+                    label_counter,
+                );
+                let finalizer_continue_via_label = alloc_finally_forwarder(
+                    &mut finalizer_continue_forwarders,
+                    control_flow.continue_label,
+                    label_counter,
+                );
+                for frame in &label_ctx.frames {
+                    alloc_finally_forwarder(
+                        &mut finalizer_break_forwarders,
+                        Some(frame.break_target),
+                        label_counter,
+                    );
+                    alloc_finally_forwarder(
+                        &mut finalizer_continue_forwarders,
+                        frame.continue_target,
+                        label_counter,
+                    );
+                }
+                let finalizer_control_flow = ControlFlowTargets {
+                    break_label: finalizer_break_via_label.or(control_flow.break_label),
+                    continue_label: finalizer_continue_via_label.or(control_flow.continue_label),
+                };
+                let finalizer_label_ctx = label_ctx.remap_abrupt_targets(
+                    &finalizer_break_forwarders,
+                    &finalizer_continue_forwarders,
+                );
                 ops.push(Ir1Op::Label { id: fl });
                 ops.push(Ir1Op::EnterFinally);
                 if let Some(finalizer) = &tc.finalizer {
@@ -2647,61 +2851,46 @@ fn lower_statement_to_ir1_with_flow(
                             scope_id,
                             label_counter,
                             span_table,
-                            control_flow,
-                            label_ctx,
+                            finalizer_control_flow,
+                            &finalizer_label_ctx,
                         )?;
                     }
+                }
+                let has_finalizer_forwarders = !finalizer_break_forwarders.is_empty()
+                    || !finalizer_continue_forwarders.is_empty();
+                let normal_finally_complete_label =
+                    has_finalizer_forwarders.then(|| alloc_label(label_counter));
+                if let Some(normal_finally_complete_label) = normal_finally_complete_label {
+                    ops.push(Ir1Op::Jump {
+                        label_id: normal_finally_complete_label,
+                    });
+                    for (via_break_label, actual_break_label) in finalizer_break_forwarders {
+                        ops.push(Ir1Op::Label {
+                            id: via_break_label,
+                        });
+                        ops.push(Ir1Op::DiscardAbruptCompletion);
+                        ops.push(Ir1Op::Jump {
+                            label_id: actual_break_label,
+                        });
+                    }
+                    for (via_continue_label, actual_continue_label) in finalizer_continue_forwarders
+                    {
+                        ops.push(Ir1Op::Label {
+                            id: via_continue_label,
+                        });
+                        ops.push(Ir1Op::DiscardAbruptCompletion);
+                        ops.push(Ir1Op::Jump {
+                            label_id: actual_continue_label,
+                        });
+                    }
+                    ops.push(Ir1Op::Label {
+                        id: normal_finally_complete_label,
+                    });
                 }
                 ops.push(Ir1Op::EndFinally);
                 ops.push(Ir1Op::Jump {
                     label_id: end_label,
                 });
-            }
-            if let Some(finalizer) = &tc.finalizer {
-                for (via_break_label, actual_break_label) in break_finally_forwarders {
-                    ops.push(Ir1Op::Label {
-                        id: via_break_label,
-                    });
-                    for inner in &finalizer.body {
-                        lower_statement_to_ir1_with_flow(
-                            inner,
-                            ops,
-                            bindings,
-                            binding_lookup,
-                            binding_index,
-                            scope_id,
-                            label_counter,
-                            span_table,
-                            control_flow,
-                            label_ctx,
-                        )?;
-                    }
-                    ops.push(Ir1Op::Jump {
-                        label_id: actual_break_label,
-                    });
-                }
-                for (via_continue_label, actual_continue_label) in continue_finally_forwarders {
-                    ops.push(Ir1Op::Label {
-                        id: via_continue_label,
-                    });
-                    for inner in &finalizer.body {
-                        lower_statement_to_ir1_with_flow(
-                            inner,
-                            ops,
-                            bindings,
-                            binding_lookup,
-                            binding_index,
-                            scope_id,
-                            label_counter,
-                            span_table,
-                            control_flow,
-                            label_ctx,
-                        )?;
-                    }
-                    ops.push(Ir1Op::Jump {
-                        label_id: actual_continue_label,
-                    });
-                }
             }
             ops.push(Ir1Op::Label { id: end_label });
         }
@@ -4094,6 +4283,10 @@ pub fn lower_ir2_to_ir3(
             }
             Ir1Op::EndFinally => {
                 ir3.instructions.push(Ir3Instruction::EndFinally);
+            }
+            Ir1Op::DiscardAbruptCompletion => {
+                ir3.instructions
+                    .push(Ir3Instruction::DiscardAbruptCompletion);
             }
             Ir1Op::BinaryOp { operator } => {
                 let rhs = pop_lowering_value(&mut value_stack)?;
@@ -5920,6 +6113,10 @@ pub fn lower_ir2_to_ir3(
                 }
                 Ir1Op::EndFinally => {
                     ir3.instructions.push(Ir3Instruction::EndFinally);
+                }
+                Ir1Op::DiscardAbruptCompletion => {
+                    ir3.instructions
+                        .push(Ir3Instruction::DiscardAbruptCompletion);
                 }
                 Ir1Op::ForInInit => {
                     let src = pop_lowering_value(&mut fn_value_stack)?;
@@ -11310,7 +11507,8 @@ fn classify_ir1_op(
         | Ir1Op::BeginTry { .. }
         | Ir1Op::EndTry
         | Ir1Op::EnterFinally
-        | Ir1Op::EndFinally => (
+        | Ir1Op::EndFinally
+        | Ir1Op::DiscardAbruptCompletion => (
             EffectBoundary::ReadEffect,
             None,
             Some(FlowAnnotation {
@@ -17674,28 +17872,8 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------------
-    // Golden File Tests for IR Lowering Pipeline Output
+    // Snapshot Tests for IR Lowering Pipeline Output
     // ---------------------------------------------------------------------------
-
-    use std::fs;
-    use std::path::PathBuf;
-
-    /// Helper to get golden file path for a test case.
-    ///
-    /// bd-ub6x8.6.2: migrated from tests/goldens/ir/ to tests/golden/ir/.
-    fn golden_path(test_name: &str) -> PathBuf {
-        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        path.push("tests");
-        path.push("golden");
-        path.push("ir");
-        path.push(format!("{}.json", test_name));
-        path
-    }
-
-    /// Helper to check if we should update golden files
-    fn should_update_goldens() -> bool {
-        std::env::var("UPDATE_GOLDENS").is_ok()
-    }
 
     /// Helper to run full lowering pipeline and serialize output deterministically
     fn run_lowering_pipeline_for_golden(
@@ -17711,54 +17889,19 @@ mod tests {
         lower_ir0_to_ir3(ir0, &context).expect("Lowering pipeline should succeed for golden test")
     }
 
-    /// Assert golden file matches current pipeline output
-    fn assert_golden_ir_output(ir0: &Ir0Module, test_name: &str) {
-        let golden_file = golden_path(test_name);
-
-        // Run the lowering pipeline
+    /// Assert the lowering pipeline output matches the committed insta snapshot.
+    fn assert_lowering_pipeline_snapshot(ir0: &Ir0Module, test_name: &str) {
         let output = run_lowering_pipeline_for_golden(ir0, test_name);
-
-        // Serialize to deterministic JSON
         let actual_json =
             serde_json::to_string_pretty(&output).expect("IR output should serialize to JSON");
 
-        if should_update_goldens() {
-            // Update mode: write new golden file
-            if let Some(parent) = golden_file.parent() {
-                fs::create_dir_all(parent).expect("Should be able to create golden directory");
-            }
-            fs::write(&golden_file, &actual_json).expect("Should be able to write golden file");
-            eprintln!("[GOLDEN] Updated: {}", golden_file.display());
-            return;
-        }
-
-        // Compare mode: check against existing golden
-        let expected_json = fs::read_to_string(&golden_file).unwrap_or_else(|_| {
-            panic!(
-                "Golden file missing: {}\n\
-                 Run with UPDATE_GOLDENS=1 to create it\n\
-                 Then review and commit: git diff tests/golden/ir/",
-                golden_file.display()
-            )
+        let snapshot_name = format!("lowering_pipeline__{test_name}");
+        insta::with_settings!({
+            snapshot_path => "../tests/snapshots",
+            prepend_module_to_snapshot => false,
+        }, {
+            insta::assert_snapshot!(snapshot_name, actual_json);
         });
-
-        if actual_json != expected_json {
-            // Write actual for easy diffing
-            let actual_path = golden_file.with_extension("actual.json");
-            fs::write(&actual_path, &actual_json).expect("Should be able to write actual output");
-
-            panic!(
-                "GOLDEN MISMATCH: {test_name}\n\n\
-                 Expected: {}\n\
-                 Actual:   {}\n\n\
-                 To update: UPDATE_GOLDENS=1 cargo test -- {test_name}\n\
-                 To review: diff {} {}",
-                golden_file.display(),
-                actual_path.display(),
-                golden_file.display(),
-                actual_path.display(),
-            );
-        }
     }
 
     /// Create IR0 for simple arithmetic expression
@@ -17912,37 +18055,37 @@ mod tests {
     #[test]
     fn golden_arithmetic_lowering() {
         let ir0 = arithmetic_ir0();
-        assert_golden_ir_output(&ir0, "arithmetic_expression");
+        assert_lowering_pipeline_snapshot(&ir0, "arithmetic_expression");
     }
 
     #[test]
     fn golden_conditional_lowering() {
         let ir0 = conditional_ir0();
-        assert_golden_ir_output(&ir0, "if_else_statement");
+        assert_lowering_pipeline_snapshot(&ir0, "if_else_statement");
     }
 
     #[test]
     fn golden_function_declaration_lowering() {
         let ir0 = function_declaration_ir0();
-        assert_golden_ir_output(&ir0, "function_declaration");
+        assert_lowering_pipeline_snapshot(&ir0, "function_declaration");
     }
 
     #[test]
     fn golden_variable_declarations_lowering() {
         let ir0 = variable_declarations_ir0();
-        assert_golden_ir_output(&ir0, "variable_declarations");
+        assert_lowering_pipeline_snapshot(&ir0, "variable_declarations");
     }
 
     #[test]
     fn golden_loop_lowering() {
         let ir0 = loop_ir0();
-        assert_golden_ir_output(&ir0, "for_loop_statement");
+        assert_lowering_pipeline_snapshot(&ir0, "for_loop_statement");
     }
 
     #[test]
     fn golden_simple_literal_lowering() {
         let ir0 = script_ir0(); // Reuse existing simple literal test
-        assert_golden_ir_output(&ir0, "numeric_literal");
+        assert_lowering_pipeline_snapshot(&ir0, "numeric_literal");
     }
 
     // MIGRATION TESTS: Unified Authority Algebra

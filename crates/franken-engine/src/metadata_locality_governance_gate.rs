@@ -488,12 +488,20 @@ impl PortabilityEvidence {
     pub fn content_hash(&self) -> ContentHash {
         let mut hasher = Sha256::new();
         hasher.update(b"portability_evidence");
+        // Length-prefix the adjacent free-form topologies and count-prefix the
+        // degradation_factors so the preimage is injective (without this,
+        // source+target could blur and the uncounted factor list could be
+        // re-segmented: ("ab","c") vs ("a","bc")).
+        hasher.update((self.source_topology.len() as u64).to_le_bytes());
         hasher.update(self.source_topology.as_bytes());
+        hasher.update((self.target_topology.len() as u64).to_le_bytes());
         hasher.update(self.target_topology.as_bytes());
         hasher.update(self.transferable_fraction.to_le_bytes());
         let mut sorted_factors = self.degradation_factors.clone();
         sorted_factors.sort();
+        hasher.update((sorted_factors.len() as u64).to_le_bytes());
         for factor in &sorted_factors {
+            hasher.update((factor.len() as u64).to_le_bytes());
             hasher.update(factor.as_bytes());
         }
         hasher.update(self.epoch.as_u64().to_le_bytes());
@@ -1226,6 +1234,33 @@ mod tests {
 
     fn default_config() -> GateConfig {
         GateConfig::default()
+    }
+
+    #[test]
+    fn portability_content_hash_injective_over_topologies_bd_igad8() {
+        // Regression (bd-igad8): source_topology + target_topology were adjacent
+        // free strings with no length prefix, so ("ab","c") aliased ("a","bc");
+        // the degradation_factors list was also uncounted.
+        let a = PortabilityEvidence::new("ab", "c", 900_000, vec![], test_epoch());
+        let b = PortabilityEvidence::new("a", "bc", 900_000, vec![], test_epoch());
+        assert_ne!(a.content_hash(), b.content_hash());
+
+        // Factor-list boundary: ["ab","c"] vs ["a","bc"] must differ too.
+        let f1 = PortabilityEvidence::new(
+            "x",
+            "y",
+            1,
+            vec!["ab".to_string(), "c".to_string()],
+            test_epoch(),
+        );
+        let f2 = PortabilityEvidence::new(
+            "x",
+            "y",
+            1,
+            vec!["a".to_string(), "bc".to_string()],
+            test_epoch(),
+        );
+        assert_ne!(f1.content_hash(), f2.content_hash());
     }
 
     // --- LocalityDomain tests ---

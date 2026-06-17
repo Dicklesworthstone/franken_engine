@@ -1084,9 +1084,16 @@ impl DarkMatterEvidence {
     pub fn content_hash(&self) -> ContentHash {
         let mut buf = Vec::with_capacity(256);
         buf.extend_from_slice(b"DarkMatterEvidence|");
+        // Length-prefix the adjacent free-form fields so their boundaries are
+        // unambiguous (injective preimage): without this, schema_version +
+        // bead_id + board_state could blur (e.g. ("ab","c") vs ("a","bc")).
+        buf.extend_from_slice(&(self.schema_version.len() as u64).to_le_bytes());
         buf.extend_from_slice(self.schema_version.as_bytes());
+        buf.extend_from_slice(&(self.bead_id.len() as u64).to_le_bytes());
         buf.extend_from_slice(self.bead_id.as_bytes());
-        buf.extend_from_slice(self.board_state.as_str().as_bytes());
+        let board_state = self.board_state.as_str();
+        buf.extend_from_slice(&(board_state.len() as u64).to_le_bytes());
+        buf.extend_from_slice(board_state.as_bytes());
         buf.extend_from_slice(self.receipt_hash.as_bytes());
         buf.extend_from_slice(&self.epoch.as_u64().to_le_bytes());
         buf.extend_from_slice(&self.emitted_at_epoch_secs.to_le_bytes());
@@ -2669,6 +2676,26 @@ mod tests {
         let e1 = eval.emit_evidence(1500);
         let e2 = eval.emit_evidence(1500);
         assert_eq!(e1.content_hash(), e2.content_hash());
+    }
+
+    #[test]
+    fn evidence_content_hash_injective_over_ids_bd_igad8() {
+        // Regression (bd-igad8): schema_version + bead_id were adjacent free
+        // strings with no length prefix, so ("ab","c") aliased ("a","bc").
+        let config = SaturationConfig {
+            min_observations: 3,
+            ..SaturationConfig::default()
+        };
+        let obs = make_test_observations(5, 1000, 100, 100_000, 5_000, 15_000);
+        let eval = make_test_evaluator(100_000, MILLION, obs, config);
+        let base = eval.emit_evidence(1500);
+        let mut a = base.clone();
+        a.schema_version = "ab".into();
+        a.bead_id = "c".into();
+        let mut b = base.clone();
+        b.schema_version = "a".into();
+        b.bead_id = "bc".into();
+        assert_ne!(a.content_hash(), b.content_hash());
     }
 
     #[test]

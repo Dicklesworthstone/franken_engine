@@ -47,6 +47,41 @@ pub const DARK_MATTER_ENGINE_SCHEMA_VERSION: &str = "franken-engine.semantic-dar
 pub const DARK_MATTER_ENGINE_COMPONENT: &str = "semantic_dark_matter_engine";
 pub const DARK_MATTER_ENGINE_POLICY_ID: &str = "RGC-707";
 
+// ---------------------------------------------------------------------------
+// Content-hash preimage helpers
+// ---------------------------------------------------------------------------
+//
+// These content hashes must be *injective*: feeding free-form `String`s (ids,
+// target cells) into the preimage with no length marker, looping over a
+// collection with no count marker, or appending an `Option` only when `Some`,
+// all let distinct inputs share a preimage — `("ab","c")` collides with
+// `("a","bc")` and `Some("")` aliases `None`. These helpers append
+// self-delimiting fields. (Fixed-width fields — `ContentHash`, numerics — need
+// no prefix; an uncounted loop over only fixed-width fields stays injective.)
+
+/// Append `bytes` with a fixed-width `u64` little-endian length prefix.
+fn push_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    buf.extend_from_slice(bytes);
+}
+
+/// Append a `u64` little-endian count prefix for a collection.
+fn push_count(buf: &mut Vec<u8>, count: usize) {
+    buf.extend_from_slice(&(count as u64).to_le_bytes());
+}
+
+/// Append an optional length-prefixed field with a presence tag so `Some("")`
+/// cannot alias `None`.
+fn push_opt_len_prefixed(buf: &mut Vec<u8>, value: Option<&[u8]>) {
+    match value {
+        Some(bytes) => {
+            buf.push(1);
+            push_len_prefixed(buf, bytes);
+        }
+        None => buf.push(0),
+    }
+}
+
 const MILLION: u64 = 1_000_000;
 const DISCOVERY_OBSERVATION_STEP_SECS: u64 = 3600;
 const SYNTHESIS_REGION_PREFIX: &str = "semantic_dark_matter_synthesis::";
@@ -541,23 +576,25 @@ impl DarkMatterEngineOrchestrator {
             buf.extend_from_slice(&(promoted as u64).to_le_bytes());
             buf.extend_from_slice(&(rejected as u64).to_le_bytes());
             buf.extend_from_slice(novelty_batch.content_hash.as_bytes());
+            push_count(&mut buf, candidate_receipts.len());
             for receipt in &candidate_receipts {
-                buf.extend_from_slice(receipt.candidate_id.as_bytes());
-                buf.extend_from_slice(receipt.novelty_verdict.as_str().as_bytes());
-                buf.extend_from_slice(receipt.composite_verdict.as_str().as_bytes());
+                push_len_prefixed(&mut buf, receipt.candidate_id.as_bytes());
+                push_len_prefixed(&mut buf, receipt.novelty_verdict.as_str().as_bytes());
+                push_len_prefixed(&mut buf, receipt.composite_verdict.as_str().as_bytes());
                 buf.extend_from_slice(&receipt.total_score_millionths.to_le_bytes());
                 buf.extend_from_slice(&receipt.composite_millionths.to_le_bytes());
                 buf.extend_from_slice(&u64::from(receipt.rank).to_le_bytes());
                 buf.push(u8::from(receipt.promoted));
+                push_count(&mut buf, receipt.dimension_scores.len());
                 for (dimension, score) in &receipt.dimension_scores {
-                    buf.extend_from_slice(dimension.as_str().as_bytes());
+                    push_len_prefixed(&mut buf, dimension.as_str().as_bytes());
                     buf.extend_from_slice(&score.to_le_bytes());
                 }
                 buf.extend_from_slice(receipt.config_hash.as_bytes());
                 buf.extend_from_slice(receipt.certificate_hash.as_bytes());
                 buf.extend_from_slice(receipt.composite_score_hash.as_bytes());
             }
-            buf.extend_from_slice(synthesis_receipt.manifest_batch_id.as_bytes());
+            push_len_prefixed(&mut buf, synthesis_receipt.manifest_batch_id.as_bytes());
             buf.extend_from_slice(synthesis_receipt.manifest_hash.as_bytes());
             buf.extend_from_slice(&synthesis_receipt.candidates_proposed.to_le_bytes());
             buf.extend_from_slice(&synthesis_receipt.candidates_accepted.to_le_bytes());
@@ -779,7 +816,7 @@ impl DarkMatterEngineOrchestrator {
         let receipt_hash = {
             let mut buf = Vec::new();
             buf.extend_from_slice(DARK_MATTER_ENGINE_SCHEMA_VERSION.as_bytes());
-            buf.extend_from_slice(manifest.batch_id.as_bytes());
+            push_len_prefixed(&mut buf, manifest.batch_id.as_bytes());
             buf.extend_from_slice(manifest_hash.as_bytes());
             buf.extend_from_slice(&now_epoch_secs.to_le_bytes());
             buf.extend_from_slice(&candidates_proposed.to_le_bytes());
@@ -787,20 +824,21 @@ impl DarkMatterEngineOrchestrator {
             buf.extend_from_slice(&candidates_denied.to_le_bytes());
             buf.extend_from_slice(&novelty_yield_millionths.to_le_bytes());
             buf.extend_from_slice(&coverage_improvement_millionths.to_le_bytes());
+            push_count(&mut buf, candidate_receipts.len());
             for receipt in &candidate_receipts {
-                buf.extend_from_slice(receipt.candidate_id.as_bytes());
-                buf.extend_from_slice(receipt.kind.as_str().as_bytes());
-                buf.extend_from_slice(receipt.strategy.as_str().as_bytes());
+                push_len_prefixed(&mut buf, receipt.candidate_id.as_bytes());
+                push_len_prefixed(&mut buf, receipt.kind.as_str().as_bytes());
+                push_len_prefixed(&mut buf, receipt.strategy.as_str().as_bytes());
                 buf.extend_from_slice(&receipt.novelty_score_millionths.to_le_bytes());
                 buf.extend_from_slice(&receipt.coverage_delta_millionths.to_le_bytes());
+                push_count(&mut buf, receipt.target_cells.len());
                 for target_cell in &receipt.target_cells {
-                    buf.extend_from_slice(target_cell.as_bytes());
+                    push_len_prefixed(&mut buf, target_cell.as_bytes());
                 }
                 buf.extend_from_slice(receipt.content_hash.as_bytes());
                 buf.push(u8::from(receipt.accepted));
-                if let Some(reason) = &receipt.denial_reason {
-                    buf.extend_from_slice(reason.stable_label().as_bytes());
-                }
+                let denial_label = receipt.denial_reason.as_ref().map(|r| r.stable_label());
+                push_opt_len_prefixed(&mut buf, denial_label.as_deref().map(str::as_bytes));
             }
             ContentHash::compute(&buf)
         };
@@ -1304,6 +1342,35 @@ mod tests {
 
     fn test_epoch() -> SecurityEpoch {
         SecurityEpoch::from_raw(1)
+    }
+
+    #[test]
+    fn preimage_helpers_are_injective_bd_wy4aq() {
+        // Regression (bd-wy4aq): the summary content_hash and receipt_hash
+        // concatenated free-form ids / target cells with no length prefix over
+        // uncounted loops and appended denial_reason only when Some, so
+        // ("ab","c") aliased ("a","bc") and Some("") aliased None.
+        let mut a = Vec::new();
+        push_len_prefixed(&mut a, b"ab");
+        push_len_prefixed(&mut a, b"c");
+        let mut b = Vec::new();
+        push_len_prefixed(&mut b, b"a");
+        push_len_prefixed(&mut b, b"bc");
+        assert_ne!(a, b);
+
+        // Count prefix separates a 1-item run from a 2-item run.
+        let mut one = Vec::new();
+        push_count(&mut one, 1);
+        let mut two = Vec::new();
+        push_count(&mut two, 2);
+        assert_ne!(one, two);
+
+        // Presence tag keeps Some("") distinct from None.
+        let mut some_empty = Vec::new();
+        push_opt_len_prefixed(&mut some_empty, Some(b"".as_slice()));
+        let mut none = Vec::new();
+        push_opt_len_prefixed(&mut none, None);
+        assert_ne!(some_empty, none);
     }
 
     fn expected_cycle_metrics(

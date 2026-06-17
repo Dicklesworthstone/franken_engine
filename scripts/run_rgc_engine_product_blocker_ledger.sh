@@ -133,6 +133,18 @@ json_array_from_args() {
   printf '%s\n' "$@" | jq -R . | jq -s .
 }
 
+normalize_bead_snapshot() {
+  jq '
+    if type == "array" then
+      .
+    elif type == "object" and (.issues | type) == "array" then
+      .issues
+    else
+      error("expected Beads snapshot array or object with issues array")
+    end
+  '
+}
+
 file_age_hours() {
   local path="$1"
   local now modified
@@ -150,7 +162,6 @@ file_age_hours() {
 declare -a commands_run=()
 declare -a validation_errors=()
 failed_command=""
-manifest_written=false
 step_log_index=0
 last_step_log_path=""
 
@@ -267,9 +278,9 @@ hydrate_local_generated_artifacts() {
 validate_inputs() {
   local support_age
 
-  commands_run+=("br list --all --json > ${beads_snapshot_path}")
-  if ! br list --all --json >"${beads_snapshot_path}"; then
-    validation_errors+=("failed to capture bead snapshot via br list --all --json")
+  commands_run+=("br list --all --json --limit 0 | normalize_bead_snapshot > ${beads_snapshot_path}")
+  if ! br list --all --json --limit 0 | normalize_bead_snapshot >"${beads_snapshot_path}"; then
+    validation_errors+=("failed to capture/normalize bead snapshot via br list --all --json --limit 0")
   fi
 
   if [[ ! -f "${support_contract_json}" ]]; then
@@ -456,7 +467,6 @@ write_manifest() {
       },
       commands: $commands
     }' >"${manifest_path}"
-  manifest_written=true
 }
 
 run_mode() {

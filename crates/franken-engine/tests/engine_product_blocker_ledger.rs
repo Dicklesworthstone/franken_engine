@@ -219,7 +219,10 @@ fn rgc_408b_runner_script_uses_rch_and_live_bead_snapshot() {
     let script = load_runner_script();
 
     for needle in [
-        "br list --all --json",
+        "br list --all --json --limit 0",
+        "normalize_bead_snapshot()",
+        "(.issues | type) == \"array\"",
+        "failed to capture/normalize bead snapshot via br list --all --json --limit 0",
         "run_emit_bundle_step()",
         "cargo run -p frankenengine-engine --bin franken_engine_product_blocker_ledger",
         "--emit-local-bundle-json",

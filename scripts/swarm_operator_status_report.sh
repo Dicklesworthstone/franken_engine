@@ -59,6 +59,8 @@ queue_policy_expiry_supersession_plan_json=""
 queue_policy_expiry_supersession_ledger_json=""
 swarm_agent_causal_trace_graph_json=""
 swarm_agent_causal_trace_anomaly_report_json=""
+identity_reconciliation_receipt_json=""
+identity_reconciliation_receipt_required="false"
 swarm_resource_envelope_json=""
 swarm_fair_share_batch_plan_json=""
 swarm_topology_placement_plan_json=""
@@ -140,6 +142,8 @@ Options:
   --queue-policy-expiry-supersession-ledger-json FILE
   --swarm-agent-causal-trace-graph-json FILE
   --swarm-agent-causal-trace-anomaly-report-json FILE
+  --identity-reconciliation-receipt-json FILE
+  --require-identity-reconciliation-receipt
   --swarm-resource-envelope-json FILE
   --swarm-fair-share-batch-plan-json FILE
   --swarm-topology-placement-plan-json FILE
@@ -392,6 +396,14 @@ while [[ "$#" -gt 0 ]]; do
       swarm_agent_causal_trace_anomaly_report_json="$2"
       shift 2
       ;;
+    --identity-reconciliation-receipt-json)
+      identity_reconciliation_receipt_json="$2"
+      shift 2
+      ;;
+    --require-identity-reconciliation-receipt)
+      identity_reconciliation_receipt_required="true"
+      shift
+      ;;
     --swarm-resource-envelope-json)
       swarm_resource_envelope_json="$2"
       shift 2
@@ -542,6 +554,7 @@ queue_policy_expiry_supersession_plan_status="missing"
 queue_policy_expiry_supersession_ledger_status="missing"
 swarm_agent_causal_trace_graph_status="missing"
 swarm_agent_causal_trace_anomaly_report_status="missing"
+identity_reconciliation_receipt_status="missing"
 swarm_resource_envelope_status="missing"
 swarm_fair_share_batch_plan_status="missing"
 swarm_topology_placement_plan_status="missing"
@@ -592,6 +605,7 @@ if [[ -n "$queue_policy_expiry_supersession_plan_json" ]]; then queue_policy_exp
 if [[ -n "$queue_policy_expiry_supersession_ledger_json" ]]; then queue_policy_expiry_supersession_ledger_status="provided"; fi
 if [[ -n "$swarm_agent_causal_trace_graph_json" ]]; then swarm_agent_causal_trace_graph_status="provided"; fi
 if [[ -n "$swarm_agent_causal_trace_anomaly_report_json" ]]; then swarm_agent_causal_trace_anomaly_report_status="provided"; fi
+if [[ -n "$identity_reconciliation_receipt_json" ]]; then identity_reconciliation_receipt_status="provided"; fi
 if [[ -n "$swarm_resource_envelope_json" ]]; then swarm_resource_envelope_status="provided"; fi
 if [[ -n "$swarm_fair_share_batch_plan_json" ]]; then swarm_fair_share_batch_plan_status="provided"; fi
 if [[ -n "$swarm_topology_placement_plan_json" ]]; then swarm_topology_placement_plan_status="provided"; fi
@@ -643,6 +657,7 @@ queue_policy_expiry_supersession_plan_data="$(json_or_default "$queue_policy_exp
 queue_policy_expiry_supersession_ledger_data="$(json_or_default "$queue_policy_expiry_supersession_ledger_json" '{"schema_version":"franken-engine.swarm-execution-queue-policy-expiry-supersession-ledger.v1","decision":"missing","ledger_rows":[],"ownership_rows":[],"fail_closed_reasons":[],"mutation_policy":{"changes_active_queue":false,"applies_live_retuning":false,"mutates_br":false,"sends_agent_mail":false,"mutates_remote_workers":false,"rewrites_historical_outcomes":false,"retirement_executed":false,"supersession_executed":false},"artifact_paths":{}}' 'queue-policy-expiry-supersession-ledger')"
 swarm_agent_causal_trace_graph_data="$(json_or_default "$swarm_agent_causal_trace_graph_json" '{"schema_version":"franken-engine.swarm-agent-causal-trace-graph.v1","trace_id":null,"bead_id":null,"source_revision":null,"nodes":[],"edges":[],"anomaly_summary":{"decision":"missing","anomaly_count":0,"fail_closed_count":0,"degraded_count":0,"anomaly_classes":[]},"mutation_policy":{"fixture_fed_only":true,"mutates_br":false,"reassigns_beads":false,"releases_reservations":false,"sends_agent_mail":false,"queries_live_agent_mail":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false,"rewrites_historical_outcomes":false,"operator_wording_required":"advisory-only"},"artifact_paths":{}}' 'swarm-agent-causal-trace-graph')"
 swarm_agent_causal_trace_anomaly_report_data="$(json_or_default "$swarm_agent_causal_trace_anomaly_report_json" '{"schema_version":"franken-engine.swarm-agent-causal-trace-anomaly-report.v1","trace_id":null,"bead_id":null,"source_revision":null,"decision":"missing","anomaly_count":0,"fail_closed_count":0,"degraded_count":0,"anomaly_classes":[],"anomalies":[],"artifact_paths":{}}' 'swarm-agent-causal-trace-anomaly-report')"
+identity_reconciliation_receipt_data="$(json_or_default "$identity_reconciliation_receipt_json" '{"schema_version":"franken-engine.swarm-agent-mail-identity-reconciliation-receipt.v1","decision":"missing","evaluated_at":null,"source_revision":null,"agent_name":null,"bead_id":null,"thread_id":null,"raw_error":"","parsed_error":{"pattern_id":"missing"},"affected_entities":{},"anomaly_classes":[],"evidence":{"failed_ack_attempt_count":0,"anomalies":[]},"manual_repair_recipes":[],"artifact_paths":{},"mutation_policy":{"fixture_fed_only":true,"proof_only":true,"advisory_only":true,"queries_live_agent_mail":false,"mutates_agent_mail":false,"acknowledges_messages":false,"sends_agent_mail":false,"approves_contacts":false,"mutates_br":false,"reassigns_beads":false,"closes_beads":false,"releases_reservations":false,"force_releases_reservations":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false}}' 'identity-reconciliation-receipt')"
 swarm_resource_envelope_data="$(json_or_default "$swarm_resource_envelope_json" '{"schema_version":"franken-engine.swarm-resource-envelope.v1","decision":"missing","readiness":"missing","host_identity":{},"cpu_topology":{},"memory_pressure":{},"target_dir_pressure":{},"rch_slots":{},"capacity_budget":{"script_lane_limit":0,"proof_lane_limit":0,"build_lane_limit":0,"remote_rch_slot_limit":0,"memory_bytes_budget":0,"target_dir_bytes_budget":0,"defer_reasons":[]},"degraded_reasons":[],"blocked_reasons":[],"fail_closed_reasons":[],"artifact_paths":{},"mutation_policy":{"fixture_fed_only":true,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false}}' 'swarm-resource-envelope')"
 swarm_fair_share_batch_plan_data="$(json_or_default "$swarm_fair_share_batch_plan_json" '{"schema_version":"franken-engine.swarm-fair-share-batch-plan.v1","decision":"missing","summary":{"requested_count":0,"admitted_count":0,"deferred_count":0,"heavy_admitted_count":0,"heavy_lane_limit":0,"remote_rch_slot_limit":0,"rch_slots_used":0,"contaminated_input":false},"admitted_lanes":[],"deferred_lanes":[],"fairness_rationale":[],"fail_closed_reasons":[],"artifact_paths":{},"mutation_policy":{"fixture_fed_only":true,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false}}' 'swarm-fair-share-batch-plan')"
 swarm_topology_placement_plan_data="$(json_or_default "$swarm_topology_placement_plan_json" '{"schema_version":"franken-engine.swarm-topology-placement-plan.v1","decision":"missing","placement_readiness":"missing","recommended_topology_class":"missing","recommended_worker_targets":[],"warm_cache_residency_state":"missing","warm_cache_opportunities":[],"degraded_reasons":[],"blocked_reasons":[],"fail_closed_reasons":[],"locality_assumptions":[],"summary":{"target_count":0,"warm_cache_opportunity_count":0,"heavy_target_count":0,"latency_sensitive_target_count":0},"artifact_paths":{},"mutation_policy":{"fixture_fed_only":true,"proof_only":true,"advisory_only":true,"mutates_br":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false,"pins_workers_automatically":false,"rebinds_hosts_automatically":false,"repairs_target_dirs_automatically":false}}' 'swarm-topology-placement-plan')"
@@ -710,6 +725,7 @@ inputs_bundle_path="${run_dir}/inputs.bundle.json"
   printf '"queue_policy_expiry_supersession_ledger":%s,\n' "$queue_policy_expiry_supersession_ledger_data"
   printf '"swarm_agent_causal_trace_graph":%s,\n' "$swarm_agent_causal_trace_graph_data"
   printf '"swarm_agent_causal_trace_anomaly_report":%s,\n' "$swarm_agent_causal_trace_anomaly_report_data"
+  printf '"identity_reconciliation_receipt":%s,\n' "$identity_reconciliation_receipt_data"
   printf '"swarm_resource_envelope":%s,\n' "$swarm_resource_envelope_data"
   printf '"swarm_fair_share_batch_plan":%s,\n' "$swarm_fair_share_batch_plan_data"
   printf '"swarm_topology_placement_plan":%s,\n' "$swarm_topology_placement_plan_data"
@@ -772,6 +788,8 @@ jq -n \
   --arg queue_policy_expiry_supersession_ledger_status "$queue_policy_expiry_supersession_ledger_status" \
   --arg swarm_agent_causal_trace_graph_status "$swarm_agent_causal_trace_graph_status" \
   --arg swarm_agent_causal_trace_anomaly_report_status "$swarm_agent_causal_trace_anomaly_report_status" \
+  --arg identity_reconciliation_receipt_status "$identity_reconciliation_receipt_status" \
+  --arg identity_reconciliation_receipt_required "$identity_reconciliation_receipt_required" \
   --arg swarm_resource_envelope_status "$swarm_resource_envelope_status" \
   --arg swarm_fair_share_batch_plan_status "$swarm_fair_share_batch_plan_status" \
   --arg swarm_topology_placement_plan_status "$swarm_topology_placement_plan_status" \
@@ -802,6 +820,7 @@ jq -n \
   --arg swarm_control_surface_intent_plan_json "$swarm_control_surface_intent_plan_json" \
   --arg swarm_control_surface_drift_report_json "$swarm_control_surface_drift_report_json" \
   --arg first_error_conveyor_plan_json "$first_error_conveyor_plan_json" \
+  --arg identity_reconciliation_receipt_json "$identity_reconciliation_receipt_json" \
   --arg snapshot_bundle_json "$snapshot_bundle_json" \
   --arg status_path "$status_path" \
   --arg commands_path "$commands_path" \
@@ -831,6 +850,11 @@ jq -n \
     elif ($items | type) == "array" then $items
     else [$items]
     end;
+  def compact_values($items):
+    bounded(as_array($items)
+      | map(select(. != null and . != ""))
+      | map(tostring)
+      | unique);
   def tag_labels($items):
     bounded(as_array($items)
       | map(if (type == "object") then (.purpose // .surface_id // .tag // empty) else . end)
@@ -897,6 +921,7 @@ jq -n \
   | $input.queue_policy_expiry_supersession_ledger as $queue_policy_expiry_supersession_ledger
   | $input.swarm_agent_causal_trace_graph as $swarm_agent_causal_trace_graph
   | $input.swarm_agent_causal_trace_anomaly_report as $swarm_agent_causal_trace_anomaly_report
+  | $input.identity_reconciliation_receipt as $identity_reconciliation_receipt
   | $input.swarm_resource_envelope as $swarm_resource_envelope
   | $input.swarm_fair_share_batch_plan as $swarm_fair_share_batch_plan
   | $input.swarm_topology_placement_plan as $swarm_topology_placement_plan
@@ -1847,6 +1872,128 @@ jq -n \
         anomaly_report_json: ($swarm_agent_causal_trace_anomaly_report.artifact_paths.anomaly_report_json // $swarm_agent_causal_trace_graph.artifact_paths.anomaly_report_json // null)
       }
     }) as $causal_trace_summary
+  | (($identity_reconciliation_receipt_required == "true") or ($identity_reconciliation_receipt_status == "provided")) as $identity_reconciliation_enabled
+  | ($identity_reconciliation_receipt.mutation_policy // {}) as $identity_policy
+  | ($identity_reconciliation_receipt.evidence.anomalies // []) as $identity_anomalies
+  | ([($identity_reconciliation_receipt.affected_entities // {})] + ($identity_anomalies | map(.affected_entities // {}))) as $identity_affected_rows
+  | ([($identity_reconciliation_receipt.raw_error // "")] + ($identity_anomalies | map(.raw_error // "")) | compact_values(.)) as $identity_raw_errors
+  | ([
+      {flag: "fixture_fed_only", unsafe: (($identity_policy.fixture_fed_only // true) != true)},
+      {flag: "proof_only", unsafe: (($identity_policy.proof_only // true) != true)},
+      {flag: "advisory_only", unsafe: (($identity_policy.advisory_only // true) != true)},
+      {flag: "queries_live_agent_mail", unsafe: (($identity_policy.queries_live_agent_mail // false) == true)},
+      {flag: "mutates_agent_mail", unsafe: (($identity_policy.mutates_agent_mail // false) == true)},
+      {flag: "acknowledges_messages", unsafe: (($identity_policy.acknowledges_messages // false) == true)},
+      {flag: "sends_agent_mail", unsafe: (($identity_policy.sends_agent_mail // false) == true)},
+      {flag: "approves_contacts", unsafe: (($identity_policy.approves_contacts // false) == true)},
+      {flag: "mutates_br", unsafe: (($identity_policy.mutates_br // false) == true)},
+      {flag: "reassigns_beads", unsafe: (($identity_policy.reassigns_beads // false) == true)},
+      {flag: "closes_beads", unsafe: (($identity_policy.closes_beads // false) == true)},
+      {flag: "releases_reservations", unsafe: (($identity_policy.releases_reservations // false) == true)},
+      {flag: "force_releases_reservations", unsafe: (($identity_policy.force_releases_reservations // false) == true)},
+      {flag: "runs_cargo", unsafe: (($identity_policy.runs_cargo // false) == true)},
+      {flag: "runs_rch", unsafe: (($identity_policy.runs_rch // false) == true)},
+      {flag: "mutates_remote_workers", unsafe: (($identity_policy.mutates_remote_workers // false) == true)},
+      {flag: "changes_live_queue_policy", unsafe: (($identity_policy.changes_live_queue_policy // false) == true)}
+    ] | map(select(.unsafe == true)) | map(.flag)) as $identity_unsafe_mutation_claims
+  | ($identity_reconciliation_receipt.decision // "missing") as $identity_receipt_decision
+  | ($identity_reconciliation_receipt.anomaly_classes // ($identity_anomalies | map(.anomaly_class // empty)) // []) as $identity_anomaly_classes
+  | (($identity_reconciliation_receipt.evidence.failed_ack_attempt_count // 0) | tonumber? // 0) as $identity_failed_ack_attempt_count
+  | ({
+      enabled: $identity_reconciliation_enabled,
+      artifact_status: $identity_reconciliation_receipt_status,
+      readiness: (
+        if ($identity_reconciliation_enabled | not) then "not_requested"
+        elif $identity_reconciliation_receipt_status == "missing" then "degraded"
+        elif (($identity_unsafe_mutation_claims | length) > 0) then "fail_closed"
+        elif $identity_receipt_decision == "fail_closed" then "fail_closed"
+        elif $identity_receipt_decision == "blocked" then "blocked"
+        elif $identity_receipt_decision == "degraded" then "degraded"
+        else "healthy"
+        end
+      ),
+      severity: (
+        if ($identity_reconciliation_enabled | not) then "ok"
+        elif $identity_reconciliation_receipt_status == "missing" then "warning"
+        elif (($identity_unsafe_mutation_claims | length) > 0)
+          or ($identity_receipt_decision == "fail_closed")
+          or ($identity_receipt_decision == "blocked") then "critical"
+        elif ($identity_receipt_decision == "degraded")
+          or (($identity_anomalies | length) > 0)
+          or (($identity_anomaly_classes | length) > 0) then "warning"
+        else "ok"
+        end
+      ),
+      decision: (if (($identity_unsafe_mutation_claims | length) > 0) then "fail_closed" else $identity_receipt_decision end),
+      source_revision: ($identity_reconciliation_receipt.source_revision // null),
+      evaluated_at: ($identity_reconciliation_receipt.evaluated_at // null),
+      agent_name: ($identity_reconciliation_receipt.agent_name // null),
+      bead_id: ($identity_reconciliation_receipt.bead_id // null),
+      thread_id: ($identity_reconciliation_receipt.thread_id // null),
+      raw_error: (($identity_raw_errors | .[0]) // ""),
+      raw_errors: $identity_raw_errors,
+      parsed_error: ($identity_reconciliation_receipt.parsed_error // {}),
+      anomaly_classes: $identity_anomaly_classes,
+      anomaly_count: (($identity_anomalies | length) + (if $identity_reconciliation_receipt_status == "missing" and $identity_reconciliation_enabled then 1 else 0 end)),
+      failed_ack_attempt_count: ($identity_failed_ack_attempt_count // 0),
+      affected_entities: ($identity_reconciliation_receipt.affected_entities // {}),
+      affected: {
+        agents: compact_values([($identity_reconciliation_receipt.agent_name // null)] + ($identity_affected_rows | map(.from_agent // empty)) + ($identity_affected_rows | map(.to_agent // empty))),
+        message_ids: compact_values($identity_affected_rows | map(.message_id // empty)),
+        thread_ids: compact_values([($identity_reconciliation_receipt.thread_id // null)] + ($identity_affected_rows | map(.thread_id // empty))),
+        bead_ids: compact_values([($identity_reconciliation_receipt.bead_id // null)] + ($identity_affected_rows | map(.bead_id // empty)))
+      },
+      suspected_stale_ids: {
+        message_recipient_row_ids: compact_values($identity_affected_rows | map(.message_recipient_row_id // empty)),
+        contact_link_ids: compact_values($identity_affected_rows | map(.contact_link_id // empty)),
+        reservation_ids: compact_values($identity_affected_rows | map(.reservation_id // empty)),
+        reservation_paths: compact_values($identity_affected_rows | map(.reservation_path // empty))
+      },
+      manual_repair_recipes: bounded($identity_reconciliation_receipt.manual_repair_recipes // []),
+      manual_repair_recipe_text: compact_values(($identity_reconciliation_receipt.manual_repair_recipes // []) | map(.recipe // .manual_repair_recipe // .text // .)),
+      unsafe_mutation_claims: $identity_unsafe_mutation_claims,
+      truth_gate: {
+        forbidden_live_claims: [
+          "automatic acknowledgement",
+          "automatic contact approval",
+          "automatic reservation release",
+          "automatic bead reassignment",
+          "live Agent Mail querying",
+          "Cargo execution",
+          "RCH execution",
+          "worker mutation"
+        ],
+        fixture_fed_only: true,
+        proof_only: true,
+        advisory_only: true
+      },
+      mutation_policy: {
+        fixture_fed_only: (($identity_policy.fixture_fed_only // true) == true),
+        proof_only: (($identity_policy.proof_only // true) == true),
+        advisory_only: (($identity_policy.advisory_only // true) == true),
+        queries_live_agent_mail: (($identity_policy.queries_live_agent_mail // false) == true),
+        mutates_agent_mail: (($identity_policy.mutates_agent_mail // false) == true),
+        acknowledges_messages: (($identity_policy.acknowledges_messages // false) == true),
+        sends_agent_mail: (($identity_policy.sends_agent_mail // false) == true),
+        approves_contacts: (($identity_policy.approves_contacts // false) == true),
+        mutates_br: (($identity_policy.mutates_br // false) == true),
+        reassigns_beads: (($identity_policy.reassigns_beads // false) == true),
+        closes_beads: (($identity_policy.closes_beads // false) == true),
+        releases_reservations: (($identity_policy.releases_reservations // false) == true),
+        force_releases_reservations: (($identity_policy.force_releases_reservations // false) == true),
+        runs_cargo: (($identity_policy.runs_cargo // false) == true),
+        runs_rch: (($identity_policy.runs_rch // false) == true),
+        mutates_remote_workers: (($identity_policy.mutates_remote_workers // false) == true),
+        changes_live_queue_policy: (($identity_policy.changes_live_queue_policy // false) == true)
+      },
+      artifact_paths: {
+        identity_reconciliation_receipt_json: (
+          if $identity_reconciliation_receipt_status == "provided" then
+            ($identity_reconciliation_receipt.artifact_paths.receipt_json // $identity_reconciliation_receipt_json)
+          else null end
+        )
+      }
+    }) as $identity_reconciliation_summary
   | (($swarm_resource_envelope.fail_closed_reasons // []) | map(.code // .kind // .)) as $resource_envelope_fail_classes
   | (($swarm_fair_share_batch_plan.fail_closed_reasons // []) | map(.code // .kind // .)) as $fair_share_fail_classes
   | (($resource_envelope_fail_classes + $fair_share_fail_classes)
@@ -2900,6 +3047,15 @@ jq -n \
       elif $queue_policy_adoption_summary.severity == "warning" then
         [{component: "queue_policy_adoption", status: $queue_policy_adoption_summary.readiness, impact: "policy lifecycle evidence recommends expiry, supersession, or manual review", remediation: "Route the advisory to a human operator; do not treat it as executed policy retirement or supersession."}]
       else [] end)
+    + (if $identity_reconciliation_summary.enabled and $identity_reconciliation_summary.artifact_status == "missing" then
+        [{component: "agent_mail_identity_drift", status: "missing", impact: "identity-drift receipt is required but absent", remediation: "Provide the reconciler receipt before trusting acknowledgement, contact, reservation, or bead-handoff repair advice."}]
+      elif $identity_reconciliation_summary.enabled and (($identity_reconciliation_summary.unsafe_mutation_claims // []) | length) > 0 then
+        [{component: "agent_mail_identity_drift", status: "fail_closed", impact: "identity-drift receipt claims forbidden live mutation", remediation: "Reject receipts that claim automatic acknowledgement, contact approval, reservation release, bead reassignment, live Agent Mail querying, Cargo/RCH execution, or worker mutation."}]
+      elif $identity_reconciliation_summary.enabled and $identity_reconciliation_summary.severity == "critical" then
+        [{component: "agent_mail_identity_drift", status: $identity_reconciliation_summary.readiness, impact: "Agent Mail identity drift blocks acknowledgement handoff", remediation: "Use the manual repair recipe text only; do not let the status report perform the repair."}]
+      elif $identity_reconciliation_summary.enabled and $identity_reconciliation_summary.severity == "warning" then
+        [{component: "agent_mail_identity_drift", status: $identity_reconciliation_summary.readiness, impact: "Agent Mail identity-drift evidence is degraded or incomplete", remediation: "Capture or refresh the reconciler receipt before retrying acknowledgement/contact/reservation work."}]
+      else [] end)
     + (if $causal_trace_summary.severity == "critical" then
         [{component: "swarm_agent_causal_trace", status: $causal_trace_summary.readiness, impact: "causal trace evidence is contaminated or failed closed", remediation: "Reject the handoff until ownership, acknowledgement, RCH proof, and closeout evidence are repaired."}]
       elif $causal_trace_summary.severity == "warning" then
@@ -3025,6 +3181,14 @@ jq -n \
         staged_contamination_decision: $staged_contamination_summary.decision,
         staged_contamination_offender_count: $staged_contamination_summary.offender_count
       }
+      + (if $identity_reconciliation_summary.enabled then {
+        identity_drift_readiness: $identity_reconciliation_summary.readiness,
+        identity_drift_decision: $identity_reconciliation_summary.decision,
+        identity_drift_anomaly_count: $identity_reconciliation_summary.anomaly_count,
+        identity_drift_failed_ack_attempt_count: $identity_reconciliation_summary.failed_ack_attempt_count,
+        identity_drift_raw_error_count: (($identity_reconciliation_summary.raw_errors // []) | length),
+        identity_drift_manual_recipe_count: (($identity_reconciliation_summary.manual_repair_recipes // []) | length)
+      } else {} end)
       + (if $swarm_benchmark_present then {
         benchmark_readiness: $benchmark_advisory_summary.readiness,
         benchmark_catalog_decision: $benchmark_advisory_summary.catalog_decision,
@@ -3125,11 +3289,12 @@ jq -n \
         swarm_agent_causal_trace: $causal_trace_summary,
         staged_contamination: $staged_contamination_summary,
         fixture_contract: {
-          golden_cases: (["healthy", "degraded", "stale_proof", "high_cost", "collision_risk", "overloaded", "forecast_low_confidence", "execution_queue_conservative", "execution_queue_restore_blocked", "queue_fidelity_high_drift", "queue_fidelity_insufficient_evidence", "queue_tuning_promotion_blocked", "queue_tuning_promotion_stale_evidence", "queue_tuning_promotion_rollback_required", "queue_policy_adoption_expiry_required", "queue_policy_adoption_supersession_required", "causal_trace_degraded", "causal_trace_contaminated", "resource_envelope_healthy", "resource_envelope_degraded", "resource_envelope_blocked", "resource_envelope_contaminated", "topology_placement_healthy", "topology_placement_drifted", "topology_placement_expired", "topology_placement_blocked", "topology_queue_advisory_healthy", "topology_queue_advisory_degraded", "topology_queue_advisory_blocked", "topology_queue_advisory_contaminated", "benchmark_advisory_healthy", "benchmark_advisory_blocked_measurement", "benchmark_advisory_local_fallback_contaminated", "benchmark_advisory_stale_baseline", "benchmark_advisory_resource_saturation", "capability_affinity_healthy", "capability_affinity_degraded", "capability_affinity_blocked", "actionability_guard_healthy", "actionability_guard_blocked_divergence", "actionability_guard_stale_source", "actionability_guard_dirty_overlap"] + (if $control_surface_catalog_present then ["control_surface_catalog_healthy", "control_surface_catalog_no_match", "control_surface_catalog_drift_fail_closed", "control_surface_catalog_duplicate_warning", "control_surface_catalog_shadow_blocked", "control_surface_catalog_remote_proof_resident", "control_surface_catalog_proof_economy_what_if", "control_surface_catalog_build_storm_qos", "control_surface_catalog_worker_toolchain_mismatch", "control_surface_catalog_warm_target_roi", "control_surface_catalog_local_fallback_contaminated"] else [] end)),
+          golden_cases: (["healthy", "degraded", "stale_proof", "high_cost", "collision_risk", "overloaded", "forecast_low_confidence", "execution_queue_conservative", "execution_queue_restore_blocked", "queue_fidelity_high_drift", "queue_fidelity_insufficient_evidence", "queue_tuning_promotion_blocked", "queue_tuning_promotion_stale_evidence", "queue_tuning_promotion_rollback_required", "queue_policy_adoption_expiry_required", "queue_policy_adoption_supersession_required", "causal_trace_degraded", "causal_trace_contaminated", "resource_envelope_healthy", "resource_envelope_degraded", "resource_envelope_blocked", "resource_envelope_contaminated", "topology_placement_healthy", "topology_placement_drifted", "topology_placement_expired", "topology_placement_blocked", "topology_queue_advisory_healthy", "topology_queue_advisory_degraded", "topology_queue_advisory_blocked", "topology_queue_advisory_contaminated", "benchmark_advisory_healthy", "benchmark_advisory_blocked_measurement", "benchmark_advisory_local_fallback_contaminated", "benchmark_advisory_stale_baseline", "benchmark_advisory_resource_saturation", "capability_affinity_healthy", "capability_affinity_degraded", "capability_affinity_blocked", "actionability_guard_healthy", "actionability_guard_blocked_divergence", "actionability_guard_stale_source", "actionability_guard_dirty_overlap"] + (if $identity_reconciliation_summary.enabled then ["identity_drift_healthy", "identity_drift_missing_receipt", "identity_drift_blocked", "identity_drift_fail_closed"] else [] end) + (if $control_surface_catalog_present then ["control_surface_catalog_healthy", "control_surface_catalog_no_match", "control_surface_catalog_drift_fail_closed", "control_surface_catalog_duplicate_warning", "control_surface_catalog_shadow_blocked", "control_surface_catalog_remote_proof_resident", "control_surface_catalog_proof_economy_what_if", "control_surface_catalog_build_storm_qos", "control_surface_catalog_worker_toolchain_mismatch", "control_surface_catalog_warm_target_roi", "control_surface_catalog_local_fallback_contaminated"] else [] end)),
           intended_renderer_repo: "/dp/frankentui",
           local_tui_renderer: false
         }
       }
+      + (if $identity_reconciliation_summary.enabled then {agent_mail_identity_drift: $identity_reconciliation_summary} else {} end)
       + (if $swarm_benchmark_present then {swarm_benchmark_responsiveness: $benchmark_advisory_summary} else {} end)
       + (if $swarm_topology_aware_queue_advisory_status != "missing" then {swarm_topology_aware_queue_advisory: $topology_queue_advisory_summary} else {} end)
       + (if $snapshot_bundle_status != "missing" then {live_readonly_snapshot: $live_snapshot_summary} else {} end)
@@ -3147,6 +3312,10 @@ jq -n \
           [recommendation("coordinate_first_error_owner"; $first_error_conveyor_summary.affected_bead; "first-error conveyor recommendation is behind active ownership evidence")]
         elif $first_error_conveyor_plan_status != "missing" and $first_error_conveyor_summary.readiness == "duplicate" then
           [recommendation("use_existing_first_error_bead"; $first_error_conveyor_summary.affected_bead; "first-error conveyor matched an existing bead for this diagnostic")]
+        elif $identity_reconciliation_summary.enabled and $identity_reconciliation_summary.severity == "critical" then
+          [recommendation("repair_agent_mail_identity_drift"; $identity_reconciliation_summary.bead_id; "Agent Mail identity-drift receipt is blocked, fail-closed, or claims forbidden live mutation")]
+        elif $identity_reconciliation_summary.enabled and $identity_reconciliation_summary.severity == "warning" then
+          [recommendation("capture_identity_reconciliation_receipt"; $identity_reconciliation_summary.bead_id; "Agent Mail identity-drift receipt is missing or degraded")]
         elif $causal_trace_summary.readiness == "contaminated" then
           [recommendation("respect_causal_trace_contamination"; $causal_trace_summary.bead_id; "causal trace handoff is contaminated by fail-closed anomaly evidence")]
         elif $causal_trace_summary.readiness == "blocked" then
@@ -3316,7 +3485,9 @@ jq -n \
         swarm_agent_causal_trace_graph_json: $causal_trace_summary.artifact_paths.causal_graph_json,
         swarm_agent_causal_trace_anomaly_report_json: $causal_trace_summary.artifact_paths.anomaly_report_json,
         swarm_actionability_report_json: $actionability_summary.artifact_paths.actionability_report_json
-      } + (if $swarm_benchmark_present then {
+      } + (if $identity_reconciliation_summary.enabled then {
+        identity_reconciliation_receipt_json: $identity_reconciliation_summary.artifact_paths.identity_reconciliation_receipt_json
+      } else {} end) + (if $swarm_benchmark_present then {
         swarm_benchmark_workload_catalog_json: $benchmark_advisory_summary.artifact_paths.workload_catalog_json,
         swarm_benchmark_catalog_findings_json: $benchmark_advisory_summary.artifact_paths.catalog_findings_json,
         swarm_benchmark_responsiveness_advisory_json: $benchmark_advisory_summary.artifact_paths.responsiveness_advisory_json
@@ -3380,6 +3551,9 @@ JQ
   printf -- "- Queue tuning promotion: readiness=\`%s\` decision=\`%s\` rollback=\`%s\` canary=\`%s\`\n" "$(jq -r '.summary.queue_tuning_promotion_readiness' "$status_path")" "$(jq -r '.summary.queue_tuning_promotion_decision' "$status_path")" "$(jq -r '.summary.queue_tuning_rollback_verdict' "$status_path")" "$(jq -r '.summary.queue_tuning_canary_action' "$status_path")"
   printf -- "- Queue policy adoption: readiness=\`%s\` sustained=\`%s\` expiry=\`%s\` expire=\`%s\` supersede=\`%s\`\n" "$(jq -r '.summary.queue_policy_adoption_readiness' "$status_path")" "$(jq -r '.summary.queue_policy_sustained_gain_verdict' "$status_path")" "$(jq -r '.summary.queue_policy_expiry_decision' "$status_path")" "$(jq -r '.summary.queue_policy_expiry_required' "$status_path")" "$(jq -r '.summary.queue_policy_supersession_required' "$status_path")"
   printf -- "- Causal trace: readiness=\`%s\` decision=\`%s\` anomalies=\`%s\` missing-edges=\`%s\`\n" "$(jq -r '.summary.causal_trace_readiness' "$status_path")" "$(jq -r '.summary.causal_trace_decision' "$status_path")" "$(jq '.summary.causal_trace_anomaly_count' "$status_path")" "$(jq '.summary.causal_trace_missing_edge_count' "$status_path")"
+  if jq -e '.predictive_dashboard | has("agent_mail_identity_drift")' "$status_path" >/dev/null; then
+    printf -- "- Agent Mail identity drift: readiness=\`%s\` decision=\`%s\` failed-acks=\`%s\` raw-error=\`%s\`\n" "$(jq -r '.summary.identity_drift_readiness' "$status_path")" "$(jq -r '.summary.identity_drift_decision' "$status_path")" "$(jq '.summary.identity_drift_failed_ack_attempt_count' "$status_path")" "$(jq -r '.predictive_dashboard.agent_mail_identity_drift.raw_error // ""' "$status_path")"
+  fi
   printf -- "- High-cost commands: \`%s\`\n" "$(jq '.summary.high_cost_command_count' "$status_path")"
   printf -- "- Collision risk: \`%s\`\n" "$(jq -r '.summary.collision_risk' "$status_path")"
   printf -- "- RCH incidents: \`%s\`\n\n" "$(jq '.summary.rch_incident_count' "$status_path")"
@@ -3424,7 +3598,9 @@ JQ
       {label:"Queue policy expiry/supersession ledger", path:.artifact_paths.queue_policy_expiry_supersession_ledger_json},
       {label:"Causal trace graph", path:.artifact_paths.swarm_agent_causal_trace_graph_json},
       {label:"Causal trace anomalies", path:.artifact_paths.swarm_agent_causal_trace_anomaly_report_json}
-    ] + (if (.predictive_dashboard | has("swarm_control_surface_catalog")) then [
+    ] + (if (.predictive_dashboard | has("agent_mail_identity_drift")) then [
+      {label:"Identity reconciliation receipt", path:.artifact_paths.identity_reconciliation_receipt_json}
+    ] else [] end) + (if (.predictive_dashboard | has("swarm_control_surface_catalog")) then [
       {label:"Swarm control-surface catalog", path:.artifact_paths.swarm_control_surface_catalog_json},
       {label:"Swarm control-surface intent plan", path:.artifact_paths.swarm_control_surface_intent_plan_json},
       {label:"Swarm control-surface drift report", path:.artifact_paths.swarm_control_surface_drift_report_json}

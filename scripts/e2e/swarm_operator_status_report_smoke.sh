@@ -2425,6 +2425,104 @@ write_causal_trace_fixtures() {
     }' >"${fixture_dir}/causal_trace_anomalies.json"
 }
 
+write_identity_reconciliation_receipt_fixture() {
+  local fixture_dir="$1"
+  local mode="$2"
+  local decision="pass"
+  local anomaly_class=""
+  local anomaly_severity=""
+  local raw_error=""
+  local recipe=""
+
+  case "$mode" in
+    no_drift)
+      ;;
+    blocked)
+      decision="blocked"
+      anomaly_class="stale_message_recipient_row"
+      anomaly_severity="blocked"
+      raw_error="MessageRecipient not found: 739:17897"
+      recipe="Manual recipe only: verify message 17897 and recipient row 739, then rerun acknowledge_message only after confirming the live recipient mapping."
+      ;;
+    fail_closed)
+      decision="fail_closed"
+      anomaly_class="stale_message_recipient_row"
+      anomaly_severity="fail_closed"
+      raw_error="MessageRecipient not found: 739:17897"
+      recipe="Manual recipe only: preserve the raw failure string, recapture Agent Mail message-recipient evidence, and do not approve contacts or acknowledge messages automatically."
+      ;;
+    *)
+      record_failure "unknown identity reconciliation fixture mode: ${mode}"
+      exit 64
+      ;;
+  esac
+
+  jq -n \
+    --arg mode "$mode" \
+    --arg decision "$decision" \
+    --arg anomaly_class "$anomaly_class" \
+    --arg anomaly_severity "$anomaly_severity" \
+    --arg raw_error "$raw_error" \
+    --arg recipe "$recipe" \
+    --arg receipt_path "${fixture_dir}/identity_reconciliation_receipt.json" \
+    '{
+      schema_version:"franken-engine.swarm-agent-mail-identity-reconciliation-receipt.v1",
+      decision:$decision,
+      evaluated_at:"2026-06-18T00:00:00Z",
+      source_revision:"smoke-rev",
+      agent_name:"EmeraldPine",
+      bead_id:"bd-jw854",
+      thread_id:"bd-jw854",
+      raw_error:$raw_error,
+      parsed_error:(if $mode == "no_drift" then {pattern_id:"none"} else {pattern_id:"message_recipient_not_found",message_recipient_row_id:739,message_id:17897} end),
+      affected_entities:(
+        if $mode == "no_drift" then {}
+        else {message_id:17897,message_recipient_row_id:739,from_agent:"MistyFox",to_agent:"EmeraldPine",thread_id:"bd-jw854",bead_id:"bd-jw854",contact_link_id:null,reservation_id:null,reservation_path:null}
+        end
+      ),
+      anomaly_classes:(if $mode == "no_drift" then [] else [$anomaly_class] end),
+      evidence:{
+        failed_ack_attempt_count:(if $mode == "no_drift" then 0 else 1 end),
+        anomalies:(
+          if $mode == "no_drift" then []
+          else [{
+            anomaly_class:$anomaly_class,
+            severity:$anomaly_severity,
+            raw_error:$raw_error,
+            affected_entities:{message_id:17897,message_recipient_row_id:739,from_agent:"MistyFox",to_agent:"EmeraldPine",thread_id:"bd-jw854",bead_id:"bd-jw854",contact_link_id:null,reservation_id:null,reservation_path:null},
+            manual_repair_recipe:$recipe
+          }]
+          end
+        )
+      },
+      manual_repair_recipes:(
+        if $mode == "no_drift" then []
+        else [{anomaly_class:$anomaly_class,severity:$anomaly_severity,affected_entities:{message_id:17897,message_recipient_row_id:739,from_agent:"MistyFox",to_agent:"EmeraldPine",thread_id:"bd-jw854",bead_id:"bd-jw854",contact_link_id:null,reservation_id:null,reservation_path:null},recipe:$recipe}]
+        end
+      ),
+      artifact_paths:{receipt_json:$receipt_path},
+      mutation_policy:{
+        fixture_fed_only:true,
+        proof_only:true,
+        advisory_only:true,
+        queries_live_agent_mail:false,
+        mutates_agent_mail:false,
+        acknowledges_messages:false,
+        sends_agent_mail:false,
+        approves_contacts:false,
+        mutates_br:false,
+        reassigns_beads:false,
+        closes_beads:false,
+        releases_reservations:false,
+        force_releases_reservations:false,
+        runs_cargo:false,
+        runs_rch:false,
+        mutates_remote_workers:false,
+        changes_live_queue_policy:false
+      }
+    }' >"${fixture_dir}/identity_reconciliation_receipt.json"
+}
+
 write_healthy_fixtures() {
   local fixture_dir="$1"
 
@@ -2985,6 +3083,22 @@ run_case() {
       write_healthy_fixtures "$fixture_dir"
       write_causal_trace_fixtures "$fixture_dir" "contaminated"
       ;;
+    identity_drift_healthy)
+      write_healthy_fixtures "$fixture_dir"
+      write_identity_reconciliation_receipt_fixture "$fixture_dir" "no_drift"
+      ;;
+    identity_drift_missing_receipt)
+      write_healthy_fixtures "$fixture_dir"
+      : >"${fixture_dir}/identity_reconciliation_receipt_required.flag"
+      ;;
+    identity_drift_blocked)
+      write_healthy_fixtures "$fixture_dir"
+      write_identity_reconciliation_receipt_fixture "$fixture_dir" "blocked"
+      ;;
+    identity_drift_fail_closed)
+      write_healthy_fixtures "$fixture_dir"
+      write_identity_reconciliation_receipt_fixture "$fixture_dir" "fail_closed"
+      ;;
     resource_envelope_healthy)
       write_healthy_fixtures "$fixture_dir"
       write_resource_envelope_fixtures "$fixture_dir" "healthy"
@@ -3183,6 +3297,8 @@ run_case() {
   [[ -f "${fixture_dir}/expiry_supersession_ledger.json" ]] && extra_args+=(--queue-policy-expiry-supersession-ledger-json "${fixture_dir}/expiry_supersession_ledger.json")
   [[ -f "${fixture_dir}/causal_trace_graph.json" ]] && extra_args+=(--swarm-agent-causal-trace-graph-json "${fixture_dir}/causal_trace_graph.json")
   [[ -f "${fixture_dir}/causal_trace_anomalies.json" ]] && extra_args+=(--swarm-agent-causal-trace-anomaly-report-json "${fixture_dir}/causal_trace_anomalies.json")
+  [[ -f "${fixture_dir}/identity_reconciliation_receipt.json" ]] && extra_args+=(--identity-reconciliation-receipt-json "${fixture_dir}/identity_reconciliation_receipt.json")
+  [[ -f "${fixture_dir}/identity_reconciliation_receipt_required.flag" ]] && extra_args+=(--require-identity-reconciliation-receipt)
   [[ -f "${fixture_dir}/swarm_resource_envelope.json" ]] && extra_args+=(--swarm-resource-envelope-json "${fixture_dir}/swarm_resource_envelope.json")
   [[ -f "${fixture_dir}/swarm_fair_share_batch_plan.json" ]] && extra_args+=(--swarm-fair-share-batch-plan-json "${fixture_dir}/swarm_fair_share_batch_plan.json")
   [[ -f "${fixture_dir}/swarm_topology_placement_plan.json" ]] && extra_args+=(--swarm-topology-placement-plan-json "${fixture_dir}/swarm_topology_placement_plan.json")
@@ -3295,6 +3411,33 @@ run_case() {
     and (.predictive_dashboard.swarm_agent_causal_trace.mutation_policy.mutates_br == false)
     and (.predictive_dashboard.swarm_agent_causal_trace.mutation_policy.sends_agent_mail == false)
     and (.predictive_dashboard.swarm_agent_causal_trace.mutation_policy.runs_rch == false)
+    and ((.predictive_dashboard | has("agent_mail_identity_drift") | not) or (
+      (.predictive_dashboard.agent_mail_identity_drift.readiness | type == "string")
+      and (.predictive_dashboard.agent_mail_identity_drift.decision | type == "string")
+      and (.predictive_dashboard.agent_mail_identity_drift.raw_errors | type == "array")
+      and (.predictive_dashboard.agent_mail_identity_drift.affected.message_ids | type == "array")
+      and (.predictive_dashboard.agent_mail_identity_drift.suspected_stale_ids.message_recipient_row_ids | type == "array")
+      and (.predictive_dashboard.agent_mail_identity_drift.manual_repair_recipes | type == "array")
+      and (.predictive_dashboard.agent_mail_identity_drift.truth_gate.forbidden_live_claims | index("automatic acknowledgement"))
+      and (.predictive_dashboard.agent_mail_identity_drift.truth_gate.forbidden_live_claims | index("automatic contact approval"))
+      and (.predictive_dashboard.agent_mail_identity_drift.truth_gate.forbidden_live_claims | index("automatic reservation release"))
+      and (.predictive_dashboard.agent_mail_identity_drift.truth_gate.forbidden_live_claims | index("automatic bead reassignment"))
+      and (.predictive_dashboard.agent_mail_identity_drift.truth_gate.forbidden_live_claims | index("live Agent Mail querying"))
+      and (.predictive_dashboard.agent_mail_identity_drift.truth_gate.forbidden_live_claims | index("Cargo execution"))
+      and (.predictive_dashboard.agent_mail_identity_drift.truth_gate.forbidden_live_claims | index("RCH execution"))
+      and (.predictive_dashboard.agent_mail_identity_drift.truth_gate.forbidden_live_claims | index("worker mutation"))
+      and (.predictive_dashboard.agent_mail_identity_drift.mutation_policy.fixture_fed_only == true)
+      and (.predictive_dashboard.agent_mail_identity_drift.mutation_policy.proof_only == true)
+      and (.predictive_dashboard.agent_mail_identity_drift.mutation_policy.advisory_only == true)
+      and (.predictive_dashboard.agent_mail_identity_drift.mutation_policy.queries_live_agent_mail == false)
+      and (.predictive_dashboard.agent_mail_identity_drift.mutation_policy.acknowledges_messages == false)
+      and (.predictive_dashboard.agent_mail_identity_drift.mutation_policy.approves_contacts == false)
+      and (.predictive_dashboard.agent_mail_identity_drift.mutation_policy.releases_reservations == false)
+      and (.predictive_dashboard.agent_mail_identity_drift.mutation_policy.reassigns_beads == false)
+      and (.predictive_dashboard.agent_mail_identity_drift.mutation_policy.runs_cargo == false)
+      and (.predictive_dashboard.agent_mail_identity_drift.mutation_policy.runs_rch == false)
+      and (.predictive_dashboard.agent_mail_identity_drift.mutation_policy.mutates_remote_workers == false)
+    ))
     and (.predictive_dashboard.swarm_resource_envelope.readiness | type == "string")
     and (.predictive_dashboard.swarm_resource_envelope.decision | type == "string")
     and (.predictive_dashboard.swarm_resource_envelope.fair_share_decision | type == "string")
@@ -3783,6 +3926,54 @@ run_case() {
         and .summary.causal_trace_readiness == "contaminated"
         and .recommendations[0].action == "respect_causal_trace_contamination"
         and any(.degraded[]; .component == "swarm_agent_causal_trace")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    identity_drift_healthy)
+      jq -e '
+        .status == "healthy"
+        and .predictive_dashboard.agent_mail_identity_drift.readiness == "healthy"
+        and .predictive_dashboard.agent_mail_identity_drift.decision == "pass"
+        and .predictive_dashboard.agent_mail_identity_drift.failed_ack_attempt_count == 0
+        and (.predictive_dashboard.agent_mail_identity_drift.raw_errors | length) == 0
+        and (.predictive_dashboard.fixture_contract.golden_cases | index("identity_drift_healthy"))
+        and (.degraded | map(.component) | index("agent_mail_identity_drift") | not)
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    identity_drift_missing_receipt)
+      jq -e '
+        .status == "degraded"
+        and .predictive_dashboard.agent_mail_identity_drift.artifact_status == "missing"
+        and .predictive_dashboard.agent_mail_identity_drift.readiness == "degraded"
+        and .predictive_dashboard.agent_mail_identity_drift.decision == "missing"
+        and .summary.identity_drift_anomaly_count == 1
+        and .recommendations[0].action == "capture_identity_reconciliation_receipt"
+        and any(.degraded[]; .component == "agent_mail_identity_drift" and .status == "missing")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    identity_drift_blocked)
+      jq -e '
+        .status == "degraded"
+        and .predictive_dashboard.agent_mail_identity_drift.readiness == "blocked"
+        and .predictive_dashboard.agent_mail_identity_drift.decision == "blocked"
+        and .predictive_dashboard.agent_mail_identity_drift.raw_error == "MessageRecipient not found: 739:17897"
+        and (.predictive_dashboard.agent_mail_identity_drift.raw_errors | index("MessageRecipient not found: 739:17897"))
+        and (.predictive_dashboard.agent_mail_identity_drift.affected.message_ids | index("17897"))
+        and (.predictive_dashboard.agent_mail_identity_drift.suspected_stale_ids.message_recipient_row_ids | index("739"))
+        and (.predictive_dashboard.agent_mail_identity_drift.manual_repair_recipe_text[] | contains("rerun acknowledge_message only after confirming"))
+        and .recommendations[0].action == "repair_agent_mail_identity_drift"
+        and any(.degraded[]; .component == "agent_mail_identity_drift" and .status == "blocked")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    identity_drift_fail_closed)
+      jq -e '
+        .status == "degraded"
+        and .predictive_dashboard.agent_mail_identity_drift.readiness == "fail_closed"
+        and .predictive_dashboard.agent_mail_identity_drift.decision == "fail_closed"
+        and .predictive_dashboard.agent_mail_identity_drift.raw_error == "MessageRecipient not found: 739:17897"
+        and (.predictive_dashboard.agent_mail_identity_drift.anomaly_classes | index("stale_message_recipient_row"))
+        and (.predictive_dashboard.agent_mail_identity_drift.manual_repair_recipe_text[] | contains("do not approve contacts or acknowledge messages automatically"))
+        and .recommendations[0].action == "repair_agent_mail_identity_drift"
+        and any(.degraded[]; .component == "agent_mail_identity_drift" and .status == "fail_closed")
       ' "${output_dir}/status.json" >/dev/null
       ;;
     resource_envelope_healthy)
@@ -4342,6 +4533,13 @@ run_case() {
   esac
   record_pass "${case_name} dashboard fields validate"
 
+  case "$case_name" in
+    identity_drift_*)
+      record_pass "${case_name} targeted smoke without golden"
+      return 0
+      ;;
+  esac
+
   canonicalize_status "${output_dir}/status.json" "$tmp_root" >"$actual_path"
   compare_case_golden "$case_name" "$actual_path" "$golden_path"
   canonicalize_report "${output_dir}/report.md" "$tmp_root" >"$report_actual_path"
@@ -4649,6 +4847,10 @@ run_selftest() {
   run_case "queue_policy_adoption_supersession_required" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "causal_trace_degraded" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "causal_trace_contaminated" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "identity_drift_healthy" "healthy" "ok" "ok" "ok" "$tmp_root"
+  run_case "identity_drift_missing_receipt" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "identity_drift_blocked" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "identity_drift_fail_closed" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "resource_envelope_healthy" "healthy" "ok" "ok" "ok" "$tmp_root"
   run_case "resource_envelope_degraded" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "resource_envelope_blocked" "degraded" "ok" "ok" "ok" "$tmp_root"

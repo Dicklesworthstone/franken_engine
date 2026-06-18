@@ -1,0 +1,318 @@
+{
+  "schema_version": "franken-engine.swarm-agent-mail-identity-reconciliation-contract.v1",
+  "bead_id": "bd-lh0re.1",
+  "parent_bead_id": "bd-lh0re",
+  "track": "SWARM-IDENTITY",
+  "purpose": "Define proof-only receipts that explain Agent Mail identity or recipient drift after failed acknowledgement attempts.",
+  "receipt_schema_version": "franken-engine.swarm-agent-mail-identity-reconciliation-receipt.v1",
+  "input_schema_version": "franken-engine.swarm-agent-mail-identity-reconciliation-input.v1",
+  "source_schema_version": "franken-engine.swarm-agent-mail-identity-reconciliation-sources.v1",
+  "event_schema_version": "franken-engine.swarm-agent-mail-identity-reconciliation-event.v1",
+  "normalizer": {
+    "planned_script": "scripts/swarm_agent_mail_identity_reconciler.sh",
+    "planned_smoke_script": "scripts/e2e/swarm_agent_mail_identity_reconciler_smoke.sh",
+    "artifacts": [
+      "swarm_agent_mail_identity_reconciliation_input.json",
+      "swarm_agent_mail_identity_reconciliation_sources.json",
+      "swarm_agent_mail_identity_reconciliation_receipt.json",
+      "events.jsonl",
+      "commands.txt",
+      "report.md"
+    ]
+  },
+  "no_mock_drill": {
+    "planned_script": "scripts/e2e/swarm_agent_mail_identity_reconciliation_no_mock_drill.sh",
+    "composes": [
+      "scripts/swarm_agent_mail_identity_reconciler.sh",
+      "scripts/swarm_operator_status_report.sh",
+      "scripts/e2e/swarm_agent_mail_identity_reconciliation_truth_gate.sh"
+    ],
+    "required_cases": [
+      "healthy_no_drift",
+      "message_recipient_row_drift",
+      "stale_contact_link",
+      "missing_active_profile",
+      "blocked_contact_policy",
+      "contradictory_active_reservation",
+      "unparsable_ack_error"
+    ],
+    "artifacts": [
+      "swarm_agent_mail_identity_reconciliation_no_mock_drill_receipt.json",
+      "events.jsonl",
+      "commands.txt",
+      "report.md"
+    ]
+  },
+  "source_snapshot_contracts": [
+    {
+      "source_id": "agent_mail_profiles_json",
+      "capture_command": "Agent Mail list_agents output",
+      "required": false,
+      "missing_decision": "degraded",
+      "expected_rows": "agents[] or result[]"
+    },
+    {
+      "source_id": "agent_mail_contacts_json",
+      "capture_command": "Agent Mail list_contacts/contact-link snapshot for affected agents",
+      "required": false,
+      "missing_decision": "degraded",
+      "expected_rows": "contacts[] or links[]"
+    },
+    {
+      "source_id": "agent_mail_messages_json",
+      "capture_command": "Agent Mail inbox/search/thread snapshot, including ack_attempts, acknowledgement_attempts, or message_ack_attempts when available",
+      "required": true,
+      "missing_decision": "fail_closed",
+      "expected_rows": "messages[] plus optional ack_attempts[]"
+    },
+    {
+      "source_id": "file_reservations_json",
+      "capture_command": "Agent Mail active file reservation snapshot",
+      "required": false,
+      "missing_decision": "degraded",
+      "expected_rows": "reservations[] or granted[]"
+    },
+    {
+      "source_id": "br_issue_json",
+      "capture_command": "br show <bead-id> --json for the affected thread when known",
+      "required": false,
+      "missing_decision": "degraded",
+      "expected_rows": "issue object or single-item array"
+    },
+    {
+      "source_id": "agent_mail_sla_panel_json",
+      "capture_command": "scripts/swarm_agent_mail_sla_panel.sh output",
+      "required": false,
+      "missing_decision": "degraded",
+      "expected_rows": "diagnostics[]"
+    },
+    {
+      "source_id": "causal_trace_anomalies_json",
+      "capture_command": "scripts/swarm_agent_causal_trace_graph.sh anomaly report",
+      "required": false,
+      "missing_decision": "degraded",
+      "expected_rows": "anomalies[]"
+    }
+  ],
+  "required_receipt_fields": [
+    "schema_version",
+    "decision",
+    "evaluated_at",
+    "source_revision",
+    "agent_name",
+    "bead_id",
+    "thread_id",
+    "raw_error",
+    "parsed_error",
+    "affected_entities",
+    "anomaly_classes",
+    "evidence",
+    "manual_repair_recipes",
+    "artifact_paths",
+    "mutation_policy"
+  ],
+  "affected_entity_fields": [
+    "message_id",
+    "message_recipient_row_id",
+    "from_agent",
+    "to_agent",
+    "thread_id",
+    "bead_id",
+    "contact_link_id",
+    "reservation_id",
+    "reservation_path"
+  ],
+  "raw_error_policy": {
+    "preserve_exact_error_text": true,
+    "parse_without_rewriting": true,
+    "known_patterns": [
+      {
+        "pattern_id": "message_recipient_not_found",
+        "example": "MessageRecipient not found: 739:17897",
+        "parsed_fields": [
+          "message_recipient_row_id",
+          "message_id"
+        ]
+      },
+      {
+        "pattern_id": "agent_link_not_found",
+        "example": "AgentLink not found: EmeraldPine:MistyFox",
+        "parsed_fields": [
+          "from_agent",
+          "to_agent"
+        ]
+      },
+      {
+        "pattern_id": "contact_policy_blocked",
+        "example": "contact policy blocked recipient",
+        "parsed_fields": [
+          "to_agent"
+        ]
+      }
+    ]
+  },
+  "decision_policy": {
+    "pass": "no failed acknowledgement attempt or identity-drift evidence is present in the supplied snapshots",
+    "degraded": "optional profile, contact, reservation, SLA, or causal-trace evidence is missing, but raw ack attempt evidence is still interpretable",
+    "blocked": "identity drift is diagnosed and a manual repair recipe is available, but the artifact must not perform the repair",
+    "fail_closed": "required message/ack-attempt evidence is missing, malformed, contradictory, or cannot preserve the raw failure string"
+  },
+  "anomaly_classes": [
+    "stale_message_recipient_row",
+    "stale_contact_link",
+    "missing_agent_profile",
+    "unknown_agent_profile",
+    "blocked_contact_policy",
+    "contradictory_active_reservation",
+    "unparsable_ack_error",
+    "missing_ack_attempt_snapshot",
+    "missing_raw_error",
+    "stale_identity_snapshot"
+  ],
+  "manual_repair_recipe_contract": {
+    "recipes_are_text_only": true,
+    "must_include_exact_command_shape_when_safe": true,
+    "must_include_manual_confirmation_note": true,
+    "allowed_command_names_as_text": [
+      "fetch_inbox",
+      "mark_message_read",
+      "acknowledge_message",
+      "request_contact",
+      "respond_contact",
+      "list_contacts",
+      "whois",
+      "release_file_reservations",
+      "force_release_file_reservation"
+    ],
+    "forbidden_execution": [
+      "do not call Agent Mail mutation tools from the reconciler",
+      "do not change br state",
+      "do not release or force-release reservations",
+      "do not send acknowledgements",
+      "do not approve contact links",
+      "do not mutate worker or queue state"
+    ]
+  },
+  "artifact_contracts": [
+    {
+      "path_key": "artifact_paths.input_json",
+      "schema_version": "franken-engine.swarm-agent-mail-identity-reconciliation-input.v1",
+      "required": true
+    },
+    {
+      "path_key": "artifact_paths.sources_json",
+      "schema_version": "franken-engine.swarm-agent-mail-identity-reconciliation-sources.v1",
+      "required": true
+    },
+    {
+      "path_key": "artifact_paths.receipt_json",
+      "schema_version": "franken-engine.swarm-agent-mail-identity-reconciliation-receipt.v1",
+      "required": true
+    },
+    {
+      "path_key": "artifact_paths.events_jsonl",
+      "required": true,
+      "description": "structured producer events"
+    },
+    {
+      "path_key": "artifact_paths.commands_txt",
+      "required": true,
+      "description": "exact command transcript"
+    },
+    {
+      "path_key": "artifact_paths.report_md",
+      "required": true,
+      "description": "operator-facing summary"
+    }
+  ],
+  "planned_fixture_cases": [
+    {
+      "fixture_id": "healthy_no_drift",
+      "expected_decision": "pass",
+      "description": "ack-required messages are acknowledged and no failed ack attempts are supplied"
+    },
+    {
+      "fixture_id": "message_recipient_row_drift",
+      "expected_decision": "blocked",
+      "description": "MessageRecipient not found error is parsed into stale row and message IDs while preserving raw text"
+    },
+    {
+      "fixture_id": "stale_contact_link",
+      "expected_decision": "blocked",
+      "description": "failed ack attempt is explained by stale or missing contact-link evidence"
+    },
+    {
+      "fixture_id": "missing_active_profile",
+      "expected_decision": "blocked",
+      "description": "raw ack failure is parsed while the affected agent profile snapshot is missing; blocked repair evidence remains manual-only"
+    },
+    {
+      "fixture_id": "blocked_contact_policy",
+      "expected_decision": "blocked",
+      "description": "contact policy blocks the recipient and the receipt emits manual contact-approval recipe text"
+    },
+    {
+      "fixture_id": "contradictory_active_reservation",
+      "expected_decision": "blocked",
+      "description": "active reservation evidence conflicts with the bead assignee or affected agent identity"
+    },
+    {
+      "fixture_id": "unparsable_ack_error",
+      "expected_decision": "fail_closed",
+      "description": "failed ack attempt lacks a supported raw error shape or cannot preserve exact error text"
+    }
+  ],
+  "truth_gate": {
+    "planned_script": "scripts/e2e/swarm_agent_mail_identity_reconciliation_truth_gate.sh",
+    "required_advisory_terms": [
+      "fixture-fed",
+      "proof-only",
+      "advisory-only",
+      "manual repair recipe"
+    ],
+    "forbidden_live_claim_patterns": [
+      "queries live Agent Mail",
+      "changes br state",
+      "mutates br state",
+      "acknowledges messages",
+      "sends Agent Mail",
+      "approves contacts",
+      "releases reservations",
+      "force releases reservations",
+      "reassigns beads",
+      "closes beads",
+      "mutates workers",
+      "runs cargo",
+      "runs rch",
+      "repairs automatically",
+      "automatic acknowledgement",
+      "automatic contact approval",
+      "automatic reservation release"
+    ]
+  },
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "proof_only": true,
+    "advisory_only": true,
+    "queries_live_agent_mail": false,
+    "mutates_agent_mail": false,
+    "acknowledges_messages": false,
+    "sends_agent_mail": false,
+    "approves_contacts": false,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "closes_beads": false,
+    "releases_reservations": false,
+    "force_releases_reservations": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  },
+  "downstream_beads": [
+    "bd-lh0re.2",
+    "bd-lh0re.3",
+    "bd-lh0re.4",
+    "bd-lh0re.5"
+  ]
+}

@@ -88,6 +88,24 @@ fn string_from_char_code() {
 }
 
 #[test]
+fn string_from_code_point_invalid_values_throw_range_error_bd_xulus() {
+    assert_eq!(eval("String.fromCodePoint(65, 66);"), "AB");
+
+    for source in [
+        "String.fromCodePoint(65, 0x110000);",
+        "String.fromCodePoint(-1);",
+        "String.fromCodePoint(1.5);",
+        "String.fromCodePoint(undefined);",
+    ] {
+        let out = eval(source);
+        assert!(
+            out.contains("range error") && out.contains("String.fromCodePoint"),
+            "{source} should throw RangeError instead of returning a partial string, got {out:?}"
+        );
+    }
+}
+
+#[test]
 fn math_and_string_builtins_use_modular_float_coercion() {
     // ECMA `Math.imul`/`Math.clz32`/`String.fromCharCode` apply modular
     // ToInt32/ToUint32/ToUint16 to their operands. Rust's `f64 as i32`/`as u32`

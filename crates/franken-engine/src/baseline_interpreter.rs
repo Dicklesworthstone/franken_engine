@@ -23636,22 +23636,47 @@ impl InterpreterCore {
                 // Iterate through all provided code points
                 for i in 0..args.count {
                     let code_point_val = self.read_reg(args.start + i)?;
-                    let code_point = match code_point_val {
-                        Value::Int(n) => n as u32,
-                        Value::Float(f) => f.inner() as u32,
-                        _ => return Ok(Value::str(result)), // Invalid code point, return partial result
+                    let code_point_number = match code_point_val {
+                        Value::Int(n) => n as f64,
+                        Value::Float(f) => f.inner(),
+                        Value::Bool(true) => 1.0,
+                        Value::Bool(false) | Value::Null => 0.0,
+                        Value::Str(s) => {
+                            let trimmed = s.trim();
+                            if trimmed.is_empty() {
+                                0.0
+                            } else {
+                                trimmed.parse::<f64>().unwrap_or(f64::NAN)
+                            }
+                        }
+                        _ => f64::NAN,
                     };
 
-                    // Validate Unicode code point range (0 to 0x10FFFF)
-                    if code_point > 0x10FFFF {
-                        return Ok(Value::str(result)); // RangeError equivalent, return partial result
+                    // ES2020 21.1.2.2: each argument must be an integral Unicode
+                    // scalar value in 0..=0x10FFFF. The previous Path-A handler
+                    // returned the already-built prefix on invalid input, e.g.
+                    // `String.fromCodePoint(65, 0x110000)` returned "A".
+                    if !code_point_number.is_finite()
+                        || code_point_number.fract() != 0.0
+                        || !(0.0..=0x10FFFF as f64).contains(&code_point_number)
+                    {
+                        return Err(InterpreterError::RangeError {
+                            message: format!(
+                                "String.fromCodePoint invalid code point: {code_point_number}"
+                            ),
+                        });
                     }
 
+                    let code_point = code_point_number as u32;
                     // Convert to character
                     if let Some(ch) = std::char::from_u32(code_point) {
                         result.push(ch);
                     } else {
-                        return Ok(Value::str(result)); // Invalid code point, return partial result
+                        return Err(InterpreterError::RangeError {
+                            message: format!(
+                                "String.fromCodePoint invalid code point: {code_point}"
+                            ),
+                        });
                     }
                 }
 

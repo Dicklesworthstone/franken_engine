@@ -164,6 +164,54 @@ fn assert_both_lanes_value(module: &Ir3Module, expected: Value, label: &str) {
     assert_eq!(v8.value, expected, "v8 mismatch for {label}");
 }
 
+fn builtin_test_config() -> InterpreterConfig {
+    let mut config = baseline_test_config();
+    config
+        .granted_capabilities
+        .insert(RuntimeCapability::Builtin);
+    config
+}
+
+fn builtin_test_v8_config() -> InterpreterConfig {
+    let mut config = baseline_test_v8_config();
+    config
+        .granted_capabilities
+        .insert(RuntimeCapability::Builtin);
+    config
+}
+
+fn qjs_run_with_builtin(module: &Ir3Module) -> Result<ExecutionResult, InterpreterError> {
+    QuickJsLane::with_config(builtin_test_config()).execute(module, "builtin-integ-trace")
+}
+
+fn v8_run_with_builtin(module: &Ir3Module) -> Result<ExecutionResult, InterpreterError> {
+    V8Lane::with_config(builtin_test_v8_config()).execute(module, "builtin-integ-trace")
+}
+
+fn assert_both_builtin_lanes_value(module: &Ir3Module, expected: Value, label: &str) {
+    let qjs = qjs_run_with_builtin(module).unwrap();
+    assert_eq!(qjs.value, expected.clone(), "quickjs mismatch for {label}");
+
+    let v8 = v8_run_with_builtin(module).unwrap();
+    assert_eq!(v8.value, expected, "v8 mismatch for {label}");
+}
+
+fn call_builtin_math_random(dst: u32) -> Ir3Instruction {
+    Ir3Instruction::HostCall {
+        capability: CapabilityTag("builtin:MathRandom".to_string()),
+        args: RegRange { start: 0, count: 0 },
+        dst,
+    }
+}
+
+fn call_builtin_number_to_string(dst: u32) -> Ir3Instruction {
+    Ir3Instruction::HostCall {
+        capability: CapabilityTag("builtin:NumberPrototypeToString".to_string()),
+        args: RegRange { start: 0, count: 2 },
+        dst,
+    }
+}
+
 fn temp_module_dir(prefix: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -10515,34 +10563,84 @@ fn console_output_hostcall_bounds_capability_based() {
 // Builtin Deduplication Tests (bd-kn1yy)
 // ============================================================================
 
-// Tests previously exercised builtin-ID deduplication invariants by building
-// IR3 modules with a direct `Ir3Instruction::CallFunction { func_index, ... }`
-// opcode plus legacy `Ir3FunctionDesc { name, param_count, local_count,
-// body_start }` entries. The IR contract has since moved to a register-based
-// calling convention (`Ir3Instruction::Call { callee, args, dst }`) and the
-// function descriptor now carries `{ entry, arity, frame_size, name }` — the
-// old construction no longer compiles. The equivalent invariants (exactly one
-// match arm for each builtin, no duplicate IDs) are enforced by the
-// source-scanning tests in `array_*_duplicate_removal_regression.rs` and
-// friends, so these tests are stubbed and ignored until someone ports them to
-// the new calling convention.
+// These regressions used to be empty `#[ignore]` stubs after the IR calling
+// convention moved away from `CallFunction`. Keep this integration target
+// executable by driving the current builtin hostcall path directly.
 
 #[test]
-#[ignore = "API-drift stub: Ir3Instruction::CallFunction was replaced by Call{callee,args,dst}; body never updated. Builtin-dedup invariants are covered by array_foreach_duplicate_removal_regression.rs and array_some_duplicate_removal_regression.rs. Empty body — delete or rewrite for the new calling convention (bd-c13nb)"]
 fn math_random_builtin_ids_produce_deterministic_results() {
-    // stub: see module-level comment above.
+    let module = test_module(vec![
+        call_builtin_math_random(0),
+        call_builtin_math_random(1),
+        call_builtin_math_random(2),
+        Ir3Instruction::Return { value: 0 },
+    ]);
+
+    let qjs_first = qjs_run_with_builtin(&module).unwrap();
+    let qjs_second = qjs_run_with_builtin(&module).unwrap();
+    let v8 = v8_run_with_builtin(&module).unwrap();
+
+    assert_eq!(qjs_first.value, qjs_second.value);
+    assert_eq!(qjs_first.value, v8.value);
+    let Value::Float(value) = qjs_first.value else {
+        panic!("Math.random should return a float");
+    };
+    assert!(
+        value.inner() >= 0.0 && value.inner() < 1.0,
+        "Math.random value must be in [0, 1), got {}",
+        value.inner()
+    );
+    assert!(value.inner().is_finite());
 }
 
 #[test]
-#[ignore = "API-drift stub: same as above — Ir3Instruction::CallFunction replaced by Call{callee,args,dst}; body never updated. Number.toString radix coverage lives in stdlib_integration.rs and stdlib_enrichment_integration.rs. Empty body — delete or rewrite (bd-c13nb)"]
 fn number_to_string_builtin_ids_consistent_radix_handling() {
-    // stub: see module-level comment above.
+    for (number, radix, expected) in [
+        (42, 2, "101010"),
+        (42, 8, "52"),
+        (42, 10, "42"),
+        (255, 16, "ff"),
+        (1000, 36, "rs"),
+        (-42, 16, "-2a"),
+    ] {
+        let module = test_module(vec![
+            Ir3Instruction::LoadInt {
+                dst: 0,
+                value: number,
+            },
+            Ir3Instruction::LoadInt {
+                dst: 1,
+                value: radix,
+            },
+            call_builtin_number_to_string(2),
+            Ir3Instruction::Return { value: 2 },
+        ]);
+        assert_both_builtin_lanes_value(
+            &module,
+            Value::str(expected),
+            &format!("Number.toString({number}, {radix})"),
+        );
+    }
 }
 
 #[test]
-#[ignore = "API-drift stub: same as above — Ir3Instruction::CallFunction replaced by Call{callee,args,dst}; body never updated. Number.toString invalid-radix behavior lives in stdlib_integration.rs / stdlib_enrichment_integration.rs. Empty body — delete or rewrite (bd-c13nb)"]
 fn number_to_string_invalid_radix_handling() {
-    // stub: see module-level comment above.
+    for radix in [0, 1, 37] {
+        let module = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 42 },
+            Ir3Instruction::LoadInt {
+                dst: 1,
+                value: radix,
+            },
+            call_builtin_number_to_string(2),
+            Ir3Instruction::Return { value: 2 },
+        ]);
+        assert_both_builtin_lanes_value(
+            &module,
+            Value::str("RangeError"),
+            &format!("Number.toString invalid radix {radix}"),
+        );
+    }
 }
 
 // Regression tests for recent fix(baseline_interpreter) commits

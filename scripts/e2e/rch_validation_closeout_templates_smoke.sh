@@ -115,6 +115,7 @@ validate_contract() {
           "cargo-clippy-missing",
           "ssh-timeout-no-final-verdict",
           "remote-stale-no-verdict",
+          "dry-run-no-admissible-workers",
           "full-cargo-test-timeout",
           "all-targets-check-pass",
           "source-diagnostic-failure"
@@ -136,6 +137,7 @@ validate_contract() {
     (.templates[] | select(.template_id == "cargo-clippy-missing") | .component_toolchain | contains("cargo-clippy"))
     and (.templates[] | select(.template_id == "ssh-timeout-no-final-verdict") | .final_verdict == "transport_timeout")
     and (.templates[] | select(.template_id == "remote-stale-no-verdict") | .final_verdict == "transport_stall" and .reason_code == "remote_stale_no_verdict" and .source_evidence == false and (.agent_mail_body_md | contains("detector_progress_stale=true")) and (.br_close_reason | contains("progress_age_secs=174")))
+    and (.templates[] | select(.template_id == "dry-run-no-admissible-workers") | .final_verdict == "admission_refused" and .reason_code == "no_admissible_workers" and .source_evidence == false and .worker_id == "not_admitted" and (.agent_mail_body_md | contains("would_intercept=true")) and (.agent_mail_body_md | contains("would_offload=false")) and (.agent_mail_body_md | contains("Cargo did not execute")) and (.br_close_reason | contains("active_project_exclusion=1")))
     and (.templates[] | select(.template_id == "full-cargo-test-timeout") | .command | test("cargo test$"))
     and (.templates[] | select(.template_id == "all-targets-check-pass") | .source_evidence == true and .final_verdict == "source_pass")
     and (.templates[] | select(.template_id == "source-diagnostic-failure") | .source_evidence == true and .final_verdict == "source_failure")
@@ -147,11 +149,20 @@ validate_docs() {
     "Cargo-Clippy Missing" \
     "SSH Timeout" \
     "Remote Progress Stale With No Verdict" \
+    "Dry-Run Admission Refused Before Worker Start" \
     "Full Cargo Test Timed Out" \
     "All-Targets Check Pass" \
     "Source Diagnostic Failure" \
     "final_verdict=transport_stall" \
     "reason_code=remote_stale_no_verdict" \
+    "final_verdict=admission_refused" \
+    "reason_code=no_admissible_workers" \
+    "would_offload=false" \
+    "Cargo never executed remotely" \
+    "Beads comment template" \
+    "Agent Mail body template" \
+    "pending_validation=" \
+    "cargo_executed=false" \
     "detector_progress_stale=true" \
     "command=rch exec --" \
     "not source evidence"; do

@@ -307,6 +307,10 @@ fn push_operator_action_preimage(buf: &mut Vec<u8>, action: &OperatorAction) {
     buf.extend_from_slice(&action.timestamp_ticks.to_le_bytes());
 }
 
+// Binds all nine deterministic artifact-id fields injectively. The fields come
+// from two distinct sources (`ArtifactBuilder` on build, `RecoveryArtifact` on
+// verify), so collapsing them into one parameter struct would be artificial.
+#[allow(clippy::too_many_arguments)]
 fn artifact_id_preimage(
     artifact_type: &ArtifactType,
     trigger: &RecoveryTrigger,

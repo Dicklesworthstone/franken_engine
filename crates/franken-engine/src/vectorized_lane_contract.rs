@@ -47,6 +47,15 @@ fn compute_content_hash(data: &[u8]) -> ContentHash {
     ContentHash::compute(data)
 }
 
+fn append_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    buf.extend_from_slice(bytes);
+}
+
+fn append_count(buf: &mut Vec<u8>, count: usize) {
+    buf.extend_from_slice(&(count as u64).to_le_bytes());
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -529,11 +538,15 @@ impl VectorizationDecision {
         rejection_reason: &Option<String>,
     ) -> ContentHash {
         let mut buf = Vec::new();
-        buf.extend_from_slice(family.as_str().as_bytes());
+        append_len_prefixed(&mut buf, family.as_str().as_bytes());
         buf.extend_from_slice(&chosen_width.width().to_le_bytes());
         buf.push(u8::from(eligible));
-        if let Some(reason) = rejection_reason {
-            buf.extend_from_slice(reason.as_bytes());
+        match rejection_reason {
+            Some(reason) => {
+                buf.push(1);
+                append_len_prefixed(&mut buf, reason.as_bytes());
+            }
+            None => buf.push(0),
         }
         compute_content_hash(&buf)
     }
@@ -710,15 +723,17 @@ impl LaneContract {
     /// Compute a deterministic content hash over the entire contract.
     pub fn content_hash(&self) -> ContentHash {
         let mut buf = Vec::new();
-        buf.extend_from_slice(self.schema_version.as_bytes());
+        append_len_prefixed(&mut buf, self.schema_version.as_bytes());
+        append_count(&mut buf, self.eligibility_map.len());
         for entry in &self.eligibility_map {
-            buf.extend_from_slice(entry.family.as_str().as_bytes());
+            append_len_prefixed(&mut buf, entry.family.as_str().as_bytes());
             buf.extend_from_slice(&entry.max_lane_width.width().to_le_bytes());
             buf.push(u8::from(entry.supports_early_exit));
             buf.push(u8::from(entry.supports_masking));
-            buf.extend_from_slice(entry.ordering.as_str().as_bytes());
+            append_len_prefixed(&mut buf, entry.ordering.as_str().as_bytes());
+            append_count(&mut buf, entry.required_oracles.len());
             for oracle in &entry.required_oracles {
-                buf.extend_from_slice(oracle.as_str().as_bytes());
+                append_len_prefixed(&mut buf, oracle.as_str().as_bytes());
             }
         }
         compute_content_hash(&buf)
@@ -1348,6 +1363,27 @@ mod tests {
     }
 
     #[test]
+    fn content_hash_includes_required_oracle_framing() {
+        let base = LaneContract {
+            schema_version: "test-schema".to_string(),
+            eligibility_map: vec![LaneEligibility {
+                family: BuiltinFamily::ArrayMap,
+                max_lane_width: LaneWidth::Lane4,
+                required_oracles: Vec::new(),
+                ordering: OrderingConstraint::NoOrdering,
+                supports_early_exit: false,
+                supports_masking: true,
+            }],
+        };
+        let mut with_oracle = base.clone();
+        with_oracle.eligibility_map[0]
+            .required_oracles
+            .push(ScalarOracleKind::NoExceptions);
+
+        assert_ne!(base.content_hash(), with_oracle.content_hash());
+    }
+
+    #[test]
     fn decision_hash_changes_with_family() {
         let contract = LaneContract::new();
         let epoch = SecurityEpoch::from_raw(1);
@@ -1362,6 +1398,24 @@ mod tests {
             epoch,
         );
         assert_ne!(d1.content_hash, d2.content_hash);
+    }
+
+    #[test]
+    fn decision_hash_distinguishes_absent_and_empty_rejection_reason() {
+        let absent = VectorizationDecision::compute_hash(
+            &BuiltinFamily::ArrayMap,
+            &LaneWidth::Scalar,
+            false,
+            &None,
+        );
+        let empty = VectorizationDecision::compute_hash(
+            &BuiltinFamily::ArrayMap,
+            &LaneWidth::Scalar,
+            false,
+            &Some(String::new()),
+        );
+
+        assert_ne!(absent, empty);
     }
 
     // -----------------------------------------------------------------------

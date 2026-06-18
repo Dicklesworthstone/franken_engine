@@ -27,6 +27,11 @@ use crate::security_epoch::SecurityEpoch;
 
 static HSP_BUNDLE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+fn extend_len_prefixed_str(preimage: &mut Vec<u8>, value: &str) {
+    preimage.extend_from_slice(&(value.len() as u64).to_le_bytes());
+    preimage.extend_from_slice(value.as_bytes());
+}
+
 // ---------------------------------------------------------------------------
 // Typestate session phases
 // ---------------------------------------------------------------------------
@@ -417,12 +422,9 @@ impl SessionKeySchedule {
         let mut preimage = Vec::new();
         preimage.extend_from_slice(b"franken::key_schedule::");
         preimage.extend_from_slice(&self.epoch.as_u64().to_le_bytes());
-        preimage.extend_from_slice(self.session_id.as_bytes());
-        preimage.push(0);
-        preimage.extend_from_slice(self.extension_id.as_bytes());
-        preimage.push(0);
-        preimage.extend_from_slice(self.host_id.as_bytes());
-        preimage.push(0);
+        extend_len_prefixed_str(&mut preimage, &self.session_id);
+        extend_len_prefixed_str(&mut preimage, &self.extension_id);
+        extend_len_prefixed_str(&mut preimage, &self.host_id);
         preimage.extend_from_slice(self.handshake_transcript_hash.as_bytes());
         ContentHash::compute(&preimage)
     }
@@ -2296,6 +2298,26 @@ mod tests {
         let ks1 = make_key_schedule();
         let mut ks2 = make_key_schedule();
         ks2.session_id = "sess-002".into();
+        assert_ne!(ks1.binding_hash(), ks2.binding_hash());
+    }
+
+    #[test]
+    fn key_schedule_binding_hash_is_injective_for_nul_boundaries() {
+        let ks1 = SessionKeySchedule::new(
+            test_epoch(),
+            "sess\0ext".into(),
+            "alpha".into(),
+            "host-bravo".into(),
+            test_hash(),
+        );
+        let ks2 = SessionKeySchedule::new(
+            test_epoch(),
+            "sess".into(),
+            "ext\0alpha".into(),
+            "host-bravo".into(),
+            test_hash(),
+        );
+
         assert_ne!(ks1.binding_hash(), ks2.binding_hash());
     }
 

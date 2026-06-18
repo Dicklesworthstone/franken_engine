@@ -1163,6 +1163,11 @@ fn build_request<const N: usize>(
     }
 }
 
+fn append_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    buf.extend_from_slice(bytes);
+}
+
 fn derive_correlation_key(
     boundary_class: BoundaryClass,
     sequence: u64,
@@ -1171,19 +1176,14 @@ fn derive_correlation_key(
     component: &str,
     virtual_ts: u64,
 ) -> String {
-    let canonical = format!(
-        "{}|{}|{}|{}|{}|{}",
-        boundary_class.as_str(),
-        sequence,
-        trace_id,
-        decision_id,
-        component,
-        virtual_ts
-    );
-    format!(
-        "bcorr_{}",
-        ContentHash::compute(canonical.as_bytes()).to_hex()
-    )
+    let mut canonical = Vec::new();
+    append_len_prefixed(&mut canonical, boundary_class.as_str().as_bytes());
+    canonical.extend_from_slice(&sequence.to_le_bytes());
+    append_len_prefixed(&mut canonical, trace_id.as_bytes());
+    append_len_prefixed(&mut canonical, decision_id.as_bytes());
+    append_len_prefixed(&mut canonical, component.as_bytes());
+    canonical.extend_from_slice(&virtual_ts.to_le_bytes());
+    format!("bcorr_{}", ContentHash::compute(&canonical).to_hex())
 }
 
 #[cfg(test)]
@@ -1851,6 +1851,47 @@ mod tests {
         let a = derive_correlation_key(BoundaryClass::ClockRead, 0, "t", "d", "comp1", 1);
         let b = derive_correlation_key(BoundaryClass::ClockRead, 0, "t", "d", "comp2", 1);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn correlation_key_len_prefixes_delimiter_boundaries_bd_fn47f() {
+        let old_left = format!(
+            "{}|{}|{}|{}|{}|{}",
+            BoundaryClass::ClockRead.as_str(),
+            0,
+            "trace|decision",
+            "component",
+            "leaf",
+            1
+        );
+        let old_right = format!(
+            "{}|{}|{}|{}|{}|{}",
+            BoundaryClass::ClockRead.as_str(),
+            0,
+            "trace",
+            "decision|component",
+            "leaf",
+            1
+        );
+        assert_eq!(old_left, old_right);
+
+        let left = derive_correlation_key(
+            BoundaryClass::ClockRead,
+            0,
+            "trace|decision",
+            "component",
+            "leaf",
+            1,
+        );
+        let right = derive_correlation_key(
+            BoundaryClass::ClockRead,
+            0,
+            "trace",
+            "decision|component",
+            "leaf",
+            1,
+        );
+        assert_ne!(left, right);
     }
 
     #[test]

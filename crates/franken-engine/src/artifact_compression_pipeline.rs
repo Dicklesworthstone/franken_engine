@@ -92,6 +92,15 @@ const MAX_RETAINED_CONTENT_BYTES: u64 = 1024 * 1024;
 /// Zstandard level used by the deterministic byte-backed codec path.
 const ZSTD_COMPRESSION_LEVEL: i32 = 3;
 
+fn update_len_prefixed(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+
+fn update_count(hasher: &mut Sha256, count: usize) {
+    hasher.update((count as u64).to_le_bytes());
+}
+
 // ---------------------------------------------------------------------------
 // CompressionAlgorithm
 // ---------------------------------------------------------------------------
@@ -728,11 +737,9 @@ impl DedupReceipt {
         let canonical_artifact_id = canonical_artifact_id.into();
 
         let mut hasher = Sha256::new();
-        hasher.update(b"dedup_receipt:");
-        hasher.update(duplicate_artifact_id.as_bytes());
-        hasher.update(b"|");
-        hasher.update(canonical_artifact_id.as_bytes());
-        hasher.update(b"|");
+        hasher.update(b"dedup_receipt:v1");
+        update_len_prefixed(&mut hasher, duplicate_artifact_id.as_bytes());
+        update_len_prefixed(&mut hasher, canonical_artifact_id.as_bytes());
         hasher.update(canonical_hash.as_bytes());
         hasher.update(epoch.as_u64().to_le_bytes());
         let receipt_hash = ContentHash::compute(&hasher.finalize());
@@ -780,10 +787,9 @@ impl ExclusionReceipt {
         let artifact_id = artifact_id.into();
 
         let mut hasher = Sha256::new();
-        hasher.update(b"exclusion_receipt:");
-        hasher.update(artifact_id.as_bytes());
-        hasher.update(b"|");
-        hasher.update(reason.as_str().as_bytes());
+        hasher.update(b"exclusion_receipt:v1");
+        update_len_prefixed(&mut hasher, artifact_id.as_bytes());
+        update_len_prefixed(&mut hasher, reason.as_str().as_bytes());
         hasher.update(epoch.as_u64().to_le_bytes());
         let receipt_hash = ContentHash::compute(&hasher.finalize());
 
@@ -822,6 +828,18 @@ pub struct PlanEntry {
 // ---------------------------------------------------------------------------
 // BundlePlan — the planner's output for a set of artifacts
 // ---------------------------------------------------------------------------
+
+fn compute_plan_hash(entries: &[PlanEntry], epoch: SecurityEpoch) -> ContentHash {
+    let mut hasher = Sha256::new();
+    hasher.update(b"bundle_plan:v1");
+    update_count(&mut hasher, entries.len());
+    for entry in entries {
+        update_len_prefixed(&mut hasher, entry.artifact_id.as_bytes());
+        update_len_prefixed(&mut hasher, entry.action.as_str().as_bytes());
+    }
+    hasher.update(epoch.as_u64().to_le_bytes());
+    ContentHash::compute(&hasher.finalize())
+}
 
 /// The output of the bundle planner: a deterministic plan for compressing,
 /// deduplicating, or excluding each artifact in a bundle.
@@ -1025,16 +1043,7 @@ impl BundlePlanner {
             }
         }
 
-        // Compute plan hash
-        let mut hasher = Sha256::new();
-        hasher.update(b"bundle_plan:");
-        hasher.update(entries.len().to_le_bytes());
-        for entry in &entries {
-            hasher.update(entry.artifact_id.as_bytes());
-            hasher.update(entry.action.as_str().as_bytes());
-        }
-        hasher.update(self.config.epoch.as_u64().to_le_bytes());
-        let plan_hash = ContentHash::compute(&hasher.finalize());
+        let plan_hash = compute_plan_hash(&entries, self.config.epoch);
 
         BundlePlan {
             entries,
@@ -1684,6 +1693,31 @@ mod tests {
     }
 
     #[test]
+    fn dedup_receipt_hash_distinguishes_artifact_id_boundaries_bd_fn47f() {
+        let canonical_hash = ContentHash::compute(b"same-canonical");
+        let left = DedupReceipt::new(
+            "dup|canon",
+            "target",
+            canonical_hash,
+            ArtifactCategory::Cache,
+            512,
+            1,
+            test_epoch(),
+        );
+        let right = DedupReceipt::new(
+            "dup",
+            "canon|target",
+            canonical_hash,
+            ArtifactCategory::Cache,
+            512,
+            1,
+            test_epoch(),
+        );
+
+        assert_ne!(left.receipt_hash, right.receipt_hash);
+    }
+
+    #[test]
     fn dedup_receipt_serde_roundtrip() {
         let r = DedupReceipt::new(
             "dup-1",
@@ -1935,6 +1969,34 @@ mod tests {
         let plan2 = p2.plan(&descriptors);
 
         assert_eq!(plan1.plan_hash, plan2.plan_hash);
+    }
+
+    #[test]
+    fn planner_hash_distinguishes_entry_boundaries_bd_fn47f() {
+        fn entry(artifact_id: &str, action: CompressionAction) -> PlanEntry {
+            PlanEntry {
+                artifact_id: artifact_id.to_string(),
+                category: ArtifactCategory::Cache,
+                action,
+                algorithm: CompressionAlgorithm::Identity,
+                dedup_target: None,
+                exclusion_reason: None,
+            }
+        }
+
+        let left = [
+            entry("", CompressionAction::Compress),
+            entry("dedup", CompressionAction::Passthrough),
+        ];
+        let right = [
+            entry("compress", CompressionAction::Dedup),
+            entry("", CompressionAction::Passthrough),
+        ];
+
+        assert_ne!(
+            compute_plan_hash(&left, test_epoch()),
+            compute_plan_hash(&right, test_epoch())
+        );
     }
 
     // --- DedupTracker ---

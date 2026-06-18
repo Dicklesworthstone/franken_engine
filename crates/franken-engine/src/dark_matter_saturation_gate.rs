@@ -68,6 +68,25 @@ pub const DEFAULT_RATCHET_WIDENING_CEILING: u64 = 150_000;
 /// meaningful burndown velocity estimate.
 pub const DEFAULT_MIN_OBSERVATIONS: u64 = 10;
 
+fn append_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    buf.extend_from_slice(bytes);
+}
+
+fn append_count(buf: &mut Vec<u8>, count: usize) {
+    buf.extend_from_slice(&(count as u64).to_le_bytes());
+}
+
+fn append_optional_u64(buf: &mut Vec<u8>, value: Option<u64>) {
+    match value {
+        Some(value) => {
+            buf.push(1);
+            buf.extend_from_slice(&value.to_le_bytes());
+        }
+        None => buf.push(0),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // DarkMatterRegionKind
 // ---------------------------------------------------------------------------
@@ -183,14 +202,12 @@ impl DarkMatterRegion {
     #[must_use]
     pub fn content_hash(&self) -> ContentHash {
         let mut buf = Vec::with_capacity(128);
-        buf.extend_from_slice(self.region_id.as_bytes());
-        buf.push(b'|');
-        buf.extend_from_slice(self.kind.as_str().as_bytes());
-        buf.push(b'|');
+        append_len_prefixed(&mut buf, self.region_id.as_bytes());
+        append_len_prefixed(&mut buf, self.kind.as_str().as_bytes());
         buf.extend_from_slice(&self.mass_millionths.to_le_bytes());
         buf.push(if self.retired { 1 } else { 0 });
         buf.extend_from_slice(&self.discovered_at_epoch_secs.to_le_bytes());
-        buf.extend_from_slice(&self.retired_at_epoch_secs.unwrap_or(0).to_le_bytes());
+        append_optional_u64(&mut buf, self.retired_at_epoch_secs);
         buf.extend_from_slice(&self.priority_weight_millionths.to_le_bytes());
         ContentHash::compute(&buf)
     }
@@ -321,12 +338,13 @@ impl DarkMatterEstimate {
     #[must_use]
     pub fn content_hash(&self) -> ContentHash {
         let mut buf = Vec::with_capacity(256);
-        buf.extend_from_slice(b"DarkMatterEstimate|");
+        append_len_prefixed(&mut buf, b"DarkMatterEstimate");
         buf.extend_from_slice(&self.total_surface_millionths.to_le_bytes());
         buf.extend_from_slice(&self.epoch.as_u64().to_le_bytes());
         buf.extend_from_slice(&self.estimated_at_epoch_secs.to_le_bytes());
+        append_count(&mut buf, self.regions.len());
         for (id, region) in &self.regions {
-            buf.extend_from_slice(id.as_bytes());
+            append_len_prefixed(&mut buf, id.as_bytes());
             buf.extend_from_slice(region.content_hash().as_bytes());
         }
         ContentHash::compute(&buf)
@@ -500,9 +518,10 @@ impl BurndownTracker {
     #[must_use]
     pub fn content_hash(&self) -> ContentHash {
         let mut buf = Vec::with_capacity(128);
-        buf.extend_from_slice(b"BurndownTracker|");
+        append_len_prefixed(&mut buf, b"BurndownTracker");
         buf.extend_from_slice(&self.total_surface_millionths.to_le_bytes());
         buf.extend_from_slice(&self.epoch.as_u64().to_le_bytes());
+        append_count(&mut buf, self.observations.len());
         for obs in &self.observations {
             buf.extend_from_slice(obs.content_hash().as_bytes());
         }
@@ -774,9 +793,8 @@ impl BoardSaturationVerdict {
     #[must_use]
     pub fn content_hash(&self) -> ContentHash {
         let mut buf = Vec::with_capacity(128);
-        buf.extend_from_slice(b"BoardSaturationVerdict|");
-        buf.extend_from_slice(self.state.as_str().as_bytes());
-        buf.push(b'|');
+        append_len_prefixed(&mut buf, b"BoardSaturationVerdict");
+        append_len_prefixed(&mut buf, self.state.as_str().as_bytes());
         buf.extend_from_slice(&self.dark_matter_fraction_millionths.to_le_bytes());
         buf.extend_from_slice(&self.net_burndown_velocity_millionths.to_le_bytes());
         buf.extend_from_slice(&(self.observation_count as u64).to_le_bytes());
@@ -784,8 +802,9 @@ impl BoardSaturationVerdict {
         buf.extend_from_slice(&self.verdict_at_epoch_secs.to_le_bytes());
         let mut sorted_reasons = self.reasons.clone();
         sorted_reasons.sort_by_key(|r| r.to_string());
+        append_count(&mut buf, sorted_reasons.len());
         for reason in &sorted_reasons {
-            buf.extend_from_slice(reason.to_string().as_bytes());
+            append_len_prefixed(&mut buf, reason.to_string().as_bytes());
         }
         ContentHash::compute(&buf)
     }
@@ -991,9 +1010,8 @@ impl DecisionReceipt {
         timestamp: u64,
     ) -> ContentHash {
         let mut buf = Vec::with_capacity(256);
-        buf.extend_from_slice(b"DecisionReceipt|");
-        buf.extend_from_slice(DARK_MATTER_GATE_SCHEMA_VERSION.as_bytes());
-        buf.push(b'|');
+        append_len_prefixed(&mut buf, b"DecisionReceipt");
+        append_len_prefixed(&mut buf, DARK_MATTER_GATE_SCHEMA_VERSION.as_bytes());
         buf.extend_from_slice(saturation.content_hash().as_bytes());
         buf.extend_from_slice(freshness.content_hash().as_bytes());
         buf.extend_from_slice(ratchet.content_hash().as_bytes());
@@ -1083,17 +1101,11 @@ impl DarkMatterEvidence {
     #[must_use]
     pub fn content_hash(&self) -> ContentHash {
         let mut buf = Vec::with_capacity(256);
-        buf.extend_from_slice(b"DarkMatterEvidence|");
-        // Length-prefix the adjacent free-form fields so their boundaries are
-        // unambiguous (injective preimage): without this, schema_version +
-        // bead_id + board_state could blur (e.g. ("ab","c") vs ("a","bc")).
-        buf.extend_from_slice(&(self.schema_version.len() as u64).to_le_bytes());
-        buf.extend_from_slice(self.schema_version.as_bytes());
-        buf.extend_from_slice(&(self.bead_id.len() as u64).to_le_bytes());
-        buf.extend_from_slice(self.bead_id.as_bytes());
+        append_len_prefixed(&mut buf, b"DarkMatterEvidence");
+        append_len_prefixed(&mut buf, self.schema_version.as_bytes());
+        append_len_prefixed(&mut buf, self.bead_id.as_bytes());
         let board_state = self.board_state.as_str();
-        buf.extend_from_slice(&(board_state.len() as u64).to_le_bytes());
-        buf.extend_from_slice(board_state.as_bytes());
+        append_len_prefixed(&mut buf, board_state.as_bytes());
         buf.extend_from_slice(self.receipt_hash.as_bytes());
         buf.extend_from_slice(&self.epoch.as_u64().to_le_bytes());
         buf.extend_from_slice(&self.emitted_at_epoch_secs.to_le_bytes());
@@ -1617,6 +1629,32 @@ mod tests {
         let r1 = make_test_region("r1", DarkMatterRegionKind::UntestedCodePath, 100_000, false);
         let r2 = make_test_region("r1", DarkMatterRegionKind::UntestedCodePath, 100_000, true);
         assert_ne!(r1.content_hash(), r2.content_hash());
+    }
+
+    #[test]
+    fn region_content_hash_distinguishes_none_and_zero_retired_timestamp_bd_fn47f() {
+        fn old_unframed_hash(region: &DarkMatterRegion) -> ContentHash {
+            let mut buf = Vec::with_capacity(128);
+            buf.extend_from_slice(region.region_id.as_bytes());
+            buf.push(b'|');
+            buf.extend_from_slice(region.kind.as_str().as_bytes());
+            buf.push(b'|');
+            buf.extend_from_slice(&region.mass_millionths.to_le_bytes());
+            buf.push(if region.retired { 1 } else { 0 });
+            buf.extend_from_slice(&region.discovered_at_epoch_secs.to_le_bytes());
+            buf.extend_from_slice(&region.retired_at_epoch_secs.unwrap_or(0).to_le_bytes());
+            buf.extend_from_slice(&region.priority_weight_millionths.to_le_bytes());
+            ContentHash::compute(&buf)
+        }
+
+        let mut none =
+            make_test_region("r1", DarkMatterRegionKind::UntestedCodePath, 100_000, true);
+        none.retired_at_epoch_secs = None;
+        let mut zero = none.clone();
+        zero.retired_at_epoch_secs = Some(0);
+
+        assert_eq!(old_unframed_hash(&none), old_unframed_hash(&zero));
+        assert_ne!(none.content_hash(), zero.content_hash());
     }
 
     #[test]

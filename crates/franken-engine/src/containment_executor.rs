@@ -36,6 +36,15 @@ fn placeholder_sentinel() -> ContentHash {
     ContentHash::compute(b"placeholder")
 }
 
+fn push_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    buf.extend_from_slice(bytes);
+}
+
+fn push_count(buf: &mut Vec<u8>, count: usize) {
+    buf.extend_from_slice(&(count as u64).to_le_bytes());
+}
+
 // ---------------------------------------------------------------------------
 // ContainmentError
 // ---------------------------------------------------------------------------
@@ -223,30 +232,24 @@ impl ContainmentReceipt {
     /// non-reproducible across replay runs.
     fn canonical_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(256);
-        buf.extend_from_slice(self.receipt_id.as_bytes());
-        buf.push(0);
-        buf.extend_from_slice(self.action.to_string().as_bytes());
-        buf.push(0);
-        buf.extend_from_slice(self.target_extension_id.as_bytes());
-        buf.push(0);
-        buf.extend_from_slice(self.previous_state.to_string().as_bytes());
-        buf.push(0);
-        buf.extend_from_slice(self.new_state.to_string().as_bytes());
-        buf.push(0);
+        push_len_prefixed(&mut buf, self.receipt_id.as_bytes());
+        push_len_prefixed(&mut buf, self.action.to_string().as_bytes());
+        push_len_prefixed(&mut buf, self.target_extension_id.as_bytes());
+        push_len_prefixed(&mut buf, self.previous_state.to_string().as_bytes());
+        push_len_prefixed(&mut buf, self.new_state.to_string().as_bytes());
         buf.extend_from_slice(&self.timestamp_ns.to_le_bytes());
         // NOTE: duration_ns intentionally omitted — see doc comment above.
         buf.push(u8::from(self.success));
         buf.push(u8::from(self.cooperative));
+        push_count(&mut buf, self.evidence_refs.len());
         for r in &self.evidence_refs {
-            buf.extend_from_slice(r.as_bytes());
-            buf.push(0);
+            push_len_prefixed(&mut buf, r.as_bytes());
         }
         buf.extend_from_slice(&self.epoch.as_u64().to_le_bytes());
+        push_count(&mut buf, self.metadata.len());
         for (k, v) in &self.metadata {
-            buf.extend_from_slice(k.as_bytes());
-            buf.push(0);
-            buf.extend_from_slice(v.as_bytes());
-            buf.push(0);
+            push_len_prefixed(&mut buf, k.as_bytes());
+            push_len_prefixed(&mut buf, v.as_bytes());
         }
         buf
     }
@@ -428,12 +431,13 @@ impl ContainmentExecutor {
                 // extension state rather than a synthetic placeholder.
                 let receipt_count = ext.receipts.len() as u64;
                 let mut mem_preimage = Vec::new();
-                mem_preimage.extend_from_slice(extension_id.as_bytes());
+                push_len_prefixed(&mut mem_preimage, extension_id.as_bytes());
                 mem_preimage.extend_from_slice(&receipt_count.to_be_bytes());
                 mem_preimage.extend_from_slice(&context.timestamp_ns.to_be_bytes());
-                mem_preimage.extend_from_slice(context.decision_id.as_bytes());
+                push_len_prefixed(&mut mem_preimage, context.decision_id.as_bytes());
+                push_count(&mut mem_preimage, ext.receipts.len());
                 for r in &ext.receipts {
-                    mem_preimage.extend_from_slice(r.receipt_id.as_bytes());
+                    push_len_prefixed(&mut mem_preimage, r.receipt_id.as_bytes());
                 }
                 let mut manifest_preimage = Vec::new();
                 manifest_preimage.extend_from_slice(extension_id.as_bytes());
@@ -669,6 +673,38 @@ mod tests {
         executor.register("ext-001");
         executor.register("ext-002");
         executor
+    }
+
+    #[test]
+    fn canonical_bytes_injective_over_null_byte_evidence_bd_fn47f() {
+        let mk = |refs: Vec<&str>| {
+            ContainmentReceipt {
+                receipt_id: "r1".into(),
+                action: ContainmentAction::Sandbox,
+                target_extension_id: "ext-1".into(),
+                previous_state: ContainmentState::Running,
+                new_state: ContainmentState::Sandboxed,
+                timestamp_ns: 1000,
+                duration_ns: 0,
+                success: true,
+                cooperative: false,
+                evidence_refs: refs.into_iter().map(String::from).collect(),
+                epoch: SecurityEpoch::GENESIS,
+                content_hash: ContentHash::compute(b"placeholder"),
+                metadata: BTreeMap::new(),
+            }
+            .canonical_bytes()
+        };
+
+        assert_ne!(mk(vec!["a\0c"]), mk(vec!["a", "c"]));
+
+        let mut left = Vec::new();
+        push_len_prefixed(&mut left, b"ab");
+        push_len_prefixed(&mut left, b"c");
+        let mut right = Vec::new();
+        push_len_prefixed(&mut right, b"a");
+        push_len_prefixed(&mut right, b"bc");
+        assert_ne!(left, right);
     }
 
     // -----------------------------------------------------------------------

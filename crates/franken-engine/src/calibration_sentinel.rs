@@ -267,14 +267,13 @@ impl CalibrationSentinel {
     /// Compute a deterministic content hash for this sentinel.
     pub fn compute_hash(&self) -> ContentHash {
         let mut hasher = Sha256::new();
-        hasher.update(COMPONENT.as_bytes());
-        hasher.update(b":sentinel:");
-        hasher.update(self.sentinel_id.as_bytes());
-        hasher.update(b":");
-        hasher.update(self.kind.as_str().as_bytes());
+        hash_field(&mut hasher, COMPONENT.as_bytes());
+        hash_field(&mut hasher, b"sentinel");
+        hash_field(&mut hasher, self.sentinel_id.as_bytes());
+        hash_field(&mut hasher, self.kind.as_str().as_bytes());
         hasher.update(self.threshold_millionths.to_le_bytes());
         hasher.update(self.current_value_millionths.to_le_bytes());
-        hasher.update(self.state.as_str().as_bytes());
+        hash_field(&mut hasher, self.state.as_str().as_bytes());
         let result = hasher.finalize();
         let mut out = [0u8; 32];
         out.copy_from_slice(&result);
@@ -337,15 +336,12 @@ impl ObservabilityCell {
     /// Compute a deterministic content hash for this cell.
     pub fn compute_hash(&self) -> ContentHash {
         let mut hasher = Sha256::new();
-        hasher.update(COMPONENT.as_bytes());
-        hasher.update(b":cell:");
-        hasher.update(self.cell_id.as_bytes());
-        hasher.update(b":");
-        hasher.update(self.supremacy_domain.as_bytes());
-        hasher.update(b":");
-        hasher.update(self.promotion_rule.as_str().as_bytes());
-        hasher.update(b":");
-        hasher.update(self.overall_state.as_str().as_bytes());
+        hash_field(&mut hasher, COMPONENT.as_bytes());
+        hash_field(&mut hasher, b"cell");
+        hash_field(&mut hasher, self.cell_id.as_bytes());
+        hash_field(&mut hasher, self.supremacy_domain.as_bytes());
+        hash_field(&mut hasher, self.promotion_rule.as_str().as_bytes());
+        hash_field(&mut hasher, self.overall_state.as_str().as_bytes());
         {
             let mut sorted_hashes: Vec<[u8; 32]> = self
                 .sentinels
@@ -353,6 +349,7 @@ impl ObservabilityCell {
                 .map(|s| *s.content_hash.as_bytes())
                 .collect();
             sorted_hashes.sort();
+            hash_count(&mut hasher, sorted_hashes.len());
             for h in &sorted_hashes {
                 hasher.update(h);
             }
@@ -405,17 +402,21 @@ pub struct PromotionDecision {
 /// Append a variable-length field to a `Sha256` content-hash preimage with a
 /// fixed-width `u64` length prefix.
 ///
-/// The decision hash commits to a promotion decision's identity, so its
-/// preimage must be injective. Separating adjacent variable-length fields with
+/// Calibration reports commit to free-form ids, domains, and reasons, so their
+/// preimages must be injective. Separating adjacent variable-length fields with
 /// a byte delimiter (`:`/`|`) is not injective when a field can contain the
 /// delimiter — `decision_id="a:b", cell_id="c"` and `decision_id="a",
-/// cell_id="b:c"` both serialize to `…a:b:c…`, and `suppression_reasons=["a|b"]`
-/// collides with `["a","b"]`. Length-prefixing each variable-length field and
-/// count-prefixing the reasons removes the ambiguity. Cf. the same fix
+/// cell_id="b:c"` both serialize to `...a:b:c...`, and uncounted string loops
+/// can blur item boundaries. Length-prefixing each variable-length field and
+/// count-prefixing collections removes the ambiguity. Cf. the same fix
 /// crate-wide in commits 7f500570 / 1d3e0542.
 fn hash_field(hasher: &mut Sha256, bytes: &[u8]) {
     hasher.update((bytes.len() as u64).to_le_bytes());
     hasher.update(bytes);
+}
+
+fn hash_count(hasher: &mut Sha256, count: usize) {
+    hasher.update((count as u64).to_le_bytes());
 }
 
 impl PromotionDecision {
@@ -483,14 +484,13 @@ impl SentinelReport {
     /// Compute a deterministic content hash for this report.
     pub fn compute_hash(&self) -> ContentHash {
         let mut hasher = Sha256::new();
-        hasher.update(COMPONENT.as_bytes());
-        hasher.update(b":report:");
-        hasher.update(self.report_id.as_bytes());
-        hasher.update(b":");
+        hash_field(&mut hasher, COMPONENT.as_bytes());
+        hash_field(&mut hasher, b"report");
+        hash_field(&mut hasher, self.report_id.as_bytes());
         hasher.update(self.epoch.as_u64().to_le_bytes());
         hasher.update(self.green_count.to_le_bytes());
         hasher.update(self.red_count.to_le_bytes());
-        hasher.update((self.cells.len() as u64).to_le_bytes());
+        hash_count(&mut hasher, self.cells.len());
         {
             let mut cell_hashes: Vec<ContentHash> =
                 self.cells.iter().map(|c| c.compute_hash()).collect();
@@ -506,6 +506,7 @@ impl SentinelReport {
                 .map(|d| *d.content_hash.as_bytes())
                 .collect();
             decision_hashes.sort();
+            hash_count(&mut hasher, decision_hashes.len());
             for h in &decision_hashes {
                 hasher.update(h);
             }
@@ -942,14 +943,13 @@ fn collect_yellow_warnings(cell: &ObservabilityCell, reasons: &mut Vec<String>) 
 /// Generate a deterministic decision ID from cell data.
 fn generate_decision_id(cell: &ObservabilityCell) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"decision:");
-    hasher.update(cell.cell_id.as_bytes());
-    hasher.update(b":");
-    hasher.update(cell.promotion_rule.as_str().as_bytes());
-    hasher.update(b":");
-    hasher.update(cell.overall_state.as_str().as_bytes());
+    hash_field(&mut hasher, b"decision");
+    hash_field(&mut hasher, cell.cell_id.as_bytes());
+    hash_field(&mut hasher, cell.promotion_rule.as_str().as_bytes());
+    hash_field(&mut hasher, cell.overall_state.as_str().as_bytes());
+    hash_count(&mut hasher, cell.sentinels.len());
     for s in &cell.sentinels {
-        hasher.update(s.sentinel_id.as_bytes());
+        hash_field(&mut hasher, s.sentinel_id.as_bytes());
         hasher.update(s.current_value_millionths.to_le_bytes());
     }
     let result = hasher.finalize();
@@ -965,14 +965,15 @@ fn generate_report_id(
     decisions: &[PromotionDecision],
 ) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"report:");
+    hash_field(&mut hasher, b"report");
     hasher.update(epoch.as_u64().to_le_bytes());
-    hasher.update((cells.len() as u64).to_le_bytes());
+    hash_count(&mut hasher, cells.len());
     for c in cells {
-        hasher.update(c.cell_id.as_bytes());
+        hash_field(&mut hasher, c.cell_id.as_bytes());
     }
+    hash_count(&mut hasher, decisions.len());
     for d in decisions {
-        hasher.update(d.decision_id.as_bytes());
+        hash_field(&mut hasher, d.decision_id.as_bytes());
     }
     let result = hasher.finalize();
     let mut out = [0u8; 32];
@@ -1071,6 +1072,91 @@ mod tests {
         let s1 = make_sentinel("r1", SentinelKind::ErrorBound, 100_000, 200_000);
         let s2 = make_sentinel("r2", SentinelKind::Coverage, 800_000, MILLIONTHS);
         build_cell(cell_id, domain, vec![s1, s2], rule)
+    }
+
+    #[test]
+    fn cell_hash_len_prefixes_id_and_domain_boundaries_bd_fn47f() {
+        // bd-fn47f: cell_id and supremacy_domain were ':'-joined, so
+        // ("a:b","c") and ("a","b:c") serialized to the same field bytes.
+        let sentinel = make_sentinel("same", SentinelKind::ErrorBound, 500_000, 100_000);
+        let left = build_cell(
+            "a:b",
+            "c",
+            vec![sentinel.clone()],
+            PromotionRule::FailClosed,
+        );
+        let right = build_cell("a", "b:c", vec![sentinel], PromotionRule::FailClosed);
+
+        assert_ne!(
+            left.compute_hash(),
+            right.compute_hash(),
+            "cell_id/domain field boundary must not collide"
+        );
+    }
+
+    #[test]
+    fn decision_id_len_prefixes_sentinel_loop_boundaries_bd_fn47f() {
+        // bd-fn47f: generate_decision_id used an uncounted loop of
+        // sentinel_id + current_value bytes. With current_value=0, the old
+        // two-sentinel suffix ["a", 0u64, "b", 1u64] matched the one-sentinel
+        // suffix ["a\\0\\0\\0\\0\\0\\0\\0\\0b", 1u64].
+        let first = make_sentinel("a", SentinelKind::ErrorBound, 500_000, 0);
+        let second = make_sentinel("b", SentinelKind::ErrorBound, 500_000, 1);
+        let joined_id = format!("a{}b", "\0".repeat(8));
+        let joined = make_sentinel(&joined_id, SentinelKind::ErrorBound, 500_000, 1);
+
+        let two_sentinel_cell = build_cell(
+            "same-cell",
+            "same-domain",
+            vec![first, second],
+            PromotionRule::FailClosed,
+        );
+        let one_sentinel_cell = build_cell(
+            "same-cell",
+            "same-domain",
+            vec![joined],
+            PromotionRule::FailClosed,
+        );
+
+        assert_eq!(
+            two_sentinel_cell.overall_state,
+            one_sentinel_cell.overall_state
+        );
+        assert_ne!(
+            generate_decision_id(&two_sentinel_cell),
+            generate_decision_id(&one_sentinel_cell),
+            "sentinel loop arity and id boundaries must not collide"
+        );
+    }
+
+    #[test]
+    fn report_id_len_prefixes_cell_and_decision_boundaries_bd_fn47f() {
+        // bd-fn47f: generate_report_id counted cells but did not frame cell ids
+        // or decision ids, so one cell_id plus one decision_id could blur:
+        // ("a","bc") and ("ab","c") both contributed "abc".
+        let epoch = SecurityEpoch::from_raw(7);
+        let sentinel = make_sentinel("same", SentinelKind::ErrorBound, 500_000, 100_000);
+        let cell_a = build_cell(
+            "a",
+            "domain",
+            vec![sentinel.clone()],
+            PromotionRule::FailClosed,
+        );
+        let cell_ab = build_cell("ab", "domain", vec![sentinel], PromotionRule::FailClosed);
+        let decision = |decision_id: &str| PromotionDecision {
+            decision_id: decision_id.to_string(),
+            cell_id: "same-cell".to_string(),
+            rule: PromotionRule::FailClosed,
+            allowed: true,
+            suppression_reasons: Vec::new(),
+            content_hash: ContentHash::compute(b"placeholder"),
+        };
+
+        assert_ne!(
+            generate_report_id(&epoch, &[cell_a], &[decision("bc")]),
+            generate_report_id(&epoch, &[cell_ab], &[decision("c")]),
+            "report cell-id/decision-id boundary must not collide"
+        );
     }
 
     // -- SentinelKind tests -------------------------------------------------

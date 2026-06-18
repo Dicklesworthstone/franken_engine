@@ -76,6 +76,11 @@ pub const MIN_SAMPLE_COUNT: u64 = 10;
 /// conditionally approved.
 const CONDITIONAL_MULTIPLIER: u64 = 1_500_000; // 1.5 in millionths
 
+fn update_len_prefixed(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+
 // ---------------------------------------------------------------------------
 // LocalityDomain
 // ---------------------------------------------------------------------------
@@ -722,9 +727,9 @@ impl DecisionReceipt {
         let component = component.into();
         let mut hasher = Sha256::new();
         hasher.update(b"decision_receipt");
-        hasher.update(component.as_bytes());
+        update_len_prefixed(&mut hasher, component.as_bytes());
         hasher.update(epoch.as_u64().to_le_bytes());
-        hasher.update(decision.as_str().as_bytes());
+        update_len_prefixed(&mut hasher, decision.as_str().as_bytes());
         hasher.update(evidence_hash.as_bytes());
         let receipt_hash = ContentHash::compute(&hasher.finalize());
         Self {
@@ -1730,6 +1735,56 @@ mod tests {
         let a = DecisionReceipt::new(COMPONENT, test_epoch(), GovernanceDecision::Approve, hash);
         let b = DecisionReceipt::new(COMPONENT, test_epoch(), GovernanceDecision::Approve, hash);
         assert_eq!(a.receipt_hash, b.receipt_hash);
+    }
+
+    #[test]
+    fn decision_receipt_hash_len_prefixes_component_and_decision_bd_fn47f() {
+        fn old_unframed_preimage(
+            component: &str,
+            epoch: SecurityEpoch,
+            decision: GovernanceDecision,
+            evidence_hash: ContentHash,
+        ) -> Vec<u8> {
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(b"decision_receipt");
+            bytes.extend_from_slice(component.as_bytes());
+            bytes.extend_from_slice(&epoch.as_u64().to_le_bytes());
+            bytes.extend_from_slice(decision.as_str().as_bytes());
+            bytes.extend_from_slice(evidence_hash.as_bytes());
+            bytes
+        }
+
+        let evidence_hash = ContentHash::compute(b"bd-fn47f-metadata-locality-receipt");
+        let epoch_a = SecurityEpoch::from_raw(u64::from_le_bytes(*b"ABCDEFGH"));
+        let epoch_b = SecurityEpoch::from_raw(u64::from_le_bytes(*b"itional_"));
+        let receipt_a = DecisionReceipt::new(
+            "x",
+            epoch_a,
+            GovernanceDecision::ConditionalApprove,
+            evidence_hash,
+        );
+        let receipt_b = DecisionReceipt::new(
+            "xABCDEFGHcond",
+            epoch_b,
+            GovernanceDecision::Approve,
+            evidence_hash,
+        );
+
+        assert_eq!(
+            old_unframed_preimage(
+                &receipt_a.component,
+                receipt_a.epoch,
+                receipt_a.decision,
+                evidence_hash,
+            ),
+            old_unframed_preimage(
+                &receipt_b.component,
+                receipt_b.epoch,
+                receipt_b.decision,
+                evidence_hash,
+            )
+        );
+        assert_ne!(receipt_a.receipt_hash, receipt_b.receipt_hash);
     }
 
     // --- GateSummary tests ---

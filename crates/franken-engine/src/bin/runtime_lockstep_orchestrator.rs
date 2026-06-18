@@ -9,12 +9,11 @@
 
 #![forbid(unsafe_code)]
 
-use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 
 use frankenengine_engine::runtime_lockstep_helpers::{
     RuntimeId, RuntimeLockstepConfig, generate_trace_session_id,

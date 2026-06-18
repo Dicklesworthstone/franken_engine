@@ -86,16 +86,11 @@ fn manifest(
     publisher_key: &VerificationKey,
 ) -> ExtensionManifest {
     let artifacts = vec![artifact("main.fir")];
-    let mut buf = Vec::new();
-    for art in &artifacts {
-        buf.extend_from_slice(art.path.as_bytes());
-        buf.push(0);
-        buf.extend_from_slice(art.content_hash.as_bytes());
-        buf.extend_from_slice(&art.size_bytes.to_le_bytes());
-    }
-    let artifacts_root_hash = ContentHash::compute(&buf);
-
-    ExtensionManifest {
+    // bd-fn47f: the artifacts root must be computed by the same method the
+    // registry verifies with (ExtensionManifest::compute_artifacts_root), not an
+    // inline copy of the (now length-prefixed) preimage. Build with a placeholder
+    // then fill it in, mirroring the production build_manifest path.
+    let mut manifest = ExtensionManifest {
         scope: scope.to_string(),
         name: name.to_string(),
         version,
@@ -104,11 +99,13 @@ fn manifest(
         capabilities: vec![capability("net:outbound")],
         artifacts,
         build: build_descriptor(),
-        artifacts_root_hash,
+        artifacts_root_hash: ContentHash::compute(b"placeholder"),
         description: format!("Test extension @{scope}/{name}"),
         license: Some("MIT".to_string()),
         dependencies: BTreeMap::new(),
-    }
+    };
+    manifest.artifacts_root_hash = manifest.compute_artifacts_root();
+    manifest
 }
 
 fn publish(
@@ -593,15 +590,10 @@ fn manifest_too_many_artifacts_rejected() {
     m.artifacts = (0..1025)
         .map(|i| artifact(&format!("file_{i}.dat")))
         .collect();
-    // Recompute artifacts root
-    let mut buf = Vec::new();
-    for art in &m.artifacts {
-        buf.extend_from_slice(art.path.as_bytes());
-        buf.push(0);
-        buf.extend_from_slice(art.content_hash.as_bytes());
-        buf.extend_from_slice(&art.size_bytes.to_le_bytes());
-    }
-    m.artifacts_root_hash = ContentHash::compute(&buf);
+    // Recompute artifacts root via the canonical method (bd-fn47f: keep in sync
+    // with ExtensionManifest::compute_artifacts_root so the manifest stays valid
+    // and the TooManyArtifacts check is what fires).
+    m.artifacts_root_hash = m.compute_artifacts_root();
 
     let result = publish(&mut reg, &m, &sk);
     assert!(matches!(

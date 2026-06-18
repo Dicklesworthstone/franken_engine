@@ -1,0 +1,503 @@
+{
+  "schema_version": "franken-engine.rch-admission-refusal-receipt-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "mixed_no_admissible_workers_live_shape",
+      "bead_id": "bd-sq84c.2",
+      "parent_bead_id": "bd-sq84c",
+      "thread_id": "bd-sq84c",
+      "diagnose": {
+        "api_version": "1.0",
+        "timestamp": 1781775898,
+        "command": "diagnose",
+        "success": true,
+        "data": {
+          "classification": {
+            "is_compilation": true,
+            "confidence": 0.9,
+            "kind": "cargo_check",
+            "reason": "cargo check"
+          },
+          "command": "env CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_ENCODED_RUSTFLAGS=-Clinker=cc CARGO_TARGET_DIR=/tmp/rch_target_example cargo check -p frankenengine-engine --bin frankenctl",
+          "normalized_command": "cargo check -p frankenengine-engine --bin frankenctl",
+          "decision": {
+            "would_intercept": true,
+            "reason": "Compilation command with confidence 0.90 >= threshold 0.85"
+          },
+          "threshold": {
+            "value": 0.85,
+            "source": "fixture"
+          },
+          "daemon": {
+            "status": "healthy",
+            "version": "1.0.41"
+          },
+          "worker_selection": {
+            "estimated_cores": 1,
+            "cargo_jobs": 1,
+            "worker": null,
+            "reason": {
+              "no_admissible_workers": "critical_pressure=1,health_below_fallback=6,hard_preflight=2,active_project_exclusion=1"
+            },
+            "diagnostics": {
+              "required_runtime": "rust",
+              "active_project_exclusion_count": 1,
+              "workers": [
+                {
+                  "worker_id": "ovh-b",
+                  "status": "healthy",
+                  "circuit_state": "closed",
+                  "pressure_state": "critical",
+                  "pressure_reason_code": "disk_critical_without_fresh_telemetry",
+                  "success_rate": 1.0,
+                  "runtime_available": true,
+                  "available_slots": 8,
+                  "total_slots": 8,
+                  "active_project_excluded": false,
+                  "final_decision": "deny",
+                  "final_reason": "critical pressure: disk_critical_without_fresh_telemetry",
+                  "reason_codes": [
+                    "preflight.low_disk",
+                    "pressure.critical"
+                  ]
+                },
+                {
+                  "worker_id": "hz2",
+                  "status": "healthy",
+                  "circuit_state": "closed",
+                  "pressure_state": "healthy",
+                  "pressure_reason_code": "pressure_healthy",
+                  "success_rate": 1.0,
+                  "runtime_available": true,
+                  "available_slots": 8,
+                  "total_slots": 8,
+                  "active_project_excluded": false,
+                  "final_decision": "deny",
+                  "final_reason": "toolchain_preflight_command_failed:1:error: toolchain 'nightly-2026-06-07-x86_64-unknown-linux-gnu' is not installed",
+                  "reason_codes": [
+                    "toolchain.preflight_failed"
+                  ]
+                },
+                {
+                  "worker_id": "vmi1152480",
+                  "status": "healthy",
+                  "circuit_state": "closed",
+                  "pressure_state": "healthy",
+                  "pressure_reason_code": "pressure_healthy",
+                  "success_rate": 0.0,
+                  "runtime_available": true,
+                  "available_slots": 8,
+                  "total_slots": 8,
+                  "active_project_excluded": false,
+                  "final_decision": "deny",
+                  "final_reason": "success_rate 0.00 < fallback 0.50",
+                  "reason_codes": [
+                    "health.below_fallback_min_success_rate",
+                    "health.below_min_success_rate"
+                  ]
+                },
+                {
+                  "worker_id": "vmi1293453",
+                  "status": "healthy",
+                  "circuit_state": "closed",
+                  "pressure_state": "healthy",
+                  "pressure_reason_code": "pressure_healthy",
+                  "success_rate": 1.0,
+                  "runtime_available": true,
+                  "available_slots": 2,
+                  "total_slots": 6,
+                  "active_project_excluded": true,
+                  "final_decision": "deny",
+                  "final_reason": "worker already has an active build for this project",
+                  "reason_codes": [
+                    "active_project_exclusion"
+                  ]
+                }
+              ]
+            }
+          },
+          "dry_run": {
+            "would_offload": false,
+            "reason": "compilation command meets threshold, but no worker selected: no admissible workers: critical_pressure=1,health_below_fallback=6,hard_preflight=2,active_project_exclusion=1",
+            "pipeline_steps": [
+              {
+                "step": 1,
+                "name": "Classification",
+                "skipped": false
+              },
+              {
+                "step": 3,
+                "name": "Worker selection",
+                "skipped": true,
+                "skip_reason": "no admissible workers: critical_pressure=1,health_below_fallback=6,hard_preflight=2,active_project_exclusion=1"
+              },
+              {
+                "step": 5,
+                "name": "Remote execution",
+                "skipped": true,
+                "skip_reason": "no admissible workers: critical_pressure=1,health_below_fallback=6,hard_preflight=2,active_project_exclusion=1"
+              }
+            ]
+          }
+        }
+      },
+      "expected": {
+        "exit_code": 0,
+        "final_verdict": "admission_refused",
+        "reason_code": "no_admissible_workers",
+        "operator_category": "mixed_no_admissible_workers",
+        "active_project_worker": "vmi1293453",
+        "reason_counts": {
+          "critical_pressure": 1,
+          "health_below_fallback": 6,
+          "hard_preflight": 2,
+          "active_project_exclusion": 1
+        }
+      }
+    },
+    {
+      "case_id": "active_project_exclusion_only",
+      "bead_id": "bd-sq84c.3",
+      "parent_bead_id": "bd-sq84c",
+      "thread_id": "bd-sq84c",
+      "diagnose": {
+        "api_version": "1.0",
+        "command": "diagnose",
+        "success": true,
+        "data": {
+          "classification": {
+            "is_compilation": true,
+            "confidence": 0.95,
+            "kind": "cargo_test",
+            "reason": "cargo test"
+          },
+          "command": "env CARGO_TARGET_DIR=/tmp/rch_target_active cargo test -p frankenengine-engine --lib parser -- --nocapture",
+          "normalized_command": "cargo test -p frankenengine-engine --lib parser -- --nocapture",
+          "decision": {
+            "would_intercept": true
+          },
+          "worker_selection": {
+            "worker": null,
+            "reason": {
+              "no_admissible_workers": "active_project_exclusion=1"
+            },
+            "diagnostics": {
+              "active_project_exclusion_count": 1,
+              "workers": [
+                {
+                  "worker_id": "vmi1293453",
+                  "status": "healthy",
+                  "pressure_state": "healthy",
+                  "active_project_excluded": true,
+                  "final_decision": "deny",
+                  "final_reason": "worker already has an active build for this project",
+                  "reason_codes": [
+                    "active_project_exclusion"
+                  ]
+                }
+              ]
+            }
+          },
+          "dry_run": {
+            "would_offload": false,
+            "reason": "compilation command meets threshold, but no worker selected: no admissible workers: active_project_exclusion=1",
+            "pipeline_steps": [
+              {
+                "step": 3,
+                "name": "Worker selection",
+                "skipped": true,
+                "skip_reason": "no admissible workers: active_project_exclusion=1"
+              }
+            ]
+          }
+        }
+      },
+      "expected": {
+        "exit_code": 0,
+        "final_verdict": "admission_refused",
+        "reason_code": "no_admissible_workers",
+        "operator_category": "wait_for_active_project",
+        "active_project_worker": "vmi1293453",
+        "denied_reason_code": "active_project_exclusion",
+        "denied_reason_count": 1,
+        "reason_counts": {
+          "critical_pressure": 0,
+          "health_below_fallback": 0,
+          "hard_preflight": 0,
+          "active_project_exclusion": 1
+        }
+      }
+    },
+    {
+      "case_id": "health_below_fallback_only",
+      "bead_id": "bd-sq84c.3",
+      "parent_bead_id": "bd-sq84c",
+      "thread_id": "bd-sq84c",
+      "diagnose": {
+        "api_version": "1.0",
+        "command": "diagnose",
+        "success": true,
+        "data": {
+          "classification": {
+            "is_compilation": true,
+            "confidence": 0.95,
+            "kind": "cargo_test",
+            "reason": "cargo test"
+          },
+          "command": "env CARGO_TARGET_DIR=/tmp/rch_target_health cargo test -p frankenengine-engine --test focused_case",
+          "normalized_command": "cargo test -p frankenengine-engine --test focused_case",
+          "decision": {
+            "would_intercept": true
+          },
+          "worker_selection": {
+            "worker": null,
+            "reason": {
+              "no_admissible_workers": "health_below_fallback=2"
+            },
+            "diagnostics": {
+              "workers": [
+                {
+                  "worker_id": "vmi1152480",
+                  "status": "healthy",
+                  "pressure_state": "healthy",
+                  "success_rate": 0.0,
+                  "active_project_excluded": false,
+                  "final_decision": "deny",
+                  "final_reason": "success_rate 0.00 < fallback 0.50",
+                  "reason_codes": [
+                    "health.below_fallback_min_success_rate"
+                  ]
+                },
+                {
+                  "worker_id": "vmi1227854",
+                  "status": "healthy",
+                  "pressure_state": "healthy",
+                  "success_rate": 0.1,
+                  "active_project_excluded": false,
+                  "final_decision": "deny",
+                  "final_reason": "success_rate 0.10 < fallback 0.50",
+                  "reason_codes": [
+                    "health.below_fallback_min_success_rate"
+                  ]
+                }
+              ]
+            }
+          },
+          "dry_run": {
+            "would_offload": false,
+            "reason": "compilation command meets threshold, but no worker selected: no admissible workers: health_below_fallback=2"
+          }
+        }
+      },
+      "expected": {
+        "exit_code": 0,
+        "final_verdict": "admission_refused",
+        "reason_code": "no_admissible_workers",
+        "operator_category": "worker_health_or_capacity",
+        "active_project_worker": "",
+        "denied_reason_code": "health.below_fallback_min_success_rate",
+        "denied_reason_count": 2,
+        "reason_counts": {
+          "critical_pressure": 0,
+          "health_below_fallback": 2,
+          "hard_preflight": 0,
+          "active_project_exclusion": 0
+        }
+      }
+    },
+    {
+      "case_id": "critical_pressure_only",
+      "bead_id": "bd-sq84c.3",
+      "parent_bead_id": "bd-sq84c",
+      "thread_id": "bd-sq84c",
+      "diagnose": {
+        "api_version": "1.0",
+        "command": "diagnose",
+        "success": true,
+        "data": {
+          "classification": {
+            "is_compilation": true,
+            "confidence": 0.9,
+            "kind": "cargo_check",
+            "reason": "cargo check"
+          },
+          "command": "env CARGO_TARGET_DIR=/tmp/rch_target_critical cargo check -p frankenengine-engine",
+          "normalized_command": "cargo check -p frankenengine-engine",
+          "decision": {
+            "would_intercept": true
+          },
+          "worker_selection": {
+            "worker": null,
+            "reason": {
+              "no_admissible_workers": "critical_pressure=1"
+            },
+            "diagnostics": {
+              "workers": [
+                {
+                  "worker_id": "ovh-b",
+                  "status": "healthy",
+                  "pressure_state": "critical",
+                  "pressure_reason_code": "disk_critical_without_fresh_telemetry",
+                  "active_project_excluded": false,
+                  "final_decision": "deny",
+                  "final_reason": "critical pressure: disk_critical_without_fresh_telemetry",
+                  "reason_codes": [
+                    "pressure.critical"
+                  ]
+                }
+              ]
+            }
+          },
+          "dry_run": {
+            "would_offload": false,
+            "reason": "compilation command meets threshold, but no worker selected: no admissible workers: critical_pressure=1"
+          }
+        }
+      },
+      "expected": {
+        "exit_code": 0,
+        "final_verdict": "admission_refused",
+        "reason_code": "no_admissible_workers",
+        "operator_category": "worker_health_or_capacity",
+        "active_project_worker": "",
+        "denied_reason_code": "pressure.critical",
+        "denied_reason_count": 1,
+        "reason_counts": {
+          "critical_pressure": 1,
+          "health_below_fallback": 0,
+          "hard_preflight": 0,
+          "active_project_exclusion": 0
+        }
+      }
+    },
+    {
+      "case_id": "hard_preflight_toolchain_only",
+      "bead_id": "bd-sq84c.3",
+      "parent_bead_id": "bd-sq84c",
+      "thread_id": "bd-sq84c",
+      "diagnose": {
+        "api_version": "1.0",
+        "command": "diagnose",
+        "success": true,
+        "data": {
+          "classification": {
+            "is_compilation": true,
+            "confidence": 0.9,
+            "kind": "cargo_check",
+            "reason": "cargo check"
+          },
+          "command": "env CARGO_TARGET_DIR=/tmp/rch_target_toolchain cargo check -p frankenengine-engine --bin frankenctl",
+          "normalized_command": "cargo check -p frankenengine-engine --bin frankenctl",
+          "decision": {
+            "would_intercept": true
+          },
+          "worker_selection": {
+            "worker": null,
+            "reason": {
+              "no_admissible_workers": "hard_preflight=1"
+            },
+            "diagnostics": {
+              "workers": [
+                {
+                  "worker_id": "hz2",
+                  "status": "healthy",
+                  "pressure_state": "healthy",
+                  "active_project_excluded": false,
+                  "final_decision": "deny",
+                  "final_reason": "toolchain_preflight_command_failed: toolchain nightly-2026-06-07 is not installed",
+                  "reason_codes": [
+                    "toolchain.preflight_failed"
+                  ]
+                }
+              ]
+            }
+          },
+          "dry_run": {
+            "would_offload": false,
+            "reason": "compilation command meets threshold, but no worker selected: no admissible workers: hard_preflight=1"
+          }
+        }
+      },
+      "expected": {
+        "exit_code": 0,
+        "final_verdict": "admission_refused",
+        "reason_code": "no_admissible_workers",
+        "operator_category": "worker_preflight_or_toolchain",
+        "active_project_worker": "",
+        "denied_reason_code": "toolchain.preflight_failed",
+        "denied_reason_count": 1,
+        "reason_counts": {
+          "critical_pressure": 0,
+          "health_below_fallback": 0,
+          "hard_preflight": 1,
+          "active_project_exclusion": 0
+        }
+      }
+    },
+    {
+      "case_id": "dependency_preflight_code_boundary",
+      "bead_id": "bd-sq84c.3",
+      "parent_bead_id": "bd-sq84c",
+      "thread_id": "bd-sq84c",
+      "diagnose": {
+        "api_version": "1.0",
+        "command": "diagnose",
+        "success": true,
+        "data": {
+          "classification": {
+            "is_compilation": true,
+            "confidence": 0.95,
+            "kind": "cargo_test",
+            "reason": "cargo test"
+          },
+          "command": "env CARGO_TARGET_DIR=/tmp/rch_target_e324 cargo test -p frankenengine-engine hash_is_length_prefixed --lib -- --nocapture",
+          "normalized_command": "cargo test -p frankenengine-engine hash_is_length_prefixed --lib -- --nocapture",
+          "decision": {
+            "would_intercept": true
+          },
+          "worker_selection": {
+            "worker": null,
+            "reason": {
+              "no_admissible_workers": "hard_preflight=1"
+            },
+            "diagnostics": {
+              "workers": [
+                {
+                  "worker_id": "vmi1264463",
+                  "status": "healthy",
+                  "pressure_state": "healthy",
+                  "active_project_excluded": false,
+                  "final_decision": "deny",
+                  "final_reason": "Remote dependency preflight blocked remote execution [RCH-E324]; deployment should expose RCH-E410 after bd-d6t8d",
+                  "reason_codes": [
+                    "dependency_preflight.code_mismatch"
+                  ]
+                }
+              ]
+            }
+          },
+          "dry_run": {
+            "would_offload": false,
+            "reason": "compilation command meets threshold, but no worker selected: no admissible workers: hard_preflight=1"
+          }
+        }
+      },
+      "expected": {
+        "exit_code": 0,
+        "final_verdict": "admission_refused",
+        "reason_code": "no_admissible_workers",
+        "operator_category": "worker_preflight_or_toolchain",
+        "active_project_worker": "",
+        "denied_reason_code": "dependency_preflight.code_mismatch",
+        "denied_reason_count": 1,
+        "final_reason_contains": "RCH-E324",
+        "reason_counts": {
+          "critical_pressure": 0,
+          "health_below_fallback": 0,
+          "hard_preflight": 1,
+          "active_project_exclusion": 0
+        }
+      }
+    }
+  ]
+}

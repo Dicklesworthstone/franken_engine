@@ -102,6 +102,28 @@ fn repeat_zero_is_empty() {
     assert_eq!(eval(r#"let s = "ab"; s.repeat(0);"#), "");
 }
 
+#[test]
+fn repeat_negative_count_is_range_error_bd_8tsdh() {
+    // ES2020 21.1.3.16 step 4: a negative count throws RangeError (not ""), matching
+    // the stdlib path. Previously the IR-dispatch path clamped to 0 and returned "".
+    let out = eval(r#"let s = "x"; s.repeat(-1);"#);
+    assert!(
+        out.contains("range error") && out.contains("non-negative"),
+        "repeat(-1) should be a RangeError, got {out:?}"
+    );
+}
+
+#[test]
+fn repeat_oversize_is_range_error_bd_8tsdh() {
+    // An oversize result fails closed with RangeError (previously TypeError): receiver
+    // length 2 * count 10_000_000 exceeds the result-size guard.
+    let out = eval(r#"let s = "ab"; s.repeat(10000000);"#);
+    assert!(
+        out.contains("range error") && out.contains("exceeds maximum"),
+        "oversize repeat should be a RangeError, got {out:?}"
+    );
+}
+
 // ---- padStart / padEnd ---------------------------------------------------
 
 #[test]

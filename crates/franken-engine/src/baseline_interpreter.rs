@@ -13025,17 +13025,27 @@ impl InterpreterCore {
         this_str: &str,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        // ES2020 21.1.3.16: concatenate `count` copies. A negative count
-        // is clamped to 0 (matching the existing receiver-less handler);
-        // an allocation guard rejects pathological sizes. (bd-9a8cz.1)
-        let count = match self.builtin_arg(args, 0)? {
-            Some(arg) => Self::value_as_integer(&arg).max(0) as usize,
+        // ES2020 21.1.3.16 step 4: `ToIntegerOrInfinity(count)`; a count that is
+        // negative (or +Infinity) throws RangeError, while a NaN count coerces to
+        // 0 (-> ""). An oversize result also fails closed with RangeError, matching
+        // the stdlib path (`stdlib::exec_string_method`) and V8's "Invalid string
+        // length". (bd-9a8cz.1, bd-8tsdh) This path previously clamped a negative
+        // count to 0 (returning "") and reported the size guard as a TypeError,
+        // both of which diverged from the spec and from the stdlib path.
+        let count_int = match self.builtin_arg(args, 0)? {
+            Some(arg) => Self::value_as_integer(&arg),
             None => 0,
         };
-        if this_str.len().saturating_mul(count) > 10_000_000 {
-            return Err(InterpreterError::TypeError {
-                expected: "String.prototype.repeat result within size limit".to_string(),
-                got: format!("{} bytes", this_str.len().saturating_mul(count)),
+        if count_int < 0 {
+            return Err(InterpreterError::RangeError {
+                message: format!("repeat count must be non-negative (got {count_int})"),
+            });
+        }
+        let count = count_int as usize;
+        let result_len = this_str.len().saturating_mul(count);
+        if result_len > 10_000_000 {
+            return Err(InterpreterError::RangeError {
+                message: format!("repeat resulting length {result_len} exceeds maximum 10000000"),
             });
         }
         Ok(Value::str(this_str.repeat(count)))
@@ -46097,7 +46107,7 @@ mod string_intrinsic_table_parity_tests {
             vec![Value::Int(0)],
             vec![Value::Int(3)],
             vec![Value::Int(-2)],
-            // Size-guard TypeError must reproduce identically on both routes.
+            // Size-guard RangeError must reproduce identically on both routes.
             vec![Value::Int(10_000_000)],
         ];
         assert_method_parity(

@@ -56,6 +56,8 @@ tmp/
 # (bd-ub6x8.15).
 crates/franken-engine/tests/**/*.actual
 crates/franken-engine/tests/**/*.actual.*
+crates/franken-engine/tests/**/*.snap.new
+crates/franken-extension-host/tests/**/*.snap.new
 
 # Runtime SQLite databases
 storage.sqlite3

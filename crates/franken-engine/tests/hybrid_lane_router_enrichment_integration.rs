@@ -701,6 +701,14 @@ fn deterministic_reward_computation() {
 fn serde_router_error_round_trip() {
     let errors = vec![
         RouterError::AlreadyConservative,
+        RouterError::AdaptiveWarmupIncomplete {
+            observations: 3,
+            required: 20,
+        },
+        RouterError::AdaptiveWarmupInvalid {
+            coverage_millionths: 500_000,
+            target_millionths: 900_000,
+        },
         RouterError::InvalidRandomDraw { value: -1 },
         RouterError::InvalidConfig {
             reason: "bad threshold".to_string(),

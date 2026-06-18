@@ -704,6 +704,13 @@ impl RouterConfig {
 pub enum RouterError {
     /// Already in conservative mode, cannot demote further.
     AlreadyConservative,
+    /// Adaptive promotion was requested before the conformal warm-up completed.
+    AdaptiveWarmupIncomplete { observations: u64, required: u64 },
+    /// Adaptive promotion was requested with invalid conformal warm-up coverage.
+    AdaptiveWarmupInvalid {
+        coverage_millionths: i64,
+        target_millionths: i64,
+    },
     /// Invalid random draw value.
     InvalidRandomDraw { value: i64 },
     /// Config validation failure.
@@ -894,6 +901,18 @@ impl HybridLaneRouter {
     pub fn promote_to_adaptive(&mut self) -> Result<(), RouterError> {
         if self.policy == RoutingPolicy::Adaptive {
             return Ok(());
+        }
+        if self.conformal.total_observations < self.config.conformal.min_observations {
+            return Err(RouterError::AdaptiveWarmupIncomplete {
+                observations: self.conformal.total_observations,
+                required: self.config.conformal.min_observations,
+            });
+        }
+        if !self.conformal.is_valid() {
+            return Err(RouterError::AdaptiveWarmupInvalid {
+                coverage_millionths: self.conformal.coverage_millionths(),
+                target_millionths: self.config.conformal.target_coverage_millionths,
+            });
         }
         self.policy_transitions.push(PolicyTransition {
             round: self.round,
@@ -1419,8 +1438,49 @@ mod tests {
     }
 
     #[test]
+    fn router_refuses_adaptive_before_conformal_warmup() {
+        let mut router = HybridLaneRouter::with_defaults();
+        let err = router.promote_to_adaptive().unwrap_err();
+        assert_eq!(
+            err,
+            RouterError::AdaptiveWarmupIncomplete {
+                observations: 0,
+                required: router.config.conformal.min_observations,
+            }
+        );
+        assert_eq!(router.policy, RoutingPolicy::Conservative);
+        assert!(router.policy_transitions.is_empty());
+    }
+
+    #[test]
+    fn router_refuses_adaptive_with_invalid_warmup_coverage() {
+        let mut router = HybridLaneRouter::new(RouterConfig {
+            conformal: ConformalConfig {
+                target_coverage_millionths: 900_000,
+                min_observations: 5,
+                window_size: 10,
+            },
+            ..RouterConfig::default_config()
+        });
+        for _ in 0..5 {
+            router.conformal.observe(false);
+        }
+        let err = router.promote_to_adaptive().unwrap_err();
+        assert_eq!(
+            err,
+            RouterError::AdaptiveWarmupInvalid {
+                coverage_millionths: 0,
+                target_millionths: 900_000,
+            }
+        );
+        assert_eq!(router.policy, RoutingPolicy::Conservative);
+        assert!(router.policy_transitions.is_empty());
+    }
+
+    #[test]
     fn router_promote_to_adaptive() {
         let mut router = HybridLaneRouter::with_defaults();
+        prime_conformal_warmup(&mut router);
         router
             .promote_to_adaptive()
             .expect("operation should succeed for valid inputs");
@@ -1431,6 +1491,7 @@ mod tests {
     #[test]
     fn router_adaptive_uses_random_draw() {
         let mut router = HybridLaneRouter::with_defaults();
+        prime_conformal_warmup(&mut router);
         router
             .promote_to_adaptive()
             .expect("operation should succeed for valid inputs");
@@ -1483,6 +1544,7 @@ mod tests {
             },
             ..RouterConfig::default_config()
         });
+        prime_conformal_warmup(&mut router);
         router
             .promote_to_adaptive()
             .expect("operation should succeed for valid inputs");
@@ -1514,6 +1576,7 @@ mod tests {
             },
             ..RouterConfig::default_config()
         });
+        prime_conformal_warmup(&mut router);
         router
             .promote_to_adaptive()
             .expect("operation should succeed for valid inputs");
@@ -1538,6 +1601,7 @@ mod tests {
     #[test]
     fn router_manual_demote() {
         let mut router = HybridLaneRouter::with_defaults();
+        prime_conformal_warmup(&mut router);
         router
             .promote_to_adaptive()
             .expect("operation should succeed for valid inputs");
@@ -1575,6 +1639,7 @@ mod tests {
     #[test]
     fn router_lane_probabilities_adaptive() {
         let mut router = HybridLaneRouter::with_defaults();
+        prime_conformal_warmup(&mut router);
         router
             .promote_to_adaptive()
             .expect("operation should succeed for valid inputs");
@@ -1665,6 +1730,7 @@ mod tests {
             },
             ..RouterConfig::default_config()
         });
+        prime_conformal_warmup(&mut router);
         router
             .promote_to_adaptive()
             .expect("operation should succeed for valid inputs");
@@ -1702,6 +1768,7 @@ mod tests {
             },
             ..RouterConfig::default_config()
         });
+        prime_conformal_warmup(&mut router);
         router
             .promote_to_adaptive()
             .expect("operation should succeed for valid inputs");
@@ -1743,6 +1810,7 @@ mod tests {
         });
 
         // Round 1: promote
+        prime_conformal_warmup(&mut router);
         router
             .promote_to_adaptive()
             .expect("operation should succeed for valid inputs");
@@ -1837,6 +1905,12 @@ mod tests {
 
     // -- Helpers --
 
+    fn prime_conformal_warmup(router: &mut HybridLaneRouter) {
+        for _ in 0..router.config.conformal.min_observations {
+            router.conformal.observe(true);
+        }
+    }
+
     fn good_observation(lane: LaneChoice) -> LaneObservation {
         LaneObservation {
             lane,
@@ -1906,6 +1980,7 @@ mod tests {
     #[test]
     fn promote_to_adaptive_idempotent() {
         let mut router = HybridLaneRouter::with_defaults();
+        prime_conformal_warmup(&mut router);
         router
             .promote_to_adaptive()
             .expect("operation should succeed for valid inputs");
@@ -1922,6 +1997,14 @@ mod tests {
     fn router_error_serde_roundtrip() {
         for err in [
             RouterError::AlreadyConservative,
+            RouterError::AdaptiveWarmupIncomplete {
+                observations: 3,
+                required: 20,
+            },
+            RouterError::AdaptiveWarmupInvalid {
+                coverage_millionths: 500_000,
+                target_millionths: 900_000,
+            },
             RouterError::InvalidConfig {
                 reason: "bad".into(),
             },
@@ -2028,6 +2111,7 @@ mod tests {
         assert_eq!(router.consecutive_conservative_rounds, 2);
 
         // Promote and observe — counter resets
+        prime_conformal_warmup(&mut router);
         router
             .promote_to_adaptive()
             .expect("operation should succeed for valid inputs");
@@ -2115,6 +2199,14 @@ mod tests {
     fn router_error_serde_all_variants() {
         for err in [
             RouterError::AlreadyConservative,
+            RouterError::AdaptiveWarmupIncomplete {
+                observations: 3,
+                required: 20,
+            },
+            RouterError::AdaptiveWarmupInvalid {
+                coverage_millionths: 500_000,
+                target_millionths: 900_000,
+            },
             RouterError::InvalidRandomDraw { value: -1 },
             RouterError::InvalidConfig {
                 reason: "bad".into(),

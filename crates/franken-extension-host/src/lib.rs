@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::too_many_arguments)]
 
+pub mod host_io;
+
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

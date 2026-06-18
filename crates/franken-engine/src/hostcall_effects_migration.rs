@@ -18,6 +18,9 @@ use crate::algebraic_effects::{
     HandlerStack,
 };
 use crate::capability::{CapabilityProfile, ProfileKind, RuntimeCapability};
+use frankenengine_extension_host::host_io::{
+    HostIoError, HostIoProvider, HostIoRecorder, HostIoRequest, HostIoResponse,
+};
 
 // ---------------------------------------------------------------------------
 // Hostcall Effect implementations
@@ -219,26 +222,152 @@ pub struct ModuleExports {
 // ---------------------------------------------------------------------------
 
 /// Handler implementing FullCaps capability profile.
-#[derive(Debug)]
-pub struct FullCapsHandler;
+///
+/// With no host I/O provider installed, filesystem and network hostcalls remain
+/// fail-closed and return `CapabilityDenied`, preserving the bd-6wc97 posture.
+/// When a sandboxed provider is deliberately installed, those requests are
+/// routed to the provider after capability mapping. The engine never performs
+/// host filesystem or network I/O directly.
+#[derive(Debug, Default)]
+pub struct FullCapsHandler {
+    host_io: Option<Arc<dyn HostIoProvider>>,
+    host_io_recorder: Option<Arc<dyn HostIoRecorder>>,
+}
 
 impl FullCapsHandler {
+    /// Construct a FullCaps handler with no host I/O provider.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Construct a FullCaps handler backed by a sandboxed host I/O provider.
+    #[must_use]
+    pub fn with_host_io(provider: Arc<dyn HostIoProvider>) -> Self {
+        Self {
+            host_io: Some(provider),
+            host_io_recorder: None,
+        }
+    }
+
+    /// Construct a FullCaps handler with host I/O record/replay enabled.
+    #[must_use]
+    pub fn with_host_io_recorded(
+        provider: Arc<dyn HostIoProvider>,
+        recorder: Arc<dyn HostIoRecorder>,
+    ) -> Self {
+        Self {
+            host_io: Some(provider),
+            host_io_recorder: Some(recorder),
+        }
+    }
+
     /// Whether this handler dispatches side-effecting hostcalls
     /// (`fs:read` / `fs:write` / `network`) to the engine's real hostcall
     /// implementations.
     ///
-    /// Returns `false` (bd-1lw7r.11, bd-6wc97): no real in-engine fs/network
-    /// executor exists. Rather than SIMULATE those effects (the prior behaviour
+    /// Returns `true` only when an extension-host provider has been installed.
+    /// With no provider, no real in-engine fs/network executor exists. Rather
+    /// than SIMULATE those effects (the prior behaviour
     /// — fake fs reads / discarded writes / hardcoded network responses, which
     /// handed callers fake data while claiming full capability),
     /// [`FullCapsHandler::handle`] now EXPLICITLY DENIES `fs:read`, `fs:write`
-    /// and `network` with `CapabilityDenied`. Real guest fs/network is deferred
-    /// to the `frankenengine-extension-host` epic; if that lands, route those
-    /// arms to the real `dispatch_*_hostcall` surface (honoring the capability
-    /// gate, deterministic-replay recording, and IFC labeling) and flip this to
-    /// `true`.
-    pub const fn dispatches_real_hostcalls() -> bool {
-        false
+    /// and `network` with `CapabilityDenied`.
+    #[must_use]
+    pub fn dispatches_real_hostcalls(&self) -> bool {
+        self.host_io.is_some()
+    }
+
+    fn route_host_io(
+        &self,
+        effect: &dyn ErasedEffect,
+    ) -> Result<Option<EffectResult>, EffectError> {
+        let Some(provider) = self.host_io.as_deref() else {
+            return Err(EffectError::CapabilityDenied {
+                required: effect.required_capabilities(),
+            });
+        };
+
+        let request = Self::host_io_request_from_effect(effect)?;
+        let granted = [request.required_capability()];
+        let outcome = match self
+            .host_io_recorder
+            .as_deref()
+            .and_then(|recorder| recorder.replay(&request))
+        {
+            Some(recorded) => recorded,
+            None => {
+                let live = provider.perform(&request, &granted);
+                if let Some(recorder) = self.host_io_recorder.as_deref() {
+                    recorder.record(&request, &live);
+                }
+                live
+            }
+        };
+
+        match outcome {
+            Ok(response) => Ok(Some(Self::effect_result_from_host_io(&response))),
+            Err(HostIoError::Io { detail }) => Err(EffectError::HandlerError {
+                handler: "full_caps_handler".to_string(),
+                message: detail,
+            }),
+            Err(_) => Err(EffectError::CapabilityDenied {
+                required: effect.required_capabilities(),
+            }),
+        }
+    }
+
+    fn host_io_request_from_effect(
+        effect: &dyn ErasedEffect,
+    ) -> Result<HostIoRequest, EffectError> {
+        match effect.effect_name() {
+            "hostcall:fs:read" | "hostcall:fs:write" => {
+                let params = effect
+                    .parameters()
+                    .downcast::<(FsOperation, String, Option<Vec<u8>>)>()
+                    .map_err(|_| EffectError::InvalidParameters {
+                        effect_name: effect.effect_name().to_string(),
+                        reason: "Expected (FsOperation, String, Option<Vec<u8>>) parameters"
+                            .to_string(),
+                    })?;
+                let (operation, path, content) = *params;
+                Ok(match operation {
+                    FsOperation::Read => HostIoRequest::FsRead { path },
+                    FsOperation::Write => HostIoRequest::FsWrite {
+                        path,
+                        data: content.unwrap_or_default(),
+                    },
+                })
+            }
+            "hostcall:network" => {
+                let params = effect
+                    .parameters()
+                    .downcast::<(String, String, Vec<(String, String)>, Option<Vec<u8>>)>()
+                    .map_err(|_| EffectError::InvalidParameters {
+                        effect_name: effect.effect_name().to_string(),
+                        reason: "Expected (url, method, headers, body) network parameters"
+                            .to_string(),
+                    })?;
+                let (url, _method, _headers, body) = *params;
+                Ok(HostIoRequest::NetworkSend {
+                    endpoint: url,
+                    payload: body.unwrap_or_default(),
+                })
+            }
+            other => Err(EffectError::InvalidParameters {
+                effect_name: other.to_string(),
+                reason: "not an fs/network hostcall".to_string(),
+            }),
+        }
+    }
+
+    fn effect_result_from_host_io(response: &HostIoResponse) -> EffectResult {
+        match response {
+            HostIoResponse::FsRead { bytes } => EffectResult::new(bytes.clone()),
+            HostIoResponse::FsWrite { bytes_written } => EffectResult::new(*bytes_written),
+            HostIoResponse::NetworkSend { bytes_sent } => EffectResult::new(*bytes_sent),
+            HostIoResponse::NetworkRecv { bytes } => EffectResult::new(bytes.clone()),
+        }
     }
 }
 
@@ -249,11 +378,9 @@ impl Handler for FullCapsHandler {
 
     fn handle(&self, effect: &dyn ErasedEffect) -> Result<Option<EffectResult>, EffectError> {
         // FullCaps is permitted to invoke all hostcalls, but `fs:read`,
-        // `fs:write` and `network` are EXPLICITLY DENIED (bd-6wc97): no real
-        // in-engine executor exists, so rather than hand back simulated/fake
-        // data they return `CapabilityDenied`. `console`, `timer` and `module`
-        // run their in-process paths. `dispatches_real_hostcalls()` stays
-        // `false`. Real guest fs/network is deferred to the extension-host epic.
+        // `fs:write`, and `network` are explicitly denied unless a sandboxed
+        // extension-host provider is installed. `console`, `timer`, and
+        // `module` keep their in-process migration paths.
         match effect.effect_name() {
             "hostcall:console" => {
                 if let Ok(params) = effect.parameters().downcast::<(String, Vec<String>)>() {
@@ -283,16 +410,15 @@ impl Handler for FullCapsHandler {
                 // bd-6wc97 / bd-6wc97.1 decision: EXPLICIT-DENY by design.
                 // There is no real in-engine fs/network executor (only
                 // `MockFsHandler`); routing to host `std::fs`/sockets would be a
-                // sandbox escape, and real guest I/O is deferred to the
-                // frankenengine-extension-host epic. These arms previously
+                // sandbox escape. If an extension-host provider is installed,
+                // route the request there; otherwise keep the explicit deny.
+                // These arms previously
                 // SIMULATED the effects — a canned fs read, a discarded write,
                 // a hardcoded network response — handing callers FAKE data while
                 // the Full profile claimed full capability. That is exactly the
                 // dishonesty `bd-1lw7r.11` guards against, so deny rather than
-                // fake. `dispatches_real_hostcalls()` stays `false`.
-                Err(EffectError::CapabilityDenied {
-                    required: effect.required_capabilities(),
-                })
+                // fake.
+                self.route_host_io(effect)
             }
             "hostcall:timer" => {
                 if let Ok(params) = effect
@@ -571,7 +697,7 @@ pub fn create_handler_stack_from_profile(profile: &CapabilityProfile) -> Handler
 
     match profile.kind() {
         ProfileKind::Full => {
-            stack.add_handler(Arc::new(FullCapsHandler));
+            stack.add_handler(Arc::new(FullCapsHandler::new()));
         }
         ProfileKind::EngineCore => {
             stack.add_handler(Arc::new(EngineCoreHandler));
@@ -679,10 +805,11 @@ pub fn create_effect_from_hostcall_tag(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use frankenengine_extension_host::host_io::HostIoCapability;
 
     #[test]
     fn test_full_caps_handler_console() {
-        let handler = FullCapsHandler;
+        let handler = FullCapsHandler::new();
         let effect = ConsoleHostcallEffect {
             method: "log".to_string(),
             args: vec!["test".to_string(), "message".to_string()],
@@ -701,12 +828,11 @@ mod tests {
         // data while claiming full capability). With no real in-engine executor,
         // it EXPLICITLY DENIES them with `CapabilityDenied`. `timer` keeps its
         // in-process path and the helper stays `false`.
+        let handler = FullCapsHandler::new();
         assert!(
-            !FullCapsHandler::dispatches_real_hostcalls(),
+            !handler.dispatches_real_hostcalls(),
             "no real fs/network executor exists, so this must stay false (bd-6wc97)"
         );
-
-        let handler = FullCapsHandler;
 
         // fs:read — denied, not a canned "simulated content of {path}" buffer.
         let fs_read = FsHostcallEffect {
@@ -761,6 +887,121 @@ mod tests {
             handler.handle(&timer_effect).is_ok(),
             "timer must remain handled (bd-6wc97 denies only fs/network)"
         );
+    }
+
+    #[derive(Debug, Default)]
+    struct RecordingHostIo {
+        seen: std::sync::Mutex<Vec<(HostIoRequest, Vec<HostIoCapability>)>>,
+    }
+
+    impl HostIoProvider for RecordingHostIo {
+        fn name(&self) -> &str {
+            "recording-test-host-io"
+        }
+
+        fn perform(
+            &self,
+            request: &HostIoRequest,
+            granted: &[HostIoCapability],
+        ) -> Result<HostIoResponse, HostIoError> {
+            self.seen
+                .lock()
+                .unwrap()
+                .push((request.clone(), granted.to_vec()));
+            Ok(match request {
+                HostIoRequest::FsRead { .. } => HostIoResponse::FsRead {
+                    bytes: b"real-bytes".to_vec(),
+                },
+                HostIoRequest::FsWrite { data, .. } => HostIoResponse::FsWrite {
+                    bytes_written: data.len() as u64,
+                },
+                HostIoRequest::NetworkSend { payload, .. } => HostIoResponse::NetworkSend {
+                    bytes_sent: payload.len() as u64,
+                },
+                HostIoRequest::NetworkRecv { max_len, .. } => HostIoResponse::NetworkRecv {
+                    bytes: vec![0; *max_len as usize],
+                },
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    struct NeverCalledHostIo;
+
+    impl HostIoProvider for NeverCalledHostIo {
+        fn name(&self) -> &str {
+            "never-called"
+        }
+
+        fn perform(
+            &self,
+            _request: &HostIoRequest,
+            _granted: &[HostIoCapability],
+        ) -> Result<HostIoResponse, HostIoError> {
+            panic!("provider must not be called in replay mode");
+        }
+    }
+
+    #[test]
+    fn full_caps_with_provider_routes_fs_and_network_bd_lrbbz_7() {
+        let provider = Arc::new(RecordingHostIo::default());
+        let handler = FullCapsHandler::with_host_io(provider.clone());
+        assert!(handler.dispatches_real_hostcalls());
+
+        let fs_read = FsHostcallEffect {
+            operation: FsOperation::Read,
+            path: "/data/x".to_string(),
+            content: None,
+        };
+        assert!(handler.handle(&fs_read).expect("fs read routed").is_some());
+
+        let fs_write = FsHostcallEffect {
+            operation: FsOperation::Write,
+            path: "/data/y".to_string(),
+            content: Some(b"abc".to_vec()),
+        };
+        assert!(
+            handler
+                .handle(&fs_write)
+                .expect("fs write routed")
+                .is_some()
+        );
+
+        let network = NetworkHostcallEffect {
+            url: "https://host:443".to_string(),
+            method: "POST".to_string(),
+            headers: Vec::new(),
+            body: Some(b"hi".to_vec()),
+        };
+        assert!(handler.handle(&network).expect("network routed").is_some());
+
+        let seen = provider.seen.lock().unwrap();
+        assert_eq!(seen.len(), 3);
+        for (request, granted) in seen.iter() {
+            assert_eq!(granted.as_slice(), &[request.required_capability()]);
+        }
+    }
+
+    #[test]
+    fn full_caps_records_and_replays_host_io_bd_lrbbz_7() {
+        use frankenengine_extension_host::host_io::InMemoryHostIoTranscript;
+
+        let provider = Arc::new(RecordingHostIo::default());
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        let record_handler = FullCapsHandler::with_host_io_recorded(provider, recorder.clone());
+        let network = NetworkHostcallEffect {
+            url: "https://host:443".to_string(),
+            method: "POST".to_string(),
+            headers: Vec::new(),
+            body: Some(b"hi".to_vec()),
+        };
+        assert!(record_handler.handle(&network).is_ok());
+        assert_eq!(recorder.entries().len(), 1);
+
+        let replay = Arc::new(InMemoryHostIoTranscript::replaying(recorder.entries()));
+        let replay_handler =
+            FullCapsHandler::with_host_io_recorded(Arc::new(NeverCalledHostIo), replay);
+        assert!(replay_handler.handle(&network).is_ok());
     }
 
     #[test]
@@ -898,7 +1139,7 @@ mod tests {
     fn test_handler_stack_composition() {
         let mut stack = HandlerStack::new();
         stack.add_handler(Arc::new(ComputeOnlyHandler)); // Higher priority, should block
-        stack.add_handler(Arc::new(FullCapsHandler)); // Lower priority due to ordering
+        stack.add_handler(Arc::new(FullCapsHandler::new())); // Lower priority due to ordering
 
         let effect = ConsoleHostcallEffect {
             method: "log".to_string(),

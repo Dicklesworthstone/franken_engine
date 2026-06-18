@@ -19,13 +19,6 @@ use frankenengine_engine::signature_preimage::{
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 const ZONE: &str = "test-zone";
-// bd-ub6x8.6.3: migrated from tests/golden_vectors/ to tests/golden/wire_vectors/.
-const REVOCATION_CHECK_EVENT_SCHEMA_GOLDEN: &str =
-    include_str!("golden/wire_vectors/revocation_check_event_schema.json");
-const REVOCATION_CHECK_EVENT_V1_WIRE_GOLDEN: &str =
-    include_str!("golden/wire_vectors/revocation_check_event_v1_wire.json");
-const SIGNED_REVOCATION_CHECK_EVENT_V1_WIRE_GOLDEN: &str =
-    include_str!("golden/wire_vectors/signed_revocation_check_event_v1_wire.json");
 const REVOCATION_CHECK_EVENT_TEST_AUTH_KEY: &[u8] = b"revocation-check-event-test-key";
 
 fn head_signing_key() -> SigningKey {
@@ -892,10 +885,8 @@ fn audit_event_correlates_transitive_denial_with_frontier_and_error_code() {
 
 #[test]
 fn revocation_check_event_schema_matches_golden_snapshot() {
-    assert_eq!(
-        revocation_check_event_schema_snapshot(),
-        REVOCATION_CHECK_EVENT_SCHEMA_GOLDEN
-    );
+    let actual = revocation_check_event_schema_snapshot();
+    insta::assert_snapshot!("revocation_check_event_schema", actual);
 }
 
 #[test]
@@ -905,10 +896,7 @@ fn revocation_check_event_v1_wire_format_matches_golden_snapshot() {
         serde_json::to_string_pretty(&sample_revocation_check_event_v1_wire())
             .expect("serialize v1 wire event")
     );
-    assert_eq!(
-        actual, REVOCATION_CHECK_EVENT_V1_WIRE_GOLDEN,
-        "actual v1 wire format:\n{actual}"
-    );
+    insta::assert_snapshot!("revocation_check_event_v1_wire", actual);
 }
 
 #[test]
@@ -918,10 +906,7 @@ fn signed_revocation_check_event_v1_wire_format_matches_golden_snapshot() {
         serde_json::to_string_pretty(&sample_signed_revocation_check_event_v1_wire())
             .expect("serialize signed v1 wire event")
     );
-    assert_eq!(
-        actual, SIGNED_REVOCATION_CHECK_EVENT_V1_WIRE_GOLDEN,
-        "actual signed v1 wire format:\n{actual}"
-    );
+    insta::assert_snapshot!("signed_revocation_check_event_v1_wire", actual);
 
     let decoded: SignedRevocationCheckEvent =
         serde_json::from_str(&actual).expect("decode signed v1 wire event");

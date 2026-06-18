@@ -433,6 +433,41 @@ callers moved their comparison path to `insta::assert_snapshot!`.
   `tests/golden/wire_vectors/baseline_dispatch_arms.txt` remains on disk until
   explicit deletion/move approval is given.
 
+### `revocation_enforcement_integration__revocation_check_event_schema.snap`, `revocation_enforcement_integration__revocation_check_event_v1_wire.snap`, `revocation_enforcement_integration__signed_revocation_check_event_v1_wire.snap` *(moved to `tests/snapshots/` — bd-ub6x8.21)*
+
+- **Owning test:** `tests/revocation_enforcement_integration.rs`.
+  Migrated from embedded includes of
+  `tests/golden/wire_vectors/revocation_check_event_schema.json`,
+  `tests/golden/wire_vectors/revocation_check_event_v1_wire.json`, and
+  `tests/golden/wire_vectors/signed_revocation_check_event_v1_wire.json`
+  to `insta::assert_snapshot!`.
+- **Subject under test:** revocation-event schema plus the unsigned and signed
+  revocation-check wire representations.
+- **Regen:**
+  `INSTA_UPDATE=always cargo test -p frankenengine-engine --test revocation_enforcement_integration revocation_check_event -- --nocapture`,
+  followed by `cargo insta review` for interactive blessing.
+- **Legacy audit fixture retained:**
+  `tests/golden/wire_vectors/revocation_check_event_schema.json`,
+  `tests/golden/wire_vectors/revocation_check_event_v1_wire.json`, and
+  `tests/golden/wire_vectors/signed_revocation_check_event_v1_wire.json`
+  remain on disk until explicit deletion/move approval is given.
+
+### `perf_h4_encode_buffer_integration__frankenctl_compile_artifact_unchanged_after_buffer_pool.snap` *(moved to `tests/snapshots/` — bd-ub6x8.21)*
+
+- **Owning test:** `tests/perf_h4_encode_buffer_integration.rs`.
+  Migrated from the `BLESS_H4_GOLDEN` read/write branch plus
+  `tests/golden/h4_encode/compile_artifact.hash` comparison to
+  `insta::assert_snapshot!`. The test still checks within-build repeated
+  compile determinism before comparing the compile-hash map to the snapshot.
+- **Subject under test:** the deterministic `frankenctl compile` IR hash set
+  emitted after the H4 buffered-encoding path.
+- **Regen:**
+  `INSTA_UPDATE=always cargo test -p frankenengine-engine --test perf_h4_encode_buffer_integration frankenctl_compile_artifact_unchanged_after_buffer_pool -- --nocapture`,
+  followed by `cargo insta review` for interactive blessing.
+- **Legacy audit fixture retained:**
+  `tests/golden/h4_encode/compile_artifact.hash` remains on disk until
+  explicit deletion/move approval is given.
+
 ### `benchmark_evidence_bundle_golden__bundle_report_output.snap` *(moved to `tests/snapshots/` — bd-ub6x8.21)*
 
 - **Owning test:** `tests/benchmark_evidence_bundle_golden.rs`.

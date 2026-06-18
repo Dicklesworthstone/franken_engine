@@ -316,7 +316,7 @@ fn governance_receipt_denial() {
     insta::assert_snapshot!("governance_receipt_denial", json);
 }
 
-// Test that UPDATE_GOLDENS workflow works
+// Test that the insta snapshot workflow covers a simple certificate case.
 #[test]
 fn golden_file_update_workflow() {
     // Simple test case for workflow verification

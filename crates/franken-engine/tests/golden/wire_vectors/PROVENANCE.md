@@ -122,13 +122,24 @@ crate-test root.
   `tests/golden/wire_vectors/extension_host_lifecycle_authority_decisions.json`
   remains on disk until explicit deletion/move approval is given.
 
-### `revocation_check_event_schema.json`, `revocation_check_event_v1_wire.json`, `signed_revocation_check_event_v1_wire.json`
+### `revocation_enforcement_integration__revocation_check_event_schema.snap`, `revocation_enforcement_integration__revocation_check_event_v1_wire.snap`, `revocation_enforcement_integration__signed_revocation_check_event_v1_wire.snap` *(moved to `tests/snapshots/` — bd-ub6x8.21)*
 
 - **Owning test:** `tests/revocation_enforcement_integration.rs`.
+  Migrated from embedded includes of
+  `tests/golden/wire_vectors/revocation_check_event_schema.json`,
+  `tests/golden/wire_vectors/revocation_check_event_v1_wire.json`, and
+  `tests/golden/wire_vectors/signed_revocation_check_event_v1_wire.json`
+  to `insta::assert_snapshot!`.
 - **Subject under test:** revocation-event schema + the unsigned and
   signed wire representations.
 - **Regen:**
-  `UPDATE_GOLDENS=1 cargo test -p frankenengine-engine --test revocation_enforcement_integration`
+  `INSTA_UPDATE=always cargo test -p frankenengine-engine --test revocation_enforcement_integration revocation_check_event -- --nocapture`,
+  followed by `cargo insta review` for interactive blessing.
+- **Legacy audit fixture retained:**
+  `tests/golden/wire_vectors/revocation_check_event_schema.json`,
+  `tests/golden/wire_vectors/revocation_check_event_v1_wire.json`, and
+  `tests/golden/wire_vectors/signed_revocation_check_event_v1_wire.json`
+  remain on disk until explicit deletion/move approval is given.
 
 ### `semantic_flattening_inventory_golden__semantic_flattening_inventory_hashes.snap` *(moved to `tests/snapshots/` — bd-ub6x8.21)*
 

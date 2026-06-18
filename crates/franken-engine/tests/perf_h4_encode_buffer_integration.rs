@@ -7,11 +7,11 @@
 //! These two tests guard the end-to-end frankenctl surface:
 //!
 //! 1. `frankenctl_compile_artifact_unchanged_after_buffer_pool` locks the
-//!    deterministic IR content-hashes emitted by `frankenctl compile` against a
-//!    checked-in golden (`tests/golden/h4_encode/compile_artifact.hash`). The
-//!    hashes are content-derived and independent of timestamps/ids (we still
-//!    pin those for byte stability), so a golden file is an honest cross-build
-//!    regression lock: any drift in the encode path moves a hash and fails.
+//!    deterministic IR content-hashes emitted by `frankenctl compile` against
+//!    an insta snapshot. The hashes are content-derived and independent of
+//!    timestamps/ids (we still pin those for byte stability), so the snapshot
+//!    is an honest cross-build regression lock: any drift in the encode path
+//!    moves a hash and fails.
 //!
 //!    NOTE: `frankenctl compile` embeds the verbatim `--input` path into the
 //!    IR0 content hash (parse_event_ir stays path-independent), so the golden is
@@ -26,12 +26,12 @@
 //!    is property-heavy so the capture is non-empty; replay compares the trace
 //!    against itself in-process.
 //!
-//! Re-bless the golden after an intentional encode change with:
-//!   BLESS_H4_GOLDEN=1 cargo test --test perf_h4_encode_buffer_integration \
+//! Re-bless the snapshot after an intentional encode change with:
+//!   INSTA_UPDATE=always cargo test --test perf_h4_encode_buffer_integration \
 //!       frankenctl_compile_artifact_unchanged_after_buffer_pool -- --nocapture
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output};
 
 use frankenengine_engine::baseline_interpreter::{ExecutionResult, QuickJsLane};
@@ -43,7 +43,7 @@ use frankenengine_engine::parser_api_stability::parse_script;
 /// `frankenctl compile`. The companion within-run test
 /// `frankenctl_compile_and_run_artifacts_are_byte_identical_with_fixed_inputs`
 /// in `deterministic_replay_integration.rs` proves byte-stability for one
-/// invocation pair; here we add the cross-build golden lock H4.7 asks for.
+/// invocation pair; here we add the cross-build snapshot lock H4.7 asks for.
 const COMPILE_SOURCE: &str = "const a = 7;\n\
 const b = 11;\n\
 const c = a * b;\n\
@@ -69,14 +69,6 @@ total;\n";
 
 /// Ordered hash fields emitted under `compile_json["hashes"]`.
 const HASH_FIELDS: [&str; 5] = ["parse_event_ir", "ir0", "ir1", "ir2", "ir3"];
-
-fn golden_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("golden")
-        .join("h4_encode")
-        .join("compile_artifact.hash")
-}
 
 fn assert_command_success(output: &Output, command: &str) {
     assert!(
@@ -186,47 +178,12 @@ fn frankenctl_compile_artifact_unchanged_after_buffer_pool() {
         "frankenctl compile must be deterministic across repeated invocations"
     );
 
-    let path = golden_path();
-    if std::env::var_os("BLESS_H4_GOLDEN").is_some() {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).expect("golden directory should be creatable");
-        }
-        let serialized =
-            serde_json::to_string_pretty(&captured).expect("golden hashes should serialise");
-        // Emit the blessed hashes on stdout (run with `-- --nocapture`) so they
-        // can be captured even when the test executes on a remote build worker
-        // whose filesystem is not synced back to the source checkout.
-        println!("H4_GOLDEN_BLESS_START");
-        println!("{serialized}");
-        println!("H4_GOLDEN_BLESS_END");
-        fs::write(&path, format!("{serialized}\n")).expect("golden file should write");
-        return;
-    }
-
-    let golden_bytes = fs::read(&path).unwrap_or_else(|err| {
-        panic!(
-            "golden file {} missing ({err}); regenerate with BLESS_H4_GOLDEN=1",
-            path.display()
-        )
-    });
-    let golden: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_slice(&golden_bytes).expect("golden file should parse as JSON object");
-
-    for field in HASH_FIELDS {
-        let want = golden
-            .get(field)
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_else(|| panic!("golden missing `{field}`"));
-        let got = captured
-            .get(field)
-            .and_then(serde_json::Value::as_str)
-            .expect("captured hashes populated above");
-        assert_eq!(
-            got, want,
-            "compile hash `{field}` drifted from golden: encode path changed \
-             (re-bless with BLESS_H4_GOLDEN=1 if intentional)"
-        );
-    }
+    let serialized =
+        serde_json::to_string_pretty(&captured).expect("captured hashes should serialise");
+    insta::assert_snapshot!(
+        "frankenctl_compile_artifact_unchanged_after_buffer_pool",
+        serialized
+    );
 }
 
 #[test]

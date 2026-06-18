@@ -97,14 +97,9 @@ fn run_frankenctl_fixture() -> String {
 #[test]
 fn frankenctl_run_evidence_byte_identical_under_lazy_seed() {
     let start = Instant::now();
-    let golden = include_str!("fixtures/perf_h2/run_output.golden.json");
     let actual = run_frankenctl_fixture();
 
-    assert_eq!(
-        actual.trim_end(),
-        golden.trim_end(),
-        "frankenctl run output diverged from the pre-H2 lazy-seed golden"
-    );
+    insta::assert_snapshot!("frankenctl_run_evidence_under_lazy_seed", actual.trim_end());
 
     let second = run_frankenctl_fixture();
     assert_eq!(

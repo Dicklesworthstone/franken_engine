@@ -60,15 +60,11 @@ fn run_frankenctl() -> String {
 fn frankenctl_run_output_matches_golden_after_capacity_hint_sweep() {
     let start = Instant::now();
 
-    let golden = include_str!("fixtures/perf_h6/run_output.golden.json");
     let actual = run_frankenctl();
 
-    // Byte-identical comparison: capacity hints must not perturb any output.
-    assert_eq!(
-        actual.trim_end(),
-        golden.trim_end(),
-        "frankenctl run output diverged from the pre-H6 golden — capacity \
-         hints must be pure metadata and must not change observable output"
+    insta::assert_snapshot!(
+        "frankenctl_run_output_after_capacity_hint_sweep",
+        actual.trim_end()
     );
 
     // Determinism guard: a second run must reproduce the first byte-for-byte.

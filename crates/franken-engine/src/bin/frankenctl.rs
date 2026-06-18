@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use chrono::{NaiveDate, SecondsFormat, Utc};
+use chrono::{NaiveDate, NaiveDateTime, SecondsFormat, Utc};
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::authority_footprint::{
     AuthorityFootprintReport, analyze_authority_footprint,
@@ -26,6 +26,10 @@ use frankenengine_engine::benchmark_e2e::{
     write_evidence_artifacts,
 };
 use frankenengine_engine::capability::{CapabilityProfile, RuntimeCapability};
+use frankenengine_engine::data_contract::{
+    DEFAULT_DATA_CONTRACT_PURPOSE, DataContract, DataContractRunBinding,
+    E8_REFUSAL_LEDGER_SCHEMA_VERSION, E8RefusalLedgerReceipt,
+};
 use frankenengine_engine::deterministic_replay::{NondeterminismTrace, ReplayEngine, ReplayMode};
 use frankenengine_engine::differential_oracle::{DifferentialOracleInput, run_differential_oracle};
 use frankenengine_engine::differential_oracle_perf::{
@@ -111,6 +115,10 @@ const RUN_ACTION_DECISION_SCHEMA_VERSION: &str = "franken-engine.frankenctl.run-
 const RUN_POSTERIOR_SCHEMA_VERSION: &str = "franken-engine.frankenctl.run-posterior.v1";
 const RUN_CONTAINMENT_RECEIPT_SCHEMA_VERSION: &str =
     "franken-engine.frankenctl.run-containment-receipt.v1";
+const CLAIM_EXPLAINER_SCHEMA_VERSION: &str = "franken-engine.external-trust-claim-explainer.v1";
+const CLAIM_MATRIX_SCHEMA_VERSION: &str = "franken-engine.claim-to-proof-matrix.v1";
+const DEFAULT_CLAIM_MATRIX_PATH: &str = "docs/claim_to_proof_matrix_v1.json";
+const DEFAULT_BEADS_JSONL_PATH: &str = ".beads/issues.jsonl";
 const REACT_CLI_CONTRACT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.react-cli-contract.v1";
 const REACT_CLI_REPORT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.react-cli-report.v1";
 const REACT_DOCTOR_REPORT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.react-doctor.v1";
@@ -153,6 +161,7 @@ enum CommandSpec {
     DiffBehavior(DiffBehaviorArgs),
     Run(RunArgs),
     Explain(ExplainArgs),
+    Claims(ClaimsArgs),
     Doctor(Box<DoctorArgs>),
     Verify(VerifyArgs),
     Benchmark(BenchmarkArgs),
@@ -176,6 +185,8 @@ enum HelpTopic {
     DiffBehavior,
     Run,
     Explain,
+    Claims,
+    ClaimsExplain,
     Doctor,
     Verify,
     VerifyCompileArtifact,
@@ -213,6 +224,8 @@ impl HelpTopic {
             Self::DiffBehavior => diff_behavior_usage(),
             Self::Run => run_usage(),
             Self::Explain => explain_usage(),
+            Self::Claims => claims_usage(),
+            Self::ClaimsExplain => claims_explain_usage(),
             Self::Doctor => doctor_usage(),
             Self::Verify => verify_usage(),
             Self::VerifyCompileArtifact => verify_compile_artifact_usage(),
@@ -304,6 +317,8 @@ struct RunArgs {
     out: Option<PathBuf>,
     explain: bool,
     explain_out: Option<PathBuf>,
+    data_contract: Option<PathBuf>,
+    data_contract_purpose: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -321,6 +336,25 @@ struct ExplainArgs {
     /// evidence_graph.json, replay.json, counterfactuals.json, commands.txt,
     /// repro.lock, plus a copy of the index (explain.json).
     emit_bundle: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ClaimsArgs {
+    mode: ClaimsMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ClaimsMode {
+    Explain(ClaimsExplainArgs),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ClaimsExplainArgs {
+    claim_id: String,
+    matrix: PathBuf,
+    beads_jsonl: Option<PathBuf>,
+    format: CheckOutputFormat,
+    out: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -779,6 +813,10 @@ struct RunCommandOutput {
     report_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     explain_bundle_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data_contract: Option<DataContractRunBinding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    e8_preflight_receipt: Option<E8RefusalLedgerReceipt>,
     source_ingestion: SourceIngestionSummary,
     lane: String,
     lane_reason: String,
@@ -1458,6 +1496,7 @@ fn run(raw_args: Vec<String>) -> Result<i32, String> {
         CommandSpec::DiffBehavior(args) => execute_diff_behavior(args),
         CommandSpec::Run(args) => execute_run(args),
         CommandSpec::Explain(args) => execute_explain(args),
+        CommandSpec::Claims(args) => execute_claims(args),
         CommandSpec::Doctor(args) => execute_doctor(*args),
         CommandSpec::Verify(args) => execute_verify(args),
         CommandSpec::Benchmark(args) => execute_benchmark(args),
@@ -1497,6 +1536,7 @@ fn parse_command(args: &[String]) -> Result<CommandSpec, String> {
         "diff-behavior" => parse_diff_behavior_command(&args[1..]),
         "run" => parse_run_command(&args[1..]),
         "explain" => parse_explain_command(&args[1..]),
+        "claims" => parse_claims_command(&args[1..]),
         "doctor" => parse_doctor_command(&args[1..]),
         "verify" => parse_verify_command(&args[1..]),
         "benchmark" => parse_benchmark_command(&args[1..]),
@@ -1527,6 +1567,7 @@ fn parse_help_command(args: &[String]) -> Result<CommandSpec, String> {
         }
         "run" => parse_leaf_help_topic("run", HelpTopic::Run, &args[1..]),
         "explain" => parse_leaf_help_topic("explain", HelpTopic::Explain, &args[1..]),
+        "claims" => parse_claims_help_command(&args[1..]),
         "doctor" => parse_leaf_help_topic("doctor", HelpTopic::Doctor, &args[1..]),
         "verify" => parse_verify_help_command(&args[1..]),
         "benchmark" => parse_benchmark_help_command(&args[1..]),
@@ -1542,6 +1583,16 @@ fn parse_help_command(args: &[String]) -> Result<CommandSpec, String> {
         other => Err(format!(
             "unknown help topic `{other}` (expected compile|check|onboard|diff-behavior|run|explain|doctor|verify|benchmark|replay|differential-oracle|react|gates|reports|test|synth|orchestrate|runtime)"
         )),
+    }
+}
+
+fn parse_claims_help_command(args: &[String]) -> Result<CommandSpec, String> {
+    if args.is_empty() || matches!(args[0].as_str(), "--help" | "-h") {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Claims));
+    }
+    match args[0].as_str() {
+        "explain" => parse_leaf_help_topic("claims explain", HelpTopic::ClaimsExplain, &args[1..]),
+        other => Err(format!("unknown claims help topic `{other}`")),
     }
 }
 
@@ -1924,6 +1975,8 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut out: Option<PathBuf> = None;
     let mut explain = false;
     let mut explain_out: Option<PathBuf> = None;
+    let mut data_contract: Option<PathBuf> = None;
+    let mut data_contract_purpose = DEFAULT_DATA_CONTRACT_PURPOSE.to_string();
 
     let mut index = 0usize;
     while index < args.len() {
@@ -1932,6 +1985,16 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
             "--extension-id" => extension_id = Some(next_arg(args, &mut index, "--extension-id")?),
             "--goal" => goal = parse_goal(&next_arg(args, &mut index, "--goal")?)?,
             "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            "--data-contract" => {
+                data_contract = Some(PathBuf::from(next_arg(
+                    args,
+                    &mut index,
+                    "--data-contract",
+                )?));
+            }
+            "--purpose" => {
+                data_contract_purpose = next_arg(args, &mut index, "--purpose")?;
+            }
             "--explain" => {
                 explain = true;
                 if let Some(candidate) = args.get(index + 1)
@@ -1961,6 +2024,8 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
         out,
         explain,
         explain_out,
+        data_contract,
+        data_contract_purpose,
     }))
 }
 
@@ -1999,6 +2064,62 @@ fn parse_explain_command(args: &[String]) -> Result<CommandSpec, String> {
         format,
         out,
         emit_bundle,
+    }))
+}
+
+fn parse_claims_command(args: &[String]) -> Result<CommandSpec, String> {
+    if args.is_empty() {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Claims));
+    }
+    match args[0].as_str() {
+        "help" | "--help" | "-h" => Ok(CommandSpec::HelpTopic(HelpTopic::Claims)),
+        "explain" => parse_claims_explain_command(&args[1..]),
+        other => Err(format!("unknown claims subcommand `{other}`")),
+    }
+}
+
+fn parse_claims_explain_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::ClaimsExplain));
+    }
+
+    let mut claim_id: Option<String> = None;
+    let mut matrix = PathBuf::from(DEFAULT_CLAIM_MATRIX_PATH);
+    let mut beads_jsonl = Some(PathBuf::from(DEFAULT_BEADS_JSONL_PATH));
+    let mut format = CheckOutputFormat::Human;
+    let mut out: Option<PathBuf> = None;
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--claim-id" => claim_id = Some(next_arg(args, &mut index, "--claim-id")?),
+            "--matrix" => matrix = PathBuf::from(next_arg(args, &mut index, "--matrix")?),
+            "--beads-jsonl" => {
+                beads_jsonl = Some(PathBuf::from(next_arg(args, &mut index, "--beads-jsonl")?))
+            }
+            "--no-beads" => beads_jsonl = None,
+            "--format" => {
+                format = parse_check_output_format(&next_arg(args, &mut index, "--format")?)?
+            }
+            "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            value if !value.starts_with("--") && claim_id.is_none() => {
+                claim_id = Some(value.to_string());
+            }
+            flag => return Err(format!("unknown claims explain flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    let claim_id = claim_id
+        .ok_or_else(|| "claims explain requires <claim-id> or --claim-id <id>".to_string())?;
+    Ok(CommandSpec::Claims(ClaimsArgs {
+        mode: ClaimsMode::Explain(ClaimsExplainArgs {
+            claim_id,
+            matrix,
+            beads_jsonl,
+            format,
+            out,
+        }),
     }))
 }
 
@@ -3552,6 +3673,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     let source = fs::read_to_string(&args.input)
         .map_err(|error| format!("failed to read source `{}`: {error}", args.input.display()))?;
     let source_hash = ContentHash::compute(source.as_bytes());
+    let data_contract = load_and_bind_data_contract(&args, &source_hash)?;
 
     let source_label = args.input.display().to_string();
     let capabilities = run_cli_capabilities(args.parse_goal);
@@ -3574,6 +3696,14 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         .map_err(|error| format_run_error(&args.input, &error))?;
     let explain_bundle_path = resolve_run_explain_path(&args);
 
+    let explain_bundle_path_string = explain_bundle_path
+        .as_ref()
+        .map(|path| path.display().to_string());
+    let e8_preflight_receipt = data_contract.as_ref().map(|binding| {
+        binding
+            .uncertified_preflight_receipt(&result.trace_id, explain_bundle_path_string.as_deref())
+    });
+
     let output = RunCommandOutput {
         schema_version: FRANKENCTL_SCHEMA_VERSION.to_string(),
         extension_id: result.extension_id.clone(),
@@ -3582,9 +3712,9 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         policy_id,
         parse_goal: args.parse_goal.as_str().to_string(),
         report_path: args.out.as_ref().map(|path| path.display().to_string()),
-        explain_bundle_path: explain_bundle_path
-            .as_ref()
-            .map(|path| path.display().to_string()),
+        explain_bundle_path: explain_bundle_path_string,
+        data_contract,
+        e8_preflight_receipt,
         source_ingestion: result.source_ingestion.clone(),
         lane: result.lane.to_string(),
         lane_reason: result.lane_reason.to_string(),
@@ -3609,6 +3739,26 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     print_json(&output)?;
 
     Ok(0)
+}
+
+fn load_and_bind_data_contract(
+    args: &RunArgs,
+    source_hash: &ContentHash,
+) -> Result<Option<DataContractRunBinding>, String> {
+    let Some(path) = args.data_contract.as_ref() else {
+        return Ok(None);
+    };
+    let contract: DataContract = load_json_file(path)?;
+    let input_path = args.input.display().to_string();
+    contract
+        .bind_to_run(
+            &args.extension_id,
+            &input_path,
+            &args.data_contract_purpose,
+            Some(source_hash),
+        )
+        .map(Some)
+        .map_err(|error| format!("failed to bind data contract `{}`: {error}", path.display()))
 }
 
 fn resolve_run_explain_path(args: &RunArgs) -> Option<PathBuf> {
@@ -3657,6 +3807,41 @@ fn build_run_explain_bundle(
         .add_artifact(source_ref)
         .map_err(|error| error.to_string())?;
 
+    if let Some(binding) = output.data_contract.as_ref() {
+        let contract_ref = RuntimeArtifactRef::new(
+            "data-contract",
+            RuntimeArtifactKind::Other {
+                schema_id: binding.schema_version.clone(),
+            },
+            content_hash_for_json(binding, "data contract binding")?,
+            StableArtifactRef::new("data_contract", binding.contract_id.clone())
+                .with_revision(binding.contract_hash_hex.clone()),
+        )
+        .with_schema_id(binding.schema_version.clone())
+        .with_producer("frankenctl")
+        .with_metadata(
+            RUNTIME_EXPLAIN_ORIGIN_SURFACE_METADATA_KEY,
+            "frankenctl_run",
+        )
+        .with_metadata(
+            RUNTIME_EXPLAIN_ORIGIN_SCHEMA_METADATA_KEY,
+            binding.schema_version.clone(),
+        )
+        .with_metadata(
+            RUNTIME_EXPLAIN_ORIGIN_ARTIFACT_METADATA_KEY,
+            "DataContractRunBinding",
+        );
+        builder = builder
+            .add_artifact(contract_ref)
+            .map_err(|error| error.to_string())?;
+        builder = builder.add_link(RuntimeExplainLink::new(
+            "data-contract-to-source",
+            "data-contract",
+            "source",
+            RuntimeExplainRelation::DerivedFrom,
+        ));
+    }
+
     let report_stable_key = output
         .report_path
         .clone()
@@ -3692,6 +3877,50 @@ fn build_run_explain_bundle(
     builder = builder
         .add_artifact(run_report_ref)
         .map_err(|error| error.to_string())?;
+
+    if let Some(receipt) = output.e8_preflight_receipt.as_ref() {
+        let receipt_ref = RuntimeArtifactRef::new(
+            "e8-preflight-refusal-ledger",
+            RuntimeArtifactKind::Other {
+                schema_id: E8_REFUSAL_LEDGER_SCHEMA_VERSION.to_string(),
+            },
+            content_hash_for_json(receipt, "E8 preflight refusal ledger")?,
+            StableArtifactRef::new("e8_refusal_ledger", receipt.ledger_id.clone())
+                .with_revision(receipt.run_id.clone()),
+        )
+        .with_schema_id(E8_REFUSAL_LEDGER_SCHEMA_VERSION)
+        .with_producer("frankenctl")
+        .with_roles([RuntimeExplainRole::ReplayStatus])
+        .with_metadata(
+            RUNTIME_EXPLAIN_ORIGIN_SURFACE_METADATA_KEY,
+            "frankenctl_run",
+        )
+        .with_metadata(
+            RUNTIME_EXPLAIN_ORIGIN_SCHEMA_METADATA_KEY,
+            E8_REFUSAL_LEDGER_SCHEMA_VERSION,
+        )
+        .with_metadata(
+            RUNTIME_EXPLAIN_ORIGIN_ARTIFACT_METADATA_KEY,
+            "E8RefusalLedgerReceipt",
+        );
+        builder = builder
+            .add_artifact(receipt_ref)
+            .map_err(|error| error.to_string())?;
+        if output.data_contract.is_some() {
+            builder = builder.add_link(RuntimeExplainLink::new(
+                "e8-preflight-from-data-contract",
+                "e8-preflight-refusal-ledger",
+                "data-contract",
+                RuntimeExplainRelation::DerivedFrom,
+            ));
+        }
+        builder = builder.add_link(RuntimeExplainLink::new(
+            "e8-preflight-to-run-report",
+            "e8-preflight-refusal-ledger",
+            "run-report",
+            RuntimeExplainRelation::DerivedFrom,
+        ));
+    }
 
     let action_hash = content_hash_for_json(&result.action_decision, "run action decision")?;
     let action_ref = RuntimeArtifactRef::new(
@@ -3923,6 +4152,1298 @@ fn render_runtime_explain_summary(bundle: &RuntimeExplainBundle, input: &Path) -
         format!("  artifact_kinds: {kind_summary}"),
     ]
     .join("\n")
+}
+
+fn execute_claims(args: ClaimsArgs) -> Result<i32, String> {
+    match args.mode {
+        ClaimsMode::Explain(args) => execute_claims_explain(args),
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ClaimMatrixDocument {
+    max_observed_freshness_days: Option<u64>,
+    stale_threshold_days: Option<u64>,
+    claims: Vec<ClaimMatrixRow>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ClaimMatrixRow {
+    actual_wording_state: String,
+    allowed_state: String,
+    artifact_path: Option<String>,
+    claim_id: String,
+    claim_scope: String,
+    claim_text: String,
+    decision: String,
+    downgrade_text: Option<String>,
+    #[serde(
+        default,
+        alias = "artifact_hash",
+        alias = "artifact_sha256",
+        alias = "content_hash",
+        alias = "expected_content_hash"
+    )]
+    expected_hash: Option<String>,
+    freshness_days: Option<u64>,
+    owning_bead: String,
+    reason: String,
+    source_path: String,
+    source_span: Option<ClaimSourceSpan>,
+    verification_command: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ClaimSourceSpan {
+    start_line: u64,
+    end_line: u64,
+    must_contain: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ClaimExplanationOutput {
+    schema_version: String,
+    receipt_id: String,
+    claim_id: String,
+    decision: String,
+    reason_codes: Vec<String>,
+    matrix_path: String,
+    matrix_schema_version: String,
+    claim: Option<ClaimExplanationClaim>,
+    artifact: Option<ClaimExplanationArtifact>,
+    bead: Option<ClaimExplanationBead>,
+    mock_status: String,
+    local_fallback_status: String,
+    replay_commands: Vec<String>,
+    remediation: Vec<String>,
+    source_line_refs: Vec<ClaimExplanationSourceRef>,
+    mutation_policy: ClaimExplanationMutationPolicy,
+    renderer_boundary: ClaimExplanationRendererBoundary,
+}
+
+impl ClaimExplanationOutput {
+    fn exit_code(&self) -> i32 {
+        match self.decision.as_str() {
+            "supported" => 0,
+            "degraded" | "not_promotable" | "unsupported" => 1,
+            _ => 2,
+        }
+    }
+
+    fn render_human(&self) -> String {
+        let mut lines = vec![
+            "claim explanation:".to_string(),
+            format!("  claim_id: {}", self.claim_id),
+            format!("  decision: {}", self.decision),
+            format!("  reason_codes: {}", self.reason_codes.join(", ")),
+            format!("  receipt_id: {}", self.receipt_id),
+            format!("  matrix: {}", self.matrix_path),
+        ];
+        if let Some(claim) = self.claim.as_ref() {
+            lines.push(format!("  allowed_state: {}", claim.allowed_state));
+            lines.push(format!(
+                "  actual_wording_state: {}",
+                claim.actual_wording_state
+            ));
+            lines.push(format!("  owning_bead: {}", claim.owning_bead));
+            lines.push(format!("  artifact_path: {}", claim.artifact_path));
+        }
+        if let Some(artifact) = self.artifact.as_ref() {
+            lines.push(format!("  artifact_present: {}", artifact.present));
+            lines.push(format!(
+                "  artifact_hash: {}",
+                artifact.content_hash.as_deref().unwrap_or("unavailable")
+            ));
+            lines.push(format!(
+                "  expected_hash: {}",
+                artifact.expected_hash.as_deref().unwrap_or("unasserted")
+            ));
+            lines.push(format!("  hash_status: {}", artifact.hash_status));
+            lines.push(format!("  freshness_status: {}", artifact.freshness_status));
+            if let Some(days) = artifact.actual_freshness_days {
+                lines.push(format!("  actual_freshness_days: {days}"));
+            }
+        }
+        if let Some(bead) = self.bead.as_ref() {
+            lines.push(format!("  bead_status: {}", bead.status));
+            if let Some(assignee) = bead.assignee.as_ref() {
+                lines.push(format!("  bead_assignee: {assignee}"));
+            }
+        }
+        lines.push(format!("  mock_status: {}", self.mock_status));
+        lines.push(format!(
+            "  local_fallback_status: {}",
+            self.local_fallback_status
+        ));
+        if !self.remediation.is_empty() {
+            lines.push("  remediation:".to_string());
+            lines.extend(self.remediation.iter().map(|item| format!("    - {item}")));
+        }
+        lines.join("\n")
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ClaimExplanationClaim {
+    claim_scope: String,
+    claim_text: String,
+    allowed_state: String,
+    actual_wording_state: String,
+    decision: String,
+    reason: String,
+    downgrade_text: Option<String>,
+    freshness_days: Option<u64>,
+    owning_bead: String,
+    verification_command: String,
+    artifact_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ClaimExplanationArtifact {
+    path: String,
+    present: bool,
+    kind: String,
+    content_hash: Option<String>,
+    expected_hash: Option<String>,
+    hash_status: String,
+    required_for_supported: bool,
+    actual_freshness_days: Option<u64>,
+    freshness_status: String,
+    stale_threshold_days: u64,
+    max_observed_freshness_days: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ClaimExplanationBead {
+    bead_id: String,
+    status: String,
+    assignee: Option<String>,
+    source: String,
+    found: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ClaimExplanationSourceRef {
+    source_path: String,
+    start_line: Option<u64>,
+    end_line: Option<u64>,
+    must_contain: Option<String>,
+    status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ClaimExplanationMutationPolicy {
+    mutates_br: bool,
+    mutates_agent_mail: bool,
+    mutates_file_reservations: bool,
+    mutates_remote_workers: bool,
+    mutates_evidence_bundles: bool,
+    mutates_claim_matrix: bool,
+    mutates_git: bool,
+    runs_cargo: bool,
+    runs_rch: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ClaimExplanationRendererBoundary {
+    future_rich_renderer_provider: String,
+    local_rich_renderer_shipped: bool,
+}
+
+fn execute_claims_explain(args: ClaimsExplainArgs) -> Result<i32, String> {
+    let output = build_claim_explanation(
+        args.claim_id.as_str(),
+        &args.matrix,
+        args.beads_jsonl.as_deref(),
+    )?;
+    match args.format {
+        CheckOutputFormat::Human => {
+            let rendered = output.render_human();
+            if let Some(path) = args.out.as_ref() {
+                write_bytes_file(path, rendered.as_bytes())?;
+            } else {
+                println!("{rendered}");
+            }
+        }
+        CheckOutputFormat::Json => {
+            if let Some(path) = args.out.as_ref() {
+                write_json_file(path, &output)?;
+            } else {
+                print_json(&output)?;
+            }
+        }
+    }
+    Ok(output.exit_code())
+}
+
+fn build_claim_explanation(
+    claim_id: &str,
+    matrix_path: &Path,
+    beads_jsonl: Option<&Path>,
+) -> Result<ClaimExplanationOutput, String> {
+    let matrix_value: serde_json::Value = match load_json_file(matrix_path) {
+        Ok(value) => value,
+        Err(error) => {
+            return Ok(claim_explanation_fail_closed(
+                claim_id,
+                matrix_path,
+                "unavailable".to_string(),
+                "unreadable_matrix",
+                format!(
+                    "Read or regenerate the claim-to-proof matrix, then rerun the claim gate: {error}"
+                ),
+            ));
+        }
+    };
+    let matrix_schema_version = matrix_value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("missing")
+        .to_string();
+    if matrix_schema_version != CLAIM_MATRIX_SCHEMA_VERSION {
+        return Ok(claim_explanation_fail_closed(
+            claim_id,
+            matrix_path,
+            matrix_schema_version,
+            "invalid_matrix_schema",
+            "Regenerate or fix the claim-to-proof matrix and rerun the claim gate.",
+        ));
+    }
+
+    let matrix: ClaimMatrixDocument = match serde_json::from_value(matrix_value) {
+        Ok(matrix) => matrix,
+        Err(error) => {
+            return Ok(claim_explanation_fail_closed(
+                claim_id,
+                matrix_path,
+                matrix_schema_version,
+                "missing_required_field",
+                format!("Fix required claim matrix fields before explaining this claim: {error}"),
+            ));
+        }
+    };
+    let max_observed_freshness_days = matrix.max_observed_freshness_days.unwrap_or(30);
+    let stale_threshold_days = matrix
+        .stale_threshold_days
+        .unwrap_or(max_observed_freshness_days);
+    let mut matching_claim_rows = matrix
+        .claims
+        .into_iter()
+        .filter(|row| row.claim_id == claim_id);
+    let Some(row) = matching_claim_rows.next() else {
+        return Ok(claim_explanation_fail_closed(
+            claim_id,
+            matrix_path,
+            matrix_schema_version,
+            "missing_claim_row",
+            "Add or correct the matrix row before explaining the claim.",
+        ));
+    };
+    if matching_claim_rows.next().is_some() {
+        return Ok(claim_explanation_fail_closed(
+            claim_id,
+            matrix_path,
+            matrix_schema_version,
+            "duplicate_claim_row",
+            "Deduplicate the claim-to-proof matrix row before explaining the claim.",
+        ));
+    }
+
+    let bead = load_bead_status(beads_jsonl, row.owning_bead.as_str())?;
+    Ok(explain_claim_row(
+        claim_id,
+        matrix_path,
+        matrix_schema_version,
+        row,
+        bead,
+        stale_threshold_days,
+        max_observed_freshness_days,
+    ))
+}
+
+fn explain_claim_row(
+    claim_id: &str,
+    matrix_path: &Path,
+    matrix_schema_version: String,
+    row: ClaimMatrixRow,
+    bead: Option<ClaimExplanationBead>,
+    stale_threshold_days: u64,
+    max_observed_freshness_days: u64,
+) -> ClaimExplanationOutput {
+    let mut reason_codes = Vec::new();
+    let mut remediation = Vec::new();
+    let artifact_path = row.artifact_path.clone().unwrap_or_default();
+    let resolved_artifact_path = resolve_claim_artifact_path(matrix_path, &artifact_path);
+    let artifact = explain_claim_artifact(
+        &artifact_path,
+        &resolved_artifact_path,
+        row.allowed_state.as_str(),
+        row.expected_hash.as_deref(),
+        stale_threshold_days,
+        max_observed_freshness_days,
+    );
+
+    let missing_fields = claim_row_missing_required_fields(&row);
+    if !missing_fields.is_empty() {
+        let fix = format!(
+            "Fill required matrix fields before this claim can be explained: {}.",
+            missing_fields.join(", ")
+        );
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "missing_required_field",
+            &fix,
+        );
+    }
+
+    if !claim_state_is_known(row.allowed_state.as_str())
+        || !claim_state_is_known(row.actual_wording_state.as_str())
+    {
+        let mut invalid_fields = Vec::new();
+        if !claim_state_is_known(row.allowed_state.as_str()) {
+            invalid_fields.push("allowed_state");
+        }
+        if !claim_state_is_known(row.actual_wording_state.as_str()) {
+            invalid_fields.push("actual_wording_state");
+        }
+        let fix = format!(
+            "Use one of hypothesis, target, or observed for {}.",
+            invalid_fields.join(", ")
+        );
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "invalid_wording_state",
+            &fix,
+        );
+    }
+
+    if state_rank(row.actual_wording_state.as_str()) > state_rank(row.allowed_state.as_str()) {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "wording_stronger_than_allowed",
+            "Downgrade the claim wording or promote the matrix row only after upstream proof gates pass.",
+        );
+    }
+    if row.allowed_state != "observed" {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "claim_not_observed",
+            "Keep the explanation degraded/not-promotable until observed proof artifacts are linked.",
+        );
+    }
+    if row.allowed_state == "observed" && !artifact.present {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "absent_artifact",
+            "Produce or attach the upstream proof artifact before treating the claim as supported.",
+        );
+    }
+    if row.allowed_state == "observed"
+        && row
+            .freshness_days
+            .is_some_and(|days| days > max_observed_freshness_days)
+    {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "stale_artifact",
+            "Declared claim freshness exceeds the matrix max_observed_freshness_days budget.",
+        );
+    }
+    if row.allowed_state == "observed"
+        && matches!(artifact.freshness_status.as_str(), "stale" | "unknown")
+    {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "stale_artifact",
+            "Refresh the observed proof artifact or downgrade the claim before treating it as supported.",
+        );
+    }
+    if row.allowed_state == "observed"
+        && artifact.present
+        && !claim_artifact_has_reproducibility_bundle(&resolved_artifact_path)
+    {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "missing_reproducibility_bundle",
+            "Add a repro.lock beside or under the observed proof artifact before treating the claim as supported.",
+        );
+    }
+    if artifact.hash_status == "invalid_expected_hash" {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "invalid_expected_hash",
+            "Replace the expected artifact hash with a sha256:<64-hex> value or omit it until an authority source exists.",
+        );
+    } else if artifact.hash_status == "mismatch" {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "artifact_hash_mismatch",
+            "Regenerate the artifact from the recorded replay command or correct the matrix hash authority.",
+        );
+    }
+
+    let mock_contaminated = claim_row_contains_mock_contamination(&row)
+        || claim_artifact_contains_mock_contamination(&resolved_artifact_path);
+    let local_fallback_contaminated = claim_row_contains_local_fallback(&row)
+        || claim_artifact_contains_local_fallback(&resolved_artifact_path);
+    if mock_contaminated {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "mock_contaminated",
+            "Replace mock or simulation evidence with a live/preserved non-mock proof artifact.",
+        );
+    }
+    if local_fallback_contaminated {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "local_fallback_contaminated",
+            "Replace local-fallback transport evidence with a remote-only preserved proof artifact.",
+        );
+    }
+
+    let source_check = validate_claim_source_ref(matrix_path, &row);
+    if let Some(reason_code) = source_check.reason_code.as_deref() {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            reason_code,
+            source_check
+                .remediation
+                .as_deref()
+                .unwrap_or("Repair the matrix source_path/source_span and rerun the claim gate."),
+        );
+    }
+
+    if let Some(bead_ref) = bead.as_ref()
+        && row.allowed_state == "observed"
+        && bead_ref.found
+        && bead_ref.status != "closed"
+    {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "contradictory_bead_status",
+            "Resolve tracker status or downgrade the claim before treating it as supported.",
+        );
+    }
+    if let Some(bead_ref) = bead.as_ref()
+        && row.allowed_state == "observed"
+        && !bead_ref.found
+    {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "stale_tracker_state",
+            "Refresh the Beads JSONL snapshot or pass --no-beads only for an explicit artifact-only review.",
+        );
+    }
+
+    let decision = claim_explanation_decision(row.allowed_state.as_str(), &reason_codes);
+    let source_ref = ClaimExplanationSourceRef {
+        source_path: row.source_path.clone(),
+        start_line: row.source_span.as_ref().map(|span| span.start_line),
+        end_line: row.source_span.as_ref().map(|span| span.end_line),
+        must_contain: row
+            .source_span
+            .as_ref()
+            .and_then(|span| span.must_contain.clone()),
+        status: source_check.status,
+    };
+    let replay_commands = if row.verification_command.trim().is_empty() {
+        Vec::new()
+    } else {
+        vec![row.verification_command.clone()]
+    };
+    let claim = ClaimExplanationClaim {
+        claim_scope: row.claim_scope,
+        claim_text: row.claim_text,
+        allowed_state: row.allowed_state,
+        actual_wording_state: row.actual_wording_state,
+        decision: row.decision,
+        reason: row.reason,
+        downgrade_text: row.downgrade_text,
+        freshness_days: row.freshness_days,
+        owning_bead: row.owning_bead,
+        verification_command: row.verification_command,
+        artifact_path,
+    };
+    let mock_status = if mock_contaminated {
+        "present_fail_closed"
+    } else {
+        "absent"
+    };
+    let local_fallback_status = if local_fallback_contaminated {
+        "present_fail_closed"
+    } else {
+        "absent"
+    };
+    let mut output = ClaimExplanationOutput {
+        schema_version: CLAIM_EXPLAINER_SCHEMA_VERSION.to_string(),
+        receipt_id: String::new(),
+        claim_id: claim_id.to_string(),
+        decision,
+        reason_codes,
+        matrix_path: matrix_path.display().to_string(),
+        matrix_schema_version,
+        claim: Some(claim),
+        artifact: Some(artifact),
+        bead,
+        mock_status: mock_status.to_string(),
+        local_fallback_status: local_fallback_status.to_string(),
+        replay_commands,
+        remediation,
+        source_line_refs: vec![source_ref],
+        mutation_policy: claim_explanation_mutation_policy(),
+        renderer_boundary: claim_explanation_renderer_boundary(),
+    };
+    output.receipt_id = derive_claim_explanation_receipt_id(&output);
+    output
+}
+
+fn claim_explanation_fail_closed(
+    claim_id: &str,
+    matrix_path: &Path,
+    matrix_schema_version: String,
+    reason_code: &str,
+    remediation: impl Into<String>,
+) -> ClaimExplanationOutput {
+    let mut output = ClaimExplanationOutput {
+        schema_version: CLAIM_EXPLAINER_SCHEMA_VERSION.to_string(),
+        receipt_id: String::new(),
+        claim_id: claim_id.to_string(),
+        decision: "fail_closed".to_string(),
+        reason_codes: vec![reason_code.to_string()],
+        matrix_path: matrix_path.display().to_string(),
+        matrix_schema_version,
+        claim: None,
+        artifact: None,
+        bead: None,
+        mock_status: "unknown_fail_closed".to_string(),
+        local_fallback_status: "unknown_fail_closed".to_string(),
+        replay_commands: Vec::new(),
+        remediation: vec![remediation.into()],
+        source_line_refs: Vec::new(),
+        mutation_policy: claim_explanation_mutation_policy(),
+        renderer_boundary: claim_explanation_renderer_boundary(),
+    };
+    output.receipt_id = derive_claim_explanation_receipt_id(&output);
+    output
+}
+
+fn explain_claim_artifact(
+    path: &str,
+    resolved_path: &Path,
+    allowed_state: &str,
+    expected_hash: Option<&str>,
+    stale_threshold_days: u64,
+    max_observed_freshness_days: u64,
+) -> ClaimExplanationArtifact {
+    let present = !path.is_empty() && resolved_path.exists();
+    let kind = if path.is_empty() {
+        "missing".to_string()
+    } else if resolved_path.is_dir() {
+        "directory".to_string()
+    } else if resolved_path.is_file() {
+        "file".to_string()
+    } else {
+        "missing".to_string()
+    };
+    let content_hash = compute_artifact_content_hash(resolved_path);
+    let expected_hash = expected_hash
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let expected_hash_normalized = expected_hash
+        .as_deref()
+        .and_then(normalize_claim_expected_hash);
+    let hash_status = match (&content_hash, &expected_hash, &expected_hash_normalized) {
+        (_, None, _) => "unasserted",
+        (_, Some(_), None) => "invalid_expected_hash",
+        (None, Some(_), Some(_)) => "unavailable",
+        (Some(actual), Some(_), Some(expected)) if actual == expected => "matched",
+        (Some(_), Some(_), Some(_)) => "mismatch",
+    };
+    let actual_freshness_days = if allowed_state == "observed" && present {
+        derive_artifact_freshness_days(resolved_path)
+    } else {
+        None
+    };
+    let freshness_status = if allowed_state != "observed" {
+        "not_required"
+    } else {
+        match actual_freshness_days {
+            Some(days) if days > stale_threshold_days => "stale",
+            Some(_) => "fresh",
+            None => "unknown",
+        }
+    };
+    ClaimExplanationArtifact {
+        path: if path.is_empty() {
+            String::new()
+        } else {
+            resolved_path.display().to_string()
+        },
+        present,
+        kind,
+        content_hash,
+        expected_hash,
+        hash_status: hash_status.to_string(),
+        required_for_supported: allowed_state == "observed",
+        actual_freshness_days,
+        freshness_status: freshness_status.to_string(),
+        stale_threshold_days,
+        max_observed_freshness_days,
+    }
+}
+
+fn resolve_claim_artifact_path(matrix_path: &Path, artifact_path: &str) -> PathBuf {
+    let path = Path::new(artifact_path);
+    if artifact_path.trim().is_empty() || path.is_absolute() {
+        return path.to_path_buf();
+    }
+    if let Some(matrix_relative) = matrix_path
+        .parent()
+        .map(|parent| parent.join(path))
+        .filter(|candidate| candidate.exists())
+    {
+        return matrix_relative;
+    }
+    if let Some(repo_relative) = matrix_path
+        .parent()
+        .and_then(Path::parent)
+        .map(|parent| parent.join(path))
+        .filter(|candidate| candidate.exists())
+    {
+        return repo_relative;
+    }
+    if path.exists() {
+        return path.to_path_buf();
+    }
+    path.to_path_buf()
+}
+
+fn claim_row_missing_required_fields(row: &ClaimMatrixRow) -> Vec<&'static str> {
+    let mut missing = Vec::new();
+    if row.claim_id.trim().is_empty() {
+        missing.push("claim_id");
+    }
+    if row.claim_scope.trim().is_empty() {
+        missing.push("claim_scope");
+    }
+    if row.claim_text.trim().is_empty() {
+        missing.push("claim_text");
+    }
+    if row.source_path.trim().is_empty() {
+        missing.push("source_path");
+    }
+    if row.source_span.is_none() {
+        missing.push("source_span");
+    } else if row
+        .source_span
+        .as_ref()
+        .and_then(|span| span.must_contain.as_deref())
+        .map_or(true, |must_contain| must_contain.trim().is_empty())
+    {
+        missing.push("source_span.must_contain");
+    }
+    if row.allowed_state.trim().is_empty() {
+        missing.push("allowed_state");
+    }
+    if row.actual_wording_state.trim().is_empty() {
+        missing.push("actual_wording_state");
+    }
+    if row.decision.trim().is_empty() {
+        missing.push("decision");
+    }
+    if row.reason.trim().is_empty() {
+        missing.push("reason");
+    }
+    if row.owning_bead.trim().is_empty() {
+        missing.push("owning_bead");
+    }
+    if row.allowed_state == "observed" {
+        if row
+            .artifact_path
+            .as_deref()
+            .map_or(true, |path| path.trim().is_empty())
+        {
+            missing.push("artifact_path");
+        }
+        if row.verification_command.trim().is_empty() {
+            missing.push("verification_command");
+        }
+        if row.freshness_days.is_none() {
+            missing.push("freshness_days");
+        }
+    } else if row
+        .downgrade_text
+        .as_deref()
+        .map_or(true, |text| text.trim().is_empty())
+    {
+        missing.push("downgrade_text");
+    }
+    missing
+}
+
+fn compute_artifact_content_hash(path: &Path) -> Option<String> {
+    if path.is_file() {
+        return fs::read(path)
+            .ok()
+            .map(|bytes| ContentHash::compute(&bytes).to_hex());
+    }
+    if !path.is_dir() {
+        return None;
+    }
+
+    let mut files = Vec::new();
+    collect_artifact_files(path, &mut files).ok()?;
+    files.sort();
+    let mut preimage = Vec::new();
+    append_claim_hash_field(
+        &mut preimage,
+        b"franken-engine.claim-artifact-directory-hash.v1",
+    );
+    for file in files {
+        let relative = file.strip_prefix(path).ok()?;
+        let bytes = fs::read(&file).ok()?;
+        append_claim_hash_field(&mut preimage, relative.to_string_lossy().as_bytes());
+        append_claim_hash_field(
+            &mut preimage,
+            ContentHash::compute(&bytes).to_hex().as_bytes(),
+        );
+    }
+    Some(ContentHash::compute(&preimage).to_hex())
+}
+
+fn append_claim_hash_field(preimage: &mut Vec<u8>, bytes: &[u8]) {
+    let length = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    preimage.extend_from_slice(&length.to_be_bytes());
+    preimage.extend_from_slice(bytes);
+}
+
+fn collect_artifact_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    for entry in
+        fs::read_dir(dir).map_err(|error| format!("read dir `{}`: {error}", dir.display()))?
+    {
+        let entry =
+            entry.map_err(|error| format!("read dir entry `{}`: {error}", dir.display()))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("read file type `{}`: {error}", path.display()))?;
+        if file_type.is_dir() {
+            collect_artifact_files(&path, files)?;
+        } else if file_type.is_file() {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct ClaimSourceValidation {
+    status: String,
+    reason_code: Option<String>,
+    remediation: Option<String>,
+}
+
+impl ClaimSourceValidation {
+    fn ok(status: impl Into<String>) -> Self {
+        Self {
+            status: status.into(),
+            reason_code: None,
+            remediation: None,
+        }
+    }
+
+    fn fail(
+        status: impl Into<String>,
+        reason_code: impl Into<String>,
+        remediation: impl Into<String>,
+    ) -> Self {
+        Self {
+            status: status.into(),
+            reason_code: Some(reason_code.into()),
+            remediation: Some(remediation.into()),
+        }
+    }
+}
+
+fn validate_claim_source_ref(matrix_path: &Path, row: &ClaimMatrixRow) -> ClaimSourceValidation {
+    let Some(span) = row.source_span.as_ref() else {
+        return ClaimSourceValidation::ok("missing_required_field");
+    };
+    if row.source_path.trim().is_empty() {
+        return ClaimSourceValidation::ok("missing_required_field");
+    }
+    let Some(must_contain) = span
+        .must_contain
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return ClaimSourceValidation::ok("missing_required_field");
+    };
+
+    if span.start_line == 0 || span.end_line < span.start_line {
+        return ClaimSourceValidation::fail(
+            "invalid_span",
+            "invalid_source_span",
+            "Use one-based source_span line numbers with start_line <= end_line.",
+        );
+    }
+
+    let resolved_path = resolve_claim_source_path(matrix_path, row.source_path.as_str());
+    if !resolved_path.is_file() {
+        return ClaimSourceValidation::fail(
+            "missing_source",
+            "source_path_missing",
+            format!(
+                "Restore `{}` or update the matrix source_path before treating this claim as supported.",
+                row.source_path
+            ),
+        );
+    }
+
+    let Ok(contents) = fs::read_to_string(&resolved_path) else {
+        return ClaimSourceValidation::fail(
+            "unreadable_source",
+            "source_path_unreadable",
+            format!(
+                "Make `{}` readable or update the matrix source_path before explaining this claim.",
+                resolved_path.display()
+            ),
+        );
+    };
+    let span_text = select_claim_source_span_text(&contents, span.start_line, span.end_line);
+    if !span_text.contains(must_contain) {
+        return ClaimSourceValidation::fail(
+            "span_mismatch",
+            "source_span_mismatch",
+            "Update the matrix source_span/must_contain or downgrade the claim until the source text matches.",
+        );
+    }
+
+    ClaimSourceValidation::ok("matched")
+}
+
+fn resolve_claim_source_path(matrix_path: &Path, source_path: &str) -> PathBuf {
+    let path = Path::new(source_path);
+    if source_path.trim().is_empty() || path.is_absolute() {
+        return path.to_path_buf();
+    }
+    if let Some(matrix_relative) = matrix_path
+        .parent()
+        .map(|parent| parent.join(path))
+        .filter(|candidate| candidate.exists())
+    {
+        return matrix_relative;
+    }
+    if let Some(repo_relative) = matrix_path
+        .parent()
+        .and_then(Path::parent)
+        .map(|parent| parent.join(path))
+        .filter(|candidate| candidate.exists())
+    {
+        return repo_relative;
+    }
+    if path.exists() {
+        return path.to_path_buf();
+    }
+    path.to_path_buf()
+}
+
+fn select_claim_source_span_text(contents: &str, start_line: u64, end_line: u64) -> String {
+    contents
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let line_number = u64::try_from(index).ok()?.saturating_add(1);
+            if (start_line..=end_line).contains(&line_number) {
+                Some(line)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn normalize_claim_expected_hash(value: &str) -> Option<String> {
+    let normalized = value
+        .trim()
+        .strip_prefix("sha256:")
+        .or_else(|| value.trim().strip_prefix("content:"))
+        .unwrap_or_else(|| value.trim())
+        .to_ascii_lowercase();
+    if normalized.len() == 64 && normalized.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Some(normalized)
+    } else {
+        None
+    }
+}
+
+fn derive_artifact_freshness_days(path: &Path) -> Option<u64> {
+    if path.is_file() {
+        return fs::metadata(path)
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(freshness_days_since);
+    }
+
+    if path.is_dir() {
+        let mut manifests = Vec::new();
+        collect_artifact_manifest_candidates(path, &mut manifests).ok()?;
+        manifests.sort();
+        for manifest in manifests {
+            let Ok(contents) = fs::read_to_string(&manifest) else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents) else {
+                continue;
+            };
+            if let Some(days) = freshness_days_from_manifest(&value) {
+                return Some(days);
+            }
+        }
+    }
+
+    None
+}
+
+fn collect_artifact_manifest_candidates(
+    dir: &Path,
+    manifests: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    for entry in
+        fs::read_dir(dir).map_err(|error| format!("read dir `{}`: {error}", dir.display()))?
+    {
+        let entry =
+            entry.map_err(|error| format!("read dir entry `{}`: {error}", dir.display()))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("read file type `{}`: {error}", path.display()))?;
+        if file_type.is_dir() {
+            collect_artifact_manifest_candidates(&path, manifests)?;
+        } else if file_type.is_file()
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name == "manifest.json" || name.ends_with("_manifest.json"))
+        {
+            manifests.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn freshness_days_from_manifest(value: &serde_json::Value) -> Option<u64> {
+    let generated_utc = value
+        .pointer("/freshness/generated_utc")
+        .or_else(|| value.get("generated_utc"))
+        .or_else(|| value.get("generated_at_utc"))
+        .and_then(serde_json::Value::as_str)?;
+    let generated_epoch = parse_claim_artifact_timestamp_epoch(generated_utc)?;
+    let now_epoch = Utc::now().timestamp();
+    if now_epoch <= generated_epoch {
+        return Some(0);
+    }
+    Some(((now_epoch - generated_epoch) as u64) / 86_400)
+}
+
+fn parse_claim_artifact_timestamp_epoch(value: &str) -> Option<i64> {
+    if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(value) {
+        return Some(parsed.timestamp());
+    }
+    NaiveDateTime::parse_from_str(value, "%Y%m%dT%H%M%SZ")
+        .ok()
+        .map(|parsed| parsed.and_utc().timestamp())
+}
+
+fn freshness_days_since(time: SystemTime) -> Option<u64> {
+    SystemTime::now()
+        .duration_since(time)
+        .ok()
+        .map(|duration| duration.as_secs() / 86_400)
+}
+
+fn claim_artifact_has_reproducibility_bundle(path: &Path) -> bool {
+    if path.is_file() {
+        return path
+            .parent()
+            .is_some_and(|parent| parent.join("repro.lock").is_file());
+    }
+    if path.is_dir() {
+        return directory_contains_repro_lock(path, 0, 4);
+    }
+    false
+}
+
+fn directory_contains_repro_lock(dir: &Path, depth: usize, max_depth: usize) -> bool {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let entry_depth = depth.saturating_add(1);
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == "repro.lock")
+            && path.is_file()
+            && entry_depth <= max_depth
+        {
+            return true;
+        }
+        if entry_depth < max_depth
+            && path.is_dir()
+            && directory_contains_repro_lock(&path, entry_depth, max_depth)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn load_bead_status(
+    beads_jsonl: Option<&Path>,
+    bead_id: &str,
+) -> Result<Option<ClaimExplanationBead>, String> {
+    let Some(path) = beads_jsonl else {
+        return Ok(None);
+    };
+    let Ok(contents) = fs::read_to_string(path) else {
+        return Ok(Some(ClaimExplanationBead {
+            bead_id: bead_id.to_string(),
+            status: "unavailable".to_string(),
+            assignee: None,
+            source: path.display().to_string(),
+            found: false,
+        }));
+    };
+    for line in contents.lines() {
+        if !line.contains(bead_id) {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            return Ok(Some(ClaimExplanationBead {
+                bead_id: bead_id.to_string(),
+                status: "unreadable".to_string(),
+                assignee: None,
+                source: path.display().to_string(),
+                found: false,
+            }));
+        };
+        if value
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|id| id == bead_id)
+        {
+            return Ok(Some(ClaimExplanationBead {
+                bead_id: bead_id.to_string(),
+                status: value
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string(),
+                assignee: value
+                    .get("assignee")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+                source: path.display().to_string(),
+                found: true,
+            }));
+        }
+    }
+    Ok(Some(ClaimExplanationBead {
+        bead_id: bead_id.to_string(),
+        status: "not_found".to_string(),
+        assignee: None,
+        source: path.display().to_string(),
+        found: false,
+    }))
+}
+
+fn claim_row_contains_mock_contamination(row: &ClaimMatrixRow) -> bool {
+    claim_row_text_fields(row)
+        .iter()
+        .any(|value| contains_claim_mock_marker(value))
+}
+
+fn claim_row_contains_local_fallback(row: &ClaimMatrixRow) -> bool {
+    claim_row_text_fields(row)
+        .iter()
+        .any(|value| contains_claim_local_fallback_marker(value))
+}
+
+fn claim_row_text_fields(row: &ClaimMatrixRow) -> [&str; 5] {
+    [
+        row.artifact_path.as_deref().unwrap_or_default(),
+        row.claim_text.as_str(),
+        row.decision.as_str(),
+        row.reason.as_str(),
+        row.downgrade_text.as_deref().unwrap_or_default(),
+    ]
+}
+
+fn claim_artifact_contains_mock_contamination(path: &Path) -> bool {
+    claim_artifact_contains_marker(path, contains_claim_mock_marker)
+}
+
+fn claim_artifact_contains_local_fallback(path: &Path) -> bool {
+    claim_artifact_contains_marker(path, contains_claim_local_fallback_marker)
+}
+
+fn claim_artifact_contains_marker(path: &Path, contains_marker: fn(&str) -> bool) -> bool {
+    if path.is_file() {
+        return artifact_file_contains_marker(path, contains_marker);
+    }
+    if !path.is_dir() {
+        return false;
+    }
+
+    let mut files = Vec::new();
+    if collect_artifact_files(path, &mut files).is_err() {
+        return false;
+    }
+    files
+        .iter()
+        .any(|file| artifact_file_contains_marker(file, contains_marker))
+}
+
+fn artifact_file_contains_marker(path: &Path, contains_marker: fn(&str) -> bool) -> bool {
+    let Ok(bytes) = fs::read(path) else {
+        return false;
+    };
+    let contents = String::from_utf8_lossy(&bytes);
+    contains_marker(contents.as_ref())
+}
+
+fn contains_claim_mock_marker(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    value.contains("mockcertificate")
+        || value.contains("mock_certificate")
+        || value.contains("mock-certificate")
+        || value.contains("hot_paths_simulation")
+}
+
+fn contains_claim_local_fallback_marker(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    value.contains("localfallback")
+        || value.contains("local_fallback_contaminated")
+        || value.contains("local_fallback_observed")
+        || value.contains("local-fallback-contaminated")
+        || value.contains("local fallback was used")
+        || value.contains("local fallback observed")
+        || value.contains("falling back to local")
+        || value.contains("fallback to local")
+        || value.contains("ran locally instead of rch")
+        || value.contains("running locally")
+}
+
+fn claim_explanation_decision(allowed_state: &str, reason_codes: &[String]) -> String {
+    if reason_codes.iter().any(|code| {
+        matches!(
+            code.as_str(),
+            "absent_artifact"
+                | "artifact_hash_mismatch"
+                | "contradictory_bead_status"
+                | "duplicate_claim_row"
+                | "invalid_matrix_schema"
+                | "invalid_expected_hash"
+                | "invalid_wording_state"
+                | "local_fallback_contaminated"
+                | "missing_reproducibility_bundle"
+                | "missing_claim_row"
+                | "missing_required_field"
+                | "mock_contaminated"
+                | "invalid_source_span"
+                | "stale_artifact"
+                | "stale_tracker_state"
+                | "source_path_missing"
+                | "source_path_unreadable"
+                | "source_span_mismatch"
+                | "wording_stronger_than_allowed"
+        )
+    }) {
+        return "fail_closed".to_string();
+    }
+    match allowed_state {
+        "observed" => "supported".to_string(),
+        "target" | "hypothesis" => "not_promotable".to_string(),
+        _ => "unsupported".to_string(),
+    }
+}
+
+fn push_reason(
+    reason_codes: &mut Vec<String>,
+    remediation: &mut Vec<String>,
+    reason: &str,
+    fix: &str,
+) {
+    if !reason_codes.iter().any(|existing| existing == reason) {
+        reason_codes.push(reason.to_string());
+        remediation.push(format!("{reason}: {fix}"));
+    }
+}
+
+fn state_rank(state: &str) -> u8 {
+    match state {
+        "hypothesis" => 0,
+        "target" => 1,
+        "observed" => 2,
+        _ => 3,
+    }
+}
+
+fn claim_state_is_known(state: &str) -> bool {
+    matches!(state, "hypothesis" | "target" | "observed")
+}
+
+fn claim_explanation_mutation_policy() -> ClaimExplanationMutationPolicy {
+    ClaimExplanationMutationPolicy {
+        mutates_br: false,
+        mutates_agent_mail: false,
+        mutates_file_reservations: false,
+        mutates_remote_workers: false,
+        mutates_evidence_bundles: false,
+        mutates_claim_matrix: false,
+        mutates_git: false,
+        runs_cargo: false,
+        runs_rch: false,
+    }
+}
+
+fn claim_explanation_renderer_boundary() -> ClaimExplanationRendererBoundary {
+    ClaimExplanationRendererBoundary {
+        future_rich_renderer_provider: "/dp/frankentui".to_string(),
+        local_rich_renderer_shipped: false,
+    }
+}
+
+fn derive_claim_explanation_receipt_id(output: &ClaimExplanationOutput) -> String {
+    let mut value = serde_json::to_value(output).expect("claim explanation serializes");
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "receipt_id".to_string(),
+            serde_json::Value::String(String::new()),
+        );
+    }
+    let encoded = serde_json::to_vec(&value).expect("claim explanation JSON serializes");
+    format!("claim-explain-{}", ContentHash::compute(&encoded).to_hex())
 }
 
 fn format_run_error(input: &Path, error: &OrchestratorError) -> String {
@@ -7784,9 +9305,12 @@ fn usage() -> String {
         "  frankenctl diff-behavior <before-pkg|entry.js> <after-pkg|entry.js> [--format human|json] [--out <bundle-dir>]",
         "      # supply-chain behavioral delta over package authority/IFC intake reports",
         "  frankenctl run --input <source.js> --extension-id <id> [--goal script|module] [--out <report.json>]",
+        "      [--data-contract <contract.json>] [--purpose <purpose>]",
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
         "  frankenctl explain <bundle.json> [--format summary|json] [--out <path>] [--emit-bundle <dir>]",
         "      # --emit-bundle: explain.md + evidence_graph/replay/counterfactuals.json + commands.txt + repro.lock",
+        "  frankenctl claims explain <FE-CLAIM-NNN> [--format human|json] [--out <path>]",
+        "      # advisory claim-to-proof matrix explainer; never promotes claims or mutates evidence",
         "  frankenctl doctor (--input <runtime_input.json> | --artifact-dir <artifacts/<gate>/<ts>>)",
         "      [--summary] [--out-dir <path>]",
         "      [--workload-id <id>] [--package-name <name>] [--target-platform <value>]...",
@@ -7843,6 +9367,9 @@ fn command_label(command: &CommandSpec) -> &'static str {
         CommandSpec::DiffBehavior(_) => "diff-behavior",
         CommandSpec::Run(_) => "run",
         CommandSpec::Explain(_) => "explain",
+        CommandSpec::Claims(ClaimsArgs {
+            mode: ClaimsMode::Explain(_),
+        }) => "claims-explain",
         CommandSpec::Doctor(_) => "doctor",
         CommandSpec::Verify(_) => "verify",
         CommandSpec::Benchmark(_) => "benchmark",
@@ -7888,6 +9415,9 @@ fn command_remediation(command: &str) -> &'static str {
         }
         "run" => "Verify extension source path and `--extension-id`, then rerun `frankenctl run`.",
         "explain" => "Verify the explain bundle path, then rerun `frankenctl explain`.",
+        "claims-explain" => {
+            "Verify the claim id, matrix path, artifact paths, and optional Beads JSONL snapshot, then rerun `frankenctl claims explain`."
+        }
         "doctor" => {
             "Verify runtime diagnostics input, optional signal paths, and then rerun `frankenctl doctor`."
         }
@@ -7954,6 +9484,7 @@ fn run_usage() -> String {
     [
         "run usage:",
         "  frankenctl run --input <source.js> --extension-id <id> [--goal script|module] [--out <report.json>]",
+        "      [--data-contract <contract.json>] [--purpose <purpose>]",
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
     ]
     .join("\n")
@@ -7975,6 +9506,33 @@ fn explain_usage() -> String {
         "    repro.lock          deterministic content-address over every indexed artifact,",
         "    explain.json        a copy of the index itself.",
         "  Every view is a pure projection over the index — never a second truth model.",
+    ]
+    .join("\n")
+}
+
+fn claims_usage() -> String {
+    [
+        "claims usage:",
+        "  frankenctl claims explain <FE-CLAIM-NNN> [--matrix <matrix.json>]",
+        "      [--beads-jsonl <issues.jsonl>|--no-beads] [--format human|json] [--out <path>]",
+        "",
+        "  The claims surface is an advisory proof-reader over existing claim matrix",
+        "  and artifact state. It does not promote claim wording, run replay, mutate",
+        "  Beads, or change evidence bundles.",
+    ]
+    .join("\n")
+}
+
+fn claims_explain_usage() -> String {
+    [
+        "claims explain usage:",
+        "  frankenctl claims explain <FE-CLAIM-NNN> [--matrix docs/claim_to_proof_matrix_v1.json]",
+        "      [--beads-jsonl .beads/issues.jsonl|--no-beads]",
+        "      [--format human|json] [--out <path>]",
+        "",
+        "  Decisions: supported, not_promotable, degraded, unsupported, fail_closed.",
+        "  Observed claims fail closed when required artifacts are absent, mock-",
+        "  contaminated, or contradicted by owning Beads state.",
     ]
     .join("\n")
 }
@@ -8422,6 +9980,8 @@ mod tests {
                 assert_eq!(spec.out, Some(PathBuf::from("run.json")));
                 assert!(!spec.explain);
                 assert_eq!(spec.explain_out, None);
+                assert_eq!(spec.data_contract, None);
+                assert_eq!(spec.data_contract_purpose, DEFAULT_DATA_CONTRACT_PURPOSE);
             }
             other => panic!("expected run command, got {other:?}"),
         }
@@ -8458,6 +10018,723 @@ mod tests {
     }
 
     #[test]
+    fn parse_run_command_accepts_data_contract() {
+        let args = vec![
+            "run".to_string(),
+            "--input".to_string(),
+            "agent.js".to_string(),
+            "--extension-id".to_string(),
+            "ext-e8".to_string(),
+            "--data-contract".to_string(),
+            "contract.json".to_string(),
+            "--purpose".to_string(),
+            "agent_sandbox".to_string(),
+        ];
+        let parsed = parse_command(&args).expect("run with data contract should parse");
+        match parsed {
+            CommandSpec::Run(spec) => {
+                assert_eq!(spec.data_contract, Some(PathBuf::from("contract.json")));
+                assert_eq!(spec.data_contract_purpose, "agent_sandbox");
+            }
+            other => panic!("expected run command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_claims_explain_command_accepts_defaults_and_json_format() {
+        let args = vec![
+            "claims".to_string(),
+            "explain".to_string(),
+            "FE-CLAIM-001".to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+            "--out".to_string(),
+            "claim.json".to_string(),
+        ];
+        let parsed = parse_command(&args).expect("claims explain command should parse");
+        match parsed {
+            CommandSpec::Claims(ClaimsArgs {
+                mode: ClaimsMode::Explain(spec),
+            }) => {
+                assert_eq!(spec.claim_id, "FE-CLAIM-001");
+                assert_eq!(spec.matrix, PathBuf::from(DEFAULT_CLAIM_MATRIX_PATH));
+                assert_eq!(
+                    spec.beads_jsonl,
+                    Some(PathBuf::from(DEFAULT_BEADS_JSONL_PATH))
+                );
+                assert_eq!(spec.format, CheckOutputFormat::Json);
+                assert_eq!(spec.out, Some(PathBuf::from("claim.json")));
+            }
+            other => panic!("expected claims explain command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn claim_explainer_supports_observed_fixture() {
+        let dir = frankenctl_test_temp_dir("claim-supported");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let artifact_path = dir.join("artifact.json");
+        fs::write(&artifact_path, b"{\"ok\":true}\n").expect("write artifact");
+        write_repro_lock_next_to_file(&artifact_path);
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-TEST",
+                "observed",
+                "observed",
+                artifact_path.display().to_string(),
+                "bd-test"
+            )]),
+        );
+        let beads_path = dir.join("issues.jsonl");
+        fs::write(
+            &beads_path,
+            serde_json::json!({"id":"bd-test","status":"closed","assignee":"EmeraldPine"})
+                .to_string(),
+        )
+        .expect("write beads fixture");
+
+        let output = build_claim_explanation("FE-CLAIM-TEST", &matrix_path, Some(&beads_path))
+            .expect("claim should explain");
+        assert_eq!(output.decision, "supported");
+        assert_eq!(output.exit_code(), 0);
+        assert!(output.reason_codes.is_empty());
+        assert_eq!(output.mock_status, "absent");
+        assert!(output.artifact.as_ref().expect("artifact").present);
+        assert_eq!(output.bead.as_ref().expect("bead").status, "closed");
+        assert!(output.receipt_id.starts_with("claim-explain-"));
+    }
+
+    #[test]
+    fn claim_explainer_missing_requested_bead_snapshot_fails_closed() {
+        let dir = frankenctl_test_temp_dir("claim-missing-bead-snapshot");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let artifact_path = dir.join("artifact.json");
+        fs::write(&artifact_path, b"{\"ok\":true}\n").expect("write artifact");
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-BEAD-MISSING",
+                "observed",
+                "observed",
+                artifact_path.display().to_string(),
+                "bd-missing"
+            )]),
+        );
+        let missing_beads_path = dir.join("missing-issues.jsonl");
+
+        let output = build_claim_explanation(
+            "FE-CLAIM-BEAD-MISSING",
+            &matrix_path,
+            Some(&missing_beads_path),
+        )
+        .expect("missing Beads snapshot should render fail-closed receipt");
+
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert!(
+            output
+                .reason_codes
+                .contains(&"stale_tracker_state".to_string())
+        );
+        assert_eq!(output.bead.as_ref().expect("bead").found, false);
+    }
+
+    #[test]
+    fn claim_explainer_corrupt_requested_bead_snapshot_fails_closed() {
+        let dir = frankenctl_test_temp_dir("claim-corrupt-bead-snapshot");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let artifact_path = dir.join("artifact.json");
+        fs::write(&artifact_path, b"{\"ok\":true}\n").expect("write artifact");
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-BEAD-CORRUPT",
+                "observed",
+                "observed",
+                artifact_path.display().to_string(),
+                "bd-corrupt"
+            )]),
+        );
+        let beads_path = dir.join("issues.jsonl");
+        fs::write(&beads_path, "{not-json-for bd-corrupt\n").expect("write corrupt beads fixture");
+
+        let output =
+            build_claim_explanation("FE-CLAIM-BEAD-CORRUPT", &matrix_path, Some(&beads_path))
+                .expect("corrupt Beads snapshot should render fail-closed receipt");
+
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert!(
+            output
+                .reason_codes
+                .contains(&"stale_tracker_state".to_string())
+        );
+        let bead = output.bead.as_ref().expect("bead");
+        assert!(!bead.found);
+        assert_eq!(bead.status, "unreadable");
+    }
+
+    #[test]
+    fn claim_explainer_keeps_target_claim_not_promotable() {
+        let dir = frankenctl_test_temp_dir("claim-target");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-TARGET",
+                "target",
+                "target",
+                "missing-target-artifact.json",
+                "bd-target"
+            )]),
+        );
+
+        let output = build_claim_explanation("FE-CLAIM-TARGET", &matrix_path, None)
+            .expect("target claim should explain");
+        assert_eq!(output.decision, "not_promotable");
+        assert_eq!(output.exit_code(), 1);
+        assert!(
+            output
+                .reason_codes
+                .contains(&"claim_not_observed".to_string())
+        );
+        assert!(
+            !output
+                .artifact
+                .as_ref()
+                .expect("artifact")
+                .required_for_supported
+        );
+    }
+
+    #[test]
+    fn claim_explainer_resolves_matrix_local_relative_artifact_path() {
+        let dir = frankenctl_test_temp_dir("claim-matrix-local-artifact");
+        let bundle_dir = dir.join("bundle");
+        fs::create_dir_all(&bundle_dir).expect("create fixture dir");
+        fs::write(bundle_dir.join("artifact.json"), b"{\"ok\":true}\n").expect("write artifact");
+        fs::write(bundle_dir.join("repro.lock"), b"fixture repro lock\n")
+            .expect("write repro lock");
+        let matrix_path = bundle_dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-RELATIVE",
+                "observed",
+                "observed",
+                "artifact.json",
+                "bd-relative"
+            )]),
+        );
+
+        let output = build_claim_explanation("FE-CLAIM-RELATIVE", &matrix_path, None)
+            .expect("matrix-local relative artifact should explain");
+        assert_eq!(output.decision, "supported");
+        let artifact = output.artifact.as_ref().expect("artifact");
+        assert!(artifact.present);
+        assert_eq!(artifact.kind, "file");
+        assert_eq!(
+            artifact.path,
+            bundle_dir.join("artifact.json").display().to_string()
+        );
+    }
+
+    #[test]
+    fn claim_explainer_prefers_matrix_local_artifact_over_cwd_match() {
+        let dir = frankenctl_test_temp_dir("claim-matrix-local-precedence");
+        let bundle_dir = dir.join("bundle");
+        fs::create_dir_all(&bundle_dir).expect("create fixture dir");
+        fs::write(bundle_dir.join("Cargo.toml"), b"matrix-local artifact\n")
+            .expect("write artifact matching repo-root file name");
+
+        let resolved = resolve_claim_artifact_path(&bundle_dir.join("matrix.json"), "Cargo.toml");
+
+        assert_eq!(resolved, bundle_dir.join("Cargo.toml"));
+    }
+
+    #[test]
+    fn claim_explainer_resolves_repo_relative_artifact_from_absolute_matrix_path() {
+        let dir = frankenctl_test_temp_dir("claim-repo-relative-artifact");
+        let docs_dir = dir.join("docs");
+        let artifact_path = dir
+            .join("artifacts")
+            .join("claim-explainer-repo-relative")
+            .join("artifact.json");
+        fs::create_dir_all(&docs_dir).expect("create docs fixture dir");
+        fs::create_dir_all(artifact_path.parent().expect("artifact parent"))
+            .expect("create artifact fixture dir");
+        fs::write(&artifact_path, b"{\"ok\":true}\n").expect("write artifact fixture");
+
+        let resolved = resolve_claim_artifact_path(
+            &docs_dir.join("matrix.json"),
+            "artifacts/claim-explainer-repo-relative/artifact.json",
+        );
+
+        assert_eq!(resolved, artifact_path);
+    }
+
+    #[test]
+    fn claim_explainer_invalid_wording_state_fails_closed() {
+        let dir = frankenctl_test_temp_dir("claim-invalid-state");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let artifact_path = dir.join("artifact.json");
+        fs::write(&artifact_path, b"{\"ok\":true}\n").expect("write artifact");
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-INVALID-STATE",
+                "verified",
+                "observed",
+                artifact_path.display().to_string(),
+                "bd-invalid-state"
+            )]),
+        );
+
+        let output = build_claim_explanation("FE-CLAIM-INVALID-STATE", &matrix_path, None)
+            .expect("invalid state should render fail-closed receipt");
+
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert!(
+            output
+                .reason_codes
+                .contains(&"invalid_wording_state".to_string())
+        );
+    }
+
+    #[test]
+    fn claim_explainer_missing_claim_fails_closed() {
+        let dir = frankenctl_test_temp_dir("claim-missing");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(&matrix_path, serde_json::json!([]));
+
+        let output = build_claim_explanation("FE-CLAIM-MISSING", &matrix_path, None)
+            .expect("missing claim should render fail-closed receipt");
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert_eq!(output.reason_codes, vec!["missing_claim_row"]);
+        assert!(output.claim.is_none());
+    }
+
+    #[test]
+    fn claim_explainer_duplicate_claim_rows_fail_closed() {
+        let dir = frankenctl_test_temp_dir("claim-duplicate-row");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let artifact_path = dir.join("artifact.json");
+        fs::write(&artifact_path, b"{\"ok\":true}\n").expect("write artifact");
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([
+                claim_row_fixture(
+                    "FE-CLAIM-DUPLICATE",
+                    "observed",
+                    "observed",
+                    artifact_path.display().to_string(),
+                    "bd-duplicate-a"
+                ),
+                claim_row_fixture(
+                    "FE-CLAIM-DUPLICATE",
+                    "target",
+                    "target",
+                    "missing-target-artifact.json",
+                    "bd-duplicate-b"
+                )
+            ]),
+        );
+
+        let output = build_claim_explanation("FE-CLAIM-DUPLICATE", &matrix_path, None)
+            .expect("duplicate claim rows should render fail-closed receipt");
+
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert_eq!(output.reason_codes, vec!["duplicate_claim_row"]);
+        assert!(output.claim.is_none());
+    }
+
+    #[test]
+    fn claim_explainer_missing_matrix_fails_closed_with_receipt() {
+        let dir = frankenctl_test_temp_dir("claim-missing-matrix");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let matrix_path = dir.join("missing-matrix.json");
+
+        let output = build_claim_explanation("FE-CLAIM-MATRIX-MISSING", &matrix_path, None)
+            .expect("missing matrix should render fail-closed receipt");
+
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert_eq!(output.reason_codes, vec!["unreadable_matrix"]);
+        assert_eq!(output.matrix_schema_version, "unavailable");
+        assert!(output.claim.is_none());
+    }
+
+    #[test]
+    fn claim_explainer_invalid_matrix_schema_fails_closed_with_receipt() {
+        let dir = frankenctl_test_temp_dir("claim-invalid-matrix-schema");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let matrix_path = dir.join("matrix.json");
+        fs::write(
+            &matrix_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_version": "franken-engine.claim-to-proof-matrix.v0",
+                "claims": []
+            }))
+            .expect("matrix JSON serializes"),
+        )
+        .expect("write matrix fixture");
+
+        let output = build_claim_explanation("FE-CLAIM-SCHEMA", &matrix_path, None)
+            .expect("invalid schema should render fail-closed receipt");
+
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert_eq!(output.reason_codes, vec!["invalid_matrix_schema"]);
+        assert_eq!(
+            output.matrix_schema_version,
+            "franken-engine.claim-to-proof-matrix.v0"
+        );
+    }
+
+    #[test]
+    fn claim_explainer_source_span_mismatch_fails_closed() {
+        let dir = frankenctl_test_temp_dir("claim-source-span-mismatch");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let artifact_path = dir.join("artifact.json");
+        fs::write(&artifact_path, b"{\"ok\":true}\n").expect("write artifact");
+        let source_path = dir.join("source.md");
+        fs::write(&source_path, "Documented claim text changed.\n").expect("write source");
+        let mut row = claim_row_fixture(
+            "FE-CLAIM-SOURCE",
+            "observed",
+            "observed",
+            artifact_path.display().to_string(),
+            "bd-source",
+        );
+        row["source_path"] = serde_json::Value::String(source_path.display().to_string());
+        row["source_span"]["must_contain"] =
+            serde_json::Value::String("Original claim text".to_string());
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(&matrix_path, serde_json::json!([row]));
+
+        let output = build_claim_explanation("FE-CLAIM-SOURCE", &matrix_path, None)
+            .expect("stale source span should render fail-closed receipt");
+
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert!(
+            output
+                .reason_codes
+                .contains(&"source_span_mismatch".to_string())
+        );
+        assert_eq!(output.source_line_refs[0].status, "span_mismatch");
+    }
+
+    #[test]
+    fn claim_explainer_missing_observed_artifact_fails_closed() {
+        let dir = frankenctl_test_temp_dir("claim-absent-artifact");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-ABSENT",
+                "observed",
+                "observed",
+                dir.join("missing-artifact.json").display().to_string(),
+                "bd-absent"
+            )]),
+        );
+
+        let output = build_claim_explanation("FE-CLAIM-ABSENT", &matrix_path, None)
+            .expect("absent artifact should render fail-closed receipt");
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert!(output.reason_codes.contains(&"absent_artifact".to_string()));
+        assert!(!output.artifact.as_ref().expect("artifact").present);
+    }
+
+    #[test]
+    fn claim_explainer_missing_repro_lock_fails_closed() {
+        let dir = frankenctl_test_temp_dir("claim-missing-repro-lock");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let artifact_path = dir.join("artifact.json");
+        fs::write(&artifact_path, b"{\"ok\":true}\n").expect("write artifact");
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-NO-REPRO",
+                "observed",
+                "observed",
+                artifact_path.display().to_string(),
+                "bd-no-repro"
+            )]),
+        );
+
+        let output = build_claim_explanation("FE-CLAIM-NO-REPRO", &matrix_path, None)
+            .expect("missing repro lock should render fail-closed receipt");
+
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert!(
+            output
+                .reason_codes
+                .contains(&"missing_reproducibility_bundle".to_string())
+        );
+    }
+
+    #[test]
+    fn claim_explainer_stale_observed_artifact_fails_closed() {
+        let dir = frankenctl_test_temp_dir("claim-stale-artifact");
+        let artifact_dir = dir.join("artifact");
+        fs::create_dir_all(&artifact_dir).expect("create fixture dir");
+        fs::write(
+            artifact_dir.join("manifest.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_version": "franken-engine.proof-artifact-manifest.v1",
+                "freshness": {
+                    "generated_utc": "2026-01-01T00:00:00Z"
+                }
+            }))
+            .expect("manifest JSON serializes"),
+        )
+        .expect("write stale manifest");
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-STALE",
+                "observed",
+                "observed",
+                artifact_dir.display().to_string(),
+                "bd-stale"
+            )]),
+        );
+
+        let output = build_claim_explanation("FE-CLAIM-STALE", &matrix_path, None)
+            .expect("stale artifact should render fail-closed receipt");
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert!(output.reason_codes.contains(&"stale_artifact".to_string()));
+        assert_eq!(
+            output.artifact.as_ref().expect("artifact").freshness_status,
+            "stale"
+        );
+    }
+
+    #[test]
+    fn claim_explainer_hash_mismatch_fails_closed() {
+        let dir = frankenctl_test_temp_dir("claim-hash-mismatch");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let artifact_path = dir.join("artifact.json");
+        fs::write(&artifact_path, b"{\"ok\":true}\n").expect("write artifact");
+        let mut row = claim_row_fixture(
+            "FE-CLAIM-HASH",
+            "observed",
+            "observed",
+            artifact_path.display().to_string(),
+            "bd-hash",
+        );
+        row["expected_hash"] = serde_json::Value::String(format!("sha256:{}", "0".repeat(64)));
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(&matrix_path, serde_json::json!([row]));
+
+        let output = build_claim_explanation("FE-CLAIM-HASH", &matrix_path, None)
+            .expect("hash mismatch should render fail-closed receipt");
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert!(
+            output
+                .reason_codes
+                .contains(&"artifact_hash_mismatch".to_string())
+        );
+        assert_eq!(
+            output.artifact.as_ref().expect("artifact").hash_status,
+            "mismatch"
+        );
+    }
+
+    #[test]
+    fn claim_explainer_explicit_mock_marker_fails_closed_case_insensitive() {
+        let dir = frankenctl_test_temp_dir("claim-mock-marker");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let artifact_path = dir.join("artifact.json");
+        fs::write(&artifact_path, b"{\"ok\":true}\n").expect("write artifact");
+        let mut row = claim_row_fixture(
+            "FE-CLAIM-MOCK",
+            "observed",
+            "observed",
+            artifact_path.display().to_string(),
+            "bd-mock",
+        );
+        row["claim_text"] =
+            serde_json::Value::String("Fixture uses mock_certificate evidence.".to_string());
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(&matrix_path, serde_json::json!([row]));
+
+        let output = build_claim_explanation("FE-CLAIM-MOCK", &matrix_path, None)
+            .expect("mock marker should render fail-closed receipt");
+
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert!(
+            output
+                .reason_codes
+                .contains(&"mock_contaminated".to_string())
+        );
+        assert_eq!(output.mock_status, "present_fail_closed");
+    }
+
+    #[test]
+    fn claim_explainer_artifact_mock_marker_fails_closed_case_insensitive() {
+        let dir = frankenctl_test_temp_dir("claim-artifact-mock-marker");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let artifact_path = dir.join("artifact.json");
+        fs::write(&artifact_path, b"{\"producer\":\"MockCertificate\"}\n")
+            .expect("write mock artifact");
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-ARTIFACT-MOCK",
+                "observed",
+                "observed",
+                artifact_path.display().to_string(),
+                "bd-artifact-mock"
+            )]),
+        );
+
+        let output = build_claim_explanation("FE-CLAIM-ARTIFACT-MOCK", &matrix_path, None)
+            .expect("artifact mock marker should render fail-closed receipt");
+
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert!(
+            output
+                .reason_codes
+                .contains(&"mock_contaminated".to_string())
+        );
+        assert_eq!(output.mock_status, "present_fail_closed");
+    }
+
+    #[test]
+    fn claim_explainer_local_fallback_marker_fails_closed_case_insensitive() {
+        let dir = frankenctl_test_temp_dir("claim-local-fallback-marker");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let artifact_path = dir.join("artifact.json");
+        fs::write(
+            &artifact_path,
+            b"{\"transport\":\"local fallback was used\"}\n",
+        )
+        .expect("write local-fallback artifact");
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-LOCAL-FALLBACK",
+                "observed",
+                "observed",
+                artifact_path.display().to_string(),
+                "bd-local-fallback"
+            )]),
+        );
+
+        let output = build_claim_explanation("FE-CLAIM-LOCAL-FALLBACK", &matrix_path, None)
+            .expect("local-fallback marker should render fail-closed receipt");
+
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert!(
+            output
+                .reason_codes
+                .contains(&"local_fallback_contaminated".to_string())
+        );
+        assert_eq!(output.local_fallback_status, "present_fail_closed");
+    }
+
+    #[test]
+    fn claim_explainer_refused_local_fallback_marker_is_not_contamination() {
+        let dir = frankenctl_test_temp_dir("claim-local-fallback-refused");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let artifact_path = dir.join("artifact.json");
+        fs::write(
+            &artifact_path,
+            b"{\"transport\":\"Refusing local fallback\"}\n",
+        )
+        .expect("write local-fallback refusal artifact");
+        write_repro_lock_next_to_file(&artifact_path);
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-LOCAL-FALLBACK-REFUSED",
+                "observed",
+                "observed",
+                artifact_path.display().to_string(),
+                "bd-local-fallback-refused"
+            )]),
+        );
+
+        let output = build_claim_explanation("FE-CLAIM-LOCAL-FALLBACK-REFUSED", &matrix_path, None)
+            .expect("local-fallback refusal marker should explain");
+
+        assert_eq!(output.decision, "supported");
+        assert_eq!(output.exit_code(), 0);
+        assert!(
+            !output
+                .reason_codes
+                .contains(&"local_fallback_contaminated".to_string())
+        );
+        assert_eq!(output.local_fallback_status, "absent");
+    }
+
+    #[test]
+    fn claim_explainer_directory_hash_uses_length_prefixed_fields() {
+        let dir = frankenctl_test_temp_dir("claim-dir-hash");
+        let nested = dir.join("nested");
+        fs::create_dir_all(&nested).expect("create fixture dir");
+        fs::write(dir.join("a.json"), b"{\"a\":true}\n").expect("write first artifact");
+        fs::write(nested.join("b.json"), b"{\"b\":true}\n").expect("write second artifact");
+
+        let mut files = Vec::new();
+        collect_artifact_files(&dir, &mut files).expect("collect artifact files");
+        files.sort();
+
+        let mut expected_preimage = Vec::new();
+        append_claim_hash_field(
+            &mut expected_preimage,
+            b"franken-engine.claim-artifact-directory-hash.v1",
+        );
+        let mut legacy_preimage = Vec::new();
+        for file in files {
+            let relative = file.strip_prefix(&dir).expect("relative path");
+            let bytes = fs::read(&file).expect("read artifact file");
+            let digest = ContentHash::compute(&bytes).to_hex();
+            append_claim_hash_field(
+                &mut expected_preimage,
+                relative.to_string_lossy().as_bytes(),
+            );
+            append_claim_hash_field(&mut expected_preimage, digest.as_bytes());
+
+            legacy_preimage.extend_from_slice(relative.to_string_lossy().as_bytes());
+            legacy_preimage.push(0);
+            legacy_preimage.extend_from_slice(digest.as_bytes());
+            legacy_preimage.push(b'\n');
+        }
+
+        let actual = compute_artifact_content_hash(&dir).expect("directory hash");
+        assert_eq!(actual, ContentHash::compute(&expected_preimage).to_hex());
+        assert_ne!(actual, ContentHash::compute(&legacy_preimage).to_hex());
+    }
+
+    #[test]
     fn parse_differential_oracle_run_command() {
         let args = vec![
             "differential-oracle".to_string(),
@@ -8483,6 +10760,60 @@ mod tests {
             }
             other => panic!("expected differential-oracle command, got {other:?}"),
         }
+    }
+
+    fn frankenctl_test_temp_dir(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "frankenctl-{label}-{}-{}",
+            std::process::id(),
+            current_unix_ns()
+        ))
+    }
+
+    fn write_claim_matrix_fixture(path: &Path, claims: serde_json::Value) {
+        let matrix = serde_json::json!({
+            "schema_version": CLAIM_MATRIX_SCHEMA_VERSION,
+            "claims": claims,
+        });
+        fs::write(
+            path,
+            serde_json::to_vec_pretty(&matrix).expect("matrix JSON serializes"),
+        )
+        .expect("write matrix fixture");
+    }
+
+    fn write_repro_lock_next_to_file(path: &Path) {
+        let parent = path.parent().expect("artifact parent");
+        fs::write(parent.join("repro.lock"), b"fixture repro lock\n").expect("write repro lock");
+    }
+
+    fn claim_row_fixture(
+        claim_id: &str,
+        allowed_state: &str,
+        actual_wording_state: &str,
+        artifact_path: impl Into<String>,
+        owning_bead: &str,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "actual_wording_state": actual_wording_state,
+            "allowed_state": allowed_state,
+            "artifact_path": artifact_path.into(),
+            "claim_id": claim_id,
+            "claim_scope": "evidence",
+            "claim_text": "Fixture claim text.",
+            "decision": "fixture decision",
+            "downgrade_text": "Fixture downgrade text.",
+            "freshness_days": 0,
+            "owning_bead": owning_bead,
+            "reason": "Fixture reason.",
+            "source_path": concat!(env!("CARGO_MANIFEST_DIR"), "/src/bin/frankenctl.rs"),
+            "source_span": {
+                "start_line": 1,
+                "end_line": 1,
+                "must_contain": "#![forbid(unsafe_code)]"
+            },
+            "verification_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_fixture cargo test -p frankenengine-engine fixture"
+        })
     }
 
     #[test]

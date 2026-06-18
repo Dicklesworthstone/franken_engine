@@ -82,6 +82,42 @@ fn push_opt_len_prefixed(buf: &mut Vec<u8>, value: Option<&[u8]>) {
     }
 }
 
+fn push_synthesized_candidate_receipt_preimage(
+    buf: &mut Vec<u8>,
+    receipt: &SynthesizedCandidateReceipt,
+) {
+    push_len_prefixed(buf, receipt.candidate_id.as_bytes());
+    push_len_prefixed(buf, receipt.kind.as_str().as_bytes());
+    push_len_prefixed(buf, receipt.strategy.as_str().as_bytes());
+    buf.extend_from_slice(&receipt.novelty_score_millionths.to_le_bytes());
+    buf.extend_from_slice(&receipt.coverage_delta_millionths.to_le_bytes());
+    push_count(buf, receipt.target_cells.len());
+    for target_cell in &receipt.target_cells {
+        push_len_prefixed(buf, target_cell.as_bytes());
+    }
+    buf.extend_from_slice(receipt.content_hash.as_bytes());
+    buf.push(u8::from(receipt.accepted));
+    let denial_label = receipt
+        .denial_reason
+        .as_ref()
+        .map(|reason| reason.stable_label());
+    push_opt_len_prefixed(buf, denial_label.as_deref().map(str::as_bytes));
+}
+
+fn push_region_update_receipt_preimage(buf: &mut Vec<u8>, update: &RegionUpdateReceipt) {
+    push_len_prefixed(buf, update.region_id.as_bytes());
+    push_len_prefixed(buf, update.candidate_id.as_bytes());
+    push_len_prefixed(buf, update.target_cell.as_bytes());
+    push_len_prefixed(buf, update.kind.as_str().as_bytes());
+    buf.extend_from_slice(&update.mass_millionths.to_le_bytes());
+    buf.push(match update.action {
+        RegionUpdateAction::Activated => 0,
+        RegionUpdateAction::Retired => 1,
+    });
+    buf.push(u8::from(update.retired));
+    buf.extend_from_slice(update.content_hash.as_bytes());
+}
+
 const MILLION: u64 = 1_000_000;
 const DISCOVERY_OBSERVATION_STEP_SECS: u64 = 3600;
 const SYNTHESIS_REGION_PREFIX: &str = "semantic_dark_matter_synthesis::";
@@ -606,33 +642,13 @@ impl DarkMatterEngineOrchestrator {
                     .to_le_bytes(),
             );
             buf.extend_from_slice(synthesis_receipt.receipt_hash.as_bytes());
+            push_count(&mut buf, synthesized_candidate_receipts.len());
             for receipt in &synthesized_candidate_receipts {
-                buf.extend_from_slice(receipt.candidate_id.as_bytes());
-                buf.extend_from_slice(receipt.kind.as_str().as_bytes());
-                buf.extend_from_slice(receipt.strategy.as_str().as_bytes());
-                buf.extend_from_slice(&receipt.novelty_score_millionths.to_le_bytes());
-                buf.extend_from_slice(&receipt.coverage_delta_millionths.to_le_bytes());
-                for target_cell in &receipt.target_cells {
-                    buf.extend_from_slice(target_cell.as_bytes());
-                }
-                buf.extend_from_slice(receipt.content_hash.as_bytes());
-                buf.push(u8::from(receipt.accepted));
-                if let Some(reason) = &receipt.denial_reason {
-                    buf.extend_from_slice(reason.stable_label().as_bytes());
-                }
+                push_synthesized_candidate_receipt_preimage(&mut buf, receipt);
             }
+            push_count(&mut buf, region_update_receipts.len());
             for update in &region_update_receipts {
-                buf.extend_from_slice(update.region_id.as_bytes());
-                buf.extend_from_slice(update.candidate_id.as_bytes());
-                buf.extend_from_slice(update.target_cell.as_bytes());
-                buf.extend_from_slice(update.kind.as_str().as_bytes());
-                buf.extend_from_slice(&update.mass_millionths.to_le_bytes());
-                buf.push(match update.action {
-                    RegionUpdateAction::Activated => 0,
-                    RegionUpdateAction::Retired => 1,
-                });
-                buf.push(u8::from(update.retired));
-                buf.extend_from_slice(update.content_hash.as_bytes());
+                push_region_update_receipt_preimage(&mut buf, update);
             }
             buf.extend_from_slice(board_state_evaluation.receipt.receipt_hash.as_bytes());
             ContentHash::compute(&buf)
@@ -1371,6 +1387,86 @@ mod tests {
         let mut none = Vec::new();
         push_opt_len_prefixed(&mut none, None);
         assert_ne!(some_empty, none);
+    }
+
+    fn test_synthesized_candidate_receipt(
+        candidate_id: &str,
+        target_cells: &[&str],
+    ) -> SynthesizedCandidateReceipt {
+        SynthesizedCandidateReceipt {
+            candidate_id: candidate_id.to_string(),
+            kind: ProgramKind::PlainJs,
+            strategy: SynthesisStrategy::GrammarGuided,
+            novelty_score_millionths: 700_000,
+            coverage_delta_millionths: 120_000,
+            target_cells: target_cells
+                .iter()
+                .map(|cell| (*cell).to_string())
+                .collect(),
+            content_hash: ContentHash::compute(format!("synth:{candidate_id}").as_bytes()),
+            accepted: false,
+            denial_reason: Some(SynthesizedCandidateDenialReason::PromotionCapReached),
+        }
+    }
+
+    #[test]
+    fn synthesized_candidate_receipt_preimage_is_injective_bd_fn47f() {
+        let ab_c = test_synthesized_candidate_receipt("candidate", &["ab", "c"]);
+        let a_bc = test_synthesized_candidate_receipt("candidate", &["a", "bc"]);
+
+        let mut ab_c_preimage = Vec::new();
+        push_synthesized_candidate_receipt_preimage(&mut ab_c_preimage, &ab_c);
+        let mut a_bc_preimage = Vec::new();
+        push_synthesized_candidate_receipt_preimage(&mut a_bc_preimage, &a_bc);
+
+        assert_eq!(ab_c.target_cells.concat(), a_bc.target_cells.concat());
+        assert_ne!(ab_c_preimage, a_bc_preimage);
+
+        let one_cell = test_synthesized_candidate_receipt("candidate", &["abc"]);
+        let two_cells = test_synthesized_candidate_receipt("candidate", &["ab", "c"]);
+        let mut one_cell_preimage = Vec::new();
+        push_synthesized_candidate_receipt_preimage(&mut one_cell_preimage, &one_cell);
+        let mut two_cells_preimage = Vec::new();
+        push_synthesized_candidate_receipt_preimage(&mut two_cells_preimage, &two_cells);
+
+        assert_eq!(
+            one_cell.target_cells.concat(),
+            two_cells.target_cells.concat()
+        );
+        assert_ne!(one_cell_preimage, two_cells_preimage);
+    }
+
+    fn test_region_update(
+        region_id: &str,
+        candidate_id: &str,
+        target_cell: &str,
+    ) -> RegionUpdateReceipt {
+        RegionUpdateReceipt {
+            region_id: region_id.to_string(),
+            candidate_id: candidate_id.to_string(),
+            target_cell: target_cell.to_string(),
+            action: RegionUpdateAction::Activated,
+            kind: DarkMatterRegionKind::UntestedCodePath,
+            mass_millionths: 50_000,
+            retired: false,
+            content_hash: ContentHash::compute(b"region-update"),
+        }
+    }
+
+    #[test]
+    fn region_update_receipt_preimage_is_injective_bd_fn47f() {
+        let ab_c = test_region_update("ab", "c", "target");
+        let a_bc = test_region_update("a", "bc", "target");
+
+        let mut ab_c_preimage = Vec::new();
+        push_region_update_receipt_preimage(&mut ab_c_preimage, &ab_c);
+        let mut a_bc_preimage = Vec::new();
+        push_region_update_receipt_preimage(&mut a_bc_preimage, &a_bc);
+
+        let old_concat_ab_c = format!("{}{}", ab_c.region_id, ab_c.candidate_id);
+        let old_concat_a_bc = format!("{}{}", a_bc.region_id, a_bc.candidate_id);
+        assert_eq!(old_concat_ab_c, old_concat_a_bc);
+        assert_ne!(ab_c_preimage, a_bc_preimage);
     }
 
     fn expected_cycle_metrics(

@@ -187,6 +187,157 @@ pub struct OperatorAction {
 }
 
 // ---------------------------------------------------------------------------
+// Artifact-id preimage helpers
+// ---------------------------------------------------------------------------
+//
+// Artifact ids must bind every deterministic field injectively. Do not use
+// `Display` strings here: several display forms intentionally summarize values
+// for humans and omit fields that are required for tamper evidence.
+
+fn push_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    buf.extend_from_slice(bytes);
+}
+
+fn push_count(buf: &mut Vec<u8>, count: usize) {
+    buf.extend_from_slice(&(count as u64).to_le_bytes());
+}
+
+fn push_artifact_type_preimage(buf: &mut Vec<u8>, artifact_type: &ArtifactType) {
+    buf.push(match artifact_type {
+        ArtifactType::GapFill => 0,
+        ArtifactType::StateRepair => 1,
+        ArtifactType::ForcedReconciliation => 2,
+        ArtifactType::TrustRestoration => 3,
+        ArtifactType::RejectedEpochPromotion => 4,
+        ArtifactType::RejectedRevocation => 5,
+        ArtifactType::FailedAttestation => 6,
+    });
+}
+
+fn push_recovery_trigger_preimage(buf: &mut Vec<u8>, trigger: &RecoveryTrigger) {
+    match trigger {
+        RecoveryTrigger::ReconciliationFailure { reconciliation_id } => {
+            buf.push(0);
+            push_len_prefixed(buf, reconciliation_id.as_bytes());
+        }
+        RecoveryTrigger::IntegrityCheckFailure { check_id, details } => {
+            buf.push(1);
+            push_len_prefixed(buf, check_id.as_bytes());
+            push_len_prefixed(buf, details.as_bytes());
+        }
+        RecoveryTrigger::OperatorIntervention { operator, reason } => {
+            buf.push(2);
+            push_len_prefixed(buf, operator.as_bytes());
+            push_len_prefixed(buf, reason.as_bytes());
+        }
+        RecoveryTrigger::AutomaticFallback { fallback_id } => {
+            buf.push(3);
+            push_len_prefixed(buf, fallback_id.as_bytes());
+        }
+        RecoveryTrigger::EpochValidationFailure {
+            from_epoch,
+            to_epoch,
+        } => {
+            buf.push(4);
+            buf.extend_from_slice(&from_epoch.to_le_bytes());
+            buf.extend_from_slice(&to_epoch.to_le_bytes());
+        }
+        RecoveryTrigger::StaleAttestation {
+            attestation_age_ticks,
+        } => {
+            buf.push(5);
+            buf.extend_from_slice(&attestation_age_ticks.to_le_bytes());
+        }
+    }
+}
+
+fn push_proof_element_preimage(buf: &mut Vec<u8>, proof: &ProofElement) {
+    match proof {
+        ProofElement::MmrConsistency {
+            root_hash,
+            leaf_count,
+            proof_hashes,
+        } => {
+            buf.push(0);
+            buf.extend_from_slice(root_hash.as_bytes());
+            buf.extend_from_slice(&leaf_count.to_le_bytes());
+            push_count(buf, proof_hashes.len());
+            for proof_hash in proof_hashes {
+                buf.extend_from_slice(proof_hash.as_bytes());
+            }
+        }
+        ProofElement::HashChainVerification {
+            start_marker_id,
+            end_marker_id,
+            chain_hash,
+            verified,
+        } => {
+            buf.push(1);
+            buf.extend_from_slice(&start_marker_id.to_le_bytes());
+            buf.extend_from_slice(&end_marker_id.to_le_bytes());
+            buf.extend_from_slice(chain_hash.as_bytes());
+            buf.push(u8::from(*verified));
+        }
+        ProofElement::EvidenceEntryLink {
+            evidence_hash,
+            decision_id,
+        } => {
+            buf.push(2);
+            buf.extend_from_slice(evidence_hash.as_bytes());
+            push_len_prefixed(buf, decision_id.as_bytes());
+        }
+        ProofElement::EpochValidityCheck {
+            epoch,
+            is_valid,
+            reason,
+        } => {
+            buf.push(3);
+            buf.extend_from_slice(&epoch.as_u64().to_le_bytes());
+            buf.push(u8::from(*is_valid));
+            push_len_prefixed(buf, reason.as_bytes());
+        }
+    }
+}
+
+fn push_operator_action_preimage(buf: &mut Vec<u8>, action: &OperatorAction) {
+    push_len_prefixed(buf, action.operator.as_bytes());
+    push_len_prefixed(buf, action.action.as_bytes());
+    buf.extend_from_slice(action.authorization_hash.as_bytes());
+    buf.extend_from_slice(&action.timestamp_ticks.to_le_bytes());
+}
+
+fn artifact_id_preimage(
+    artifact_type: &ArtifactType,
+    trigger: &RecoveryTrigger,
+    before_state: ContentHash,
+    after_state: ContentHash,
+    proof_bundle: &[ProofElement],
+    operator_actions: &[OperatorAction],
+    trace_id: &str,
+    epoch_id: u64,
+    timestamp_ticks: u64,
+) -> Vec<u8> {
+    let mut id_buf = Vec::new();
+    push_artifact_type_preimage(&mut id_buf, artifact_type);
+    push_recovery_trigger_preimage(&mut id_buf, trigger);
+    id_buf.extend_from_slice(before_state.as_bytes());
+    id_buf.extend_from_slice(after_state.as_bytes());
+    id_buf.extend_from_slice(&epoch_id.to_le_bytes());
+    id_buf.extend_from_slice(&timestamp_ticks.to_le_bytes());
+    push_len_prefixed(&mut id_buf, trace_id.as_bytes());
+    push_count(&mut id_buf, proof_bundle.len());
+    for proof in proof_bundle {
+        push_proof_element_preimage(&mut id_buf, proof);
+    }
+    push_count(&mut id_buf, operator_actions.len());
+    for action in operator_actions {
+        push_operator_action_preimage(&mut id_buf, action);
+    }
+    id_buf
+}
+
+// ---------------------------------------------------------------------------
 // RecoveryArtifact — the core proof-carrying recovery artifact
 // ---------------------------------------------------------------------------
 
@@ -381,35 +532,17 @@ impl ArtifactBuilder {
 
         // Compute artifact_id as ContentHash over ALL deterministic fields,
         // including proof_bundle and operator_actions for tamper-evidence.
-        let mut id_buf = Vec::new();
-        id_buf.extend_from_slice(
-            format!(
-                "{}:{}:{}:{}:{}:{}:{}",
-                self.artifact_type,
-                self.trigger,
-                self.before_state,
-                after_state,
-                self.epoch_id,
-                self.timestamp_ticks,
-                self.trace_id,
-            )
-            .as_bytes(),
+        let id_buf = artifact_id_preimage(
+            &self.artifact_type,
+            &self.trigger,
+            self.before_state,
+            after_state,
+            &self.proof_elements,
+            &self.operator_actions,
+            &self.trace_id,
+            self.epoch_id,
+            self.timestamp_ticks,
         );
-        id_buf.extend_from_slice(&(self.proof_elements.len() as u64).to_le_bytes());
-        for proof in &self.proof_elements {
-            let proof_bytes = format!("{proof}").into_bytes();
-            id_buf.extend_from_slice(&(proof_bytes.len() as u64).to_le_bytes());
-            id_buf.extend_from_slice(&proof_bytes);
-        }
-        id_buf.extend_from_slice(&(self.operator_actions.len() as u64).to_le_bytes());
-        for action in &self.operator_actions {
-            id_buf.extend_from_slice(&(action.operator.len() as u64).to_le_bytes());
-            id_buf.extend_from_slice(action.operator.as_bytes());
-            id_buf.extend_from_slice(&(action.action.len() as u64).to_le_bytes());
-            id_buf.extend_from_slice(action.action.as_bytes());
-            id_buf.extend_from_slice(action.authorization_hash.as_bytes());
-            id_buf.extend_from_slice(&action.timestamp_ticks.to_le_bytes());
-        }
         let artifact_id = ContentHash::compute(&id_buf);
 
         // Sign with the epoch authentication key.
@@ -489,35 +622,17 @@ impl RecoveryArtifactStore {
     ) -> Result<RecoveryVerdict, VerificationError> {
         // Check artifact_id — must match the build() computation exactly,
         // including proof_bundle and operator_actions for tamper-evidence.
-        let mut id_buf = Vec::new();
-        id_buf.extend_from_slice(
-            format!(
-                "{}:{}:{}:{}:{}:{}:{}",
-                artifact.artifact_type,
-                artifact.trigger,
-                artifact.before_state,
-                artifact.after_state,
-                artifact.epoch_id,
-                artifact.timestamp_ticks,
-                artifact.trace_id,
-            )
-            .as_bytes(),
+        let id_buf = artifact_id_preimage(
+            &artifact.artifact_type,
+            &artifact.trigger,
+            artifact.before_state,
+            artifact.after_state,
+            &artifact.proof_bundle,
+            &artifact.operator_actions,
+            &artifact.trace_id,
+            artifact.epoch_id,
+            artifact.timestamp_ticks,
         );
-        id_buf.extend_from_slice(&(artifact.proof_bundle.len() as u64).to_le_bytes());
-        for proof in &artifact.proof_bundle {
-            let proof_bytes = format!("{proof}").into_bytes();
-            id_buf.extend_from_slice(&(proof_bytes.len() as u64).to_le_bytes());
-            id_buf.extend_from_slice(&proof_bytes);
-        }
-        id_buf.extend_from_slice(&(artifact.operator_actions.len() as u64).to_le_bytes());
-        for action in &artifact.operator_actions {
-            id_buf.extend_from_slice(&(action.operator.len() as u64).to_le_bytes());
-            id_buf.extend_from_slice(action.operator.as_bytes());
-            id_buf.extend_from_slice(&(action.action.len() as u64).to_le_bytes());
-            id_buf.extend_from_slice(action.action.as_bytes());
-            id_buf.extend_from_slice(action.authorization_hash.as_bytes());
-            id_buf.extend_from_slice(&action.timestamp_ticks.to_le_bytes());
-        }
         let computed_id = ContentHash::compute(&id_buf);
         if computed_id != artifact.artifact_id {
             return Err(VerificationError::ArtifactIdMismatch {
@@ -1607,6 +1722,137 @@ mod tests {
             fallback_id: "fb-2".to_string(),
         });
         assert_ne!(a1.artifact_id, a2.artifact_id);
+    }
+
+    #[test]
+    fn artifact_id_sensitive_to_trigger_details_bd_fn47f() {
+        let base = |details: &str| {
+            ArtifactBuilder::new(
+                ArtifactType::GapFill,
+                RecoveryTrigger::IntegrityCheckFailure {
+                    check_id: "check-1".to_string(),
+                    details: details.to_string(),
+                },
+                sample_before_state(),
+                "t",
+                1,
+                1000,
+                &test_key(),
+            )
+            .proof(ProofElement::MmrConsistency {
+                root_hash: ContentHash::compute(b"r"),
+                leaf_count: 1,
+                proof_hashes: vec![],
+            })
+            .build()
+        };
+        assert_ne!(base("left").artifact_id, base("right").artifact_id);
+    }
+
+    #[test]
+    fn artifact_id_sensitive_to_operator_intervention_reason_bd_fn47f() {
+        let base = |reason: &str| {
+            ArtifactBuilder::new(
+                ArtifactType::TrustRestoration,
+                RecoveryTrigger::OperatorIntervention {
+                    operator: "admin".to_string(),
+                    reason: reason.to_string(),
+                },
+                sample_before_state(),
+                "t",
+                1,
+                1000,
+                &test_key(),
+            )
+            .proof(ProofElement::MmrConsistency {
+                root_hash: ContentHash::compute(b"r"),
+                leaf_count: 1,
+                proof_hashes: vec![],
+            })
+            .build()
+        };
+        assert_ne!(base("left").artifact_id, base("right").artifact_id);
+    }
+
+    #[test]
+    fn artifact_id_sensitive_to_mmr_root_and_proof_hashes_bd_fn47f() {
+        let base = |root: &[u8], proof_hash: &[u8]| {
+            ArtifactBuilder::new(
+                ArtifactType::GapFill,
+                RecoveryTrigger::AutomaticFallback {
+                    fallback_id: "fb".to_string(),
+                },
+                sample_before_state(),
+                "t",
+                1,
+                1000,
+                &test_key(),
+            )
+            .proof(ProofElement::MmrConsistency {
+                root_hash: ContentHash::compute(root),
+                leaf_count: 1,
+                proof_hashes: vec![ContentHash::compute(proof_hash)],
+            })
+            .build()
+        };
+        assert_ne!(
+            base(b"root-left", b"proof").artifact_id,
+            base(b"root-right", b"proof").artifact_id
+        );
+        assert_ne!(
+            base(b"root", b"proof-left").artifact_id,
+            base(b"root", b"proof-right").artifact_id
+        );
+    }
+
+    #[test]
+    fn artifact_id_sensitive_to_evidence_hash_and_epoch_reason_bd_fn47f() {
+        let evidence_base = |evidence: &[u8]| {
+            ArtifactBuilder::new(
+                ArtifactType::GapFill,
+                RecoveryTrigger::AutomaticFallback {
+                    fallback_id: "fb".to_string(),
+                },
+                sample_before_state(),
+                "t",
+                1,
+                1000,
+                &test_key(),
+            )
+            .proof(ProofElement::EvidenceEntryLink {
+                evidence_hash: ContentHash::compute(evidence),
+                decision_id: "decision-1".to_string(),
+            })
+            .build()
+        };
+        assert_ne!(
+            evidence_base(b"evidence-left").artifact_id,
+            evidence_base(b"evidence-right").artifact_id
+        );
+
+        let epoch_base = |reason: &str| {
+            ArtifactBuilder::new(
+                ArtifactType::GapFill,
+                RecoveryTrigger::AutomaticFallback {
+                    fallback_id: "fb".to_string(),
+                },
+                sample_before_state(),
+                "t",
+                1,
+                1000,
+                &test_key(),
+            )
+            .proof(ProofElement::EpochValidityCheck {
+                epoch: test_epoch(),
+                is_valid: true,
+                reason: reason.to_string(),
+            })
+            .build()
+        };
+        assert_ne!(
+            epoch_base("left").artifact_id,
+            epoch_base("right").artifact_id
+        );
     }
 
     #[test]

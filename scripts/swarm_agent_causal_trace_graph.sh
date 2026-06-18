@@ -209,6 +209,23 @@ jq -cS --arg bead_id "$bead_id" '
     (($left.agent_name // $left.payload.agent_name // $left.payload.name // $left.payload.from // "") as $l
       | ($right.agent_name // $right.payload.agent_name // $right.payload.name // $right.payload.from // "") as $r
       | ($l != "" and $r != "" and $l == $r));
+  def ids_equal($left; $right):
+    (($left // null) != null and ($right // null) != null and (($left | tostring) == ($right | tostring)));
+  def receipt_anomalies($receipt):
+    if (($receipt.payload.evidence.anomalies // $receipt.payload.anomalies // null) | type) == "array" then
+      ($receipt.payload.evidence.anomalies // $receipt.payload.anomalies)
+    else [] end;
+  def ack_thread($ack): ($ack.payload.thread_id // $ack.payload.bead_id // $ack.thread_id // "");
+  def ack_bead($ack): ($ack.payload.bead_id // $ack.bead_id // "");
+  def receipt_matches_ack($receipt; $ack):
+    ids_equal($receipt.payload.message_id; ($ack.payload.message_id // $ack.payload.id))
+    or ((($receipt.payload.thread_id // "") != "") and (($receipt.payload.thread_id // "") == ack_thread($ack)))
+    or ((($receipt.payload.bead_id // "") != "") and (($receipt.payload.bead_id // "") == ack_bead($ack)))
+    or any(receipt_anomalies($receipt)[]?;
+      ids_equal(.affected_entities.message_id; ($ack.payload.message_id // $ack.payload.id))
+      or (((.affected_entities.thread_id // "") != "") and ((.affected_entities.thread_id // "") == ack_thread($ack)))
+      or (((.affected_entities.bead_id // "") != "") and ((.affected_entities.bead_id // "") == ack_bead($ack)))
+    );
   def edge($type; $from; $to; $detail):
     {
       edge_id: (("edge:" + $type + ":" + node_id($from) + ">" + node_id($to)) | clean),
@@ -222,6 +239,8 @@ jq -cS --arg bead_id "$bead_id" '
   events("bead_state") as $beads
   | events("agent_profile") as $profiles
   | events("mail_message") as $messages
+  | events("ack_attempt") as $ack_attempts
+  | events("identity_reconciliation_receipt") as $identity_receipts
   | events("file_reservation") as $reservations
   | events("git_commit") as $commits
   | events("validation_command") as $validations
@@ -242,6 +261,13 @@ jq -cS --arg bead_id "$bead_id" '
         | select((.payload.ack_required // false) == true)
         | select(((.payload.ack_ts // .payload.acknowledged_at // .payload.acknowledged_at_utc // "") | length) > 0 or ((.payload.acknowledged // false) == true))
         | edge("message_acknowledged"; .; $bead; "ack_required Agent Mail message includes acknowledgement evidence")),
+      ($ack_attempts[]?
+        | select(((.payload.success // .payload.acknowledged // false) == false) and (((.payload.error // .payload.error_message // .payload.detail // "") | length) > 0))
+        | edge("message_ack_failed"; .; $bead; "failed Agent Mail acknowledgement attempt links to bead state")),
+      ($ack_attempts[]? as $ack
+        | $identity_receipts[]?
+        | select(receipt_matches_ack(.; $ack))
+        | edge("ack_failure_reconciled"; $ack; .; "failed acknowledgement attempt links to identity reconciliation receipt evidence")),
       ($validations[]? as $validation
         | $rch[]?
         | edge("validation_proves_closeout"; $validation; .; "validation command links to RCH proof artifact")),
@@ -270,6 +296,23 @@ jq -cS --arg bead_id "$bead_id" --arg agent_name "$agent_name" '
   def root_degraded($code): any((.degraded_reasons // [])[]?; (.code // "") == $code);
   def source_missing($needle):
     any((.degraded_reasons // [])[]?; (.code // "") == "optional_snapshot_missing" and ((.message // "") | test($needle; "i")));
+  def ids_equal($left; $right):
+    (($left // null) != null and ($right // null) != null and (($left | tostring) == ($right | tostring)));
+  def receipt_anomalies($receipt):
+    if (($receipt.payload.evidence.anomalies // $receipt.payload.anomalies // null) | type) == "array" then
+      ($receipt.payload.evidence.anomalies // $receipt.payload.anomalies)
+    else [] end;
+  def ack_thread($ack): ($ack.payload.thread_id // $ack.payload.bead_id // $ack.thread_id // "");
+  def ack_bead($ack): ($ack.payload.bead_id // $ack.bead_id // "");
+  def receipt_matches_ack($receipt; $ack):
+    ids_equal($receipt.payload.message_id; ($ack.payload.message_id // $ack.payload.id))
+    or ((($receipt.payload.thread_id // "") != "") and (($receipt.payload.thread_id // "") == ack_thread($ack)))
+    or ((($receipt.payload.bead_id // "") != "") and (($receipt.payload.bead_id // "") == ack_bead($ack)))
+    or any(receipt_anomalies($receipt)[]?;
+      ids_equal(.affected_entities.message_id; ($ack.payload.message_id // $ack.payload.id))
+      or (((.affected_entities.thread_id // "") != "") and ((.affected_entities.thread_id // "") == ack_thread($ack)))
+      or (((.affected_entities.bead_id // "") != "") and ((.affected_entities.bead_id // "") == ack_bead($ack)))
+    );
   def text($e):
     [
       $e.payload.subject,
@@ -283,6 +326,12 @@ jq -cS --arg bead_id "$bead_id" --arg agent_name "$agent_name" '
     [events("mail_message")[] | select(text(.) | test("claim|claimed|claiming|intro|introduced"; "i"))];
   def bead_state:
     (events("bead_state")[0] // {});
+  def ack_failed_events:
+    [events("ack_attempt")[]? | select(((.payload.success // .payload.acknowledged // false) == false) and (((.payload.error // .payload.error_message // .payload.detail // "") | length) > 0))];
+  def ack_failure_evidence:
+    (([ack_failed_events[]?.event_id]
+      + [ack_failed_events[]? as $ack | events("identity_reconciliation_receipt")[]? | select(receipt_matches_ack(.; $ack)) | .event_id])
+      | unique);
   def closed_bead:
     ((bead_state.payload.status // bead_state.decision // "") == "closed");
   def anomaly($class; $severity; $evidence; $detail; $remediation):
@@ -356,6 +405,33 @@ jq -cS --arg bead_id "$bead_id" --arg agent_name "$agent_name" '
         [events("mail_message")[]? | select((.payload.ack_required // false) == true) | .event_id];
         "ack_required Agent Mail message lacks acknowledgement evidence";
         "Acknowledge the coordination message or record why it is stale before accepting the trace"
+      )
+    else empty end),
+    (if root_fail("ack_attempt_failed") or ((ack_failed_events | length) > 0) then
+      anomaly(
+        "ack_attempt_failed";
+        "fail_closed";
+        ack_failure_evidence;
+        "Agent Mail acknowledgement attempt failed with an explicit error";
+        "Record fallback receipt evidence and repair Agent Mail identity/recipient state before accepting the trace"
+      )
+    else empty end),
+    (if root_degraded("identity_reconciliation_receipt_missing") then
+      anomaly(
+        "identity_reconciliation_receipt_missing";
+        "degraded";
+        [ack_failed_events[]?.event_id];
+        "Failed acknowledgement attempt lacks identity reconciliation receipt evidence";
+        "Capture the reconciler receipt before accepting ack repair evidence"
+      )
+    else empty end),
+    (if root_fail("identity_reconciliation_receipt_contradicts_ack_attempt") then
+      anomaly(
+        "identity_reconciliation_receipt_contradicts_ack_attempt";
+        "fail_closed";
+        ack_failure_evidence;
+        "Identity reconciliation receipt contradicts the raw failed acknowledgement attempt evidence";
+        "Reject the receipt and recapture raw Agent Mail acknowledgement attempt evidence"
       )
     else empty end),
     (if root_fail("stale_owner_recent_activity_conflict") or (((bead_state.payload.assignee // "") != "") and ((bead_state.payload.assignee // "") != $agent_name) and (((bead_state.payload.status // "") == "in_progress") or ((bead_state.payload.status // "") == "closed"))) then

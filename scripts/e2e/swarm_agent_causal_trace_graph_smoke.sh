@@ -51,28 +51,56 @@ write_common_fixtures() {
   jq -n '{schema_version:"franken-engine.swarm-predictive-dashboard.v1", status:"ok"}' >"${dir}/operator_status.json"
 }
 
+write_identity_receipt() {
+  local dir="$1"
+  jq -n '{
+    schema_version:"franken-engine.swarm-agent-mail-identity-reconciliation-receipt.v1",
+    decision:"fail_closed",
+    bead_id:"bd-trace",
+    thread_id:"bd-trace",
+    raw_error:"MessageRecipient not found: 739:1",
+    evidence:{
+      failed_ack_attempt_count:1,
+      anomalies:[{
+        anomaly_class:"stale_message_recipient_row",
+        severity:"fail_closed",
+        raw_error:"MessageRecipient not found: 739:1",
+        affected_entities:{
+          message_id:1,
+          thread_id:"bd-trace",
+          bead_id:"bd-trace"
+        }
+      }]
+    }
+  }' >"${dir}/identity_receipt.json"
+}
+
 run_normalizer_case() {
   local fixture_dir="$1"
   local output_dir="$2"
+  local args=(
+    --bead-id bd-trace
+    --agent-name AgentAlpha
+    --source-revision fixture-rev
+    --br-issue-json "${fixture_dir}/br_issue.json"
+    --br-ready-json "${fixture_dir}/br_ready.json"
+    --br-sync-status-json "${fixture_dir}/br_sync_status.json"
+    --bv-actionable-plan-json "${fixture_dir}/bv_plan.json"
+    --agent-mail-profiles-json "${fixture_dir}/profiles.json"
+    --agent-mail-messages-json "${fixture_dir}/messages.json"
+    --file-reservations-json "${fixture_dir}/reservations.json"
+    --declared-write-set-json "${fixture_dir}/write_set.json"
+    --git-status-json "${fixture_dir}/git_status.json"
+    --git-closeout-commits-json "${fixture_dir}/commits.json"
+    --rch-validation-artifacts-json "${fixture_dir}/rch.json"
+    --validation-commands-json "${fixture_dir}/validation.json"
+    --operator-status-json "${fixture_dir}/operator_status.json"
+  )
+  if [[ -f "${fixture_dir}/identity_receipt.json" ]]; then
+    args+=(--identity-reconciliation-receipt-json "${fixture_dir}/identity_receipt.json")
+  fi
   set +e
-  "$normalizer" \
-    --bead-id bd-trace \
-    --agent-name AgentAlpha \
-    --source-revision fixture-rev \
-    --br-issue-json "${fixture_dir}/br_issue.json" \
-    --br-ready-json "${fixture_dir}/br_ready.json" \
-    --br-sync-status-json "${fixture_dir}/br_sync_status.json" \
-    --bv-actionable-plan-json "${fixture_dir}/bv_plan.json" \
-    --agent-mail-profiles-json "${fixture_dir}/profiles.json" \
-    --agent-mail-messages-json "${fixture_dir}/messages.json" \
-    --file-reservations-json "${fixture_dir}/reservations.json" \
-    --declared-write-set-json "${fixture_dir}/write_set.json" \
-    --git-status-json "${fixture_dir}/git_status.json" \
-    --git-closeout-commits-json "${fixture_dir}/commits.json" \
-    --rch-validation-artifacts-json "${fixture_dir}/rch.json" \
-    --validation-commands-json "${fixture_dir}/validation.json" \
-    --operator-status-json "${fixture_dir}/operator_status.json" \
-    --output-dir "$output_dir" >/dev/null
+  "$normalizer" "${args[@]}" --output-dir "$output_dir" >/dev/null
   local status=$?
   set -e
   if [[ "$status" -ne 0 && "$status" -ne 42 ]]; then
@@ -135,6 +163,7 @@ run_selftest() {
   local local_fallback="${tmp_root}/local_fallback"
   local missing_commit="${tmp_root}/missing_commit"
   local ownership_conflict="${tmp_root}/ownership_conflict"
+  local ack_failed="${tmp_root}/ack_failed"
 
   rm -rf "$tmp_root"
   mkdir -p "$tmp_root"
@@ -170,6 +199,26 @@ run_selftest() {
   run_normalizer_case "$ownership_conflict" "${ownership_conflict}/normalizer"
   expect_graph_fail_closed "${ownership_conflict}/normalizer" "${ownership_conflict}/graph"
   jq -e 'any(.anomalies[]; .anomaly_class == "reservation_without_matching_bead_scope")' "${ownership_conflict}/graph/swarm_agent_causal_trace_anomalies.json" >/dev/null
+
+  write_common_fixtures "$ack_failed" "closed"
+  write_identity_receipt "$ack_failed"
+  jq '.ack_attempts = [{
+    message_id:1,
+    thread_id:"bd-trace",
+    bead_id:"bd-trace",
+    agent_name:"AgentAlpha",
+    attempted_at:"2026-05-06T00:02:30Z",
+    success:false,
+    error:"MessageRecipient not found: 739:1"
+  }]' "${ack_failed}/messages.json" >"${ack_failed}/messages.tmp"
+  mv "${ack_failed}/messages.tmp" "${ack_failed}/messages.json"
+  run_normalizer_case "$ack_failed" "${ack_failed}/normalizer"
+  expect_graph_fail_closed "${ack_failed}/normalizer" "${ack_failed}/graph"
+  jq -e 'any(.anomalies[]; .anomaly_class == "ack_attempt_failed")' "${ack_failed}/graph/swarm_agent_causal_trace_anomalies.json" >/dev/null
+  jq -e 'any(.edges[]; .edge_type == "message_ack_failed")' "${ack_failed}/graph/swarm_agent_causal_trace_graph.json" >/dev/null
+  jq -e 'any(.nodes[]; .node_type == "identity_reconciliation_receipt")' "${ack_failed}/graph/swarm_agent_causal_trace_graph.json" >/dev/null
+  jq -e 'any(.edges[]; .edge_type == "ack_failure_reconciled")' "${ack_failed}/graph/swarm_agent_causal_trace_graph.json" >/dev/null
+  jq -e 'any(.anomalies[]; .anomaly_class == "ack_attempt_failed" and ((.evidence_event_ids // []) | index("identity_reconciliation_receipt-0") != null))' "${ack_failed}/graph/swarm_agent_causal_trace_anomalies.json" >/dev/null
 
   record_pass "selftest fixtures"
   printf 'swarm_agent_causal_trace_graph_smoke_artifacts=%s\n' "$tmp_root"

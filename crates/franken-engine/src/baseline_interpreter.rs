@@ -6049,28 +6049,47 @@ impl InterpreterCore {
                 self.string_pad_end_impl(&value, args)
             }
             BuiltinFunctionKind::NumberToFixed => {
-                // ES2020 20.1.3.3: fixed-point notation with `digits` (0..=100)
-                // fraction digits. (bd-i08nh)
+                // ES2020 20.1.3.3: fixed-point notation with `digits` fraction
+                // digits. `ToIntegerOrInfinity(digits)` must be in 0..=100 or a
+                // RangeError is thrown. This path previously clamped instead, so
+                // `(1).toFixed(101)` produced a 100-digit string and
+                // `(1).toFixed(-1)` returned "1". (bd-i08nh, bd-cxmtb)
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let num = Self::number_receiver_to_f64(&receiver);
                 let digits = match self.builtin_arg(args, 0)? {
-                    Some(arg) => Self::value_as_integer(&arg).clamp(0, 100) as usize,
+                    Some(arg) => Self::value_as_integer(&arg),
                     None => 0,
                 };
-                Ok(Value::str(number_to_fixed_string(num, digits)))
+                if !(0..=100).contains(&digits) {
+                    return Err(InterpreterError::RangeError {
+                        message: format!("toFixed() digits must be between 0 and 100 (got {digits})"),
+                    });
+                }
+                Ok(Value::str(number_to_fixed_string(num, digits as usize)))
             }
             BuiltinFunctionKind::NumberToString => {
-                // ES2020 20.1.3.6: string form, optional radix (2..=36),
-                // default 10. Reuses the shared radix conversion. (bd-i08nh)
+                // ES2020 20.1.3.6: string form, optional radix, default 10.
+                // `ToIntegerOrInfinity(radix)` must be in 2..=36 or a RangeError is
+                // thrown. This path previously returned the literal string
+                // "RangeError" for an out-of-range radix (number_to_string_impl
+                // reuses DivisionByZero as a RangeError stand-in) and silently
+                // defaulted a non-finite radix to 10. (bd-i08nh, bd-cxmtb)
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let num = Self::number_receiver_to_f64(&receiver);
                 let radix = match self.builtin_arg(args, 0)? {
                     Some(Value::Undefined) | None => 10,
-                    Some(arg) => Self::coerce_finite_radix_or_default(arg, 10),
+                    Some(arg) => Self::value_as_integer(&arg),
                 };
-                match self.number_to_string_impl(num, radix) {
+                if !(2..=36).contains(&radix) {
+                    return Err(InterpreterError::RangeError {
+                        message: format!("toString() radix must be between 2 and 36 (got {radix})"),
+                    });
+                }
+                match self.number_to_string_impl(num, radix as i32) {
                     Ok(result) => Ok(Value::str(result)),
-                    Err(_) => Ok(Value::str("RangeError")),
+                    Err(_) => Err(InterpreterError::RangeError {
+                        message: format!("toString() radix must be between 2 and 36 (got {radix})"),
+                    }),
                 }
             }
             BuiltinFunctionKind::NumberValueOf => {

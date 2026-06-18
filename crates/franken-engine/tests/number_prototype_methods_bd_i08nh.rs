@@ -107,3 +107,37 @@ fn paren_literal_to_fixed() {
 fn paren_literal_to_string_radix() {
     assert_eq!(eval("(255).toString(16);"), "ff");
 }
+
+// ---- out-of-range RangeError fidelity (bd-cxmtb) -------------------------
+
+#[test]
+fn to_fixed_digits_above_100_is_range_error_bd_cxmtb() {
+    // ES2020 20.1.3.3: digits > 100 throws RangeError; the IR path previously
+    // clamped to 100 and returned a 100-digit string.
+    let out = eval("(1).toFixed(101);");
+    assert!(
+        out.contains("range error") && out.contains("toFixed"),
+        "toFixed(101) should be a RangeError, got {out:?}"
+    );
+}
+
+#[test]
+fn to_fixed_negative_digits_is_range_error_bd_cxmtb() {
+    // digits < 0 throws RangeError; the IR path previously clamped to 0 -> "1".
+    let out = eval("(1).toFixed(-1);");
+    assert!(
+        out.contains("range error") && out.contains("toFixed"),
+        "toFixed(-1) should be a RangeError, got {out:?}"
+    );
+}
+
+#[test]
+fn to_string_invalid_radix_is_range_error_bd_cxmtb() {
+    // ES2020 20.1.3.6: radix outside 2..=36 throws RangeError; the IR path
+    // previously returned the literal string "RangeError" as the value.
+    let out = eval("(255).toString(99);");
+    assert!(
+        out.contains("range error") && out.contains("radix"),
+        "toString(99) should be a RangeError (not the string \"RangeError\"), got {out:?}"
+    );
+}

@@ -1,0 +1,18 @@
+{
+  "schema_version": "franken-engine.rgc-metadata-bundle.v1",
+  "bundle_type": "rgc",
+  "bundle_id": "invalid-required-flag-rgc-bundle",
+  "fresh_until_utc": "2035-01-01T00:00:00Z",
+  "required_members": [
+    {
+      "path": "events.jsonl",
+      "required": 0
+    },
+    {
+      "path": "commands.txt"
+    }
+  ],
+  "replay_commands": [
+    "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_external_trust_fixture cargo test -p frankenengine-engine --test fixture"
+  ]
+}

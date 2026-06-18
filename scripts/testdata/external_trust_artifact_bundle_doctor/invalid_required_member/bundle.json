@@ -1,0 +1,14 @@
+{
+  "schema_version": "franken-engine.proof-artifact-bundle.v1",
+  "bundle_type": "proof-artifact",
+  "fresh_until_utc": "2031-01-01T00:00:00Z",
+  "required_members": [
+    {
+      "artifact": "events.jsonl"
+    },
+    42
+  ],
+  "replay_commands": [
+    "cargo test -p frankenengine-engine"
+  ]
+}

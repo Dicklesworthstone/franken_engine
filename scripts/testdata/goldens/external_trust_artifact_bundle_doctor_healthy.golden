@@ -1,0 +1,81 @@
+{
+  "artifact_completeness": {
+    "missing_required_members": [],
+    "present_required_count": 3,
+    "required_count": 3
+  },
+  "artifact_refs": [
+    {
+      "content_hash": "6eeb1d6a51dc20dac58dce1a612bd31f52e95a85be97955fe77404e9bb56827c",
+      "expected_hash": null,
+      "hash_status": "computed",
+      "path": "scripts/testdata/external_trust_artifact_bundle_doctor/healthy/events.jsonl",
+      "present": true,
+      "required": true
+    },
+    {
+      "content_hash": "a0e2020db2707064c4b8fa201633b5459563bf8b2f4c0c68f093eff48edfe604",
+      "expected_hash": null,
+      "hash_status": "computed",
+      "path": "scripts/testdata/external_trust_artifact_bundle_doctor/healthy/commands.txt",
+      "present": true,
+      "required": true
+    },
+    {
+      "content_hash": "0ffeaed2b3f90c1b339183393fa0878a50342e51e7cf47ec5b1d5e95abf52491",
+      "expected_hash": null,
+      "hash_status": "computed",
+      "path": "scripts/testdata/external_trust_artifact_bundle_doctor/healthy/summary.md",
+      "present": true,
+      "required": true
+    }
+  ],
+  "bundle": {
+    "bundle_type": "benchmark",
+    "content_hash": "cd84795cf79b10e622eca19ec5d62abcfbe556c4581d86abc089aad7f8b442e8",
+    "manifest_path": "scripts/testdata/external_trust_artifact_bundle_doctor/healthy/bundle.json",
+    "path": "scripts/testdata/external_trust_artifact_bundle_doctor/healthy",
+    "schema_version": "franken-engine.benchmark-evidence-bundle.v1"
+  },
+  "command_transcript_refs": [
+    {
+      "content_hash": "a0e2020db2707064c4b8fa201633b5459563bf8b2f4c0c68f093eff48edfe604",
+      "line_count": 1,
+      "path": "scripts/testdata/external_trust_artifact_bundle_doctor/healthy/commands.txt"
+    }
+  ],
+  "decision": "supported",
+  "evidence_freshness": {
+    "fresh_until_utc": "2035-01-01T00:00:00Z",
+    "now_utc": "2030-01-01T00:00:00Z",
+    "status": "fresh"
+  },
+  "generated_at_utc": "2030-01-01T00:00:00Z",
+  "local_fallback_findings": [],
+  "local_fallback_status": "absent",
+  "mock_findings": [],
+  "mock_status": "absent",
+  "mutation_policy": {
+    "mutates_agent_mail": false,
+    "mutates_br": false,
+    "mutates_cargo_targets": false,
+    "mutates_claim_matrix": false,
+    "mutates_evidence_bundles": false,
+    "mutates_file_reservations": false,
+    "mutates_git": false,
+    "mutates_remote_workers": false,
+    "mutates_runtime_policy": false
+  },
+  "reason_codes": [],
+  "receipt_id": "bundle-doctor-eef0f25b12581538",
+  "remediation": [],
+  "renderer_boundary": {
+    "future_rich_renderer_provider": "/dp/frankentui",
+    "local_rich_renderer_shipped": false
+  },
+  "replay_commands": [
+    "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_external_trust_fixture cargo test -p frankenengine-engine --test fixture"
+  ],
+  "schema_version": "franken-engine.external-trust-artifact-bundle-doctor.v1",
+  "source_line_refs": []
+}

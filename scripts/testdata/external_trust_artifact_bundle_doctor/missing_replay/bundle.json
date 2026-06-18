@@ -1,0 +1,11 @@
+{
+  "schema_version": "franken-engine.proof-artifact-bundle.v1",
+  "bundle_type": "proof",
+  "bundle_id": "missing-replay-bundle",
+  "fresh_until_utc": "2035-01-01T00:00:00Z",
+  "required_members": [
+    {
+      "path": "events.jsonl"
+    }
+  ]
+}

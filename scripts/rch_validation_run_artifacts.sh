@@ -300,6 +300,7 @@ jq -r '
   "| source failure | yes | fix or cite touched-target failure |",
   "| remote toolchain failure | no | cite as worker/toolchain blocker |",
   "| remote timeout | no | split target, salvage artifacts, or rerun narrower |",
+  "| admission refused before worker start | no | preserve dry-run receipt and rerun diagnose before exec |",
   "| local fallback refusal | no | cite remote infrastructure blocker |",
   "| missing proof | no | rerun with preserved `rch exec --` evidence |",
   "",

@@ -11,6 +11,9 @@ failures=0
 case_ids=(
   healthy_response_times
   stale_ack_required_thread
+  ack_attempt_failed
+  ack_attempt_failed_missing_identity_receipt
+  ack_attempt_failed_contradictory_identity_receipt
   expired_reservation
   inactive_assignee_active_reservation
   missing_mail_snapshot
@@ -39,6 +42,9 @@ fixtures_shape_ok() {
     .schema_version == "franken-engine.swarm-agent-mail-sla-panel.fixtures.v1"
     and ([.cases[].case_id] | sort) == ([
       "contact_policy_blocked_recipient",
+      "ack_attempt_failed",
+      "ack_attempt_failed_contradictory_identity_receipt",
+      "ack_attempt_failed_missing_identity_receipt",
       "contradictory_ownership_reservation",
       "expired_reservation",
       "healthy_response_times",
@@ -49,6 +55,9 @@ fixtures_shape_ok() {
     ] | sort)
     and any(.cases[]; .case_id == "healthy_response_times" and .expected.decision == "pass")
     and any(.cases[]; .case_id == "stale_ack_required_thread" and (.expected.diagnostic_codes | index("stale_ack_required_thread") != null))
+    and any(.cases[]; .case_id == "ack_attempt_failed" and (.expected.diagnostic_codes | index("ack_attempt_failed") != null))
+    and any(.cases[]; .case_id == "ack_attempt_failed_missing_identity_receipt" and (.expected.diagnostic_codes | index("identity_reconciliation_receipt_missing") != null))
+    and any(.cases[]; .case_id == "ack_attempt_failed_contradictory_identity_receipt" and (.expected.diagnostic_codes | index("identity_reconciliation_receipt_contradicts_ack_attempt") != null))
     and any(.cases[]; .case_id == "expired_reservation" and (.expected.diagnostic_codes | index("expired_reservation") != null))
     and any(.cases[]; .case_id == "inactive_assignee_active_reservation" and (.expected.diagnostic_codes | index("inactive_assignee_active_reservation") != null))
     and any(.cases[]; .case_id == "missing_mail_snapshot" and (.expected.diagnostic_codes | index("missing_mail_snapshot") != null))
@@ -91,7 +100,7 @@ run_case() {
   local case_id="$2"
   local case_dir="${tmp_root}/${case_id}"
   local case_json="${case_dir}/case.json"
-  local mail_path br_path reservations_path
+  local mail_path br_path reservations_path identity_receipt_path
   local actual_exit expected_decision expected_codes now_ts
   mkdir -p "$case_dir"
 
@@ -103,6 +112,7 @@ run_case() {
   mail_path="$(write_optional_json "$case_json" "mail_snapshot" "${case_dir}/mail_snapshot.json")"
   br_path="$(write_optional_json "$case_json" "br_in_progress" "${case_dir}/br_in_progress.json")"
   reservations_path="$(write_optional_json "$case_json" "file_reservations" "${case_dir}/file_reservations.json")"
+  identity_receipt_path="$(write_optional_json "$case_json" "identity_reconciliation_receipt" "${case_dir}/identity_reconciliation_receipt.json")"
 
   args=(
     --now-ts "$now_ts"
@@ -117,6 +127,9 @@ run_case() {
   fi
   if [[ -n "$reservations_path" ]]; then
     args+=(--file-reservations-json "$reservations_path")
+  fi
+  if [[ -n "$identity_receipt_path" ]]; then
+    args+=(--identity-reconciliation-receipt-json "$identity_receipt_path")
   fi
 
   set +e
@@ -166,6 +179,45 @@ run_case() {
     jq -e 'any(.diagnostics[]?; .code == "stale_ack_required_thread" and (.message_age_seconds // 0) > 900)' \
       "${case_dir}/out/agent_mail_sla_report.json" >/dev/null || {
       record_failure "${case_id} missing message age evidence"
+      return
+    }
+  fi
+  if [[ "$case_id" == "ack_attempt_failed" ]]; then
+    jq -e '
+      any(.diagnostics[]?;
+        .code == "ack_attempt_failed"
+        and .severity == "error"
+        and (.message_id // 0) == 17897
+        and ((.ack_error // "") | contains("MessageRecipient not found"))
+        and .identity_reconciliation_linked == true
+        and (.identity_reconciliation_decision // "") == "fail_closed"
+      )
+    ' "${case_dir}/out/agent_mail_sla_report.json" >/dev/null || {
+      record_failure "${case_id} missing linked ack failure evidence"
+      return
+    }
+  fi
+  if [[ "$case_id" == "ack_attempt_failed_missing_identity_receipt" ]]; then
+    jq -e '
+      any(.diagnostics[]?;
+        .code == "identity_reconciliation_receipt_missing"
+        and .severity == "warning"
+      )
+    ' "${case_dir}/out/agent_mail_sla_report.json" >/dev/null || {
+      record_failure "${case_id} missing degraded receipt diagnostic"
+      return
+    }
+  fi
+  if [[ "$case_id" == "ack_attempt_failed_contradictory_identity_receipt" ]]; then
+    jq -e '
+      any(.diagnostics[]?;
+        .code == "identity_reconciliation_receipt_contradicts_ack_attempt"
+        and .severity == "error"
+        and (.identity_reconciliation_decision // "") == "pass"
+        and (.receipt_bead_id // "") == "bd-different"
+      )
+    ' "${case_dir}/out/agent_mail_sla_report.json" >/dev/null || {
+      record_failure "${case_id} missing contradictory receipt evidence"
       return
     }
   fi

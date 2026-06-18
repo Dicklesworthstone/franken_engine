@@ -893,22 +893,30 @@ pub struct AttestationTransitionReceipt {
     pub signature: Signature,
 }
 
+/// Length-prefix a variable-length field (u64 LE length + bytes) so that
+/// adjacent free-form fields cannot re-segment across a shared boundary
+/// (bd-fn47f content-hash/preimage injectivity).
+fn push_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    buf.extend_from_slice(bytes);
+}
+
 impl AttestationTransitionReceipt {
     fn preimage(&self) -> Vec<u8> {
+        // bd-fn47f: reason/trace_id/decision_id/policy_id are free-form String
+        // fields. The old 0x00-delimited preimage was NOT injective because a Rust
+        // String can contain U+0000: reason="a"+trace_id="b\0c" produced the same
+        // SIGNED bytes as reason="a\0b"+trace_id="c", so one Ed25519 signature
+        // validated two distinct transition receipts. Length-prefix every variable
+        // field instead (the hashed field SET is unchanged).
         let mut buf = Vec::new();
         buf.extend_from_slice(&self.sequence.to_be_bytes());
-        buf.extend_from_slice(self.from_state.to_string().as_bytes());
-        buf.push(0);
-        buf.extend_from_slice(self.to_state.to_string().as_bytes());
-        buf.push(0);
-        buf.extend_from_slice(self.reason.as_bytes());
-        buf.push(0);
-        buf.extend_from_slice(self.trace_id.as_bytes());
-        buf.push(0);
-        buf.extend_from_slice(self.decision_id.as_bytes());
-        buf.push(0);
-        buf.extend_from_slice(self.policy_id.as_bytes());
-        buf.push(0);
+        push_len_prefixed(&mut buf, self.from_state.to_string().as_bytes());
+        push_len_prefixed(&mut buf, self.to_state.to_string().as_bytes());
+        push_len_prefixed(&mut buf, self.reason.as_bytes());
+        push_len_prefixed(&mut buf, self.trace_id.as_bytes());
+        push_len_prefixed(&mut buf, self.decision_id.as_bytes());
+        push_len_prefixed(&mut buf, self.policy_id.as_bytes());
         buf.extend_from_slice(&self.timestamp_ns.to_be_bytes());
         buf.extend_from_slice(self.signer_verification_key.as_bytes());
         buf.extend_from_slice(&SIGNATURE_SENTINEL);
@@ -2880,6 +2888,52 @@ mod tests {
         for receipt in mgr.transition_receipts() {
             receipt.verify().expect("receipt signature should be valid");
         }
+    }
+
+    #[test]
+    fn transition_receipt_preimage_len_prefixes_free_string_boundaries_bd_fn47f() {
+        // Regression (bd-fn47f): reason/trace_id/decision_id/policy_id are free-form
+        // String fields in a SIGNED preimage. The old 0x00-delimited preimage made
+        // reason="a"+trace_id="b\0c" collide byte-for-byte with reason="a\0b"+trace_id="c"
+        // (sequence/timestamp/from/to/decision/policy held equal), so a single Ed25519
+        // signature validated two distinct transition receipts -- a forgeable receipt.
+        let key = make_signing_key();
+        let req_a =
+            AttestationActionRequest::new("b\0c", "d", "p", AutonomousAction::MetricsEmission, 7);
+        let req_b =
+            AttestationActionRequest::new("c", "d", "p", AutonomousAction::MetricsEmission, 7);
+        let a = AttestationTransitionReceipt::signed(
+            1,
+            AttestationFallbackState::Normal,
+            AttestationFallbackState::Degraded,
+            "a",
+            &req_a,
+            &key,
+        )
+        .expect("sign receipt a");
+        let b = AttestationTransitionReceipt::signed(
+            1,
+            AttestationFallbackState::Normal,
+            AttestationFallbackState::Degraded,
+            "a\0b",
+            &req_b,
+            &key,
+        )
+        .expect("sign receipt b");
+
+        // Distinct receipts must produce distinct signing preimages.
+        assert_ne!(
+            a.preimage(),
+            b.preimage(),
+            "len-prefixed preimage must separate the reason/trace_id boundary"
+        );
+        // And A's signature must not transfer onto B's content (no cross-forgery).
+        let mut forged = b.clone();
+        forged.signature = a.signature.clone();
+        assert!(
+            forged.verify().is_err(),
+            "a signature must not validate a distinct transition receipt"
+        );
     }
 
     // -- Recovery backlog --

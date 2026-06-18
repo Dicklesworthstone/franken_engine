@@ -94,16 +94,11 @@ pub enum VerificationMethod {
 
 impl VerificationMethod {
     /// Whether a real backend runner for this method is currently wired into
-    /// the validator. When this returns `false`, [`StatementValidationContext::
-    /// verify_proof_obligation`] (and the equivalent path in
-    /// `full_ir_translation_validator`) returns `true` as a placeholder — the
-    /// `true` is a *rubber stamp*, not a real discharge. The proof-bundle and
-    /// matrix-promotion machinery (bd-cixqu.7 Track G / FE-CLAIM-016..021)
-    /// should consult this helper before claiming any obligation verified by
-    /// these methods has been formally discharged. Tracked under bd-1lw7r.8;
-    /// the parallel optimization_proof_carriers path already routes
-    /// `Z3`-discharged methods through `invoke_z3` (bd-cixqu.7.17 /
-    /// bd-cixqu.7.17.1) and fail-closes the runner-dependent ones.
+    /// the validator. When this returns `false`, proof obligations using that
+    /// method fail closed in [`StatementValidationContext::
+    /// verify_proof_obligation`]. Tracked under bd-bnx59 / bd-1lw7r.8; the
+    /// parallel optimization_proof_carriers path already routes `Z3`-discharged
+    /// methods through `invoke_z3` and fail-closes runner-dependent methods.
     pub fn is_runner_wired(&self) -> bool {
         match self {
             // LeanFormal only does a non-empty-string check in
@@ -299,14 +294,10 @@ impl StatementValidationContext {
 
     /// Verify a single proof obligation.
     ///
-    /// **bd-1lw7r.8 honesty note**: the current implementation does NOT
-    /// discharge runner-dependent obligations. `LeanFormal` only checks the
-    /// premise/conclusion strings are non-empty (structural well-formedness),
-    /// and the other three methods unconditionally return `true`. A `true`
-    /// return from this function therefore means "structurally well-formed
-    /// *or* rubber-stamped" — not "formally verified". Use
-    /// [`VerificationMethod::is_runner_wired`] to filter results that depend
-    /// on a real backend before reporting them as proven.
+    /// **bd-bnx59 / bd-1lw7r.8 honesty note**: the statement validator does not
+    /// yet discharge runner-dependent obligations. Until a real runner is
+    /// wired for a method, obligations using that method fail closed rather
+    /// than being counted as proven from structural well-formedness alone.
     ///
     /// The matching path in `optimization_proof_carriers::verify_proof_obligation`
     /// already routes `Z3`-discharged methods through `invoke_z3` and
@@ -316,33 +307,21 @@ impl StatementValidationContext {
     fn verify_proof_obligation(&self, obligation: &ProofObligation) -> bool {
         match obligation.verification_method {
             VerificationMethod::LeanFormal => {
-                // FIXME (bd-1lw7r.8): rubber-stamp until the Lean 4 runner
-                // is wired (bd-cixqu.7.17.3). This is *structural*
-                // well-formedness, not a Lean proof discharge — do not
-                // interpret a `true` here as a verified obligation.
-                !obligation.premise.is_empty() && !obligation.conclusion.is_empty()
+                // Lean 4 integration exists as a proof-bundle runner elsewhere,
+                // but this statement-level path has no wired dispatcher yet.
+                false
             }
             VerificationMethod::SymbolicExecution => {
-                // FIXME (bd-1lw7r.8): rubber-stamp until a symbolic-execution
-                // engine is wired. `is_runner_wired()` returns false for this
-                // method so downstream proof-bundle emitters can detect.
-                true
+                // No symbolic-execution backend is wired into this validator.
+                false
             }
             VerificationMethod::ModelChecking => {
-                // FIXME (bd-1lw7r.8): rubber-stamp until a model checker
-                // (TLA+ / Spin / Z3) is wired. The Z3 route already exists in
-                // `optimization_proof_carriers::verify_proof_obligation`
-                // (bd-cixqu.7.17.1); the statement validator should route
-                // here when the integration is generalised.
-                true
+                // No model-checker backend is wired into this validator.
+                false
             }
             VerificationMethod::DifferentialTesting => {
-                // FIXME (bd-1lw7r.8): rubber-stamp until a differential
-                // tester is wired. `optimization_proof_carriers` fail-closes
-                // this method explicitly (`Ok(ProofResult::Failed)`); the
-                // equivalent fail-close in the statement validator awaits a
-                // companion downstream-test sweep.
-                true
+                // No differential runner is wired into this validator.
+                false
             }
         }
     }
@@ -376,6 +355,35 @@ mod verification_method_wired_tests {
     #[test]
     fn differential_testing_is_not_runner_wired() {
         assert!(!VerificationMethod::DifferentialTesting.is_runner_wired());
+    }
+
+    #[test]
+    fn unwired_methods_fail_closed_in_statement_validation() {
+        use super::{LemmaType, ProofObligation, StatementValidationContext, ValidationLemma};
+        use std::collections::BTreeSet;
+
+        let mut ctx = StatementValidationContext::new();
+        ctx.validation_lemmas.push(ValidationLemma {
+            lemma_id: "unwired_symbolic_obligation".to_string(),
+            lemma_type: LemmaType::ControlFlowPreservation,
+            source_nodes: BTreeSet::from([1]),
+            target_nodes: BTreeSet::from([1]),
+            invariant: "symbolic obligation must not rubber-stamp".to_string(),
+            proof_obligations: vec![ProofObligation {
+                obligation_id: "symbolic_equivalence".to_string(),
+                premise: "source semantics".to_string(),
+                conclusion: "target semantics".to_string(),
+                verification_method: VerificationMethod::SymbolicExecution,
+            }],
+        });
+
+        let result = ctx.validate_lemmas();
+        assert!(!result.validation_successful);
+        assert_eq!(result.verified_lemmas, 0);
+        assert_eq!(
+            result.failed_lemmas,
+            vec!["unwired_symbolic_obligation".to_string()]
+        );
     }
 }
 
@@ -550,7 +558,9 @@ mod tests {
         ctx.generate_phi_node_lemmas().unwrap();
 
         let result = ctx.validate_lemmas();
-        assert!(result.validation_successful);
-        assert!(result.phi_node_correctness_proven);
+        assert!(!result.validation_successful);
+        assert_eq!(result.verified_lemmas, 0);
+        assert_eq!(result.failed_lemmas, vec!["phi_merge_2_x".to_string()]);
+        assert!(!result.phi_node_correctness_proven);
     }
 }

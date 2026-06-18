@@ -368,30 +368,28 @@ impl FullIrValidationContext {
 
     /// Verify that all global invariants hold.
     ///
-    /// **bd-1lw7r.8 honesty note**: every `GlobalInvariantType` arm currently
-    /// rubber-stamps `true`. That's a placeholder, not a real discharge —
-    /// the actual verification would invoke a theorem prover or a type-system
-    /// checker over the merged IR. Consult
-    /// [`VerificationMethod::is_runner_wired`] (sibling enum in
-    /// `statement_translation_validator`) before claiming any of these
-    /// invariants has been formally proven. The structural well-formedness
-    /// checks earlier in the pipeline (`validate_transformation_step` at
-    /// line ~314, which rejects vacuous lemmas and no-op transitions) remain
-    /// honest — only this *global-invariant* verifier is the rubber stamp.
+    /// **bd-bnx59 / bd-1lw7r.8 honesty note**: there is no theorem prover or
+    /// type-system checker wired into this global-invariant path yet. The
+    /// structural well-formedness checks earlier in the pipeline
+    /// (`validate_transformation_step`) remain useful, but global invariants
+    /// fail closed until a discipline-specific backend is integrated.
     fn verify_global_invariants(&mut self) -> bool {
+        if self.global_invariants.is_empty() {
+            return false;
+        }
+
+        let mut all_verified = true;
+
         for invariant in &self.global_invariants {
-            // FIXME (bd-1lw7r.8): rubber-stamp until a real prover/checker is
-            // wired. Each arm should route to its discipline-appropriate
-            // backend (Z3 for SemanticEquivalence / TypeSafety, region-based
-            // analysis for VariableLifetimeCorrectness, etc.) when that
-            // infrastructure lands under bd-cixqu.7 Track G.
+            // Fail closed until each invariant type has a real backend
+            // (Z3/theorem prover, type checker, region analysis, etc.).
             let verification_success = match invariant.invariant_type {
-                GlobalInvariantType::TypeSafety => true,
-                GlobalInvariantType::MemorySafety => true,
-                GlobalInvariantType::CapabilityConfinement => true,
-                GlobalInvariantType::SemanticEquivalence => true,
-                GlobalInvariantType::ControlFlowIntegrity => true,
-                GlobalInvariantType::VariableLifetimeCorrectness => true,
+                GlobalInvariantType::TypeSafety => false,
+                GlobalInvariantType::MemorySafety => false,
+                GlobalInvariantType::CapabilityConfinement => false,
+                GlobalInvariantType::SemanticEquivalence => false,
+                GlobalInvariantType::ControlFlowIntegrity => false,
+                GlobalInvariantType::VariableLifetimeCorrectness => false,
             };
 
             self.verification_coverage
@@ -399,10 +397,11 @@ impl FullIrValidationContext {
                 .insert(invariant.invariant_type.clone(), verification_success);
 
             if !verification_success {
-                return false;
+                all_verified = false;
             }
         }
-        true
+
+        all_verified
     }
 
     /// Check if complete coverage has been achieved.
@@ -1489,6 +1488,18 @@ mod tests {
     }
 
     #[test]
+    fn empty_global_invariant_set_fails_closed() {
+        let mut ctx = FullIrValidationContext::new();
+
+        assert!(!ctx.verify_global_invariants());
+        assert!(
+            ctx.verification_coverage
+                .global_invariant_coverage
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn full_pipeline_validation() {
         let mut ctx = FullIrValidationContext::new();
 
@@ -1527,13 +1538,14 @@ mod tests {
         ctx.generate_global_invariants().unwrap();
 
         let result = ctx.validate_full_pipeline();
-        assert!(result.pipeline_validation_successful);
+        assert!(!result.pipeline_validation_successful);
         assert_eq!(result.verified_transformation_steps, 3);
         assert!(
             result
                 .expression_validation_result
                 .semantic_preservation_proven
         );
+        assert!(!result.global_invariants_maintained);
     }
 
     #[test]

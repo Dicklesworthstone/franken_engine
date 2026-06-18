@@ -201,12 +201,14 @@ fn complex_control_flow_validation() {
     assert_eq!(phi_lemmas, 2); // Two phi nodes
     assert_eq!(control_lemmas, 5); // Five control flow nodes
 
-    // Validate all lemmas
+    // Validate all lemmas. The obligations are structurally generated, but no
+    // statement-level proof runners are wired, so proof discharge fails closed.
     let result = ctx.validate_lemmas();
-    assert!(result.validation_successful);
-    assert!(result.phi_node_correctness_proven);
-    assert!(result.control_flow_preservation_proven);
-    assert_eq!(result.verified_lemmas, phi_lemmas + control_lemmas);
+    assert!(!result.validation_successful);
+    assert!(!result.phi_node_correctness_proven);
+    assert!(!result.control_flow_preservation_proven);
+    assert_eq!(result.verified_lemmas, 0);
+    assert_eq!(result.failed_lemmas.len(), phi_lemmas + control_lemmas);
 }
 
 /// Test statement test case generation and validation.
@@ -388,15 +390,16 @@ fn validation_result_comprehensive() {
     assert!(phi_count > 0);
     assert!(cf_count > 0);
 
-    // Validate everything
+    // Validate everything. The structural obligations exist, but without wired
+    // runners they must not be counted as proven.
     let result = ctx.validate_lemmas();
 
-    assert!(result.validation_successful);
-    assert!(result.semantic_equivalence_proven);
-    assert!(result.control_flow_preservation_proven);
-    assert!(result.phi_node_correctness_proven);
-    assert_eq!(result.verified_lemmas, phi_count + cf_count);
-    assert!(result.failed_lemmas.is_empty());
+    assert!(!result.validation_successful);
+    assert!(!result.semantic_equivalence_proven);
+    assert!(!result.control_flow_preservation_proven);
+    assert!(!result.phi_node_correctness_proven);
+    assert_eq!(result.verified_lemmas, 0);
+    assert_eq!(result.failed_lemmas.len(), phi_count + cf_count);
 }
 
 /// Test error handling for malformed control flow.
@@ -434,7 +437,9 @@ fn translation_validation_integration() {
     let lemmas = ctx.generate_control_flow_lemmas().unwrap();
     assert!(lemmas > 0);
 
-    // Validation should handle mixed statement/expression cases
+    // Structural generation works, but unwired proof discharge fails closed.
     let result = ctx.validate_lemmas();
-    assert!(result.validation_successful);
+    assert!(!result.validation_successful);
+    assert_eq!(result.verified_lemmas, 0);
+    assert_eq!(result.failed_lemmas, vec!["control_flow_1".to_string()]);
 }

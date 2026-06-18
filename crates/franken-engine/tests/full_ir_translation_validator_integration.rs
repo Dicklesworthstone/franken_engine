@@ -267,12 +267,16 @@ fn end_to_end_validation_workflow() {
     let invariant_count = ctx.generate_global_invariants().unwrap();
 
     // Verify complete validation
-    assert!(invariant_count >= 0); // Some invariants generated
+    assert!(invariant_count > 0); // Some invariants generated
     assert_eq!(ctx.pipeline_stages.len(), 3); // All transformations added
 
-    // Validate pipeline using the current API method
+    // Structural steps are present, but generated global invariants have no
+    // wired prover/checker and must fail closed.
     let result = ctx.validate_full_pipeline();
-    assert!(result.pipeline_validation_successful);
+    assert!(!result.pipeline_validation_successful);
+    assert_eq!(result.verified_transformation_steps, 3);
+    assert!(!result.global_invariants_maintained);
+    assert!(!result.semantic_equivalence_end_to_end);
 }
 
 /// Test validation with direct IR level jumps.
@@ -375,10 +379,10 @@ fn complex_control_flow_validation() {
     );
 }
 
-/// Build a *well-formed* transformation step: it rewrites the representation
-/// across a genuine IR-level transition and carries a validation lemma that maps
-/// real source/target nodes and discharges a stated proof obligation. Such a
-/// step must be accepted by `validate_transformation_step`.
+/// Build a structurally well-formed transformation step: it rewrites the
+/// representation across a genuine IR-level transition and carries a validation
+/// lemma that maps real source/target nodes and states a proof obligation. This
+/// is not a runner-backed proof discharge.
 fn proven_step(
     name: &str,
     source_level: IrLevel,
@@ -408,11 +412,10 @@ fn proven_step(
     }
 }
 
-/// Build a fully proven IR0→IR1→IR2→IR3 pipeline with global invariants and full
-/// G.6 feature-class breadth, so `validate_full_pipeline` can reach a complete-
-/// coverage verdict. Callers still supply the G.5 statement/control-flow
-/// coverage percentages (G.4 expression coverage is set during validation).
-fn proven_full_pipeline() -> FullIrValidationContext {
+/// Build a structurally complete IR0→IR1→IR2→IR3 pipeline with global
+/// invariants and full G.6 feature-class breadth. The global invariants still
+/// fail closed until their backend checkers are wired.
+fn structurally_complete_full_pipeline() -> FullIrValidationContext {
     let mut ctx = FullIrValidationContext::new();
     ctx.add_transformation_step(proven_step(
         "parse",
@@ -549,7 +552,7 @@ fn validation_test_case_generation() {
 /// structural-equivalence verdict. Drives the real `validate_full_pipeline`.
 #[test]
 fn integration_with_previous_validation() {
-    let mut ctx = proven_full_pipeline();
+    let mut ctx = structurally_complete_full_pipeline();
     // Feed in G.5 statement/control-flow coverage; G.4 expression coverage is
     // established by validate_full_pipeline itself.
     ctx.verification_coverage.statement_coverage_percentage = 100.0;
@@ -557,7 +560,7 @@ fn integration_with_previous_validation() {
 
     let result = ctx.validate_full_pipeline();
 
-    assert!(result.pipeline_validation_successful);
+    assert!(!result.pipeline_validation_successful);
     assert_eq!(result.verified_transformation_steps, 3);
     assert!(result.failed_transformation_steps.is_empty());
     assert!(
@@ -565,7 +568,18 @@ fn integration_with_previous_validation() {
             .expression_validation_result
             .semantic_preservation_proven
     );
-    assert!(result.global_invariants_maintained);
+    assert!(!result.global_invariants_maintained);
+    assert!(
+        !ctx.verification_coverage
+            .global_invariant_coverage
+            .is_empty()
+    );
+    assert!(
+        ctx.verification_coverage
+            .global_invariant_coverage
+            .values()
+            .all(|verified| !*verified)
+    );
 
     // The proven pipeline covers every IR level.
     for level in [IrLevel::IR0, IrLevel::IR1, IrLevel::IR2, IrLevel::IR3] {
@@ -575,9 +589,10 @@ fn integration_with_previous_validation() {
         );
     }
 
-    // With G.4 + G.5 + G.6 coverage all complete, the end-to-end verdict holds.
+    // G.4 + G.5 + G.6 coverage can be complete, but the end-to-end proof
+    // verdict stays false while global invariant checkers are unwired.
     assert!(result.complete_coverage_achieved);
-    assert!(result.semantic_equivalence_end_to_end);
+    assert!(!result.semantic_equivalence_end_to_end);
 
     // Sanity: dropping G.5 control-flow coverage must collapse the end-to-end
     // verdict, proving it genuinely depends on the previous validators.
@@ -585,8 +600,9 @@ fn integration_with_previous_validation() {
     let degraded = ctx.validate_full_pipeline();
     assert!(!degraded.complete_coverage_achieved);
     assert!(!degraded.semantic_equivalence_end_to_end);
-    // Per-step structural validation is unaffected by the missing percentage.
-    assert!(degraded.pipeline_validation_successful);
+    // Per-step structural validation is unaffected, but the pipeline verdict is
+    // already fail-closed on global invariants.
+    assert!(!degraded.pipeline_validation_successful);
 }
 
 /// Performance with a large pipeline: validating several hundred proven steps
@@ -690,7 +706,7 @@ fn concurrent_validation_stability() {
     let handles: Vec<_> = (0..4)
         .map(|_| {
             thread::spawn(|| {
-                let mut ctx = proven_full_pipeline();
+                let mut ctx = structurally_complete_full_pipeline();
                 ctx.verification_coverage.statement_coverage_percentage = 100.0;
                 ctx.verification_coverage.control_flow_coverage_percentage = 100.0;
                 let r = ctx.validate_full_pipeline();
@@ -706,7 +722,7 @@ fn concurrent_validation_stability() {
     let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
     assert_eq!(results.len(), 4);
     assert!(
-        results.iter().all(|&r| r == (true, 3, true)),
+        results.iter().all(|&r| r == (false, 3, false)),
         "nondeterministic validation verdicts: {results:?}"
     );
 }

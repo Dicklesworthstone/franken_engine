@@ -1,6 +1,6 @@
 # FrankenEngine Performance Baseline
 
-**Last Updated:** 2026-05-25  
+**Last Updated:** 2026-06-18
 **Baseline Version:** FrankenEngine baseline interpreter (not JIT-optimized)  
 **Artifact Location:** `artifacts/performance_baselines/2026-04-16_12-41-04/`
 
@@ -95,6 +95,21 @@ static DEFAULT_EVIDENCE_VERIFICATION_KEY: std::sync::LazyLock<VerificationKey> =
 For evidence supporting this optimization, see `tests/artifacts/perf/20260520T214829Z-prof-pass1/06_HYPOTHESIS_LEDGER.md#h1`.
 
 **Note:** Any additional cached cryptographic material must follow this same pattern: deterministic construction from constant bytes with LazyLock initialization to ensure thread-safety and replay compatibility.
+
+### PERF-H1 validation snapshot
+
+The current H1 proof chain is anchored by the frozen `pass1`
+`evidence_ledger_bundle` baseline plus the 2026-06-18 remote-only H1.4/H1.5
+validation runs. The H1.4 bench validator remains the statistical authority for
+the performance claim; the H1.6 smoke script is the one-shot operator check that
+the evidence-ledger tests, signature golden, and hot Criterion target still run
+under the accepted cap.
+
+| bead | artifact | result |
+|---|---|---|
+| PERF-H1.4 (`bd-o4cbn.1.4`) | `tests/artifacts/perf/h1_bench/20260618T1410Z/summary.md` | `evidence_ledger_bundle` mean `225145.0 ns` -> `71346.4 ns` (`-68.31 %`), CI95 `[70296.4, 72432.0] ns`, CV `7.7 %`; gate verdict PASS |
+| PERF-H1.5 (`bd-o4cbn.1.5`) | `tests/artifacts/perf/h1_replay/20260618T144245Z/` | replay coverage `3/3`, fail-closed fixture rejects as expected, metamorphic suite `12` relations / `12000` pairs / `0` violations |
+| PERF-H1.6 (`bd-o4cbn.1.6`) | `scripts/perf/run_perf_h1_smoke.sh` | remote-only E2E smoke emits `tests/artifacts/perf/h1_smoke/<run-id>/events.jsonl` with `perf.profile.run_start`, `perf.profile.sample_collected`, and `perf.profile.run_complete`; `evidence_ledger_bundle` cap is `<= 110000 ns` |
 
 ## Reusable canonical-encoding buffers
 

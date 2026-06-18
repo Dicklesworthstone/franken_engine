@@ -41,9 +41,14 @@ GROUP="real_runtime_hot_paths"
 TARGET_BENCH="evidence_ledger_bundle"
 PASS1_DIR="tests/artifacts/perf/20260520T214829Z-prof-pass1"
 RUN_TS="${H1_BENCH_VALIDATE_RUN_TS:-$(date -u +%Y%m%dT%H%M%SZ)}"
+RUN_DIR="tests/artifacts/perf/h1_bench/${RUN_TS}"
+CRITERION_HOME_DIR="${REPO_ROOT}/${RUN_DIR}/criterion"
 CARGO_TARGET_DIR_DEFAULT="/tmp/rch_target_franken_engine_h1_bench_validate_${USER:-agent}_${RUN_TS}"
 EFFECTIVE_CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$CARGO_TARGET_DIR_DEFAULT}"
-CRIT_DIR="$EFFECTIVE_CARGO_TARGET_DIR/criterion"
+# RCH rewrites cargo target dirs to worker-local .rch-target-* paths and excludes
+# them from sync-back. Keep build artifacts there, but force Criterion results
+# into the run artifact directory so postprocessing has synced estimates.
+CRIT_DIR="$CRITERION_HOME_DIR"
 RCH_EXEC_TIMEOUT_SECONDS="${RCH_EXEC_TIMEOUT_SECONDS:-5400}"
 RCH_LOG_DIR="${H1_BENCH_VALIDATE_RCH_LOG_DIR:-tests/artifacts/perf/h1_bench/rch_logs}"
 PASS1_RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc"
@@ -62,8 +67,7 @@ BENCHES=(
     transport_certificate_serialization
 )
 
-RUN_DIR="tests/artifacts/perf/h1_bench/${RUN_TS}"
-mkdir -p "$RUN_DIR"
+mkdir -p "$RUN_DIR" "$CRITERION_HOME_DIR"
 echo "[h1.4] run dir: $RUN_DIR"
 
 strip_ansi_file() {
@@ -87,8 +91,9 @@ mkdir -p "$RCH_LOG_DIR"
 rch_log_path="${RCH_LOG_DIR}/${RUN_TS}.log"
 remote_target_dir="$EFFECTIVE_CARGO_TARGET_DIR"
 echo "[h1.4] heavy validation must run remotely through rch"
-printf '[h1.4] probe command: RCH_REQUIRE_REMOTE=1 RCH_BUILD_TIMEOUT_SEC=%q rch diagnose --dry-run --json -- env RCH_CARGO_WRAPPER_BYPASS=1 CARGO_ENCODED_RUSTFLAGS=%q CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=%q %q bench --bench hot_paths -- --save-baseline post_h1 %q\n' \
+printf '[h1.4] probe command: RCH_REQUIRE_REMOTE=1 RCH_BUILD_TIMEOUT_SEC=%q rch diagnose --dry-run --json -- env RCH_CARGO_WRAPPER_BYPASS=1 CRITERION_HOME=%q CARGO_ENCODED_RUSTFLAGS=%q CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=%q %q bench --bench hot_paths -- --save-baseline post_h1 %q\n' \
     "$RCH_BUILD_TIMEOUT_SEC" \
+    "$CRITERION_HOME_DIR" \
     "$PASS1_ENCODED_RUSTFLAGS" \
     "$remote_target_dir" \
     "${CARGO:-/home/ubuntu/.cargo/bin/cargo}" \
@@ -101,6 +106,7 @@ if ! RCH_REQUIRE_REMOTE=1 \
     rch diagnose --dry-run --json -- \
     env \
     RCH_CARGO_WRAPPER_BYPASS=1 \
+    CRITERION_HOME="$CRITERION_HOME_DIR" \
     CARGO_ENCODED_RUSTFLAGS="$PASS1_ENCODED_RUSTFLAGS" \
     CARGO_INCREMENTAL=0 \
     CARGO_TARGET_DIR="${remote_target_dir}" \
@@ -126,9 +132,10 @@ if dry_run.get("would_offload") is not True:
 PYRCHDRY
 
 echo "[h1.4] remote cargo bench command:" | tee "$rch_log_path"
-printf 'RCH_REQUIRE_REMOTE=1 RCH_BUILD_TIMEOUT_SEC=%q timeout %q rch exec -- env RCH_CARGO_WRAPPER_BYPASS=1 CARGO_ENCODED_RUSTFLAGS=%q CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=%q %q bench --bench hot_paths -- --save-baseline post_h1 %q\n' \
+printf 'RCH_REQUIRE_REMOTE=1 RCH_BUILD_TIMEOUT_SEC=%q timeout %q rch exec -- env RCH_CARGO_WRAPPER_BYPASS=1 CRITERION_HOME=%q CARGO_ENCODED_RUSTFLAGS=%q CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=%q %q bench --bench hot_paths -- --save-baseline post_h1 %q\n' \
     "$RCH_EXEC_TIMEOUT_SECONDS" \
     "$RCH_EXEC_TIMEOUT_SECONDS" \
+    "$CRITERION_HOME_DIR" \
     "$PASS1_ENCODED_RUSTFLAGS" \
     "$remote_target_dir" \
     "${CARGO:-/home/ubuntu/.cargo/bin/cargo}" \
@@ -142,6 +149,7 @@ if ! RCH_REQUIRE_REMOTE=1 \
     rch exec -- \
     env \
     RCH_CARGO_WRAPPER_BYPASS=1 \
+    CRITERION_HOME="$CRITERION_HOME_DIR" \
     CARGO_ENCODED_RUSTFLAGS="$PASS1_ENCODED_RUSTFLAGS" \
     CARGO_INCREMENTAL=0 \
     CARGO_TARGET_DIR="${remote_target_dir}" \
@@ -159,10 +167,10 @@ if [[ "$run_status" != "0" ]]; then
 fi
 if [[ ! -s "$CRIT_DIR/$GROUP/$TARGET_BENCH/post_h1/estimates.json" ]]; then
     echo "[h1.4] missing synced Criterion estimates under $CRIT_DIR" >&2
-    echo "[h1.4] rch should sync custom CARGO_TARGET_DIR criterion/** artifacts for cargo bench; treat this as an artifact-sync failure" >&2
+    echo "[h1.4] rch should sync CRITERION_HOME criterion/** artifacts for cargo bench; treat this as an artifact-sync failure" >&2
     exit 1
 fi
-echo "[h1.4] using Criterion output synced back from rch target: $CRIT_DIR"
+echo "[h1.4] using Criterion output synced back from rch Criterion home: $CRIT_DIR"
 
 # ---------------------------------------------------------------------------
 # 4. Reconstruct the pass1 Criterion baseline from saved estimates so that
@@ -193,16 +201,17 @@ done
 # ---------------------------------------------------------------------------
 # 5. Fingerprint for this run.
 # ---------------------------------------------------------------------------
-python3 - "$RUN_DIR" "${RUN_DIR}/rch_dry_run.json" "$rch_log_path" "$remote_target_dir" "$PASS1_RUSTFLAGS" "$PASS1_ENCODED_RUSTFLAGS" <<'PYFP'
+python3 - "$RUN_DIR" "${RUN_DIR}/rch_dry_run.json" "$rch_log_path" "$remote_target_dir" "$CRITERION_HOME_DIR" "$PASS1_RUSTFLAGS" "$PASS1_ENCODED_RUSTFLAGS" <<'PYFP'
 import json, os, subprocess, sys, time, platform
 (
     run_dir,
     rch_dry_run_path,
     rch_log_path,
     cargo_target_dir,
+    criterion_home,
     pass1_rustflags,
     pass1_encoded_rustflags,
-) = sys.argv[1:7]
+) = sys.argv[1:8]
 def sh(*a):
     try:
         return subprocess.check_output(a, text=True, stderr=subprocess.DEVNULL).strip()
@@ -245,6 +254,7 @@ fp = {
     "execution": {
         "mode": "rch_remote",
         "cargo_target_dir": cargo_target_dir,
+        "criterion_home": criterion_home,
         "build_timeout_sec": os.environ.get("RCH_BUILD_TIMEOUT_SEC", ""),
         "rch_log_path": rch_log_path,
         "rch_dry_run": load_rch_dry_run(rch_dry_run_path),

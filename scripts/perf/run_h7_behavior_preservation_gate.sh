@@ -56,7 +56,7 @@ gate_command() {
     clippy)      echo "cargo clippy --all-targets -- -D warnings" ;;
     lib_test)    echo "cargo test --lib -p frankenengine-engine" ;;
     replay)      echo "./scripts/run_replay_coverage_metric_gate.sh ci" ;;
-    metamorphic) echo "cargo run -p franken-metamorphic --bin run_metamorphic_suite" ;;
+    metamorphic) echo "cargo run -p frankenengine-metamorphic --bin run_metamorphic_suite" ;;
     *)           echo "" ;;
   esac
 }

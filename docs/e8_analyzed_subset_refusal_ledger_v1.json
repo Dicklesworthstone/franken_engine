@@ -1,0 +1,237 @@
+{
+  "schema_version": "franken-engine.e8-analyzed-subset-refusal-ledger.v1",
+  "source_bead": "bd-fqlfw.8.4.1.1",
+  "parent_track": "bd-fqlfw.8.4.1",
+  "threat_model": {
+    "scope": "explicit_flow_ifc_v1",
+    "non_goals": [
+      "covert_channel_certification",
+      "timing_channel_certification",
+      "resource_side_channel_certification",
+      "full_non_use_certificate_soundness"
+    ]
+  },
+  "source_hooks": [
+    {
+      "surface": "data_contract_binding",
+      "path": "crates/franken-engine/src/data_contract.rs",
+      "symbols": [
+        "DataContract",
+        "DataContractRunBinding",
+        "E8RefusalLedgerReceipt",
+        "E8AdversarialRefusalFixture",
+        "DataContractRunBinding::uncertified_preflight_receipt",
+        "DataContractRunBinding::uncertified_preflight_receipt_with_adversarial_fixtures",
+        "DataContractError"
+      ]
+    },
+    {
+      "surface": "frankenctl_run_explain",
+      "path": "crates/franken-engine/src/bin/frankenctl.rs",
+      "symbols": [
+        "load_and_bind_data_contract",
+        "E8RefusalLedgerReceipt",
+        "build_run_explain_bundle"
+      ]
+    },
+    {
+      "surface": "parser_unsupported_diagnostics",
+      "path": "crates/franken-engine/src/parser.rs",
+      "symbols": [
+        "ParseErrorCode::UnsupportedSyntax",
+        "GrammarCoverageStatus"
+      ]
+    },
+    {
+      "surface": "flow_envelope",
+      "path": "crates/franken-engine/src/flow_envelope.rs",
+      "symbols": [
+        "FlowRequirement",
+        "FlowProofObligation",
+        "FlowProofMethod",
+        "FallbackQuality"
+      ]
+    },
+    {
+      "surface": "ifc_artifacts",
+      "path": "crates/franken-engine/src/ifc_artifacts.rs",
+      "symbols": [
+        "Label",
+        "ClearanceClass",
+        "DeclassificationRoute",
+        "FlowRule"
+      ]
+    },
+    {
+      "surface": "baseline_interpreter_labels",
+      "path": "crates/franken-engine/src/baseline_interpreter.rs",
+      "symbols": [
+        "get_register_label",
+        "set_register_label",
+        "intrinsic_result_label"
+      ]
+    },
+    {
+      "surface": "external_trust_explainer",
+      "path": "docs/EXTERNAL_TRUST_ARTIFACT_UX_CONTRACT_V1.md",
+      "symbols": [
+        "e8_certificate_bundle",
+        "e8_refusal_ledger",
+        "unavailable_e8_certifier",
+        "explicit_e8_uncertified_refusal",
+        "malformed_e8_refusal_ledger"
+      ]
+    }
+  ],
+  "result_classes": [
+    {
+      "code": "certifiable_subset",
+      "claim_language_rule": "may feed certifier but is not itself a certificate"
+    },
+    {
+      "code": "uncertified",
+      "claim_language_rule": "must not be phrased as non-use success"
+    },
+    {
+      "code": "degraded",
+      "claim_language_rule": "requires remediation before promotion"
+    },
+    {
+      "code": "fail_closed",
+      "claim_language_rule": "blocks certification"
+    },
+    {
+      "code": "out_of_scope",
+      "claim_language_rule": "states E8 v1 cannot certify the requested guarantee"
+    }
+  ],
+  "refusal_codes": [
+    {
+      "code": "missing_data_contract_binding",
+      "class": "missing_evidence",
+      "remediation": "run with --data-contract and a valid purpose"
+    },
+    {
+      "code": "missing_run_input_hash",
+      "class": "missing_evidence",
+      "remediation": "hash the actual run input and bind it"
+    },
+    {
+      "code": "run_input_hash_mismatch",
+      "class": "fail_closed",
+      "remediation": "fix the contract or rerun against the intended source"
+    },
+    {
+      "code": "unsupported_syntax_surface",
+      "class": "uncertified",
+      "remediation": "reduce the program or add analyzed support with tests"
+    },
+    {
+      "code": "unproven_ifc_propagation",
+      "class": "uncertified",
+      "remediation": "add IFC propagation proof or fail-closed fixture coverage"
+    },
+    {
+      "code": "missing_flow_proof_obligation",
+      "class": "missing_evidence",
+      "remediation": "emit or link a FlowProofObligation"
+    },
+    {
+      "code": "fallback_flow_envelope",
+      "class": "degraded",
+      "remediation": "rerun with sufficient budget or mark the claim uncertified"
+    },
+    {
+      "code": "missing_declassification_receipt",
+      "class": "fail_closed",
+      "remediation": "add a signed declassification receipt or deny the claim"
+    },
+    {
+      "code": "missing_source_span",
+      "class": "degraded",
+      "remediation": "thread span or provenance into the receipt"
+    },
+    {
+      "code": "missing_explain_or_replay_bundle",
+      "class": "missing_evidence",
+      "remediation": "emit the explain or replay bundle before certification"
+    },
+    {
+      "code": "out_of_scope_covert_channel",
+      "class": "out_of_scope",
+      "remediation": "state the boundary and do not certify under E8 v1"
+    },
+    {
+      "code": "out_of_scope_timing_channel",
+      "class": "out_of_scope",
+      "remediation": "state the boundary and do not certify under E8 v1"
+    }
+  ],
+  "operator_runbook": {
+    "source_bead": "bd-fqlfw.8.4.1.6",
+    "current_smoke_gate": "scripts/e2e/e8_refusal_ledger_smoke.sh check",
+    "cargo_policy": "cargo validation must be run through rch with a unique CARGO_TARGET_DIR",
+      "artifact_checks": [
+        "schema_version equals franken-engine.e8-refusal-ledger.v1",
+        "threat_model_scope equals explicit_flow_ifc_v1",
+        "live data-contract preflight receipts use E8RefusalLedgerReceipt",
+        "adversarial unsupported-surface fixtures use E8AdversarialRefusalFixture",
+        "every refusal code points at a declared source_ref id",
+      "positive_non_use_claim_allowed is false when refusal evidence exists",
+      "non-certifiable result classes set certifier_input_allowed=false",
+      "non-certifiable result classes set must_block_certificate=true",
+      "external explainers preserve refusal code, class, source reference, and remediation"
+    ]
+  },
+  "truth_gate_capstone": {
+    "source_bead": "bd-fqlfw.8.4.1.6",
+    "required_inputs": [
+      "docs/E8_ANALYZED_SUBSET_REFUSAL_LEDGER.md",
+      "docs/e8_analyzed_subset_refusal_ledger_v1.json",
+      "docs/e8_refusal_ledger_schema_v1.json",
+      "scripts/testdata/e8_refusal_ledger/*.json",
+      "live data-contract preflight receipt from bd-fqlfw.8.4.1.3",
+      "adversarial unsupported-surface fixtures from bd-fqlfw.8.4.1.4",
+      "external-trust explainer output from bd-fqlfw.8.4.1.5"
+    ],
+    "invariants": [
+      {
+        "condition": "any refusal code is present",
+        "required_result": "no successful non-use certificate is emitted"
+      },
+      {
+        "condition": "Secret-to-sink-like fixture crosses an unanalyzed surface",
+        "required_result": "result_class is uncertified or fail_closed"
+      },
+      {
+        "condition": "source hash or source provenance disagrees with run input",
+        "required_result": "result_class is fail_closed"
+      },
+      {
+        "condition": "flow evidence comes from fallback or partial analysis",
+        "required_result": "result_class is degraded and certifier_input_allowed is false"
+      },
+      {
+        "condition": "requested guarantee depends on covert or timing channels",
+        "required_result": "result_class is out_of_scope with E8 v1 boundary language"
+      },
+      {
+        "condition": "external explainer consumes an E8 refusal ledger",
+        "required_result": "human and machine output preserve refusal code, class, source reference, and remediation"
+      }
+    ],
+    "future_rch_target_dir_prefixes": [
+      "/tmp/rch_target_brownwolf_bd_fqlfw_8_4_1_4_fixtures_",
+      "/tmp/rch_target_brownwolf_bd_fqlfw_8_4_1_6_preflight_",
+      "/tmp/rch_target_brownwolf_bd_fqlfw_8_4_1_6_capstone_"
+    ]
+  },
+  "downstream_beads": [
+    "bd-fqlfw.8.4.1.2",
+    "bd-fqlfw.8.4.1.3",
+    "bd-fqlfw.8.4.1.4",
+    "bd-fqlfw.8.4.1.5",
+    "bd-fqlfw.8.4.1.6",
+    "bd-fqlfw.8.7"
+  ]
+}

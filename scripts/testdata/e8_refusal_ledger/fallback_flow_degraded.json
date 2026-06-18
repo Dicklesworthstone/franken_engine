@@ -1,0 +1,42 @@
+{
+  "schema_version": "franken-engine.e8-refusal-ledger.v1",
+  "ledger_id": "e8-refusal-ledger-fallback-flow",
+  "run_id": "frankenctl-run-fallback-flow",
+  "contract_id": "contract-e8-fallback",
+  "result_class": "degraded",
+  "threat_model_scope": "explicit_flow_ifc_v1",
+  "certifier_input_allowed": false,
+  "positive_non_use_claim_allowed": false,
+  "must_block_certificate": true,
+  "analyzed_surface_count": 4,
+  "unanalyzed_surface_count": 0,
+  "degraded_surface_count": 1,
+  "refusal_codes": [
+    {
+      "code": "fallback_flow_envelope",
+      "class": "degraded",
+      "source_ref_id": "flow-envelope",
+      "remediation": "rerun with sufficient flow-analysis budget or keep the claim uncertified"
+    }
+  ],
+  "source_refs": [
+    {
+      "id": "flow-envelope",
+      "surface": "flow_envelope",
+      "path": "crates/franken-engine/src/flow_envelope.rs",
+      "symbol": "FallbackQuality"
+    }
+  ],
+  "evidence_refs": [
+    {
+      "id": "flow-envelope-artifact",
+      "kind": "flow_envelope",
+      "status": "degraded",
+      "artifact_path": "artifacts/e8/fallback_flow/flow_envelope.json"
+    }
+  ],
+  "remediation_actions": [
+    "rerun flow analysis without budget fallback",
+    "link a non-fallback FlowProofObligation before certification"
+  ]
+}

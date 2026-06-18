@@ -1,0 +1,43 @@
+{
+  "schema_version": "franken-engine.e8-refusal-ledger.v1",
+  "ledger_id": "e8-refusal-ledger-unsupported-syntax",
+  "run_id": "frankenctl-run-unsupported-syntax",
+  "contract_id": "contract-e8-unsupported",
+  "result_class": "uncertified",
+  "threat_model_scope": "explicit_flow_ifc_v1",
+  "certifier_input_allowed": false,
+  "positive_non_use_claim_allowed": false,
+  "must_block_certificate": true,
+  "analyzed_surface_count": 2,
+  "unanalyzed_surface_count": 1,
+  "degraded_surface_count": 0,
+  "refusal_codes": [
+    {
+      "code": "unsupported_syntax_surface",
+      "class": "uncertified",
+      "source_ref_id": "parser-diagnostic",
+      "remediation": "reduce the source or add analyzed parser/lowering support with fail-closed tests"
+    }
+  ],
+  "source_refs": [
+    {
+      "id": "parser-diagnostic",
+      "surface": "parser_unsupported_diagnostics",
+      "path": "crates/franken-engine/src/parser.rs",
+      "symbol": "ParseErrorCode::UnsupportedSyntax",
+      "span": "agent.js:12:4"
+    }
+  ],
+  "evidence_refs": [
+    {
+      "id": "run-explain",
+      "kind": "runtime_explain_bundle",
+      "status": "present",
+      "artifact_path": "artifacts/e8/unsupported_syntax/explain.json"
+    }
+  ],
+  "remediation_actions": [
+    "add analyzed parser/lowering support for the rejected surface",
+    "rerun the data-contract preflight after support lands"
+  ]
+}

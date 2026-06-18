@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frankenengine.local/schemas/e8_refusal_ledger_v1.json",
+  "title": "FrankenEngine E8 Refusal Ledger v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "ledger_id",
+    "run_id",
+    "contract_id",
+    "result_class",
+    "threat_model_scope",
+    "certifier_input_allowed",
+    "positive_non_use_claim_allowed",
+    "must_block_certificate",
+    "analyzed_surface_count",
+    "unanalyzed_surface_count",
+    "degraded_surface_count",
+    "refusal_codes",
+    "source_refs",
+    "evidence_refs",
+    "remediation_actions"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "franken-engine.e8-refusal-ledger.v1"
+    },
+    "ledger_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "contract_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "result_class": {
+      "enum": [
+        "certifiable_subset",
+        "uncertified",
+        "degraded",
+        "fail_closed",
+        "out_of_scope"
+      ]
+    },
+    "threat_model_scope": {
+      "const": "explicit_flow_ifc_v1"
+    },
+    "certifier_input_allowed": {
+      "type": "boolean"
+    },
+    "positive_non_use_claim_allowed": {
+      "type": "boolean",
+      "const": false
+    },
+    "must_block_certificate": {
+      "type": "boolean"
+    },
+    "analyzed_surface_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "unanalyzed_surface_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "degraded_surface_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "refusal_codes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/refusal_code"
+      }
+    },
+    "source_refs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/source_ref"
+      },
+      "minItems": 1
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/evidence_ref"
+      }
+    },
+    "remediation_actions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "$defs": {
+    "refusal_code": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "class",
+        "source_ref_id",
+        "remediation"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "missing_data_contract_binding",
+            "missing_run_input_hash",
+            "run_input_hash_mismatch",
+            "unsupported_syntax_surface",
+            "unproven_ifc_propagation",
+            "missing_flow_proof_obligation",
+            "fallback_flow_envelope",
+            "missing_declassification_receipt",
+            "missing_source_span",
+            "missing_explain_or_replay_bundle",
+            "out_of_scope_covert_channel",
+            "out_of_scope_timing_channel"
+          ]
+        },
+        "class": {
+          "enum": [
+            "missing_evidence",
+            "uncertified",
+            "degraded",
+            "fail_closed",
+            "out_of_scope"
+          ]
+        },
+        "source_ref_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "remediation": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "source_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "surface",
+        "path"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "surface": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "span": {
+          "type": "string"
+        }
+      }
+    },
+    "evidence_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "status"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "present",
+            "missing",
+            "degraded",
+            "malformed",
+            "out_of_scope"
+          ]
+        },
+        "artifact_path": {
+          "type": "string"
+        },
+        "content_hash_hex": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

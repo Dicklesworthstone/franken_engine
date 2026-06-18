@@ -136,6 +136,7 @@ pub mod cross_workload_transfer;
 pub mod cut_line_automation;
 pub mod cx_threading;
 pub mod dark_matter_saturation_gate;
+pub mod data_contract;
 pub mod declassification_pipeline;
 pub mod delegate_cell_harness;
 pub mod delegation_chain;

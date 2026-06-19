@@ -136,9 +136,9 @@ The table below mirrors [`docs/CLAIM_TO_PROOF_MATRIX_V1.md`](./docs/CLAIM_TO_PRO
 | Native execution profiles (`baseline_deterministic_profile`, `baseline_throughput_profile`, `adaptive_profile_router`) | OBSERVED | Live in tree, exercised by the CLI smoke and the RGC execution-profile gate. |
 | Probabilistic guardplane (Bayesian + e-process boundaries) | OBSERVED | Backed by live decision artifacts; demonstrated in `examples/live_guardplane_decision_example.rs`. |
 | Deterministic replay for the declared high-severity inventory | OBSERVED | `replay_coverage` proof gate (`bd-2488a`) + byte-identical fixed-input `compile`/`run` artifacts in CLI integration tests. |
-| Cryptographic decision receipts with transparency-log + TEE attestation | OBSERVED | Receipt-only proof handle (`bd-cixqu.1.1`), transparency log + MMR inclusion/consistency proofs (`bd-cixqu.1.2`), and TEE attestation policy with live-quote binding (`bd-cixqu.1.3`), cross-referenced and content-addressed by `scripts/run_rgc_signed_decision_receipt.sh` + replay wrapper (`bd-cixqu.1.4`). |
+| Cryptographic decision receipts with transparency-log + MMR proofs (signing OBSERVED; TEE attestation is HYPOTHESIS — simulated by default) | OBSERVED (signing + transparency log) · HYPOTHESIS (TEE) | Receipt-only proof handle (`bd-cixqu.1.1`) and transparency log + MMR inclusion/consistency proofs (`bd-cixqu.1.2`) are live, cross-referenced and content-addressed by `scripts/run_rgc_signed_decision_receipt.sh` + replay wrapper (`bd-cixqu.1.4`). TEE attestation policy (`bd-cixqu.1.3`) is simulated-by-default — no hardware root of trust, the `tee-real-sdk` SDK path is unwired (`tee_live_quote.rs`) — so it stays HYPOTHESIS (`FE-CLAIM-004-TEE`). |
 | Fleet immune system / quarantine propagation convergence SLO | OBSERVED | Fleet convergence harness with N-node testing (`bd-cixqu.2.1`), bounded SLO declaration and gate (`bd-cixqu.2.2`), quarantine de-escalation primitive (`bd-cixqu.2.3`), and partition fault profiles (`bd-cixqu.2.4`) provide live convergence evidence. |
-| Capability-typed end-to-end TS-to-IR contract / ambient-authority rejection | OBSERVED | Effect-set IR2 annotation (`bd-cixqu.3.1`), lowering-side rejection of ambient-authority calls (`bd-cixqu.3.2`), 16-scenario red-team negative corpus (`bd-cixqu.3.3`), and `scripts/run_rgc_capability_typed_compile_time.sh` + replay wrapper (`bd-cixqu.3.4`). |
+| Capability-typed ambient-authority rejection on selected hostcall/import edges (the end-to-end TS-to-IR contract is TARGETED) | OBSERVED (selected edges) · TARGETED (end-to-end) | Effect-set IR2 annotation (`bd-cixqu.3.1`), lowering-side rejection of ambient-authority calls on the shipped hostcall/import edges (`bd-cixqu.3.2`), 16-scenario red-team negative corpus (`bd-cixqu.3.3`), and `scripts/run_rgc_capability_typed_compile_time.sh` + replay wrapper (`bd-cixqu.3.4`). The end-to-end compile-time TS-to-IR contract over *all* ambient constructs remains TARGETED (`FE-CLAIM-006`; see *Threat Model* and *Module System & Compatibility Matrix*). |
 | Information-flow control with signed declassification receipts | OBSERVED | Live IFC example in `examples/live_ifc_declassification_example.rs` (`bd-dpfvh`). |
 | Red-team compromise-rate comparison | OBSERVED | Real attacker harness (`bd-28otw`), not hardcoded baselines. |
 | Signal-to-action latency for containment | OBSERVED | Real latency artifacts; operational target is at or below 250ms median under defined load envelopes. |
@@ -542,7 +542,7 @@ What FrankenEngine *is* built to defend against, and what is explicitly out of s
 | **Decision tampering / log forgery** | Evidence ledger: chained content hashes + Ed25519 signatures per entry; rewriting one entry invalidates every downstream `prev_hash`. |
 | **Replay forgery / out-of-order replay** | Length-prefixed canonical hashing across every variable-length field; randomness transcript captured; `strict` replay aborts on first divergence. |
 | **Promotion-of-unproven-optimizations / phantom promotions** | IDEA-WIZARD-XI promotion controller: eligibility composer (`bd-4j2ck`), transfer guard (`bd-jp4r0`), no-mock replay drill (`bd-xbesa`), demotion rollback receipt (`bd-or2e1`). |
-| **Cross-runtime divergence under same input** | Test262 conformance (real, not fake fixtures), lockstep oracle, byte-level cross-runtime output equivalence in `benchmark-e2e`. |
+| **Cross-runtime divergence under same input** | Provisional Test262-derived vectors (checked-in `es2020-normative` subset run by `test262_release_gate`, not the full corpus — `full_suite_claim_allowed=false`; full-suite conformance is TARGETED), lockstep oracle, byte-level cross-runtime output equivalence in `benchmark-e2e`. |
 | **Adversarial supremacy / worst-case input synthesis** | `adversarial_supremacy_synthesis.rs`, `attack_surface_game_model.rs`, `counterexample_synthesizer.rs`, fault-injection chaos pack. |
 | **Native add-on supply-chain compromise** | `native_addon_membrane.rs` + cohort gate + parity gate; no "trusted native" path. |
 | **Documentation drift / unbacked claims** | Claim-to-Proof Matrix gate: refuses prose whose actual wording state is stronger than `allowed_state`. |
@@ -553,7 +553,7 @@ What FrankenEngine *is* built to defend against, and what is explicitly out of s
 |---|---|
 | **Side-channel attacks on the underlying CPU** (Spectre/Meltdown/RowHammer variants) | Hardware-side; FrankenEngine assumes the CPU honors its ISA contract. |
 | **Compromised operator signing key** | Threshold signing (`threshold_signing.rs`) reduces blast radius but cannot defend against a multi-party compromise. Out-of-band key custody is required. |
-| **Compromised host OS / hypervisor** | Bounded by TEE attestation, but TEE-backed production guarantees remain HYPOTHESIS (`FE-CLAIM-004`). |
+| **Compromised host OS / hypervisor** | Bounded by TEE attestation, but TEE-backed production guarantees remain HYPOTHESIS (`FE-CLAIM-004-TEE`; quotes are simulated by default); receipt signing + transparency-log/MMR proofs are OBSERVED (`FE-CLAIM-004`). |
 | **Adversarial sibling-repo crates** | The sibling-reuse contract assumes `/dp/asupersync`, `/dp/frankentui`, `/dp/frankensqlite` are trusted upstream. Sibling-repo compromise is out of scope; the cross-repo integration suite verifies behaviour, not authenticity. |
 | **De-escalation in a hostile fleet** | Quarantine de-escalation is supported via signed re-admission decisions with operator approval and TEE attestation (`bd-cixqu.2.3`); automatic re-admission without operator involvement remains out of scope. |
 | **Formal end-to-end proofs** | The finite-algebra invariant tests are mathematically explicit; theorem-backed proofs of equivalence between specification and implementation remain HYPOTHESIS (`FE-CLAIM-016`–`FE-CLAIM-021`). |
@@ -1398,7 +1398,7 @@ Honest comparison across six JavaScript / WebAssembly runtimes targeting differe
 | Core execution ownership | Native Rust baseline interpreter + profile router | V8 embedding | JavaScriptCore + Zig runtime | V8 + Rust core | V8 isolates + C++/Rust runtime | Native Rust Wasm engine |
 | Deterministic replay for high-severity decisions | Built into the runtime for the declared allow/deny/escalate inventory; fixed-input `frankenctl compile`/`run` artifacts are byte-identical in the shipped CLI integration test | External tooling only | External tooling only | External tooling only | Trace replay via runtime tooling (workerd); not a high-severity-inventory contract | Deterministic execution by spec, but no high-severity decision inventory or evidence-bundle contract |
 | Probabilistic containment policy | Built-in guardplane (Bayesian + e-process) | Not default runtime behavior | Not default runtime behavior | Permission prompts; not probabilistic | Per-request isolate boundaries; not probabilistic | N/A (host-defined) |
-| Cryptographic decision receipts | HYPOTHESIS until transparency-log and TEE proof artifacts promote the claim | Not a core runtime primitive | Not a core runtime primitive | Not a core runtime primitive | Not a core runtime primitive | Not a core runtime primitive |
+| Cryptographic decision receipts | Signed receipts + transparency-log/MMR proofs OBSERVED; TEE attestation HYPOTHESIS (`FE-CLAIM-004-TEE`) | Not a core runtime primitive | Not a core runtime primitive | Not a core runtime primitive | Not a core runtime primitive | Not a core runtime primitive |
 | Fleet quarantine convergence model | OBSERVED (fleet convergence SLO with bounded timeouts; de-escalation via signed re-admission decisions) | App-specific | App-specific | App-specific | Per-isolate kill via control plane; no convergence SLO | N/A |
 | Capability-typed extension contract | Selected runtime capability gates; compile-time TS-to-IR contract is not shipped | Not native to runtime | Not native to runtime | Permission flags at process scope (`--allow-net`, etc.); not capability-typed at IR level | Bindings-mediated capabilities; not IR-typed | WASI capability surface; bound to imports, not source-level types |
 | Information-flow control with signed declassification receipts | OBSERVED (finite IFC lattice + signed declassification receipts) | Not in core | Not in core | Not in core | Not in core | Not in core |
@@ -2033,7 +2033,7 @@ The README and CHANGELOG are point-in-time documents; the live state of "what's 
 
 | Surface | Command / path | What it shows |
 |---|---|---|
-| **TARGETED / HYPOTHESIS rows of the matrix** | [`docs/CLAIM_TO_PROOF_MATRIX_V1.md`](./docs/CLAIM_TO_PROOF_MATRIX_V1.md) + the *TL;DR* matrix table in this README | The 12 of 21 claims that are not yet OBSERVED (4 TARGETED, 8 HYPOTHESIS; 9 already OBSERVED). Each row names an owning bead. This is the load-bearing "what needs to ship before GA" list. |
+| **TARGETED / HYPOTHESIS rows of the matrix** | [`docs/CLAIM_TO_PROOF_MATRIX_V1.md`](./docs/CLAIM_TO_PROOF_MATRIX_V1.md) + the *TL;DR* matrix table in this README | The 9 of 26 claims that are not yet OBSERVED (2 TARGETED, 7 HYPOTHESIS; 17 already OBSERVED). Each row names an owning bead. This is the load-bearing "what needs to ship before GA" list. |
 | **Active DEVIATIONs** | `AGENTS.md` (search `DEVIATION`) + the *Persistence Surface & Former DEVIATION* section | Currently zero: the typed-heavy persistence stores deviation was resolved 2026-05-21 (bd-cixqu.12.1 audit). |
 | **Live ready-work queue** | `br ready` (interactive) or `br list --format json --status ready` (script-friendly) | The set of beads whose ancestor chain is unblocked and which can be picked up by the next agent. Reflects current state of `.beads/beads.db`, not the synced `.beads/issues.jsonl`. |
 
@@ -2158,7 +2158,7 @@ For downstream consumers (e.g. `/dp/franken_node`, sibling crates, integrators) 
 
 | | What you must NOT depend on |
 |---|---|
-| ❌ | TEE-backed production guarantees for cryptographic decision receipts. `FE-CLAIM-004` remains HYPOTHESIS until receipt, transparency-log, and TEE proof artifacts ship. |
+| ❌ | TEE-backed production guarantees for cryptographic decision receipts. `FE-CLAIM-004-TEE` remains HYPOTHESIS (quotes are simulated by default); receipt signing + transparency-log/MMR proofs are OBSERVED (`FE-CLAIM-004`). |
 | ❌ | Compile-time TS-to-IR rejection of ambient-authority constructs as an end-to-end contract. `FE-CLAIM-006` remains TARGETED; selected hostcall/import gates cover only specific edges. |
 | ❌ | Node/Bun denominator throughput claims for *unmeasured* workloads. Only workloads in `real_runtime_hot_paths` are gated; `MockCertificate` / `hot_paths_simulation` artifacts are rejected by the gate. |
 | ✅ | Bounded fleet-quarantine convergence SLOs as a current guarantee. `FE-CLAIM-005` is now OBSERVED with live convergence evidence and partition fault profile testing. |
@@ -2183,7 +2183,7 @@ For downstream consumers (e.g. `/dp/franken_node`, sibling crates, integrators) 
 - High-security mode adds measurable overhead on latency-sensitive low-risk workloads.
 - Capability-typed TS-to-IR extension onboarding is not shipped as an end-to-end contract; current capability checks cover selected runtime hostcall/import boundaries.
 - Fleet quarantine supports reversible de-escalation via signed re-admission decisions; automatic re-admission without operator approval remains unimplemented.
-- Cryptographic decision receipts with transparency-log and TEE attestation remain HYPOTHESIS until live proof artifacts split and ship.
+- Cryptographic decision receipts: receipt signing + transparency-log/MMR proofs are OBSERVED (`FE-CLAIM-004`); TEE attestation remains HYPOTHESIS (`FE-CLAIM-004-TEE`) until a real TEE SDK and live-quote proof artifacts ship.
 - Node/Bun denominator performance comparisons remain TARGETED until live denominator artifacts replace placeholders; the gate explicitly rejects `MockCertificate` and `hot_paths_simulation` fixtures.
 - Deterministic replay and evidence retention increase storage footprint.
 - Full Node ecosystem compatibility is an active target; edge behavior differences can still appear in low-level module or process APIs. `package.json type=module` extensionless relative imports are fail-closed in `native` / `node_compat` modes; only the explicit `bun_compat` bridge enables extension probing.
@@ -2269,7 +2269,7 @@ Project-specific jargon, defined once.
 | **Claim language policy** | Charter §7. Defines `observed` / `target` / `hypothesis`; bans absolute-superiority wording without artifacts. |
 | **Compile artifact** | The output of `frankenctl compile`: a versioned, content-hashed JSON record of an IR3 program. Subject to `frankenctl verify compile-artifact`. |
 | **Counterfactual replay** | Replay with a substituted policy snapshot, to answer "what would the runtime have done under policy X instead of Y?" Implemented in `counterfactual_evaluator.rs`. |
-| **Decision receipt** | An evidence-ledger entry recording a single high-impact decision. Cryptographic decision receipts with transparency-log + TEE binding remain HYPOTHESIS. |
+| **Decision receipt** | An evidence-ledger entry recording a single high-impact decision. Receipt signing + transparency-log/MMR proofs are OBSERVED (`FE-CLAIM-004`); TEE binding remains HYPOTHESIS (`FE-CLAIM-004-TEE`). |
 | **Declassification receipt** | A signed evidence entry authorizing an IFC label downgrade. OBSERVED via `bd-dpfvh`. |
 | **DEVIATION** | The `AGENTS.md` mechanism for marking an in-tree implementation that doesn't yet match a binding rule. Each DEVIATION names the rule, the impact, and the required fix (typically a P0 follow-up bead). The typed-heavy persistence stores deviation was resolved 2026-05-21. |
 | **Differential harness** | Any two-runtime comparison harness; specifically `frx_lockstep_oracle.rs` for FrankenEngine vs Node/Bun, and `benchmark-e2e` for cross-runtime equivalence of outputs. |
@@ -2316,7 +2316,7 @@ Project-specific jargon, defined once.
 | **Signed manifest** | `run_manifest.json` is the Ed25519-anchored declaration that ships with each gate bundle; the signing/verification primitives live in `signature_preimage.rs`, `signature_drift_gate.rs`, and `threshold_signing.rs`. |
 | **TARGETED** | A matrix state meaning a design goal/SLO is documented but observed proof has not been linked yet. Required wording includes the qualifier. |
 | **Test262** | The official ECMAScript conformance test suite. Run via `frankenctl test test262`. |
-| **Transparency log** | A future append-only log for decision receipts. Part of the HYPOTHESIS-state `FE-CLAIM-004`. |
+| **Transparency log** | An append-only Merkle log (RFC-6962-style MMR) for decision receipts; inclusion/consistency proofs are OBSERVED (`FE-CLAIM-004`, `bd-cixqu.1.2`). The TEE-attestation binding remains HYPOTHESIS (`FE-CLAIM-004-TEE`). |
 | **Workload regime** | A characterization of an extension's behavioural state (input distribution, hostcall pattern, resource envelope). The promotion controller's transfer guard (`bd-jp4r0`) refuses to promote a model trained on regime A into regime B without an explicit transfer proof. |
 
 ---

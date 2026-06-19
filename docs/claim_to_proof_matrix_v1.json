@@ -66,18 +66,38 @@
       "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-004",
       "claim_id": "FE-CLAIM-004",
       "claim_scope": "security",
-      "claim_text": "Signed decision receipts with transparency-log proofs and optional TEE attestation bindings.",
+      "claim_text": "Signed decision receipts with RFC-6962-style transparency-log (MMR) inclusion and consistency proofs. The TEE attestation binding is tracked separately as FE-CLAIM-004-TEE (simulated by default).",
       "decision": "allow_observed",
       "freshness_days": 1,
       "owning_bead": "bd-1qkrc",
-      "reason": "Signed-decision-receipt surface is live in tree across A.1 receipt-only proof handle, A.2 transparency log + MMR inclusion/consistency proofs, and A.3 TEE attestation policy with live-quote binding; cross-referenced and content-addressed by scripts/run_rgc_signed_decision_receipt.sh ci (bd-cixqu.1.4) with a reproducibility bundle.",
+      "reason": "Signed-decision-receipt surface is live in tree across the receipt-only proof handle (bd-cixqu.1.1) and the transparency log + MMR inclusion/consistency proofs (bd-cixqu.1.2); cross-referenced and content-addressed by scripts/run_rgc_signed_decision_receipt.sh ci (bd-cixqu.1.4) with a reproducibility bundle. The TEE attestation binding (bd-cixqu.1.3) is split out as FE-CLAIM-004-TEE by CEI-C.1 because it is simulated by default (see tee_live_quote.rs).",
       "source_path": "README.md",
       "source_span": {
         "end_line": 139,
-        "must_contain": "transparency-log + TEE attestation",
+        "must_contain": "transparency-log + MMR proofs",
         "start_line": 139
       },
       "verification_command": "./scripts/run_rgc_signed_decision_receipt.sh ci"
+    },
+    {
+      "actual_wording_state": "hypothesis",
+      "allowed_state": "hypothesis",
+      "artifact_path": null,
+      "claim_id": "FE-CLAIM-004-TEE",
+      "claim_scope": "security",
+      "claim_text": "TEE live-quote attestation binding for decision receipts (hardware root of trust).",
+      "decision": "downgrade_until_live_proof",
+      "downgrade_text": "Hypothesis: TEE attestation is simulated by default (no Intel SGX / AMD SEV / Intel TDX SDK is wired); every quote is sha256-simulated and the tee-real-sdk path fails closed rather than fabricating a Success. Promotes to OBSERVED only when a real TEE SDK plus live-quote proof artifacts ship.",
+      "freshness_days": null,
+      "owning_bead": "bd-sde5e.3.1",
+      "reason": "tee_live_quote.rs module docs (lines 6-24) self-document that every quote is simulated unless the unwired tee-real-sdk feature is enabled, and TeeQuoteResult::Success is only reachable from a real SDK-backed quote. Split out of FE-CLAIM-004 by CEI-C.1 so the genuinely-observed signing + transparency-log surface is not overstated by the unobserved TEE attestation.",
+      "source_path": "README.md",
+      "source_span": {
+        "end_line": 139,
+        "must_contain": "TEE attestation is HYPOTHESIS",
+        "start_line": 139
+      },
+      "verification_command": "TBD: integrate a real TEE SDK (Intel SGX / AMD SEV / Intel TDX) and emit a live-quote proof artifact"
     },
     {
       "actual_wording_state": "observed",
@@ -104,7 +124,7 @@
       "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-006",
       "claim_id": "FE-CLAIM-006",
       "claim_scope": "security",
-      "claim_text": "Capability-typed execution with compile-time ambient-authority rejection via the C.3 red-team scenario corpus (16 scenarios) and the bd-cixqu.3.4 gate.",
+      "claim_text": "Capability-typed compile-time ambient-authority rejection on the shipped hostcall/import edges (effect-set IR2 annotation + lowering-side rejection), exercised by the 16-scenario red-team corpus and the bd-cixqu.3.4 gate. The end-to-end TS-to-IR contract over all ambient constructs is TARGETED, not observed.",
       "decision": "allow_observed",
       "freshness_days": 30,
       "owning_bead": "bd-cixqu.3.5",
@@ -116,6 +136,26 @@
         "start_line": 141
       },
       "verification_command": "./scripts/run_rgc_capability_typed_compile_time.sh ci"
+    },
+    {
+      "actual_wording_state": "target",
+      "allowed_state": "target",
+      "artifact_path": null,
+      "claim_id": "FE-CLAIM-TEST262",
+      "claim_scope": "conformance",
+      "claim_text": "Test262 conformance via a provisional checked-in es2020-normative vector subset; full-suite conformance is TARGETED.",
+      "decision": "downgrade_until_live_proof",
+      "downgrade_text": "Targeted: the shipped test262_release_gate runs a provisional checked-in vector subset (docs/test262_compatibility_pass_rate_v1.json declares full_suite_claim_allowed=false); full tc39/test262 corpus conformance is a documented goal, not an observed result.",
+      "freshness_days": null,
+      "owning_bead": "bd-sde5e.4.1",
+      "reason": "docs/test262_compatibility_pass_rate_v1.json (the project's own machine-readable posture) sets proof_state=checked_in_vectors_provisional and full_suite_claim_allowed=false with a small checked-in denominator. CEI-D.1 reframes the README wording from 'Test262 conformance (real, not fake fixtures)' to a bounded provisional-subset statement so the claim does not exceed the posture.",
+      "source_path": "README.md",
+      "source_span": {
+        "end_line": 545,
+        "must_contain": "full-suite conformance is TARGETED",
+        "start_line": 545
+      },
+      "verification_command": "cargo test -p frankenengine-engine --test test262_release_gate"
     },
     {
       "actual_wording_state": "observed",

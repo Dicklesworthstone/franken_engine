@@ -460,6 +460,24 @@ impl Default for ConformalConfig {
     }
 }
 
+/// Tri-state calibration verdict (`bd-sde5e.5.1`, CEI-E.1).
+///
+/// Distinguishes the safety-critical case where the calibrator has too little
+/// data to measure coverage (`InsufficientData`) from a measured pass
+/// (`Calibrated`) or a measured failure (`OutOfTolerance`). `is_calibrated()`
+/// treats anything other than `Calibrated` as not-calibrated (fail closed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CalibrationStatus {
+    /// Fewer than `min_calibration_observations` predictions recorded; coverage
+    /// cannot be measured, so calibration must not be asserted.
+    InsufficientData,
+    /// Measured coverage meets the `1 - alpha` target.
+    Calibrated,
+    /// Enough data, but measured coverage is below the target.
+    OutOfTolerance,
+}
+
 /// Anytime-valid conformal calibration tracker.
 ///
 /// Tracks whether decision predictions satisfy the promised coverage
@@ -576,13 +594,54 @@ impl ConformalCalibrator {
         (self.covered_predictions as i64).saturating_mul(MILLION) / (self.total_predictions as i64)
     }
 
-    /// Whether the required coverage is being met.
+    /// Whether the required coverage is currently being met.
+    ///
+    /// Fails **closed** on insufficient data (`bd-sde5e.5.1`, CEI-E.1): with
+    /// fewer than `min_calibration_observations` recorded predictions the
+    /// calibrator cannot *measure* its coverage, so it must not *assert* it.
+    /// Returning `true` here would silently claim a statistical guarantee that
+    /// has not been observed, violating the Charter §3 deterministic-safe-mode
+    /// posture (a calibration-gated decision would take the optimistic path on
+    /// zero evidence). Callers that need to distinguish "measured-good" from
+    /// "not-yet-measurable" should consult [`Self::calibration_status`].
+    ///
+    /// ## CEI-E.1 sibling audit (insufficient-data-assume-good sites)
+    ///
+    /// Other guardplane/decision predicates were audited for the same
+    /// "assume good when we cannot measure" shape:
+    /// * `conformal_calibration::ConformalCertificationGate` — already fails
+    ///   closed (refuses certification when `n < min_calibration_size`). OK.
+    /// * `hybrid_lane_router::ConformalState::is_valid` — fail-open during
+    ///   warm-up, but that predicate gates lane *demotion*; the conservative
+    ///   action there is to keep the lane (burn-in tolerance), and the branch is
+    ///   unreachable in production (Adaptive entry is warm-up gated). Left intact
+    ///   by design; see its doc comment.
+    /// * Modules exposing an explicit `InsufficientData` / `Unknown` verdict
+    ///   (`distribution_shift_monitor`, `change_point_detector`,
+    ///   `cold_start_aot_governance`, `catastrophic_tail_tournament_gate`,
+    ///   `hostcall_session_governance_gate`) already model the abstain state and
+    ///   do not assume good. OK.
     pub fn is_calibrated(&self) -> bool {
         if self.total_predictions < self.config.min_calibration_observations {
-            return true; // insufficient data → assume calibrated
+            return false; // insufficient data → fail closed (cannot assert calibration)
         }
         let target = MILLION - self.config.alpha_millionths;
         self.coverage_millionths() >= target
+    }
+
+    /// Tri-state calibration verdict that preserves the distinction between
+    /// "not enough data to judge" and "measured and out of tolerance" without
+    /// changing the conservative boolean contract of [`Self::is_calibrated`].
+    pub fn calibration_status(&self) -> CalibrationStatus {
+        if self.total_predictions < self.config.min_calibration_observations {
+            return CalibrationStatus::InsufficientData;
+        }
+        let target = MILLION - self.config.alpha_millionths;
+        if self.coverage_millionths() >= target {
+            CalibrationStatus::Calibrated
+        } else {
+            CalibrationStatus::OutOfTolerance
+        }
     }
 
     /// Current anytime-valid e-value (millionths).
@@ -1887,10 +1946,45 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn conformal_starts_calibrated() {
+    fn conformal_starts_uncalibrated_fails_closed() {
+        // bd-sde5e.5.1 (CEI-E.1): a fresh calibrator has zero observations and
+        // therefore cannot assert calibration — it must fail closed.
         let cal = ConformalCalibrator::new(ConformalConfig::default());
-        assert!(cal.is_calibrated());
+        assert!(
+            !cal.is_calibrated(),
+            "fresh calibrator must fail closed on insufficient data"
+        );
+        assert_eq!(
+            cal.calibration_status(),
+            CalibrationStatus::InsufficientData
+        );
+        // Coverage is still vacuously full; the verdict comes from the data floor.
         assert_eq!(cal.coverage_millionths(), MILLION);
+    }
+
+    #[test]
+    fn is_calibrated_fails_closed_below_min_observations() {
+        // Regression pin for the fail-open bug: even with perfect coverage so far,
+        // below the observation floor calibration is not asserted.
+        let mut cal = ConformalCalibrator::new(ConformalConfig {
+            min_calibration_observations: 50,
+            ..Default::default()
+        });
+        for i in 0..49 {
+            cal.record(epoch(i), true); // all covered, but only 49 < 50 observations
+        }
+        assert!(
+            !cal.is_calibrated(),
+            "49 < 50 observations must fail closed"
+        );
+        assert_eq!(
+            cal.calibration_status(),
+            CalibrationStatus::InsufficientData
+        );
+        // Crossing the floor with good coverage flips it to calibrated.
+        cal.record(epoch(49), true);
+        assert!(cal.is_calibrated());
+        assert_eq!(cal.calibration_status(), CalibrationStatus::Calibrated);
     }
 
     #[test]

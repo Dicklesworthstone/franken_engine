@@ -203,10 +203,25 @@ impl ConformalState {
         sum / self.window.len() as i64
     }
 
-    /// Whether conformal validity holds.
+    /// Whether conformal validity holds (used as a lane-*demotion* guard).
+    ///
+    /// Sibling audit for `bd-sde5e.5.1` (CEI-E.1): unlike
+    /// `ConformalCalibrator::is_calibrated` — which *asserts* a measured coverage
+    /// guarantee and therefore must fail closed on insufficient data — this
+    /// predicate gates *demotion* of an already-promoted lane. During the
+    /// warm-up window (`total_observations < min_observations`) the conservative
+    /// action is **not** to demote: tearing a lane out of service before there is
+    /// enough data to judge it is an availability hazard with no supporting
+    /// evidence. The burn-in tolerance is therefore correct-by-design, not a
+    /// fail-open assertion bug. It is also unreachable in production:
+    /// `promote_to_adaptive` refuses to enter Adaptive before warm-up completes
+    /// (`AdaptiveWarmupIncomplete`), and demotion checks only run while Adaptive,
+    /// so `total_observations >= min_observations` already holds at every live
+    /// call site. Left intact deliberately; see the E.1 sibling-audit note in
+    /// `runtime_decision_theory::ConformalCalibrator::is_calibrated`.
     pub fn is_valid(&self) -> bool {
         if self.total_observations < self.config.min_observations {
-            return true; // insufficient data — assume valid
+            return true; // burn-in: do not demote a lane we cannot yet judge
         }
         self.coverage_millionths() >= self.config.target_coverage_millionths
     }
@@ -1155,6 +1170,10 @@ mod tests {
 
     #[test]
     fn conformal_valid_before_min_observations() {
+        // bd-sde5e.5.1 (CEI-E.1) sibling audit: this is a demotion guard, so the
+        // conservative action during warm-up is NOT to demote — validity holds
+        // (burn-in tolerance) until enough data exists to judge the lane. See the
+        // is_valid() doc comment for why this differs from is_calibrated().
         let mut cs = ConformalState::new(ConformalConfig {
             target_coverage_millionths: 900_000,
             min_observations: 20,
@@ -1163,7 +1182,7 @@ mod tests {
         for _ in 0..5 {
             cs.observe(false);
         }
-        assert!(cs.is_valid()); // Not enough observations yet
+        assert!(cs.is_valid()); // Not enough observations yet → burn-in tolerance
     }
 
     // -- ChangePointMonitor --

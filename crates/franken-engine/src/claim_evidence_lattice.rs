@@ -409,12 +409,12 @@ impl IntegrityReport {
             verdicts.insert(row.claim_id.clone(), verdict);
         }
         let total_rows = verdicts.len() as u64;
-        // Integer fixed-point: exactly COVERAGE_SCALE iff all rows are sound.
-        let coverage_millionths = if total_rows == 0 {
-            COVERAGE_SCALE
-        } else {
-            (sound_rows.saturating_mul(COVERAGE_SCALE)) / total_rows
-        };
+        // Integer fixed-point: exactly COVERAGE_SCALE iff all rows are sound
+        // (and vacuously so when there are no rows).
+        let coverage_millionths = sound_rows
+            .saturating_mul(COVERAGE_SCALE)
+            .checked_div(total_rows)
+            .unwrap_or(COVERAGE_SCALE);
         let coverage_digest = Self::compute_digest(&verdicts, coverage_millionths);
         Self {
             verdicts,
@@ -540,9 +540,11 @@ pub fn collect_evidence_facts(
     now_unix: i64,
     max_freshness_days: u64,
 ) -> EvidenceFacts {
-    let mut facts = EvidenceFacts::default();
+    let mut facts = EvidenceFacts {
+        artifact_git_tracked: git_path_tracked(repo_root, artifact_path),
+        ..EvidenceFacts::default()
+    };
 
-    facts.artifact_git_tracked = git_path_tracked(repo_root, artifact_path);
     if !facts.artifact_git_tracked {
         facts
             .notes
@@ -610,16 +612,16 @@ pub fn collect_evidence_facts(
     // Run receipt: zero exit recorded in the committed repro.lock.
     if facts.repro_lock_present {
         let repro_lock_path = bundle_dir.join("repro.lock");
-        if let Ok(text) = std::fs::read_to_string(&repro_lock_path) {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                let exit = json
-                    .get("expected_outputs")
-                    .and_then(|o| o.get("exit_code"))
-                    .and_then(serde_json::Value::as_i64);
-                facts.receipt_exit_zero = exit == Some(0);
-                if exit != Some(0) {
-                    facts.notes.push(format!("repro.lock exit_code={exit:?}"));
-                }
+        if let Ok(text) = std::fs::read_to_string(&repro_lock_path)
+            && let Ok(json) = serde_json::from_str::<serde_json::Value>(&text)
+        {
+            let exit = json
+                .get("expected_outputs")
+                .and_then(|o| o.get("exit_code"))
+                .and_then(serde_json::Value::as_i64);
+            facts.receipt_exit_zero = exit == Some(0);
+            if exit != Some(0) {
+                facts.notes.push(format!("repro.lock exit_code={exit:?}"));
             }
         }
     }

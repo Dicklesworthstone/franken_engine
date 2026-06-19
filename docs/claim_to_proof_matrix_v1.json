@@ -257,17 +257,17 @@
       "verification_command": "./scripts/run_red_team_compromise_rate_metric_gate.sh ci"
     },
     {
-      "actual_wording_state": "observed",
-      "allowed_state": "observed",
+      "actual_wording_state": "target",
+      "allowed_state": "target",
       "artifact_path": "docs/evidence/FE-CLAIM-012",
       "claim_id": "FE-CLAIM-012",
       "claim_scope": "security",
       "claim_text": "<= 250ms median time from high-risk signal crossing to containment action.",
-      "decision": "allow_observed",
+      "decision": "downgrade_target",
       "downgrade_text": "Target: <= 250ms median containment latency under declared workload conditions.",
       "freshness_days": 1,
       "owning_bead": "bd-38mby",
-      "reason": "Containment-latency metric gate (bd-38mby) computes actual signal-to-action timestamps and median latency artifacts with bounded timing validation.",
+      "reason": "Downgraded observed->target under CEI B.2 (bd-sde5e.2.2): the containment-latency gate fails closed without a measured CONTAINMENT_LATENCY_METRIC_INPUT, the matrix verification_command omits it, and no production-measured latency artifact is committed (the only input is a rev-under-test fixture). 'Real latency artifacts' was over-claimed.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
         "end_line": 60,

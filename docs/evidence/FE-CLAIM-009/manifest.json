@@ -18,7 +18,7 @@
     "scope": "evidence",
     "state": "observed"
   },
-  "generated_at_utc": "2026-05-21T20:50:00.000000+00:00",
+  "generated_at_utc": "2026-06-19T20:42:39.031542+00:00",
   "inputs": {
     "dependencies": [
       "scripts/run_claim_to_proof_matrix_gate.sh",
@@ -35,7 +35,10 @@
   "outputs": {
     "decision_artifacts": "generated",
     "execution_trace": "deterministic",
-    "verification_result": "pass"
+    "exit_code": 0,
+    "verification_command": "./scripts/run_claim_to_proof_matrix_gate.sh ci",
+    "verification_result": "passed",
+    "verified_at_utc": "2026-06-19T20:42:39.031542+00:00"
   },
   "provenance": {
     "audit_source": "bd-cixqu.4.4",
@@ -45,7 +48,7 @@
       "bd-cixqu.4.2",
       "bd-cixqu.4.3"
     ],
-    "generated_by": "matrix_promotion_manual"
+    "generated_by": "reemit_evidence_receipts.py (live gate run)"
   },
   "retention": {
     "backup_required": true,
@@ -56,7 +59,7 @@
   "schema_version": "frankenengine.reproducibility.manifest.v1",
   "source_revision": {
     "branch": "main",
-    "commit": "284e79be7bb929530151603aaabd5cbfa438685c",
+    "commit": "e96bb632cc9d3cc5f3007b048067521537100734",
     "repository": "franken_engine"
   },
   "validation": {

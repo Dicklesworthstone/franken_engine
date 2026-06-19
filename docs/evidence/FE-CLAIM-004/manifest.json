@@ -18,7 +18,7 @@
     "scope": "security",
     "state": "observed"
   },
-  "generated_at_utc": "2026-05-25T01:28:51.087909+00:00",
+  "generated_at_utc": "2026-06-19T20:40:02.913225+00:00",
   "inputs": {
     "dependencies": [
       "frankenengine-engine",
@@ -32,12 +32,15 @@
   "outputs": {
     "decision_artifacts": "generated",
     "execution_trace": "deterministic",
-    "verification_result": "pending"
+    "exit_code": 0,
+    "verification_command": "./scripts/run_rgc_signed_decision_receipt.sh ci",
+    "verification_result": "passed",
+    "verified_at_utc": "2026-06-19T20:40:02.913225+00:00"
   },
   "provenance": {
     "audit_source": "bd-cixqu.4.1",
     "bead_id": "bd-cixqu.4.2",
-    "generated_by": "backfill_reproducibility_bundles.py"
+    "generated_by": "reemit_evidence_receipts.py (live gate run)"
   },
   "retention": {
     "backup_required": true,
@@ -48,7 +51,7 @@
   "schema_version": "frankenengine.reproducibility.manifest.v1",
   "source_revision": {
     "branch": "main",
-    "commit": "87651f49ebfd1e956ddb5b037ce655e5f9cdb24a",
+    "commit": "e96bb632cc9d3cc5f3007b048067521537100734",
     "repository": "franken_engine"
   },
   "validation": {

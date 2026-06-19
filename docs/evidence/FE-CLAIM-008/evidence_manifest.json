@@ -14,8 +14,8 @@
       "git_tracked": true,
       "path": "docs/evidence/FE-CLAIM-008/manifest.json",
       "role": "bundle_file",
-      "sha256": "7adff386f24c185acbf420a81a60dd213aee11545c50573f895b2b14aadf5378",
-      "size_bytes": 1549,
+      "sha256": "b37d319b39eb8040a3a65775798106bc3fa98c86062206b3c5c09f47e3d66563",
+      "size_bytes": 1713,
       "source": "worktree"
     },
     {
@@ -28,14 +28,14 @@
     }
   ],
   "claim_id": "FE-CLAIM-008",
-  "generated_at_utc": "2026-05-21T19:32:39.561422+00:00",
+  "generated_at_utc": "2026-06-19T20:42:36.054214+00:00",
   "hash_algorithm": "sha256",
   "owning_bead": "bd-1qkrc",
   "receipt": {
-    "backfilled": true,
-    "generated_by": "backfill_reproducibility_bundles.py",
-    "receipt_sha256": "31bdb31dc9ad8544c869f2076c399e37c23b095388c52368d6337e81d373212f",
-    "verification_result": "pending"
+    "backfilled": false,
+    "generated_by": "reemit_evidence_receipts.py (live gate run)",
+    "receipt_sha256": "d419bf31c74779110cf6bb80ac20bc6e2c0b326ee85e0ea553a35850f1ffab03",
+    "verification_result": "passed"
   },
   "repro_lock": {
     "git_tracked": true,
@@ -46,7 +46,7 @@
     "source": "worktree"
   },
   "schema_version": "franken-engine.evidence-manifest.v1",
-  "source_commit": "379944dbcfeef8db14666525bb3f053c33843bd7",
+  "source_commit": "e96bb632cc9d3cc5f3007b048067521537100734",
   "verifiable_inputs": [
     {
       "git_tracked": true,

@@ -18,7 +18,7 @@
     "scope": "operations",
     "state": "observed"
   },
-  "generated_at_utc": "2026-05-23T04:38:36.000000+00:00",
+  "generated_at_utc": "2026-06-19T20:40:03.027998+00:00",
   "inputs": {
     "dependencies": [
       "frankenengine-engine",
@@ -35,12 +35,15 @@
   "outputs": {
     "decision_artifacts": "generated",
     "execution_trace": "deterministic",
-    "verification_result": "passed"
+    "exit_code": 0,
+    "verification_command": "./scripts/run_rgc_fleet_convergence_slo_gate.sh ci",
+    "verification_result": "passed",
+    "verified_at_utc": "2026-06-19T20:40:03.027998+00:00"
   },
   "provenance": {
     "audit_source": "bd-cixqu.2.5",
     "bead_id": "bd-cixqu.2.5",
-    "generated_by": "OrangeSeal"
+    "generated_by": "reemit_evidence_receipts.py (live gate run)"
   },
   "retention": {
     "backup_required": true,
@@ -51,7 +54,7 @@
   "schema_version": "frankenengine.reproducibility.manifest.v1",
   "source_revision": {
     "branch": "main",
-    "commit": "5af6d3ff",
+    "commit": "e96bb632cc9d3cc5f3007b048067521537100734",
     "repository": "franken_engine"
   },
   "validation": {

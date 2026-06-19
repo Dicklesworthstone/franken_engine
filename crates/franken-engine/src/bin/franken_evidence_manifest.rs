@@ -1,22 +1,29 @@
-//! `franken-evidence-manifest` — CEI B.1 (`bd-sde5e.2.1`) operator tool.
+//! `franken-evidence-manifest` — CEI evidence operator tool (B.1 `bd-sde5e.2.1`,
+//! A.3 `bd-sde5e.1.3`).
 //!
 //! Generates and verifies the content-addressed, git-tracked evidence manifests
 //! under `docs/evidence/<CLAIM>/` for every OBSERVED claim in the claim-to-proof
-//! matrix. See [`frankenengine_engine::evidence_manifest`] for the schema and the
-//! offline-verification contract.
+//! matrix, and audits the matrix against that committed evidence. See
+//! [`frankenengine_engine::evidence_manifest`] for the schema and the
+//! offline-verification contract, and [`frankenengine_engine::claim_evidence_lattice`]
+//! for the soundness scorer.
 //!
 //! Usage:
-//!   franken_evidence_manifest generate   # copy bundles into docs/evidence/ + write manifests
-//!   franken_evidence_manifest verify     # re-verify every committed manifest offline (CI)
+//!   franken_evidence_manifest generate          # copy bundles into docs/evidence/ + write manifests
+//!   franken_evidence_manifest verify            # re-verify every committed manifest offline (CI)
+//!   franken_evidence_manifest audit [--blocking] # CEI-A.3: report rows that assert more than their evidence licenses
 //!
 //! `verify` is deterministic and needs no access to the git-ignored `artifacts/`
 //! tree; it exits non-zero if any recorded content hash fails to re-verify.
+//! `audit` is advisory (exit 0) unless `--blocking` is passed (exit 1 on any
+//! over-promoted row).
 
 #![forbid(unsafe_code)]
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use frankenengine_engine::claim_evidence_lattice::score_matrix_file;
 use frankenengine_engine::evidence_manifest::{
     BUNDLE_FILES, EVIDENCE_DIR, build_manifest, load_manifest, verify_manifest_offline,
 };
@@ -47,8 +54,9 @@ fn main() -> ExitCode {
     match mode.as_str() {
         "generate" => generate(&repo_root, &claims),
         "verify" => verify(&repo_root, &claims),
+        "audit" => audit(&repo_root, std::env::args().any(|a| a == "--blocking")),
         other => {
-            eprintln!("unknown mode '{other}': expected 'generate' or 'verify'");
+            eprintln!("unknown mode '{other}': expected 'generate', 'verify', or 'audit'");
             ExitCode::from(2)
         }
     }
@@ -224,6 +232,61 @@ fn verify(repo_root: &Path, claims: &[ObservedClaim]) -> ExitCode {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
+    }
+}
+
+/// CEI-A.3 (`bd-sde5e.1.3`): score the live matrix against committed evidence and
+/// report every row whose asserted state exceeds what its git-tracked, non-pending
+/// evidence licenses (the bidirectional `state <= ceiling(tier)` check).
+///
+/// Advisory by default (exit 0, prints the over-promotion list); `--blocking`
+/// fails closed (exit 1) on any unsound row. The G.1 meta-gate runs it with
+/// `--blocking` once Track B has committed real receipts for every OBSERVED row.
+fn audit(repo_root: &Path, blocking: bool) -> ExitCode {
+    let matrix_path = repo_root.join("docs/claim_to_proof_matrix_v1.json");
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let report = match score_matrix_file(&matrix_path, repo_root, now_unix, None) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("audit: failed to score matrix: {e:?}");
+            return ExitCode::from(2);
+        }
+    };
+    println!(
+        "claim-integrity-coverage = {}/{} sound ({} millionths, digest {})",
+        report.sound_rows, report.total_rows, report.coverage_millionths, report.coverage_digest
+    );
+    let unsound = report.unsound();
+    for v in &unsound {
+        println!(
+            "  OVER-PROMOTED {}: asserts={} but evidence tier={} licenses <= {} :: {}",
+            v.claim_id,
+            v.asserted_state,
+            v.evidence_tier,
+            v.ceiling,
+            v.notes.join("; ")
+        );
+    }
+    if unsound.is_empty() {
+        println!(
+            "audit: PASS — every claim's asserted state is within its committed-evidence ceiling"
+        );
+        ExitCode::SUCCESS
+    } else if blocking {
+        eprintln!(
+            "audit: FAIL (blocking) — {} claim(s) assert more than their committed evidence licenses",
+            unsound.len()
+        );
+        ExitCode::FAILURE
+    } else {
+        println!(
+            "audit: ADVISORY — {} over-promoted claim(s); not failing (pass --blocking to enforce)",
+            unsound.len()
+        );
+        ExitCode::SUCCESS
     }
 }
 

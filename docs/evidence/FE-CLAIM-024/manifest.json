@@ -1,0 +1,63 @@
+{
+  "artifacts": {
+    "bundle_path": "artifacts/reproducibility_bundles/FE-CLAIM-024",
+    "env_json": "env.json",
+    "manifest_json": "manifest.json",
+    "primary": "scripts/test_standalone_build.sh",
+    "repro_lock": "repro.lock"
+  },
+  "canonicalization": {
+    "encoding": "utf-8",
+    "format": "json",
+    "key_ordering": "lexicographic",
+    "newline": "lf"
+  },
+  "claim": {
+    "id": "FE-CLAIM-024",
+    "original_artifact_path": null,
+    "scope": "integration",
+    "state": "observed"
+  },
+  "generated_at_utc": "2026-05-21T22:11:00.000000+00:00",
+  "inputs": {
+    "dependencies": [
+      "scripts/test_standalone_build.sh",
+      "scripts/e2e/sibling_integration_smoke.sh"
+    ],
+    "source_files": [
+      "scripts/test_standalone_build.sh",
+      "scripts/e2e/sibling_integration_smoke.sh"
+    ]
+  },
+  "manifest_id": "manifest-fe-claim-024-20260521",
+  "outputs": {
+    "decision_artifacts": "generated",
+    "execution_trace": "deterministic",
+    "verification_result": "pass"
+  },
+  "provenance": {
+    "audit_source": "bd-cixqu.13.3",
+    "bead_id": "bd-cixqu.13",
+    "blocking_beads_closed": [
+      "bd-cixqu.13.1"
+    ],
+    "generated_by": "matrix_promotion_manual"
+  },
+  "retention": {
+    "backup_required": true,
+    "immutable": true,
+    "policy": "permanent"
+  },
+  "schema_hash": "sha256:8f9a0b1c2d3e4f5678abc9def0123456789abcdef0123456789abcdef01234567",
+  "schema_version": "frankenengine.reproducibility.manifest.v1",
+  "source_revision": {
+    "branch": "main",
+    "commit": "96db979d1ab9f31a9e99c92a11a8fcb1d4343d9a",
+    "repository": "franken_engine"
+  },
+  "validation": {
+    "hash_verified": true,
+    "provenance_linked": true,
+    "schema_validated": true
+  }
+}

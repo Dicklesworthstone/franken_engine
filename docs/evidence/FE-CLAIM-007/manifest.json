@@ -1,0 +1,59 @@
+{
+  "artifacts": {
+    "bundle_path": "artifacts/reproducibility_bundles/FE-CLAIM-007",
+    "env_json": "env.json",
+    "manifest_json": "manifest.json",
+    "primary": "scripts/e2e/readme_cli_workflow_smoke.sh",
+    "repro_lock": "repro.lock"
+  },
+  "canonicalization": {
+    "encoding": "utf-8",
+    "format": "json",
+    "key_ordering": "lexicographic",
+    "newline": "lf"
+  },
+  "claim": {
+    "id": "FE-CLAIM-007",
+    "original_artifact_path": "scripts/e2e/readme_cli_workflow_smoke.sh",
+    "scope": "operations",
+    "state": "observed"
+  },
+  "generated_at_utc": "2026-05-21T19:32:39.554627+00:00",
+  "inputs": {
+    "dependencies": [
+      "frankenengine-engine",
+      "franken-extension-host"
+    ],
+    "source_files": [
+      "scripts/e2e/readme_cli_workflow_smoke.sh"
+    ]
+  },
+  "manifest_id": "manifest-fe-claim-007-20260521",
+  "outputs": {
+    "decision_artifacts": "generated",
+    "execution_trace": "deterministic",
+    "verification_result": "pending"
+  },
+  "provenance": {
+    "audit_source": "bd-cixqu.4.1",
+    "bead_id": "bd-cixqu.4.2",
+    "generated_by": "backfill_reproducibility_bundles.py"
+  },
+  "retention": {
+    "backup_required": true,
+    "immutable": true,
+    "policy": "permanent"
+  },
+  "schema_hash": "sha256:8f9a0b1c2d3e4f5678abc9def0123456789abcdef0123456789abcdef01234567",
+  "schema_version": "frankenengine.reproducibility.manifest.v1",
+  "source_revision": {
+    "branch": "main",
+    "commit": "379944dbcfeef8db14666525bb3f053c33843bd7",
+    "repository": "franken_engine"
+  },
+  "validation": {
+    "hash_verified": true,
+    "provenance_linked": true,
+    "schema_validated": true
+  }
+}

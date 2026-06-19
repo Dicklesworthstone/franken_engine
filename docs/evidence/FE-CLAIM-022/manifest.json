@@ -1,0 +1,63 @@
+{
+  "artifacts": {
+    "bundle_path": "artifacts/reproducibility_bundles/FE-CLAIM-022",
+    "env_json": "env.json",
+    "manifest_json": "manifest.json",
+    "primary": "scripts/run_rgc_lockstep_oracle_pipeline.sh",
+    "repro_lock": "repro.lock"
+  },
+  "canonicalization": {
+    "encoding": "utf-8",
+    "format": "json",
+    "key_ordering": "lexicographic",
+    "newline": "lf"
+  },
+  "claim": {
+    "id": "FE-CLAIM-022",
+    "original_artifact_path": "scripts/run_rgc_lockstep_oracle_pipeline.sh",
+    "scope": "runtime",
+    "state": "observed"
+  },
+  "generated_at_utc": "2026-05-21T20:44:00.000000+00:00",
+  "inputs": {
+    "dependencies": [
+      "frankenengine-engine",
+      "franken-extension-host"
+    ],
+    "source_files": [
+      "scripts/run_rgc_lockstep_oracle_pipeline.sh",
+      "scripts/e2e/rgc_lockstep_oracle_pipeline_replay.sh",
+      "crates/franken-engine/src/frx_lockstep_oracle.rs",
+      "crates/franken-engine/src/runtime_lockstep_helpers.rs",
+      "docs/lockstep_divergence_taxonomy_v1.json"
+    ]
+  },
+  "manifest_id": "manifest-fe-claim-022-20260521",
+  "outputs": {
+    "decision_artifacts": "generated",
+    "execution_trace": "deterministic",
+    "verification_result": "pending"
+  },
+  "provenance": {
+    "audit_source": "bd-cixqu.9.5",
+    "bead_id": "bd-cixqu.9",
+    "generated_by": "matrix_promotion_manual"
+  },
+  "retention": {
+    "backup_required": true,
+    "immutable": true,
+    "policy": "permanent"
+  },
+  "schema_hash": "sha256:8f9a0b1c2d3e4f5678abc9def0123456789abcdef0123456789abcdef01234567",
+  "schema_version": "frankenengine.reproducibility.manifest.v1",
+  "source_revision": {
+    "branch": "main",
+    "commit": "5030bbfb9e12c5b4e8a7f3c8b6a9e2d1c4f7a3b6e9c2d5f8a1b4c7e0d3f6a9b2",
+    "repository": "franken_engine"
+  },
+  "validation": {
+    "hash_verified": true,
+    "provenance_linked": true,
+    "schema_validated": true
+  }
+}

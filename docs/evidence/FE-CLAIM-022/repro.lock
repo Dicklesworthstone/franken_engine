@@ -1,0 +1,56 @@
+{
+  "commands": {
+    "cleanup": "cargo clean",
+    "environment_setup": "export CARGO_INCREMENTAL=0",
+    "verification": "./scripts/run_rgc_lockstep_oracle_pipeline.sh ci"
+  },
+  "determinism": {
+    "environment_isolation": "containerized",
+    "mode": "strict",
+    "reproducible_builds": true,
+    "seed_control": "fixed"
+  },
+  "expected_outputs": {
+    "deterministic_trace": true,
+    "evidence_generated": true,
+    "exit_code": 0,
+    "verification_success": true
+  },
+  "generated_at_utc": "2026-05-21T20:43:03.000000+00:00",
+  "inputs": {
+    "dependencies": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "crates/franken-engine/Cargo.toml",
+      "crates/franken-engine/src/frx_lockstep_oracle.rs",
+      "crates/franken-engine/src/runtime_lockstep_helpers.rs",
+      "docs/lockstep_divergence_taxonomy_v1.json"
+    ],
+    "primary_artifact": {
+      "hash": "6a5b2c8e9d7f1a3b4c5e6d7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b",
+      "path": "scripts/run_rgc_lockstep_oracle_pipeline.sh",
+      "size_bytes": 15420
+    }
+  },
+  "lock_id": "lock-fe-claim-022-20260521204303",
+  "manifest_id": "manifest-fe-claim-022-20260521",
+  "replay": {
+    "command_sequence": [
+      "./scripts/run_rgc_lockstep_oracle_pipeline.sh ci"
+    ],
+    "environment_vars": {
+      "CARGO_INCREMENTAL": "0",
+      "RUSTFLAGS": "-C linker=cc"
+    },
+    "working_directory": "/data/projects/franken_engine"
+  },
+  "schema_hash": "sha256:9f0a1b2c3d4e5f6789abcdef0123456789abcdef0123456789abcdef01234567",
+  "schema_version": "frankenengine.reproducibility.lock.v1",
+  "source_commit": "5030bbfb9e12c5b4e8a7f3c8b6a9e2d1c4f7a3b6e9c2d5f8a1b4c7e0d3f6a9b2",
+  "verification": {
+    "freshness_check": "required",
+    "hash_algorithm": "sha256",
+    "replay_validation": "automated",
+    "signature_required": false
+  }
+}

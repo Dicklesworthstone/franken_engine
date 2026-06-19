@@ -3,7 +3,7 @@
     {
       "actual_wording_state": "observed",
       "allowed_state": "observed",
-      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-001",
+      "artifact_path": "docs/evidence/FE-CLAIM-001",
       "claim_id": "FE-CLAIM-001",
       "claim_scope": "runtime",
       "claim_text": "FrankenEngine is a native Rust runtime for adversarial extension workloads with deterministic replay, cryptographic decision receipts, and fleet-scale containment.",
@@ -23,7 +23,7 @@
     {
       "actual_wording_state": "observed",
       "allowed_state": "observed",
-      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-002",
+      "artifact_path": "docs/evidence/FE-CLAIM-002",
       "claim_id": "FE-CLAIM-002",
       "claim_scope": "security",
       "claim_text": "Probabilistic guardplane with expected-loss actioning.",
@@ -43,7 +43,7 @@
     {
       "actual_wording_state": "observed",
       "allowed_state": "observed",
-      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-003",
+      "artifact_path": "docs/evidence/FE-CLAIM-003",
       "claim_id": "FE-CLAIM-003",
       "claim_scope": "replay",
       "claim_text": "Deterministic replay for high-severity decisions with counterfactual policy simulation.",
@@ -63,7 +63,7 @@
     {
       "actual_wording_state": "observed",
       "allowed_state": "observed",
-      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-004",
+      "artifact_path": "docs/evidence/FE-CLAIM-004",
       "claim_id": "FE-CLAIM-004",
       "claim_scope": "security",
       "claim_text": "Signed decision receipts with RFC-6962-style transparency-log (MMR) inclusion and consistency proofs. The TEE attestation binding is tracked separately as FE-CLAIM-004-TEE (simulated by default).",
@@ -102,7 +102,7 @@
     {
       "actual_wording_state": "observed",
       "allowed_state": "observed",
-      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-005",
+      "artifact_path": "docs/evidence/FE-CLAIM-005",
       "claim_id": "FE-CLAIM-005",
       "claim_scope": "operations",
       "claim_text": "Fleet immune system with quarantine and revocation propagation plus bounded convergence SLOs.",
@@ -121,14 +121,14 @@
     {
       "actual_wording_state": "observed",
       "allowed_state": "observed",
-      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-006",
+      "artifact_path": "docs/evidence/FE-CLAIM-006",
       "claim_id": "FE-CLAIM-006",
       "claim_scope": "security",
       "claim_text": "Capability-typed compile-time ambient-authority rejection on the shipped hostcall/import edges (effect-set IR2 annotation + lowering-side rejection), exercised by the 16-scenario red-team corpus and the bd-cixqu.3.4 gate. The end-to-end TS-to-IR contract over all ambient constructs is TARGETED, not observed.",
       "decision": "allow_observed",
       "freshness_days": 30,
       "owning_bead": "bd-cixqu.3.5",
-      "reason": "Promoted to OBSERVED under bd-cixqu.3.5 after C.1 (effect-set IR2 annotation), C.2 (lowering-side ambient-authority rejection), C.3 (16-scenario red-team negative corpus extending tests/red_team_scenarios/), and C.4 (run_rgc_capability_typed_compile_time.sh + replay wrapper). Reproducibility bundle at artifacts/reproducibility_bundles/FE-CLAIM-006/ self-attests via env.json + manifest.json + repro.lock per docs/REPRODUCIBILITY_CONTRACT.md; gate selftest passes 16/16 manifest-shape compliance.",
+      "reason": "Promoted to OBSERVED under bd-cixqu.3.5 after C.1 (effect-set IR2 annotation), C.2 (lowering-side ambient-authority rejection), C.3 (16-scenario red-team negative corpus extending tests/red_team_scenarios/), and C.4 (run_rgc_capability_typed_compile_time.sh + replay wrapper). Reproducibility bundle at docs/evidence/FE-CLAIM-006/ self-attests via env.json + manifest.json + repro.lock per docs/REPRODUCIBILITY_CONTRACT.md; gate selftest passes 16/16 manifest-shape compliance.",
       "source_path": "README.md",
       "source_span": {
         "end_line": 141,
@@ -160,7 +160,7 @@
     {
       "actual_wording_state": "observed",
       "allowed_state": "observed",
-      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-007",
+      "artifact_path": "docs/evidence/FE-CLAIM-007",
       "claim_id": "FE-CLAIM-007",
       "claim_scope": "operations",
       "claim_text": "The shipped frankenctl CLI provides core execution surfaces and selective operator tooling.",
@@ -180,7 +180,7 @@
     {
       "actual_wording_state": "observed",
       "allowed_state": "observed",
-      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-008",
+      "artifact_path": "docs/evidence/FE-CLAIM-008",
       "claim_id": "FE-CLAIM-008",
       "claim_scope": "operations",
       "claim_text": "Unsupported surfaces and support contract language are explicitly documented.",
@@ -200,14 +200,14 @@
     {
       "actual_wording_state": "observed",
       "allowed_state": "observed",
-      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-009",
+      "artifact_path": "docs/evidence/FE-CLAIM-009",
       "claim_id": "FE-CLAIM-009",
       "claim_scope": "evidence",
       "claim_text": "Every published performance and security claim ships with reproducible artifact bundles.",
       "decision": "allow_observed",
       "freshness_days": 30,
       "owning_bead": "bd-cixqu.4.4",
-      "reason": "Promoted to OBSERVED under bd-cixqu.4.4 after D.1 (repro.lock audit), D.2 (backfill: 9/9 OBSERVED rows have repro.lock partners), and D.3 (gate now fail-closed on missing repro.lock per ClaimMatrixError::MissingReproducibilityBundle). Reproducibility bundle at artifacts/reproducibility_bundles/FE-CLAIM-009/ self-attests via env.json + manifest.json + repro.lock per docs/REPRODUCIBILITY_CONTRACT.md.",
+      "reason": "Promoted to OBSERVED under bd-cixqu.4.4 after D.1 (repro.lock audit), D.2 (backfill: 9/9 OBSERVED rows have repro.lock partners), and D.3 (gate now fail-closed on missing repro.lock per ClaimMatrixError::MissingReproducibilityBundle). Reproducibility bundle at docs/evidence/FE-CLAIM-009/ self-attests via env.json + manifest.json + repro.lock per docs/REPRODUCIBILITY_CONTRACT.md.",
       "source_path": "README.md",
       "source_span": {
         "end_line": 215,
@@ -239,7 +239,7 @@
     {
       "actual_wording_state": "observed",
       "allowed_state": "observed",
-      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-011",
+      "artifact_path": "docs/evidence/FE-CLAIM-011",
       "claim_id": "FE-CLAIM-011",
       "claim_scope": "security",
       "claim_text": ">= 10x reduction in successful red-team host compromise rate versus Node/Bun defaults.",
@@ -259,7 +259,7 @@
     {
       "actual_wording_state": "observed",
       "allowed_state": "observed",
-      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-012",
+      "artifact_path": "docs/evidence/FE-CLAIM-012",
       "claim_id": "FE-CLAIM-012",
       "claim_scope": "security",
       "claim_text": "<= 250ms median time from high-risk signal crossing to containment action.",
@@ -279,7 +279,7 @@
     {
       "actual_wording_state": "observed",
       "allowed_state": "observed",
-      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-013",
+      "artifact_path": "docs/evidence/FE-CLAIM-013",
       "claim_id": "FE-CLAIM-013",
       "claim_scope": "replay",
       "claim_text": "100% deterministic replay coverage for declared security-critical allow/deny/escalation decisions.",
@@ -299,14 +299,14 @@
     {
       "actual_wording_state": "observed",
       "allowed_state": "observed",
-      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-014",
+      "artifact_path": "docs/evidence/FE-CLAIM-014",
       "claim_id": "FE-CLAIM-014",
       "claim_scope": "capability",
       "claim_text": "At least three production features that are impossible by default in standard Node/Bun deployments: signed IFC declassification receipts (FE-CLAIM-015), deterministic replay coverage (FE-CLAIM-013), and red-team compromise-rate reduction (FE-CLAIM-011).",
       "decision": "allow_observed",
       "freshness_days": 30,
       "owning_bead": "bd-cixqu.6.6",
-      "reason": "Promoted to OBSERVED under bd-cixqu.6.6 after F.1 (catalog spec, bd-cixqu.6.1), F.2 (IFC bundle, bd-cixqu.6.2), F.3 (replay bundle, bd-cixqu.6.3), F.4 (red-team bundle, bd-cixqu.6.4), and F.5 (RGC gate + replay wrapper, bd-cixqu.6.5). The F.5 gate scripts/run_rgc_production_feature_catalog.sh validates all three sub-bundles against franken-engine.production-feature-catalog-bundle.v1 schema, emits a unified manifest with per-feature sha256 hashes for fleet-distribution drift detection, and passes in ci mode with 3/3 features present. Reproducibility bundle at artifacts/reproducibility_bundles/FE-CLAIM-014/ self-attests via env.json + manifest.json + repro.lock per docs/REPRODUCIBILITY_CONTRACT.md.",
+      "reason": "Promoted to OBSERVED under bd-cixqu.6.6 after F.1 (catalog spec, bd-cixqu.6.1), F.2 (IFC bundle, bd-cixqu.6.2), F.3 (replay bundle, bd-cixqu.6.3), F.4 (red-team bundle, bd-cixqu.6.4), and F.5 (RGC gate + replay wrapper, bd-cixqu.6.5). The F.5 gate scripts/run_rgc_production_feature_catalog.sh validates all three sub-bundles against franken-engine.production-feature-catalog-bundle.v1 schema, emits a unified manifest with per-feature sha256 hashes for fleet-distribution drift detection, and passes in ci mode with 3/3 features present. Reproducibility bundle at docs/evidence/FE-CLAIM-014/ self-attests via env.json + manifest.json + repro.lock per docs/REPRODUCIBILITY_CONTRACT.md.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
         "end_line": 61,
@@ -318,7 +318,7 @@
     {
       "actual_wording_state": "observed",
       "allowed_state": "observed",
-      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-015",
+      "artifact_path": "docs/evidence/FE-CLAIM-015",
       "claim_id": "FE-CLAIM-015",
       "claim_scope": "ifc",
       "claim_text": "Deterministic information-flow confinement with signed declassification receipts and replay-verifiable data-provenance artifacts.",
@@ -458,7 +458,7 @@
     {
       "actual_wording_state": "observed",
       "allowed_state": "observed",
-      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-022",
+      "artifact_path": "docs/evidence/FE-CLAIM-022",
       "claim_id": "FE-CLAIM-022",
       "claim_scope": "runtime",
       "claim_text": "Cross-runtime lockstep oracle with differential Node/Bun harness and divergence classification.",
@@ -478,7 +478,7 @@
     {
       "actual_wording_state": "observed",
       "allowed_state": "observed",
-      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-023",
+      "artifact_path": "docs/evidence/FE-CLAIM-023",
       "claim_id": "FE-CLAIM-023",
       "claim_scope": "reproducibility",
       "claim_text": "Cross-platform reproducibility: Linux×x64, macOS×arm64, Windows×x64 produce identical content hashes from same input.",
@@ -498,14 +498,14 @@
     {
       "actual_wording_state": "observed",
       "allowed_state": "observed",
-      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-024",
+      "artifact_path": "docs/evidence/FE-CLAIM-024",
       "claim_id": "FE-CLAIM-024",
       "claim_scope": "integration",
       "claim_text": "Sibling-repo integration verification across asupersync, frankentui, frankensqlite, sqlmodel_rust, fastapi_rust, frankenpandas: each sibling has a per-bundle presence + Cargo.toml shape pass criterion recorded as passed / skipped / failed.",
       "decision": "allow_observed",
       "freshness_days": 30,
       "owning_bead": "bd-cixqu.13.3",
-      "reason": "Sibling repo reuse contract is now machine-enforced. M.1 (bd-cixqu.13.1, commit 87418e94) added a full-integration lane to scripts/test_standalone_build.sh that records pass/skipped/failed for each of the six declared siblings; the smoke at scripts/e2e/sibling_integration_smoke.sh asserts the lane's structured output. Reproducibility bundle at artifacts/reproducibility_bundles/FE-CLAIM-024/ self-attests via env.json + manifest.json + repro.lock per docs/REPRODUCIBILITY_CONTRACT.md.",
+      "reason": "Sibling repo reuse contract is now machine-enforced. M.1 (bd-cixqu.13.1, commit 87418e94) added a full-integration lane to scripts/test_standalone_build.sh that records pass/skipped/failed for each of the six declared siblings; the smoke at scripts/e2e/sibling_integration_smoke.sh asserts the lane's structured output. Reproducibility bundle at docs/evidence/FE-CLAIM-024/ self-attests via env.json + manifest.json + repro.lock per docs/REPRODUCIBILITY_CONTRACT.md.",
       "source_path": "README.md",
       "source_span": {
         "end_line": 2107,

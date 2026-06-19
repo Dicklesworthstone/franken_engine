@@ -1,0 +1,67 @@
+{
+  "artifacts": {
+    "bundle_path": "artifacts/reproducibility_bundles/FE-CLAIM-009",
+    "env_json": "env.json",
+    "manifest_json": "manifest.json",
+    "primary": "scripts/run_claim_to_proof_matrix_gate.sh",
+    "repro_lock": "repro.lock"
+  },
+  "canonicalization": {
+    "encoding": "utf-8",
+    "format": "json",
+    "key_ordering": "lexicographic",
+    "newline": "lf"
+  },
+  "claim": {
+    "id": "FE-CLAIM-009",
+    "original_artifact_path": "docs/RUNTIME_CHARTER.md",
+    "scope": "evidence",
+    "state": "observed"
+  },
+  "generated_at_utc": "2026-05-21T20:50:00.000000+00:00",
+  "inputs": {
+    "dependencies": [
+      "scripts/run_claim_to_proof_matrix_gate.sh",
+      "scripts/e2e/claim_to_proof_matrix_repro_lock_smoke.sh"
+    ],
+    "source_files": [
+      "docs/claim_to_proof_matrix_v1.json",
+      "docs/REPRODUCIBILITY_CONTRACT.md",
+      "scripts/run_claim_to_proof_matrix_gate.sh",
+      "scripts/testdata/claim_to_proof_matrix_repro_lock/claim_to_proof_matrix_fixture.json"
+    ]
+  },
+  "manifest_id": "manifest-fe-claim-009-20260521",
+  "outputs": {
+    "decision_artifacts": "generated",
+    "execution_trace": "deterministic",
+    "verification_result": "pass"
+  },
+  "provenance": {
+    "audit_source": "bd-cixqu.4.4",
+    "bead_id": "bd-cixqu.4",
+    "blocking_beads_closed": [
+      "bd-cixqu.4.1",
+      "bd-cixqu.4.2",
+      "bd-cixqu.4.3"
+    ],
+    "generated_by": "matrix_promotion_manual"
+  },
+  "retention": {
+    "backup_required": true,
+    "immutable": true,
+    "policy": "permanent"
+  },
+  "schema_hash": "sha256:8f9a0b1c2d3e4f5678abc9def0123456789abcdef0123456789abcdef01234567",
+  "schema_version": "frankenengine.reproducibility.manifest.v1",
+  "source_revision": {
+    "branch": "main",
+    "commit": "284e79be7bb929530151603aaabd5cbfa438685c",
+    "repository": "franken_engine"
+  },
+  "validation": {
+    "hash_verified": true,
+    "provenance_linked": true,
+    "schema_validated": true
+  }
+}

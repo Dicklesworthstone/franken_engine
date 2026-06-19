@@ -364,15 +364,16 @@ pub enum ChangePointVerdict {
         cusum_statistic_millionths: i64,
         /// Content hash of the evidence atom for this detection.
         evidence_hash: ContentHash,
-        /// Detached signature over `evidence_hash`, authenticating this
+        /// Detached Ed25519 signature over `evidence_hash`, authenticating this
         /// detection as an auditable decision artifact.
         ///
-        /// FIXME (bd-1lw7r.4): always `None` today — no evidence-signing
-        /// facility (key management + sign API) is wired into this detector
-        /// yet, so emitted change-point evidence carries a content hash but is
-        /// UNAUTHENTICATED. See [`ChangePointVerdict::evidence_signing_wired`];
-        /// wiring likely shares infrastructure with the `tee_attestation` /
-        /// `signature_preimage` modules.
+        /// Populated (bd-k2bz7): every emitted [`ChangePointVerdict::ChangeDetected`]
+        /// carries a signature produced by the engine's default evidence signer
+        /// (`evidence_ledger::sign_evidence_preimage`) and verifiable with
+        /// `evidence_ledger::shared_evidence_verification_key()`. The field stays
+        /// an `Option` only for forward/backward wire compatibility with records
+        /// serialized before the signer was wired; new records are never `None`.
+        /// See [`ChangePointVerdict::evidence_signing_wired`] (returns `true`).
         signed_evidence: Option<Vec<u8>>,
     },
 }

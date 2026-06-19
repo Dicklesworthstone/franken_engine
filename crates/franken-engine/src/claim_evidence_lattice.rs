@@ -685,6 +685,284 @@ pub fn score_matrix_file(
 }
 
 // ---------------------------------------------------------------------------
+// Whole-document claim-consistency index (CEI track A.2, bead `bd-sde5e.1.2`)
+// ---------------------------------------------------------------------------
+//
+// The single-anchor `must_contain` scan in `run_claim_to_proof_matrix_gate.sh`
+// only inspects ONE line per claim, so it cannot see a claim that is asserted
+// `observed` in the TL;DR table and `hypothesis` in the Limitations section —
+// exactly the FE-CLAIM-004 / FE-CLAIM-006 drift the CEI reality check found.
+//
+// This index records, for every claim, the canonical state from the matrix plus
+// every *literal* `FE-CLAIM-NNN` mention elsewhere in the docs that unambiguously
+// asserts a state, and flags any claim asserted at two different states. It ships
+// ADVISORY-first; G.1 promotes it to blocking only after Track C reconciles the
+// known contradictions (enforcing it against a self-contradictory README would
+// red the gate immediately).
+
+/// One recorded assertion that a given claim is at a given state, at a location.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StateAssertion {
+    pub claim_id: String,
+    pub state: ClaimAssertionState,
+    /// `path:line` (1-based). The canonical row uses the matrix `source_span`.
+    pub location: String,
+    /// Whether this is the matrix's own `actual_wording_state` (the anchor).
+    pub canonical: bool,
+}
+
+/// The whole-document consistency verdict.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConsistencyReport {
+    /// Every recorded assertion, grouped by claim id (BTree-sorted, deterministic).
+    pub assertions: std::collections::BTreeMap<String, Vec<StateAssertion>>,
+    /// Claim ids asserted at two or more distinct states anywhere.
+    pub contradictions: Vec<String>,
+    /// Number of documents scanned.
+    pub documents_scanned: u64,
+    /// Lowercase hex SHA-256 over the canonical, length-prefixed report preimage.
+    pub digest: String,
+}
+
+impl ConsistencyReport {
+    /// Whether the document set is internally consistent (no claim is asserted at
+    /// two different states). This is the predicate G.1 will enforce as blocking.
+    #[must_use]
+    pub fn is_consistent(&self) -> bool {
+        self.contradictions.is_empty()
+    }
+}
+
+/// Extract every literal `FE-CLAIM-NNN[-SUFFIX...]` id mentioned on a line, in
+/// order, de-duplicated. Greedy so `FE-CLAIM-004-TEE` is one id, distinct from a
+/// bare `FE-CLAIM-004`.
+#[must_use]
+pub fn extract_claim_ids(line: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let bytes = line.as_bytes();
+    let needle = b"FE-CLAIM-";
+    let mut i = 0;
+    while i + needle.len() <= bytes.len() {
+        if &bytes[i..i + needle.len()] == needle {
+            let mut j = i + needle.len();
+            // Consume id body: [A-Z0-9] and internal '-' that is followed by [A-Z0-9].
+            let mut end = j;
+            while j < bytes.len() {
+                let c = bytes[j];
+                if c.is_ascii_uppercase() || c.is_ascii_digit() {
+                    j += 1;
+                    end = j;
+                } else if c == b'-'
+                    && j + 1 < bytes.len()
+                    && (bytes[j + 1].is_ascii_uppercase() || bytes[j + 1].is_ascii_digit())
+                {
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
+            if end > i + needle.len() {
+                let id = line[i..end].to_string();
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+                i = end;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    ids
+}
+
+/// Extract the explicit uppercase state-assertion keywords on a line
+/// (`OBSERVED` / `TARGETED` / `HYPOTHESIS`), de-duplicated. The uppercase form is
+/// the docs' convention for asserting a matrix state; lowercase prose words are
+/// intentionally ignored to avoid false positives.
+#[must_use]
+pub fn extract_states(line: &str) -> Vec<ClaimAssertionState> {
+    let mut out = Vec::new();
+    for (token, state) in [
+        ("OBSERVED", ClaimAssertionState::Observed),
+        ("TARGETED", ClaimAssertionState::Target),
+        ("HYPOTHESIS", ClaimAssertionState::Hypothesis),
+    ] {
+        if contains_word(line, token) && !out.contains(&state) {
+            out.push(state);
+        }
+    }
+    out
+}
+
+/// Whether `token` appears in `line` not flanked by ASCII alphanumerics (so
+/// `HYPOTHESIS` matches but `HYPOTHESISED` does not).
+fn contains_word(line: &str, token: &str) -> bool {
+    let lb = line.as_bytes();
+    let tb = token.as_bytes();
+    if tb.is_empty() || lb.len() < tb.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i + tb.len() <= lb.len() {
+        if &lb[i..i + tb.len()] == tb {
+            let before_ok = i == 0 || !lb[i - 1].is_ascii_alphanumeric();
+            let after = i + tb.len();
+            let after_ok = after >= lb.len() || !lb[after].is_ascii_alphanumeric();
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Build the whole-document consistency index from the matrix plus a set of
+/// `(path, text)` documents. The matrix supplies each claim's canonical state and
+/// anchor location; literal mentions in the documents that unambiguously assert a
+/// state (a line with exactly one claim id and exactly one state keyword) add
+/// further assertions. A claim asserted at two distinct states is a contradiction.
+#[must_use]
+pub fn scan_document_consistency(
+    matrix_claims: &[(String, ClaimAssertionState, String)],
+    documents: &[(String, String)],
+) -> ConsistencyReport {
+    let mut assertions: std::collections::BTreeMap<String, Vec<StateAssertion>> =
+        std::collections::BTreeMap::new();
+
+    // 1. Canonical assertion from the matrix for every claim.
+    for (claim_id, state, location) in matrix_claims {
+        assertions
+            .entry(claim_id.clone())
+            .or_default()
+            .push(StateAssertion {
+                claim_id: claim_id.clone(),
+                state: *state,
+                location: location.clone(),
+                canonical: true,
+            });
+    }
+    let known: std::collections::BTreeSet<&String> =
+        matrix_claims.iter().map(|(id, _, _)| id).collect();
+
+    // 2. Literal mentions across the documents (unambiguous lines only).
+    for (path, text) in documents {
+        for (idx, line) in text.lines().enumerate() {
+            let ids = extract_claim_ids(line);
+            if ids.len() != 1 {
+                continue; // ambiguous attribution — skip
+            }
+            let states = extract_states(line);
+            if states.len() != 1 {
+                continue; // no single clear state on this line — skip
+            }
+            let claim_id = &ids[0];
+            // Only track claims the matrix knows about, so a typo'd id is not a
+            // phantom contradiction.
+            if !known.contains(claim_id) {
+                continue;
+            }
+            let location = format!("{path}:{}", idx + 1);
+            let entry = assertions.entry(claim_id.clone()).or_default();
+            // The canonical row already covers the matrix's own anchor line.
+            let is_anchor = entry.iter().any(|a| a.canonical && a.location == location);
+            if is_anchor {
+                continue;
+            }
+            entry.push(StateAssertion {
+                claim_id: claim_id.clone(),
+                state: states[0],
+                location,
+                canonical: false,
+            });
+        }
+    }
+
+    // 3. Contradictions: a claim with two or more distinct asserted states.
+    let mut contradictions = Vec::new();
+    for (claim_id, list) in &assertions {
+        let distinct: std::collections::BTreeSet<ClaimAssertionState> =
+            list.iter().map(|a| a.state).collect();
+        if distinct.len() > 1 {
+            contradictions.push(claim_id.clone());
+        }
+    }
+
+    let digest = consistency_digest(&assertions, &contradictions);
+    ConsistencyReport {
+        assertions,
+        contradictions,
+        documents_scanned: documents.len() as u64,
+        digest,
+    }
+}
+
+/// Canonical, length-prefixed SHA-256 over the consistency index.
+fn consistency_digest(
+    assertions: &std::collections::BTreeMap<String, Vec<StateAssertion>>,
+    contradictions: &[String],
+) -> String {
+    let mut buf: Vec<u8> = Vec::new();
+    push_len_prefixed(&mut buf, b"franken-engine.claim-consistency-index.v1");
+    push_count(&mut buf, assertions.len());
+    for (claim_id, list) in assertions {
+        push_len_prefixed(&mut buf, claim_id.as_bytes());
+        push_count(&mut buf, list.len());
+        for a in list {
+            buf.push(a.state.rank());
+            buf.push(u8::from(a.canonical));
+            push_len_prefixed(&mut buf, a.location.as_bytes());
+        }
+    }
+    push_count(&mut buf, contradictions.len());
+    for c in contradictions {
+        push_len_prefixed(&mut buf, c.as_bytes());
+    }
+    hex::encode(Sha256::digest(&buf))
+}
+
+/// Load the matrix claims as `(claim_id, canonical_state, anchor_location)` for
+/// [`scan_document_consistency`].
+pub fn matrix_canonical_states(
+    matrix_path: &Path,
+) -> Result<Vec<(String, ClaimAssertionState, String)>, IntegrityError> {
+    let text = std::fs::read_to_string(matrix_path)
+        .map_err(|e| IntegrityError::MatrixRead(e.to_string()))?;
+    let json: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| IntegrityError::MatrixParse(e.to_string()))?;
+    let claims = json
+        .get("claims")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| IntegrityError::MatrixParse("missing `claims` array".into()))?;
+    let mut out = Vec::with_capacity(claims.len());
+    for claim in claims {
+        let claim_id = claim
+            .get("claim_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| IntegrityError::MatrixParse("claim missing `claim_id`".into()))?
+            .to_string();
+        let state = ClaimAssertionState::parse(
+            claim
+                .get("actual_wording_state")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    IntegrityError::MatrixParse(format!("{claim_id} missing actual_wording_state"))
+                })?,
+        )?;
+        let (path, line) = claim
+            .get("source_span")
+            .and_then(|s| {
+                let p = claim.get("source_path").and_then(|v| v.as_str())?;
+                let l = s.get("start_line").and_then(serde_json::Value::as_u64)?;
+                Some((p.to_string(), l))
+            })
+            .unwrap_or_else(|| ("<unknown>".to_string(), 0));
+        out.push((claim_id, state, format!("{path}:{line}")));
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -999,5 +1277,122 @@ mod tests {
         };
         assert_eq!(tier(&facts), EvidenceTier::Asserted);
         assert_eq!(ceiling(tier(&facts)), ClaimAssertionState::Target);
+    }
+
+    // -- A.2 whole-document consistency index --------------------------------
+
+    #[test]
+    fn extract_claim_ids_distinguishes_suffixed_and_bare_ids() {
+        assert_eq!(
+            extract_claim_ids("see FE-CLAIM-004 for details"),
+            ["FE-CLAIM-004"]
+        );
+        assert_eq!(
+            extract_claim_ids("the TEE part is FE-CLAIM-004-TEE (hypothesis)"),
+            ["FE-CLAIM-004-TEE"]
+        );
+        assert_eq!(
+            extract_claim_ids("gated by FE-CLAIM-TEST262 row"),
+            ["FE-CLAIM-TEST262"]
+        );
+        // A line mentioning both a bare id and the suffixed id yields both, distinct.
+        assert_eq!(
+            extract_claim_ids("FE-CLAIM-004 signing OBSERVED; FE-CLAIM-004-TEE HYPOTHESIS"),
+            ["FE-CLAIM-004", "FE-CLAIM-004-TEE"]
+        );
+        assert!(extract_claim_ids("no claims here").is_empty());
+    }
+
+    #[test]
+    fn extract_states_matches_only_uppercase_word_tokens() {
+        assert_eq!(
+            extract_states("remains HYPOTHESIS today"),
+            [ClaimAssertionState::Hypothesis]
+        );
+        assert_eq!(
+            extract_states("OBSERVED in tree"),
+            [ClaimAssertionState::Observed]
+        );
+        // Lowercase prose is ignored; an embedded substring is not a word match.
+        assert!(extract_states("this was observed once").is_empty());
+        assert!(extract_states("HYPOTHESISED behaviour").is_empty());
+        // Multiple distinct states on one line are all reported (caller treats as ambiguous).
+        assert_eq!(extract_states("OBSERVED here, HYPOTHESIS there").len(), 2);
+    }
+
+    #[test]
+    fn consistency_index_flags_a_contradicted_claim_with_both_locations() {
+        let matrix = vec![(
+            "FE-CLAIM-X".to_string(),
+            ClaimAssertionState::Observed,
+            "README.md:10".to_string(),
+        )];
+        let doc = (
+            "README.md".to_string(),
+            // line 1: bare mention with a conflicting HYPOTHESIS state.
+            "Limitations: FE-CLAIM-X remains HYPOTHESIS until proof ships\n".to_string(),
+        );
+        let report = scan_document_consistency(&matrix, &[doc]);
+        assert!(!report.is_consistent());
+        assert_eq!(report.contradictions, ["FE-CLAIM-X"]);
+        let list = &report.assertions["FE-CLAIM-X"];
+        // canonical Observed (matrix) + literal Hypothesis (README:1).
+        assert!(
+            list.iter()
+                .any(|a| a.canonical && a.state == ClaimAssertionState::Observed)
+        );
+        assert!(list.iter().any(|a| !a.canonical
+            && a.state == ClaimAssertionState::Hypothesis
+            && a.location == "README.md:1"));
+    }
+
+    #[test]
+    fn consistency_index_accepts_an_agreeing_document() {
+        let matrix = vec![(
+            "FE-CLAIM-Y".to_string(),
+            ClaimAssertionState::Hypothesis,
+            "README.md:5".to_string(),
+        )];
+        let doc = (
+            "README.md".to_string(),
+            "Glossary: FE-CLAIM-Y is HYPOTHESIS until artifacts land\n".to_string(),
+        );
+        let report = scan_document_consistency(&matrix, &[doc]);
+        assert!(report.is_consistent());
+        assert!(report.contradictions.is_empty());
+    }
+
+    #[test]
+    fn consistency_index_ignores_ambiguous_multi_state_lines() {
+        // The reconciled split line mentions one claim but two states → not used.
+        let matrix = vec![(
+            "FE-CLAIM-004-TEE".to_string(),
+            ClaimAssertionState::Hypothesis,
+            "README.md:139".to_string(),
+        )];
+        let doc = (
+            "README.md".to_string(),
+            "signing OBSERVED; TEE attestation is HYPOTHESIS (FE-CLAIM-004-TEE)\n".to_string(),
+        );
+        let report = scan_document_consistency(&matrix, &[doc]);
+        // The multi-state line is skipped, so only the canonical hypothesis remains.
+        assert!(report.is_consistent());
+    }
+
+    #[test]
+    fn consistency_digest_is_deterministic() {
+        let matrix = vec![(
+            "FE-CLAIM-Z".to_string(),
+            ClaimAssertionState::Target,
+            "README.md:1".to_string(),
+        )];
+        let docs = vec![(
+            "README.md".to_string(),
+            "FE-CLAIM-Z is TARGETED\n".to_string(),
+        )];
+        let a = scan_document_consistency(&matrix, &docs);
+        let b = scan_document_consistency(&matrix, &docs);
+        assert_eq!(a.digest, b.digest);
+        assert_eq!(a.digest.len(), 64);
     }
 }

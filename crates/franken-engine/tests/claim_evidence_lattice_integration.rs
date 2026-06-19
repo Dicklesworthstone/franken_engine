@@ -11,7 +11,8 @@
 use std::path::PathBuf;
 
 use frankenengine_engine::claim_evidence_lattice::{
-    COVERAGE_SCALE, ClaimAssertionState, EvidenceTier, IntegrityReport, ceiling, tier,
+    COVERAGE_SCALE, ClaimAssertionState, EvidenceTier, IntegrityReport, ceiling,
+    matrix_canonical_states, scan_document_consistency, tier,
 };
 
 /// Repo root = two levels above this crate's manifest dir (`crates/franken-engine`).
@@ -113,6 +114,59 @@ fn drift_is_visible_at_current_head() {
             "coverage < 1.0 must list at least one over-promoted row"
         );
     }
+}
+
+/// CEI A.2 (bd-sde5e.1.2): the whole-document consistency index must find the
+/// real README/PLAN/CHANGELOG internally consistent now that Track C reconciled
+/// FE-CLAIM-004 / FE-CLAIM-006. A contradiction here means a claim is asserted at
+/// two different states in two sections — the precise drift the gate must catch.
+#[test]
+fn real_docs_are_claim_state_consistent_after_track_c() {
+    let root = repo_root();
+    let canonical = matrix_canonical_states(&matrix_path()).expect("matrix canonical states");
+    let mut docs = Vec::new();
+    for rel in [
+        "README.md",
+        "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
+        "CHANGELOG.md",
+    ] {
+        let p = root.join(rel);
+        if let Ok(text) = std::fs::read_to_string(&p) {
+            docs.push((rel.to_string(), text));
+        }
+    }
+    assert!(
+        !docs.is_empty(),
+        "expected at least README.md to be readable"
+    );
+
+    let report = scan_document_consistency(&canonical, &docs);
+    // Determinism.
+    let again = scan_document_consistency(&canonical, &docs);
+    assert_eq!(report.digest, again.digest);
+    assert_eq!(report.digest.len(), 64);
+
+    for claim_id in &report.contradictions {
+        eprintln!("[CEI A.2] CONTRADICTION {claim_id}:");
+        for a in &report.assertions[claim_id] {
+            eprintln!(
+                "    {} @ {} {}",
+                a.state,
+                a.location,
+                if a.canonical {
+                    "(matrix canonical)"
+                } else {
+                    ""
+                }
+            );
+        }
+    }
+    assert!(
+        report.is_consistent(),
+        "real docs must be claim-state consistent after Track C reconciliation; \
+         contradictions: {:?}",
+        report.contradictions
+    );
 }
 
 #[test]

@@ -2159,7 +2159,7 @@ For downstream consumers (e.g. `/dp/franken_node`, sibling crates, integrators) 
 | | What you must NOT depend on |
 |---|---|
 | ❌ | TEE-backed production guarantees for cryptographic decision receipts. `FE-CLAIM-004-TEE` remains HYPOTHESIS (quotes are simulated by default); receipt signing + transparency-log/MMR proofs are OBSERVED (`FE-CLAIM-004`). |
-| ❌ | Compile-time TS-to-IR rejection of ambient-authority constructs as an end-to-end contract. `FE-CLAIM-006` remains TARGETED; selected hostcall/import gates cover only specific edges. |
+| ❌ | Compile-time TS-to-IR rejection of ambient-authority constructs as an end-to-end contract. The end-to-end TS-to-IR contract is TARGETED; `FE-CLAIM-006` ambient-authority rejection is OBSERVED only on the shipped hostcall/import edges, not all ambient constructs. |
 | ❌ | Node/Bun denominator throughput claims for *unmeasured* workloads. Only workloads in `real_runtime_hot_paths` are gated; `MockCertificate` / `hot_paths_simulation` artifacts are rejected by the gate. |
 | ✅ | Bounded fleet-quarantine convergence SLOs as a current guarantee. `FE-CLAIM-005` is now OBSERVED with live convergence evidence and partition fault profile testing. |
 | ❌ | Arbitrary npm native add-ons through the membrane. The runtime intentionally refuses to silently bridge them into the trust boundary. |
@@ -2301,7 +2301,7 @@ Project-specific jargon, defined once.
 | **OCAP** | Object-capability security model. Authority is held in unforgeable references; FrankenEngine's `CapabilityProfile` algebra implements the canonical OCAP discipline. |
 | **`PearlTower`** | Project-internal codename for the agent persona that owns this engine's bead queue. Mentioned in `memory/MEMORY.md`. |
 | **PLAS** | The execution track named in `ADR-0004` (`docs/adr/ADR-0004-frankensqlite-reuse-scope.md`), currently "Accepted with PLAS in scope". |
-| **Production feature catalog** | `production_feature_catalog` gate; names three production features that need full proof bundles before `FE-CLAIM-014` can promote from TARGETED. |
+| **Production feature catalog** | `production_feature_catalog` gate; names the three production features whose proof bundles back the OBSERVED `FE-CLAIM-014` (the F.5 catalog gate validates all three with per-feature sha256 manifest hashes). |
 | **Promotion controller** | The closed-loop system that promotes/demotes adaptive optimizations under signed evidence (IDEA-WIZARD-XI). |
 | **Proof-artifact manifest** | `franken-engine.proof-artifact-manifest.v1`, the schema shared by every gate's `run_manifest.json`. |
 | **Quarantine mesh** | The distributed quarantine substrate (`quarantine_mesh_gate`, `examples/07_quarantine_mesh`). Live proof wrapper exists (`bd-ly6hp.3`); bounded convergence SLO is TARGETED. |

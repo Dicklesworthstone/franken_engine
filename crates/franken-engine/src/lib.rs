@@ -98,6 +98,7 @@ pub mod claim_entitlement;
 pub mod claim_envelope_contract;
 pub mod claim_evidence_lattice;
 pub mod claim_evidence_ledger;
+pub mod claim_integrity_flow;
 pub mod claim_publication_gate;
 pub mod cliff_margin_certificate;
 pub mod closure_model;

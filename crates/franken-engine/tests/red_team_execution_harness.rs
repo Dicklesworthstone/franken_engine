@@ -421,15 +421,25 @@ fn red_team_harness_environment_variable_exfiltration_frankenengine_denies_model
         result.matches_expectation,
         "FrankenEngine fail-closed result should match the scenario manifest"
     );
+    // The capability-typed ambient-authority layer (FE-CLAIM-006) now rejects the
+    // `process.env` read for an unprovisioned caller (empty effect profile) at
+    // lowering time, i.e. *before* the body is modeled and the IFC lattice runs.
+    // That is a strictly earlier — and therefore stronger — fail-closed boundary
+    // than the historical "modeled body denied by lattice" path this test was
+    // first written against. The security-critical invariants (no canary leaked,
+    // observed fail-closed evidence) are still asserted above/below; here we just
+    // pin the actual denial mechanism.
     assert!(
-        result.stderr.contains("unauthorized flow detected"),
-        "stderr should include the fail-closed lattice denial"
+        result.stderr.contains("ambient authority violation")
+            && result.stderr.contains("process.env")
+            && result.stderr.contains("env.read"),
+        "stderr should include the fail-closed ambient-authority denial for process.env"
     );
     assert!(
         result
             .structured_log
-            .contains("\"payload_execution_status\":\"modeled_payload_body_denied_by_lattice\""),
-        "structured fallback should classify this as body-level lattice denial"
+            .contains("\"payload_execution_status\":\"failed_closed_before_report\""),
+        "structured fallback should classify this as a pre-body-modeling capability denial"
     );
     assert!(
         result

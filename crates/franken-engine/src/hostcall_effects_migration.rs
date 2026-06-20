@@ -720,6 +720,37 @@ pub fn create_handler_stack_from_profile(profile: &CapabilityProfile) -> Handler
     stack
 }
 
+/// Like [`create_handler_stack_from_profile`], but for the `Full` profile installs
+/// a [`FullCapsHandler`] backed by a real sandboxed [`HostIoProvider`] (optionally
+/// wrapped in a [`HostIoRecorder`] for deterministic replay) so `fs` / `network`
+/// hostcalls dispatch to actual host I/O instead of the fail-closed deny default.
+///
+/// Non-`Full` profiles never perform host I/O, so they ignore `host_io` and build
+/// exactly as [`create_handler_stack_from_profile`]. This is the engine-side seam
+/// for the proof-carrying host-effect pipeline (bd-f5b04.2.6): the product layer
+/// constructs a sandboxed provider (plus a recorder for replay) and threads it
+/// here so a `run` actually produces and records real effects. Installing the
+/// provider is what makes [`FullCapsHandler::dispatches_real_hostcalls`] report
+/// `true`.
+pub fn create_handler_stack_from_profile_with_host_io(
+    profile: &CapabilityProfile,
+    host_io: Arc<dyn HostIoProvider>,
+    recorder: Option<Arc<dyn HostIoRecorder>>,
+) -> HandlerStack {
+    if profile.kind() != ProfileKind::Full {
+        // Only the Full profile performs fs/network host I/O; for every other
+        // profile the provider is irrelevant and the default stack is correct.
+        return create_handler_stack_from_profile(profile);
+    }
+    let mut stack = HandlerStack::new();
+    let handler = match recorder {
+        Some(recorder) => FullCapsHandler::with_host_io_recorded(host_io, recorder),
+        None => FullCapsHandler::with_host_io(host_io),
+    };
+    stack.add_handler(Arc::new(handler));
+    stack
+}
+
 /// Convert a legacy hostcall tag to an appropriate Effect.
 ///
 /// This function provides compatibility with the existing hostcall dispatch system
@@ -1002,6 +1033,89 @@ mod tests {
         let replay_handler =
             FullCapsHandler::with_host_io_recorded(Arc::new(NeverCalledHostIo), replay);
         assert!(replay_handler.handle(&network).is_ok());
+    }
+
+    #[test]
+    fn full_caps_stack_with_sandboxed_provider_performs_real_fs_bd_f5b04_2_6() {
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+
+        // A real sandbox root in a unique temp dir.
+        let mut root = std::env::temp_dir();
+        root.push(format!(
+            "frankenengine_stack_sandbox_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        let mut stack = create_handler_stack_from_profile_with_host_io(
+            &CapabilityProfile::full(),
+            provider,
+            Some(recorder.clone()),
+        );
+
+        // A real write dispatched through the algebraic-effects stack lands real
+        // bytes on disk (proves the substrate executes effects, not just gates).
+        let write = FsHostcallEffect {
+            operation: FsOperation::Write,
+            path: "report.txt".to_string(),
+            content: Some(b"real effect bytes".to_vec()),
+        };
+        stack
+            .handle_effect(&write)
+            .expect("fs write dispatched through the Full stack");
+        assert_eq!(
+            std::fs::read(root.join("report.txt")).expect("written file on disk"),
+            b"real effect bytes",
+            "the dispatched effect must have produced a real file"
+        );
+
+        // A real read dispatched through the same stack succeeds (bytes off disk).
+        let read = FsHostcallEffect {
+            operation: FsOperation::Read,
+            path: "report.txt".to_string(),
+            content: None,
+        };
+        stack
+            .handle_effect(&read)
+            .expect("fs read dispatched through the Full stack");
+
+        // Both real effects were captured in the deterministic-replay transcript.
+        assert_eq!(
+            recorder.entries().len(),
+            2,
+            "both dispatched effects must be recorded for replay"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn non_full_profile_ignores_host_io_provider_bd_f5b04_2_6() {
+        use frankenengine_extension_host::host_io::SandboxedHostIo;
+
+        let mut root = std::env::temp_dir();
+        root.push(format!(
+            "frankenengine_nonfull_sandbox_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+
+        // A ComputeOnly profile must build exactly the default stack regardless of
+        // any supplied provider (only Full performs host I/O).
+        let with_provider = create_handler_stack_from_profile_with_host_io(
+            &CapabilityProfile::compute_only(),
+            provider,
+            None,
+        );
+        let default = create_handler_stack_from_profile(&CapabilityProfile::compute_only());
+        assert_eq!(with_provider.handler_names(), default.handler_names());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

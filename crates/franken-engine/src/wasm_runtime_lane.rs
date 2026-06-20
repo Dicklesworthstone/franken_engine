@@ -1,10 +1,35 @@
 //! WASM Runtime Lane (FRX-04.2)
 //!
-//! High-performance signal graph and deterministic scheduler designed for
-//! compilation to WASM. Targets large/high-churn workloads with:
-//! - Bounded queues and deterministic topological propagation.
-//! - Efficient JS↔WASM ABI for state updates and DOM op emission.
-//! - Deterministic safe mode when resource budgets are exceeded.
+//! Two cooperating surfaces for WebAssembly-shaped extension modules. Neither is
+//! a general WebAssembly interpreter — the implemented capability is
+//! deliberately bounded, and this doc states exactly what executes (CEI-F.2,
+//! `bd-sde5e.6.2`). WebAssembly remains out of scope for the JS lane and is not
+//! exposed via the JS module loader (see the *Module System & Compatibility
+//! Matrix* in the README).
+//!
+//! # 1. WASM module routing ([`WasmModuleImportRoute::call_export`])
+//!
+//! A real WebAssembly *binary-format* parser: it decodes the type, import,
+//! function, export, and code sections, records each export's signature, and
+//! resolves the module's required capabilities. Export invocation is **limited
+//! to constant-return bodies**: [`WasmModuleImportRoute::call_export`] validates the
+//! argument arity and types against the parsed signature and returns the
+//! function's decoded constant body, or fails with
+//! [`WasmModuleRouteError::UnsupportedExportBody`] for any non-constant
+//! function. There is no opcode interpreter, linear memory, or control flow — a
+//! non-constant WASM function does not execute here.
+//!
+//! # 2. Native reactive signal graph ([`WasmSignalGraph`] + scheduler)
+//!
+//! A Rust-native reactive signal graph with bounded resources (`max_depth`,
+//! `max_nodes`, resource budgets), deterministic topological propagation
+//! ([`WasmSignalGraph::propagate_dirty`]), and a flush cycle that consumes
+//! updates, propagates dirty signals, evaluates them, and emits DOM ops.
+//! "WASM-optimised" names the intended compilation target and data-layout
+//! discipline; the model runs as native Rust today — it is not itself compiled
+//! to or executed as WebAssembly. When a resource budget is exceeded it fails
+//! closed ([`WasmGraphError::BudgetExceeded`] / [`WasmGraphError::DepthExceeded`])
+//! rather than degrading silently.
 
 use crate::capability::RuntimeCapability;
 use crate::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId, derive_id};

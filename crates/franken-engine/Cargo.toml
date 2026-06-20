@@ -39,6 +39,10 @@ name = "runtime-lockstep-orchestrator"
 path = "src/bin/runtime_lockstep_orchestrator.rs"
 
 [[example]]
+name = "live_guardplane_decision_example"
+path = "../../examples/live_guardplane_decision_example.rs"
+
+[[example]]
 name = "live_ifc_declassification_example"
 path = "../../examples/live_ifc_declassification_example.rs"
 

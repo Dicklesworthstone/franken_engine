@@ -52,8 +52,8 @@
       "git_tracked": true,
       "path": "scripts/run_claim_to_proof_matrix_gate.sh",
       "role": "primary_artifact",
-      "sha256": "f83e472fe16c413d217cec8689b969d1c19806543ded9cfe07bb2b4f2fd32d25",
-      "size_bytes": 25846,
+      "sha256": "65a3a8fec3245da733633f61bed5109a0ddd06b44caefe2d9f6a6dbaa5c53c96",
+      "size_bytes": 27856,
       "source": "head_blob"
     }
   ]

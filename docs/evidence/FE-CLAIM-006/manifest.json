@@ -18,7 +18,7 @@
     "scope": "security",
     "state": "observed"
   },
-  "generated_at_utc": "2026-05-21T21:10:00.000000+00:00",
+  "generated_at_utc": "2026-06-20T07:05:31.241329+00:00",
   "inputs": {
     "dependencies": [
       "scripts/run_rgc_capability_typed_compile_time.sh",
@@ -37,7 +37,10 @@
   "outputs": {
     "decision_artifacts": "generated",
     "execution_trace": "deterministic",
-    "verification_result": "pass"
+    "exit_code": 0,
+    "verification_command": "./scripts/run_rgc_capability_typed_compile_time.sh ci",
+    "verification_result": "passed",
+    "verified_at_utc": "2026-06-20T07:05:31.241329+00:00"
   },
   "provenance": {
     "audit_source": "bd-cixqu.3.5",
@@ -48,7 +51,7 @@
       "bd-cixqu.3.3",
       "bd-cixqu.3.4"
     ],
-    "generated_by": "matrix_promotion_manual"
+    "generated_by": "reemit_evidence_receipts.py (live gate run)"
   },
   "retention": {
     "backup_required": true,
@@ -59,7 +62,7 @@
   "schema_version": "frankenengine.reproducibility.manifest.v1",
   "source_revision": {
     "branch": "main",
-    "commit": "d00c8b31c1742ab2d9d50cba252e1e75cefdd9cc",
+    "commit": "1761a84ff49c0432dceb3cd1e19f9aa415b27b8d",
     "repository": "franken_engine"
   },
   "validation": {

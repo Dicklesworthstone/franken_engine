@@ -18,7 +18,7 @@
     "scope": "ifc",
     "state": "observed"
   },
-  "generated_at_utc": "2026-05-21T19:32:39.591117+00:00",
+  "generated_at_utc": "2026-06-20T05:37:04.234749+00:00",
   "inputs": {
     "dependencies": [
       "frankenengine-engine",
@@ -32,12 +32,15 @@
   "outputs": {
     "decision_artifacts": "generated",
     "execution_trace": "deterministic",
-    "verification_result": "pending"
+    "exit_code": 0,
+    "verification_command": "./scripts/e2e/live_ifc_declassification_smoke.sh",
+    "verification_result": "passed",
+    "verified_at_utc": "2026-06-20T05:37:04.234749+00:00"
   },
   "provenance": {
     "audit_source": "bd-cixqu.4.1",
     "bead_id": "bd-cixqu.4.2",
-    "generated_by": "backfill_reproducibility_bundles.py"
+    "generated_by": "reemit_evidence_receipts.py (live gate run)"
   },
   "retention": {
     "backup_required": true,
@@ -48,7 +51,7 @@
   "schema_version": "frankenengine.reproducibility.manifest.v1",
   "source_revision": {
     "branch": "main",
-    "commit": "379944dbcfeef8db14666525bb3f053c33843bd7",
+    "commit": "fac696b8a864c5281afb4b0252649024ef366938",
     "repository": "franken_engine"
   },
   "validation": {

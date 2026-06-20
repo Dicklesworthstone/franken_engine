@@ -18,7 +18,7 @@
     "scope": "runtime",
     "state": "observed"
   },
-  "generated_at_utc": "2026-05-21T19:32:39.524362+00:00",
+  "generated_at_utc": "2026-06-20T05:40:20.500784+00:00",
   "inputs": {
     "dependencies": [
       "frankenengine-engine",
@@ -32,12 +32,15 @@
   "outputs": {
     "decision_artifacts": "generated",
     "execution_trace": "deterministic",
-    "verification_result": "pending"
+    "exit_code": 0,
+    "verification_command": "CARGO_TARGET_DIR=/data/projects/franken_engine/target_icydeer CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc\" cargo check -p frankenengine-engine --tests",
+    "verification_result": "passed",
+    "verified_at_utc": "2026-06-20T05:40:20.500784+00:00"
   },
   "provenance": {
     "audit_source": "bd-cixqu.4.1",
     "bead_id": "bd-cixqu.4.2",
-    "generated_by": "backfill_reproducibility_bundles.py"
+    "generated_by": "reemit_evidence_receipts.py (live gate run)"
   },
   "retention": {
     "backup_required": true,
@@ -48,7 +51,7 @@
   "schema_version": "frankenengine.reproducibility.manifest.v1",
   "source_revision": {
     "branch": "main",
-    "commit": "379944dbcfeef8db14666525bb3f053c33843bd7",
+    "commit": "fac696b8a864c5281afb4b0252649024ef366938",
     "repository": "franken_engine"
   },
   "validation": {

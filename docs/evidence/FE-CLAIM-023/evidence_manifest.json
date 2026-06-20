@@ -52,8 +52,8 @@
       "git_tracked": true,
       "path": "scripts/run_rgc_cross_platform_matrix_gate.sh",
       "role": "primary_artifact",
-      "sha256": "a9076cba96859877f035d90446f86a6780d208a02cc31810e3a8e2cde10d5de4",
-      "size_bytes": 40927,
+      "sha256": "4a76c1ce7f0ed4ff3133b1177f5d04c60a31cbaa596ee34a3c1fd49882cf4955",
+      "size_bytes": 41320,
       "source": "head_blob"
     }
   ]

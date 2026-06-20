@@ -58,9 +58,12 @@ fn git_tracked(root: &Path, rel: &str) -> bool {
 fn every_observed_claim_has_a_tracked_manifest_that_verifies_offline() {
     let root = repo_root();
     let ids = observed_claim_ids(&root);
+    // Floor tracks the current OBSERVED set (16 after FE-CLAIM-012 was downgraded
+    // to `target`; see bd-sde5e). The floor guards against the matrix parser
+    // silently returning an empty/short set, not against deliberate downgrades.
     assert!(
-        ids.len() >= 17,
-        "expected the full OBSERVED set (>=17), found {}",
+        ids.len() >= 16,
+        "expected the full OBSERVED set (>=16), found {}",
         ids.len()
     );
 

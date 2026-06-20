@@ -1013,7 +1013,12 @@ write_matrix_summary() {
 }
 
 run_mode() {
-  case "$mode" in
+  # Dispatch on the explicit argument when given (e.g. the `ci` case calls
+  # `run_mode check`/`run_mode test`/`run_mode clippy`), falling back to the
+  # global $mode for the top-level invocation. Without this, `run_mode check`
+  # re-read $mode=="ci" and re-entered the `ci` case, recursing until bash
+  # overflowed its stack (SIGSEGV / exit 139) — the gate's `ci` mode never ran.
+  case "${1:-$mode}" in
     check)
       run_step "jq empty ${contract_json_path}" jq empty "$contract_json_path" || return $?
       run_step "test -f ${contract_doc_path}" test -f "$contract_doc_path" || return $?

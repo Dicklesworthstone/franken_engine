@@ -253,7 +253,11 @@ run_cargo_test() {
     cargo_exit=0
   else
     set +e
-    if command -v rch >/dev/null 2>&1; then
+    # Prefer rch for remote offload, but run locally when rch is unavailable or
+    # the caller has opted into a local build (RCH_CARGO_WRAPPER_BYPASS=1). The
+    # local path is the reliable one on a well-provisioned host; remote workers
+    # can OOM linking the larger integration-test binaries.
+    if command -v rch >/dev/null 2>&1 && [[ "${RCH_CARGO_WRAPPER_BYPASS:-0}" != "1" ]]; then
       rch exec "env CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine --test ${test_target} -- --nocapture" \
         >"${cargo_log}" 2>&1
     else

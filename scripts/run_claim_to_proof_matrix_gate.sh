@@ -202,19 +202,48 @@ classify_quality_candidate() {
   fi
 }
 
+repro_lock_committed() {
+  # bd-sde5e.2.3 (CEI-B.3): a repro.lock only counts as reproducibility
+  # evidence if it is COMMITTED (git-tracked). An on-disk-but-untracked lock is
+  # a local artifact a fresh clone / third-party verifier never receives, so it
+  # cannot back an OBSERVED claim under the "No artifact, no claim" contract
+  # (`docs/REPRODUCIBILITY_CONTRACT.md`). This closes the gap where the gate
+  # accepted an uncommitted lock that on-disk presence alone would pass.
+  #
+  # Escape hatches:
+  # - CLAIM_TO_PROOF_MATRIX_ALLOW_UNTRACKED_REPRO_LOCK=1 accepts an on-disk lock
+  #   without the tracking check (e.g. transient out-of-tree scenarios).
+  # - If git is unavailable or the path is outside any work tree we cannot
+  #   verify tracking, so we fall back to the prior on-disk semantics rather
+  #   than hard-failing a non-git environment.
+  local lock_path="$1"
+  if [[ "${CLAIM_TO_PROOF_MATRIX_ALLOW_UNTRACKED_REPRO_LOCK:-0}" == "1" ]]; then
+    return 0
+  fi
+  if ! command -v git >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    return 0
+  fi
+  git ls-files --error-unmatch -- "$lock_path" >/dev/null 2>&1
+}
+
 detect_reproducibility_bundle() {
-  # bd-cixqu.4.3: every OBSERVED claim must point at an artifact whose
-  # reproducibility evidence is captured in a `repro.lock` file. The lock
-  # records the exact source revision + toolchain + input set the
-  # artifact was produced from, so a future replay can reconstruct it.
-  # Without the lock the "observed" wording is unsupported by re-runnable
-  # evidence and the gate must fail closed.
+  # bd-cixqu.4.3 + bd-sde5e.2.3: every OBSERVED claim must point at an artifact
+  # whose reproducibility evidence is captured in a COMMITTED `repro.lock` file.
+  # The lock records the exact source revision + toolchain + input set the
+  # artifact was produced from, so a future replay can reconstruct it. Without a
+  # committed lock the "observed" wording is unsupported by re-runnable evidence
+  # an external verifier can obtain, and the gate must fail closed.
   #
   # Search policy:
   # - If `artifact_path` is a file, look in its directory for repro.lock.
   # - If `artifact_path` is a directory, look for repro.lock recursively
   #   under it (depth-capped at 4 to bound traversal cost on large
   #   bundle trees).
+  # In both cases the matched lock must additionally be git-tracked
+  # (see `repro_lock_committed`).
   #
   # Sets the global `reproducibility_lock_path` to the matched path on
   # success, empty on failure.
@@ -224,7 +253,7 @@ detect_reproducibility_bundle() {
   if [[ -f "$artifact_path" ]]; then
     local parent
     parent="$(dirname "$artifact_path")"
-    if [[ -f "${parent}/repro.lock" ]]; then
+    if [[ -f "${parent}/repro.lock" ]] && repro_lock_committed "${parent}/repro.lock"; then
       reproducibility_lock_path="${parent}/repro.lock"
       return 0
     fi
@@ -234,7 +263,7 @@ detect_reproducibility_bundle() {
   if [[ -d "$artifact_path" ]]; then
     local found
     if found="$(find "$artifact_path" -maxdepth 4 -name "repro.lock" -type f -print -quit 2>/dev/null)" \
-        && [[ -n "$found" ]]; then
+        && [[ -n "$found" ]] && repro_lock_committed "$found"; then
       reproducibility_lock_path="$found"
       return 0
     fi
@@ -523,14 +552,19 @@ while IFS= read -r claim; do
     elif [[ -z "$verification_command" || "$verification_command" == TBD:* ]]; then
       status="fail"
       local_reason="observed claim must include a concrete verification_command"
-    elif ! [[ "$freshness_days" =~ ^[0-9]+$ ]]; then
+    elif [[ -n "$freshness_days" && ! "$freshness_days" =~ ^[0-9]+$ ]]; then
       status="fail"
-      local_reason="observed claim must include numeric freshness_days"
-    elif [[ "$freshness_days" -gt "$max_observed_freshness_days" ]]; then
+      local_reason="observed claim freshness_days, when authored, must be numeric (or null)"
+    elif [[ "$freshness_days" =~ ^[0-9]+$ && "$freshness_days" -gt "$max_observed_freshness_days" ]]; then
       status="fail"
-      local_reason="observed claim freshness exceeds max_observed_freshness_days"
+      local_reason="observed claim authored freshness exceeds max_observed_freshness_days"
     else
-      # Calculate actual freshness from artifact manifest timestamp
+      # bd-sde5e.1.4 (CEI-A.4): freshness is COMPUTED from the committed artifact,
+      # never authored — the matrix carries a null per-claim `freshness_days` and a
+      # `freshness_eprocess_policy`. An empty/null authored value is therefore
+      # expected and fine; the real staleness decision uses the derived
+      # `actual_freshness_days` below. A still-authored numeric value is honored
+      # for backward compatibility (checked against max above).
       actual_freshness_days="$(derive_artifact_freshness "$artifact_path")"
 
       if [[ "$actual_freshness_days" -gt "$stale_threshold_days" ]]; then
@@ -588,7 +622,7 @@ while IFS= read -r claim; do
           : "${reproducibility_lock_path:?repro-lock path must be set on success}"
         else
           status="fail"
-          local_reason="ClaimMatrixError::MissingReproducibilityBundle: observed claim artifact has no repro.lock alongside ${artifact_path}; reproducibility lock is required for any claim whose allowed_state is 'observed' (bd-cixqu.4.3)"
+          local_reason="ClaimMatrixError::MissingReproducibilityBundle: observed claim artifact has no committed (git-tracked) repro.lock alongside ${artifact_path}; a committed reproducibility lock is required for any claim whose allowed_state is 'observed' so a fresh clone can reproduce it (bd-cixqu.4.3, bd-sde5e.2.3)"
         fi
       fi
     fi

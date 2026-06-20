@@ -66,6 +66,10 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::hash_tiers::ContentHash;
+use crate::martingale_decision_ledger::{MartingaleLedger, MartingaleVerdict, StoppingThreshold};
+use crate::security_epoch::SecurityEpoch;
+
 /// Schema/domain tag mixed into the content-addressed coverage digest so a digest
 /// for this report can never be confused with any other length-prefixed preimage.
 pub const COVERAGE_DIGEST_DOMAIN: &str = "franken-engine.claim-evidence-integrity.v1";
@@ -281,9 +285,16 @@ pub struct EvidenceFacts {
     pub adversarially_verified: bool,
 
     // --- reporting-only fields (NOT part of the monotone lattice) ---
-    /// Real artifact age in days, if it could be computed from the manifest.
+    /// Real artifact age in days, if it could be computed from the manifest
+    /// timestamp or the artifact's git commit time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub freshness_days: Option<u64>,
+    /// The anytime-valid e-process freshness verdict that *set* `fresh`
+    /// (reporting-only; the monotone lattice consumes only the boolean `fresh`,
+    /// so this field never participates in [`EvidenceFacts::dominates`] or
+    /// [`tier`]). `None` when no real age could be computed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub freshness_eprocess: Option<FreshnessVerdict>,
     /// Human-readable provenance notes (e.g. "verification_result=pending").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
@@ -326,6 +337,221 @@ pub fn tier(facts: &EvidenceFacts) -> EvidenceTier {
     } else {
         EvidenceTier::Unbacked
     }
+}
+
+// ---------------------------------------------------------------------------
+// Principled freshness via an anytime-valid e-process boundary
+// (CEI track A.4, bead `bd-sde5e.1.4`)
+// ---------------------------------------------------------------------------
+//
+// The historical freshness test was a hard `age_days <= 30` cliff, and the
+// matrix *authored* a per-claim `freshness_days` (often `1`) that bore no
+// relation to the committed bundle's real age — the exact fiction the CEI
+// reality check named (`freshness_days = 1` while real bundles are weeks old).
+// A.4 retires both:
+//
+//   * real age is *computed* from the committed evidence — the manifest
+//     `generated_at_utc`, falling back to the artifact's git commit time — and
+//     never authored into the matrix;
+//   * staleness is judged by an anytime-valid sequential test (an e-process)
+//     rather than a fixed cliff, so the `Observed` ceiling *decays principledly*
+//     past a derived bound instead of dropping off a magic number.
+//
+// # Construction
+//
+// Treat "the committed evidence is still fresh" as the null hypothesis `H0`.
+// Each elapsed day of non-reverification contributes a constant
+// log-likelihood-ratio increment `daily = ln(1/α) / horizon` toward the
+// staleness alternative, so the e-value after `d` days is the product
+// martingale `E_d = exp(daily · d)`. By **Ville's inequality**, the probability
+// that `E_d` *ever* crosses `1/α` while `H0` holds is at most `α`; crossing the
+// boundary is therefore an anytime-valid rejection of freshness at level `α`.
+//
+// Because `daily = ln(1/α)/horizon`, the boundary `E_d ≥ 1/α` is first reached
+// around `d = horizon`, so the default policy `(α = 0.05, horizon = 30)`
+// reproduces the old 30-day window *as a derived consequence* rather than as an
+// authored constant — and it keeps a continuous `stale_confidence` past the
+// boundary instead of a binary cliff. Integer-floored `daily` keeps `d = horizon`
+// strictly below the boundary (still fresh), matching the historical
+// `age <= horizon` semantics exactly so this change regresses no currently-sound
+// row.
+//
+// This reuses the guardplane e-process substrate directly: the crossing is
+// decided by a real [`MartingaleLedger`](crate::martingale_decision_ledger)
+// fed the per-day increments, so a freshness verdict is replayable evidence on
+// the same ledger every other guardrail uses — not a parallel reimplementation.
+
+/// Default false-staleness-alarm tolerance `α = 0.05`, in millionths. The
+/// probability that genuinely-fresh evidence is *ever* falsely flagged stale is
+/// at most this (Ville's inequality).
+pub const DEFAULT_FRESHNESS_ALPHA_MILLIONTHS: i64 = 50_000;
+
+/// Default freshness horizon in days — the policy point at which the e-process
+/// is calibrated to reach its rejection boundary. Mirrors the matrix's
+/// `max_observed_freshness_days`.
+pub const DEFAULT_FRESHNESS_HORIZON_DAYS: u64 = 30;
+
+/// A principled, anytime-valid freshness test calibrated by `(α, horizon)`.
+///
+/// Construct with [`FreshnessEProcess::new`] (explicit `α`) or
+/// [`FreshnessEProcess::from_horizon`] (default `α = 0.05`), then
+/// [`evaluate`](FreshnessEProcess::evaluate) a real artifact age.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FreshnessEProcess {
+    alpha_millionths: i64,
+    horizon_days: u64,
+    /// `ln(1/α)` in millionths — the rejection boundary in log space.
+    log_threshold_millionths: i64,
+    /// `ln(1/α)/horizon` in millionths — the per-day staleness log-LR increment.
+    daily_log_lr_millionths: i64,
+}
+
+impl FreshnessEProcess {
+    /// Build the e-process from an explicit false-alarm tolerance `α`
+    /// (millionths) and a calibration horizon in days.
+    ///
+    /// `α` is clamped to `(0, 1)` so `ln(1/α) > 0` (a non-trivial test), and
+    /// `horizon` to `>= 1` so the per-day increment is well defined.
+    #[must_use]
+    pub fn new(alpha_millionths: i64, horizon_days: u64) -> Self {
+        let alpha = alpha_millionths.clamp(1, 999_999);
+        let horizon = horizon_days.max(1);
+        // α as a fraction is `alpha/1e6`, so `1/α = 1e6/alpha`.
+        let inv_alpha = 1_000_000.0_f64 / alpha as f64;
+        let log_threshold_millionths = (inv_alpha.ln() * 1_000_000.0).round() as i64;
+        // Floor keeps `day == horizon` strictly below the boundary (fresh).
+        let daily_log_lr_millionths = (log_threshold_millionths / horizon as i64).max(1);
+        Self {
+            alpha_millionths: alpha,
+            horizon_days: horizon,
+            log_threshold_millionths,
+            daily_log_lr_millionths,
+        }
+    }
+
+    /// Build with the default `α = 0.05` and the supplied horizon.
+    #[must_use]
+    pub fn from_horizon(horizon_days: u64) -> Self {
+        Self::new(DEFAULT_FRESHNESS_ALPHA_MILLIONTHS, horizon_days)
+    }
+
+    /// `α` in millionths.
+    #[must_use]
+    pub fn alpha_millionths(&self) -> i64 {
+        self.alpha_millionths
+    }
+
+    /// The calibration horizon in days.
+    #[must_use]
+    pub fn horizon_days(&self) -> u64 {
+        self.horizon_days
+    }
+
+    /// `ln(1/α)` in millionths (the rejection boundary in log space).
+    #[must_use]
+    pub fn log_threshold_millionths(&self) -> i64 {
+        self.log_threshold_millionths
+    }
+
+    /// `ln(1/α)/horizon` in millionths (the per-day staleness log-LR increment).
+    #[must_use]
+    pub fn daily_log_lr_millionths(&self) -> i64 {
+        self.daily_log_lr_millionths
+    }
+
+    /// The first day `d` at which the e-process *strictly* rejects freshness,
+    /// i.e. the smallest `d` with `d · daily >= ln(1/α)`. Evidence aged
+    /// `< bound_days` is fresh; `>= bound_days` is stale.
+    #[must_use]
+    pub fn bound_days(&self) -> u64 {
+        let daily = self.daily_log_lr_millionths;
+        // ceil(threshold / daily) for positive integers.
+        ((self.log_threshold_millionths + daily - 1) / daily) as u64
+    }
+
+    /// Evaluate freshness for a committed artifact of the given real age.
+    #[must_use]
+    pub fn evaluate(&self, age_days: u64) -> FreshnessVerdict {
+        // Closed-form e-value in log space: exact and monotone in age.
+        let log_e_value_millionths = (age_days as i64).saturating_mul(self.daily_log_lr_millionths);
+
+        // Decide the crossing on the *real* guardplane martingale ledger so the
+        // verdict is replayable evidence rather than a parallel reimplementation.
+        let crossed_on_ledger = self.ledger_crosses(age_days);
+
+        // The two routes must agree on the crossing; if they ever diverge the
+        // closed-form arithmetic is wrong (caught in debug/test builds).
+        debug_assert_eq!(
+            crossed_on_ledger,
+            log_e_value_millionths >= self.log_threshold_millionths,
+            "freshness e-process: ledger and closed-form disagree on the crossing"
+        );
+
+        let fresh = !crossed_on_ledger;
+        let stale_confidence_millionths =
+            (log_e_value_millionths - self.log_threshold_millionths).max(0);
+
+        FreshnessVerdict {
+            age_days,
+            horizon_days: self.horizon_days,
+            alpha_millionths: self.alpha_millionths,
+            bound_days: self.bound_days(),
+            log_e_value_millionths,
+            log_threshold_millionths: self.log_threshold_millionths,
+            fresh,
+            stale_confidence_millionths,
+        }
+    }
+
+    /// Run the unified martingale ledger, feeding one staleness increment per
+    /// elapsed day, and report whether it crossed the rejection boundary.
+    ///
+    /// The loop is capped at `bound_days + 1` because the ledger refuses
+    /// appends after it Stops, so an age in the thousands is still `O(bound)`.
+    fn ledger_crosses(&self, age_days: u64) -> bool {
+        let threshold =
+            match StoppingThreshold::try_from_log_millionths(self.log_threshold_millionths) {
+                Ok(t) => t,
+                // `log_threshold > 0` by construction; the error is unreachable,
+                // but treat it conservatively as "cannot certify fresh".
+                Err(_) => return true,
+            };
+        let mut ledger = MartingaleLedger::new(threshold, SecurityEpoch::GENESIS);
+        let steps = age_days.min(self.bound_days().saturating_add(1));
+        for day in 0..steps {
+            let digest = ContentHash::compute(&day.to_le_bytes());
+            match ledger.append(self.daily_log_lr_millionths, digest, day) {
+                Ok(MartingaleVerdict::Stop { .. }) => return true,
+                Ok(MartingaleVerdict::Continue) => {}
+                // Overflow / already-stopped: fail closed (treat as stale).
+                Err(_) => return true,
+            }
+        }
+        ledger.is_stopped()
+    }
+}
+
+/// The verdict of a [`FreshnessEProcess`] evaluation. Reporting-only: only the
+/// boolean `fresh` feeds the monotone evidence lattice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FreshnessVerdict {
+    /// The committed artifact's real age in days.
+    pub age_days: u64,
+    /// The calibration horizon `(α, horizon)` used.
+    pub horizon_days: u64,
+    /// The false-staleness-alarm tolerance `α` in millionths.
+    pub alpha_millionths: i64,
+    /// First age (days) at which freshness is rejected.
+    pub bound_days: u64,
+    /// `ln(E_age)` in millionths — the accumulated log e-value.
+    pub log_e_value_millionths: i64,
+    /// `ln(1/α)` in millionths — the rejection boundary in log space.
+    pub log_threshold_millionths: i64,
+    /// Whether the evidence is still fresh (the e-process has not rejected).
+    pub fresh: bool,
+    /// How far past the boundary the e-value sits, `max(0, log_E − ln(1/α))`
+    /// in millionths. Zero while fresh; grows monotonically once stale.
+    pub stale_confidence_millionths: i64,
 }
 
 // ---------------------------------------------------------------------------
@@ -529,10 +755,13 @@ fn parse_unix_seconds(ts: &str) -> Option<i64> {
 /// * the bundle `manifest.json` `outputs.verification_result` and
 ///   `provenance.generated_by` (a `backfill`-generated bundle is never "passed");
 /// * `repro.lock` `expected_outputs.exit_code` for the run receipt;
-/// * the manifest `generated_at_utc` to derive real freshness vs `now_unix`.
+/// * the manifest `generated_at_utc` (falling back to the artifact's git commit
+///   time) to derive the real age, which the [`FreshnessEProcess`] judges
+///   against an anytime-valid staleness boundary calibrated by `max_freshness_days`.
 ///
 /// `now_unix` and `max_freshness_days` are passed in (never read from the wall
-/// clock here) so the collector is deterministic and unit-testable.
+/// clock here) so the collector is deterministic and unit-testable;
+/// `max_freshness_days` is the e-process horizon, not a hard cliff.
 #[must_use]
 pub fn collect_evidence_facts(
     repo_root: &Path,
@@ -557,6 +786,10 @@ pub fn collect_evidence_facts(
 
     // repro.lock must be *committed* to count.
     facts.repro_lock_present = git_path_tracked(repo_root, &repro_lock_rel);
+
+    // The manifest's self-declared generation time, captured here and resolved
+    // against the git-commit-time fallback below.
+    let mut manifest_generated_unix: Option<i64> = None;
 
     if let Ok(text) = std::fs::read_to_string(&manifest_path) {
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
@@ -584,24 +817,12 @@ pub fn collect_evidence_facts(
                     .push(format!("backfill provenance: {generated_by}"));
             }
 
-            // Freshness from the manifest generation timestamp.
-            let generated = json
+            // Capture the manifest generation timestamp (preferred age source).
+            manifest_generated_unix = json
                 .get("generated_at_utc")
                 .or_else(|| json.get("generated_utc"))
                 .and_then(|v| v.as_str())
                 .and_then(parse_unix_seconds);
-            if let Some(gen_unix) = generated {
-                let age_days = ((now_unix - gen_unix).max(0) / 86_400) as u64;
-                facts.freshness_days = Some(age_days);
-                facts.fresh = age_days <= max_freshness_days;
-                if !facts.fresh {
-                    facts
-                        .notes
-                        .push(format!("stale: {age_days}d > {max_freshness_days}d window"));
-                }
-            } else {
-                facts.notes.push("no parseable generation timestamp".into());
-            }
         } else {
             facts.notes.push("manifest.json not valid JSON".into());
         }
@@ -626,7 +847,58 @@ pub fn collect_evidence_facts(
         }
     }
 
+    // Principled freshness: compute the *real* age (manifest timestamp, falling
+    // back to the artifact's git commit time) and judge staleness with the
+    // anytime-valid e-process boundary rather than a fixed cliff.
+    let real_generated_unix = manifest_generated_unix
+        .or_else(|| git_commit_unix(repo_root, artifact_path))
+        .or_else(|| git_commit_unix(repo_root, &repro_lock_rel));
+    if let Some(gen_unix) = real_generated_unix {
+        let age_days = ((now_unix - gen_unix).max(0) / 86_400) as u64;
+        facts.freshness_days = Some(age_days);
+        let verdict = FreshnessEProcess::from_horizon(max_freshness_days).evaluate(age_days);
+        facts.fresh = verdict.fresh;
+        if !verdict.fresh {
+            facts.notes.push(format!(
+                "stale: {age_days}d at/past e-process bound {}d (alpha=0.05, horizon={}d)",
+                verdict.bound_days, verdict.horizon_days
+            ));
+        }
+        facts.freshness_eprocess = Some(verdict);
+    } else if facts.artifact_git_tracked {
+        facts
+            .notes
+            .push("no parseable generation timestamp or git commit time".into());
+    }
+
     facts
+}
+
+/// The unix-seconds commit time of the most recent commit that touched
+/// `rel_path` — the artifact's real "as committed" age. Returns `None` if the
+/// path is empty/untracked or git is unavailable. Used as the freshness age
+/// fallback when a manifest omits a parseable generation timestamp.
+fn git_commit_unix(repo_root: &Path, rel_path: &str) -> Option<i64> {
+    if rel_path.is_empty() {
+        return None;
+    }
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("log")
+        .arg("-1")
+        .arg("--format=%ct")
+        .arg("--")
+        .arg(rel_path)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse::<i64>()
+        .ok()
 }
 
 /// Score the live claim-to-proof matrix JSON file against committed evidence.
@@ -646,10 +918,18 @@ pub fn score_matrix_file(
     let json: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| IntegrityError::MatrixParse(e.to_string()))?;
 
+    // The freshness horizon is the e-process calibration point. An explicit
+    // override wins; otherwise prefer the authored `freshness_eprocess_policy`
+    // (the live A.4 policy), then the legacy `max_observed_freshness_days`.
     let window = max_freshness_days.unwrap_or_else(|| {
-        json.get("max_observed_freshness_days")
+        json.get("freshness_eprocess_policy")
+            .and_then(|p| p.get("horizon_days"))
             .and_then(serde_json::Value::as_u64)
-            .unwrap_or(30)
+            .or_else(|| {
+                json.get("max_observed_freshness_days")
+                    .and_then(serde_json::Value::as_u64)
+            })
+            .unwrap_or(DEFAULT_FRESHNESS_HORIZON_DAYS)
     });
 
     let claims = json
@@ -1072,6 +1352,7 @@ mod tests {
                 fresh: bits & 16 != 0,
                 adversarially_verified: bits & 32 != 0,
                 freshness_days: None,
+                freshness_eprocess: None,
                 notes: Vec::new(),
             });
         }
@@ -1170,6 +1451,7 @@ mod tests {
                 fresh: true,
                 adversarially_verified: false,
                 freshness_days: Some(2),
+                freshness_eprocess: None,
                 notes: Vec::new(),
             },
         };
@@ -1194,6 +1476,7 @@ mod tests {
             fresh: false,
             adversarially_verified: false,
             freshness_days: None,
+            freshness_eprocess: None,
             notes: Vec::new(),
         };
         assert_eq!(tier(&facts), EvidenceTier::Exercised);
@@ -1275,10 +1558,116 @@ mod tests {
             fresh: false, // ~25d old
             adversarially_verified: false,
             freshness_days: Some(25),
+            freshness_eprocess: None,
             notes: vec!["verification_result=pending".into()],
         };
         assert_eq!(tier(&facts), EvidenceTier::Asserted);
         assert_eq!(ceiling(tier(&facts)), ClaimAssertionState::Target);
+    }
+
+    // -- A.4 principled freshness via the e-process boundary -----------------
+
+    #[test]
+    fn freshness_eprocess_reproduces_legacy_30day_window() {
+        // The default (alpha=0.05, horizon=30) must agree with the historical
+        // `age <= 30` cliff on every day, so no currently-sound row regresses.
+        let ep = FreshnessEProcess::from_horizon(DEFAULT_FRESHNESS_HORIZON_DAYS);
+        for age in 0u64..=60 {
+            let v = ep.evaluate(age);
+            let legacy_fresh = age <= DEFAULT_FRESHNESS_HORIZON_DAYS;
+            assert_eq!(
+                v.fresh, legacy_fresh,
+                "freshness disagrees with legacy cliff at age={age} (bound={})",
+                v.bound_days
+            );
+        }
+    }
+
+    #[test]
+    fn freshness_bound_is_derived_not_authored() {
+        // The boundary day falls out of (alpha, horizon) via ln(1/alpha); it is
+        // never an authored magic number.
+        let ep = FreshnessEProcess::from_horizon(30);
+        // ln(1/0.05) = ln(20) ~= 2.9957 -> ~2_995_732 millionths.
+        assert!((ep.log_threshold_millionths() - 2_995_732).abs() <= 2);
+        // First strictly-rejecting day is just past the horizon.
+        assert_eq!(ep.bound_days(), 31);
+        // At the horizon the e-value is still below the boundary (fresh);
+        // one day later it has crossed (stale).
+        assert!(ep.evaluate(30).log_e_value_millionths < ep.log_threshold_millionths());
+        assert!(ep.evaluate(31).log_e_value_millionths >= ep.log_threshold_millionths());
+    }
+
+    #[test]
+    fn freshness_window_tracks_horizon_independent_of_alpha() {
+        // The horizon sets the *window*; alpha sets the *statistical guarantee*
+        // (false-staleness-alarm rate), not the window — because both the
+        // threshold ln(1/alpha) and the per-day increment scale with it.
+        for horizon in [7u64, 14, 30, 60, 90] {
+            for alpha in [10_000i64, 50_000, 200_000] {
+                let ep = FreshnessEProcess::new(alpha, horizon);
+                let bound = ep.bound_days();
+                assert!(
+                    bound == horizon || bound == horizon + 1,
+                    "bound {bound} should track horizon {horizon} (alpha={alpha})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn freshness_stale_confidence_is_monotone_and_zero_while_fresh() {
+        let ep = FreshnessEProcess::from_horizon(30);
+        let mut prev = i64::MIN;
+        for age in 0u64..=120 {
+            let v = ep.evaluate(age);
+            // The accumulated log e-value never decreases with age.
+            assert!(v.log_e_value_millionths >= prev);
+            prev = v.log_e_value_millionths;
+            if v.fresh {
+                assert_eq!(v.stale_confidence_millionths, 0, "fresh => zero confidence");
+            } else {
+                assert!(
+                    v.stale_confidence_millionths > 0,
+                    "stale => positive confidence"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn freshness_ledger_matches_closed_form_across_ages() {
+        // `evaluate` debug-asserts that the real martingale ledger and the
+        // closed form agree on the crossing; exercise the whole range so any
+        // arithmetic drift panics here in test builds.
+        let ep = FreshnessEProcess::from_horizon(30);
+        for age in 0u64..=200 {
+            let v = ep.evaluate(age);
+            assert_eq!(v.fresh, age < ep.bound_days());
+        }
+    }
+
+    #[test]
+    fn freshness_verdict_serde_round_trip() {
+        let v = FreshnessEProcess::from_horizon(30).evaluate(42);
+        let json = serde_json::to_string(&v).expect("serialize FreshnessVerdict");
+        let back: FreshnessVerdict = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(v, back);
+        assert!(!v.fresh, "age 42 > bound 31 is stale");
+    }
+
+    #[test]
+    fn freshness_eprocess_clamps_degenerate_parameters() {
+        // alpha >= 1 (>= 1_000_000 millionths) would make the test fire on day
+        // zero; it is clamped so the test stays non-trivial, and horizon 0 is
+        // clamped to 1 so the per-day increment is well defined.
+        let ep = FreshnessEProcess::new(5_000_000, 0);
+        assert!(ep.log_threshold_millionths() > 0);
+        assert!(ep.bound_days() >= 1);
+        assert!(
+            ep.evaluate(0).fresh,
+            "fresh evidence at age 0 is never stale"
+        );
     }
 
     // -- A.2 whole-document consistency index --------------------------------

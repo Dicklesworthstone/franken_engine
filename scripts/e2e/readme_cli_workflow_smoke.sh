@@ -61,11 +61,26 @@ json_args() {
 
 readme_line_for() {
   local needle="$1"
-  if command -v rg >/dev/null 2>&1; then
-    rg -n -F "$needle" "$readme_path" | head -n 1 | cut -d: -f1 || true
-  else
-    grep -n -F "$needle" "$readme_path" | head -n 1 | cut -d: -f1 || true
-  fi
+  # Normalize the needle's internal whitespace to single spaces so the contract
+  # match is independent of how the README formats the command.
+  needle="$(printf '%s' "$needle" | tr -s '[:space:]' ' ')"
+  # Normalize the README the same way before searching: join trailing-backslash
+  # continuation lines into one logical line (keyed to the first physical line
+  # number) and collapse runs of whitespace. The README documents each CLI
+  # command as a multi-line, space-aligned block (`cmd \` + indented flags), so a
+  # literal single-line grep would spuriously report contract drift even though
+  # the command is present. This keeps the contract ("the README documents this
+  # exact command, modulo shell line-continuation formatting") while matching the
+  # form the README actually ships.
+  awk '
+    function flush(){ if(have){ gsub(/[ \t]+/, " ", buf); sub(/^ +/, "", buf); sub(/ +$/, "", buf); print start ":" buf; have=0; buf="" } }
+    { line=$0
+      if(!have){ start=NR; have=1 }
+      if(line ~ /\\[ \t]*$/){ sub(/\\[ \t]*$/, "", line); buf=buf line " " }
+      else { buf=buf line; flush() }
+    }
+    END{ flush() }
+  ' "$readme_path" | grep -F "$needle" | head -n 1 | cut -d: -f1 || true
 }
 
 resolve_cargo_target_dir() {

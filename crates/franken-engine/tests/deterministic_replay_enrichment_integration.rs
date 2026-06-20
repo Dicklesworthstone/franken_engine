@@ -1269,7 +1269,7 @@ fn enrichment_json_fields_incident_artifact() {
 #[test]
 fn enrichment_source_all_has_all_variants() {
     assert!(NondeterminismSource::ALL.contains(&NondeterminismSource::FloatingPointResult));
-    assert_eq!(NondeterminismSource::ALL.len(), 7);
+    assert_eq!(NondeterminismSource::ALL.len(), 11);
 }
 
 #[test]

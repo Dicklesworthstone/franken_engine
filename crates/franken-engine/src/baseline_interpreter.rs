@@ -50,14 +50,19 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
+use frankenengine_extension_host::host_io::{HostIoProvider, HostIoRecorder};
+
 use crate::ast::ParseGoal;
-use crate::capability::RuntimeCapability;
+use crate::capability::{CapabilityProfile, RuntimeCapability};
 use crate::checkpoint::{
     CancellationToken, CheckpointAction, CheckpointGuard, DensityConfig, LoopSite,
 };
 use crate::deterministic_replay::{NondeterminismSource, NondeterminismTrace};
 use crate::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId, derive_id};
 use crate::hash_tiers::ContentHash;
+use crate::hostcall_effects_migration::{
+    create_effect_from_hostcall_tag, create_handler_stack_from_profile_with_host_io,
+};
 use crate::hostcall_telemetry::{
     FlowLabel, HostcallResult as TelemetryHostcallResult, HostcallType as TelemetryHostcallType,
     RecordInput, RecorderConfig, ResourceDelta, TelemetryRecorder,
@@ -4275,6 +4280,14 @@ pub enum ExecutionSeed {
 pub struct InterpreterCore {
     config: InterpreterConfig,
     hook: Option<Arc<dyn InterpreterHook>>,
+    /// Optional sandboxed host-I/O provider (bd-f5b04.2.7). When set, authorized
+    /// `fs:` hostcalls dispatch to real host effects through the algebraic-effects
+    /// handler stack instead of returning `undefined`. `None` preserves the
+    /// fail-closed baseline (no real host I/O).
+    host_io: Option<Arc<dyn HostIoProvider>>,
+    /// Optional deterministic-replay recorder paired with `host_io`; captures each
+    /// dispatched effect as a `(request, outcome)` transcript entry.
+    host_io_recorder: Option<Arc<dyn HostIoRecorder>>,
     /// Register file (flat, indexed by register number). SEED-SURFACE.
     registers: SeedTrackedField<Vec<Value>>,
     /// Call stack.
@@ -4457,6 +4470,8 @@ impl InterpreterCore {
         Self {
             config,
             hook: None,
+            host_io: None,
+            host_io_recorder: None,
             registers: SeedTrackedField::new(vec![Value::Undefined; max_regs]),
             call_stack: Vec::new(),
             heap: SeedTrackedField::new(Vec::new()),
@@ -4530,6 +4545,79 @@ impl InterpreterCore {
 
     pub fn clear_hook(&mut self) {
         self.hook = None;
+    }
+
+    /// Install a sandboxed host-I/O provider (and an optional replay recorder) so
+    /// authorized `fs:` hostcalls perform and record real host effects
+    /// (bd-f5b04.2.7). Mirrors [`InterpreterCore::set_hook`]; with no provider the
+    /// interpreter keeps its fail-closed baseline (fs hostcalls return undefined).
+    pub fn set_host_io(
+        &mut self,
+        provider: Arc<dyn HostIoProvider>,
+        recorder: Option<Arc<dyn HostIoRecorder>>,
+    ) {
+        self.host_io = Some(provider);
+        self.host_io_recorder = recorder;
+    }
+
+    /// Dispatch an `fs:` hostcall through the installed sandboxed host-I/O
+    /// provider, performing (and recording) a real host effect and mapping the
+    /// result back into a JS [`Value`]. Returns [`Value::Undefined`] when no
+    /// provider is installed, preserving the fail-closed baseline. The capability
+    /// gate has already authorized the call before this point; the provider
+    /// re-checks the single required capability and performs the real I/O.
+    fn dispatch_host_io_hostcall(
+        &mut self,
+        capability: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let Some(provider) = self.host_io.clone() else {
+            return Ok(Value::Undefined);
+        };
+        // Coerce the hostcall arg registers to strings for the tag->effect builder
+        // (fs paths and contents are string operands in baseline IR3).
+        let mut arg_strings: Vec<String> = Vec::with_capacity(args.count as usize);
+        for offset in 0..args.count {
+            let value = self.read_reg(args.start + offset)?;
+            arg_strings.push(match value {
+                Value::Str(s) => s.to_string(),
+                Value::Int(i) => i.to_string(),
+                Value::Undefined | Value::Null => String::new(),
+                other => other.type_name().to_string(),
+            });
+        }
+        let effect = create_effect_from_hostcall_tag(capability, &arg_strings).map_err(|err| {
+            InterpreterError::InternalError {
+                details: format!("host effect build failed for {capability}: {err}"),
+            }
+        })?;
+        // Build a Full handler stack backed by the provider (+ recorder) for this
+        // dispatch. Full grants all capabilities so the stack's gate never
+        // re-denies what the interpreter already authorized; the provider performs
+        // the real, capability-checked effect and the recorder logs it.
+        let mut stack = create_handler_stack_from_profile_with_host_io(
+            &CapabilityProfile::full(),
+            provider,
+            self.host_io_recorder.clone(),
+        );
+        let result = stack.handle_effect(effect.as_ref()).map_err(|err| {
+            InterpreterError::InternalError {
+                details: format!("host effect dispatch failed for {capability}: {err}"),
+            }
+        })?;
+        Ok(match capability {
+            "fs:read" => result
+                .downcast::<Vec<u8>>()
+                .map_or(Value::Undefined, |bytes| {
+                    Value::Str(Arc::from(String::from_utf8_lossy(&bytes).into_owned()))
+                }),
+            "fs:write" => result
+                .downcast::<u64>()
+                .map_or(Value::Undefined, |written| {
+                    Value::Int(i64::try_from(written).unwrap_or(i64::MAX))
+                }),
+            _ => Value::Undefined,
+        })
     }
 
     // ---------------------------------------------------------------------------
@@ -9883,6 +9971,12 @@ impl InterpreterCore {
                         self.dispatch_timer_hostcall(&capability.0, args)?
                     } else if capability.0.starts_with("builtin:") {
                         self.dispatch_builtin_hostcall(&capability.0, args, Some(module))?
+                    } else if capability.0.starts_with("fs:") {
+                        // bd-f5b04.2.7: when a sandboxed host-I/O provider is
+                        // installed, dispatch the (already-authorized) fs hostcall
+                        // through the algebraic-effects stack to perform a real,
+                        // recorded host effect; otherwise it returns undefined.
+                        self.dispatch_host_io_hostcall(&capability.0, args)?
                     } else {
                         // Non-promise hostcalls return undefined in baseline.
                         Value::Undefined
@@ -33501,6 +33595,84 @@ mod async_runtime_tests_current {
             &crate::ifc_artifacts::Label::Public,
             "zero-arg hostcall dst must reset to Public"
         );
+    }
+
+    /// bd-f5b04.2.7: when a sandboxed host-I/O provider is installed, the
+    /// interpreter's `fs:` hostcall dispatch performs and records a REAL host
+    /// effect (bytes hit disk) and returns the real result; with no provider it
+    /// stays fail-closed (undefined).
+    #[test]
+    fn hostcall_fs_dispatch_performs_real_io_through_provider_bd_f5b04_2_7() {
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+
+        let mut root = std::env::temp_dir();
+        root.push(format!(
+            "frankenengine_interp_hostio_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+
+        let mut core = test_interpreter();
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        core.set_host_io(provider, Some(recorder_dyn));
+        // reg0 = relative path, reg1 = content (string operands).
+        core.mutate_registers(|r| {
+            r[0] = Value::Str(Arc::from("report.txt"));
+            r[1] = Value::Str(Arc::from("real effect bytes"));
+        });
+
+        // fs:write through the interpreter dispatch performs a real write.
+        let write_result = core
+            .dispatch_host_io_hostcall("fs:write", RegRange { start: 0, count: 2 })
+            .expect("fs:write dispatch");
+        assert_eq!(
+            write_result,
+            Value::Int(17),
+            "fs:write must return the real bytes_written"
+        );
+        assert_eq!(
+            std::fs::read(root.join("report.txt")).expect("written file on disk"),
+            b"real effect bytes",
+            "the interpreter must have produced a real file"
+        );
+
+        // fs:read through the interpreter dispatch returns the real bytes.
+        let read_result = core
+            .dispatch_host_io_hostcall("fs:read", RegRange { start: 0, count: 1 })
+            .expect("fs:read dispatch");
+        assert_eq!(
+            read_result,
+            Value::Str(Arc::from("real effect bytes")),
+            "fs:read must surface the real file contents"
+        );
+
+        // Both real effects were captured in the replay transcript — the ledger
+        // source for bd-5r99w.12.
+        assert_eq!(
+            recorder.entries().len(),
+            2,
+            "both dispatched effects must be recorded"
+        );
+
+        // With no provider installed, fs hostcalls stay fail-closed (undefined).
+        let mut bare = test_interpreter();
+        bare.mutate_registers(|r| {
+            r[0] = Value::Str(Arc::from("nope.txt"));
+        });
+        let bare_result = bare
+            .dispatch_host_io_hostcall("fs:read", RegRange { start: 0, count: 1 })
+            .expect("no-provider dispatch is infallible");
+        assert_eq!(
+            bare_result,
+            Value::Undefined,
+            "no provider installed => fail-closed undefined"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// bd-0zybl: reading a property off a Secret-labeled object must taint the

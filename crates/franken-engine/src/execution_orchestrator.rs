@@ -23,6 +23,9 @@ use crate::baseline_interpreter::{
     ConsoleEntry, ExecutionResult, HookAction, InterpreterConfig, InterpreterError,
     InterpreterHook, LaneChoice, LaneReason, LaneRouter, RoutedResult,
 };
+use frankenengine_extension_host::host_io::{
+    HostIoOutcome, HostIoProvider, HostIoRecorder, HostIoRequest,
+};
 use crate::bayesian_posterior::{
     BayesianPosteriorUpdater, Evidence, Posterior, RiskState, UpdateResult,
 };
@@ -255,6 +258,13 @@ pub struct OrchestratorResult {
     pub cell_events: Vec<CellEvent>,
     pub finalize_result: Option<FinalizeResult>,
 
+    // Host effects (bd-f5b04.2.7): the capability-metered transcript of host
+    // effects the run performed or was denied, harvested from the installed
+    // host-I/O recorder. Empty when no provider was installed or the program
+    // emitted no host effects. This is the source bd-5r99w.12 renders as a
+    // signed effect ledger in `franken-node run`.
+    pub host_effect_transcript: Vec<(HostIoRequest, HostIoOutcome)>,
+
     // Epoch
     pub epoch: SecurityEpoch,
 }
@@ -473,6 +483,11 @@ pub struct ExecutionOrchestrator {
     trusted_declassification_authorizers: BTreeMap<String, BTreeSet<VerificationKey>>,
     attempt_counter: u64,
     execution_counter: u64,
+    /// Optional sandboxed host-I/O provider (+ recorder) installed into the
+    /// interpreter lane so authorized host effects perform and record real I/O
+    /// (bd-f5b04.2.7). `None` keeps the fail-closed baseline (no host effects).
+    host_io: Option<Arc<dyn HostIoProvider>>,
+    host_io_recorder: Option<Arc<dyn HostIoRecorder>>,
 }
 
 impl ExecutionOrchestrator {
@@ -535,6 +550,8 @@ impl ExecutionOrchestrator {
             trusted_declassification_authorizers: BTreeMap::new(),
             attempt_counter: 0,
             execution_counter: 0,
+            host_io: None,
+            host_io_recorder: None,
             config,
             runtime_config,
         })
@@ -543,6 +560,20 @@ impl ExecutionOrchestrator {
     /// Create an orchestrator with default configuration.
     pub fn with_defaults() -> Self {
         Self::new(OrchestratorConfig::default())
+    }
+
+    /// Install a sandboxed host-I/O provider (+ optional replay recorder) so the
+    /// next `execute` threads it into the interpreter lane, making authorized
+    /// host effects perform and record real I/O (bd-f5b04.2.7). The recorder's
+    /// transcript is surfaced on [`OrchestratorResult::host_effect_transcript`].
+    /// With no provider installed the run stays fail-closed (no host effects).
+    pub fn set_host_io(
+        &mut self,
+        provider: Arc<dyn HostIoProvider>,
+        recorder: Option<Arc<dyn HostIoRecorder>>,
+    ) {
+        self.host_io = Some(provider);
+        self.host_io_recorder = recorder;
     }
 
     /// Access the runtime configuration.
@@ -797,6 +828,13 @@ impl ExecutionOrchestrator {
             saga_id,
             cell_events,
             finalize_result,
+            // bd-f5b04.2.7: surface the host effects this run performed/was denied,
+            // harvested from the installed recorder (empty when none installed).
+            host_effect_transcript: self
+                .host_io_recorder
+                .as_ref()
+                .map(|recorder| recorder.recorded_entries())
+                .unwrap_or_default(),
             epoch: self.config.epoch,
         })
     }
@@ -974,7 +1012,14 @@ impl ExecutionOrchestrator {
         });
         // Package capabilities remain user-scoped; the orchestrator adds only
         // the minimal VM capabilities needed to run the already-lowered module.
-        let routed = Self::lane_router_for_execution(package)
+        let mut lane_router = Self::lane_router_for_execution(package);
+        // bd-f5b04.2.7: thread the installed sandboxed host-I/O provider (+ recorder)
+        // into whichever lane runs, so authorized `fs:` hostcalls perform and record
+        // real host effects through the algebraic-effects stack.
+        if let Some(provider) = self.host_io.clone() {
+            lane_router.set_host_io(provider, self.host_io_recorder.clone());
+        }
+        let routed = lane_router
             .execute_with_hook(ir3, trace_id, self.config.force_lane, hook)
             .map_err(OrchestratorError::Interpreter)?;
         let report = guardplane_adapter
@@ -2885,6 +2930,63 @@ mod tests {
         let policy = orch.new_stopping_policy();
         assert_eq!(policy.cusum.threshold_millionths, 1_000_000);
         assert_eq!(policy.cusum.reference_millionths, 200_000);
+    }
+
+    /// bd-f5b04.2.7: an orchestrated run surfaces the installed host-I/O recorder's
+    /// transcript on `OrchestratorResult.host_effect_transcript`, the source
+    /// bd-5r99w.12 renders as a signed effect ledger in `franken-node run`. Uses
+    /// the REAL `InMemoryHostIoTranscript` + `SandboxedHostIo` (no mocks): a real
+    /// `(request, outcome)` is recorded into the installed recorder and the run
+    /// must surface exactly it. With no provider installed the transcript is empty
+    /// (fail-closed baseline). The interpreter-side perform+record path is proven
+    /// by `hostcall_fs_dispatch_performs_real_io_through_provider_bd_f5b04_2_7`.
+    #[test]
+    fn run_surfaces_host_effect_transcript_from_installed_recorder_bd_f5b04_2_7() {
+        use frankenengine_extension_host::host_io::{
+            HostIoError, InMemoryHostIoTranscript, SandboxedHostIo,
+        };
+
+        let mut root = std::env::temp_dir();
+        root.push(format!("frankenengine_orch_hostio_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        // A real (request, outcome) pair as produced at a host-effect site; a denied
+        // read is itself a ledger-worthy effect.
+        let request = HostIoRequest::FsRead {
+            path: "denied.txt".to_string(),
+        };
+        let outcome: HostIoOutcome = Err(HostIoError::Denied {
+            reason: "policy".to_string(),
+        });
+        recorder.record(&request, &outcome);
+
+        let mut orch = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        orch.set_host_io(provider, Some(recorder_dyn));
+
+        let result = orch
+            .execute(&simple_package())
+            .expect("execute with host io installed");
+        assert_eq!(
+            result.host_effect_transcript,
+            vec![(request, outcome)],
+            "the run must surface exactly the installed recorder's transcript"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+
+        // No provider installed => empty transcript (fail-closed baseline).
+        let mut bare = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        let bare_result = bare
+            .execute(&simple_package())
+            .expect("execute without host io");
+        assert!(
+            bare_result.host_effect_transcript.is_empty(),
+            "no provider installed => empty host-effect transcript"
+        );
     }
 
     #[test]

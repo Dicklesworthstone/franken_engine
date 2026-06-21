@@ -409,6 +409,14 @@ pub trait HostIoRecorder: core::fmt::Debug + Send + Sync {
 
     /// In record mode, append a completed host I/O request and outcome.
     fn record(&self, request: &HostIoRequest, outcome: &HostIoOutcome);
+
+    /// Snapshot the recorded `(request, outcome)` transcript so callers (e.g. the
+    /// execution orchestrator) can surface the host effects a run performed and
+    /// was denied (bd-f5b04.2.7). Recorders that do not retain a transcript
+    /// return an empty vec by default.
+    fn recorded_entries(&self) -> Vec<(HostIoRequest, HostIoOutcome)> {
+        Vec::new()
+    }
 }
 
 /// In-memory transcript reference implementation.
@@ -507,6 +515,10 @@ impl HostIoRecorder for InMemoryHostIoTranscript {
             .lock()
             .expect("host I/O transcript mutex")
             .push((request.clone(), outcome.clone()));
+    }
+
+    fn recorded_entries(&self) -> Vec<(HostIoRequest, HostIoOutcome)> {
+        self.entries()
     }
 }
 

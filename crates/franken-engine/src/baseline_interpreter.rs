@@ -29457,12 +29457,19 @@ pub trait ExecutionEngine {
 /// Deterministic execution profile: conservative budgets and replay-stable defaults.
 pub struct QuickJsLane {
     config: InterpreterConfig,
+    /// Optional sandboxed host-I/O provider (+ recorder) threaded into the
+    /// interpreter so authorized `fs:` hostcalls perform and record real host
+    /// effects (bd-f5b04.2.7). `None` keeps the fail-closed baseline.
+    host_io: Option<Arc<dyn HostIoProvider>>,
+    host_io_recorder: Option<Arc<dyn HostIoRecorder>>,
 }
 
 impl Default for QuickJsLane {
     fn default() -> Self {
         Self {
             config: execution_profile_config(InterpreterConfig::quickjs_defaults()),
+            host_io: None,
+            host_io_recorder: None,
         }
     }
 }
@@ -29473,7 +29480,22 @@ impl QuickJsLane {
     }
 
     pub fn with_config(config: InterpreterConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            host_io: None,
+            host_io_recorder: None,
+        }
+    }
+
+    /// Install a sandboxed host-I/O provider (+ optional recorder) for this lane,
+    /// mirroring [`QuickJsLane::set_host_io`] (bd-f5b04.2.7).
+    pub fn set_host_io(
+        &mut self,
+        provider: Arc<dyn HostIoProvider>,
+        recorder: Option<Arc<dyn HostIoRecorder>>,
+    ) {
+        self.host_io = Some(provider);
+        self.host_io_recorder = recorder;
     }
 
     pub fn execute(
@@ -29493,6 +29515,9 @@ impl QuickJsLane {
         let mut core = InterpreterCore::new(self.config.clone(), trace_id);
         if let Some(hook) = hook {
             core.set_hook(hook);
+        }
+        if let Some(provider) = self.host_io.clone() {
+            core.set_host_io(provider, self.host_io_recorder.clone());
         }
         match core.execute(module) {
             Ok(result) => Ok(result),
@@ -29529,12 +29554,18 @@ impl ExecutionEngine for QuickJsLane {
 /// Throughput execution profile: larger budgets for heavier workloads.
 pub struct V8Lane {
     config: InterpreterConfig,
+    /// Optional sandboxed host-I/O provider (+ recorder), mirroring [`QuickJsLane`]
+    /// (bd-f5b04.2.7). `None` keeps the fail-closed baseline.
+    host_io: Option<Arc<dyn HostIoProvider>>,
+    host_io_recorder: Option<Arc<dyn HostIoRecorder>>,
 }
 
 impl Default for V8Lane {
     fn default() -> Self {
         Self {
             config: execution_profile_config(InterpreterConfig::v8_defaults()),
+            host_io: None,
+            host_io_recorder: None,
         }
     }
 }
@@ -29553,7 +29584,22 @@ impl V8Lane {
     }
 
     pub fn with_config(config: InterpreterConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            host_io: None,
+            host_io_recorder: None,
+        }
+    }
+
+    /// Install a sandboxed host-I/O provider (+ optional recorder) for this lane;
+    /// it is threaded into each `InterpreterCore` this lane creates (bd-f5b04.2.7).
+    pub fn set_host_io(
+        &mut self,
+        provider: Arc<dyn HostIoProvider>,
+        recorder: Option<Arc<dyn HostIoRecorder>>,
+    ) {
+        self.host_io = Some(provider);
+        self.host_io_recorder = recorder;
     }
 
     pub fn execute(
@@ -29573,6 +29619,9 @@ impl V8Lane {
         let mut core = InterpreterCore::new(self.config.clone(), trace_id);
         if let Some(hook) = hook {
             core.set_hook(hook);
+        }
+        if let Some(provider) = self.host_io.clone() {
+            core.set_host_io(provider, self.host_io_recorder.clone());
         }
         match core.execute(module) {
             Ok(result) => Ok(result),
@@ -30019,6 +30068,18 @@ impl LaneRouter {
             quickjs: QuickJsLane::with_config(quickjs_config),
             v8: V8Lane::with_config(v8_config),
         }
+    }
+
+    /// Install a sandboxed host-I/O provider (+ optional recorder) on both lanes so
+    /// whichever lane is selected threads it into its `InterpreterCore`
+    /// (bd-f5b04.2.7). The orchestrator calls this before `execute_with_hook`.
+    pub fn set_host_io(
+        &mut self,
+        provider: Arc<dyn HostIoProvider>,
+        recorder: Option<Arc<dyn HostIoRecorder>>,
+    ) {
+        self.quickjs.set_host_io(provider.clone(), recorder.clone());
+        self.v8.set_host_io(provider, recorder);
     }
 
     /// Route and execute the module.

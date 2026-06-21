@@ -88,3 +88,36 @@ G.3, `bd-sde5e.7.3`) proves the capstone cannot be satisfied by fixtures: it
 injects an over-promotion (e.g. flips a committed receipt to `pending`, or untracks
 an artifact) into a throwaway worktree copy and asserts the capstone goes red,
 then restores the tree.
+
+## Machine-checked meta-soundness (H.4)
+
+The capstone's `bidirectional_lattice` sub-gate enforces `asserted_state ≤
+ceiling(evidence_tier)` row by row at run time. CEI H.4 (`bd-sde5e.8.4`) makes the
+*lemma the whole gate rests on* machine-checked in Lean 4, independent of any one
+run:
+
+```bash
+# Build + axiom-check the soundness proof (lake build is targeted, so it never
+# touches the heavier Mathlib isomorphism libraries); fails closed unless the
+# keystone theorems are confirmed sorryAx-free.
+./scripts/run_cei_soundness_lean_proof.sh ci
+
+# Structural smoke without a Lean toolchain (asserts the required theorems are
+# declared and the proof contains no sorry):
+./scripts/run_cei_soundness_lean_proof.sh selftest
+```
+
+`proofs/lean4/ClaimEvidenceSoundness.lean` mirrors `claim_evidence_lattice.rs`
+and `claim_integrity_flow.rs` and proves, over the finite claim/evidence lattices:
+
+- `gate_transition_sound` — the gate's corrective transition `meet(state,
+  ceiling(tier))` always lands within the evidence ceiling (the keystone; depends
+  on **no axioms**);
+- `ceiling_monotone` / `tier_monotone` / `sound_monotone_in_tier` — soundness can
+  only strengthen with committed evidence, never weaken;
+- `flow_legal_iff_sound` — the lattice soundness predicate is *exactly* the H.3
+  Biba integrity verdict.
+
+It is pure Lean 4 core (no Mathlib import), so it re-checks in well under a second
+and is immune to upstream library drift. It is referenced from the `FE-CLAIM-025`
+matrix row.

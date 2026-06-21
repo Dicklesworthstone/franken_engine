@@ -8213,13 +8213,17 @@ fn execute_test(args: TestArgs) -> Result<i32, String> {
             std::fs::create_dir_all(&out_dir)
                 .map_err(|e| format!("Failed to create output directory: {e}"))?;
 
-            // Try to find the installed franken_test262_runner binary
+            // Try to find the installed franken_test262_runner binary.
+            // The runner names its output flag `--output-root`, and ingests a real
+            // tc39/test262 checkout via `--suite-path` (generating case vectors live
+            // from the pinned suite). The previous `--out-dir` / `--suite` names were
+            // both rejected by the runner as unknown flags.
             let mut cmd = Command::new("franken_test262_runner");
-            cmd.arg("--out-dir").arg(path_to_str(&out_dir)?);
+            cmd.arg("--output-root").arg(path_to_str(&out_dir)?);
 
-            // Add suite path if specified
+            // Point the runner at a real Test262 checkout if specified.
             if let Some(suite) = &suite_path {
-                cmd.arg("--suite").arg(path_to_str(suite)?);
+                cmd.arg("--suite-path").arg(path_to_str(suite)?);
             }
 
             // Execute the command

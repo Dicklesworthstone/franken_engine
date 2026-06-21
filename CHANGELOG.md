@@ -10,6 +10,22 @@ The project ships a single `0.1.0` Cargo manifest across the workspace and has n
 
 ---
 
+## Post-Snapshot Update — Claim-Evidence Integrity Capstone (2026-06-21)
+
+The CEI epic (`bd-sde5e`, *stated state must be provably ≤ commit*) reached its capstone. Tracks A, C, E, F were already closed; this update lands Tracks **B** and **G** and the Track-H reflexive claim:
+
+- **B.2 (`bd-sde5e.2.2`)** — every OBSERVED claim now carries a real `verification_result=passed` receipt from a live gate run (no backfill/pending). The last holdout, **FE-CLAIM-022** (cross-runtime lockstep oracle), is re-emitted from a live run against **real Node.js** (`/usr/bin/nodejs` v20.19.4) with zero divergences across node/bun/franken; the latent bench bug behind its old backfilled receipt (the FrankenEngine lane exhausting the containment instruction budget on the 10k/20k-iter workloads) is fixed by sizing the comparative workloads to `frankenctl run`'s real default budget. **FE-CLAIM-023** (cross-platform identical-hash reproducibility) is honestly downgraded `observed → target` — it is unprovable on a single host and its receipt was backfill/pending (precedent: FE-CLAIM-012). Result: the A.3 bidirectional audit is **27/27 sound (100%)**, `--blocking` exit 0.
+- **B.4 (`bd-sde5e.2.4`)** — fresh-clone committed-evidence verification (`scripts/e2e/fresh_clone_evidence_verification_smoke.sh`) is 16/16 offline against a clean `git worktree` checkout.
+- **G.1 (`bd-sde5e.7.1`)** — `scripts/run_claim_evidence_integrity_capstone.sh` composes the four CEI checks (claim-to-proof wording + A.1/A.3 bidirectional lattice, H.1 Merkle ledger, whole-document consistency, D.3 Test262 posture) into one fail-closed meta-gate, with an e2e replay wrapper and `docs/CLAIM_EVIDENCE_INTEGRITY_CAPSTONE_RUNBOOK.md`.
+- **G.3 (`bd-sde5e.7.3`)** — a no-mock acceptance drill (`scripts/e2e/claim_evidence_integrity_capstone_drift.sh`) injects an over-promotion of each class, asserts the capstone reddens the responsible sub-gate, and restores the tree byte-for-byte: the gate cannot be satisfied by fixtures.
+- **H.2 (`bd-sde5e.8.2`)** — **FE-CLAIM-025** reflexive soundness claim (the gate gates itself), backed by the A.5 adversarial corpus (4/4) and committed in the H.1 Merkle ledger alongside the claims it checks. The pre-existing unbacked target FE-CLAIM-TEST262 was also given a git-tracked evidence bundle so the blocking audit is clean.
+
+Honestly deferred (genuine environment blocks, not skipped work): **D.2** (`bd-sde5e.4.2`, full tc39/test262 corpus + denominator) and **H.4** (`bd-sde5e.8.4`, a *checked* Lean 4 theorem) remain open; D.2 needs the external corpus and H.4 needs a Lean toolchain absent on this host. Their parents (Tracks D, H) and the epic stay open accordingly. Relates to the honest GA-exit ledger (`bd-cixqu.47`).
+
+Commits: `619479f2`, `163c17472`.
+
+---
+
 ## Post-Snapshot Update — Track H Exception Semantics (2026-06-03)
 
 - Promoted the README JavaScript surface coverage for `try` / `catch` / `finally` and `throw` / exception semantics to **Executed** after the Track H closure-capture work (`bd-cixqu.8.2`, `bd-cixqu.8.3`, `bd-cixqu.8.5`, `bd-cixqu.8.6`, `bd-cixqu.8.4`).

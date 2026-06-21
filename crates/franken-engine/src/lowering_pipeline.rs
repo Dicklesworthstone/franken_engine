@@ -8551,6 +8551,39 @@ fn lower_expression_to_ir1_inner(
                 });
                 return Ok(());
             }
+            if let Some(capability) = fs_builtin_call_capability(callee) {
+                // bd-1xl17: inline `require('fs').readFileSync(path)` /
+                // `require('fs').writeFileSync(path, data)` (Sync) lower to an
+                // `fs:`-tagged HostCall so the interpreter's host-I/O seam performs
+                // and records a real, capability-gated host effect (the source the
+                // run --json effect ledger renders). Like the static `Math.*`
+                // interception above we do NOT lower the inner `require('fs')`
+                // receiver — there is no real fs module object and that path would
+                // fault at runtime; recognition is purely syntactic. Arg order is
+                // source order (path, then data), matching `dispatch_host_io_hostcall`
+                // (arg[0]=path, arg[1]=content). Arity must match exactly; otherwise
+                // fall through so a malformed call is not silently mis-shaped.
+                let expected_args = if capability == "fs:write" { 2 } else { 1 };
+                if arguments.len() == expected_args {
+                    for arg in arguments {
+                        lower_expression_to_ir1(
+                            arg,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                            span_table,
+                        )?;
+                    }
+                    ops.push(Ir1Op::HostCall {
+                        capability: capability.to_string(),
+                        arg_count: expected_args as u32,
+                    });
+                    return Ok(());
+                }
+            }
             if let Some(capability) = date_builtin_call_capability(callee, binding_lookup) {
                 // `Date.now()` — the `Date` global has no eval-scope binding, so
                 // (like the Math-static interception) recognize the bare static
@@ -10982,6 +11015,58 @@ fn console_builtin_call_capability(
         "error" => Some("console:error"),
         "warn" => Some("console:warn"),
         "info" => Some("console:info"),
+        _ => None,
+    }
+}
+
+/// Recognize an inline `require('fs').readFileSync(path)` /
+/// `require('fs').writeFileSync(path, data)` (or the `node:fs` specifier) call and
+/// return its `fs:`-prefixed hostcall capability so the call lowers to a real,
+/// capability-gated host effect instead of a `CallMethod` that would fault on the
+/// (non-existent) fs module object (bd-1xl17).
+///
+/// Recognition is purely syntactic on the receiver shape: there is no real `fs`
+/// heap object, and `require('fs')` resolves to `ModuleNotFound` at runtime, so
+/// the binding form `const fs = require('fs'); fs.readFileSync(...)` and ESM/async
+/// variants are intentionally out of scope here (tracked as bd-1xl17.a–.d). Only
+/// the synchronous `readFileSync`/`writeFileSync` methods on an inline
+/// `require('fs')`/`require('node:fs')` receiver are matched.
+fn fs_builtin_call_capability(callee: &Expression) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee
+    else {
+        return None;
+    };
+    // Receiver must be an inline `require('fs')` / `require('node:fs')` call.
+    let Expression::Call {
+        callee: require_callee,
+        arguments: require_args,
+        ..
+    } = object.as_ref()
+    else {
+        return None;
+    };
+    if !matches!(require_callee.as_ref(), Expression::Identifier(name) if name == "require") {
+        return None;
+    }
+    let is_fs_specifier = matches!(
+        require_args.as_slice(),
+        [Expression::StringLiteral(spec)] if spec == "fs" || spec == "node:fs"
+    );
+    if !is_fs_specifier {
+        return None;
+    }
+    let method = match property.as_ref() {
+        Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
+        _ => return None,
+    };
+    match method {
+        "readFileSync" => Some("fs:read"),
+        "writeFileSync" => Some("fs:write"),
         _ => None,
     }
 }

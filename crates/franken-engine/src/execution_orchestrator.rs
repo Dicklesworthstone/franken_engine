@@ -2989,6 +2989,70 @@ mod tests {
         );
     }
 
+    /// bd-1xl17 (end-to-end keystone): a REAL JS program — compiled+executed from
+    /// source through `ExecutionOrchestrator::execute`, no hand-built IR — that calls
+    /// `require('fs').writeFileSync`/`readFileSync` produces `fs:` HostCalls which
+    /// perform real sandboxed I/O and yield a NON-EMPTY host-effect transcript. This
+    /// closes the loop: idiomatic JS fs ops now lower to host effects the run ledger
+    /// can render (bd-5r99w.12). Mock-free: real parser/lowering, real SandboxedHostIo.
+    #[test]
+    fn real_js_fs_program_produces_host_effects_bd_1xl17() {
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+
+        let mut root = std::env::temp_dir();
+        root.push(format!("frankenengine_e2e_fs_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+
+        let mut orch = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        orch.set_host_io(provider, Some(recorder_dyn));
+
+        // Real idiomatic JS source (inline require form), granting the fs caps the
+        // capability gate requires (snake_case grant tags).
+        let pkg = ExtensionPackage {
+            extension_id: "fs-e2e".to_string(),
+            source: "require('fs').writeFileSync('out.txt', 'real effect bytes');\n\
+                     require('fs').readFileSync('out.txt');\n"
+                .to_string(),
+            source_file: None,
+            capabilities: vec![
+                "vm_dispatch".to_string(),
+                "heap_allocate".to_string(),
+                "fs_read".to_string(),
+                "fs_write".to_string(),
+            ],
+            version: "1.0.0".to_string(),
+            metadata: BTreeMap::new(),
+        };
+
+        let result = orch.execute(&pkg).expect("real fs JS program executes");
+
+        // The write hit the real sandbox filesystem.
+        assert_eq!(
+            std::fs::read(root.join("out.txt")).expect("written file on disk"),
+            b"real effect bytes",
+            "writeFileSync must have produced a real file in the sandbox"
+        );
+
+        // Both host effects were recorded and surfaced on the result — the ledger source.
+        let kinds: Vec<&str> = result
+            .host_effect_transcript
+            .iter()
+            .map(|(request, _)| request.kind())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["fs_write", "fs_read"],
+            "real JS fs ops must surface fs_write then fs_read host effects, got {kinds:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn try_new_rejects_zero_concurrency_envelope() {
         let err = match ExecutionOrchestrator::try_new(OrchestratorConfig {

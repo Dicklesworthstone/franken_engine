@@ -467,6 +467,28 @@ fn run_external_backend(
     }
 }
 
+/// Renders captured `console.*` output the way `node -e` / `bun -e` surface it:
+/// `log`/`info` entries flow to stdout and `warn`/`error` entries to stderr,
+/// each terminated by a newline. This lets the in-process engine backend be
+/// compared against the subprocess runtimes on the same observable (their
+/// console stream) rather than on the engine's internal completion value.
+fn render_console_streams(
+    entries: &[crate::baseline_interpreter::ConsoleEntry],
+) -> (String, String) {
+    use crate::baseline_interpreter::ConsoleLevel;
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    for entry in entries {
+        let target = match entry.level {
+            ConsoleLevel::Log | ConsoleLevel::Info => &mut stdout,
+            ConsoleLevel::Warn | ConsoleLevel::Error => &mut stderr,
+        };
+        target.push_str(&entry.message);
+        target.push('\n');
+    }
+    (stdout, stderr)
+}
+
 fn run_franken_engine_backend(
     source: &str,
     instruction_budget: Option<u64>,
@@ -481,7 +503,12 @@ fn run_franken_engine_backend(
         instruction_budget.map(|budget| format!("instruction_budget_override={budget}"));
     match evaluated {
         Ok(outcome) => {
-            let stdout = outcome.value.clone();
+            // The external backends are `node -e` / `bun -e` subprocesses whose
+            // only observable is their console stream. Surface the in-process
+            // engine's captured `console.*` output the same way so the
+            // structured-value comparison is apples-to-apples; the completion
+            // `value` is retained as supplementary detail.
+            let (stdout, stderr) = render_console_streams(&outcome.console_output);
             let mut diagnostics = vec![format!("route_reason={}", outcome.route_reason)];
             diagnostics.extend(budget_diagnostic.clone());
             DifferentialBackendReceipt {
@@ -493,9 +520,9 @@ fn run_franken_engine_backend(
                 duration_micros: started.elapsed().as_micros(),
                 value: Some(outcome.value),
                 stdout_sha256: sha256_hex(stdout.as_bytes()),
-                stderr_sha256: sha256_hex(b""),
+                stderr_sha256: sha256_hex(stderr.as_bytes()),
                 stdout,
-                stderr: String::new(),
+                stderr,
                 diagnostics,
             }
         }
@@ -1245,10 +1272,12 @@ fn canonical_structured_value(
     if receipt.status != DifferentialBackendStatus::Completed {
         return None;
     }
-    receipt
-        .value
-        .as_deref()
-        .or_else(|| infer_single_stdout_value(canonical_stdout))
+    // Prefer the program's observable console output (matching the `node -e` /
+    // `bun -e` subprocess model the external backends use); fall back to an
+    // explicit completion value only when nothing was printed (e.g. a bare
+    // expression that the in-process lanes can still report a value for).
+    infer_single_stdout_value(canonical_stdout)
+        .or(receipt.value.as_deref())
         .map(canonicalize_js_value)
 }
 
@@ -1658,6 +1687,46 @@ mod tests {
             DifferentialBackendStatus::Completed
         );
         assert_eq!(report.backends[3].value.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn franken_engine_backend_surfaces_console_output_as_stdout() {
+        // Regression (bd-fqlfw.2.4): a program whose only observable is
+        // `console.log` must report that console output as stdout — matching the
+        // `node -e` / `bun -e` subprocess backends — rather than its `undefined`
+        // completion value, otherwise the cross-runtime structured-value
+        // comparison can never reach consensus and no case enters the denominator.
+        let engine = run_franken_engine_backend("console.log(1 + 1);", Some(2_000_000_000));
+        assert_eq!(engine.status, DifferentialBackendStatus::Completed);
+        assert_eq!(engine.stdout, "2\n");
+        assert_eq!(engine.stdout_sha256, sha256_hex(b"2\n"));
+
+        // The engine now shares a structured-value group with a node-style
+        // stdout-only receipt for the same printed value.
+        let report = canonicalize_backend_receipts(&[
+            receipt(
+                DifferentialBackend::NodeLts,
+                DifferentialBackendStatus::Completed,
+                None,
+                "2\n",
+                "",
+                &[],
+            ),
+            engine,
+        ]);
+        let structured = comparison(&report, DifferentialComparisonMode::StructuredValue);
+        assert_eq!(structured.verdict, DifferentialComparisonVerdict::Consensus);
+        assert_eq!(structured.groups.len(), 1);
+        assert!(
+            structured.groups[0]
+                .backends
+                .contains(&DifferentialBackend::FrankenEngine)
+        );
+        assert!(
+            structured.groups[0]
+                .backends
+                .contains(&DifferentialBackend::NodeLts)
+        );
     }
 
     #[test]

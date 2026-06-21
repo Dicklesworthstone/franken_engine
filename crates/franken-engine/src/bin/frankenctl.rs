@@ -472,6 +472,7 @@ struct DifferentialOracleRunArgs {
     case_id: Option<String>,
     timeout_ms: u64,
     out: Option<PathBuf>,
+    engine_budget: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2611,6 +2612,7 @@ fn parse_differential_oracle_run_command(args: &[String]) -> Result<CommandSpec,
     let mut case_id: Option<String> = None;
     let mut timeout_ms = 2_000_u64;
     let mut out: Option<PathBuf> = None;
+    let mut engine_budget: Option<u64> = None;
 
     let mut index = 0usize;
     while index < args.len() {
@@ -2622,6 +2624,12 @@ fn parse_differential_oracle_run_command(args: &[String]) -> Result<CommandSpec,
                     parse_u64(&next_arg(args, &mut index, "--timeout-ms")?, "--timeout-ms")?.max(1)
             }
             "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            "--engine-budget" => {
+                engine_budget = Some(parse_u64(
+                    &next_arg(args, &mut index, "--engine-budget")?,
+                    "--engine-budget",
+                )?)
+            }
             flag => return Err(format!("unknown differential-oracle run flag `{flag}`")),
         }
         index += 1;
@@ -2635,6 +2643,7 @@ fn parse_differential_oracle_run_command(args: &[String]) -> Result<CommandSpec,
             case_id,
             timeout_ms,
             out,
+            engine_budget,
         }),
     }))
 }
@@ -7814,9 +7823,12 @@ fn execute_differential_oracle_run(args: DifferentialOracleRunArgs) -> Result<i3
             .unwrap_or("differential-oracle-case")
             .to_string()
     });
-    let input = DifferentialOracleInput::new(case_id, source)
+    let mut input = DifferentialOracleInput::new(case_id, source)
         .with_source_path(args.input.display().to_string())
         .with_timeout_ms(args.timeout_ms);
+    if let Some(budget) = args.engine_budget {
+        input = input.with_engine_instruction_budget(budget);
+    }
     let report = run_differential_oracle(&input);
 
     if let Some(path) = args.out {
@@ -9715,6 +9727,11 @@ fn differential_oracle_run_usage() -> String {
         "differential-oracle run usage:",
         "  frankenctl differential-oracle run --input <source.js>",
         "      [--case-id <id>] [--timeout-ms <u64>] [--out <report.json>]",
+        "      [--engine-budget <u64>]",
+        "",
+        "  --engine-budget overrides the in-process engine instruction budget so",
+        "  long-running corpus programs can execute (the containment default is",
+        "  intentionally small); node/bun have no analogous cap.",
     ]
     .join("\n")
 }

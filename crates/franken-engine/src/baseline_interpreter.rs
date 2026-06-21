@@ -29487,8 +29487,8 @@ impl QuickJsLane {
         }
     }
 
-    /// Install a sandboxed host-I/O provider (+ optional recorder) for this lane,
-    /// mirroring [`QuickJsLane::set_host_io`] (bd-f5b04.2.7).
+    /// Install a sandboxed host-I/O provider (+ optional recorder) for this lane;
+    /// it is threaded into each `InterpreterCore` this lane creates (bd-f5b04.2.7).
     pub fn set_host_io(
         &mut self,
         provider: Arc<dyn HostIoProvider>,
@@ -29591,8 +29591,8 @@ impl V8Lane {
         }
     }
 
-    /// Install a sandboxed host-I/O provider (+ optional recorder) for this lane;
-    /// it is threaded into each `InterpreterCore` this lane creates (bd-f5b04.2.7).
+    /// Install a sandboxed host-I/O provider (+ optional recorder) for this lane,
+    /// mirroring [`QuickJsLane::set_host_io`] (bd-f5b04.2.7).
     pub fn set_host_io(
         &mut self,
         provider: Arc<dyn HostIoProvider>,

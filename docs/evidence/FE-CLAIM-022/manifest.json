@@ -18,7 +18,7 @@
     "scope": "runtime",
     "state": "observed"
   },
-  "generated_at_utc": "2026-05-21T20:44:00.000000+00:00",
+  "generated_at_utc": "2026-06-21T04:10:31.838893+00:00",
   "inputs": {
     "dependencies": [
       "frankenengine-engine",
@@ -36,12 +36,15 @@
   "outputs": {
     "decision_artifacts": "generated",
     "execution_trace": "deterministic",
-    "verification_result": "pending"
+    "exit_code": 0,
+    "verification_command": "./scripts/run_rgc_lockstep_oracle_pipeline.sh ci",
+    "verification_result": "passed",
+    "verified_at_utc": "2026-06-21T04:10:31.838893+00:00"
   },
   "provenance": {
     "audit_source": "bd-cixqu.9.5",
     "bead_id": "bd-cixqu.9",
-    "generated_by": "matrix_promotion_manual"
+    "generated_by": "reemit_evidence_receipts.py (live gate run)"
   },
   "retention": {
     "backup_required": true,
@@ -52,7 +55,7 @@
   "schema_version": "frankenengine.reproducibility.manifest.v1",
   "source_revision": {
     "branch": "main",
-    "commit": "5030bbfb9e12c5b4e8a7f3c8b6a9e2d1c4f7a3b6e9c2d5f8a1b4c7e0d3f6a9b2",
+    "commit": "12cec3f935f769aeb0b5d99d5665d0f532a1a2e2",
     "repository": "franken_engine"
   },
   "validation": {

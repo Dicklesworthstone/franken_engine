@@ -58,7 +58,7 @@ Operator workflow, failure triage, and comparison steps live in
 | `FE-CLAIM-009` | evidence | `README.md:213` | `observed` | gate refuses OBSERVED state without repro.lock (bd-cixqu.4.3); all OBSERVED rows have reproducibility bundles | `bd-cixqu.4.4` |
 | `FE-CLAIM-010` | performance | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:56-58` | `target` | downgrade until live Node/Bun denominator artifacts replace targeted placeholder throughput evidence | `bd-y6v8s` |
 | `FE-CLAIM-011` | security | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:58` | `observed` | allow observed red-team compromise-rate comparison with baseline validation | `bd-1vwza` |
-| `FE-CLAIM-012` | security | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:59-60` | `observed` | allow observed signal-to-action timestamp computation with latency artifacts | `bd-38mby` |
+| `FE-CLAIM-012` | security | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:59-60` | `target` | downgraded observed->target (CEI B.2): no production-measured containment-latency artifact; the gate fails closed without `CONTAINMENT_LATENCY_METRIC_INPUT` | `bd-38mby` |
 | `FE-CLAIM-013` | replay | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:60` | `observed` | allow observed replay coverage gate plus byte-identical fixed-input CLI artifact proof | `bd-2488a` |
 | `FE-CLAIM-014` | capability | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:61` | `observed` | three named production feature proof bundles ship (IFC declassification, deterministic replay, red-team compromise rate) — F.5 gate `scripts/run_rgc_production_feature_catalog.sh` validates all three with per-feature sha256 manifest hashes | `bd-cixqu.6.6` |
 | `FE-CLAIM-015` | ifc | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:96` | `observed` | allow observed IFC with signed declassification receipts | `bd-dpfvh` |
@@ -68,7 +68,10 @@ Operator workflow, failure triage, and comparison steps live in
 | `FE-CLAIM-019` | optimization | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:636` | `hypothesis` | STAY_HYPOTHESIS (G.10): `optimization_proof_carriers.rs` returns Verified unconditionally — no real model checker or differential oracle | `bd-csnqb` |
 | `FE-CLAIM-020` | policy | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:744` | `hypothesis` | STAY_HYPOTHESIS (G.10): end-to-end compiler composes 018/019/021 and inherits their simulated verdicts | `bd-csnqb` |
 | `FE-CLAIM-021` | policy | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:828-898` | `hypothesis` | STAY_HYPOTHESIS (G.10): Policy Theorem Engine monotonicity/non-interference/attenuation checks are simulated, not solver-backed | `bd-csnqb` |
+| `FE-CLAIM-022` | runtime | `README.md:1405` | `observed` | cross-runtime lockstep oracle (Node/Bun differential harness, divergence taxonomy, RGC gate + replay); the real Node lane runs against `/usr/bin/nodejs` (CEI B.2) | `bd-cixqu.9` |
+| `FE-CLAIM-023` | reproducibility | `README.md:1759` | `target` | downgraded observed->target (CEI B.2): cross-platform identical-hash evidence (Linux/macOS/Windows × x64/arm64) requires the multi-platform CI matrix; a single host backs only the Linux×x64 lane | `bd-cixqu.11.7` |
 | `FE-CLAIM-024` | integration | `README.md:2071` | `observed` | sibling-repo integration verification across all 6 declared siblings (bd-cixqu.13.1 full-integration lane records pass/skipped/failed per sibling) | `bd-cixqu.13.3` |
+| `FE-CLAIM-025` | evidence | `README.md:2482` | `observed` | CEI H.2 reflexive soundness: the integrity capstone composes the A.1/A.3 lattice + H.1 Merkle ledger + wording gate + D.3 Test262 posture; 025's own row is ledger-committed, the A.5 adversarial corpus rejects over-promotion fixtures, and the G.3 no-mock drill reddens the capstone on any injected over-promotion | `bd-sde5e.8.2` |
 
 ## Failure Output
 

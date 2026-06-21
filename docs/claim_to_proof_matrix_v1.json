@@ -140,7 +140,7 @@
     {
       "actual_wording_state": "target",
       "allowed_state": "target",
-      "artifact_path": null,
+      "artifact_path": "docs/evidence/FE-CLAIM-TEST262",
       "claim_id": "FE-CLAIM-TEST262",
       "claim_scope": "conformance",
       "claim_text": "Test262 conformance via a provisional checked-in es2020-normative vector subset; full-suite conformance is TARGETED.",
@@ -476,17 +476,17 @@
       "verification_command": "./scripts/run_rgc_lockstep_oracle_pipeline.sh ci"
     },
     {
-      "actual_wording_state": "observed",
-      "allowed_state": "observed",
+      "actual_wording_state": "target",
+      "allowed_state": "target",
       "artifact_path": "docs/evidence/FE-CLAIM-023",
       "claim_id": "FE-CLAIM-023",
       "claim_scope": "reproducibility",
       "claim_text": "Cross-platform reproducibility: Linux×x64, macOS×arm64, Windows×x64 produce identical content hashes from same input.",
-      "decision": "allow_observed",
-      "downgrade_text": "Cross-platform deterministic execution validated across primary platforms with reproducible artifacts.",
+      "decision": "downgrade_target",
+      "downgrade_text": "Target: cross-platform reproducibility (Linux×x64, macOS×arm64, Windows×x64 identical content hashes); single-host runs validate the Linux×x64 lane only — full cross-platform identical-hash evidence requires the multi-platform CI matrix.",
       "freshness_days": null,
       "owning_bead": "bd-cixqu.11.7",
-      "reason": "Cross-platform matrix gate validates deterministic execution across Linux, macOS, and Windows platforms with content hash verification.",
+      "reason": "Downgraded observed->target under CEI B.2 (bd-sde5e.2.2, SwiftSquirrel): the identical-hash claim spans Linux/macOS/Windows × x64/arm64, but a single host can only produce the Linux×x64 manifest. The committed receipt was backfill/pending (never a live multi-platform pass) and evaluate_matrix requires per-target manifests from a real 6-platform CI matrix. The gate logic is correct (run_mode recursion fixed in 24d79417) and would pass in CI, but OBSERVED cannot be honestly backed single-host. Precedent: FE-CLAIM-012.",
       "source_path": "README.md",
       "source_span": {
         "end_line": 1759,
@@ -513,6 +513,26 @@
         "start_line": 2107
       },
       "verification_command": "./scripts/test_standalone_build.sh full-integration"
+    },
+    {
+      "actual_wording_state": "observed",
+      "allowed_state": "observed",
+      "artifact_path": "docs/evidence/FE-CLAIM-025",
+      "claim_id": "FE-CLAIM-025",
+      "claim_scope": "evidence",
+      "claim_text": "Reflexive claim-evidence integrity: the integrity gate is itself a gated claim, its verdict is committed in a Merkle ledger, and a no-mock drill demonstrates it cannot be satisfied by fixtures.",
+      "decision": "allow_observed",
+      "downgrade_text": "Target: reflexive claim-evidence integrity -- the integrity gate as a self-checked, ledger-committed claim.",
+      "freshness_days": null,
+      "owning_bead": "bd-sde5e.8.2",
+      "reason": "CEI H.2: the claim-evidence integrity capstone (scripts/run_claim_evidence_integrity_capstone.sh) composes the A.1/A.3 bidirectional lattice, the H.1 Merkle-committed Claim-Evidence Ledger, the claim-to-proof wording gate, and the D.3 Test262 posture gate. FE-CLAIM-025's own row is committed in that ledger, the A.5 adversarial corpus rejects over-promotion fixtures, and the G.3 no-mock drill (scripts/e2e/claim_evidence_integrity_capstone_drift.sh) demonstrates the capstone goes red on any injected over-promotion and green only when all sub-gates hold.",
+      "source_path": "README.md",
+      "source_span": {
+        "end_line": 2482,
+        "must_contain": "Reflexive claim-evidence integrity",
+        "start_line": 2482
+      },
+      "verification_command": "cargo test -p frankenengine-engine --test claim_evidence_adversarial_corpus"
     }
   ],
   "freshness_eprocess_policy": {

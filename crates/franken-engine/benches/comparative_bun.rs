@@ -53,34 +53,39 @@ struct Workload {
     expected_stdout: &'static str,
 }
 
+// Loop bounds are sized to complete within frankenctl's default containment
+// instruction budget (the lockstep oracle's job is cross-runtime differential
+// correctness, not throughput magnitude). `frankenctl run` enforces the security
+// containment budget by design; benchmark workloads run under that real default
+// rather than an artificially raised ceiling.
 const WORKLOADS: &[Workload] = &[
     Workload {
         id: "numeric_loop",
         source: r#"
 var i = 0;
 var sum = 0;
-while (i < 10000) {
+while (i < 5000) {
   sum = sum + i;
   i = i + 1;
 }
 console.log(sum);
 sum;
 "#,
-        expected_stdout: "49995000",
+        expected_stdout: "12497500",
     },
     Workload {
         id: "basic_arithmetic",
         source: r#"
 var i = 0;
 var acc = 1;
-while (i < 20000) {
+while (i < 3000) {
   acc = (acc * 17 + i) % 1000003;
   i = i + 1;
 }
 console.log(acc);
 acc;
 "#,
-        expected_stdout: "120504",
+        expected_stdout: "994493",
     },
     Workload {
         id: "json_roundtrip",

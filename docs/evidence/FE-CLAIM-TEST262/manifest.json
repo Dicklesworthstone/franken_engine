@@ -1,0 +1,61 @@
+{
+  "artifacts": {
+    "bundle_path": "artifacts/reproducibility_bundles/FE-CLAIM-TEST262",
+    "env_json": "env.json",
+    "manifest_json": "manifest.json",
+    "primary": "docs/test262_compatibility_pass_rate_v1.json",
+    "repro_lock": "repro.lock"
+  },
+  "canonicalization": {
+    "encoding": "utf-8",
+    "format": "json",
+    "key_ordering": "lexicographic",
+    "newline": "lf"
+  },
+  "claim": {
+    "id": "FE-CLAIM-TEST262",
+    "original_artifact_path": "docs/test262_compatibility_pass_rate_v1.json",
+    "scope": "conformance",
+    "state": "target"
+  },
+  "generated_at_utc": "2026-06-21T04:24:16.787673+00:00",
+  "inputs": {
+    "dependencies": [
+      "docs/test262_compatibility_pass_rate_v1.json",
+      "docs/claim_to_proof_matrix_v1.json"
+    ],
+    "source_files": [
+      "docs/test262_compatibility_pass_rate_v1.json",
+      "crates/franken-engine/tests/test262_release_gate.rs",
+      "scripts/run_test262_posture_consistency.sh"
+    ]
+  },
+  "manifest_id": "manifest-fe-claim-test262-20260621",
+  "outputs": {
+    "decision_artifacts": "generated",
+    "execution_trace": "deterministic",
+    "verification_result": "pending"
+  },
+  "provenance": {
+    "audit_source": "bd-sde5e.4.1",
+    "bead_id": "bd-sde5e.4.1",
+    "generated_by": "SwiftSquirrel (CEI: back the targeted Test262 posture with a git-tracked bundle)"
+  },
+  "retention": {
+    "backup_required": true,
+    "immutable": true,
+    "policy": "permanent"
+  },
+  "schema_hash": "sha256:8f9a0b1c2d3e4f5678abc9def0123456789abcdef0123456789abcdef01234567",
+  "schema_version": "frankenengine.reproducibility.manifest.v1",
+  "source_revision": {
+    "branch": "main",
+    "commit": "7521b74d1e311e005ea734c5fff0353bf79dda10",
+    "repository": "franken_engine"
+  },
+  "validation": {
+    "hash_verified": true,
+    "provenance_linked": true,
+    "schema_validated": true
+  }
+}

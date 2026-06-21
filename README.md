@@ -1756,7 +1756,7 @@ The project ships a layered test stack; each layer answers a different question.
 | **Mock-leak audit** | `scripts/run_rgc_zero_placeholder_gate.sh ci` + `mock-code-finder` skill | Refuses release if protected surfaces contain placeholder/mock/stub code that is not explicitly waived. |
 | **Claim-language gate** | `./scripts/run_claim_to_proof_matrix_gate.sh ci` | Refuses README/doc edits whose actual wording state is stronger than the matrix's `allowed_state`. |
 | **Determinism harness** | `crates/franken-metamorphic/` runners, `scripts/run_deterministic_e2e_harness.sh` | Equivalent re-execution under varied environments. |
-| **Cross-platform matrix** | `scripts/run_rgc_cross_platform_matrix_gate.sh ci` | Linux / macOS / Windows × x64 / arm64 reproducibility validation. Claim FE-CLAIM-023 in the claim-to-proof matrix. |
+| **Cross-platform matrix** | `scripts/run_rgc_cross_platform_matrix_gate.sh ci` | TARGETED (FE-CLAIM-023): Linux / macOS / Windows × x64 / arm64 identical-hash reproducibility; the single-host gate validates the Linux×x64 lane, full cross-platform identical-hash evidence requires the multi-platform CI matrix. |
 | **Compiler/lint/format gates** | `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check` | Required after every substantive change per `AGENTS.md`. |
 
 The full layered stack is what enforces the project's *evidence-before-claims* posture: every README assertion is backed by at least one of these layers.
@@ -2474,6 +2474,12 @@ Reproducible execution and CLI behaviour across the supported build targets are 
 ```
 
 The contract — target list, required README fragments, and drift severity classes — is pinned in [`docs/rgc_cross_platform_matrix_v1.json`](./docs/rgc_cross_platform_matrix_v1.json), and each run writes a content-addressed bundle whose verdict lives in `artifacts/rgc_cross_platform_matrix/<timestamp>/matrix_summary.json`.
+
+---
+
+## Claim-Evidence Integrity (Reflexive Soundness)
+
+Reflexive claim-evidence integrity (`FE-CLAIM-025`) means the claim-to-proof discipline is applied to itself: the integrity gate is itself a gated claim. The capstone meta-gate ([`scripts/run_claim_evidence_integrity_capstone.sh`](./scripts/run_claim_evidence_integrity_capstone.sh)) composes the bidirectional lattice (matrix asserted-state ≤ committed evidence tier), the Merkle-committed Claim-Evidence Ledger (a silent leaf edit moves the root and fails closed), the README/matrix wording gate, and the Test262 posture gate. Its own soundness row is committed in the same ledger it checks, and a no-mock acceptance drill ([`scripts/e2e/claim_evidence_integrity_capstone_drift.sh`](./scripts/e2e/claim_evidence_integrity_capstone_drift.sh)) demonstrates the gate cannot be satisfied by fixtures. See the [`docs/CLAIM_EVIDENCE_INTEGRITY_CAPSTONE_RUNBOOK.md`](./docs/CLAIM_EVIDENCE_INTEGRITY_CAPSTONE_RUNBOOK.md).
 
 ---
 

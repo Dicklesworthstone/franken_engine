@@ -23,9 +23,6 @@ use crate::baseline_interpreter::{
     ConsoleEntry, ExecutionResult, HookAction, InterpreterConfig, InterpreterError,
     InterpreterHook, LaneChoice, LaneReason, LaneRouter, RoutedResult,
 };
-use frankenengine_extension_host::host_io::{
-    HostIoOutcome, HostIoProvider, HostIoRecorder, HostIoRequest,
-};
 use crate::bayesian_posterior::{
     BayesianPosteriorUpdater, Evidence, Posterior, RiskState, UpdateResult,
 };
@@ -81,6 +78,9 @@ use crate::tropical_semiring::{
 };
 use crate::ts_normalization::{
     SourceIngestionSummary, TsNormalizationError, prepare_source_entry_for_public_entrypoints,
+};
+use frankenengine_extension_host::host_io::{
+    HostIoOutcome, HostIoProvider, HostIoRecorder, HostIoRequest,
 };
 
 // Canonical baseline anchors for the orchestrator-tuning regression pin
@@ -3048,6 +3048,76 @@ mod tests {
             kinds,
             vec!["fs_write", "fs_read"],
             "real JS fs ops must surface fs_write then fs_read host effects, got {kinds:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// bd-1xl17.a (binding form): the idiomatic `const fs = require('fs'); ...`
+    /// binding form — not only the inline `require('fs').readFileSync` form —
+    /// lowers to `fs:` HostCalls that perform real sandboxed I/O and surface a
+    /// non-empty host-effect transcript. Mock-free end-to-end through
+    /// `ExecutionOrchestrator::execute` (real parser/lowering + SandboxedHostIo),
+    /// proving the usage-gated fs-alias lowering reaches the host-effect ledger.
+    #[test]
+    fn binding_form_const_fs_require_produces_host_effects_bd_1xl17_a() {
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+
+        let mut root = std::env::temp_dir();
+        root.push(format!(
+            "frankenengine_e2e_fs_binding_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+
+        let mut orch = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        orch.set_host_io(provider, Some(recorder_dyn));
+
+        // Idiomatic binding form: `const fs = require('fs')` then method calls on
+        // the alias (the most common real-world shape).
+        let pkg = ExtensionPackage {
+            extension_id: "fs-e2e-binding".to_string(),
+            source: "const fs = require('fs');\n\
+                     fs.writeFileSync('out.txt', 'real effect bytes');\n\
+                     fs.readFileSync('out.txt');\n"
+                .to_string(),
+            source_file: None,
+            capabilities: vec![
+                "vm_dispatch".to_string(),
+                "heap_allocate".to_string(),
+                "fs_read".to_string(),
+                "fs_write".to_string(),
+            ],
+            version: "1.0.0".to_string(),
+            metadata: BTreeMap::new(),
+        };
+
+        let result = orch
+            .execute(&pkg)
+            .expect("real fs JS binding-form program executes");
+
+        // The write hit the real sandbox filesystem.
+        assert_eq!(
+            std::fs::read(root.join("out.txt")).expect("written file on disk"),
+            b"real effect bytes",
+            "binding-form writeFileSync must have produced a real file in the sandbox"
+        );
+
+        // Both host effects were recorded and surfaced on the result.
+        let kinds: Vec<&str> = result
+            .host_effect_transcript
+            .iter()
+            .map(|(request, _)| request.kind())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["fs_write", "fs_read"],
+            "binding-form fs ops must surface fs_write then fs_read host effects, got {kinds:?}"
         );
 
         let _ = std::fs::remove_dir_all(&root);

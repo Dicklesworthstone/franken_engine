@@ -575,6 +575,16 @@ pub fn lower_ir0_to_ir1(
     let mut binding_lookup = BTreeMap::<String, BindingId>::new();
     let declared_root_bindings =
         reserve_root_scope_bindings(&ir0.tree.body, &mut binding_lookup, &mut binding_index);
+    // bd-1xl17.a: record fs-module binding aliases (`const fs = require('fs')`
+    // that are actually used as `fs.readFileSync/writeFileSync`) as NUL-sentinels
+    // in binding_lookup, so the binding form lowers to fs: HostCalls just like the
+    // inline `require('fs').readFileSync` form. Gated on usage so a bare/unused
+    // `const fs = require('fs')` still hits the ambient-authority denial. The
+    // sentinel value is unused — its presence is the signal; the NUL-prefixed key
+    // can never collide with a real binding name.
+    for alias in confirmed_fs_module_aliases(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(fs_module_alias_sentinel(&alias), 0);
+    }
     let mut synthetic_export_index = 0u32;
     let mut synthetic_import_index = 0u32;
     let mut label_counter = 0u32;
@@ -1273,14 +1283,13 @@ impl LabelContext {
             }) {
                 frame.break_target = via_label;
             }
-            if let Some(continue_target) = frame.continue_target {
-                if let Some(via_label) =
+            if let Some(continue_target) = frame.continue_target
+                && let Some(via_label) =
                     continue_forwarders.iter().find_map(|(via_label, actual)| {
                         (*actual == continue_target).then_some(*via_label)
                     })
-                {
-                    frame.continue_target = Some(via_label);
-                }
+            {
+                frame.continue_target = Some(via_label);
             }
         }
         child
@@ -1941,16 +1950,36 @@ fn lower_statement_to_ir1_with_flow(
 
                 // Lower the initializer expression (pushes value onto stack).
                 if let Some(init) = &d.initializer {
-                    lower_expression_to_ir1(
-                        init,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        scope_id,
-                        label_counter,
-                        span_table,
-                    )?;
+                    // bd-1xl17.a: when `<id> = require('fs')` aliases the fs module
+                    // AND the alias was confirmed at pre-scan (used as an fs host
+                    // method; the NUL-sentinel is present), bind `id` to `undefined`
+                    // and SKIP lowering the inner `require('fs')` — which would
+                    // otherwise hit the always-deny ambient-authority gate and the
+                    // `ModuleNotFound`-faulting `module:require` hostcall. The fs
+                    // operations are recognized + capability-gated at the
+                    // `id.readFileSync/writeFileSync` call sites, exactly like the
+                    // inline `require('fs').readFileSync` form. A bare/unused
+                    // `const fs = require('fs')` is not recorded, so it still hits
+                    // the ambient denial (preserving that contract).
+                    if let BindingPattern::Identifier(alias) = &d.pattern
+                        && is_require_fs_module_initializer(init, binding_lookup)
+                        && binding_lookup.contains_key(&fs_module_alias_sentinel(alias))
+                    {
+                        ops.push(Ir1Op::LoadLiteral {
+                            value: Ir1Literal::Undefined,
+                        });
+                    } else {
+                        lower_expression_to_ir1(
+                            init,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            label_counter,
+                            span_table,
+                        )?;
+                    }
                 } else {
                     ops.push(Ir1Op::LoadLiteral {
                         value: Ir1Literal::Undefined,
@@ -8551,7 +8580,7 @@ fn lower_expression_to_ir1_inner(
                 });
                 return Ok(());
             }
-            if let Some(capability) = fs_builtin_call_capability(callee) {
+            if let Some(capability) = fs_builtin_call_capability(callee, binding_lookup) {
                 // bd-1xl17: inline `require('fs').readFileSync(path)` /
                 // `require('fs').writeFileSync(path, data)` (Sync) lower to an
                 // `fs:`-tagged HostCall so the interpreter's host-I/O seam performs
@@ -11019,19 +11048,205 @@ fn console_builtin_call_capability(
     }
 }
 
-/// Recognize an inline `require('fs').readFileSync(path)` /
-/// `require('fs').writeFileSync(path, data)` (or the `node:fs` specifier) call and
-/// return its `fs:`-prefixed hostcall capability so the call lowers to a real,
-/// capability-gated host effect instead of a `CallMethod` that would fault on the
-/// (non-existent) fs module object (bd-1xl17).
+/// Sentinel key recording that `name` is bound to the `fs`/`node:fs` module via
+/// `const <name> = require('fs')` (bd-1xl17.a). It is stored in the lowering
+/// `binding_lookup`; the leading NUL byte cannot occur in a JS identifier, so the
+/// sentinel never collides with or shadows a real binding lookup. This lets the
+/// syntactic fs lowering recognize the *binding* form `fs.readFileSync(path)` in
+/// addition to the *inline* form `require('fs').readFileSync(path)` without
+/// threading a new provenance map through the entire IR1 lowering recursion.
+fn fs_module_alias_sentinel(name: &str) -> String {
+    format!("\0fsmod\0{name}")
+}
+
+/// True when `expr` is exactly `require('fs')` / `require('node:fs')` with an
+/// unshadowed `require` — the initializer shape that aliases the fs module in
+/// `const fs = require('fs')` (bd-1xl17.a).
+fn is_require_fs_module_initializer(
+    expr: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    let Expression::Call {
+        callee, arguments, ..
+    } = expr
+    else {
+        return false;
+    };
+    if !matches!(callee.as_ref(), Expression::Identifier(name)
+        if name == "require" && !binding_lookup.contains_key(name.as_str()))
+    {
+        return false;
+    }
+    matches!(
+        arguments.as_slice(),
+        [Expression::StringLiteral(spec)] if spec == "fs" || spec == "node:fs"
+    )
+}
+
+/// True when `callee` is a non-computed member access `<obj>.readFileSync` /
+/// `.writeFileSync` whose object identifier is in `alias_names` — i.e. a
+/// recognized synchronous fs host method call on a `const fs = require('fs')`
+/// alias (bd-1xl17.a).
+fn is_fs_alias_method_callee(callee: &Expression, alias_names: &BTreeSet<String>) -> bool {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee
+    else {
+        return false;
+    };
+    let Expression::Identifier(obj) = object.as_ref() else {
+        return false;
+    };
+    if !alias_names.contains(obj) {
+        return false;
+    }
+    matches!(property.as_ref(),
+        Expression::Identifier(m) | Expression::StringLiteral(m)
+            if m == "readFileSync" || m == "writeFileSync")
+}
+
+/// Recursively scan `expr` for a call whose callee is a recognized fs host method
+/// on one of `alias_names` (bd-1xl17.a usage-lookahead). Function/arrow and class
+/// bodies and object literals are treated as opaque: a usage buried inside one is
+/// conservatively NOT detected, so the corresponding `const fs = require('fs')`
+/// falls through to the existing ambient-authority rejection. This is
+/// fail-closed by design — it never widens authority, it only declines to
+/// recognize the fs binding form in less common syntactic positions.
+fn expr_uses_fs_alias_method(expr: &Expression, alias_names: &BTreeSet<String>) -> bool {
+    match expr {
+        Expression::Call {
+            callee, arguments, ..
+        }
+        | Expression::OptionalCall {
+            callee, arguments, ..
+        } => {
+            is_fs_alias_method_callee(callee, alias_names)
+                || expr_uses_fs_alias_method(callee, alias_names)
+                || arguments
+                    .iter()
+                    .any(|a| expr_uses_fs_alias_method(a, alias_names))
+        }
+        Expression::New { callee, arguments } => {
+            expr_uses_fs_alias_method(callee, alias_names)
+                || arguments
+                    .iter()
+                    .any(|a| expr_uses_fs_alias_method(a, alias_names))
+        }
+        Expression::Member {
+            object, property, ..
+        }
+        | Expression::OptionalMember {
+            object, property, ..
+        } => {
+            expr_uses_fs_alias_method(object, alias_names)
+                || expr_uses_fs_alias_method(property, alias_names)
+        }
+        Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
+            expr_uses_fs_alias_method(left, alias_names)
+                || expr_uses_fs_alias_method(right, alias_names)
+        }
+        Expression::Unary { argument, .. }
+        | Expression::Await(argument)
+        | Expression::SpreadElement(argument) => {
+            expr_uses_fs_alias_method(argument, alias_names)
+        }
+        Expression::Conditional {
+            test,
+            consequent,
+            alternate,
+        } => {
+            expr_uses_fs_alias_method(test, alias_names)
+                || expr_uses_fs_alias_method(consequent, alias_names)
+                || expr_uses_fs_alias_method(alternate, alias_names)
+        }
+        Expression::Yield {
+            argument: Some(argument),
+            ..
+        } => expr_uses_fs_alias_method(argument, alias_names),
+        Expression::ArrayLiteral(elements) => elements
+            .iter()
+            .flatten()
+            .any(|e| expr_uses_fs_alias_method(e, alias_names)),
+        Expression::TemplateLiteral { expressions, .. } => expressions
+            .iter()
+            .any(|e| expr_uses_fs_alias_method(e, alias_names)),
+        _ => false,
+    }
+}
+
+/// Compute the set of identifier names that are BOTH bound via
+/// `const/let/var <name> = require('fs')` / `require('node:fs')` AND used as a
+/// recognized fs host method (`<name>.readFileSync/writeFileSync(...)`) somewhere
+/// in a top-level expression or variable initializer of `body` (bd-1xl17.a
+/// usage-lookahead).
 ///
-/// Recognition is purely syntactic on the receiver shape: there is no real `fs`
-/// heap object, and `require('fs')` resolves to `ModuleNotFound` at runtime, so
-/// the binding form `const fs = require('fs'); fs.readFileSync(...)` and ESM/async
-/// variants are intentionally out of scope here (tracked as bd-1xl17.a–.d). Only
-/// the synchronous `readFileSync`/`writeFileSync` methods on an inline
-/// `require('fs')`/`require('node:fs')` receiver are matched.
-fn fs_builtin_call_capability(callee: &Expression) -> Option<&'static str> {
+/// Only such names are aliased, so that the fs *binding* form lowers to fs:
+/// HostCalls; a `const fs = require('fs')` that is never used as an fs method is
+/// deliberately left to the existing ambient-authority denial (preserving the
+/// `require(...)` rejection contract for bare/unused requires without any test
+/// changes). The usage scan covers top-level positions and fails closed for
+/// deeper nesting — see [`expr_uses_fs_alias_method`].
+fn confirmed_fs_module_aliases(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for stmt in body {
+        if let Statement::VariableDeclaration(vd) = stmt {
+            for d in &vd.declarations {
+                if let (BindingPattern::Identifier(name), Some(init)) = (&d.pattern, &d.initializer)
+                    && is_require_fs_module_initializer(init, binding_lookup)
+                {
+                    candidates.insert(name.clone());
+                }
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return candidates;
+    }
+
+    let mut used = BTreeSet::new();
+    for name in &candidates {
+        let single: BTreeSet<String> = std::iter::once(name.clone()).collect();
+        let is_used = body.iter().any(|stmt| match stmt {
+            Statement::Expression(es) => expr_uses_fs_alias_method(&es.expression, &single),
+            Statement::VariableDeclaration(vd) => vd.declarations.iter().any(|d| {
+                d.initializer
+                    .as_ref()
+                    .is_some_and(|init| expr_uses_fs_alias_method(init, &single))
+            }),
+            _ => false,
+        });
+        if is_used {
+            used.insert(name.clone());
+        }
+    }
+    used
+}
+
+/// Recognize an idiomatic synchronous fs read/write call and return its `fs:`
+/// hostcall capability so it lowers to a real, capability-gated host effect
+/// instead of a `CallMethod` that would fault on the (non-existent) fs module
+/// object (bd-1xl17 + bd-1xl17.a). Two receiver shapes are matched, both purely
+/// syntactic (there is no real `fs` heap object; `require('fs')` resolves to
+/// `ModuleNotFound` at runtime):
+///   * inline:  `require('fs').readFileSync(path)` / `.writeFileSync(path, data)`
+///   * binding: `fs.readFileSync(path)` where `fs` was aliased via
+///     `const fs = require('fs')` — recorded as a NUL-sentinel in
+///     `binding_lookup` by the program pre-scan, gated on actual usage so the
+///     ambient-authority denial of bare/unused requires is preserved.
+///
+/// Only the `fs`/`node:fs` specifier and the synchronous `readFileSync` /
+/// `writeFileSync` methods are matched (async / ESM / return-shape variants are
+/// tracked separately as bd-1xl17.b–.d).
+fn fs_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
     let Expression::Member {
         object,
         property,
@@ -11041,23 +11256,26 @@ fn fs_builtin_call_capability(callee: &Expression) -> Option<&'static str> {
     else {
         return None;
     };
-    // Receiver must be an inline `require('fs')` / `require('node:fs')` call.
-    let Expression::Call {
-        callee: require_callee,
-        arguments: require_args,
-        ..
-    } = object.as_ref()
-    else {
-        return None;
+    let receiver_is_fs_module = match object.as_ref() {
+        // inline `require('fs')` / `require('node:fs')` receiver.
+        Expression::Call {
+            callee: require_callee,
+            arguments: require_args,
+            ..
+        } => {
+            matches!(require_callee.as_ref(), Expression::Identifier(name) if name == "require")
+                && matches!(
+                    require_args.as_slice(),
+                    [Expression::StringLiteral(spec)] if spec == "fs" || spec == "node:fs"
+                )
+        }
+        // binding form: identifier aliased to the fs module (bd-1xl17.a).
+        Expression::Identifier(alias) => {
+            binding_lookup.contains_key(&fs_module_alias_sentinel(alias))
+        }
+        _ => false,
     };
-    if !matches!(require_callee.as_ref(), Expression::Identifier(name) if name == "require") {
-        return None;
-    }
-    let is_fs_specifier = matches!(
-        require_args.as_slice(),
-        [Expression::StringLiteral(spec)] if spec == "fs" || spec == "node:fs"
-    );
-    if !is_fs_specifier {
+    if !receiver_is_fs_module {
         return None;
     }
     let method = match property.as_ref() {

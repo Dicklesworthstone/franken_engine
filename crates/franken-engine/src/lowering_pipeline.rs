@@ -585,6 +585,18 @@ pub fn lower_ir0_to_ir1(
     for alias in confirmed_fs_module_aliases(&ir0.tree.body, &binding_lookup) {
         binding_lookup.insert(fs_module_alias_sentinel(&alias), 0);
     }
+    // bd-1xl17.b: ESM fs imports. Namespace/default fs imports used as
+    // `fs.readFileSync/...` reuse the same member-call sentinel above so the
+    // existing recognizer (`fs_builtin_call_capability`) handles their call sites
+    // unchanged; named fs imports used as direct calls get a capability-encoding
+    // sentinel consumed by `fs_named_import_call_capability`. Both are
+    // usage-gated, leaving bare/unused fs imports at their current behavior.
+    for alias in confirmed_fs_namespace_import_aliases(&ir0.tree.body) {
+        binding_lookup.insert(fs_module_alias_sentinel(&alias), 0);
+    }
+    for (local, capability) in confirmed_fs_named_imports(&ir0.tree.body) {
+        binding_lookup.insert(fs_named_import_sentinel(&local, capability), 0);
+    }
     let mut synthetic_export_index = 0u32;
     let mut synthetic_import_index = 0u32;
     let mut label_counter = 0u32;
@@ -640,7 +652,20 @@ pub fn lower_ir0_to_ir1(
                         ir1.ops.push(Ir1Op::Pop);
                     }
                     ImportClause::Namespace { local } => {
-                        ir1.ops.push(Ir1Op::ImportModule { specifier });
+                        // bd-1xl17.b: a confirmed fs namespace alias used as
+                        // `local.readFileSync/...` binds to undefined and skips the
+                        // module load (no real fs module — it would fault). The fs
+                        // ops are recognized + capability-gated at the member-call
+                        // sites, mirroring the require-binding form (bd-1xl17.a).
+                        if is_fs_module_specifier(&import.source)
+                            && binding_lookup.contains_key(&fs_module_alias_sentinel(local))
+                        {
+                            ir1.ops.push(Ir1Op::LoadLiteral {
+                                value: Ir1Literal::Undefined,
+                            });
+                        } else {
+                            ir1.ops.push(Ir1Op::ImportModule { specifier });
+                        }
                         let binding_id = alloc_import_binding(
                             local,
                             &mut bindings,
@@ -651,10 +676,23 @@ pub fn lower_ir0_to_ir1(
                         ir1.ops.push(Ir1Op::Pop);
                     }
                     ImportClause::Default { local } => {
-                        ir1.ops.push(Ir1Op::ImportModule { specifier });
-                        ir1.ops.push(Ir1Op::GetProperty {
-                            key: Ir1PropertyKey::Static("default".to_string()),
-                        });
+                        // bd-1xl17.b: a confirmed fs default import
+                        // (`import fs from 'node:fs'`) used as `fs.readFileSync/...`
+                        // binds to undefined and skips both the module load and the
+                        // `default` extraction (they would fault); recognized at the
+                        // member-call sites like the namespace/binding forms.
+                        if is_fs_module_specifier(&import.source)
+                            && binding_lookup.contains_key(&fs_module_alias_sentinel(local))
+                        {
+                            ir1.ops.push(Ir1Op::LoadLiteral {
+                                value: Ir1Literal::Undefined,
+                            });
+                        } else {
+                            ir1.ops.push(Ir1Op::ImportModule { specifier });
+                            ir1.ops.push(Ir1Op::GetProperty {
+                                key: Ir1PropertyKey::Static("default".to_string()),
+                            });
+                        }
                         let binding_id = alloc_import_binding(
                             local,
                             &mut bindings,
@@ -665,32 +703,66 @@ pub fn lower_ir0_to_ir1(
                         ir1.ops.push(Ir1Op::Pop);
                     }
                     ImportClause::Named { specifiers } => {
-                        let temp_binding_id = make_temp_binding(
-                            &mut synthetic_import_index,
-                            &mut bindings,
-                            &mut binding_lookup,
-                            &mut binding_index,
-                        )?;
-                        ir1.ops.push(Ir1Op::ImportModule { specifier });
-                        ir1.ops.push(Ir1Op::StoreBinding {
-                            binding_id: temp_binding_id,
-                        });
-                        ir1.ops.push(Ir1Op::Pop);
-                        for spec in specifiers {
-                            ir1.ops.push(Ir1Op::LoadBinding {
-                                binding_id: temp_binding_id,
+                        // bd-1xl17.b: when this is a `... from 'node:fs'` import with
+                        // at least one confirmed fs function used as a direct call
+                        // (`readFileSync(...)`), skip the module load (it would fault —
+                        // there is no real fs module) and bind every local to
+                        // undefined. Confirmed fs functions are recognized + gated at
+                        // their direct-call sites; any other name imported from
+                        // node:fs is left undefined (fail-closed — invoking it faults,
+                        // exactly as the module load would have).
+                        let fs_named_import = is_fs_module_specifier(&import.source)
+                            && specifiers.iter().any(|spec| {
+                                binding_lookup.contains_key(&fs_named_import_sentinel(
+                                    &spec.local_name,
+                                    "fs:read",
+                                )) || binding_lookup.contains_key(&fs_named_import_sentinel(
+                                    &spec.local_name,
+                                    "fs:write",
+                                ))
                             });
-                            ir1.ops.push(Ir1Op::GetProperty {
-                                key: Ir1PropertyKey::Static(spec.import_name.clone()),
-                            });
-                            let binding_id = alloc_import_binding(
-                                &spec.local_name,
+                        if fs_named_import {
+                            for spec in specifiers {
+                                ir1.ops.push(Ir1Op::LoadLiteral {
+                                    value: Ir1Literal::Undefined,
+                                });
+                                let binding_id = alloc_import_binding(
+                                    &spec.local_name,
+                                    &mut bindings,
+                                    &mut binding_lookup,
+                                    &mut binding_index,
+                                )?;
+                                ir1.ops.push(Ir1Op::StoreBinding { binding_id });
+                                ir1.ops.push(Ir1Op::Pop);
+                            }
+                        } else {
+                            let temp_binding_id = make_temp_binding(
+                                &mut synthetic_import_index,
                                 &mut bindings,
                                 &mut binding_lookup,
                                 &mut binding_index,
                             )?;
-                            ir1.ops.push(Ir1Op::StoreBinding { binding_id });
+                            ir1.ops.push(Ir1Op::ImportModule { specifier });
+                            ir1.ops.push(Ir1Op::StoreBinding {
+                                binding_id: temp_binding_id,
+                            });
                             ir1.ops.push(Ir1Op::Pop);
+                            for spec in specifiers {
+                                ir1.ops.push(Ir1Op::LoadBinding {
+                                    binding_id: temp_binding_id,
+                                });
+                                ir1.ops.push(Ir1Op::GetProperty {
+                                    key: Ir1PropertyKey::Static(spec.import_name.clone()),
+                                });
+                                let binding_id = alloc_import_binding(
+                                    &spec.local_name,
+                                    &mut bindings,
+                                    &mut binding_lookup,
+                                    &mut binding_index,
+                                )?;
+                                ir1.ops.push(Ir1Op::StoreBinding { binding_id });
+                                ir1.ops.push(Ir1Op::Pop);
+                            }
                         }
                     }
                     ImportClause::DefaultAndNamed {
@@ -8613,6 +8685,35 @@ fn lower_expression_to_ir1_inner(
                     return Ok(());
                 }
             }
+            if let Some(capability) = fs_named_import_call_capability(callee, binding_lookup) {
+                // bd-1xl17.b: `readFileSync(path)` / `writeFileSync(path, data)`
+                // where the function was named-imported from 'node:fs'
+                // (`import { readFileSync } from 'node:fs'`) — recorded as a
+                // sentinel by the program pre-scan. Lower to the same `fs:`
+                // HostCall as the inline/binding member-call forms: args in source
+                // order (path, then data), arity exact (read=1, write=2);
+                // otherwise fall through so a malformed call is not mis-shaped.
+                let expected_args = if capability == "fs:write" { 2 } else { 1 };
+                if arguments.len() == expected_args {
+                    for arg in arguments {
+                        lower_expression_to_ir1(
+                            arg,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                            span_table,
+                        )?;
+                    }
+                    ops.push(Ir1Op::HostCall {
+                        capability: capability.to_string(),
+                        arg_count: expected_args as u32,
+                    });
+                    return Ok(());
+                }
+            }
             if let Some(capability) = date_builtin_call_capability(callee, binding_lookup) {
                 // `Date.now()` — the `Date` global has no eval-scope binding, so
                 // (like the Math-static interception) recognize the bare static
@@ -11048,6 +11149,14 @@ fn console_builtin_call_capability(
     }
 }
 
+/// True when `specifier` names the Node filesystem module — `fs` or `node:fs`
+/// (bd-1xl17.a/.b). Shared by every fs recognizer (require initializer, ESM
+/// import clauses, inline member call) so the accepted specifier set stays
+/// identical across all idiomatic shapes.
+fn is_fs_module_specifier(specifier: &str) -> bool {
+    specifier == "fs" || specifier == "node:fs"
+}
+
 /// Sentinel key recording that `name` is bound to the `fs`/`node:fs` module via
 /// `const <name> = require('fs')` (bd-1xl17.a). It is stored in the lowering
 /// `binding_lookup`; the leading NUL byte cannot occur in a JS identifier, so the
@@ -11079,7 +11188,7 @@ fn is_require_fs_module_initializer(
     }
     matches!(
         arguments.as_slice(),
-        [Expression::StringLiteral(spec)] if spec == "fs" || spec == "node:fs"
+        [Expression::StringLiteral(spec)] if is_fs_module_specifier(spec)
     )
 }
 
@@ -11108,14 +11217,18 @@ fn is_fs_alias_method_callee(callee: &Expression, alias_names: &BTreeSet<String>
             if m == "readFileSync" || m == "writeFileSync")
 }
 
-/// Recursively scan `expr` for a call whose callee is a recognized fs host method
-/// on one of `alias_names` (bd-1xl17.a usage-lookahead). Function/arrow and class
+/// Recursively scan `expr` for a call whose callee satisfies `is_target` — the
+/// shared fs usage-lookahead walker (bd-1xl17.a/.b). Function/arrow and class
 /// bodies and object literals are treated as opaque: a usage buried inside one is
-/// conservatively NOT detected, so the corresponding `const fs = require('fs')`
-/// falls through to the existing ambient-authority rejection. This is
+/// conservatively NOT detected, so the corresponding fs binding/import falls
+/// through to its existing behavior (ambient-authority rejection for the
+/// `require` binding form, or the runtime module load for ESM imports). This is
 /// fail-closed by design — it never widens authority, it only declines to
-/// recognize the fs binding form in less common syntactic positions.
-fn expr_uses_fs_alias_method(expr: &Expression, alias_names: &BTreeSet<String>) -> bool {
+/// recognize the fs form in less common syntactic positions.
+fn expr_contains_matching_call<F: Fn(&Expression) -> bool>(
+    expr: &Expression,
+    is_target: &F,
+) -> bool {
     match expr {
         Expression::Call {
             callee, arguments, ..
@@ -11123,17 +11236,17 @@ fn expr_uses_fs_alias_method(expr: &Expression, alias_names: &BTreeSet<String>) 
         | Expression::OptionalCall {
             callee, arguments, ..
         } => {
-            is_fs_alias_method_callee(callee, alias_names)
-                || expr_uses_fs_alias_method(callee, alias_names)
+            is_target(callee)
+                || expr_contains_matching_call(callee, is_target)
                 || arguments
                     .iter()
-                    .any(|a| expr_uses_fs_alias_method(a, alias_names))
+                    .any(|a| expr_contains_matching_call(a, is_target))
         }
         Expression::New { callee, arguments } => {
-            expr_uses_fs_alias_method(callee, alias_names)
+            expr_contains_matching_call(callee, is_target)
                 || arguments
                     .iter()
-                    .any(|a| expr_uses_fs_alias_method(a, alias_names))
+                    .any(|a| expr_contains_matching_call(a, is_target))
         }
         Expression::Member {
             object, property, ..
@@ -11141,40 +11254,64 @@ fn expr_uses_fs_alias_method(expr: &Expression, alias_names: &BTreeSet<String>) 
         | Expression::OptionalMember {
             object, property, ..
         } => {
-            expr_uses_fs_alias_method(object, alias_names)
-                || expr_uses_fs_alias_method(property, alias_names)
+            expr_contains_matching_call(object, is_target)
+                || expr_contains_matching_call(property, is_target)
         }
         Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
-            expr_uses_fs_alias_method(left, alias_names)
-                || expr_uses_fs_alias_method(right, alias_names)
+            expr_contains_matching_call(left, is_target)
+                || expr_contains_matching_call(right, is_target)
         }
         Expression::Unary { argument, .. }
         | Expression::Await(argument)
-        | Expression::SpreadElement(argument) => {
-            expr_uses_fs_alias_method(argument, alias_names)
-        }
+        | Expression::SpreadElement(argument) => expr_contains_matching_call(argument, is_target),
         Expression::Conditional {
             test,
             consequent,
             alternate,
         } => {
-            expr_uses_fs_alias_method(test, alias_names)
-                || expr_uses_fs_alias_method(consequent, alias_names)
-                || expr_uses_fs_alias_method(alternate, alias_names)
+            expr_contains_matching_call(test, is_target)
+                || expr_contains_matching_call(consequent, is_target)
+                || expr_contains_matching_call(alternate, is_target)
         }
         Expression::Yield {
             argument: Some(argument),
             ..
-        } => expr_uses_fs_alias_method(argument, alias_names),
+        } => expr_contains_matching_call(argument, is_target),
         Expression::ArrayLiteral(elements) => elements
             .iter()
             .flatten()
-            .any(|e| expr_uses_fs_alias_method(e, alias_names)),
+            .any(|e| expr_contains_matching_call(e, is_target)),
         Expression::TemplateLiteral { expressions, .. } => expressions
             .iter()
-            .any(|e| expr_uses_fs_alias_method(e, alias_names)),
+            .any(|e| expr_contains_matching_call(e, is_target)),
         _ => false,
     }
+}
+
+/// Usage-lookahead wrapper: true when `expr` contains a recognized fs host
+/// *method* call `<alias>.readFileSync/writeFileSync(...)` on one of
+/// `alias_names` — the binding (`const fs = require('fs')`, bd-1xl17.a) and ESM
+/// namespace/default-import (bd-1xl17.b) receiver forms.
+fn expr_uses_fs_alias_method(expr: &Expression, alias_names: &BTreeSet<String>) -> bool {
+    expr_contains_matching_call(expr, &|callee| {
+        is_fs_alias_method_callee(callee, alias_names)
+    })
+}
+
+/// True when any top-level expression statement or variable initializer in
+/// `body` satisfies `uses`. This is the shallow, fail-closed scan surface shared
+/// by every fs usage-lookahead (bd-1xl17.a/.b): only program-body positions are
+/// inspected; deeper nesting (function/class bodies) is left to the opaque
+/// handling inside [`expr_contains_matching_call`].
+fn body_top_level_expr_matches<F: Fn(&Expression) -> bool>(body: &[Statement], uses: &F) -> bool {
+    body.iter().any(|stmt| match stmt {
+        Statement::Expression(es) => uses(&es.expression),
+        Statement::VariableDeclaration(vd) => vd
+            .declarations
+            .iter()
+            .any(|d| d.initializer.as_ref().is_some_and(uses)),
+        _ => false,
+    })
 }
 
 /// Compute the set of identifier names that are BOTH bound via
@@ -11212,16 +11349,7 @@ fn confirmed_fs_module_aliases(
     let mut used = BTreeSet::new();
     for name in &candidates {
         let single: BTreeSet<String> = std::iter::once(name.clone()).collect();
-        let is_used = body.iter().any(|stmt| match stmt {
-            Statement::Expression(es) => expr_uses_fs_alias_method(&es.expression, &single),
-            Statement::VariableDeclaration(vd) => vd.declarations.iter().any(|d| {
-                d.initializer
-                    .as_ref()
-                    .is_some_and(|init| expr_uses_fs_alias_method(init, &single))
-            }),
-            _ => false,
-        });
-        if is_used {
+        if body_top_level_expr_matches(body, &|e| expr_uses_fs_alias_method(e, &single)) {
             used.insert(name.clone());
         }
     }
@@ -11266,7 +11394,7 @@ fn fs_builtin_call_capability(
             matches!(require_callee.as_ref(), Expression::Identifier(name) if name == "require")
                 && matches!(
                     require_args.as_slice(),
-                    [Expression::StringLiteral(spec)] if spec == "fs" || spec == "node:fs"
+                    [Expression::StringLiteral(spec)] if is_fs_module_specifier(spec)
                 )
         }
         // binding form: identifier aliased to the fs module (bd-1xl17.a).
@@ -11286,6 +11414,114 @@ fn fs_builtin_call_capability(
         "readFileSync" => Some("fs:read"),
         "writeFileSync" => Some("fs:write"),
         _ => None,
+    }
+}
+
+/// True when `callee` is exactly the bare identifier `name` — the direct-call
+/// shape `readFileSync(path)` of an fs function brought in by a named ESM import
+/// `import { readFileSync } from 'node:fs'` (bd-1xl17.b). Used as the
+/// usage-lookahead target for [`expr_contains_matching_call`].
+fn is_fs_named_callee(callee: &Expression, name: &str) -> bool {
+    matches!(callee, Expression::Identifier(n) if n == name)
+}
+
+/// Sentinel key recording that the local binding `local_name` is an fs *named
+/// import* (`import { readFileSync } from 'node:fs'`, incl. `as` renames) bound to
+/// `capability` ("fs:read"/"fs:write") AND used as a direct call (bd-1xl17.b).
+/// Like [`fs_module_alias_sentinel`] it lives in the lowering `binding_lookup`;
+/// the leading NUL and the `:` inside the capability cannot occur in a JS
+/// identifier, so the composite key never collides with a real binding. This lets
+/// the direct-call recognizer map `readFileSync(...)` to its `fs:` hostcall
+/// without threading an import-provenance map through the IR1 recursion.
+fn fs_named_import_sentinel(local_name: &str, capability: &str) -> String {
+    format!("\0fsnamed\0{capability}\0{local_name}")
+}
+
+/// Confirmed fs *namespace/default* ESM import aliases (bd-1xl17.b): a local
+/// bound via `import * as <local> from 'node:fs'` or `import <local> from
+/// 'node:fs'` that is actually used as `<local>.readFileSync/writeFileSync(...)`
+/// at a top-level program position. These reuse the SAME member-call recognizer
+/// and [`fs_module_alias_sentinel`] as the require-binding form (bd-1xl17.a), so
+/// the call sites need no additional handling. Gated on usage so a bare/unused fs
+/// import keeps its current (runtime module-load) behavior — the fail-closed
+/// analogue of the `require`-binding ambient-denial contract.
+fn confirmed_fs_namespace_import_aliases(body: &[Statement]) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for stmt in body {
+        if let Statement::Import(import) = stmt
+            && is_fs_module_specifier(&import.source)
+        {
+            match &import.clause {
+                ImportClause::Namespace { local } | ImportClause::Default { local } => {
+                    candidates.insert(local.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut used = BTreeSet::new();
+    for name in &candidates {
+        let single: BTreeSet<String> = std::iter::once(name.clone()).collect();
+        if body_top_level_expr_matches(body, &|e| expr_uses_fs_alias_method(e, &single)) {
+            used.insert(name.clone());
+        }
+    }
+    used
+}
+
+/// Confirmed fs *named* ESM imports (bd-1xl17.b): `import { readFileSync[,
+/// writeFileSync] } from 'node:fs'` (incl. `as` renames) whose local binding is
+/// used as a direct call `<local>(...)` at a top-level program position. Returns
+/// a map local-name -> fs capability ("fs:read"/"fs:write"). Recorded as
+/// NUL-sentinels (see [`fs_named_import_sentinel`]) and gated on usage, exactly
+/// like the binding/namespace forms.
+fn confirmed_fs_named_imports(body: &[Statement]) -> BTreeMap<String, &'static str> {
+    let mut candidates: BTreeMap<String, &'static str> = BTreeMap::new();
+    for stmt in body {
+        if let Statement::Import(import) = stmt
+            && is_fs_module_specifier(&import.source)
+            && let ImportClause::Named { specifiers } = &import.clause
+        {
+            for spec in specifiers {
+                let capability = match spec.import_name.as_str() {
+                    "readFileSync" => "fs:read",
+                    "writeFileSync" => "fs:write",
+                    _ => continue,
+                };
+                candidates.insert(spec.local_name.clone(), capability);
+            }
+        }
+    }
+    candidates
+        .into_iter()
+        .filter(|(local, _)| {
+            body_top_level_expr_matches(body, &|e| {
+                expr_contains_matching_call(e, &|c| is_fs_named_callee(c, local))
+            })
+        })
+        .collect()
+}
+
+/// Recognize a direct call to an fs *named import* — `readFileSync(path)` /
+/// `writeFileSync(path, data)` brought in by `import { ... } from 'node:fs'`
+/// (bd-1xl17.b) — and return its `fs:` hostcall capability. The local name
+/// (respecting `as` renames) was recorded as a NUL-sentinel in `binding_lookup`
+/// by the program pre-scan, gated on actual direct-call usage so a bare/unused fs
+/// import keeps its current behavior. This is the ESM-named-import analogue of
+/// [`fs_builtin_call_capability`]'s inline/binding member-call recognition.
+fn fs_named_import_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Identifier(name) = callee else {
+        return None;
+    };
+    if binding_lookup.contains_key(&fs_named_import_sentinel(name, "fs:read")) {
+        Some("fs:read")
+    } else if binding_lookup.contains_key(&fs_named_import_sentinel(name, "fs:write")) {
+        Some("fs:write")
+    } else {
+        None
     }
 }
 
@@ -13728,6 +13964,127 @@ mod tests {
             .any(|op| matches!(op, Ir1Op::ImportModule { specifier } if specifier == "lodash"));
         assert!(has_import);
         assert_eq!(result.module.scopes[0].kind, ScopeKind::Module);
+    }
+
+    /// bd-1xl17.b helper: lower ESM `source` (Module goal) to its IR1 op stream.
+    fn lower_esm_source_ops(source: &str, label: &str) -> Vec<Ir1Op> {
+        let tree = crate::parser_api_stability::parse_module(source).expect("parse ESM module");
+        let ir0 = Ir0Module::from_syntax_tree(tree, label);
+        lower_ir0_to_ir1(&ir0).expect("lower IR0->IR1").module.ops
+    }
+
+    fn ops_have_hostcall(ops: &[Ir1Op], cap: &str) -> bool {
+        ops.iter().any(
+            |op| matches!(op, Ir1Op::HostCall { capability, .. } if capability.as_str() == cap),
+        )
+    }
+
+    fn ops_have_fs_import_module(ops: &[Ir1Op]) -> bool {
+        ops.iter().any(|op| {
+            matches!(op, Ir1Op::ImportModule { specifier } if is_fs_module_specifier(specifier))
+        })
+    }
+
+    /// bd-1xl17.b: a named ESM import (`import { writeFileSync, readFileSync } from
+    /// 'node:fs'`) used as direct calls lowers to fs:write/fs:read HostCalls and
+    /// elides the (fault-prone) node:fs module load.
+    #[test]
+    fn esm_named_fs_import_lowers_to_hostcalls_bd_1xl17_b() {
+        let ops = lower_esm_source_ops(
+            "import { writeFileSync, readFileSync } from 'node:fs';\n\
+             writeFileSync('out.txt', 'bytes');\n\
+             readFileSync('out.txt');\n",
+            "esm_named_fs.mjs",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "fs:write"),
+            "expected fs:write hostcall"
+        );
+        assert!(
+            ops_have_hostcall(&ops, "fs:read"),
+            "expected fs:read hostcall"
+        );
+        assert!(
+            !ops_have_fs_import_module(&ops),
+            "node:fs module load must be elided for the confirmed named import"
+        );
+    }
+
+    /// bd-1xl17.b: named ESM import recognition respects `as` renames — the local
+    /// name (`rd`), not the imported name, is what the call site uses.
+    #[test]
+    fn esm_named_fs_import_rename_lowers_to_hostcalls_bd_1xl17_b() {
+        let ops = lower_esm_source_ops(
+            "import { readFileSync as rd } from 'node:fs';\n\
+             rd('out.txt');\n",
+            "esm_named_rename_fs.mjs",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "fs:read"),
+            "a renamed fs named import must still lower to fs:read"
+        );
+        assert!(
+            !ops_have_fs_import_module(&ops),
+            "node:fs module load must be elided"
+        );
+    }
+
+    /// bd-1xl17.b: a namespace ESM import (`import * as fs from 'node:fs'`) used as
+    /// `fs.readFileSync/...` lowers to HostCalls via the shared member-call
+    /// recognizer.
+    #[test]
+    fn esm_namespace_fs_import_lowers_to_hostcalls_bd_1xl17_b() {
+        let ops = lower_esm_source_ops(
+            "import * as fs from 'node:fs';\n\
+             fs.writeFileSync('out.txt', 'bytes');\n\
+             fs.readFileSync('out.txt');\n",
+            "esm_namespace_fs.mjs",
+        );
+        assert!(ops_have_hostcall(&ops, "fs:write"));
+        assert!(ops_have_hostcall(&ops, "fs:read"));
+        assert!(
+            !ops_have_fs_import_module(&ops),
+            "node:fs module load must be elided"
+        );
+    }
+
+    /// bd-1xl17.b: a default ESM import (`import fs from 'node:fs'`) used as
+    /// `fs.readFileSync/...` lowers to HostCalls.
+    #[test]
+    fn esm_default_fs_import_lowers_to_hostcalls_bd_1xl17_b() {
+        let ops = lower_esm_source_ops(
+            "import fs from 'node:fs';\n\
+             fs.writeFileSync('out.txt', 'bytes');\n\
+             fs.readFileSync('out.txt');\n",
+            "esm_default_fs.mjs",
+        );
+        assert!(ops_have_hostcall(&ops, "fs:write"));
+        assert!(ops_have_hostcall(&ops, "fs:read"));
+        assert!(
+            !ops_have_fs_import_module(&ops),
+            "node:fs module load must be elided"
+        );
+    }
+
+    /// bd-1xl17.b fail-closed: a bare/UNUSED fs import is NOT recognized — the
+    /// node:fs module load is preserved and no fs HostCall is emitted, so the
+    /// import keeps its current (runtime module-load) behavior. The ESM analogue
+    /// of the require-binding usage-gating (bd-1xl17.a) that preserves the
+    /// ambient-authority denial of bare/unused requires.
+    #[test]
+    fn esm_unused_fs_import_is_not_recognized_bd_1xl17_b() {
+        let ops = lower_esm_source_ops(
+            "import { readFileSync } from 'node:fs';\n",
+            "esm_unused_fs.mjs",
+        );
+        assert!(
+            ops_have_fs_import_module(&ops),
+            "an unused fs named import must keep its module load (no recognition)"
+        );
+        assert!(
+            !ops_have_hostcall(&ops, "fs:read"),
+            "an unused fs named import must not emit an fs hostcall"
+        );
     }
 
     #[test]

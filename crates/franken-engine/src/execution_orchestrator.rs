@@ -3123,6 +3123,109 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Shared mock-free driver for the bd-1xl17.b ESM-import fs tests: compile +
+    /// execute `source` as a Module through `ExecutionOrchestrator::execute` with a
+    /// real `SandboxedHostIo`, then assert the bytes hit the sandbox disk and an
+    /// [fs_write, fs_read] host-effect transcript was surfaced — proving the ESM
+    /// import lowering reaches the host-effect ledger like the require forms.
+    fn assert_esm_fs_source_lowers_to_host_effects(source: &str, scratch_label: &str) {
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+
+        let mut root = std::env::temp_dir();
+        root.push(format!("{scratch_label}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+
+        // ESM imports require the module parse goal.
+        let cfg = OrchestratorConfig {
+            parse_goal: ParseGoal::Module,
+            ..OrchestratorConfig::default()
+        };
+        let mut orch = ExecutionOrchestrator::new(cfg);
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        orch.set_host_io(provider, Some(recorder_dyn));
+
+        let pkg = ExtensionPackage {
+            extension_id: scratch_label.to_string(),
+            source: source.to_string(),
+            source_file: None,
+            capabilities: vec![
+                "vm_dispatch".to_string(),
+                "heap_allocate".to_string(),
+                "fs_read".to_string(),
+                "fs_write".to_string(),
+            ],
+            version: "1.0.0".to_string(),
+            metadata: BTreeMap::new(),
+        };
+
+        let result = orch.execute(&pkg).expect("ESM fs program executes");
+
+        // The write hit the real sandbox filesystem.
+        assert_eq!(
+            std::fs::read(root.join("out.txt")).expect("written file on disk"),
+            b"real effect bytes",
+            "ESM-import writeFileSync must have produced a real file in the sandbox"
+        );
+
+        // Both host effects were recorded and surfaced — the ledger source.
+        let kinds: Vec<&str> = result
+            .host_effect_transcript
+            .iter()
+            .map(|(request, _)| request.kind())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["fs_write", "fs_read"],
+            "ESM-import fs ops must surface fs_write then fs_read host effects, got {kinds:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// bd-1xl17.b (ESM named import): `import { writeFileSync, readFileSync } from
+    /// 'node:fs'` with direct calls lowers to `fs:` HostCalls that perform real
+    /// sandboxed I/O and surface a non-empty host-effect transcript. Mock-free
+    /// end-to-end through `ExecutionOrchestrator::execute`.
+    #[test]
+    fn esm_named_import_fs_program_produces_host_effects_bd_1xl17_b() {
+        assert_esm_fs_source_lowers_to_host_effects(
+            "import { writeFileSync, readFileSync } from 'node:fs';\n\
+             writeFileSync('out.txt', 'real effect bytes');\n\
+             readFileSync('out.txt');\n",
+            "frankenengine_e2e_fs_esm_named",
+        );
+    }
+
+    /// bd-1xl17.b (ESM namespace import): `import * as fs from 'node:fs'` with
+    /// `fs.writeFileSync/readFileSync` member calls lowers to `fs:` HostCalls.
+    /// Mock-free end-to-end.
+    #[test]
+    fn esm_namespace_import_fs_program_produces_host_effects_bd_1xl17_b() {
+        assert_esm_fs_source_lowers_to_host_effects(
+            "import * as fs from 'node:fs';\n\
+             fs.writeFileSync('out.txt', 'real effect bytes');\n\
+             fs.readFileSync('out.txt');\n",
+            "frankenengine_e2e_fs_esm_namespace",
+        );
+    }
+
+    /// bd-1xl17.b (ESM default import): `import fs from 'node:fs'` with
+    /// `fs.writeFileSync/readFileSync` member calls lowers to `fs:` HostCalls.
+    /// Mock-free end-to-end.
+    #[test]
+    fn esm_default_import_fs_program_produces_host_effects_bd_1xl17_b() {
+        assert_esm_fs_source_lowers_to_host_effects(
+            "import fs from 'node:fs';\n\
+             fs.writeFileSync('out.txt', 'real effect bytes');\n\
+             fs.readFileSync('out.txt');\n",
+            "frankenengine_e2e_fs_esm_default",
+        );
+    }
+
     #[test]
     fn try_new_rejects_zero_concurrency_envelope() {
         let err = match ExecutionOrchestrator::try_new(OrchestratorConfig {

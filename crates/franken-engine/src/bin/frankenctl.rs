@@ -31,7 +31,11 @@ use frankenengine_engine::data_contract::{
     E8_REFUSAL_LEDGER_SCHEMA_VERSION, E8RefusalLedgerReceipt,
 };
 use frankenengine_engine::deterministic_replay::{NondeterminismTrace, ReplayEngine, ReplayMode};
-use frankenengine_engine::differential_oracle::{DifferentialOracleInput, run_differential_oracle};
+use frankenengine_engine::differential_oracle::{
+    DifferentialBackend, DifferentialBackendStatus, DifferentialComparisonVerdict,
+    DifferentialOracleInput, DifferentialOracleReport, default_backend_selection,
+    run_differential_oracle,
+};
 use frankenengine_engine::differential_oracle_perf::{
     PerfArmConfig, load_runtime_comparison_corpus, run_differential_perf,
 };
@@ -168,6 +172,7 @@ enum CommandSpec {
     Replay(ReplayArgs),
     ReplayDebug(ReplayDebugArgs),
     DifferentialOracle(DifferentialOracleArgs),
+    Oracle(OracleArgs),
     React(ReactArgs),
     Gates(GatesArgs),
     Reports(ReportsArgs),
@@ -202,6 +207,9 @@ enum HelpTopic {
     DifferentialOracle,
     DifferentialOracleRun,
     DifferentialOraclePerf,
+    Oracle,
+    OracleRun,
+    OracleReport,
     React,
     ReactCompile,
     ReactBuild,
@@ -241,6 +249,9 @@ impl HelpTopic {
             Self::DifferentialOracle => differential_oracle_usage(),
             Self::DifferentialOracleRun => differential_oracle_run_usage(),
             Self::DifferentialOraclePerf => differential_oracle_perf_usage(),
+            Self::Oracle => oracle_usage(),
+            Self::OracleRun => oracle_run_usage(),
+            Self::OracleReport => oracle_report_usage(),
             Self::React => react_usage(),
             Self::ReactCompile => react_compile_usage(),
             Self::ReactBuild => react_build_usage(),
@@ -487,6 +498,45 @@ struct DifferentialOraclePerfArgs {
     node_bin: Option<String>,
     bun_bin: Option<String>,
     case_filter: Vec<String>,
+}
+
+/// User-facing wrapper over the differential oracle. Where `differential-oracle`
+/// is the CI-gate-shaped surface, `oracle` is the operator/frontier-facing
+/// surface: it selects engines, emits a content-addressed bundle, renders it,
+/// and reports documented exit codes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OracleArgs {
+    mode: OracleMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OracleMode {
+    Run(OracleRunArgs),
+    Report(OracleReportArgs),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OracleRunArgs {
+    input: PathBuf,
+    /// Resolved, deduplicated, canonically-ordered engine selection.
+    engines: Vec<DifferentialBackend>,
+    case_id: Option<String>,
+    timeout_ms: u64,
+    engine_budget: Option<u64>,
+    node_bin: Option<String>,
+    bun_bin: Option<String>,
+    /// When set, write a content-addressed oracle-run bundle to this directory.
+    bundle: Option<PathBuf>,
+    /// When set, also write the raw `DifferentialOracleReport` JSON here.
+    out: Option<PathBuf>,
+    format: CheckOutputFormat,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OracleReportArgs {
+    /// A bundle directory, or a path to its `manifest.json`/`report.json`.
+    bundle: PathBuf,
+    format: CheckOutputFormat,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1504,6 +1554,7 @@ fn run(raw_args: Vec<String>) -> Result<i32, String> {
         CommandSpec::Replay(args) => execute_replay(args),
         CommandSpec::ReplayDebug(args) => execute_replay_debug(args),
         CommandSpec::DifferentialOracle(args) => execute_differential_oracle(args),
+        CommandSpec::Oracle(args) => execute_oracle(args),
         CommandSpec::React(args) => execute_react(args),
         CommandSpec::Gates(args) => execute_gates(args),
         CommandSpec::Reports(args) => execute_reports(args),
@@ -1543,6 +1594,7 @@ fn parse_command(args: &[String]) -> Result<CommandSpec, String> {
         "benchmark" => parse_benchmark_command(&args[1..]),
         "replay" => parse_replay_command(&args[1..]),
         "differential-oracle" => parse_differential_oracle_command(&args[1..]),
+        "oracle" => parse_oracle_command(&args[1..]),
         "react" => parse_react_command(&args[1..]),
         "gates" => parse_gates_command(&args[1..]),
         "reports" => parse_reports_command(&args[1..]),
@@ -2721,6 +2773,170 @@ fn parse_differential_oracle_perf_command(args: &[String]) -> Result<CommandSpec
             node_bin,
             bun_bin,
             case_filter,
+        }),
+    }))
+}
+
+fn parse_oracle_command(args: &[String]) -> Result<CommandSpec, String> {
+    if args.is_empty() {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Oracle));
+    }
+
+    match args[0].as_str() {
+        "help" | "--help" | "-h" => match args.get(1).map(String::as_str) {
+            Some("run") => Ok(CommandSpec::HelpTopic(HelpTopic::OracleRun)),
+            Some("report") => Ok(CommandSpec::HelpTopic(HelpTopic::OracleReport)),
+            Some(other) => Err(format!(
+                "unknown oracle help topic `{other}` (expected run|report)"
+            )),
+            None => Ok(CommandSpec::HelpTopic(HelpTopic::Oracle)),
+        },
+        "run" => parse_oracle_run_command(&args[1..]),
+        "report" => parse_oracle_report_command(&args[1..]),
+        other => Err(format!(
+            "unknown oracle subcommand `{other}` (expected run|report)"
+        )),
+    }
+}
+
+/// Resolve the `--engines` selection. Accepts a comma-separated list of engine
+/// aliases; `None` (flag omitted) yields the full four-lane selection.
+fn parse_engine_selection(raw: Option<&str>) -> Result<Vec<DifferentialBackend>, String> {
+    let Some(raw) = raw else {
+        return Ok(default_backend_selection());
+    };
+    let mut selection: Vec<DifferentialBackend> = Vec::new();
+    for token in raw.split(',') {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+        let backend = match token.to_ascii_lowercase().as_str() {
+            "node" | "nodejs" | "node_lts" | "node-lts" => DifferentialBackend::NodeLts,
+            "bun" | "bun_stable" | "bun-stable" => DifferentialBackend::BunStable,
+            "franken" | "engine" | "franken_engine" | "franken-engine" => {
+                DifferentialBackend::FrankenEngine
+            }
+            "core" | "franken_core" | "franken-core" => DifferentialBackend::FrankenCore,
+            other => {
+                return Err(format!(
+                    "unknown engine `{other}` in --engines (expected comma-separated subset of: node, bun, franken, core)"
+                ));
+            }
+        };
+        if !selection.contains(&backend) {
+            selection.push(backend);
+        }
+    }
+    if selection.is_empty() {
+        return Err(
+            "--engines must select at least one engine (node, bun, franken, core)".to_string(),
+        );
+    }
+    Ok(selection)
+}
+
+fn parse_oracle_run_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::OracleRun));
+    }
+
+    let mut input: Option<PathBuf> = None;
+    let mut engines_raw: Option<String> = None;
+    let mut case_id: Option<String> = None;
+    let mut timeout_ms = 2_000_u64;
+    let mut engine_budget: Option<u64> = None;
+    let mut node_bin: Option<String> = None;
+    let mut bun_bin: Option<String> = None;
+    let mut bundle: Option<PathBuf> = None;
+    let mut out: Option<PathBuf> = None;
+    let mut format = CheckOutputFormat::Human;
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--input" => input = Some(PathBuf::from(next_arg(args, &mut index, "--input")?)),
+            "--engines" => engines_raw = Some(next_arg(args, &mut index, "--engines")?),
+            "--case-id" => case_id = Some(next_arg(args, &mut index, "--case-id")?),
+            "--timeout-ms" => {
+                timeout_ms =
+                    parse_u64(&next_arg(args, &mut index, "--timeout-ms")?, "--timeout-ms")?.max(1)
+            }
+            "--engine-budget" => {
+                engine_budget = Some(parse_u64(
+                    &next_arg(args, &mut index, "--engine-budget")?,
+                    "--engine-budget",
+                )?)
+            }
+            "--node-bin" => node_bin = Some(next_arg(args, &mut index, "--node-bin")?),
+            "--bun-bin" => bun_bin = Some(next_arg(args, &mut index, "--bun-bin")?),
+            "--bundle" => bundle = Some(PathBuf::from(next_arg(args, &mut index, "--bundle")?)),
+            "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            "--json" => format = CheckOutputFormat::Json,
+            other if !other.starts_with("--") => {
+                if input.is_some() {
+                    return Err(format!(
+                        "unexpected positional argument `{other}` (input already provided)"
+                    ));
+                }
+                input = Some(PathBuf::from(other));
+            }
+            flag => return Err(format!("unknown oracle run flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    let engines = parse_engine_selection(engines_raw.as_deref())?;
+
+    Ok(CommandSpec::Oracle(OracleArgs {
+        mode: OracleMode::Run(OracleRunArgs {
+            input: input.ok_or_else(|| {
+                "oracle run requires <input.js> (positional or --input)".to_string()
+            })?,
+            engines,
+            case_id,
+            timeout_ms,
+            engine_budget,
+            node_bin,
+            bun_bin,
+            bundle,
+            out,
+            format,
+        }),
+    }))
+}
+
+fn parse_oracle_report_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::OracleReport));
+    }
+
+    let mut bundle: Option<PathBuf> = None;
+    let mut format = CheckOutputFormat::Human;
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--bundle" => bundle = Some(PathBuf::from(next_arg(args, &mut index, "--bundle")?)),
+            "--json" => format = CheckOutputFormat::Json,
+            other if !other.starts_with("--") => {
+                if bundle.is_some() {
+                    return Err(format!(
+                        "unexpected positional argument `{other}` (bundle already provided)"
+                    ));
+                }
+                bundle = Some(PathBuf::from(other));
+            }
+            flag => return Err(format!("unknown oracle report flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    Ok(CommandSpec::Oracle(OracleArgs {
+        mode: OracleMode::Report(OracleReportArgs {
+            bundle: bundle
+                .ok_or_else(|| "oracle report requires <bundle-dir|manifest.json>".to_string())?,
+            format,
         }),
     }))
 }
@@ -4863,7 +5079,7 @@ fn claim_row_missing_required_fields(row: &ClaimMatrixRow) -> Vec<&'static str> 
         .source_span
         .as_ref()
         .and_then(|span| span.must_contain.as_deref())
-        .map_or(true, |must_contain| must_contain.trim().is_empty())
+        .is_none_or(|must_contain| must_contain.trim().is_empty())
     {
         missing.push("source_span.must_contain");
     }
@@ -4886,7 +5102,7 @@ fn claim_row_missing_required_fields(row: &ClaimMatrixRow) -> Vec<&'static str> 
         if row
             .artifact_path
             .as_deref()
-            .map_or(true, |path| path.trim().is_empty())
+            .is_none_or(|path| path.trim().is_empty())
         {
             missing.push("artifact_path");
         }
@@ -4899,7 +5115,7 @@ fn claim_row_missing_required_fields(row: &ClaimMatrixRow) -> Vec<&'static str> 
     } else if row
         .downgrade_text
         .as_deref()
-        .map_or(true, |text| text.trim().is_empty())
+        .is_none_or(|text| text.trim().is_empty())
     {
         missing.push("downgrade_text");
     }
@@ -7838,6 +8054,535 @@ fn execute_differential_oracle_run(args: DifferentialOracleRunArgs) -> Result<i3
     Ok(0)
 }
 
+// ── oracle (operator-facing differential oracle) ───────────────────────────
+
+/// Schema id for the content-addressed bundle emitted by `oracle run --bundle`.
+const ORACLE_RUN_BUNDLE_SCHEMA_VERSION: &str = "franken-engine.oracle-run-bundle.v1";
+const ORACLE_RUN_DEGRADED_RECEIPT_SCHEMA_VERSION: &str =
+    "franken-engine.oracle-run-degraded-receipt.v1";
+const ORACLE_RUN_SUMMARY_SCHEMA_VERSION: &str = "franken-engine.oracle-run-summary.v1";
+const ORACLE_REPRO_LOCK_SCHEMA_VERSION: &str = "franken-engine.repro-lock.v1";
+
+/// Documented `oracle` exit codes (part of the CLI contract; see `oracle_usage`).
+const ORACLE_EXIT_CONSENSUS: i32 = 0;
+const ORACLE_EXIT_DIVERGENCE: i32 = 3;
+const ORACLE_EXIT_INSUFFICIENT: i32 = 4;
+
+/// A summary handle returned by [`emit_oracle_run_bundle`] for display.
+struct OracleBundleSummary {
+    dir: PathBuf,
+    bundle_id: String,
+    degraded: bool,
+}
+
+fn oracle_verdict_label(verdict: DifferentialComparisonVerdict) -> &'static str {
+    match verdict {
+        DifferentialComparisonVerdict::Consensus => "consensus",
+        DifferentialComparisonVerdict::Divergence => "divergence",
+        DifferentialComparisonVerdict::InsufficientData => "insufficient_data",
+    }
+}
+
+/// Map a backend to its short `--engines` alias (the reproducible CLI token).
+fn oracle_engine_alias(backend: DifferentialBackend) -> &'static str {
+    match backend {
+        DifferentialBackend::NodeLts => "node",
+        DifferentialBackend::BunStable => "bun",
+        DifferentialBackend::FrankenEngine => "franken",
+        DifferentialBackend::FrankenCore => "core",
+    }
+}
+
+fn oracle_engines_csv(report: &DifferentialOracleReport) -> String {
+    report
+        .backends
+        .iter()
+        .map(|receipt| oracle_engine_alias(receipt.backend))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Reasons a selected reference runtime (Node/Bun) failed to produce a result.
+/// Non-empty ⇒ the run is degraded: the engine output is unverified against at
+/// least one requested reference runtime.
+fn oracle_external_degradations(report: &DifferentialOracleReport) -> Vec<String> {
+    report
+        .backends
+        .iter()
+        .filter(|receipt| {
+            matches!(
+                receipt.backend,
+                DifferentialBackend::NodeLts | DifferentialBackend::BunStable
+            ) && receipt.status != DifferentialBackendStatus::Completed
+        })
+        .map(|receipt| {
+            format!(
+                "{} is {} and was excluded from cross-runtime consensus",
+                receipt.backend,
+                receipt.status.stable_label()
+            )
+        })
+        .collect()
+}
+
+/// Derive the documented exit code from the recorded verdict. A consensus only
+/// counts as a pass (`0`) when no requested reference runtime was missing;
+/// otherwise it is downgraded to insufficient-data (`4`). A divergence is always
+/// surfaced (`3`).
+fn oracle_exit_for_report(report: &DifferentialOracleReport, degraded: bool) -> i32 {
+    match report.canonicalization.semantic_verdict {
+        DifferentialComparisonVerdict::Divergence => ORACLE_EXIT_DIVERGENCE,
+        DifferentialComparisonVerdict::Consensus => {
+            if degraded {
+                ORACLE_EXIT_INSUFFICIENT
+            } else {
+                ORACLE_EXIT_CONSENSUS
+            }
+        }
+        DifferentialComparisonVerdict::InsufficientData => ORACLE_EXIT_INSUFFICIENT,
+    }
+}
+
+/// Sort object keys recursively and pretty-print with a trailing newline, so the
+/// bytes are independent of serde_json's `preserve_order` feature and stable for
+/// content addressing.
+fn oracle_canonical_json_bytes(value: &serde_json::Value) -> String {
+    let sorted = frankenengine_engine::evidence_manifest::sort_value_keys(value);
+    let mut text = serde_json::to_string_pretty(&sorted).expect("json value pretty-prints");
+    text.push('\n');
+    text
+}
+
+fn execute_oracle(args: OracleArgs) -> Result<i32, String> {
+    match args.mode {
+        OracleMode::Run(args) => execute_oracle_run(args),
+        OracleMode::Report(args) => execute_oracle_report(args),
+    }
+}
+
+/// Resolve an explicit `--node-bin`/`--bun-bin` override, falling back to the
+/// `$NODE`/`$BUN` environment variable, so an operator on a host where `node` is
+/// a Bun shim can point the oracle at a genuine binary.
+fn oracle_runtime_program(explicit: Option<&str>, env_var: &str) -> Option<String> {
+    if let Some(value) = explicit {
+        return Some(value.to_string());
+    }
+    env::var(env_var)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn execute_oracle_run(args: OracleRunArgs) -> Result<i32, String> {
+    let source = fs::read_to_string(&args.input)
+        .map_err(|error| format!("failed to read input `{}`: {error}", args.input.display()))?;
+    let case_id = args.case_id.clone().unwrap_or_else(|| {
+        args.input
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("oracle-case")
+            .to_string()
+    });
+
+    let mut input = DifferentialOracleInput::new(case_id, source)
+        .with_source_path(args.input.display().to_string())
+        .with_timeout_ms(args.timeout_ms)
+        .with_selected_backends(args.engines.iter().copied());
+    if let Some(budget) = args.engine_budget {
+        input = input.with_engine_instruction_budget(budget);
+    }
+    if let Some(program) = oracle_runtime_program(args.node_bin.as_deref(), "NODE") {
+        input.node.program = program;
+    }
+    if let Some(program) = oracle_runtime_program(args.bun_bin.as_deref(), "BUN") {
+        input.bun.program = program;
+    }
+
+    let report = run_differential_oracle(&input);
+
+    if let Some(path) = &args.out {
+        write_json_file(path, &report)?;
+    }
+
+    let bundle_summary = match &args.bundle {
+        Some(dir) => Some(emit_oracle_run_bundle(dir, &report)?),
+        None => None,
+    };
+
+    let degraded = bundle_summary
+        .as_ref()
+        .map(|summary| summary.degraded)
+        .unwrap_or_else(|| !oracle_external_degradations(&report).is_empty());
+    let exit_code = oracle_exit_for_report(&report, degraded);
+
+    match args.format {
+        CheckOutputFormat::Json => {
+            let payload =
+                oracle_run_json_summary(&report, bundle_summary.as_ref(), degraded, exit_code);
+            print_json(&payload)?;
+        }
+        CheckOutputFormat::Human => {
+            println!(
+                "{}",
+                render_oracle_run_human(&report, bundle_summary.as_ref(), degraded, exit_code)
+            );
+        }
+    }
+    Ok(exit_code)
+}
+
+/// Write a content-addressed oracle-run bundle: `report.json` (the full report),
+/// `repro.lock` (re-run recipe + the reproducible semantic-verdict assertion),
+/// `manifest.json` (sha256-indexed artifact set + `bundle_id`), and, when a
+/// requested reference runtime was unavailable, `degraded_receipt.json`.
+fn emit_oracle_run_bundle(
+    dir: &Path,
+    report: &DifferentialOracleReport,
+) -> Result<OracleBundleSummary, String> {
+    fs::create_dir_all(dir)
+        .map_err(|error| format!("failed to create bundle dir `{}`: {error}", dir.display()))?;
+
+    let report_value = serde_json::to_value(report)
+        .map_err(|error| format!("failed to encode oracle report: {error}"))?;
+    let report_bytes = oracle_canonical_json_bytes(&report_value);
+    let report_sha = sha256_prefixed(report_bytes.as_bytes());
+    fs::write(dir.join("report.json"), report_bytes.as_bytes())
+        .map_err(|error| format!("failed to write report.json: {error}"))?;
+
+    let selected: Vec<String> = report
+        .backends
+        .iter()
+        .map(|receipt| receipt.backend.to_string())
+        .collect();
+    let verdict_label = oracle_verdict_label(report.canonicalization.semantic_verdict);
+
+    let lock_value = serde_json::json!({
+        "schema_version": ORACLE_REPRO_LOCK_SCHEMA_VERSION,
+        "case_id": report.case_id,
+        "source_sha256": format!("sha256:{}", report.source_sha256),
+        "selected_backends": selected,
+        "commands": [
+            format!(
+                "frankenctl oracle run <input.js> --engines {} --bundle <dir>",
+                oracle_engines_csv(report)
+            ),
+        ],
+        "determinism": {
+            "allow_network": false,
+            "allow_randomness": false,
+            "allow_wall_clock": true,
+            "note": "per-backend wall-clock timing is non-deterministic; the reproducible assertion is the semantic verdict over canonical structured values and exception classes, not raw stdout timing",
+            "reproducible_assertion": "semantic_verdict",
+        },
+        "expected_outputs": [
+            {
+                "kind": "semantic_verdict",
+                "path": "report.json#canonicalization.semantic_verdict",
+                "value": verdict_label,
+            },
+        ],
+        "verification": {
+            "command": "frankenctl oracle report <dir>",
+            "expected_verdict": verdict_label,
+        },
+    });
+    let lock_bytes = oracle_canonical_json_bytes(&lock_value);
+    let lock_sha = sha256_prefixed(lock_bytes.as_bytes());
+    fs::write(dir.join("repro.lock"), lock_bytes.as_bytes())
+        .map_err(|error| format!("failed to write repro.lock: {error}"))?;
+
+    let degradations = oracle_external_degradations(report);
+    let degraded = !degradations.is_empty();
+
+    let mut manifest = serde_json::json!({
+        "schema_version": ORACLE_RUN_BUNDLE_SCHEMA_VERSION,
+        "case_id": report.case_id,
+        "source_sha256": format!("sha256:{}", report.source_sha256),
+        "semantic_verdict": verdict_label,
+        "divergence_count": report.divergence_taxonomy.findings.len(),
+        "degraded": degraded,
+        "selected_backends": selected,
+        "host": {
+            "os": report.host.os,
+            "arch": report.host.arch,
+            "franken_engine_version": report.host.franken_engine_version,
+        },
+        "artifacts": {
+            "report": { "path": "report.json", "sha256": report_sha },
+            "lock": { "path": "repro.lock", "sha256": lock_sha },
+        },
+        "validation": {
+            "command": "frankenctl oracle report <bundle-dir>",
+            "exit_codes": "0 consensus | 3 divergence | 4 insufficient-data/degraded",
+        },
+    });
+    // Inject the u128 timestamp by copying the already-serialized report field,
+    // sidestepping any `json!` integer-width edge case.
+    if let Some(object) = manifest.as_object_mut() {
+        object.insert(
+            "generated_unix_ns".to_string(),
+            report_value
+                .get("generated_unix_ns")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        );
+    }
+
+    // bundle_id content-addresses the manifest body (excluding its own id).
+    let manifest_preimage = oracle_canonical_json_bytes(&manifest);
+    let bundle_id = sha256_prefixed(manifest_preimage.as_bytes());
+    if let Some(object) = manifest.as_object_mut() {
+        object.insert(
+            "bundle_id".to_string(),
+            serde_json::Value::String(bundle_id.clone()),
+        );
+    }
+    let manifest_bytes = oracle_canonical_json_bytes(&manifest);
+    fs::write(dir.join("manifest.json"), manifest_bytes.as_bytes())
+        .map_err(|error| format!("failed to write manifest.json: {error}"))?;
+
+    if degraded {
+        let receipt = serde_json::json!({
+            "schema_version": ORACLE_RUN_DEGRADED_RECEIPT_SCHEMA_VERSION,
+            "error_code": "FE-REPRO-0007",
+            "verdict": "degraded",
+            "case_id": report.case_id,
+            "reasons": degradations,
+            "policy": "Degraded oracle runs do not assert cross-runtime consensus: a requested reference runtime (Node/Bun) was unavailable, so the engine output is unverified against it.",
+        });
+        let receipt_bytes = oracle_canonical_json_bytes(&receipt);
+        fs::write(dir.join("degraded_receipt.json"), receipt_bytes.as_bytes())
+            .map_err(|error| format!("failed to write degraded_receipt.json: {error}"))?;
+    }
+
+    Ok(OracleBundleSummary {
+        dir: dir.to_path_buf(),
+        bundle_id,
+        degraded,
+    })
+}
+
+fn oracle_run_json_summary(
+    report: &DifferentialOracleReport,
+    bundle: Option<&OracleBundleSummary>,
+    degraded: bool,
+    exit_code: i32,
+) -> serde_json::Value {
+    let bundle_value = match bundle {
+        Some(summary) => serde_json::json!({
+            "dir": summary.dir.display().to_string(),
+            "bundle_id": summary.bundle_id,
+        }),
+        None => serde_json::Value::Null,
+    };
+    let backends_value = serde_json::to_value(&report.backends).unwrap_or(serde_json::Value::Null);
+    let divergences_value = serde_json::to_value(&report.divergence_taxonomy.findings)
+        .unwrap_or(serde_json::Value::Null);
+    let engines: Vec<String> = report
+        .backends
+        .iter()
+        .map(|receipt| receipt.backend.to_string())
+        .collect();
+
+    serde_json::json!({
+        "schema_version": ORACLE_RUN_SUMMARY_SCHEMA_VERSION,
+        "case_id": report.case_id,
+        "source_path": report.source_path,
+        "engines": engines,
+        "semantic_verdict": oracle_verdict_label(report.canonicalization.semantic_verdict),
+        "divergence_count": report.divergence_taxonomy.findings.len(),
+        "degraded": degraded,
+        "exit_code": exit_code,
+        "backends": backends_value,
+        "divergences": divergences_value,
+        "bundle": bundle_value,
+    })
+}
+
+fn render_oracle_run_human(
+    report: &DifferentialOracleReport,
+    bundle: Option<&OracleBundleSummary>,
+    degraded: bool,
+    exit_code: i32,
+) -> String {
+    let mut lines = vec![
+        format!("oracle run: {}", report.case_id),
+        format!(
+            "  source: {} (sha256:{})",
+            report.source_path.as_deref().unwrap_or("<inline>"),
+            report.source_sha256
+        ),
+        format!(
+            "  verdict: {} (exit {exit_code})",
+            oracle_verdict_label(report.canonicalization.semantic_verdict)
+        ),
+    ];
+    lines.push("  backends:".to_string());
+    for receipt in &report.backends {
+        let value = receipt.value.as_deref().unwrap_or("-");
+        let version = receipt.version.as_deref().unwrap_or("n/a");
+        lines.push(format!(
+            "    {:<16} {:<11} value={value} ({version}, {}us)",
+            receipt.backend.to_string(),
+            receipt.status.stable_label(),
+            receipt.duration_micros
+        ));
+    }
+    if report.divergence_taxonomy.findings.is_empty() {
+        lines.push("  divergences: none".to_string());
+    } else {
+        lines.push(format!(
+            "  divergences: {}",
+            report.divergence_taxonomy.findings.len()
+        ));
+        for finding in &report.divergence_taxonomy.findings {
+            lines.push(format!(
+                "    [{}] {}",
+                finding.class.stable_label(),
+                finding.message
+            ));
+        }
+    }
+    if degraded {
+        for reason in oracle_external_degradations(report) {
+            lines.push(format!("  degraded: {reason}"));
+        }
+    }
+    if let Some(summary) = bundle {
+        lines.push(format!(
+            "  bundle: {} ({})",
+            summary.dir.display(),
+            summary.bundle_id
+        ));
+    }
+    lines.join("\n")
+}
+
+/// Resolve a `report` argument to `(bundle_dir, manifest_path)`. Accepts a
+/// directory containing `manifest.json`, or a direct path to a `manifest.json`.
+fn resolve_oracle_bundle(path: &Path) -> Result<(PathBuf, PathBuf), String> {
+    if path.is_dir() {
+        let manifest = path.join("manifest.json");
+        if !manifest.is_file() {
+            return Err(format!(
+                "no manifest.json found in bundle dir `{}`",
+                path.display()
+            ));
+        }
+        return Ok((path.to_path_buf(), manifest));
+    }
+    if path.is_file() {
+        if path.file_name().and_then(|name| name.to_str()) == Some("manifest.json") {
+            let dir = path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+            return Ok((dir, path.to_path_buf()));
+        }
+        return Err(format!(
+            "`{}` is not a bundle directory or a manifest.json",
+            path.display()
+        ));
+    }
+    Err(format!("bundle path `{}` does not exist", path.display()))
+}
+
+fn execute_oracle_report(args: OracleReportArgs) -> Result<i32, String> {
+    let (dir, manifest_path) = resolve_oracle_bundle(&args.bundle)?;
+
+    let manifest: serde_json::Value = load_json_file(&manifest_path)?;
+    let manifest_obj = manifest.as_object().ok_or_else(|| {
+        format!(
+            "manifest `{}` is not a JSON object",
+            manifest_path.display()
+        )
+    })?;
+
+    // Integrity: recompute each referenced artifact's sha256 and compare.
+    let artifacts = manifest_obj
+        .get("artifacts")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| "manifest is missing the `artifacts` object".to_string())?;
+    for (label, entry) in artifacts {
+        let rel = entry
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("artifact `{label}` is missing a `path`"))?;
+        let expected = entry
+            .get("sha256")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("artifact `{label}` is missing a `sha256`"))?;
+        let bytes = fs::read(dir.join(rel))
+            .map_err(|error| format!("failed to read bundle artifact `{rel}`: {error}"))?;
+        let actual = sha256_prefixed(&bytes);
+        if actual != expected {
+            return Err(format!(
+                "bundle integrity failure: `{rel}` sha256 {actual} != manifest {expected}"
+            ));
+        }
+    }
+
+    // Integrity: recompute the manifest's own content address.
+    if let Some(expected_id) = manifest_obj
+        .get("bundle_id")
+        .and_then(serde_json::Value::as_str)
+    {
+        let mut preimage = manifest.clone();
+        if let Some(object) = preimage.as_object_mut() {
+            object.remove("bundle_id");
+        }
+        let actual_id = sha256_prefixed(oracle_canonical_json_bytes(&preimage).as_bytes());
+        if actual_id != expected_id {
+            return Err(format!(
+                "bundle integrity failure: recomputed bundle_id {actual_id} != manifest {expected_id}"
+            ));
+        }
+    }
+
+    let report_rel = artifacts
+        .get("report")
+        .and_then(|entry| entry.get("path"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("report.json");
+    let report: DifferentialOracleReport = load_json_file(&dir.join(report_rel))?;
+
+    let degradations = oracle_external_degradations(&report);
+    let degraded = !degradations.is_empty();
+    let exit_code = oracle_exit_for_report(&report, degraded);
+
+    match args.format {
+        CheckOutputFormat::Json => {
+            let bundle_id = manifest_obj
+                .get("bundle_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            let payload = serde_json::json!({
+                "schema_version": ORACLE_RUN_SUMMARY_SCHEMA_VERSION,
+                "bundle_dir": dir.display().to_string(),
+                "bundle_id": bundle_id,
+                "integrity": "verified",
+                "case_id": report.case_id,
+                "semantic_verdict": oracle_verdict_label(report.canonicalization.semantic_verdict),
+                "divergence_count": report.divergence_taxonomy.findings.len(),
+                "degraded": degraded,
+                "exit_code": exit_code,
+                "backends": serde_json::to_value(&report.backends).unwrap_or(serde_json::Value::Null),
+                "divergences": serde_json::to_value(&report.divergence_taxonomy.findings)
+                    .unwrap_or(serde_json::Value::Null),
+            });
+            print_json(&payload)?;
+        }
+        CheckOutputFormat::Human => {
+            let mut lines = vec![
+                format!("oracle bundle: {}", dir.display()),
+                "  integrity: verified (sha256 artifacts + bundle_id)".to_string(),
+            ];
+            lines.push(render_oracle_run_human(&report, None, degraded, exit_code));
+            println!("{}", lines.join("\n"));
+        }
+    }
+    Ok(exit_code)
+}
+
 fn execute_react(args: ReactArgs) -> Result<i32, String> {
     match args {
         ReactArgs::Compile(args) => execute_react_compile(args),
@@ -9348,6 +10093,13 @@ fn usage() -> String {
         "      [--case-id <id>] [--timeout-ms <u64>] [--out <report.json>]",
         "  frankenctl differential-oracle perf --manifest <manifest.json>",
         "      [--out <report.json>] [--events <events.jsonl>] [--warmup <u32>] [--samples <u32>]",
+        "  frankenctl oracle run <input.js> [--engines franken,node,bun,core] [--bundle <dir>]",
+        "      [--case-id <id>] [--timeout-ms <u64>] [--engine-budget <u64>]",
+        "      [--node-bin <path>] [--bun-bin <path>] [--out <report.json>] [--json]",
+        "      # operator-facing differential oracle; emits a content-addressed bundle",
+        "      # exit codes: 0 consensus · 3 divergence · 4 insufficient-data/degraded",
+        "  frankenctl oracle report <bundle-dir|manifest.json> [--json]",
+        "      # validates bundle integrity (sha256) and renders the recorded verdict",
         "  frankenctl react compile|build|doctor|contract [options]  # React integration surfaces",
         "",
         "OPERATOR/DEVELOPMENT SURFACES (unsupported in production):",
@@ -9392,6 +10144,12 @@ fn command_label(command: &CommandSpec) -> &'static str {
         CommandSpec::Replay(_) => "replay",
         CommandSpec::ReplayDebug(_) => "replay-debug",
         CommandSpec::DifferentialOracle(_) => "differential-oracle",
+        CommandSpec::Oracle(OracleArgs {
+            mode: OracleMode::Run(_),
+        }) => "oracle-run",
+        CommandSpec::Oracle(OracleArgs {
+            mode: OracleMode::Report(_),
+        }) => "oracle-report",
         CommandSpec::React(ReactArgs::Compile(_)) => "react-compile",
         CommandSpec::React(ReactArgs::Build(_)) => "react-build",
         CommandSpec::React(ReactArgs::Doctor(_)) => "react-doctor",
@@ -9444,6 +10202,12 @@ fn command_remediation(command: &str) -> &'static str {
         "replay" => "Validate trace JSON and mode, then rerun `frankenctl replay run`.",
         "differential-oracle" => {
             "Validate the JS fixture path and timeout, then rerun `frankenctl differential-oracle run`."
+        }
+        "oracle-run" => {
+            "Validate the JS input path, --engines selection, and optional --bundle dir, then rerun `frankenctl oracle run`."
+        }
+        "oracle-report" => {
+            "Point the argument at an oracle-run bundle directory (or its manifest.json/report.json), then rerun `frankenctl oracle report`."
         }
         "react-compile" | "react-build" => {
             "Inspect `frankenctl react contract` and rerun with a declared source-form/runtime/target combination."
@@ -9750,6 +10514,64 @@ fn differential_oracle_perf_usage() -> String {
         "  structured-value consensus. per-iteration timings stream to --events so the ratio can",
         "  be re-derived from raw data. fairness violations (e.g. `node` resolving to Bun's shim)",
         "  degrade the receipt instead of publishing a number.",
+    ]
+    .join("\n")
+}
+
+fn oracle_usage() -> String {
+    [
+        "oracle usage (operator-facing differential oracle):",
+        "  frankenctl oracle run <input.js> [--engines franken,node,bun,core] [--bundle <dir>]",
+        "      [--case-id <id>] [--timeout-ms <u64>] [--engine-budget <u64>]",
+        "      [--node-bin <path>] [--bun-bin <path>] [--out <report.json>] [--json]",
+        "  frankenctl oracle report <bundle-dir|manifest.json> [--json]",
+        "",
+        "behavior:",
+        "  run: executes one JS input across the selected engines, classifies any cross-runtime",
+        "       divergence, and (with --bundle) writes a content-addressed bundle that",
+        "       `oracle report` can re-render and integrity-check.",
+        "  report: validates a bundle's sha256 artifact set and bundle_id, then renders the",
+        "          recorded backends, verdict, and any divergences.",
+        "",
+        "exit codes (run and report):",
+        "  0  consensus across the selected engines",
+        "  3  semantic divergence detected",
+        "  4  insufficient data (a requested reference runtime was unavailable / degraded)",
+        "  2  usage or I/O error (e.g. bundle integrity failure)",
+    ]
+    .join("\n")
+}
+
+fn oracle_run_usage() -> String {
+    [
+        "oracle run usage:",
+        "  frankenctl oracle run <input.js> [--engines franken,node,bun,core] [--bundle <dir>]",
+        "      [--case-id <id>] [--timeout-ms <u64>] [--engine-budget <u64>]",
+        "      [--node-bin <path>] [--bun-bin <path>] [--out <report.json>] [--json]",
+        "",
+        "  --engines  comma-separated subset of {node, bun, franken, core}; default is all four.",
+        "             only the selected engines are executed and compared.",
+        "  --bundle   write a content-addressed bundle (manifest.json + report.json + repro.lock,",
+        "             plus degraded_receipt.json when a reference runtime is unavailable).",
+        "  --node-bin / --bun-bin  override the external binaries; otherwise $NODE / $BUN, then",
+        "             `node` / `bun` on PATH (point --node-bin at genuine Node where `node` is a shim).",
+        "  --engine-budget  raise the in-process engine instruction budget for long programs.",
+        "  --out      additionally write the raw DifferentialOracleReport JSON to this path.",
+        "  --json     emit a machine-parseable summary (robot mode) instead of the human view.",
+        "",
+        "  missing external runtimes produce unavailable backend receipts rather than failing the run.",
+    ]
+    .join("\n")
+}
+
+fn oracle_report_usage() -> String {
+    [
+        "oracle report usage:",
+        "  frankenctl oracle report <bundle-dir|manifest.json> [--json]",
+        "",
+        "  validates the bundle's artifact sha256 set and its bundle_id content address, then",
+        "  renders the recorded case, per-backend receipts, semantic verdict, and divergences.",
+        "  a mismatched hash is a hard error (exit 2). --json emits the parseable summary.",
     ]
     .join("\n")
 }

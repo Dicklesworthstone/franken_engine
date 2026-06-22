@@ -84,6 +84,24 @@ pub struct DifferentialOracleInput {
     pub engine_instruction_budget: Option<u64>,
     pub node: ExternalRuntimeSpec,
     pub bun: ExternalRuntimeSpec,
+    /// Backends to execute and compare. Defaults to all four lanes. The
+    /// user-facing `frankenctl oracle run --engines ...` flag narrows this set;
+    /// unselected lanes are neither executed nor included in the canonical
+    /// comparison so the semantic verdict reflects exactly the requested lanes.
+    #[serde(default = "default_backend_selection")]
+    pub selected_backends: Vec<DifferentialBackend>,
+}
+
+/// The canonical, fully-populated backend selection (node, bun, franken-engine,
+/// franken-core). Used as the serde default so historical inputs without the
+/// field deserialize to the prior all-lanes behavior.
+pub fn default_backend_selection() -> Vec<DifferentialBackend> {
+    vec![
+        DifferentialBackend::NodeLts,
+        DifferentialBackend::BunStable,
+        DifferentialBackend::FrankenEngine,
+        DifferentialBackend::FrankenCore,
+    ]
 }
 
 impl DifferentialOracleInput {
@@ -96,6 +114,7 @@ impl DifferentialOracleInput {
             engine_instruction_budget: None,
             node: ExternalRuntimeSpec::node_default(),
             bun: ExternalRuntimeSpec::bun_default(),
+            selected_backends: default_backend_selection(),
         }
     }
 
@@ -112,6 +131,28 @@ impl DifferentialOracleInput {
     pub fn with_engine_instruction_budget(mut self, instruction_budget: u64) -> Self {
         self.engine_instruction_budget = Some(instruction_budget);
         self
+    }
+
+    /// Restrict execution/comparison to the given backends. An empty selection
+    /// is normalized to the full set so the driver never produces an empty,
+    /// uncomparable report; ordering and duplicates in `backends` are ignored
+    /// because [`run_differential_oracle`] always emits the canonical order.
+    pub fn with_selected_backends(
+        mut self,
+        backends: impl IntoIterator<Item = DifferentialBackend>,
+    ) -> Self {
+        let mut selected: Vec<DifferentialBackend> = backends.into_iter().collect();
+        selected.sort_unstable();
+        selected.dedup();
+        if selected.is_empty() {
+            selected = default_backend_selection();
+        }
+        self.selected_backends = selected;
+        self
+    }
+
+    fn backend_selected(&self, backend: DifferentialBackend) -> bool {
+        self.selected_backends.contains(&backend)
     }
 }
 
@@ -344,12 +385,33 @@ pub struct DifferentialOracleReport {
 
 pub fn run_differential_oracle(input: &DifferentialOracleInput) -> DifferentialOracleReport {
     let timeout = Duration::from_millis(input.timeout_ms.max(1));
-    let backends = vec![
-        run_external_backend(&input.node, input.source.as_str(), timeout),
-        run_external_backend(&input.bun, input.source.as_str(), timeout),
-        run_franken_engine_backend(input.source.as_str(), input.engine_instruction_budget),
-        run_franken_core_backend(input.source.as_str()),
-    ];
+    // Emit lanes in canonical order regardless of the order the caller requested
+    // them, so the report is stable across invocations. Unselected lanes are not
+    // executed (no external process is spawned, no interpreter is invoked).
+    let mut backends = Vec::with_capacity(input.selected_backends.len());
+    if input.backend_selected(DifferentialBackend::NodeLts) {
+        backends.push(run_external_backend(
+            &input.node,
+            input.source.as_str(),
+            timeout,
+        ));
+    }
+    if input.backend_selected(DifferentialBackend::BunStable) {
+        backends.push(run_external_backend(
+            &input.bun,
+            input.source.as_str(),
+            timeout,
+        ));
+    }
+    if input.backend_selected(DifferentialBackend::FrankenEngine) {
+        backends.push(run_franken_engine_backend(
+            input.source.as_str(),
+            input.engine_instruction_budget,
+        ));
+    }
+    if input.backend_selected(DifferentialBackend::FrankenCore) {
+        backends.push(run_franken_core_backend(input.source.as_str()));
+    }
 
     let canonicalization = canonicalize_backend_receipts(&backends);
     let divergence_taxonomy = classify_differential_divergences(&backends, &canonicalization);

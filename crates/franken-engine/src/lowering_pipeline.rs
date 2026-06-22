@@ -8662,10 +8662,18 @@ fn lower_expression_to_ir1_inner(
                 // receiver — there is no real fs module object and that path would
                 // fault at runtime; recognition is purely syntactic. Arg order is
                 // source order (path, then data), matching `dispatch_host_io_hostcall`
-                // (arg[0]=path, arg[1]=content). Arity must match exactly; otherwise
-                // fall through so a malformed call is not silently mis-shaped.
-                let expected_args = if capability == "fs:write" { 2 } else { 1 };
-                if arguments.len() == expected_args {
+                // (arg[0]=path, arg[1]=content/encoding). Arity: writeFileSync is
+                // exactly `(path, data)`; readFileSync is `(path[, encoding])` where
+                // the optional encoding (bd-1xl17.d) selects the JS return shape
+                // (Buffer vs decoded string) at dispatch and is inert to the host
+                // effect. Otherwise fall through so a malformed call is not
+                // silently mis-shaped.
+                let arity_ok = if capability == "fs:write" {
+                    arguments.len() == 2
+                } else {
+                    matches!(arguments.len(), 1 | 2)
+                };
+                if arity_ok {
                     for arg in arguments {
                         lower_expression_to_ir1(
                             arg,
@@ -8680,7 +8688,7 @@ fn lower_expression_to_ir1_inner(
                     }
                     ops.push(Ir1Op::HostCall {
                         capability: capability.to_string(),
-                        arg_count: expected_args as u32,
+                        arg_count: arguments.len() as u32,
                     });
                     return Ok(());
                 }
@@ -8691,10 +8699,17 @@ fn lower_expression_to_ir1_inner(
                 // (`import { readFileSync } from 'node:fs'`) — recorded as a
                 // sentinel by the program pre-scan. Lower to the same `fs:`
                 // HostCall as the inline/binding member-call forms: args in source
-                // order (path, then data), arity exact (read=1, write=2);
-                // otherwise fall through so a malformed call is not mis-shaped.
-                let expected_args = if capability == "fs:write" { 2 } else { 1 };
-                if arguments.len() == expected_args {
+                // order (path, then data/encoding). Arity: write is exactly
+                // `(path, data)`; read is `(path[, encoding])` — the optional
+                // readFileSync encoding (bd-1xl17.d) steers the dispatch return
+                // shape and is inert to the host effect. Otherwise fall through so
+                // a malformed call is not mis-shaped.
+                let arity_ok = if capability == "fs:write" {
+                    arguments.len() == 2
+                } else {
+                    matches!(arguments.len(), 1 | 2)
+                };
+                if arity_ok {
                     for arg in arguments {
                         lower_expression_to_ir1(
                             arg,
@@ -8709,7 +8724,7 @@ fn lower_expression_to_ir1_inner(
                     }
                     ops.push(Ir1Op::HostCall {
                         capability: capability.to_string(),
-                        arg_count: expected_args as u32,
+                        arg_count: arguments.len() as u32,
                     });
                     return Ok(());
                 }
@@ -14084,6 +14099,80 @@ mod tests {
         assert!(
             !ops_have_hostcall(&ops, "fs:read"),
             "an unused fs named import must not emit an fs hostcall"
+        );
+    }
+
+    /// bd-1xl17.d helper: lower script-goal `source` to its IR1 op stream (the
+    /// non-Module analogue of [`lower_esm_source_ops`]).
+    fn lower_script_source_ops(source: &str, label: &str) -> Vec<Ir1Op> {
+        let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
+        let ir0 = Ir0Module::from_syntax_tree(tree, label);
+        lower_ir0_to_ir1(&ir0).expect("lower IR0->IR1").module.ops
+    }
+
+    /// bd-1xl17.d helper: arg_count of the first `fs:read` HostCall, if any.
+    fn fs_read_hostcall_arg_count(ops: &[Ir1Op]) -> Option<u32> {
+        ops.iter().find_map(|op| match op {
+            Ir1Op::HostCall {
+                capability,
+                arg_count,
+            } if capability.as_str() == "fs:read" => Some(*arg_count),
+            _ => None,
+        })
+    }
+
+    /// bd-1xl17.d: the inline `require('fs').readFileSync(path, 'utf8')` form
+    /// (arity 2) is recognized and lowers to an `fs:read` HostCall carrying BOTH
+    /// the path and the encoding (arg_count == 2); the encoding selects the JS
+    /// return shape at dispatch. Before the arity relaxation an arity-2 read fell
+    /// through the fs recognizer and faulted as an ordinary call.
+    #[test]
+    fn inline_read_with_encoding_lowers_to_arity_two_hostcall_bd_1xl17_d() {
+        let ops = lower_script_source_ops(
+            "require('fs').readFileSync('out.txt', 'utf8');\n",
+            "inline_read_encoding_fs.js",
+        );
+        assert_eq!(
+            fs_read_hostcall_arg_count(&ops),
+            Some(2),
+            "require('fs').readFileSync(path, 'utf8') must lower to fs:read with both args"
+        );
+    }
+
+    /// bd-1xl17.d: the inline arity-1 (no-encoding) read still lowers to a
+    /// single-arg `fs:read` — the relaxation widened the read to accept an
+    /// optional encoding without changing the bare form.
+    #[test]
+    fn inline_read_without_encoding_stays_arity_one_bd_1xl17_d() {
+        let ops = lower_script_source_ops(
+            "require('fs').readFileSync('out.txt');\n",
+            "inline_read_noenc_fs.js",
+        );
+        assert_eq!(
+            fs_read_hostcall_arg_count(&ops),
+            Some(1),
+            "require('fs').readFileSync(path) must still lower to fs:read with one arg"
+        );
+    }
+
+    /// bd-1xl17.d: a named ESM import read with an encoding
+    /// (`readFileSync(path, 'utf8')`) lowers to an `fs:read` HostCall with both
+    /// args (arg_count == 2) and still elides the node:fs module load.
+    #[test]
+    fn esm_read_with_encoding_lowers_to_arity_two_hostcall_bd_1xl17_d() {
+        let ops = lower_esm_source_ops(
+            "import { readFileSync } from 'node:fs';\n\
+             readFileSync('out.txt', 'utf8');\n",
+            "esm_read_encoding_fs.mjs",
+        );
+        assert_eq!(
+            fs_read_hostcall_arg_count(&ops),
+            Some(2),
+            "readFileSync(path, 'utf8') must lower to an fs:read HostCall with both args"
+        );
+        assert!(
+            !ops_have_fs_import_module(&ops),
+            "node:fs module load must be elided for the confirmed encoding read"
         );
     }
 

@@ -2842,6 +2842,8 @@ struct ClosureValue {
     captured_env: Vec<ScopeFrame>,
 }
 
+type RestoredAbruptCompletionState = (Option<(Value, Label)>, Option<Value>);
+
 /// A call stack frame.
 #[derive(Debug, Clone)]
 struct CallFrame {
@@ -4606,18 +4608,55 @@ impl InterpreterCore {
             }
         })?;
         Ok(match capability {
-            "fs:read" => result
-                .downcast::<Vec<u8>>()
-                .map_or(Value::Undefined, |bytes| {
-                    Value::Str(Arc::from(String::from_utf8_lossy(&bytes).into_owned()))
-                }),
-            "fs:write" => result
-                .downcast::<u64>()
-                .map_or(Value::Undefined, |written| {
-                    Value::Int(i64::try_from(written).unwrap_or(i64::MAX))
-                }),
+            "fs:read" => {
+                // bd-1xl17.d: Node parity for `readFileSync`'s return shape. The
+                // optional second arg (when present) is the character encoding:
+                // without it the call yields a `Buffer`, with a recognized
+                // encoding it yields the decoded string. The encoding is inert to
+                // the host effect itself (`create_effect_from_hostcall_tag` only
+                // consumes arg[1] for writes), so it only steers the value here.
+                let encoding = arg_strings.get(1).cloned();
+                match result.downcast::<Vec<u8>>() {
+                    Ok(bytes) => self.decode_fs_read_result(&bytes, encoding.as_deref())?,
+                    Err(_) => Value::Undefined,
+                }
+            }
+            // bd-1xl17.d: Node's `writeFileSync` returns `undefined`. The real
+            // write still happened and was recorded in the host-effect transcript
+            // (the ledger source for bd-5r99w.12); only the JS-visible value
+            // changes to match Node, not the recorded effect.
+            "fs:write" => Value::Undefined,
             _ => Value::Undefined,
         })
+    }
+
+    /// bd-1xl17.d: map the raw bytes a successful `fs:read` host effect produced
+    /// to the JS value `readFileSync` would return. Without an encoding Node
+    /// yields a `Buffer` (modeled here as a `Uint8Array`-backed value); with a
+    /// recognized character encoding it yields the decoded string. Encodings we
+    /// can faithfully produce without pulling new dependencies into the engine
+    /// (utf8/utf-8, latin1/binary, ascii, hex) are decoded here; anything else
+    /// (e.g. base64/base64url, ucs2/utf16le, or an unknown encoding) falls back
+    /// to the Buffer shape — a deliberately bounded gap tracked as a follow-up.
+    /// The Buffer path requires the `HeapAllocate` capability.
+    fn decode_fs_read_result(
+        &mut self,
+        bytes: &[u8],
+        encoding: Option<&str>,
+    ) -> Result<Value, InterpreterError> {
+        let decoded: Option<String> = match encoding.map(str::to_ascii_lowercase).as_deref() {
+            Some("utf8" | "utf-8") => Some(String::from_utf8_lossy(bytes).into_owned()),
+            Some("latin1" | "binary") => Some(bytes.iter().map(|&b| char::from(b)).collect()),
+            Some("ascii") => Some(bytes.iter().map(|&b| char::from(b & 0x7f)).collect()),
+            Some("hex") => Some(hex::encode(bytes)),
+            _ => None,
+        };
+        if let Some(text) = decoded {
+            return Ok(Value::Str(Arc::from(text)));
+        }
+        let values: Vec<Value> = bytes.iter().map(|&b| Value::Int(i64::from(b))).collect();
+        let view = self.alloc_typed_array_from_values(TypedArrayKind::Uint8, &values)?;
+        Ok(Value::Object(view))
     }
 
     // ---------------------------------------------------------------------------
@@ -6155,9 +6194,8 @@ impl InterpreterCore {
                 // ES2020 20.1.3.6: string form, optional radix, default 10.
                 // `ToIntegerOrInfinity(radix)` must be in 2..=36 or a RangeError is
                 // thrown. This path previously returned the literal string
-                // "RangeError" for an out-of-range radix (number_to_string_impl
-                // reuses DivisionByZero as a RangeError stand-in) and silently
-                // defaulted a non-finite radix to 10. (bd-i08nh, bd-cxmtb)
+                // "RangeError" for an out-of-range radix and silently defaulted
+                // a non-finite radix to 10. (bd-i08nh, bd-cxmtb)
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let num = Self::number_receiver_to_f64(&receiver);
                 let radix = match self.builtin_arg(args, 0)? {
@@ -8078,7 +8116,7 @@ impl InterpreterCore {
     fn unwind_call_stack_to(
         &mut self,
         target_depth: usize,
-    ) -> Result<(Option<(Value, Label)>, Option<Value>), InterpreterError> {
+    ) -> Result<RestoredAbruptCompletionState, InterpreterError> {
         let previous_scope_bytes = self.scope_chain_memory_bytes();
         let previous_closure_bytes = self.closures_memory_bytes();
         let previous_call_stack_bytes = self.call_stack_memory_bytes();
@@ -17640,6 +17678,38 @@ impl InterpreterCore {
         (index < length).then_some(index)
     }
 
+    fn normalize_array_length_assignment(value: &Value) -> Result<i64, InterpreterError> {
+        let number = match value {
+            Value::Int(n) => Some(*n as f64),
+            Value::Float(f) => Some(f.inner()),
+            Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+            Value::Null => Some(0.0),
+            Value::Str(s) => {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    Some(0.0)
+                } else {
+                    trimmed.parse::<f64>().ok()
+                }
+            }
+            _ => None,
+        };
+
+        let Some(number) = number else {
+            return Err(InterpreterError::RangeError {
+                message: format!("invalid array length {}", value.type_name()),
+            });
+        };
+        if !number.is_finite() || number < 0.0 || number > u32::MAX as f64 || number.fract() != 0.0
+        {
+            return Err(InterpreterError::RangeError {
+                message: format!("invalid array length {value}"),
+            });
+        }
+
+        Ok(number as u32 as i64)
+    }
+
     fn invoke_simple_reduce_callback(
         &mut self,
         module: Option<&Ir3Module>,
@@ -23334,22 +23404,20 @@ impl InterpreterCore {
                 // Number.prototype.toString(radix) implementation - unified spec-consistent version
                 let this_val = self.read_reg(args.start)?;
 
-                let number_val = match this_val {
-                    Value::Int(n) => n as f64,
-                    Value::Float(f) => f.inner(),
-                    _ => return Ok(Value::str("NaN")),
-                };
+                let number_val = Self::number_receiver_to_f64(&this_val);
 
-                let radix = if args.count >= 2 {
-                    Self::coerce_finite_radix_or_default(self.read_reg(args.start + 1)?, 10)
-                } else {
-                    10
-                };
+                let radix = self
+                    .optional_number_hostcall_integer_arg(args, 1)?
+                    .unwrap_or(10);
 
-                match self.number_to_string_impl(number_val, radix) {
-                    Ok(result) => Ok(Value::str(result)),
-                    Err(_) => Ok(Value::str("RangeError")),
+                if !(2..=36).contains(&radix) {
+                    return Err(InterpreterError::RangeError {
+                        message: format!("toString() radix must be between 2 and 36 (got {radix})"),
+                    });
                 }
+
+                self.number_to_string_impl(number_val, radix as i32)
+                    .map(Value::str)
             }
 
             "builtin:PromiseAll" => {
@@ -25447,30 +25515,20 @@ impl InterpreterCore {
             "builtin:NumberPrototypeToFixed" => {
                 // Number.prototype.toFixed(digits) implementation
                 let this_val = self.read_reg(args.start)?;
-                let num = match this_val {
-                    Value::Int(n) => n as f64,
-                    Value::Float(f) => f.inner(),
-                    Value::Str(s) => s.parse::<f64>().unwrap_or(f64::NAN),
-                    Value::Bool(true) => 1.0,
-                    Value::Bool(false) => 0.0,
-                    Value::Null => 0.0,
-                    _ => f64::NAN,
-                };
+                let num = Self::number_receiver_to_f64(&this_val);
 
-                let digits = if args.count > 1 {
-                    // Clamp at the integer level: a bare `n as usize` sign-loses
-                    // on a negative argument (e.g. -1 -> usize::MAX -> .min(20)
-                    // == 20), so clamp before the cast. (bd-qsz8t review)
-                    match self.read_reg(args.start + 1)? {
-                        Value::Int(n) => n.clamp(0, 20) as usize, // Max 20 digits
-                        Value::Float(f) => (f.inner() as i64).clamp(0, 20) as usize,
-                        _ => 0,
-                    }
-                } else {
-                    0
-                };
+                let digits = self
+                    .optional_number_hostcall_integer_arg(args, 1)?
+                    .unwrap_or_default();
+                if !(0..=100).contains(&digits) {
+                    return Err(InterpreterError::RangeError {
+                        message: format!(
+                            "toFixed() digits must be between 0 and 100 (got {digits})"
+                        ),
+                    });
+                }
 
-                Ok(Value::str(number_to_fixed_string(num, digits)))
+                Ok(Value::str(number_to_fixed_string(num, digits as usize)))
             }
 
             "builtin:ArrayPrototypeCopyWithin" => {
@@ -25609,25 +25667,18 @@ impl InterpreterCore {
             "builtin:NumberPrototypeToExponential" => {
                 // Number.prototype.toExponential(fractionDigits) implementation
                 let this_val = self.read_reg(args.start)?;
-                let num = match this_val {
-                    Value::Int(n) => n as f64,
-                    Value::Float(f) => f.inner(),
-                    Value::Str(s) => s.parse::<f64>().unwrap_or(f64::NAN),
-                    Value::Bool(true) => 1.0,
-                    Value::Bool(false) => 0.0,
-                    Value::Null => 0.0,
-                    _ => f64::NAN,
-                };
+                let num = Self::number_receiver_to_f64(&this_val);
 
-                let fraction_digits = if args.count > 1 {
-                    match self.read_reg(args.start + 1)? {
-                        Value::Int(n) => Some((n as usize).min(20)), // Max 20 digits
-                        Value::Float(f) => Some((f.inner() as usize).min(20)),
-                        _ => None,
-                    }
-                } else {
-                    None
-                };
+                let fraction_digits = self.optional_number_hostcall_integer_arg(args, 1)?;
+                if let Some(digits) = fraction_digits
+                    && !(0..=100).contains(&digits)
+                {
+                    return Err(InterpreterError::RangeError {
+                        message: format!(
+                            "toExponential() fractionDigits must be between 0 and 100 (got {digits})"
+                        ),
+                    });
+                }
 
                 if num.is_nan() {
                     Ok(Value::str("NaN"))
@@ -25639,7 +25690,7 @@ impl InterpreterCore {
                     }
                 } else {
                     let formatted = if let Some(digits) = fraction_digits {
-                        format!("{:.precision$e}", num, precision = digits)
+                        format!("{:.precision$e}", num, precision = digits as usize)
                     } else {
                         format!("{:e}", num)
                     };
@@ -25695,25 +25746,18 @@ impl InterpreterCore {
             "builtin:NumberPrototypeToPrecision" => {
                 // Number.prototype.toPrecision(precision) implementation
                 let this_val = self.read_reg(args.start)?;
-                let num = match this_val {
-                    Value::Int(n) => n as f64,
-                    Value::Float(f) => f.inner(),
-                    Value::Str(s) => s.parse::<f64>().unwrap_or(f64::NAN),
-                    Value::Bool(true) => 1.0,
-                    Value::Bool(false) => 0.0,
-                    Value::Null => 0.0,
-                    _ => f64::NAN,
-                };
+                let num = Self::number_receiver_to_f64(&this_val);
 
-                let precision = if args.count > 1 {
-                    match self.read_reg(args.start + 1)? {
-                        Value::Int(n) => Some((n as usize).clamp(1, 21)), // 1-21 range
-                        Value::Float(f) => Some((f.inner() as usize).clamp(1, 21)),
-                        _ => None,
-                    }
-                } else {
-                    None
-                };
+                let precision = self.optional_number_hostcall_integer_arg(args, 1)?;
+                if let Some(precision) = precision
+                    && !(1..=100).contains(&precision)
+                {
+                    return Err(InterpreterError::RangeError {
+                        message: format!(
+                            "toPrecision() precision must be between 1 and 100 (got {precision})"
+                        ),
+                    });
+                }
 
                 if num.is_nan() {
                     Ok(Value::str("NaN"))
@@ -25725,6 +25769,7 @@ impl InterpreterCore {
                     }
                 } else {
                     let formatted = if let Some(prec) = precision {
+                        let prec = prec as usize;
                         // Use exponential notation if number is too large/small for fixed precision
                         if num.abs() >= 10_f64.powi(prec as i32) || (num.abs() < 1.0 && num != 0.0)
                         {
@@ -26526,6 +26571,17 @@ impl InterpreterCore {
         }
     }
 
+    fn optional_number_hostcall_integer_arg(
+        &self,
+        args: RegRange,
+        index: u32,
+    ) -> Result<Option<i64>, InterpreterError> {
+        match self.builtin_arg(args, index)? {
+            Some(Value::Undefined) | None => Ok(None),
+            Some(value) => Ok(Some(Self::value_as_integer(&value))),
+        }
+    }
+
     fn utf16_suffix_from(
         text: &str,
         start_units: usize,
@@ -26956,7 +27012,9 @@ impl InterpreterCore {
     ) -> Result<String, InterpreterError> {
         // Validate radix according to ECMAScript's accepted range (2-36).
         if radix < 2 || radix > 36 {
-            return Err(InterpreterError::DivisionByZero); // Reuse error type for RangeError
+            return Err(InterpreterError::RangeError {
+                message: format!("toString() radix must be between 2 and 36 (got {radix})"),
+            });
         }
 
         // Handle special values
@@ -28733,15 +28791,45 @@ impl InterpreterCore {
                 got: "frozen object".to_string(),
             });
         }
+        let array_length_assignment = if object.is_array && key == "length" {
+            Some(Self::normalize_array_length_assignment(&value)?)
+        } else {
+            None
+        };
+        let deleted_index_keys = if let Some(new_length) = array_length_assignment {
+            let new_length = new_length as u64;
+            object
+                .properties
+                .keys()
+                .filter(|candidate| {
+                    Self::canonical_array_index_key(candidate)
+                        .is_some_and(|index| u64::from(index) >= new_length)
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
 
         let previous_bytes = object.properties.get(&key).map_or(0, |previous| {
             Self::estimate_property_entry_bytes(&key, previous)
         });
+        let deleted_index_bytes = deleted_index_keys
+            .iter()
+            .filter_map(|deleted_key| {
+                object
+                    .properties
+                    .get(deleted_key)
+                    .map(|value| Self::estimate_property_entry_bytes(deleted_key, value))
+            })
+            .sum::<u64>();
+        let value = array_length_assignment.map_or(value, Value::Int);
         let new_bytes = Self::estimate_property_entry_bytes(&key, &value);
         let requested_bytes = self
             .estimated_memory_bytes
             .saturating_sub(previous_bytes)
-            .saturating_add(new_bytes);
+            .saturating_add(new_bytes)
+            .saturating_sub(deleted_index_bytes);
         if requested_bytes > self.config.max_total_memory_bytes {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
         }
@@ -28761,11 +28849,20 @@ impl InterpreterCore {
                         object.cached_dense_length = None;
                     }
                 }
+                if let Some(new_length) = array_length_assignment {
+                    for deleted_key in &deleted_index_keys {
+                        object.properties.remove(deleted_key);
+                    }
+                    object.cached_dense_length = u32::try_from(new_length).ok();
+                }
 
                 object.properties.insert(key, value);
             }
         });
         self.estimated_memory_bytes = requested_bytes;
+        for deleted_key in &deleted_index_keys {
+            self.mark_deleted_for_in_iterators(object_id, deleted_key);
+        }
 
         // Trigger write barrier for GC correctness when setting object properties
         self.gc_write_barrier(object_id);
@@ -33682,14 +33779,16 @@ mod async_runtime_tests_current {
             r[1] = Value::Str(Arc::from("real effect bytes"));
         });
 
-        // fs:write through the interpreter dispatch performs a real write.
+        // fs:write through the interpreter dispatch performs a real write and —
+        // matching Node's `writeFileSync` — returns `undefined` (bd-1xl17.d). The
+        // byte count still lives in the recorded transcript, not the JS value.
         let write_result = core
             .dispatch_host_io_hostcall("fs:write", RegRange { start: 0, count: 2 })
             .expect("fs:write dispatch");
         assert_eq!(
             write_result,
-            Value::Int(17),
-            "fs:write must return the real bytes_written"
+            Value::Undefined,
+            "fs:write must return undefined to match Node's writeFileSync"
         );
         assert_eq!(
             std::fs::read(root.join("report.txt")).expect("written file on disk"),
@@ -33697,22 +33796,51 @@ mod async_runtime_tests_current {
             "the interpreter must have produced a real file"
         );
 
-        // fs:read through the interpreter dispatch returns the real bytes.
-        let read_result = core
+        // bd-1xl17.d: fs:read WITHOUT an encoding (arity 1) yields a Buffer
+        // (Uint8Array-backed) carrying the real bytes, matching `readFileSync(path)`.
+        let read_buffer = core
             .dispatch_host_io_hostcall("fs:read", RegRange { start: 0, count: 1 })
-            .expect("fs:read dispatch");
+            .expect("fs:read (no encoding) dispatch");
+        let Value::Object(buffer_id) = read_buffer else {
+            panic!(
+                "readFileSync without an encoding must return a Buffer object, got {read_buffer:?}"
+            );
+        };
+        let buffer_bytes: Vec<u8> = core
+            .read_array_like_values(buffer_id)
+            .iter()
+            .map(|value| match value {
+                Value::Int(byte) => u8::try_from(*byte).expect("Uint8Array element in 0..=255"),
+                other => panic!("Uint8Array element must be an Int byte, got {other:?}"),
+            })
+            .collect();
         assert_eq!(
-            read_result,
-            Value::Str(Arc::from("real effect bytes")),
-            "fs:read must surface the real file contents"
+            buffer_bytes, b"real effect bytes",
+            "the no-encoding read Buffer must contain the real file bytes"
         );
 
-        // Both real effects were captured in the replay transcript — the ledger
-        // source for bd-5r99w.12.
+        // bd-1xl17.d: fs:read WITH a recognized encoding ('utf8' in arg[1]) yields
+        // the decoded JS string, matching `readFileSync(path, 'utf8')`.
+        core.mutate_registers(|r| {
+            r[1] = Value::Str(Arc::from("utf8"));
+        });
+        let read_string = core
+            .dispatch_host_io_hostcall("fs:read", RegRange { start: 0, count: 2 })
+            .expect("fs:read (utf8) dispatch");
+        assert_eq!(
+            read_string,
+            Value::Str(Arc::from("real effect bytes")),
+            "the utf8 read must surface the real file contents as a string"
+        );
+
+        // All three real effects (one write + two reads) were captured in the
+        // replay transcript — the ledger source for bd-5r99w.12. The JS-visible
+        // return shape (undefined / Buffer / string) is orthogonal to what gets
+        // recorded: every dispatched fs effect still lands in the transcript.
         assert_eq!(
             recorder.entries().len(),
-            2,
-            "both dispatched effects must be recorded"
+            3,
+            "all dispatched fs effects (write + two reads) must be recorded"
         );
 
         // With no provider installed, fs hostcalls stay fail-closed (undefined).

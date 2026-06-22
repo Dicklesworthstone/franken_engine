@@ -1,0 +1,47 @@
+{
+  "commands": [
+    "target/release/frankenctl differential-oracle perf --manifest benchmarks/runtime_comparison/manifest.json --out report.json --events events.jsonl --warmup 3 --samples 10 --case-timeout-ms 120000 --engine-budget 2000000000 --node-bin <node> --bun-bin <bun>",
+    "scripts/build_e2_denominator_bundle.py --report report.json --corpus benchmarks/runtime_comparison/manifest.json --out-dir docs/perf/e2_denominator_bundle_v1"
+  ],
+  "determinism": {
+    "allow_network": false,
+    "allow_randomness": false,
+    "allow_wall_clock": true,
+    "max_clock_skew_seconds": 0,
+    "note": "wall-clock timing is measured and is inherently non-deterministic; the locked expected output is the byte-identical correctness verdict hash, not raw timings",
+    "reproducible_assertion": "correctness_verdict_hash"
+  },
+  "expected_outputs": [
+    {
+      "kind": "correctness_verdict",
+      "path": "denominator.json#correctness_verdicts",
+      "sha256": "sha256:70c438b8b9db6856de466eb4a7e0b9fdfa2e5b0930f27f9c9e16117985124410"
+    }
+  ],
+  "generated_at_utc": "20260622T032013Z",
+  "inputs": [
+    {
+      "kind": "corpus_manifest_file",
+      "path": "benchmarks/runtime_comparison/manifest.json",
+      "sha256": "sha256:969a05f1a8950b29a02992f2daf1ec21d03dea795d2394ca4b0ccde0e8576c7a"
+    },
+    {
+      "kind": "corpus_content_digest",
+      "path": "benchmarks/runtime_comparison/manifest.json#corpus_content",
+      "sha256": "sha256:fdb0c387b78380edf4460dd1e8247e91b950bc329dfa395b40b27e6aad4eef5b"
+    }
+  ],
+  "lock_id": "sha256:209b5ff204ed0f68d819986b2bdf9f53d23ad7f4d4d4f47f0444ec9b3ca6cde8",
+  "manifest_id": "sha256:36c340013dc3bdda603d8993a68f6e11cd1f825d8e1fa9eae2aa286a9d61efcc",
+  "replay": {
+    "replay_pointer": "replay://e2-denominator/sha256:209b5ff204ed0f68d819986b2bdf9f53d23ad7f4d4d4f47f0444ec9b3ca6cde8",
+    "trace_id": "trace-e2-denominator-f70502cf5b29"
+  },
+  "schema_hash": "sha256:068e0746b883683611b776666b0bee8ef4aa7f18c4dd46f02ab302d0f71ea65f",
+  "schema_version": "franken-engine.repro-lock.v1",
+  "source_commit": "f70502cf5b29593d938a6f173e60a059f7974bfa",
+  "verification": {
+    "command": "./scripts/run_e2_denominator_bundle_gate.sh ci",
+    "expected_verdict": "pass"
+  }
+}

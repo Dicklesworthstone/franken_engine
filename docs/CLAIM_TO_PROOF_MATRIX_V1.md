@@ -32,9 +32,13 @@ artifacts and `scripts/real_hot_path_proof_contract_gate.sh` validates the
 deterministic command, rch worker, target-dir, digest, metric, and proof-state
 contract.
 
-That lane does not promote the Node/Bun denominator claim. `FE-CLAIM-010`
-remains `target` until fresh Node and Bun denominator artifacts satisfy the
-benchmark denominator contract. Artifacts containing `hot_paths_simulation` or
+That lane does not promote the Node/Bun denominator claim. A measured,
+fairness-compliant Node/Bun denominator is now linked at
+`docs/perf/e2_denominator_bundle_v1` (bd-fqlfw.2.6/2.7), but it shows the native
+baseline interpreter at ~1087x slower than Node and ~1264x slower than Bun
+(`meets_3x_floor=false` for both). `FE-CLAIM-010` therefore remains `target` -
+the engine does not yet clear the >= 3x floor, and promotion to observed would
+require it to actually do so. Artifacts containing `hot_paths_simulation` or
 `MockCertificate` are fixture-only and the gate rejects them as backing evidence
 for observed performance claims.
 
@@ -56,7 +60,7 @@ Operator workflow, failure triage, and comparison steps live in
 | `FE-CLAIM-007` | operations | `README.md:93-99` | `observed` | allow documented CLI smoke workflow reference | `bd-3tsah` |
 | `FE-CLAIM-008` | operations | `README.md:2363` | `observed` | allow unsupported-surfaces support policy wording | `bd-1qkrc` |
 | `FE-CLAIM-009` | evidence | `README.md:213` | `observed` | gate refuses OBSERVED state without repro.lock (bd-cixqu.4.3); all OBSERVED rows have reproducibility bundles | `bd-cixqu.4.4` |
-| `FE-CLAIM-010` | performance | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:56-58` | `target` | downgrade until live Node/Bun denominator artifacts replace targeted placeholder throughput evidence | `bd-y6v8s` |
+| `FE-CLAIM-010` | performance | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:56-58` | `target` | measured denominator linked (`docs/perf/e2_denominator_bundle_v1`); engine ~1087x/1264x slower than Node/Bun, `meets_3x_floor=false`, so stays target | `bd-y6v8s` |
 | `FE-CLAIM-011` | security | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:58` | `observed` | allow observed red-team compromise-rate comparison with baseline validation | `bd-1vwza` |
 | `FE-CLAIM-012` | security | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:59-60` | `target` | downgraded observed->target (CEI B.2): no production-measured containment-latency artifact; the gate fails closed without `CONTAINMENT_LATENCY_METRIC_INPUT` | `bd-38mby` |
 | `FE-CLAIM-013` | replay | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:60` | `observed` | allow observed replay coverage gate plus byte-identical fixed-input CLI artifact proof | `bd-2488a` |

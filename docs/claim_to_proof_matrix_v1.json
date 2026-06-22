@@ -219,22 +219,22 @@
     {
       "actual_wording_state": "target",
       "allowed_state": "target",
-      "artifact_path": "scripts/run_throughput_disruptive_floor_metric_gate.sh",
+      "artifact_path": "docs/perf/e2_denominator_bundle_v1/denominator.json",
       "claim_id": "FE-CLAIM-010",
       "claim_scope": "performance",
       "claim_text": ">= 3x weighted-geometric-mean throughput versus Node and Bun under the benchmark denominator contract.",
-      "decision": "downgrade_until_live_baselines",
+      "decision": "stay_target_measured_below_3x_floor",
       "downgrade_text": "Target: >= 3x throughput versus Node and Bun under the declared benchmark denominator contract.",
       "freshness_days": null,
       "owning_bead": "bd-y6v8s",
-      "reason": "The throughput disruptive-floor gate exists, but no observed Node/Bun denominator artifact is linked; this claim remains target.",
+      "reason": "A measured Node/Bun denominator is now linked (docs/perf/e2_denominator_bundle_v1, bd-fqlfw.2.6/2.7). On a 28-case fairness-compliant corpus the native baseline interpreter's geomean throughput is 920 millionths of Node and 791 millionths of Bun (~1087x / ~1264x slower); meets_3x_floor is false for both baselines. The >= 3x claim is therefore not met by real numbers, so it stays target - now backed by a measured, repro.lock-addressed denominator instead of absence of data.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
         "end_line": 58,
         "must_contain": ">= 3x",
         "start_line": 56
       },
-      "verification_command": "./scripts/run_throughput_disruptive_floor_metric_gate.sh ci"
+      "verification_command": "./scripts/run_e2_denominator_bundle_gate.sh ci"
     },
     {
       "actual_wording_state": "observed",
@@ -560,7 +560,13 @@
     "throughput_denominator_target_evidence": {
       "claim_id": "FE-CLAIM-010",
       "current_state": "target",
-      "required_before_observed": "Fresh Node and Bun denominator artifacts under the benchmark denominator contract."
+      "linked_artifact": "docs/perf/e2_denominator_bundle_v1",
+      "measured_geomean_speedup_millionths": {
+        "node": 920,
+        "bun": 791
+      },
+      "meets_3x_floor": false,
+      "required_before_observed": "A fairness-compliant Node and Bun denominator is now linked (docs/perf/e2_denominator_bundle_v1, bd-fqlfw.2.6/2.7), but the engine does not meet the >= 3x floor (meets_3x_floor=false for both baselines). Promotion to observed requires the engine to actually clear the floor; until then the claim stays target."
     }
   },
   "policy_id": "runtime-charter-claim-language-v1",

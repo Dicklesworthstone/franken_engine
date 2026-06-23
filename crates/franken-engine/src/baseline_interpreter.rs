@@ -4630,15 +4630,16 @@ impl InterpreterCore {
         })
     }
 
-    /// bd-1xl17.d: map the raw bytes a successful `fs:read` host effect produced
-    /// to the JS value `readFileSync` would return. Without an encoding Node
-    /// yields a `Buffer` (modeled here as a `Uint8Array`-backed value); with a
-    /// recognized character encoding it yields the decoded string. Encodings we
-    /// can faithfully produce without pulling new dependencies into the engine
-    /// (utf8/utf-8, latin1/binary, ascii, hex) are decoded here; anything else
-    /// (e.g. base64/base64url, ucs2/utf16le, or an unknown encoding) falls back
-    /// to the Buffer shape — a deliberately bounded gap tracked as a follow-up.
-    /// The Buffer path requires the `HeapAllocate` capability.
+    /// bd-1xl17.d / bd-rul7k: map the raw bytes a successful `fs:read` host effect
+    /// produced to the JS value `readFileSync` would return. Without an encoding
+    /// Node yields a `Buffer` (modeled here as a `Uint8Array`-backed value); with
+    /// a recognized character encoding it yields the decoded string. The
+    /// dependency-free Node `BufferEncoding` values are handled here: utf8/utf-8,
+    /// utf16le/utf-16le/ucs2/ucs-2, latin1/binary, ascii, and hex. base64/
+    /// base64url (needs a base64 dep), the options-object call form
+    /// `readFileSync(path, { encoding })` (which the lowering does not yet thread
+    /// through), and unknown encodings fall back to the Buffer shape — tracked as
+    /// bd-rul7k. The Buffer path requires the `HeapAllocate` capability.
     fn decode_fs_read_result(
         &mut self,
         bytes: &[u8],
@@ -4646,6 +4647,16 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let decoded: Option<String> = match encoding.map(str::to_ascii_lowercase).as_deref() {
             Some("utf8" | "utf-8") => Some(String::from_utf8_lossy(bytes).into_owned()),
+            Some("utf16le" | "utf-16le" | "ucs2" | "ucs-2") => {
+                // UTF-16LE: little-endian u16 code units. A trailing odd byte is
+                // dropped by chunks_exact (Node would surface a replacement char);
+                // the common even-length case is faithful.
+                let units: Vec<u16> = bytes
+                    .chunks_exact(2)
+                    .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                    .collect();
+                Some(String::from_utf16_lossy(&units))
+            }
             Some("latin1" | "binary") => Some(bytes.iter().map(|&b| char::from(b)).collect()),
             Some("ascii") => Some(bytes.iter().map(|&b| char::from(b & 0x7f)).collect()),
             Some("hex") => Some(hex::encode(bytes)),
@@ -33858,6 +33869,61 @@ mod async_runtime_tests_current {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// bd-rul7k: `decode_fs_read_result` honors the dependency-free single-arg
+    /// Node `BufferEncoding` values (string output, case-insensitive) and falls
+    /// back to a Buffer for the no-encoding and unknown-encoding paths. Direct
+    /// unit coverage of the encoding matrix (utf8/utf16le/latin1/ascii/hex).
+    #[test]
+    fn decode_fs_read_result_encoding_matrix_bd_rul7k() {
+        let mut core = test_interpreter();
+        let bytes = b"real effect bytes";
+
+        // Recognized character encodings -> decoded JS strings.
+        assert_eq!(
+            core.decode_fs_read_result(bytes, Some("utf8")).unwrap(),
+            Value::Str(Arc::from("real effect bytes"))
+        );
+        assert_eq!(
+            core.decode_fs_read_result(bytes, Some("UTF-8")).unwrap(),
+            Value::Str(Arc::from("real effect bytes")),
+            "encoding match is case-insensitive"
+        );
+        assert_eq!(
+            core.decode_fs_read_result(bytes, Some("latin1")).unwrap(),
+            Value::Str(Arc::from("real effect bytes"))
+        );
+        assert_eq!(
+            core.decode_fs_read_result(bytes, Some("ascii")).unwrap(),
+            Value::Str(Arc::from("real effect bytes"))
+        );
+        assert_eq!(
+            core.decode_fs_read_result(bytes, Some("hex")).unwrap(),
+            Value::Str(Arc::from(hex::encode(bytes)))
+        );
+
+        // utf16le round-trips an even-length little-endian u16 byte stream.
+        let utf16_bytes: Vec<u8> = "hi".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert_eq!(
+            core.decode_fs_read_result(&utf16_bytes, Some("utf16le"))
+                .unwrap(),
+            Value::Str(Arc::from("hi"))
+        );
+
+        // No encoding -> Buffer (Uint8Array-backed); unknown encoding also falls back.
+        assert!(matches!(
+            core.decode_fs_read_result(bytes, None).unwrap(),
+            Value::Object(_)
+        ));
+        assert!(
+            matches!(
+                core.decode_fs_read_result(bytes, Some("totally-bogus"))
+                    .unwrap(),
+                Value::Object(_)
+            ),
+            "unknown encoding falls back to Buffer"
+        );
     }
 
     /// bd-0zybl: reading a property off a Secret-labeled object must taint the

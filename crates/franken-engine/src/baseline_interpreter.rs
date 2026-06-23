@@ -684,6 +684,11 @@ pub enum BuiltinFunctionKind {
     /// `String.prototype.substring` — receiver-aware; clamps negatives to 0 and
     /// swaps start/end when start > end (bd-9a8cz.1).
     StringSubstring,
+    /// `String.prototype.substr` — legacy (Annex B B.2.3.1) but normative;
+    /// `substr(start, length)`: a negative start counts from the end
+    /// (`max(len + start, 0)`) and an omitted length takes the rest. Distinct
+    /// from `substring` (bd-fqlfw.2.11.2).
+    StringSubstr,
     /// `String.prototype.replace` — receiver-aware; string search value,
     /// first-occurrence literal replacement (bd-9a8cz.1).
     StringReplace,
@@ -1154,6 +1159,15 @@ impl BuiltinFunction {
     fn string_substring() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringSubstring,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_substr() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringSubstr,
             module_specifier: String::new(),
             iterator_handle: None,
             bound_object: None,
@@ -2049,6 +2063,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StringLastIndexOf => "lastIndexOf",
             BuiltinFunctionKind::StringSlice => "slice",
             BuiltinFunctionKind::StringSubstring => "substring",
+            BuiltinFunctionKind::StringSubstr => "substr",
             BuiltinFunctionKind::StringReplace => "replace",
             BuiltinFunctionKind::StringMatch => "match",
             BuiltinFunctionKind::StringSearch => "search",
@@ -6151,6 +6166,11 @@ impl InterpreterCore {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
                 self.string_substring_impl(&value, args)
+            }
+            BuiltinFunctionKind::StringSubstr => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                self.string_substr_impl(&value, args)
             }
             BuiltinFunctionKind::StringReplace => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -13147,6 +13167,42 @@ impl InterpreterCore {
         Ok(Value::str(result))
     }
 
+    fn string_substr_impl(
+        &mut self,
+        this_str: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        // ES2020 Annex B B.2.3.1 (String.prototype.substr): `substr(start, length)`.
+        // `start` is coerced via ToIntegerOrInfinity; a negative start counts from
+        // the end (`max(size + start, 0)`), a non-negative one clamps to `size`.
+        // An omitted `length` takes the rest of the string; the result length is
+        // `max(min(length, size - start), 0)`, so a non-positive length yields "".
+        // This is deliberately NOT `substring`, which clamps both args to [0, len]
+        // and swaps them. (bd-fqlfw.2.11.2)
+        let chars: Vec<char> = this_str.chars().collect();
+        let size = chars.len() as i64;
+        let int_start = match self.builtin_arg(args, 0)? {
+            Some(Value::Undefined) | None => 0,
+            Some(arg) => Self::value_as_integer(&arg),
+        };
+        let int_length = match self.builtin_arg(args, 1)? {
+            Some(Value::Undefined) | None => size,
+            Some(arg) => Self::value_as_integer(&arg),
+        };
+        let start = if int_start < 0 {
+            size.saturating_add(int_start).max(0)
+        } else {
+            int_start.min(size)
+        };
+        let result_length = int_length.min(size - start).max(0);
+        if result_length == 0 {
+            return Ok(Value::str(String::new()));
+        }
+        let end = start + result_length;
+        let result: String = chars[start as usize..end as usize].iter().collect();
+        Ok(Value::str(result))
+    }
+
     fn string_replace_impl(
         &mut self,
         this_str: &str,
@@ -13254,6 +13310,7 @@ impl InterpreterCore {
             "lastIndexOf" => Value::BuiltinFunction(BuiltinFunction::string_last_index_of()),
             "slice" => Value::BuiltinFunction(BuiltinFunction::string_slice()),
             "substring" => Value::BuiltinFunction(BuiltinFunction::string_substring()),
+            "substr" => Value::BuiltinFunction(BuiltinFunction::string_substr()),
             "replace" => Value::BuiltinFunction(BuiltinFunction::string_replace()),
             "match" => Value::BuiltinFunction(BuiltinFunction::string_match()),
             "search" => Value::BuiltinFunction(BuiltinFunction::string_search()),

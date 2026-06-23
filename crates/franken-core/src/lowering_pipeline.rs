@@ -2764,7 +2764,17 @@ pub fn lower_ir2_to_ir3(
 
     let ir2_hash = ir2.content_hash();
     let mut ir3 = Ir3Module::new(ir2_hash, ir2.header.source_label.clone());
-    let mut register_cursor: Reg = 0;
+    // Register 0 is the module's reserved completion-value slot: the baseline
+    // interpreter returns `read_reg(0)` when execution falls off the end of the
+    // instruction stream (Halt), and module-level `Return` lowers to
+    // `Return { value: 0 }`. The expression-statement `Pop` handler keeps r0
+    // fresh by emitting `Move { dst: 0, src: <value> }`. Binding/temporary
+    // allocation must therefore start at register 1 — if it started at 0 the
+    // first-declared binding (e.g. a top-level `function` closure) would be
+    // pinned to r0 and then silently clobbered by every later expression-
+    // statement Pop, breaking any call that reads that binding inside a loop
+    // (bd-fqlfw.2.11.1: "expected function, got boolean").
+    let mut register_cursor: Reg = 1;
     let mut binding_registers = BTreeMap::<BindingId, Reg>::new();
     let mut required_capabilities = BTreeSet::<String>::new();
     let mut value_stack: Vec<Reg> = Vec::new();

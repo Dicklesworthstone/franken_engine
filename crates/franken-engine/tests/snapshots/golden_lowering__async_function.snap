@@ -15,8 +15,9 @@ constant_pool:
   <empty>
 
 instructions:
-  0000: {"CreateAsyncFunction":{"dst":0,"function_index":1,"capture_count":0}}
-  0001: {"Return":{"value":0}}
-  0002: "Halt"
-  0003: {"LoadInt":{"dst":0,"value":1}}
-  0004: {"Return":{"value":0}}
+  0000: {"CreateAsyncFunction":{"dst":1,"function_index":1,"capture_count":0}}
+  0001: {"Move":{"dst":0,"src":1}}
+  0002: {"Return":{"value":0}}
+  0003: "Halt"
+  0004: {"LoadInt":{"dst":0,"value":1}}
+  0005: {"Return":{"value":0}}

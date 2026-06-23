@@ -15,16 +15,16 @@ constant_pool:
   <empty>
 
 instructions:
-  0000: {"LoadNull":{"dst":0}}
-  0001: {"Move":{"dst":1,"src":0}}
-  0002: {"Move":{"dst":0,"src":1}}
-  0003: {"Move":{"dst":2,"src":1}}
-  0004: {"JumpIfNullish":{"cond":2,"target":6}}
+  0000: {"LoadNull":{"dst":1}}
+  0001: {"Move":{"dst":2,"src":1}}
+  0002: {"Move":{"dst":0,"src":2}}
+  0003: {"Move":{"dst":3,"src":2}}
+  0004: {"JumpIfNullish":{"cond":3,"target":6}}
   0005: {"Jump":{"target":9}}
-  0006: {"LoadInt":{"dst":3,"value":42}}
-  0007: {"Move":{"dst":1,"src":3}}
-  0008: {"Move":{"dst":0,"src":1}}
-  0009: {"Move":{"dst":4,"src":1}}
-  0010: {"Move":{"dst":0,"src":4}}
+  0006: {"LoadInt":{"dst":4,"value":42}}
+  0007: {"Move":{"dst":2,"src":4}}
+  0008: {"Move":{"dst":0,"src":2}}
+  0009: {"Move":{"dst":5,"src":2}}
+  0010: {"Move":{"dst":0,"src":5}}
   0011: {"Return":{"value":0}}
   0012: "Halt"

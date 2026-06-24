@@ -3175,6 +3175,14 @@ because the matrix is consistent with the (absent) proof evidence. See
 `docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md` for the per-claim
 reality assessment and the path to promotion (G.13 / bd-cixqu.7.16).
 
+When these six claims do promote, the proof artifacts this gate (and G.9)
+recheck are the same artifacts that ship to downstream consumers inside the Y.1
+proof bundle. Operators and downstream consumers verify that bundle through the
+**Y.4 operator surface** — `runbooks/scripts/verify_proof_bundle.sh`, the
+*Proof Bundle Verification Operator Surface (Y.4)* section below, and the public
+guide `docs/PROOF_BUNDLE_VERIFICATION.md` — so a G.10/G.13 promotion is
+externally re-checkable without the FrankenEngine source tree.
+
 ## Proof Bundle Export (Y.1)
 
 `bd-cixqu.25.1` packages a **third-party-verifiable proof bundle** alongside the
@@ -3209,6 +3217,54 @@ post-export tamper of a proof body breaks the match (tamper-evident). The
 `selftest` proves export → complete, deterministic tar entries, digest
 reproducibility across re-exports, and tamper detection — without an engine
 build.
+
+## Proof Bundle Verification Operator Surface (Y.4)
+
+`bd-cixqu.25.4` is the friendly operator/consumer surface over the Y.1 bundle and
+the Y.2 clean-room checker. A downstream consumer verifies a release proof bundle
+with a single command — no FrankenEngine source tree required — and gets back a
+classification that tells them exactly what to do next:
+
+```bash
+# Auto: docker clean-room for a tar when the daemon is reachable, else local python3.
+runbooks/scripts/verify_proof_bundle.sh verify proof_bundle.tar.gz
+
+# Prove all four classifications without an engine build.
+runbooks/scripts/verify_proof_bundle.sh selftest
+
+# Composition gate: real round-trip + tamper + drift + anti-drift constants + docker.
+./scripts/run_y4_proof_bundle_operator_surface.sh ci
+
+# Replay a preserved gate bundle (re-verify valid + tampered tars; fails closed).
+./scripts/e2e/y4_proof_bundle_operator_surface_replay.sh
+```
+
+The wrapper re-checks via the **single source of truth** Y.2 checker
+(`docker/y2_proof_bundle_verifier/verify_proof_bundle.py`, run in the clean-room
+image or directly with `python3`) and layers a second, orthogonal dimension the
+checker does not: proof-assistant **version drift**. Because the recheck digest
+is a pure function of the proof bytes (version-independent), the two failure
+dimensions never collide, so the wrapper classifies cleanly:
+
+- `verified` (exit 0) — recheck digest matches the trust anchor; toolchain
+  aligned or simply absent. Safe to rely on.
+- `version_drift` (exit 0 advisory, exit 2 under `--strict-version`) — content is
+  intact, but the operator's Lean/Coq toolchain differs from the bundle pin.
+  **Update the toolchain**; the release itself is fine.
+- `proof_regression` (exit 1, fail-closed) — the recheck digest no longer
+  reproduces the trust anchor (tampered/non-proven proof, or incomplete bundle).
+  **Escalate to maintainers**; `failing_claims` names the offending proof(s).
+
+The classified verdict (`franken-engine.proof-bundle-operator-verdict.v1`) and a
+per-release history feed the operator-facing
+`ProofBundleStatusPanel`
+(`crates/franken-engine/src/proof_bundle_status_panel.rs`) for the frankentui
+console. Per bd-cixqu.45 every run writes a content-addressed bundle under
+`artifacts/proof_bundle_operator_verify/<ts>/` (events.jsonl, commands.txt,
+operator + raw verdicts, run_manifest.json). The Y.4 `ci` gate's PIN 4 asserts
+the wrapper's Y.2 image/gate constants agree with the Rust canonical constants
+(`PROOF_BUNDLE_VERIFIER_IMAGE` / `_GATE`) so the three tracks cannot drift. Full
+procedure: [`docs/PROOF_BUNDLE_VERIFICATION.md`](../PROOF_BUNDLE_VERIFICATION.md).
 
 ## RGC Reproducibility-Universality Gate (bd-cixqu.14.3, Track N)
 

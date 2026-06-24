@@ -387,6 +387,7 @@ pub mod promise_model;
 pub mod promotion_gate_runner;
 pub mod proof_artifact;
 pub mod proof_backed_compression;
+pub mod proof_bundle_status_panel;
 pub mod proof_chain_composition;
 pub mod proof_evidence_index;
 pub mod proof_ingestion;

@@ -1,0 +1,565 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frankenengine.local/schemas/semantic_fidelity_vector_schema_v1.json",
+  "title": "FrankenEngine Semantic Fidelity Vector Suite v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "suite_id",
+    "owning_bead",
+    "vectors"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "franken-engine.semantic-fidelity-vectors.v1"
+    },
+    "suite_id": {
+      "type": "string",
+      "pattern": "^semfid-suite-[a-z0-9][a-z0-9._-]*$"
+    },
+    "owning_bead": {
+      "type": "string",
+      "pattern": "^bd-[a-z0-9]+(\\.[0-9]+)*$"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "determinism_policy": {
+      "$ref": "#/$defs/determinism_policy"
+    },
+    "vectors": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/vector"
+      }
+    }
+  },
+  "$defs": {
+    "vector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "vector_id",
+        "semantic_family",
+        "description",
+        "source",
+        "route_under_test",
+        "expectation",
+        "analyzed_scope",
+        "hashes",
+        "provenance",
+        "remediation"
+      ],
+      "properties": {
+        "vector_id": {
+          "type": "string",
+          "pattern": "^semfid-[a-z0-9][a-z0-9._-]*$"
+        },
+        "semantic_family": {
+          "enum": [
+            "array_length_range",
+            "catchable_error_object",
+            "number_range_or_radix",
+            "receiver_validation",
+            "string_from_code_point",
+            "string_repeat_range",
+            "to_integer_or_infinity",
+            "unsupported_surface"
+          ]
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "parse_goal",
+                "inline_source"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "inline_source"
+                },
+                "parse_goal": {
+                  "$ref": "#/$defs/parse_goal"
+                },
+                "inline_source": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "source_label": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "parse_goal",
+                "fixture_path"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "fixture_path"
+                },
+                "parse_goal": {
+                  "$ref": "#/$defs/parse_goal"
+                },
+                "fixture_path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "source_label": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          ]
+        },
+        "route_under_test": {
+          "$ref": "#/$defs/route"
+        },
+        "oracle_routes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/route"
+          },
+          "default": []
+        },
+        "expectation": {
+          "$ref": "#/$defs/expectation"
+        },
+        "analyzed_scope": {
+          "$ref": "#/$defs/analyzed_scope"
+        },
+        "hashes": {
+          "$ref": "#/$defs/hashes"
+        },
+        "provenance": {
+          "$ref": "#/$defs/provenance"
+        },
+        "remediation": {
+          "$ref": "#/$defs/remediation"
+        }
+      }
+    },
+    "parse_goal": {
+      "enum": [
+        "script",
+        "module",
+        "function_body",
+        "expression"
+      ]
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "route_id",
+        "route_kind"
+      ],
+      "properties": {
+        "route_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._:-]*$"
+        },
+        "route_kind": {
+          "enum": [
+            "source_eval",
+            "builtin_function_kind",
+            "hostcall_builtin",
+            "string_intrinsic_table",
+            "stdlib_reference",
+            "node_oracle",
+            "bun_oracle",
+            "test262_context"
+          ]
+        },
+        "engine_lane": {
+          "enum": [
+            "quickjs_inspired",
+            "v8_inspired",
+            "hybrid_router",
+            "not_applicable"
+          ]
+        },
+        "capability": {
+          "type": "string",
+          "pattern": "^builtin:[A-Za-z0-9]+$"
+        },
+        "builtin_id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "builtin_function_kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "stdlib_builtin_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "external_runtime": {
+          "enum": [
+            "node",
+            "bun"
+          ]
+        },
+        "version_hint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/source_ref"
+          },
+          "default": []
+        }
+      }
+    },
+    "expectation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "value_kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "normal"
+            },
+            "value_kind": {
+              "enum": [
+                "string",
+                "integer",
+                "float",
+                "boolean",
+                "null",
+                "undefined",
+                "object_summary"
+              ]
+            },
+            "value": {},
+            "normalization": {
+              "enum": [
+                "exact",
+                "console_trimmed",
+                "json_canonical",
+                "object_summary"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "error_class"
+          ],
+          "properties": {
+            "kind": {
+              "const": "js_error"
+            },
+            "error_class": {
+              "enum": [
+                "Error",
+                "TypeError",
+                "RangeError",
+                "ReferenceError",
+                "SyntaxError",
+                "EvalError"
+              ]
+            },
+            "message_contains": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "catchable": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "reason_code",
+            "consumer_action"
+          ],
+          "properties": {
+            "kind": {
+              "const": "unsupported"
+            },
+            "reason_code": {
+              "$ref": "#/$defs/reason_code"
+            },
+            "consumer_action": {
+              "$ref": "#/$defs/consumer_action"
+            },
+            "notes": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "reason_code",
+            "consumer_action"
+          ],
+          "properties": {
+            "kind": {
+              "const": "degraded"
+            },
+            "reason_code": {
+              "$ref": "#/$defs/reason_code"
+            },
+            "consumer_action": {
+              "$ref": "#/$defs/consumer_action"
+            },
+            "notes": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "reason_code",
+            "consumer_action"
+          ],
+          "properties": {
+            "kind": {
+              "const": "expected_unknown"
+            },
+            "reason_code": {
+              "$ref": "#/$defs/reason_code"
+            },
+            "consumer_action": {
+              "$ref": "#/$defs/consumer_action"
+            },
+            "notes": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "analyzed_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope_status",
+        "claim_policy",
+        "notes"
+      ],
+      "properties": {
+        "scope_status": {
+          "enum": [
+            "analyzed",
+            "known_gap",
+            "unsupported",
+            "degraded",
+            "expected_unknown",
+            "out_of_scope"
+          ]
+        },
+        "claim_policy": {
+          "enum": [
+            "no_claim_strengthening",
+            "regression_guard_only",
+            "candidate_observed_after_capstone"
+          ]
+        },
+        "notes": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "hashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_sha256",
+        "route_metadata_sha256",
+        "expectation_sha256"
+      ],
+      "properties": {
+        "source_sha256": {
+          "$ref": "#/$defs/sha256_hex"
+        },
+        "route_metadata_sha256": {
+          "$ref": "#/$defs/sha256_hex"
+        },
+        "expectation_sha256": {
+          "$ref": "#/$defs/sha256_hex"
+        },
+        "fixture_file_sha256": {
+          "$ref": "#/$defs/sha256_hex"
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bead_refs",
+        "source_refs"
+      ],
+      "properties": {
+        "bead_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^bd-[a-z0-9]+(\\.[0-9]+)*$"
+          }
+        },
+        "source_refs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/source_ref"
+          }
+        }
+      }
+    },
+    "remediation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "failure_reason_codes",
+        "existing_bead_refs",
+        "suggested_next_action"
+      ],
+      "properties": {
+        "failure_reason_codes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reason_code"
+          }
+        },
+        "existing_bead_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^bd-[a-z0-9]+(\\.[0-9]+)*$"
+          }
+        },
+        "suggested_next_action": {
+          "enum": [
+            "link_existing_bead",
+            "create_semantic_drift_bead",
+            "mark_unsupported",
+            "record_degraded_oracle",
+            "no_action_expected"
+          ]
+        },
+        "suggested_bead_title": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "source_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "symbol": {
+          "type": "string",
+          "minLength": 1
+        },
+        "line_hint": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "determinism_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ordering",
+        "hash_preimage",
+        "duplicate_vector_id_policy"
+      ],
+      "properties": {
+        "ordering": {
+          "const": "lexicographic_by_vector_id_then_route_id"
+        },
+        "hash_preimage": {
+          "const": "length_prefixed_utf8_fields_v1"
+        },
+        "duplicate_vector_id_policy": {
+          "const": "fail_closed"
+        }
+      }
+    },
+    "reason_code": {
+      "enum": [
+        "ambiguous_expectation",
+        "duplicate_vector_id",
+        "expected_error_class_mismatch",
+        "expected_value_mismatch",
+        "external_oracle_unavailable",
+        "fixture_file_hash_mismatch",
+        "incomplete_artifact",
+        "malformed_vector",
+        "missing_oracle",
+        "nondeterministic_output",
+        "route_disagreement",
+        "source_hash_mismatch",
+        "unsupported_route"
+      ]
+    },
+    "consumer_action": {
+      "enum": [
+        "fail_closed",
+        "surface_degraded",
+        "record_and_continue",
+        "link_existing_bead",
+        "create_followup_bead"
+      ]
+    },
+    "sha256_hex": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

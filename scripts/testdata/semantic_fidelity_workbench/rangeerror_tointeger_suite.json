@@ -1,0 +1,705 @@
+{
+  "schema_version": "franken-engine.semantic-fidelity-vectors.v1",
+  "suite_id": "semfid-suite-rangeerror-tointeger-v1",
+  "owning_bead": "bd-mihky.4",
+  "description": "Seed semantic-fidelity vectors for RangeError and ToIntegerOrInfinity builtin edges.",
+  "determinism_policy": {
+    "ordering": "lexicographic_by_vector_id_then_route_id",
+    "hash_preimage": "length_prefixed_utf8_fields_v1",
+    "duplicate_vector_id_policy": "fail_closed"
+  },
+  "vectors": [
+    {
+      "vector_id": "semfid-string-repeat-negative-count-range-error",
+      "semantic_family": "string_repeat_range",
+      "description": "String.prototype.repeat negative count throws RangeError.",
+      "source": {
+        "kind": "inline_source",
+        "parse_goal": "script",
+        "inline_source": "\"x\".repeat(-1);"
+      },
+      "route_under_test": {
+        "route_id": "oracle.node.string-repeat-negative-count",
+        "route_kind": "node_oracle",
+        "external_runtime": "node",
+        "source_refs": [
+          {
+            "path": "scripts/lockstep_runtime_adapter_node.mjs"
+          }
+        ]
+      },
+      "oracle_routes": [],
+      "expectation": {
+        "kind": "js_error",
+        "error_class": "RangeError",
+        "catchable": true
+      },
+      "analyzed_scope": {
+        "scope_status": "analyzed",
+        "claim_policy": "external_oracle_regression_seed",
+        "notes": "Closed bd-8tsdh regression seed; engine-route execution is deferred to the gate lane."
+      },
+      "hashes": {
+        "source_sha256": "sha256:2ceb802d7b4abb586b6e84d93c583d5a2648bed7f11739b5035811b83148d81b",
+        "route_metadata_sha256": "sha256:f9434f74909ed552fefb4938f8f1ba032656b0e9782c26cca8277bf8c9d7ba95",
+        "expectation_sha256": "sha256:e3cc6e889fef1326c02daeb5fef76001dcc473659fe01334e1d041b6611f66aa"
+      },
+      "provenance": {
+        "bead_refs": [
+          "bd-8tsdh",
+          "bd-xulus",
+          "bd-mihky.1"
+        ],
+        "source_refs": [
+          {
+            "path": "crates/franken-engine/tests/string_prototype_methods_part2_bd9a8cz1.rs",
+            "symbol": "repeat_negative_count_is_range_error_bd_8tsdh"
+          }
+        ]
+      },
+      "remediation": {
+        "failure_reason_codes": [
+          "expected_error_class_mismatch"
+        ],
+        "existing_bead_refs": [
+          "bd-xulus"
+        ],
+        "suggested_next_action": "link_existing_bead"
+      }
+    },
+    {
+      "vector_id": "semfid-string-repeat-fractional-count-tointeger",
+      "semantic_family": "string_repeat_range",
+      "description": "String.prototype.repeat applies ToIntegerOrInfinity and truncates fractional count.",
+      "source": {
+        "kind": "inline_source",
+        "parse_goal": "script",
+        "inline_source": "\"x\".repeat(2.7);"
+      },
+      "route_under_test": {
+        "route_id": "oracle.node.string-repeat-fractional-count",
+        "route_kind": "node_oracle",
+        "external_runtime": "node"
+      },
+      "oracle_routes": [],
+      "expectation": {
+        "kind": "normal",
+        "value": "xx"
+      },
+      "analyzed_scope": {
+        "scope_status": "analyzed",
+        "claim_policy": "external_oracle_semantic_seed",
+        "notes": "Positive ToIntegerOrInfinity edge for the same builtin family as bd-8tsdh."
+      },
+      "hashes": {
+        "source_sha256": "sha256:9d8f74fca94d80aa36dd9396534d6d9c0eb0556b2e1eadd480550ee745cb6712",
+        "route_metadata_sha256": "sha256:191ef7a2c866fbd076a69167a1bce217425b70b035a70955365d53ba0c00a764",
+        "expectation_sha256": "sha256:6d05be6bd1433384e14325c4f5f4c919ebe7ef19bf71b3c0e2954418244be311"
+      },
+      "provenance": {
+        "bead_refs": [
+          "bd-8tsdh",
+          "bd-mihky.1"
+        ],
+        "source_refs": [
+          {
+            "path": "crates/franken-engine/tests/string_prototype_methods_part2_bd9a8cz1.rs",
+            "symbol": "repeat_concatenates_copies"
+          }
+        ]
+      },
+      "remediation": {
+        "failure_reason_codes": [
+          "expected_value_mismatch"
+        ],
+        "existing_bead_refs": [
+          "bd-xulus"
+        ],
+        "suggested_next_action": "propose_followup_bead"
+      }
+    },
+    {
+      "vector_id": "semfid-string-repeat-nan-count-empty-string",
+      "semantic_family": "string_repeat_range",
+      "description": "String.prototype.repeat treats NaN count as zero and returns the empty string.",
+      "source": {
+        "kind": "inline_source",
+        "parse_goal": "script",
+        "inline_source": "\"x\".repeat(NaN);"
+      },
+      "route_under_test": {
+        "route_id": "oracle.node.string-repeat-nan-count",
+        "route_kind": "node_oracle",
+        "external_runtime": "node"
+      },
+      "oracle_routes": [],
+      "expectation": {
+        "kind": "normal",
+        "value": ""
+      },
+      "analyzed_scope": {
+        "scope_status": "analyzed",
+        "claim_policy": "external_oracle_semantic_seed",
+        "notes": "NaN-to-zero edge distinguishes ToIntegerOrInfinity from generic invalid-count handling."
+      },
+      "hashes": {
+        "source_sha256": "sha256:1ec5135cb23a3d54472476a6092d713c0022a8f5a4035f0569c428eb23a3b924",
+        "route_metadata_sha256": "sha256:d1b1e2d6b3e6689cbc3d6f0d3d3339182368465afbbb6765ddcf1529e67c73d2",
+        "expectation_sha256": "sha256:0db167f7bb570cbab0cf46d09858684f1137e2409a1209523f01bb30b7ba6d94"
+      },
+      "provenance": {
+        "bead_refs": [
+          "bd-8tsdh",
+          "bd-mihky.1"
+        ],
+        "source_refs": [
+          {
+            "path": "crates/franken-engine/tests/string_prototype_methods_part2_bd9a8cz1.rs",
+            "symbol": "repeat_zero_is_empty"
+          }
+        ]
+      },
+      "remediation": {
+        "failure_reason_codes": [
+          "expected_value_mismatch"
+        ],
+        "existing_bead_refs": [
+          "bd-xulus"
+        ],
+        "suggested_next_action": "propose_followup_bead"
+      }
+    },
+    {
+      "vector_id": "semfid-string-from-code-point-high-range-error",
+      "semantic_family": "string_from_code_point_range",
+      "description": "String.fromCodePoint rejects code points above 0x10FFFF with RangeError.",
+      "source": {
+        "kind": "inline_source",
+        "parse_goal": "script",
+        "inline_source": "String.fromCodePoint(0x110000);"
+      },
+      "route_under_test": {
+        "route_id": "oracle.node.string-from-code-point-high",
+        "route_kind": "node_oracle",
+        "external_runtime": "node"
+      },
+      "oracle_routes": [],
+      "expectation": {
+        "kind": "js_error",
+        "error_class": "RangeError",
+        "catchable": true
+      },
+      "analyzed_scope": {
+        "scope_status": "analyzed",
+        "claim_policy": "external_oracle_regression_seed",
+        "notes": "bd-xulus candidate/patch vector; executable engine proof remains blocked on RCH."
+      },
+      "hashes": {
+        "source_sha256": "sha256:a025a5145ffa21a1d2cc8c3a16a291445fea99981c4855beabfbab5d9b78a215",
+        "route_metadata_sha256": "sha256:2379909c1fe4dc244189a7c51e0f17abd819c5c24338636d744c492f0e674059",
+        "expectation_sha256": "sha256:e3cc6e889fef1326c02daeb5fef76001dcc473659fe01334e1d041b6611f66aa"
+      },
+      "provenance": {
+        "bead_refs": [
+          "bd-xulus",
+          "bd-mihky.1"
+        ],
+        "source_refs": [
+          {
+            "path": "crates/franken-engine/tests/global_static_methods_bd_tvpjk_regression.rs",
+            "symbol": "string_from_code_point_invalid_values_throw_range_error_bd_xulus"
+          }
+        ]
+      },
+      "remediation": {
+        "failure_reason_codes": [
+          "expected_error_class_mismatch"
+        ],
+        "existing_bead_refs": [
+          "bd-xulus"
+        ],
+        "suggested_next_action": "link_existing_bead"
+      }
+    },
+    {
+      "vector_id": "semfid-string-from-code-point-fractional-range-error",
+      "semantic_family": "string_from_code_point_range",
+      "description": "String.fromCodePoint rejects fractional code points with RangeError.",
+      "source": {
+        "kind": "inline_source",
+        "parse_goal": "script",
+        "inline_source": "String.fromCodePoint(1.5);"
+      },
+      "route_under_test": {
+        "route_id": "oracle.node.string-from-code-point-fractional",
+        "route_kind": "node_oracle",
+        "external_runtime": "node"
+      },
+      "oracle_routes": [],
+      "expectation": {
+        "kind": "js_error",
+        "error_class": "RangeError",
+        "catchable": true
+      },
+      "analyzed_scope": {
+        "scope_status": "analyzed",
+        "claim_policy": "external_oracle_regression_seed",
+        "notes": "Non-integer code point seed from the bd-xulus String.fromCodePoint sweep."
+      },
+      "hashes": {
+        "source_sha256": "sha256:bcfe416b0f889527000ad5950344aaee0c6fa96e20e6789825e1789560ea5d38",
+        "route_metadata_sha256": "sha256:1084ac90c188759cf76ebf08b5ea99bdc94541b8244c6716d835ac396b0cf28b",
+        "expectation_sha256": "sha256:e3cc6e889fef1326c02daeb5fef76001dcc473659fe01334e1d041b6611f66aa"
+      },
+      "provenance": {
+        "bead_refs": [
+          "bd-xulus",
+          "bd-mihky.1"
+        ],
+        "source_refs": [
+          {
+            "path": "crates/franken-engine/tests/global_static_methods_bd_tvpjk_regression.rs",
+            "symbol": "string_from_code_point_invalid_values_throw_range_error_bd_xulus"
+          }
+        ]
+      },
+      "remediation": {
+        "failure_reason_codes": [
+          "expected_error_class_mismatch"
+        ],
+        "existing_bead_refs": [
+          "bd-xulus"
+        ],
+        "suggested_next_action": "link_existing_bead"
+      }
+    },
+    {
+      "vector_id": "semfid-string-from-char-code-uint16-wrap",
+      "semantic_family": "string_from_char_code_touint16",
+      "description": "String.fromCharCode applies ToUint16 wrapping rather than saturating.",
+      "source": {
+        "kind": "inline_source",
+        "parse_goal": "script",
+        "inline_source": "String.fromCharCode(-1.5).charCodeAt(0);"
+      },
+      "route_under_test": {
+        "route_id": "oracle.node.string-from-char-code-uint16-wrap",
+        "route_kind": "node_oracle",
+        "external_runtime": "node"
+      },
+      "oracle_routes": [],
+      "expectation": {
+        "kind": "normal",
+        "value": "65535"
+      },
+      "analyzed_scope": {
+        "scope_status": "analyzed",
+        "claim_policy": "external_oracle_regression_seed",
+        "notes": "Closed modular-coercion regression seed adjacent to fromCodePoint RangeError handling."
+      },
+      "hashes": {
+        "source_sha256": "sha256:5a4d6b9d658a70a51fbe14bfed8b746ece3e8eb9aa39590e871cf40ef24387e0",
+        "route_metadata_sha256": "sha256:a3c0f825371548d54c0a627fde93684797007d4fb4f4b7cbb0e8ad2aeb82742b",
+        "expectation_sha256": "sha256:c01345aa6dc429338bbe509aa21234079d9645750192d67bf3002ea813f0b19b"
+      },
+      "provenance": {
+        "bead_refs": [
+          "bd-xulus",
+          "bd-mihky.1"
+        ],
+        "source_refs": [
+          {
+            "path": "crates/franken-engine/tests/global_static_methods_bd_tvpjk_regression.rs",
+            "symbol": "math_and_string_builtins_use_modular_float_coercion"
+          }
+        ]
+      },
+      "remediation": {
+        "failure_reason_codes": [
+          "expected_value_mismatch"
+        ],
+        "existing_bead_refs": [
+          "bd-xulus"
+        ],
+        "suggested_next_action": "link_existing_bead"
+      }
+    },
+    {
+      "vector_id": "semfid-number-to-exponential-negative-range-error",
+      "semantic_family": "number_digits_range",
+      "description": "Number.prototype.toExponential rejects negative fractionDigits with RangeError.",
+      "source": {
+        "kind": "inline_source",
+        "parse_goal": "script",
+        "inline_source": "(42).toExponential(-1);"
+      },
+      "route_under_test": {
+        "route_id": "oracle.node.number-to-exponential-negative",
+        "route_kind": "node_oracle",
+        "external_runtime": "node"
+      },
+      "oracle_routes": [],
+      "expectation": {
+        "kind": "js_error",
+        "error_class": "RangeError",
+        "catchable": true
+      },
+      "analyzed_scope": {
+        "scope_status": "analyzed",
+        "claim_policy": "external_oracle_regression_seed",
+        "notes": "bd-xulus Path-B number-method slice tracks this error class."
+      },
+      "hashes": {
+        "source_sha256": "sha256:ab9c28720e3b66a44380ff3c3aee74746e4e72365016791e76f9ced73e16e51d",
+        "route_metadata_sha256": "sha256:8c41598891c4ac4148122973023e54ee66e80ad59086984fb2fabb981542fcce",
+        "expectation_sha256": "sha256:e3cc6e889fef1326c02daeb5fef76001dcc473659fe01334e1d041b6611f66aa"
+      },
+      "provenance": {
+        "bead_refs": [
+          "bd-cxmtb",
+          "bd-xulus",
+          "bd-mihky.1"
+        ],
+        "source_refs": [
+          {
+            "path": "crates/franken-engine/tests/baseline_interpreter_integration.rs",
+            "symbol": "number_to_exponential_invalid_fraction_digits_throw_range_error"
+          }
+        ]
+      },
+      "remediation": {
+        "failure_reason_codes": [
+          "expected_error_class_mismatch"
+        ],
+        "existing_bead_refs": [
+          "bd-xulus"
+        ],
+        "suggested_next_action": "link_existing_bead"
+      }
+    },
+    {
+      "vector_id": "semfid-number-to-precision-zero-range-error",
+      "semantic_family": "number_digits_range",
+      "description": "Number.prototype.toPrecision rejects zero precision with RangeError.",
+      "source": {
+        "kind": "inline_source",
+        "parse_goal": "script",
+        "inline_source": "(42).toPrecision(0);"
+      },
+      "route_under_test": {
+        "route_id": "oracle.node.number-to-precision-zero",
+        "route_kind": "node_oracle",
+        "external_runtime": "node"
+      },
+      "oracle_routes": [],
+      "expectation": {
+        "kind": "js_error",
+        "error_class": "RangeError",
+        "catchable": true
+      },
+      "analyzed_scope": {
+        "scope_status": "analyzed",
+        "claim_policy": "external_oracle_regression_seed",
+        "notes": "bd-xulus Path-B number-method slice tracks this error class."
+      },
+      "hashes": {
+        "source_sha256": "sha256:c4e112e59a9bde476a9fa9dcf16b795157bfb5183e203539f0a4cf1260299a33",
+        "route_metadata_sha256": "sha256:1c581ef80ad86a9798986b6e4dd4f849b9dba03b2ea62a913ff290a8c5d4bff4",
+        "expectation_sha256": "sha256:e3cc6e889fef1326c02daeb5fef76001dcc473659fe01334e1d041b6611f66aa"
+      },
+      "provenance": {
+        "bead_refs": [
+          "bd-cxmtb",
+          "bd-xulus",
+          "bd-mihky.1"
+        ],
+        "source_refs": [
+          {
+            "path": "crates/franken-engine/tests/baseline_interpreter_integration.rs",
+            "symbol": "number_to_precision_invalid_precision_throw_range_error"
+          }
+        ]
+      },
+      "remediation": {
+        "failure_reason_codes": [
+          "expected_error_class_mismatch"
+        ],
+        "existing_bead_refs": [
+          "bd-xulus"
+        ],
+        "suggested_next_action": "link_existing_bead"
+      }
+    },
+    {
+      "vector_id": "semfid-array-constructor-negative-length-range-error",
+      "semantic_family": "array_length_range",
+      "description": "Array constructor rejects negative array length with RangeError.",
+      "source": {
+        "kind": "inline_source",
+        "parse_goal": "script",
+        "inline_source": "new Array(-1);"
+      },
+      "route_under_test": {
+        "route_id": "oracle.node.array-constructor-negative-length",
+        "route_kind": "node_oracle",
+        "external_runtime": "node"
+      },
+      "oracle_routes": [],
+      "expectation": {
+        "kind": "js_error",
+        "error_class": "RangeError",
+        "catchable": true
+      },
+      "analyzed_scope": {
+        "scope_status": "analyzed",
+        "claim_policy": "external_oracle_semantic_seed",
+        "notes": "Constructor-side array length boundary candidate from bd-xulus tracking notes."
+      },
+      "hashes": {
+        "source_sha256": "sha256:1a598fefb39849b384ffad681deb5abc4231185784d7186dcf31de19218cbff7",
+        "route_metadata_sha256": "sha256:76bd7ce210bceac84df39d867cabd5061c0441390875d545f504e7f1294475d5",
+        "expectation_sha256": "sha256:e3cc6e889fef1326c02daeb5fef76001dcc473659fe01334e1d041b6611f66aa"
+      },
+      "provenance": {
+        "bead_refs": [
+          "bd-xulus",
+          "bd-mihky.1"
+        ],
+        "source_refs": [
+          {
+            "path": "docs/SEMANTIC_FIDELITY_WORKBENCH_INVENTORY.md"
+          }
+        ]
+      },
+      "remediation": {
+        "failure_reason_codes": [
+          "expected_error_class_mismatch"
+        ],
+        "existing_bead_refs": [
+          "bd-xulus"
+        ],
+        "suggested_next_action": "link_existing_bead"
+      }
+    },
+    {
+      "vector_id": "semfid-array-length-fractional-assignment-range-error",
+      "semantic_family": "array_length_range",
+      "description": "Array length assignment rejects fractional lengths with RangeError.",
+      "source": {
+        "kind": "inline_source",
+        "parse_goal": "script",
+        "inline_source": "let a = [1, 2]; a.length = 1.5;"
+      },
+      "route_under_test": {
+        "route_id": "oracle.node.array-length-fractional-assignment",
+        "route_kind": "node_oracle",
+        "external_runtime": "node"
+      },
+      "oracle_routes": [],
+      "expectation": {
+        "kind": "js_error",
+        "error_class": "RangeError",
+        "catchable": true
+      },
+      "analyzed_scope": {
+        "scope_status": "analyzed",
+        "claim_policy": "external_oracle_regression_seed",
+        "notes": "bd-xulus array-length slice tracks this invalid assignment behavior."
+      },
+      "hashes": {
+        "source_sha256": "sha256:899c5a76de41c92b54afc68319052a5777201e2b15dc64891c7889ace1dd068c",
+        "route_metadata_sha256": "sha256:cc7bd697fab05db47a19363f75b2936ae26f47cd6a70174cc38758d2f22eab96",
+        "expectation_sha256": "sha256:e3cc6e889fef1326c02daeb5fef76001dcc473659fe01334e1d041b6611f66aa"
+      },
+      "provenance": {
+        "bead_refs": [
+          "bd-xulus",
+          "bd-mihky.1"
+        ],
+        "source_refs": [
+          {
+            "path": "crates/franken-engine/tests/array_prototype_mutators_bd962ev.rs",
+            "symbol": "array_length_assignment_rejects_invalid_lengths_bd_xulus"
+          }
+        ]
+      },
+      "remediation": {
+        "failure_reason_codes": [
+          "expected_error_class_mismatch"
+        ],
+        "existing_bead_refs": [
+          "bd-xulus"
+        ],
+        "suggested_next_action": "link_existing_bead"
+      }
+    },
+    {
+      "vector_id": "semfid-string-at-infinity-index-undefined",
+      "semantic_family": "string_index_tointeger",
+      "description": "String.prototype.at with Infinity index returns undefined after ToIntegerOrInfinity handling.",
+      "source": {
+        "kind": "inline_source",
+        "parse_goal": "script",
+        "inline_source": "\"abc\".at(Infinity);"
+      },
+      "route_under_test": {
+        "route_id": "oracle.node.string-at-infinity-index",
+        "route_kind": "node_oracle",
+        "external_runtime": "node"
+      },
+      "oracle_routes": [],
+      "expectation": {
+        "kind": "normal",
+        "value": "undefined"
+      },
+      "analyzed_scope": {
+        "scope_status": "analyzed",
+        "claim_policy": "external_oracle_semantic_seed",
+        "notes": "Representative string index/count ToIntegerOrInfinity edge; engine-route claims are deferred."
+      },
+      "hashes": {
+        "source_sha256": "sha256:605c5a856d25ef5a9fa3b2495dd0769f0f6ca56566719cfc2ef95cc942d841b0",
+        "route_metadata_sha256": "sha256:6c6cc6b931b650a625f339cf8fedc1e4504f91188ce5e0199760f46bdacbd3ca",
+        "expectation_sha256": "sha256:851f678c1b77012640b516c8a972ac5fdce76d924421eb21153340acd10e4d58"
+      },
+      "provenance": {
+        "bead_refs": [
+          "bd-xulus",
+          "bd-mihky.1"
+        ],
+        "source_refs": [
+          {
+            "path": "docs/SEMANTIC_FIDELITY_WORKBENCH_INVENTORY.md"
+          }
+        ]
+      },
+      "remediation": {
+        "failure_reason_codes": [
+          "expected_value_mismatch"
+        ],
+        "existing_bead_refs": [
+          "bd-xulus"
+        ],
+        "suggested_next_action": "propose_followup_bead"
+      }
+    },
+    {
+      "vector_id": "semfid-engine-source-eval-string-from-code-point-high-expected-unknown",
+      "semantic_family": "string_from_code_point_range",
+      "description": "Franken source-eval route placeholder for String.fromCodePoint high code point RangeError.",
+      "source": {
+        "kind": "inline_source",
+        "parse_goal": "script",
+        "inline_source": "String.fromCodePoint(0x110000);"
+      },
+      "route_under_test": {
+        "route_id": "engine.source-eval.string-from-code-point-high",
+        "route_kind": "source_eval",
+        "engine_lane": "quickjs_inspired"
+      },
+      "oracle_routes": [
+        {
+          "route_id": "oracle.node.string-from-code-point-high",
+          "route_kind": "node_oracle",
+          "external_runtime": "node"
+        }
+      ],
+      "expectation": {
+        "kind": "expected_unknown",
+        "reason_code": "engine_route_not_executed_by_runner",
+        "consumer_action": "record_and_continue",
+        "notes": "Existing local regression test names the expected RangeError, but bd-mihky.3 runner does not execute FrankenEngine routes yet."
+      },
+      "analyzed_scope": {
+        "scope_status": "expected_unknown",
+        "claim_policy": "no_claim_strengthening",
+        "notes": "Keep as route metadata for bd-mihky.6 execution wiring."
+      },
+      "hashes": {
+        "source_sha256": "sha256:a025a5145ffa21a1d2cc8c3a16a291445fea99981c4855beabfbab5d9b78a215",
+        "route_metadata_sha256": "sha256:7b36920ee0aa9e84e4ea83ef2086ac4f9c2ff10bb1b184927688de0163a6c1af",
+        "expectation_sha256": "sha256:b5745f4aa777cb456b769d2c123f121eae7ba917c46be1f92706400aed178115"
+      },
+      "provenance": {
+        "bead_refs": [
+          "bd-xulus",
+          "bd-mihky.1"
+        ],
+        "source_refs": [
+          {
+            "path": "crates/franken-engine/tests/global_static_methods_bd_tvpjk_regression.rs",
+            "symbol": "string_from_code_point_invalid_values_throw_range_error_bd_xulus"
+          }
+        ]
+      },
+      "remediation": {
+        "failure_reason_codes": [
+          "engine_route_not_executed_by_runner"
+        ],
+        "existing_bead_refs": [
+          "bd-mihky.6"
+        ],
+        "suggested_next_action": "wire_engine_route"
+      }
+    },
+    {
+      "vector_id": "semfid-engine-source-eval-array-length-fractional-expected-unknown",
+      "semantic_family": "array_length_range",
+      "description": "Franken source-eval route placeholder for fractional array length assignment RangeError.",
+      "source": {
+        "kind": "inline_source",
+        "parse_goal": "script",
+        "inline_source": "let a = [1, 2]; a.length = 1.5;"
+      },
+      "route_under_test": {
+        "route_id": "engine.source-eval.array-length-fractional-assignment",
+        "route_kind": "source_eval",
+        "engine_lane": "quickjs_inspired"
+      },
+      "oracle_routes": [
+        {
+          "route_id": "oracle.node.array-length-fractional-assignment",
+          "route_kind": "node_oracle",
+          "external_runtime": "node"
+        }
+      ],
+      "expectation": {
+        "kind": "expected_unknown",
+        "reason_code": "engine_route_not_executed_by_runner",
+        "consumer_action": "record_and_continue",
+        "notes": "bd-xulus has local source/test work for this candidate, but the RCH Cargo verdict is still blocked."
+      },
+      "analyzed_scope": {
+        "scope_status": "expected_unknown",
+        "claim_policy": "no_claim_strengthening",
+        "notes": "Keep as route metadata for bd-mihky.6 execution wiring."
+      },
+      "hashes": {
+        "source_sha256": "sha256:899c5a76de41c92b54afc68319052a5777201e2b15dc64891c7889ace1dd068c",
+        "route_metadata_sha256": "sha256:bafa14b1e184ba177e40bdf8047c3fd22023533fe4fa9d84a9807cad9854aad2",
+        "expectation_sha256": "sha256:c41caf7b1c57fece196ffc8edb7baa1f3435af6fd6beefdf5ab9069cb39debd0"
+      },
+      "provenance": {
+        "bead_refs": [
+          "bd-xulus",
+          "bd-mihky.1"
+        ],
+        "source_refs": [
+          {
+            "path": "crates/franken-engine/tests/array_prototype_mutators_bd962ev.rs",
+            "symbol": "array_length_assignment_rejects_invalid_lengths_bd_xulus"
+          }
+        ]
+      },
+      "remediation": {
+        "failure_reason_codes": [
+          "engine_route_not_executed_by_runner"
+        ],
+        "existing_bead_refs": [
+          "bd-mihky.6"
+        ],
+        "suggested_next_action": "wire_engine_route"
+      }
+    }
+  ]
+}

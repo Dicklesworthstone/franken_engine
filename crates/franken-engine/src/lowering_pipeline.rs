@@ -597,6 +597,14 @@ pub fn lower_ir0_to_ir1(
     for (local, capability) in confirmed_fs_named_imports(&ir0.tree.body) {
         binding_lookup.insert(fs_named_import_sentinel(&local, capability), 0);
     }
+    // bd-1xl17.c: fs/promises named imports (`import { readFile } from
+    // 'node:fs/promises'`) used as direct calls get their own capability-encoding
+    // sentinel consumed by `fs_promises_named_import_call_capability`, which lowers
+    // the call to the underlying fs: HostCall plus a `promise:resolve` wrap so the
+    // call evaluates to a Promise. Usage-gated like the synchronous forms.
+    for (local, capability) in confirmed_fs_promises_named_imports(&ir0.tree.body) {
+        binding_lookup.insert(fs_promises_named_import_sentinel(&local, capability), 0);
+    }
     let mut synthetic_export_index = 0u32;
     let mut synthetic_import_index = 0u32;
     let mut label_counter = 0u32;
@@ -711,7 +719,11 @@ pub fn lower_ir0_to_ir1(
                         // their direct-call sites; any other name imported from
                         // node:fs is left undefined (fail-closed — invoking it faults,
                         // exactly as the module load would have).
-                        let fs_named_import = is_fs_module_specifier(&import.source)
+                        // Includes the bd-1xl17.c fs/promises analogue: a confirmed
+                        // `import { readFile } from 'node:fs/promises'` likewise
+                        // binds its locals to undefined and elides the module load;
+                        // the calls are recognized + Promise-wrapped at their sites.
+                        let fs_named_import = (is_fs_module_specifier(&import.source)
                             && specifiers.iter().any(|spec| {
                                 binding_lookup.contains_key(&fs_named_import_sentinel(
                                     &spec.local_name,
@@ -720,7 +732,19 @@ pub fn lower_ir0_to_ir1(
                                     &spec.local_name,
                                     "fs:write",
                                 ))
-                            });
+                            }))
+                            || (is_fs_promises_module_specifier(&import.source)
+                                && specifiers.iter().any(|spec| {
+                                    binding_lookup.contains_key(&fs_promises_named_import_sentinel(
+                                        &spec.local_name,
+                                        "fs:read",
+                                    )) || binding_lookup.contains_key(
+                                        &fs_promises_named_import_sentinel(
+                                            &spec.local_name,
+                                            "fs:write",
+                                        ),
+                                    )
+                                }));
                         if fs_named_import {
                             for spec in specifiers {
                                 ir1.ops.push(Ir1Op::LoadLiteral {
@@ -8739,6 +8763,48 @@ fn lower_expression_to_ir1_inner(
                     return Ok(());
                 }
             }
+            if let Some(capability) =
+                fs_promises_named_import_call_capability(callee, binding_lookup)
+            {
+                // bd-1xl17.c: `readFile(path[, encoding])` / `writeFile(path, data)`
+                // named-imported from 'node:fs/promises' — recorded as a sentinel by
+                // the program pre-scan. Lower to the SAME `fs:` HostCall as the
+                // synchronous form (identical args, identical arity rules, identical
+                // capability gate + recorded host effect), then wrap the result in a
+                // `promise:resolve` HostCall so the call evaluates to a (resolved)
+                // Promise — matching the Promise-returning contract of fs/promises.
+                // Our host I/O is synchronous, so an immediately-resolved promise is
+                // behaviorally correct for `await`/`.then`. Otherwise fall through so
+                // a malformed call is not mis-shaped.
+                let arity_ok = if capability == "fs:write" {
+                    arguments.len() == 2
+                } else {
+                    matches!(arguments.len(), 1 | 2)
+                };
+                if arity_ok {
+                    for arg in arguments {
+                        lower_expression_to_ir1(
+                            arg,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                            span_table,
+                        )?;
+                    }
+                    ops.push(Ir1Op::HostCall {
+                        capability: capability.to_string(),
+                        arg_count: arguments.len() as u32,
+                    });
+                    ops.push(Ir1Op::HostCall {
+                        capability: "promise:resolve".to_string(),
+                        arg_count: 1,
+                    });
+                    return Ok(());
+                }
+            }
             if let Some(capability) = date_builtin_call_capability(callee, binding_lookup) {
                 // `Date.now()` — the `Date` global has no eval-scope binding, so
                 // (like the Math-static interception) recognize the bare static
@@ -11550,6 +11616,83 @@ fn fs_named_import_call_capability(
     }
 }
 
+/// True when `specifier` names the Node promises filesystem module —
+/// `fs/promises` or `node:fs/promises` (bd-1xl17.c). The async analogue of
+/// [`is_fs_module_specifier`]; kept separate so the synchronous recognizers never
+/// accept the promises module (its functions return Promises, not raw values).
+fn is_fs_promises_module_specifier(specifier: &str) -> bool {
+    specifier == "fs/promises" || specifier == "node:fs/promises"
+}
+
+/// Sentinel key recording that the local binding `local_name` is an fs/promises
+/// *named import* (`import { readFile } from 'node:fs/promises'`, incl. `as`
+/// renames) bound to the underlying `capability` ("fs:read"/"fs:write") AND used
+/// as a direct call (bd-1xl17.c). Mirrors [`fs_named_import_sentinel`] with a
+/// distinct prefix so the async (Promise-returning) and synchronous forms never
+/// collide in `binding_lookup`.
+fn fs_promises_named_import_sentinel(local_name: &str, capability: &str) -> String {
+    format!("\0fspromnamed\0{capability}\0{local_name}")
+}
+
+/// Confirmed fs/promises *named* ESM imports (bd-1xl17.c): `import { readFile[,
+/// writeFile] } from 'node:fs/promises'` (incl. `as` renames) whose local binding
+/// is used as a direct call `<local>(...)` at a top-level program position.
+/// Returns a map local-name -> underlying fs capability ("fs:read"/"fs:write").
+/// The promises module exposes the un-suffixed names (`readFile`/`writeFile`),
+/// each returning a Promise. Recorded as NUL-sentinels (see
+/// [`fs_promises_named_import_sentinel`]) and gated on usage, exactly like the
+/// synchronous named-import form ([`confirmed_fs_named_imports`]).
+fn confirmed_fs_promises_named_imports(body: &[Statement]) -> BTreeMap<String, &'static str> {
+    let mut candidates: BTreeMap<String, &'static str> = BTreeMap::new();
+    for stmt in body {
+        if let Statement::Import(import) = stmt
+            && is_fs_promises_module_specifier(&import.source)
+            && let ImportClause::Named { specifiers } = &import.clause
+        {
+            for spec in specifiers {
+                let capability = match spec.import_name.as_str() {
+                    "readFile" => "fs:read",
+                    "writeFile" => "fs:write",
+                    _ => continue,
+                };
+                candidates.insert(spec.local_name.clone(), capability);
+            }
+        }
+    }
+    candidates
+        .into_iter()
+        .filter(|(local, _)| {
+            body_top_level_expr_matches(body, &|e| {
+                expr_contains_matching_call(e, &|c| is_fs_named_callee(c, local))
+            })
+        })
+        .collect()
+}
+
+/// Recognize a direct call to an fs/promises *named import* —
+/// `readFile(path[, encoding])` / `writeFile(path, data)` brought in by
+/// `import { ... } from 'node:fs/promises'` (bd-1xl17.c) — and return its
+/// underlying `fs:` hostcall capability. The call site lowers this to the same
+/// `fs:` HostCall as the synchronous form and then wraps the result in a
+/// `promise:resolve` HostCall, so the call evaluates to a (resolved) Promise that
+/// matches the Promise-returning contract of `fs/promises`. The async analogue of
+/// [`fs_named_import_call_capability`].
+fn fs_promises_named_import_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Identifier(name) = callee else {
+        return None;
+    };
+    if binding_lookup.contains_key(&fs_promises_named_import_sentinel(name, "fs:read")) {
+        Some("fs:read")
+    } else if binding_lookup.contains_key(&fs_promises_named_import_sentinel(name, "fs:write")) {
+        Some("fs:write")
+    } else {
+        None
+    }
+}
+
 /// Capability for bare Promise static member reads (`Promise.all`,
 /// `Promise.resolve`, ...). Unbound globals are not runtime bindings in IR1, so
 /// a member read needs a lowering-time shim that returns the corresponding
@@ -14184,6 +14327,87 @@ mod tests {
             !ops_have_fs_import_module(&ops),
             "node:fs module load must be elided for the confirmed encoding read"
         );
+    }
+
+    /// bd-1xl17.c helper: true when the op stream still loads the fs/promises
+    /// module (i.e. the import was NOT recognized/elided).
+    fn ops_have_fs_promises_import_module(ops: &[Ir1Op]) -> bool {
+        ops.iter().any(|op| {
+            matches!(op, Ir1Op::ImportModule { specifier }
+                if is_fs_promises_module_specifier(specifier))
+        })
+    }
+
+    /// bd-1xl17.c: a named import from 'node:fs/promises' used as a direct call —
+    /// `readFile(path)` — lowers to an `fs:read` HostCall WRAPPED in a
+    /// `promise:resolve` HostCall (so the call evaluates to a Promise), and elides
+    /// the fs/promises module load. The async analogue of bd-1xl17.b/.d.
+    #[test]
+    fn esm_fs_promises_read_lowers_to_promise_wrapped_hostcall_bd_1xl17_c() {
+        let ops = lower_esm_source_ops(
+            "import { readFile } from 'node:fs/promises';\n\
+             readFile('out.txt');\n",
+            "esm_fs_promises_read.mjs",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "fs:read"),
+            "fs/promises readFile must lower to an fs:read host effect"
+        );
+        assert!(
+            ops_have_hostcall(&ops, "promise:resolve"),
+            "fs/promises readFile must wrap its result in promise:resolve"
+        );
+        assert!(
+            !ops_have_fs_promises_import_module(&ops),
+            "a confirmed fs/promises import must elide the module load"
+        );
+    }
+
+    /// bd-1xl17.c: `writeFile(path, data)` from 'fs/promises' lowers to an
+    /// fs:write host effect wrapped in promise:resolve.
+    #[test]
+    fn esm_fs_promises_write_lowers_to_promise_wrapped_hostcall_bd_1xl17_c() {
+        let ops = lower_esm_source_ops(
+            "import { writeFile } from 'fs/promises';\n\
+             writeFile('out.txt', 'bytes');\n",
+            "esm_fs_promises_write.mjs",
+        );
+        assert!(ops_have_hostcall(&ops, "fs:write"));
+        assert!(
+            ops_have_hostcall(&ops, "promise:resolve"),
+            "fs/promises writeFile must wrap its result in promise:resolve"
+        );
+        assert!(!ops_have_fs_promises_import_module(&ops));
+    }
+
+    /// bd-1xl17.c + .d: `readFile(path, 'utf8')` from fs/promises threads the
+    /// encoding (arg_count == 2 on the fs:read) and still wraps in promise:resolve.
+    #[test]
+    fn esm_fs_promises_read_with_encoding_lowers_arity_two_bd_1xl17_c() {
+        let ops = lower_esm_source_ops(
+            "import { readFile } from 'node:fs/promises';\n\
+             readFile('out.txt', 'utf8');\n",
+            "esm_fs_promises_read_enc.mjs",
+        );
+        assert_eq!(fs_read_hostcall_arg_count(&ops), Some(2));
+        assert!(ops_have_hostcall(&ops, "promise:resolve"));
+    }
+
+    /// bd-1xl17.c fail-closed: a bare/UNUSED fs/promises import is NOT recognized —
+    /// the module load is preserved and no fs HostCall is emitted, so the import
+    /// keeps its current (runtime module-load) behavior. The async analogue of the
+    /// bd-1xl17.b unused-import gating.
+    #[test]
+    fn unused_fs_promises_import_is_not_recognized_bd_1xl17_c() {
+        let ops = lower_esm_source_ops(
+            "import { readFile } from 'node:fs/promises';\n",
+            "esm_fs_promises_unused.mjs",
+        );
+        assert!(
+            ops_have_fs_promises_import_module(&ops),
+            "an unused fs/promises import must keep its module load"
+        );
+        assert!(!ops_have_hostcall(&ops, "fs:read"));
     }
 
     #[test]

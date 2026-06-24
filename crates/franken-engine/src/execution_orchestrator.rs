@@ -3301,6 +3301,23 @@ mod tests {
         );
     }
 
+    /// bd-1xl17.c (async, end-to-end): named imports from 'node:fs/promises'
+    /// (`writeFile`/`readFile`) compile, lower (to fs: HostCalls wrapped in
+    /// promise:resolve), and EXECUTE through the real pipeline + SandboxedHostIo —
+    /// the calls evaluate to Promises, the real fs effects still hit disk eagerly,
+    /// and the surfaced transcript is the same [fs_write, fs_read] as the sync
+    /// forms (the promise:resolve wrap is internal VM work, not a host effect).
+    /// Mock-free; proves the async-fs lowering reaches the host-effect ledger.
+    #[test]
+    fn esm_fs_promises_named_import_produces_host_effects_bd_1xl17_c() {
+        assert_esm_fs_source_lowers_to_host_effects(
+            "import { writeFile, readFile } from 'node:fs/promises';\n\
+             writeFile('out.txt', 'real effect bytes');\n\
+             readFile('out.txt');\n",
+            "frankenengine_e2e_fs_promises_named",
+        );
+    }
+
     #[test]
     fn try_new_rejects_zero_concurrency_envelope() {
         let err = match ExecutionOrchestrator::try_new(OrchestratorConfig {

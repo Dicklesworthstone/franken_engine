@@ -3210,4 +3210,36 @@ post-export tamper of a proof body breaks the match (tamper-evident). The
 reproducibility across re-exports, and tamper detection — without an engine
 build.
 
+## RGC Reproducibility-Universality Gate (bd-cixqu.14.3, Track N)
+
+Composes N.1 (the per-claim `env.json` + `manifest.json` + `repro.lock` emission
+under `docs/evidence/<CLAIM>/`) with N.2 (`scripts/third_party_repro_lock_verifier.sh`)
+and emits a single **reproducibility-universality verdict** bundle: it proves that
+*every* published claim-evidence `repro.lock` in the corpus is consumable by the
+independent third-party verifier — universality, not a single hand-picked fixture.
+
+```bash
+# Run the gate (enumerate docs/evidence/*/repro.lock, --plan-only verify each)
+./scripts/run_rgc_reproducibility_universality.sh ci
+
+# Replay a preserved bundle (auto-detects the latest complete bundle, or honours
+# RGC_REPRODUCIBILITY_UNIVERSALITY_REPLAY_RUN_DIR=<dir>); re-hashes each lock and
+# re-derives its plan, asserting byte-identical reproduction; fails closed.
+./scripts/e2e/rgc_reproducibility_universality_replay.sh bundle <run_dir>
+```
+
+The gate runs the verifier in `--plan-only` mode (validate the lock + derive the
+deterministic replay plan, no execution), so it needs neither cargo nor rch.
+Bundle shape: `artifacts/reproducibility_universality/<ts>/{run_manifest.json,
+events.jsonl, commands.txt, trace_ids, summary.txt, step_logs/, plans/}`. Fail-closed
+on any incomplete N.1 triple, any lock the verifier rejects, a corpus below the
+`RGC_REPRODUCIBILITY_UNIVERSALITY_MIN_LOCKS` floor (default 15), or a syntactically
+broken verifier.
+
+Scope (intentional): the perf/denominator-lineage locks (`franken-engine.repro-lock.v1`
+in `docs/perf/e2_denominator_bundle_v1` and `benchmarks/runtime_comparison`) lock the
+byte-identical correctness-verdict hash while allowing wall-clock timing to vary, which
+the strict third-party verifier deliberately rejects; they are covered by
+`scripts/run_e2_denominator_bundle_gate.sh` and are out of scope here.
+
 ## Limitations

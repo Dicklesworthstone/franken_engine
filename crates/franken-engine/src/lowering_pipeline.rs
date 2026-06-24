@@ -8818,6 +8818,47 @@ fn lower_expression_to_ir1_inner(
                     return Ok(());
                 }
             }
+            if let Some(capability) = fs_callback_builtin_call_capability(callee, binding_lookup) {
+                // bd-201vt: async callback form — inline `require('fs').readFile(
+                // path, cb)` / `.writeFile(path, data, cb)` and the binding form
+                // `fs.readFile(path, cb)`. Lowered to the SAME `fs:read`/`fs:write`
+                // HostCall as the sync member-call form, in source order, with the
+                // trailing callback closure carried as the last HostCall argument.
+                // `dispatch_host_io_hostcall` detects that trailing `Value::Closure`
+                // and switches to the async path: it performs the real, recorded
+                // host effect, then schedules the callback as an `IoCompletion`
+                // macrotask invoking `cb(err[, data])` err-first after the current
+                // synchronous turn, and the call itself evaluates to `undefined`
+                // (matching Node). Arity: `writeFile` is exactly `(path, data, cb)`;
+                // `readFile` is `(path[, encoding], cb)`. Like the sync form the
+                // inner `require('fs')` receiver is NOT lowered (no real fs object);
+                // recognition is purely syntactic. Otherwise fall through so a
+                // malformed call is not silently mis-shaped.
+                let arity_ok = if capability == "fs:write" {
+                    arguments.len() == 3
+                } else {
+                    matches!(arguments.len(), 2 | 3)
+                };
+                if arity_ok {
+                    for arg in arguments {
+                        lower_expression_to_ir1(
+                            arg,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                            span_table,
+                        )?;
+                    }
+                    ops.push(Ir1Op::HostCall {
+                        capability: capability.to_string(),
+                        arg_count: arguments.len() as u32,
+                    });
+                    return Ok(());
+                }
+            }
             if let Some(capability) = fs_promises_builtin_call_capability(callee, binding_lookup) {
                 // bd-1xl17.c: `require('fs/promises').readFile(path)` or the binding
                 // form `fsp.readFile(path)` (`const fsp = require('fs/promises')`).
@@ -8855,20 +8896,23 @@ fn lower_expression_to_ir1_inner(
                 }
             }
             if let Some(capability) = fs_named_import_call_capability(callee, binding_lookup) {
-                // bd-1xl17.b: `readFileSync(path)` / `writeFileSync(path, data)`
-                // where the function was named-imported from 'node:fs'
-                // (`import { readFileSync } from 'node:fs'`) — recorded as a
-                // sentinel by the program pre-scan. Lower to the same `fs:`
-                // HostCall as the inline/binding member-call forms: args in source
-                // order (path, then data/encoding). Arity: write is exactly
-                // `(path, data)`; read is `(path[, encoding])` — the optional
-                // readFileSync encoding (bd-1xl17.d) steers the dispatch return
-                // shape and is inert to the host effect. Otherwise fall through so
-                // a malformed call is not mis-shaped.
+                // bd-1xl17.b + bd-201vt: `readFileSync(path)` / `writeFileSync(path,
+                // data)` (sync) OR `readFile(path[, enc], cb)` / `writeFile(path,
+                // data, cb)` (async callback) named-imported from 'node:fs'
+                // (`import { readFile } from 'node:fs'`) — recorded as a sentinel by
+                // the program pre-scan. Both lower to the same `fs:` HostCall as the
+                // inline/binding member-call forms, args in source order. The named
+                // sentinel maps the local to its capability but not the sync-vs-async
+                // method, so the arity bound is the union of both forms — write is
+                // `(path, data[, cb])` and read is `(path[, enc][, cb])` — and
+                // `dispatch_host_io_hostcall` disambiguates on the trailing
+                // `Value::Closure` (callback) vs encoding/data (sync). Extra trailing
+                // args are inert to the host effect (read uses arg[0], write arg[0..2]).
+                // Otherwise fall through so a malformed call is not mis-shaped.
                 let arity_ok = if capability == "fs:write" {
-                    arguments.len() == 2
+                    matches!(arguments.len(), 2..=3)
                 } else {
-                    matches!(arguments.len(), 1 | 2)
+                    matches!(arguments.len(), 1..=3)
                 };
                 if arity_ok {
                     for arg in arguments {
@@ -11411,9 +11455,14 @@ fn is_require_fs_module_initializer(
 }
 
 /// True when `callee` is a non-computed member access `<obj>.readFileSync` /
-/// `.writeFileSync` whose object identifier is in `alias_names` — i.e. a
-/// recognized synchronous fs host method call on a `const fs = require('fs')`
-/// alias (bd-1xl17.a).
+/// `.writeFileSync` (sync, bd-1xl17.a) or `<obj>.readFile` / `.writeFile`
+/// (async callback form, bd-201vt) whose object identifier is in `alias_names` —
+/// i.e. a recognized fs host method call on a `const fs = require('fs')` alias.
+/// This is the *usage gate*: matching any of these records the alias sentinel so
+/// the per-call-site recognizers (`fs_builtin_call_capability` for sync,
+/// `fs_callback_builtin_call_capability` for callbacks) can fire. Recording the
+/// sentinel for callback-only usage is correct and benign — each call site still
+/// dispatches on its own method name.
 fn is_fs_alias_method_callee(callee: &Expression, alias_names: &BTreeSet<String>) -> bool {
     let Expression::Member {
         object,
@@ -11432,7 +11481,8 @@ fn is_fs_alias_method_callee(callee: &Expression, alias_names: &BTreeSet<String>
     }
     matches!(property.as_ref(),
         Expression::Identifier(m) | Expression::StringLiteral(m)
-            if m == "readFileSync" || m == "writeFileSync")
+            if m == "readFileSync" || m == "writeFileSync"
+                || m == "readFile" || m == "writeFile")
 }
 
 /// Recursively scan `expr` for a call whose callee satisfies `is_target` — the
@@ -11635,6 +11685,66 @@ fn fs_builtin_call_capability(
     }
 }
 
+/// bd-201vt: the *async callback* analogue of [`fs_builtin_call_capability`].
+/// Recognizes the idiomatic Node callback forms
+///   * inline:  `require('fs').readFile(path, cb)` / `.writeFile(path, data, cb)`
+///   * binding: `fs.readFile(path, cb)` where `fs` was aliased via
+///     `const fs = require('fs')` (recorded as a NUL-sentinel, gated on usage by
+///     the same pre-scan as the sync form — see [`is_fs_alias_method_callee`]).
+///
+/// Returns the SAME `fs:read`/`fs:write` capability as the sync form: the host
+/// effect is identical, and the trailing callback closure is carried as a normal
+/// trailing HostCall argument that `dispatch_host_io_hostcall` detects (a
+/// `Value::Closure` in the last slot) to switch to the async path — schedule the
+/// callback as an `IoCompletion` macrotask and return `undefined`. Only the
+/// `fs`/`node:fs` specifier and the async `readFile`/`writeFile` methods match
+/// (the `*Sync` methods stay with the sync recognizer; fs/promises is separate).
+fn fs_callback_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee
+    else {
+        return None;
+    };
+    let receiver_is_fs_module = match object.as_ref() {
+        // inline `require('fs')` / `require('node:fs')` receiver.
+        Expression::Call {
+            callee: require_callee,
+            arguments: require_args,
+            ..
+        } => {
+            matches!(require_callee.as_ref(), Expression::Identifier(name) if name == "require")
+                && matches!(
+                    require_args.as_slice(),
+                    [Expression::StringLiteral(spec)] if is_fs_module_specifier(spec)
+                )
+        }
+        // binding form: identifier aliased to the fs module.
+        Expression::Identifier(alias) => {
+            binding_lookup.contains_key(&fs_module_alias_sentinel(alias))
+        }
+        _ => false,
+    };
+    if !receiver_is_fs_module {
+        return None;
+    }
+    let method = match property.as_ref() {
+        Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
+        _ => return None,
+    };
+    match method {
+        "readFile" => Some("fs:read"),
+        "writeFile" => Some("fs:write"),
+        _ => None,
+    }
+}
+
 /// True when `callee` is exactly the bare identifier `name` — the direct-call
 /// shape `readFileSync(path)` of an fs function brought in by a named ESM import
 /// `import { readFileSync } from 'node:fs'` (bd-1xl17.b). Used as the
@@ -11702,8 +11812,13 @@ fn confirmed_fs_named_imports(body: &[Statement]) -> BTreeMap<String, &'static s
         {
             for spec in specifiers {
                 let capability = match spec.import_name.as_str() {
+                    // sync forms (bd-1xl17.b)
                     "readFileSync" => "fs:read",
                     "writeFileSync" => "fs:write",
+                    // async callback forms (bd-201vt) — same fs: capability; the
+                    // trailing callback closure is detected at dispatch.
+                    "readFile" => "fs:read",
+                    "writeFile" => "fs:write",
                     _ => continue,
                 };
                 candidates.insert(spec.local_name.clone(), capability);
@@ -14784,6 +14899,179 @@ mod tests {
             } if capability.as_str() == "fs:read" => Some(*arg_count),
             _ => None,
         })
+    }
+
+    /// bd-201vt helper: arg_count of the first `fs:write` HostCall, if any.
+    fn fs_write_hostcall_arg_count(ops: &[Ir1Op]) -> Option<u32> {
+        ops.iter().find_map(|op| match op {
+            Ir1Op::HostCall {
+                capability,
+                arg_count,
+            } if capability.as_str() == "fs:write" => Some(*arg_count),
+            _ => None,
+        })
+    }
+
+    /// bd-201vt: the inline async callback read `require('fs').readFile(path, cb)`
+    /// lowers to an `fs:read` HostCall carrying both the path and the callback
+    /// closure (arg_count == 2); dispatch detects the trailing closure and defers
+    /// the callback. (The `*Sync` recognizer is untouched — these are the async
+    /// `readFile`/`writeFile` method names.)
+    #[test]
+    fn inline_callback_read_lowers_to_fs_read_with_closure_bd_201vt() {
+        let ops = lower_script_source_ops(
+            "require('fs').readFile('out.txt', function (err, data) {});\n",
+            "inline_cb_read_fs.js",
+        );
+        assert_eq!(
+            fs_read_hostcall_arg_count(&ops),
+            Some(2),
+            "require('fs').readFile(path, cb) must lower to fs:read with path + callback"
+        );
+    }
+
+    /// bd-201vt: the inline async callback read with an explicit encoding
+    /// `require('fs').readFile(path, 'utf8', cb)` lowers to an arity-3 `fs:read`
+    /// (path, encoding, callback).
+    #[test]
+    fn inline_callback_read_with_encoding_lowers_arity_three_bd_201vt() {
+        let ops = lower_script_source_ops(
+            "require('fs').readFile('out.txt', 'utf8', function (err, data) {});\n",
+            "inline_cb_read_enc_fs.js",
+        );
+        assert_eq!(
+            fs_read_hostcall_arg_count(&ops),
+            Some(3),
+            "require('fs').readFile(path, 'utf8', cb) must lower to fs:read with all three args"
+        );
+    }
+
+    /// bd-201vt: the inline async callback write
+    /// `require('fs').writeFile(path, data, cb)` lowers to an arity-3 `fs:write`
+    /// (path, data, callback).
+    #[test]
+    fn inline_callback_write_lowers_to_fs_write_with_closure_bd_201vt() {
+        let ops = lower_script_source_ops(
+            "require('fs').writeFile('out.txt', 'bytes', function (err) {});\n",
+            "inline_cb_write_fs.js",
+        );
+        assert_eq!(
+            fs_write_hostcall_arg_count(&ops),
+            Some(3),
+            "require('fs').writeFile(path, data, cb) must lower to fs:write with path + data + callback"
+        );
+    }
+
+    /// bd-201vt: the binding async callback form
+    /// `const fs = require('fs'); fs.readFile(path, cb)` is recognized via the
+    /// usage-gated alias sentinel (now also recorded for callback-method usage) and
+    /// lowers to an `fs:read` HostCall.
+    #[test]
+    fn binding_callback_read_lowers_to_fs_read_bd_201vt() {
+        let ops = lower_script_source_ops(
+            "const fs = require('fs');\n\
+             fs.readFile('out.txt', function (err, data) {});\n",
+            "binding_cb_read_fs.js",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "fs:read"),
+            "const fs = require('fs'); fs.readFile(path, cb) must lower to an fs:read hostcall"
+        );
+    }
+
+    /// bd-201vt: a bare/unused `const fs = require('fs')` whose only fs use is an
+    /// async callback method still keeps the ambient-authority denial when the
+    /// alias is NOT actually called — fail-closed parity with the sync forms. Here
+    /// the alias is used, so it MUST be recognized (positive control for the
+    /// usage-gate extension); the negative side is covered by the existing
+    /// `unused_*` sync tests sharing the same gate.
+    #[test]
+    fn binding_callback_write_lowers_to_fs_write_bd_201vt() {
+        let ops = lower_script_source_ops(
+            "const fs = require('fs');\n\
+             fs.writeFile('out.txt', 'bytes', function (err) {});\n",
+            "binding_cb_write_fs.js",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "fs:write"),
+            "const fs = require('fs'); fs.writeFile(path, data, cb) must lower to an fs:write hostcall"
+        );
+    }
+
+    /// bd-201vt: a NAMED ESM import of the async callback fns
+    /// (`import { readFile, writeFile } from 'node:fs'`) used as direct calls
+    /// lowers to fs:read/fs:write HostCalls (with the trailing callback) and elides
+    /// the node:fs module load.
+    #[test]
+    fn esm_named_callback_import_lowers_to_hostcalls_bd_201vt() {
+        let ops = lower_esm_source_ops(
+            "import { readFile, writeFile } from 'node:fs';\n\
+             writeFile('out.txt', 'bytes', function (err) {});\n\
+             readFile('out.txt', function (err, data) {});\n",
+            "esm_named_callback_fs.mjs",
+        );
+        assert_eq!(
+            fs_read_hostcall_arg_count(&ops),
+            Some(2),
+            "readFile(path, cb) named import must lower to fs:read with path + callback"
+        );
+        assert_eq!(
+            fs_write_hostcall_arg_count(&ops),
+            Some(3),
+            "writeFile(path, data, cb) named import must lower to fs:write with all three args"
+        );
+        assert!(
+            !ops_have_fs_import_module(&ops),
+            "node:fs module load must be elided for the confirmed callback named import"
+        );
+    }
+
+    /// bd-201vt: a named ESM callback read with an explicit encoding
+    /// (`readFile(path, 'utf8', cb)`) lowers to an arity-3 fs:read.
+    #[test]
+    fn esm_named_callback_read_with_encoding_arity_three_bd_201vt() {
+        let ops = lower_esm_source_ops(
+            "import { readFile } from 'node:fs';\n\
+             readFile('out.txt', 'utf8', function (err, data) {});\n",
+            "esm_named_cb_read_enc_fs.mjs",
+        );
+        assert_eq!(
+            fs_read_hostcall_arg_count(&ops),
+            Some(3),
+            "readFile(path, 'utf8', cb) named import must lower to fs:read with all three args"
+        );
+    }
+
+    /// bd-201vt: a NAMESPACE ESM import (`import * as fs from 'node:fs'`) used as
+    /// `fs.readFile(path, cb)` reuses the alias-sentinel member-call recognizer
+    /// (extended to the async method names) and lowers to fs:read.
+    #[test]
+    fn esm_namespace_callback_member_lowers_to_fs_read_bd_201vt() {
+        let ops = lower_esm_source_ops(
+            "import * as fs from 'node:fs';\n\
+             fs.readFile('out.txt', function (err, data) {});\n",
+            "esm_namespace_cb_read_fs.mjs",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "fs:read"),
+            "import * as fs; fs.readFile(path, cb) must lower to an fs:read hostcall"
+        );
+    }
+
+    /// bd-201vt: a DEFAULT ESM import (`import fs from 'node:fs'`) used as
+    /// `fs.writeFile(path, data, cb)` likewise lowers to fs:write via the shared
+    /// alias-sentinel member-call recognizer.
+    #[test]
+    fn esm_default_callback_member_lowers_to_fs_write_bd_201vt() {
+        let ops = lower_esm_source_ops(
+            "import fs from 'node:fs';\n\
+             fs.writeFile('out.txt', 'bytes', function (err) {});\n",
+            "esm_default_cb_write_fs.mjs",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "fs:write"),
+            "import fs from 'node:fs'; fs.writeFile(path, data, cb) must lower to an fs:write hostcall"
+        );
     }
 
     /// bd-1xl17.d: the inline `require('fs').readFileSync(path, 'utf8')` form

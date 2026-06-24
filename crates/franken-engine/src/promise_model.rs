@@ -921,6 +921,21 @@ impl EventLoop {
             .schedule(MacrotaskSource::Timer, handler, fire_at, label)
     }
 
+    /// Schedule an I/O-completion macrotask (bd-201vt: async fs callbacks such as
+    /// `fs.readFile(path, cb)` / `fs.writeFile(path, data, cb)`). Like a timer it
+    /// fires after the current synchronous turn — but at the *current* virtual
+    /// time (no delay), so the callback runs in the next event-loop turn rather
+    /// than inline, matching Node's deferral of fs callbacks off the current call
+    /// stack. The host effect itself is performed synchronously at dispatch; this
+    /// only defers the callback invocation. Returns the registration sequence so
+    /// the caller can associate the callback's `(err[, data])` arguments with the
+    /// scheduled task.
+    pub fn schedule_io_completion(&mut self, handler: ClosureHandle, label: Label) -> u64 {
+        let fire_at = self.clock.now_ms();
+        self.macrotasks
+            .schedule(MacrotaskSource::IoCompletion, handler, fire_at, label)
+    }
+
     /// Whether the event loop has any pending work.
     pub fn has_pending_work(&self) -> bool {
         !self.microtasks.is_empty() || !self.macrotasks.is_empty()

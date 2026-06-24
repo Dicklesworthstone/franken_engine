@@ -4407,6 +4407,14 @@ pub struct InterpreterCore {
     promise_store: crate::promise_model::PromiseStore,
     /// Deterministic event loop state (microtasks + macrotasks + virtual clock).
     event_loop: crate::promise_model::EventLoop,
+    /// bd-201vt: pending arguments for scheduled async fs callbacks
+    /// (`fs.readFile`/`fs.writeFile` callback forms), keyed by the `IoCompletion`
+    /// macrotask's registration sequence. The host effect runs synchronously at
+    /// dispatch; the callback's `(err[, data])` arguments are stashed here and the
+    /// callback is deferred to the next event-loop turn. `execute_macrotask_callback`
+    /// drains the entry by seq when it fires, so the map never retains completed
+    /// callbacks.
+    pending_io_callbacks: BTreeMap<u64, Vec<Value>>,
     /// Active promise combinator trackers keyed by combinator id.
     promise_combinators: BTreeMap<u64, PromiseCombinatorState>,
     /// Watchers keyed by promise handle for combinator updates.
@@ -4528,6 +4536,7 @@ impl InterpreterCore {
             async_generators: Vec::new(),
             promise_store: crate::promise_model::PromiseStore::new(),
             event_loop: crate::promise_model::EventLoop::new(),
+            pending_io_callbacks: BTreeMap::new(),
             promise_combinators: BTreeMap::new(),
             promise_combinator_watchers: BTreeMap::new(),
             next_promise_combinator_id: 0,
@@ -4598,10 +4607,21 @@ impl InterpreterCore {
         // options-object encoding form (`readFileSync(p, { encoding })`), whose
         // object stringifies to a type name and would never match an encoding.
         let mut second_arg_value: Option<Value> = None;
+        // bd-201vt: the async callback forms `fs.readFile(path[, enc], cb)` /
+        // `fs.writeFile(path, data, cb)` pass the callback closure as the FINAL
+        // argument (a `Value::Closure` that survives here un-coerced; the effect
+        // builder ignores trailing args — fs:read uses arg[0], fs:write arg[0..2]).
+        // Capturing it switches dispatch to the async path after the effect runs.
+        let mut callback_closure: Option<u32> = None;
         for offset in 0..args.count {
             let value = self.read_reg(args.start + offset)?;
             if offset == 1 {
                 second_arg_value = Some(value.clone());
+            }
+            if offset + 1 == args.count
+                && let Value::Closure(cid) = &value
+            {
+                callback_closure = Some(*cid);
             }
             arg_strings.push(match value {
                 Value::Str(s) => s.to_string(),
@@ -4639,18 +4659,55 @@ impl InterpreterCore {
                 // inert to the host effect itself (`create_effect_from_hostcall_tag`
                 // only consumes arg[1] for writes), so it only steers the value here.
                 let encoding = self.resolve_fs_read_encoding(second_arg_value.as_ref());
-                match result.downcast::<Vec<u8>>() {
+                let value = match result.downcast::<Vec<u8>>() {
                     Ok(bytes) => self.decode_fs_read_result(&bytes, encoding.as_deref())?,
                     Err(_) => Value::Undefined,
+                };
+                if let Some(closure_id) = callback_closure {
+                    // bd-201vt: async `fs.readFile(path[, enc], cb)`. The read effect
+                    // already ran and was recorded above; defer the err-first
+                    // `cb(null, data)` to the next event-loop turn (Node runs fs
+                    // callbacks off the current call stack), and the call itself
+                    // evaluates to `undefined`. The encoding still steers `data`'s
+                    // Buffer-vs-string shape via the resolver above.
+                    self.schedule_fs_callback(closure_id, vec![Value::Null, value]);
+                    Value::Undefined
+                } else {
+                    value
                 }
             }
             // bd-1xl17.d: Node's `writeFileSync` returns `undefined`. The real
             // write still happened and was recorded in the host-effect transcript
             // (the ledger source for bd-5r99w.12); only the JS-visible value
             // changes to match Node, not the recorded effect.
-            "fs:write" => Value::Undefined,
+            "fs:write" => {
+                if let Some(closure_id) = callback_closure {
+                    // bd-201vt: async `fs.writeFile(path, data, cb)`. The write ran
+                    // and was recorded above; defer the err-first `cb(null)` to the
+                    // next event-loop turn. (Node's writeFile callback takes only the
+                    // error argument.)
+                    self.schedule_fs_callback(closure_id, vec![Value::Null]);
+                }
+                Value::Undefined
+            }
             _ => Value::Undefined,
         })
+    }
+
+    /// bd-201vt: schedule an async fs callback (`fs.readFile`/`fs.writeFile`
+    /// callback forms) to run on the next event-loop turn. The host effect has
+    /// already been performed and recorded synchronously by the caller; this only
+    /// defers the JS callback invocation so it runs off the current call stack,
+    /// matching Node's `IoCompletion`-phase scheduling. `callback_args` is the
+    /// err-first argument list (`[null]` for writes, `[null, data]` for reads); it
+    /// is stashed by the macrotask's registration sequence and drained when the
+    /// macrotask fires in `execute_macrotask_callback`.
+    fn schedule_fs_callback(&mut self, closure_id: u32, callback_args: Vec<Value>) {
+        let seq = self.event_loop.schedule_io_completion(
+            crate::closure_model::ClosureHandle(closure_id),
+            crate::ifc_artifacts::Label::Public,
+        );
+        self.pending_io_callbacks.insert(seq, callback_args);
     }
 
     /// bd-1xl17.d / bd-rul7k: map the raw bytes a successful `fs:read` host effect
@@ -15727,9 +15784,47 @@ impl InterpreterCore {
 
                 result.map(|_| ())
             }
+            crate::promise_model::MacrotaskSource::IoCompletion => {
+                // bd-201vt: an async fs callback (`fs.readFile`/`fs.writeFile`
+                // callback form). The host effect already ran and was recorded at
+                // dispatch; here we invoke the JS callback err-first with the
+                // arguments stashed by `schedule_fs_callback`, keyed by this
+                // macrotask's registration sequence. Draining the entry keeps the
+                // side-table bounded to in-flight callbacks.
+                let closure_id = macrotask.handler.0;
+                if self.closures.get(closure_id as usize).is_none() {
+                    return Err(InterpreterError::TypeError {
+                        expected: "valid closure".to_string(),
+                        got: format!("closure#{closure_id} not found"),
+                    });
+                }
+                let callback_args = self
+                    .pending_io_callbacks
+                    .remove(&macrotask.registration_seq)
+                    .unwrap_or_default();
+                match module {
+                    Some(module) => {
+                        // Reuse the audited synchronous closure-invocation path (the
+                        // same one timer + promise-reaction callbacks use): undefined
+                        // `this`, err-first arguments, runs the closure body to
+                        // completion against its captured environment.
+                        self.invoke_inline_method_call(
+                            Some(module),
+                            Value::Closure(closure_id),
+                            Value::Undefined,
+                            callback_args,
+                        )?;
+                        Ok(())
+                    }
+                    None => {
+                        // No module context only on the test-only event-loop path;
+                        // without it the callback body cannot be invoked.
+                        Ok(())
+                    }
+                }
+            }
             _ => {
-                // For now, only handle timer macrotasks
-                // Other sources (MessageChannel, IoCompletion) would be handled here
+                // Remaining sources (e.g. MessageChannel) are not yet scheduled.
                 Ok(())
             }
         }

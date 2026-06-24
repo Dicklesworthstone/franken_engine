@@ -3053,6 +3053,114 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// bd-201vt (async callback form): the idiomatic Node callback forms
+    /// `fs.readFile(path[, enc], cb)` / `fs.writeFile(path, data, cb)` lower to the
+    /// same `fs:` HostCalls as the sync forms, perform real sandboxed I/O recorded
+    /// in the transcript, and then invoke the callback err-first on the next
+    /// event-loop turn (off the current call stack). Mock-free end-to-end through
+    /// `ExecutionOrchestrator::execute` (real parser/lowering + SandboxedHostIo +
+    /// the deterministic event loop run to idle).
+    ///
+    /// The program writes a file, then `readFile`s it with `'utf8'` and — INSIDE
+    /// the callback — `writeFileSync`s the received `data` to a second file. The
+    /// callback's nested write proves the callback actually ran with the correctly
+    /// decoded string `data`: it uses the inline `require('fs')` form, which is
+    /// recognized syntactically (the fs-alias sentinel does not reach nested
+    /// function bodies, but the inline form needs no sentinel). The transcript
+    /// `[fs_write, fs_read, fs_write]` proves the read effect was recorded
+    /// synchronously and the callback's write was recorded on the deferred turn.
+    #[test]
+    fn async_callback_fs_program_produces_host_effects_bd_201vt() {
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+
+        let mut root = std::env::temp_dir();
+        root.push(format!("frankenengine_e2e_fs_cb_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+
+        let mut orch = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        orch.set_host_io(provider, Some(recorder_dyn));
+
+        // Real idiomatic async callback JS source. The readFile callback writes the
+        // decoded `data` back out via the inline require form, observable on disk.
+        let pkg = ExtensionPackage {
+            extension_id: "fs-e2e-callback".to_string(),
+            source: "require('fs').writeFileSync('out.txt', 'real effect bytes');\n\
+                     require('fs').readFile('out.txt', 'utf8', function (err, data) {\n\
+                       require('fs').writeFileSync('echo.txt', data);\n\
+                     });\n"
+                .to_string(),
+            source_file: None,
+            capabilities: vec![
+                "vm_dispatch".to_string(),
+                "heap_allocate".to_string(),
+                "fs_read".to_string(),
+                "fs_write".to_string(),
+            ],
+            version: "1.0.0".to_string(),
+            metadata: BTreeMap::new(),
+        };
+
+        let result = orch
+            .execute(&pkg)
+            .expect("real fs JS async-callback program executes");
+
+        // The synchronous write hit the real sandbox filesystem.
+        assert_eq!(
+            std::fs::read(root.join("out.txt")).expect("written file on disk"),
+            b"real effect bytes",
+            "writeFileSync must have produced a real file in the sandbox"
+        );
+
+        // The readFile callback fired with the correctly decoded 'utf8' string and
+        // wrote it back out — proving async-callback dispatch + deferred invocation.
+        assert_eq!(
+            std::fs::read(root.join("echo.txt")).expect("callback-written file on disk"),
+            b"real effect bytes",
+            "the readFile callback must have run with the decoded string data and \
+             written it to echo.txt"
+        );
+
+        // All three host effects were recorded and surfaced: the sync write, the
+        // read (recorded synchronously at dispatch), and the callback's write
+        // (recorded when the deferred IoCompletion macrotask fired).
+        let kinds: Vec<&str> = result
+            .host_effect_transcript
+            .iter()
+            .map(|(request, _)| request.kind())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["fs_write", "fs_read", "fs_write"],
+            "async fs callback program must surface write, read, then the callback's \
+             write host effects, got {kinds:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// bd-201vt (named ESM callback form): `import { readFile, writeFileSync } from
+    /// 'node:fs'` with the async `readFile(path, cb)` direct-call form lowers to a
+    /// real, recorded fs:read effect (with the callback deferred) and executes
+    /// end-to-end (module parse goal) without faulting, surfacing `[fs_write,
+    /// fs_read]`. The callback-fires-with-decoded-data path is proven by
+    /// `async_callback_fs_program_produces_host_effects_bd_201vt` (the dispatch +
+    /// IoCompletion path is identical across import forms); here the callback is
+    /// empty and we assert the named-import direct-call lowering reaches the ledger.
+    #[test]
+    fn esm_named_import_callback_fs_program_produces_host_effects_bd_201vt() {
+        assert_esm_fs_source_lowers_to_host_effects(
+            "import { readFile, writeFileSync } from 'node:fs';\n\
+             writeFileSync('out.txt', 'real effect bytes');\n\
+             readFile('out.txt', function (err, data) {});\n",
+            "frankenengine_e2e_fs_esm_named_cb",
+        );
+    }
+
     /// bd-1xl17.a (binding form): the idiomatic `const fs = require('fs'); ...`
     /// binding form — not only the inline `require('fs').readFileSync` form —
     /// lowers to `fs:` HostCalls that perform real sandboxed I/O and surface a

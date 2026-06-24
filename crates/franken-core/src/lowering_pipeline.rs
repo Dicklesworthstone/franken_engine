@@ -4031,6 +4031,10 @@ pub fn lower_ir2_to_ir3(
         let mut fn_reg: Reg = 0;
         let mut fn_binding_regs = BTreeMap::<BindingId, Reg>::new();
         let mut fn_value_stack: Vec<Reg> = Vec::new();
+        // bd-fqlfw.2.11.4: register discarded by the most recent function-body
+        // `Pop`, so an immediately-following explicit `Return` (whose IR1 is
+        // `[eval X, Pop, Return]`) can deliver that value instead of reading r0.
+        let mut fn_last_popped: Option<Reg> = None;
         let mut fn_label_targets = BTreeMap::<u32, u32>::new();
         let mut fn_pending_jumps = Vec::<PendingJump>::new();
 
@@ -4221,7 +4225,14 @@ pub fn lower_ir2_to_ir3(
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::Return => {
-                    let value = fn_value_stack.pop().unwrap_or(0);
+                    // bd-fqlfw.2.11.4: deliver the actual return value. The
+                    // synthetic fall-off-end return (`[LoadLiteral Undefined,
+                    // Return]`, no Pop — appended ~line 2164) leaves its value on
+                    // the stack, so prefer the stack top; an explicit `return X`
+                    // (`[eval X, Pop, Return]`) emptied the stack via its Pop, so
+                    // fall back to the register that Pop discarded
+                    // (`fn_last_popped`). `unwrap_or(0)` only as a last resort.
+                    let value = fn_value_stack.pop().or(fn_last_popped).unwrap_or(0);
                     ir3.instructions.push(Ir3Instruction::Return { value });
                 }
                 Ir1Op::Call { arg_count } => {
@@ -4311,8 +4322,21 @@ pub fn lower_ir2_to_ir3(
                 Ir1Op::Pop | Ir1Op::Nop => {
                     let reg = fn_value_stack.pop().unwrap_or(0);
                     if matches!(body_ir1, Ir1Op::Pop) {
-                        ir3.instructions
-                            .push(Ir3Instruction::Move { dst: 0, src: reg });
+                        // bd-fqlfw.2.11.4: a function-body `Pop` must DISCARD the
+                        // expression value, NOT route it through register 0. r0 is
+                        // the function's first parameter (the calling convention
+                        // writes args to the callee window at r0,r1,...), so the
+                        // old `Move { dst: 0, src: reg }` clobbered param0 —
+                        // corrupting any `return <param0>` (or re-read of param0)
+                        // that followed an expression statement. Remember the
+                        // discarded register so an immediately-following `Return`
+                        // (the IR1 for `return X` is `[eval X, Pop, Return]`, whose
+                        // `Pop` empties the value stack) delivers the actual value
+                        // rather than underflowing to r0. The module-level Pop
+                        // handler keeps its r0-completion convention (it reserves
+                        // r0); only this deferred function-body loop changes. The
+                        // engine lane already discards here (bd-62un6).
+                        fn_last_popped = Some(reg);
                     }
                 }
                 Ir1Op::AssignOp {
@@ -4576,7 +4600,17 @@ pub fn lower_ir2_to_ir3(
 
         // Ensure function body ends with Return.
         if !matches!(ir3.instructions.last(), Some(Ir3Instruction::Return { .. })) {
-            ir3.instructions.push(Ir3Instruction::Return { value: 0 });
+            // bd-fqlfw.2.11.4: fall-off-end returns `undefined` per spec, NOT r0
+            // (which now holds param0, since the function-body Pop no longer
+            // routes the completion value through r0). This tail is normally
+            // unreachable — the IR1 builder already appends a synthetic
+            // `[LoadLiteral Undefined, Return]` (~line 2164) — but keep it
+            // spec-correct should a future body-lowering path skip that.
+            let undef = alloc_register(&mut fn_reg);
+            ir3.instructions
+                .push(Ir3Instruction::LoadUndefined { dst: undef });
+            ir3.instructions
+                .push(Ir3Instruction::Return { value: undef });
         }
 
         // Resolve pending jumps within this function body.

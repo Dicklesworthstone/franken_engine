@@ -1384,6 +1384,9 @@ The "GA exit" package collects every artifact the runtime needs to ship to gener
 - the franken_node handoff bundle
 - the acceptance-ledger snapshot at the cut
 - the bead snapshot anchoring the cut to a tracker state
+- the third-party-verifiable proof bundle (`proof_bundle.tar.gz`, schema `franken-engine.proof-bundle.v1`) plus a pointer to its clean-room verifier image — the canonical third-party trust artifact (Track Y, `bd-cixqu.25.1`–`bd-cixqu.25.3`)
+
+An external auditor can re-check that proof bundle without the FrankenEngine source tree. Export it with `scripts/export_proof_bundle.sh export <proof_source_dir>`, then verify it in the clean-room docker image (which carries no engine source) with `scripts/run_y2_proof_bundle_verifier.sh verify <proof_bundle.tar.gz>`; the verifier independently recomputes the bundle's recheck digest and fails closed on any mismatch. The bundle path, recheck digest, and verifier image are wired into `ga_exit_evidence_package.rs` as a `ProofBundleReference` so they travel with the GA-exit package and cannot drift from the Y.1 exporter / Y.2 verifier.
 
 This is the artifact that promotes the workspace from `0.1.0` to a tagged release. It does not exist yet, because the matrix still has TARGETED and HYPOTHESIS rows that need to be either promoted or explicitly downgraded for the release wording to hold.
 

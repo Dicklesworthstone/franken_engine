@@ -31,7 +31,7 @@ use frankenengine_core::parser::{
     ParserOptions as CoreParserOptions,
 };
 
-use crate::{HybridRouter, RouteReason};
+use crate::{EngineMemoryBudget, HybridRouter, RouteReason};
 
 pub const DIFFERENTIAL_ORACLE_SCHEMA_VERSION: &str = "franken-engine.differential-oracle.v1";
 pub const DIFFERENTIAL_ORACLE_CANONICALIZATION_SCHEMA_VERSION: &str =
@@ -82,6 +82,16 @@ pub struct DifferentialOracleInput {
     /// budget ceiling. Recorded in the backend receipt's diagnostics.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine_instruction_budget: Option<u64>,
+    /// Override for the engine lane's heap-object budget (max live heap
+    /// objects). The deterministic containment default (100k) trips on
+    /// object-allocating benchmark loops because the interpreter heap is
+    /// append-only (no live-object reclamation), so the count is total
+    /// allocations. Corpus sweeps raise this so memory-heavy workloads measure
+    /// throughput rather than the containment ceiling. The byte ceiling is
+    /// derived proportionally (see [`engine_memory_budget_from_heap_objects`]).
+    /// Recorded in the backend receipt's diagnostics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_memory_budget: Option<u64>,
     pub node: ExternalRuntimeSpec,
     pub bun: ExternalRuntimeSpec,
     /// Backends to execute and compare. Defaults to all four lanes. The
@@ -112,6 +122,7 @@ impl DifferentialOracleInput {
             source_path: None,
             timeout_ms: DEFAULT_TIMEOUT_MS,
             engine_instruction_budget: None,
+            engine_memory_budget: None,
             node: ExternalRuntimeSpec::node_default(),
             bun: ExternalRuntimeSpec::bun_default(),
             selected_backends: default_backend_selection(),
@@ -130,6 +141,11 @@ impl DifferentialOracleInput {
 
     pub fn with_engine_instruction_budget(mut self, instruction_budget: u64) -> Self {
         self.engine_instruction_budget = Some(instruction_budget);
+        self
+    }
+
+    pub fn with_engine_memory_budget(mut self, max_heap_objects: u64) -> Self {
+        self.engine_memory_budget = Some(max_heap_objects);
         self
     }
 
@@ -407,6 +423,7 @@ pub fn run_differential_oracle(input: &DifferentialOracleInput) -> DifferentialO
         backends.push(run_franken_engine_backend(
             input.source.as_str(),
             input.engine_instruction_budget,
+            input.engine_memory_budget,
         ));
     }
     if input.backend_selected(DifferentialBackend::FrankenCore) {
@@ -551,18 +568,49 @@ fn render_console_streams(
     (stdout, stderr)
 }
 
+/// Bytes of headroom granted per heap object when an operator raises the engine
+/// heap-object budget via `--engine-memory-budget`. The interpreter's per-object
+/// base footprint estimate is 64 bytes; 1 KiB/object covers objects carrying
+/// several string/array properties so the byte ceiling does not silently become
+/// the new bottleneck once the count ceiling is raised.
+const ENGINE_MEMORY_BUDGET_BYTES_PER_OBJECT: u64 = 1024;
+/// Floor for the derived byte ceiling: never drop below the deterministic
+/// profile's 64 MiB containment default (`DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES`).
+const ENGINE_MEMORY_BUDGET_MIN_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Derive a full [`EngineMemoryBudget`] from the single operator-facing
+/// heap-object ceiling. The byte ceiling is scaled proportionally (and floored
+/// at the containment default) so the `--engine-memory-budget` flag is a single,
+/// self-consistent lever rather than two coupled numbers the operator must keep
+/// in sync.
+fn engine_memory_budget_from_heap_objects(max_heap_objects: u64) -> EngineMemoryBudget {
+    EngineMemoryBudget {
+        max_heap_objects: u32::try_from(max_heap_objects).unwrap_or(u32::MAX),
+        max_total_memory_bytes: max_heap_objects
+            .saturating_mul(ENGINE_MEMORY_BUDGET_BYTES_PER_OBJECT)
+            .max(ENGINE_MEMORY_BUDGET_MIN_BYTES),
+    }
+}
+
 fn run_franken_engine_backend(
     source: &str,
     instruction_budget: Option<u64>,
+    memory_budget: Option<u64>,
 ) -> DifferentialBackendReceipt {
     let started = Instant::now();
     let mut router = HybridRouter::default();
-    let evaluated = match instruction_budget {
-        Some(budget) => router.eval_with_instruction_budget(source, budget),
-        None => router.eval(source),
-    };
-    let budget_diagnostic =
-        instruction_budget.map(|budget| format!("instruction_budget_override={budget}"));
+    let memory_budget_override = memory_budget.map(engine_memory_budget_from_heap_objects);
+    let evaluated = router.eval_with_budgets(source, instruction_budget, memory_budget_override);
+    let mut budget_diagnostics: Vec<String> = Vec::new();
+    if let Some(budget) = instruction_budget {
+        budget_diagnostics.push(format!("instruction_budget_override={budget}"));
+    }
+    if let (Some(objects), Some(budget)) = (memory_budget, memory_budget_override) {
+        budget_diagnostics.push(format!(
+            "memory_budget_override={objects} heap_objects / {} bytes",
+            budget.max_total_memory_bytes
+        ));
+    }
     match evaluated {
         Ok(outcome) => {
             // The external backends are `node -e` / `bun -e` subprocesses whose
@@ -572,7 +620,7 @@ fn run_franken_engine_backend(
             // `value` is retained as supplementary detail.
             let (stdout, stderr) = render_console_streams(&outcome.console_output);
             let mut diagnostics = vec![format!("route_reason={}", outcome.route_reason)];
-            diagnostics.extend(budget_diagnostic.clone());
+            diagnostics.extend(budget_diagnostics.clone());
             DifferentialBackendReceipt {
                 backend: DifferentialBackend::FrankenEngine,
                 status: DifferentialBackendStatus::Completed,
@@ -591,7 +639,7 @@ fn run_franken_engine_backend(
         Err(error) => {
             let stderr = error.to_string();
             let mut diagnostics = vec![error.stable_namespace().to_string()];
-            diagnostics.extend(budget_diagnostic);
+            diagnostics.extend(budget_diagnostics);
             DifferentialBackendReceipt {
                 backend: DifferentialBackend::FrankenEngine,
                 status: DifferentialBackendStatus::Failed,
@@ -1758,7 +1806,7 @@ mod tests {
         // `node -e` / `bun -e` subprocess backends — rather than its `undefined`
         // completion value, otherwise the cross-runtime structured-value
         // comparison can never reach consensus and no case enters the denominator.
-        let engine = run_franken_engine_backend("console.log(1 + 1);", Some(2_000_000_000));
+        let engine = run_franken_engine_backend("console.log(1 + 1);", Some(2_000_000_000), None);
         assert_eq!(engine.status, DifferentialBackendStatus::Completed);
         assert_eq!(engine.stdout, "2\n");
         assert_eq!(engine.stdout_sha256, sha256_hex(b"2\n"));
@@ -1788,6 +1836,57 @@ mod tests {
             structured.groups[0]
                 .backends
                 .contains(&DifferentialBackend::NodeLts)
+        );
+    }
+
+    #[test]
+    fn engine_memory_budget_derivation_scales_bytes_and_floors_at_default() {
+        // Small override: byte ceiling is floored at the 64 MiB containment
+        // default rather than collapsing to objects * 1 KiB.
+        let small = engine_memory_budget_from_heap_objects(1_000);
+        assert_eq!(small.max_heap_objects, 1_000);
+        assert_eq!(small.max_total_memory_bytes, ENGINE_MEMORY_BUDGET_MIN_BYTES);
+
+        // Large override: byte ceiling scales 1 KiB/object once that exceeds the
+        // floor, so the byte cap does not become the new bottleneck.
+        let large = engine_memory_budget_from_heap_objects(1_000_000);
+        assert_eq!(large.max_heap_objects, 1_000_000);
+        assert_eq!(
+            large.max_total_memory_bytes,
+            1_000_000 * ENGINE_MEMORY_BUDGET_BYTES_PER_OBJECT
+        );
+
+        // A count beyond u32 saturates rather than wrapping.
+        let saturated = engine_memory_budget_from_heap_objects(u64::from(u32::MAX) + 10);
+        assert_eq!(saturated.max_heap_objects, u32::MAX);
+    }
+
+    #[test]
+    fn franken_engine_backend_memory_budget_lets_object_loop_complete() {
+        // bd-fqlfw.2.11.3: the same corpus-shaped object loop fails closed on
+        // the containment default but completes once the heap-object budget is
+        // raised, and the override is recorded in the receipt diagnostics.
+        const OBJECT_LOOP: &str = "var n=0; var i=0; \
+             while(i<110000){ var obj={a:i,b:i+1}; n=n+1; i=i+1; } \
+             console.log(n);";
+
+        let without = run_franken_engine_backend(OBJECT_LOOP, Some(2_000_000_000), None);
+        assert_eq!(without.status, DifferentialBackendStatus::Failed);
+        assert!(
+            without.stderr.to_lowercase().contains("memory budget"),
+            "expected a memory-budget fault, got: {}",
+            without.stderr
+        );
+
+        let with = run_franken_engine_backend(OBJECT_LOOP, Some(2_000_000_000), Some(1_000_000));
+        assert_eq!(with.status, DifferentialBackendStatus::Completed);
+        assert_eq!(with.stdout, "110000\n");
+        assert!(
+            with.diagnostics
+                .iter()
+                .any(|line| line.starts_with("memory_budget_override=1000000 heap_objects")),
+            "memory-budget override must be recorded in diagnostics: {:?}",
+            with.diagnostics
         );
     }
 

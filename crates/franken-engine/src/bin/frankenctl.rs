@@ -484,6 +484,7 @@ struct DifferentialOracleRunArgs {
     timeout_ms: u64,
     out: Option<PathBuf>,
     engine_budget: Option<u64>,
+    engine_memory_budget: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -523,6 +524,7 @@ struct OracleRunArgs {
     case_id: Option<String>,
     timeout_ms: u64,
     engine_budget: Option<u64>,
+    engine_memory_budget: Option<u64>,
     node_bin: Option<String>,
     bun_bin: Option<String>,
     /// When set, write a content-addressed oracle-run bundle to this directory.
@@ -2665,6 +2667,7 @@ fn parse_differential_oracle_run_command(args: &[String]) -> Result<CommandSpec,
     let mut timeout_ms = 2_000_u64;
     let mut out: Option<PathBuf> = None;
     let mut engine_budget: Option<u64> = None;
+    let mut engine_memory_budget: Option<u64> = None;
 
     let mut index = 0usize;
     while index < args.len() {
@@ -2682,6 +2685,12 @@ fn parse_differential_oracle_run_command(args: &[String]) -> Result<CommandSpec,
                     "--engine-budget",
                 )?)
             }
+            "--engine-memory-budget" => {
+                engine_memory_budget = Some(parse_u64(
+                    &next_arg(args, &mut index, "--engine-memory-budget")?,
+                    "--engine-memory-budget",
+                )?)
+            }
             flag => return Err(format!("unknown differential-oracle run flag `{flag}`")),
         }
         index += 1;
@@ -2696,6 +2705,7 @@ fn parse_differential_oracle_run_command(args: &[String]) -> Result<CommandSpec,
             timeout_ms,
             out,
             engine_budget,
+            engine_memory_budget,
         }),
     }))
 }
@@ -2846,6 +2856,7 @@ fn parse_oracle_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut case_id: Option<String> = None;
     let mut timeout_ms = 2_000_u64;
     let mut engine_budget: Option<u64> = None;
+    let mut engine_memory_budget: Option<u64> = None;
     let mut node_bin: Option<String> = None;
     let mut bun_bin: Option<String> = None;
     let mut bundle: Option<PathBuf> = None;
@@ -2866,6 +2877,12 @@ fn parse_oracle_run_command(args: &[String]) -> Result<CommandSpec, String> {
                 engine_budget = Some(parse_u64(
                     &next_arg(args, &mut index, "--engine-budget")?,
                     "--engine-budget",
+                )?)
+            }
+            "--engine-memory-budget" => {
+                engine_memory_budget = Some(parse_u64(
+                    &next_arg(args, &mut index, "--engine-memory-budget")?,
+                    "--engine-memory-budget",
                 )?)
             }
             "--node-bin" => node_bin = Some(next_arg(args, &mut index, "--node-bin")?),
@@ -2897,6 +2914,7 @@ fn parse_oracle_run_command(args: &[String]) -> Result<CommandSpec, String> {
             case_id,
             timeout_ms,
             engine_budget,
+            engine_memory_budget,
             node_bin,
             bun_bin,
             bundle,
@@ -8045,6 +8063,9 @@ fn execute_differential_oracle_run(args: DifferentialOracleRunArgs) -> Result<i3
     if let Some(budget) = args.engine_budget {
         input = input.with_engine_instruction_budget(budget);
     }
+    if let Some(memory_budget) = args.engine_memory_budget {
+        input = input.with_engine_memory_budget(memory_budget);
+    }
     let report = run_differential_oracle(&input);
 
     if let Some(path) = args.out {
@@ -8189,6 +8210,9 @@ fn execute_oracle_run(args: OracleRunArgs) -> Result<i32, String> {
         .with_selected_backends(args.engines.iter().copied());
     if let Some(budget) = args.engine_budget {
         input = input.with_engine_instruction_budget(budget);
+    }
+    if let Some(memory_budget) = args.engine_memory_budget {
+        input = input.with_engine_memory_budget(memory_budget);
     }
     if let Some(program) = oracle_runtime_program(args.node_bin.as_deref(), "NODE") {
         input.node.program = program;
@@ -10491,11 +10515,15 @@ fn differential_oracle_run_usage() -> String {
         "differential-oracle run usage:",
         "  frankenctl differential-oracle run --input <source.js>",
         "      [--case-id <id>] [--timeout-ms <u64>] [--out <report.json>]",
-        "      [--engine-budget <u64>]",
+        "      [--engine-budget <u64>] [--engine-memory-budget <u64>]",
         "",
         "  --engine-budget overrides the in-process engine instruction budget so",
         "  long-running corpus programs can execute (the containment default is",
         "  intentionally small); node/bun have no analogous cap.",
+        "  --engine-memory-budget overrides the engine heap-object ceiling (default",
+        "  100k; the byte ceiling scales with it) so object-allocating corpus loops",
+        "  can execute. The engine heap is append-only (no live-object reclamation),",
+        "  so the count is total allocations; node/bun reclaim via GC instead.",
     ]
     .join("\n")
 }
@@ -10547,7 +10575,8 @@ fn oracle_run_usage() -> String {
         "oracle run usage:",
         "  frankenctl oracle run <input.js> [--engines franken,node,bun,core] [--bundle <dir>]",
         "      [--case-id <id>] [--timeout-ms <u64>] [--engine-budget <u64>]",
-        "      [--node-bin <path>] [--bun-bin <path>] [--out <report.json>] [--json]",
+        "      [--engine-memory-budget <u64>] [--node-bin <path>] [--bun-bin <path>]",
+        "      [--out <report.json>] [--json]",
         "",
         "  --engines  comma-separated subset of {node, bun, franken, core}; default is all four.",
         "             only the selected engines are executed and compared.",
@@ -10556,6 +10585,9 @@ fn oracle_run_usage() -> String {
         "  --node-bin / --bun-bin  override the external binaries; otherwise $NODE / $BUN, then",
         "             `node` / `bun` on PATH (point --node-bin at genuine Node where `node` is a shim).",
         "  --engine-budget  raise the in-process engine instruction budget for long programs.",
+        "  --engine-memory-budget  raise the engine heap-object ceiling (default 100k) for",
+        "             object-allocating programs; the byte ceiling scales with it. The engine",
+        "             heap is append-only (no GC), so this counts total allocations.",
         "  --out      additionally write the raw DifferentialOracleReport JSON to this path.",
         "  --json     emit a machine-parseable summary (robot mode) instead of the human view.",
         "",

@@ -1320,7 +1320,12 @@ impl QuickJsInspiredNativeEngine {
         prepared: PreparedEvalSource,
         route_reason: RouteReason,
     ) -> EvalResult<EvalOutcome> {
-        eval_with_lane(prepared, LaneChoice::QuickJs, route_reason, None)
+        eval_with_lane(
+            prepared,
+            LaneChoice::QuickJs,
+            route_reason,
+            EngineEvalBudgets::default(),
+        )
     }
 
     #[allow(clippy::result_large_err)]
@@ -1328,14 +1333,9 @@ impl QuickJsInspiredNativeEngine {
         &mut self,
         prepared: PreparedEvalSource,
         route_reason: RouteReason,
-        instruction_budget: Option<u64>,
+        budgets: EngineEvalBudgets,
     ) -> EvalResult<EvalOutcome> {
-        eval_with_lane(
-            prepared,
-            LaneChoice::QuickJs,
-            route_reason,
-            instruction_budget,
-        )
+        eval_with_lane(prepared, LaneChoice::QuickJs, route_reason, budgets)
     }
 }
 
@@ -1346,7 +1346,12 @@ impl V8InspiredNativeEngine {
         prepared: PreparedEvalSource,
         route_reason: RouteReason,
     ) -> EvalResult<EvalOutcome> {
-        eval_with_lane(prepared, LaneChoice::V8, route_reason, None)
+        eval_with_lane(
+            prepared,
+            LaneChoice::V8,
+            route_reason,
+            EngineEvalBudgets::default(),
+        )
     }
 
     #[allow(clippy::result_large_err)]
@@ -1354,10 +1359,40 @@ impl V8InspiredNativeEngine {
         &mut self,
         prepared: PreparedEvalSource,
         route_reason: RouteReason,
-        instruction_budget: Option<u64>,
+        budgets: EngineEvalBudgets,
     ) -> EvalResult<EvalOutcome> {
-        eval_with_lane(prepared, LaneChoice::V8, route_reason, instruction_budget)
+        eval_with_lane(prepared, LaneChoice::V8, route_reason, budgets)
     }
+}
+
+/// Override of the engine lane's heap budget for measurement/benchmark callers.
+///
+/// The containment defaults (`DEFAULT_QUICKJS_MAX_HEAP_OBJECTS` /
+/// `DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES`) are sized for untrusted extension
+/// code, not for object-allocating benchmark loops. The differential-oracle
+/// performance arm and corpus sweeps raise this so large-but-terminating
+/// workloads can complete rather than failing closed on the containment
+/// ceiling. Like the instruction budget, the override is a
+/// measurement-configuration fact and must be recorded in whatever artifact the
+/// caller emits.
+///
+/// Note: the baseline interpreter heap is append-only (no live-object
+/// reclamation), so the budget counts total allocations rather than live
+/// objects. This lever raises the ceiling; it does not introduce GC.
+#[derive(Debug, Clone, Copy)]
+pub struct EngineMemoryBudget {
+    /// Maximum heap objects the interpreter may allocate before failing closed.
+    pub max_heap_objects: u32,
+    /// Maximum estimated live memory (bytes) before failing closed.
+    pub max_total_memory_bytes: u64,
+}
+
+/// Bundle of optional per-lane interpreter budget overrides threaded through the
+/// routed eval path. Both default to `None` (use the containment defaults).
+#[derive(Debug, Clone, Copy, Default)]
+struct EngineEvalBudgets {
+    instruction_budget: Option<u64>,
+    memory_budget: Option<EngineMemoryBudget>,
 }
 
 #[derive(Debug)]
@@ -1382,7 +1417,7 @@ impl HybridRouter {
 
     #[allow(clippy::result_large_err)]
     pub fn eval(&mut self, source: &str) -> EvalResult<EvalOutcome> {
-        self.eval_routed(source, None)
+        self.eval_routed(source, EngineEvalBudgets::default())
     }
 
     /// Same routing and semantics as [`Self::eval`], but with the per-lane
@@ -1399,26 +1434,48 @@ impl HybridRouter {
         source: &str,
         instruction_budget: u64,
     ) -> EvalResult<EvalOutcome> {
-        self.eval_routed(source, Some(instruction_budget))
+        self.eval_routed(
+            source,
+            EngineEvalBudgets {
+                instruction_budget: Some(instruction_budget),
+                memory_budget: None,
+            },
+        )
     }
 
+    /// Same routing and semantics as [`Self::eval`], but with the per-lane
+    /// interpreter instruction budget and/or heap budget overridden. Either
+    /// override may be `None` to keep the containment default for that
+    /// dimension. Both overrides are measurement-configuration facts (see
+    /// [`EngineMemoryBudget`]); the caller must record them in its artifact.
     #[allow(clippy::result_large_err)]
-    fn eval_routed(
+    pub fn eval_with_budgets(
         &mut self,
         source: &str,
         instruction_budget: Option<u64>,
+        memory_budget: Option<EngineMemoryBudget>,
     ) -> EvalResult<EvalOutcome> {
+        self.eval_routed(
+            source,
+            EngineEvalBudgets {
+                instruction_budget,
+                memory_budget,
+            },
+        )
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn eval_routed(&mut self, source: &str, budgets: EngineEvalBudgets) -> EvalResult<EvalOutcome> {
         let prepared = prepare_eval_source(source, "hybrid")?;
         let route_reason = Self::classify_source_route(prepared.prepared_source.as_str());
         match route_reason {
             RouteReason::ContainsImportKeyword | RouteReason::ContainsAwaitKeyword => self
                 .v8_lineage
-                .eval_prepared_with_budget(prepared, route_reason, instruction_budget),
-            RouteReason::DefaultQuickJsPath => self.quickjs_lineage.eval_prepared_with_budget(
-                prepared,
-                route_reason,
-                instruction_budget,
-            ),
+                .eval_prepared_with_budget(prepared, route_reason, budgets),
+            RouteReason::DefaultQuickJsPath => {
+                self.quickjs_lineage
+                    .eval_prepared_with_budget(prepared, route_reason, budgets)
+            }
             RouteReason::DirectEngineInvocation => Err(EvalError::new(
                 EvalErrorCode::InvariantViolation,
                 "router never emits direct route",
@@ -1774,9 +1831,9 @@ fn eval_with_lane(
     prepared: PreparedEvalSource,
     lane: LaneChoice,
     route_reason: RouteReason,
-    instruction_budget: Option<u64>,
+    budgets: EngineEvalBudgets,
 ) -> EvalResult<EvalOutcome> {
-    let output = eval_via_native_pipeline(&prepared, lane, instruction_budget)?;
+    let output = eval_via_native_pipeline(&prepared, lane, budgets)?;
     Ok(EvalOutcome {
         engine: engine_kind_for_lane(lane),
         value: output.value,
@@ -1802,7 +1859,7 @@ struct NativeEvalOutput {
 fn eval_via_native_pipeline(
     prepared: &PreparedEvalSource,
     lane: LaneChoice,
-    instruction_budget: Option<u64>,
+    budgets: EngineEvalBudgets,
 ) -> EvalResult<NativeEvalOutput> {
     let parser = CanonicalEs2020Parser;
     let syntax_tree = parser
@@ -1879,7 +1936,7 @@ fn eval_via_native_pipeline(
     let mut ir3 = lowering_output.ir3;
     patch_eval_completion_value(&mut ir3);
 
-    let lane_router = eval_lane_router_for_ir3(&ir3, instruction_budget);
+    let lane_router = eval_lane_router_for_ir3(&ir3, budgets);
     let routed = lane_router
         .execute(&ir3, prepared.trace_id.as_str(), Some(lane))
         .map_err(map_interpreter_error)
@@ -1898,7 +1955,7 @@ fn eval_via_native_pipeline(
     })
 }
 
-fn eval_lane_router_for_ir3(ir3: &Ir3Module, instruction_budget: Option<u64>) -> LaneRouter {
+fn eval_lane_router_for_ir3(ir3: &Ir3Module, budgets: EngineEvalBudgets) -> LaneRouter {
     let mut granted_capabilities = std::collections::BTreeSet::from([
         RuntimeCapability::VmDispatch,
         RuntimeCapability::HeapAllocate,
@@ -1919,9 +1976,15 @@ fn eval_lane_router_for_ir3(ir3: &Ir3Module, instruction_budget: Option<u64>) ->
     quickjs_config.granted_capabilities = granted_capabilities.clone();
     let mut v8_config = InterpreterConfig::v8_defaults();
     v8_config.granted_capabilities = granted_capabilities;
-    if let Some(budget) = instruction_budget {
+    if let Some(budget) = budgets.instruction_budget {
         quickjs_config.instruction_budget = budget;
         v8_config.instruction_budget = budget;
+    }
+    if let Some(memory_budget) = budgets.memory_budget {
+        quickjs_config.max_heap_objects = memory_budget.max_heap_objects;
+        quickjs_config.max_total_memory_bytes = memory_budget.max_total_memory_bytes;
+        v8_config.max_heap_objects = memory_budget.max_heap_objects;
+        v8_config.max_total_memory_bytes = memory_budget.max_total_memory_bytes;
     }
     LaneRouter::with_configs(quickjs_config, v8_config)
 }

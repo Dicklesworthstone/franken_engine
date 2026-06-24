@@ -4649,17 +4649,18 @@ impl InterpreterCore {
     /// produced to the JS value `readFileSync` would return. Without an encoding
     /// Node yields a `Buffer` (modeled here as a `Uint8Array`-backed value); with
     /// a recognized character encoding it yields the decoded string. The
-    /// dependency-free Node `BufferEncoding` values are handled here: utf8/utf-8,
-    /// utf16le/utf-16le/ucs2/ucs-2, latin1/binary, ascii, and hex. base64/
-    /// base64url (needs a base64 dep), the options-object call form
-    /// `readFileSync(path, { encoding })` (which the lowering does not yet thread
-    /// through), and unknown encodings fall back to the Buffer shape — tracked as
-    /// bd-rul7k. The Buffer path requires the `HeapAllocate` capability.
+    /// Node `BufferEncoding` values handled here: utf8/utf-8,
+    /// utf16le/utf-16le/ucs2/ucs-2, latin1/binary, ascii, hex, base64, and
+    /// base64url. The options-object call form `readFileSync(path, { encoding })`
+    /// (which the lowering does not yet thread through) and unknown encodings
+    /// still fall back to the Buffer shape — tracked as bd-rul7k. The Buffer path
+    /// requires the `HeapAllocate` capability.
     fn decode_fs_read_result(
         &mut self,
         bytes: &[u8],
         encoding: Option<&str>,
     ) -> Result<Value, InterpreterError> {
+        use base64::Engine as _;
         let decoded: Option<String> = match encoding.map(str::to_ascii_lowercase).as_deref() {
             Some("utf8" | "utf-8") => Some(String::from_utf8_lossy(bytes).into_owned()),
             Some("utf16le" | "utf-16le" | "ucs2" | "ucs-2") => {
@@ -4675,6 +4676,15 @@ impl InterpreterCore {
             Some("latin1" | "binary") => Some(bytes.iter().map(|&b| char::from(b)).collect()),
             Some("ascii") => Some(bytes.iter().map(|&b| char::from(b & 0x7f)).collect()),
             Some("hex") => Some(hex::encode(bytes)),
+            // base64/base64url ENCODE the raw bytes into an ASCII string (like
+            // `hex`); they do not decode. `readFileSync(p, 'base64')` mirrors
+            // `Buffer.from(bytes).toString('base64')`. Node's `base64` uses the
+            // standard alphabet WITH padding; `base64url` uses the URL-safe
+            // alphabet with NO padding.
+            Some("base64") => Some(base64::engine::general_purpose::STANDARD.encode(bytes)),
+            Some("base64url") => {
+                Some(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+            }
             _ => None,
         };
         if let Some(text) = decoded {
@@ -33966,6 +33976,36 @@ mod async_runtime_tests_current {
             core.decode_fs_read_result(&utf16_bytes, Some("utf16le"))
                 .unwrap(),
             Value::Str(Arc::from("hi"))
+        );
+
+        // base64/base64url ENCODE the raw bytes (like hex), not decode. The two
+        // differ only in alphabet + padding: `base64` is standard-with-padding,
+        // `base64url` is URL-safe-without-padding. Use bytes whose standard
+        // base64 contains both a `+`/`/` glyph and trailing padding so the
+        // alphabet and padding differences are actually exercised.
+        let b64_bytes = [0xfbu8, 0xff, 0xbf]; // standard "+/+/"-class glyphs
+        assert_eq!(
+            core.decode_fs_read_result(&b64_bytes, Some("base64"))
+                .unwrap(),
+            Value::Str(Arc::from("+/+/")),
+            "base64: standard alphabet with padding"
+        );
+        assert_eq!(
+            core.decode_fs_read_result(&b64_bytes, Some("base64url"))
+                .unwrap(),
+            Value::Str(Arc::from("-_-_")),
+            "base64url: URL-safe alphabet, no padding"
+        );
+        // A single byte forces padding under standard base64; base64url omits it.
+        assert_eq!(
+            core.decode_fs_read_result(b"f", Some("base64")).unwrap(),
+            Value::Str(Arc::from("Zg==")),
+            "base64 pads to a 4-char quantum"
+        );
+        assert_eq!(
+            core.decode_fs_read_result(b"f", Some("BASE64URL")).unwrap(),
+            Value::Str(Arc::from("Zg")),
+            "base64url match is case-insensitive and unpadded"
         );
 
         // No encoding -> Buffer (Uint8Array-backed); unknown encoding also falls back.

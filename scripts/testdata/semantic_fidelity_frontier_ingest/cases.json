@@ -1,0 +1,53 @@
+{
+  "schema_version": "franken-engine.semantic-fidelity-frontier-ingest-cases.v1",
+  "owning_bead": "bd-09bea.3",
+  "description": "Fixture catalog for the semantic-fidelity frontier ingest bridge.",
+  "cases": [
+    {
+      "case_id": "bd_mihky_capstone_subset",
+      "kind": "positive_capstone_bundle",
+      "source_bundle_path": "artifacts/semantic_fidelity_workbench_gate/bd-mihky-10-capstone-20300101T000000Z",
+      "source_fixture_path": "scripts/testdata/semantic_fidelity_workbench/rangeerror_tointeger_suite.json",
+      "expected_summary_path": "scripts/testdata/semantic_fidelity_frontier_ingest/expected_capstone_ingest_summary.json",
+      "expected_report_path": "scripts/testdata/semantic_fidelity_frontier_ingest/expected_capstone_report.md",
+      "expected": {
+        "schema_version": "franken-engine.semantic-fidelity-frontier-ingest.v1",
+        "scope": "semantic_fidelity_subset",
+        "claim_policy": "no_claim_promotion",
+        "row_count": 13,
+        "state_counts": {
+          "accepted_external_oracle": 11,
+          "declared_non_execution": 2
+        },
+        "coverage_counts": {
+          "eligible_subset_row": 11,
+          "non_passing_scoped_evidence": 2
+        }
+      },
+      "provenance": {
+        "source_bead_ids": [
+          "bd-mihky",
+          "bd-mihky.10",
+          "bd-fqlfw.7"
+        ],
+        "source_suite_id": "semfid-suite-rangeerror-tointeger-v1",
+        "source_suite_sha256": "sha256:e730923d9f91db98d243d3bb554ca4288604b5f9660d71de1ce3b533279c3e77"
+      }
+    },
+    {
+      "case_id": "missing_bundle_fails_closed",
+      "kind": "negative_missing_bundle",
+      "source_bundle_path": "scripts/testdata/semantic_fidelity_frontier_ingest/missing_bundle",
+      "expected_error": {
+        "schema_version": "franken-engine.semantic-fidelity-frontier-ingest-error.v1",
+        "ok": false,
+        "reason_code": "missing_source_artifact"
+      },
+      "provenance": {
+        "source_bead_ids": [
+          "bd-09bea.3"
+        ]
+      }
+    }
+  ]
+}

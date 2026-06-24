@@ -613,6 +613,32 @@ pub fn lower_ir0_to_ir1(
     for alias in confirmed_fs_promises_module_aliases(&ir0.tree.body, &binding_lookup) {
         binding_lookup.insert(fs_promises_module_alias_sentinel(&alias), 0);
     }
+    // bd-1xl17.c: destructured CJS fs/promises requires
+    // (`const { readFile } = require('fs/promises')`) record each destructured
+    // local as the SAME named-import sentinel as the ESM form, so the direct-call
+    // recognizer (`fs_promises_named_import_call_capability`) handles their call
+    // sites unchanged; the declaration itself is elided to undefined bindings.
+    // Usage-gated like every other fs form.
+    for (local, capability) in
+        confirmed_fs_promises_destructured_requires(&ir0.tree.body, &binding_lookup)
+    {
+        binding_lookup.insert(fs_promises_named_import_sentinel(&local, capability), 0);
+    }
+    // bd-1xl17.c: `const { promises } = require('fs')` records the destructured
+    // `promises` local as an fs/promises module-alias sentinel, so the member-call
+    // recognizer (`fs_promises_builtin_call_capability`) handles `<local>.readFile`
+    // unchanged. Usage-gated; only the `promises` property opts in.
+    for alias in confirmed_fs_promises_subobject_destructures(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(fs_promises_module_alias_sentinel(&alias), 0);
+    }
+    // bd-1xl17.c: namespace/default fs/promises ESM imports
+    // (`import * as fsp from 'node:fs/promises'` / `import fsp from
+    // 'node:fs/promises'`) used as `fsp.readFile/...` reuse the SAME module-alias
+    // sentinel + member-call recognizer as the require-binding form; the import
+    // clause binds the local to undefined and elides the module load. Usage-gated.
+    for alias in confirmed_fs_promises_namespace_import_aliases(&ir0.tree.body) {
+        binding_lookup.insert(fs_promises_module_alias_sentinel(&alias), 0);
+    }
     let mut synthetic_export_index = 0u32;
     let mut synthetic_import_index = 0u32;
     let mut label_counter = 0u32;
@@ -673,8 +699,16 @@ pub fn lower_ir0_to_ir1(
                         // module load (no real fs module — it would fault). The fs
                         // ops are recognized + capability-gated at the member-call
                         // sites, mirroring the require-binding form (bd-1xl17.a).
-                        if is_fs_module_specifier(&import.source)
-                            && binding_lookup.contains_key(&fs_module_alias_sentinel(local))
+                        // bd-1xl17.c: the fs/promises namespace analogue
+                        // (`import * as fsp from 'node:fs/promises'`) is elided the
+                        // same way — its `fsp.readFile/...` calls are Promise-wrapped
+                        // at the member-call sites via the promises module-alias
+                        // sentinel.
+                        if (is_fs_module_specifier(&import.source)
+                            && binding_lookup.contains_key(&fs_module_alias_sentinel(local)))
+                            || (is_fs_promises_module_specifier(&import.source)
+                                && binding_lookup
+                                    .contains_key(&fs_promises_module_alias_sentinel(local)))
                         {
                             ir1.ops.push(Ir1Op::LoadLiteral {
                                 value: Ir1Literal::Undefined,
@@ -697,8 +731,15 @@ pub fn lower_ir0_to_ir1(
                         // binds to undefined and skips both the module load and the
                         // `default` extraction (they would fault); recognized at the
                         // member-call sites like the namespace/binding forms.
-                        if is_fs_module_specifier(&import.source)
-                            && binding_lookup.contains_key(&fs_module_alias_sentinel(local))
+                        // bd-1xl17.c: the fs/promises default analogue
+                        // (`import fsp from 'node:fs/promises'`) is elided the same
+                        // way — `fsp.readFile/...` is Promise-wrapped at its call
+                        // sites via the promises module-alias sentinel.
+                        if (is_fs_module_specifier(&import.source)
+                            && binding_lookup.contains_key(&fs_module_alias_sentinel(local)))
+                            || (is_fs_promises_module_specifier(&import.source)
+                                && binding_lookup
+                                    .contains_key(&fs_promises_module_alias_sentinel(local)))
                         {
                             ir1.ops.push(Ir1Op::LoadLiteral {
                                 value: Ir1Literal::Undefined,
@@ -2052,6 +2093,39 @@ fn lower_statement_to_ir1_with_flow(
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
 
+                // bd-1xl17.c: a confirmed *destructured* fs/promises require —
+                // `const { readFile } = require('fs/promises')` or
+                // `const { promises } = require('fs')` — binds each destructured
+                // local to `undefined` and skips BOTH the faulting `require(...)`
+                // load and the property extraction (there is no real fs module
+                // object). The recognized calls are Promise-wrapped at their
+                // (direct- or member-) call sites via the sentinels recorded at
+                // the program pre-scan; unconfirmed sibling locals are left
+                // undefined (fail-closed — invoking one faults, exactly as the
+                // elided require would have). Uses `Discard` (not `Pop`) per the
+                // empty-completion contract so it never clobbers register 0.
+                // Mirrors the ESM named-import elision (bd-1xl17.b/.c).
+                if let Some(init) = &d.initializer
+                    && let Some(locals) = confirmed_fs_promises_destructure_locals(
+                        &d.pattern,
+                        init,
+                        binding_lookup,
+                    )
+                {
+                    for local in &locals {
+                        if let Some(&local_bid) = binding_lookup.get(local) {
+                            ops.push(Ir1Op::LoadLiteral {
+                                value: Ir1Literal::Undefined,
+                            });
+                            ops.push(Ir1Op::StoreBinding {
+                                binding_id: local_bid,
+                            });
+                            ops.push(Ir1Op::Discard);
+                        }
+                    }
+                    continue;
+                }
+
                 // Lower the initializer expression (pushes value onto stack).
                 if let Some(init) = &d.initializer {
                     // bd-1xl17.a: when `<id> = require('fs')` aliases the fs module
@@ -2073,7 +2147,8 @@ fn lower_statement_to_ir1_with_flow(
                     if let BindingPattern::Identifier(alias) = &d.pattern
                         && ((is_require_fs_module_initializer(init, binding_lookup)
                             && binding_lookup.contains_key(&fs_module_alias_sentinel(alias)))
-                            || (is_require_fs_promises_module_initializer(init, binding_lookup)
+                            || ((is_require_fs_promises_module_initializer(init, binding_lookup)
+                                || is_require_fs_promises_subobject(init))
                                 && binding_lookup
                                     .contains_key(&fs_promises_module_alias_sentinel(alias))))
                     {
@@ -11824,8 +11899,14 @@ fn confirmed_fs_promises_module_aliases(
     for stmt in body {
         if let Statement::VariableDeclaration(vd) = stmt {
             for d in &vd.declarations {
+                // `const fsp = require('fs/promises')` (the promises module) OR
+                // `const fsp = require('fs').promises` (the promises sub-object
+                // hung off the synchronous fs module). Both alias the same
+                // Promise-returning API, so both record the same module-alias
+                // sentinel and share `fs_promises_builtin_call_capability`.
                 if let (BindingPattern::Identifier(name), Some(init)) = (&d.pattern, &d.initializer)
-                    && is_require_fs_promises_module_initializer(init, binding_lookup)
+                    && (is_require_fs_promises_module_initializer(init, binding_lookup)
+                        || is_require_fs_promises_subobject(init))
                 {
                     candidates.insert(name.clone());
                 }
@@ -11834,6 +11915,39 @@ fn confirmed_fs_promises_module_aliases(
     }
     if candidates.is_empty() {
         return candidates;
+    }
+    let mut used = BTreeSet::new();
+    for name in &candidates {
+        let single: BTreeSet<String> = std::iter::once(name.clone()).collect();
+        if body_top_level_expr_matches(body, &|e| expr_uses_fs_promises_alias_method(e, &single)) {
+            used.insert(name.clone());
+        }
+    }
+    used
+}
+
+/// Confirmed fs/promises *namespace/default* ESM import aliases (bd-1xl17.c): a
+/// local bound via `import * as fsp from 'node:fs/promises'` or `import fsp from
+/// 'node:fs/promises'` that is actually used as `fsp.readFile/writeFile(...)` at a
+/// top-level program position. The ESM analogue of the require-binding form
+/// ([`confirmed_fs_promises_module_aliases`]); both record the same
+/// [`fs_promises_module_alias_sentinel`] and reuse
+/// [`fs_promises_builtin_call_capability`], so the call sites need no extra
+/// handling. Usage-gated so a bare/unused fs/promises namespace/default import
+/// keeps its current (runtime module-load) behavior.
+fn confirmed_fs_promises_namespace_import_aliases(body: &[Statement]) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for stmt in body {
+        if let Statement::Import(import) = stmt
+            && is_fs_promises_module_specifier(&import.source)
+        {
+            match &import.clause {
+                ImportClause::Namespace { local } | ImportClause::Default { local } => {
+                    candidates.insert(local.clone());
+                }
+                _ => {}
+            }
+        }
     }
     let mut used = BTreeSet::new();
     for name in &candidates {
@@ -11881,6 +11995,9 @@ fn fs_promises_builtin_call_capability(
         Expression::Identifier(alias) => {
             binding_lookup.contains_key(&fs_promises_module_alias_sentinel(alias))
         }
+        // sub-object form: `require('fs').promises.readFile(...)` — the promises
+        // API hung off the synchronous fs module (bd-1xl17.c).
+        member @ Expression::Member { .. } => is_require_fs_promises_subobject(member),
         _ => false,
     };
     if !receiver_is_fs_promises {
@@ -11895,6 +12012,197 @@ fn fs_promises_builtin_call_capability(
         "writeFile" => Some("fs:write"),
         _ => None,
     }
+}
+
+/// True when `expr` is the `require('fs').promises` sub-object — the promises API
+/// hung off the synchronous fs module (`const fsp = require('fs').promises` /
+/// `require('fs').promises.readFile(...)`, bd-1xl17.c). Purely syntactic like the
+/// other fs recognizers: there is no real `fs` heap object, so `.promises` is
+/// recognized at lowering time and is never read at runtime. Both `fs` and
+/// `node:fs` specifiers are accepted (via [`is_fs_module_specifier`]).
+fn is_require_fs_promises_subobject(expr: &Expression) -> bool {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = expr
+    else {
+        return false;
+    };
+    let property_is_promises = matches!(property.as_ref(),
+        Expression::Identifier(name) | Expression::StringLiteral(name) if name == "promises");
+    if !property_is_promises {
+        return false;
+    }
+    matches!(object.as_ref(), Expression::Call { callee, arguments, .. }
+        if matches!(callee.as_ref(), Expression::Identifier(name) if name == "require")
+            && matches!(arguments.as_slice(),
+                [Expression::StringLiteral(spec)] if is_fs_module_specifier(spec)))
+}
+
+/// Confirmed fs/promises *destructured* CJS requires (bd-1xl17.c):
+/// `const { readFile[, writeFile] } = require('fs/promises')` (incl. `{ readFile:
+/// rf }` renames) whose destructured local is used as a direct call
+/// `<local>(...)` at a top-level program position. Returns a map local-name ->
+/// underlying fs capability ("fs:read"/"fs:write"). The destructured locals are
+/// the CJS analogue of the ESM named import and reuse the SAME direct-call
+/// recognizer ([`fs_promises_named_import_call_capability`] via
+/// [`fs_promises_named_import_sentinel`]); usage-gated exactly like every other
+/// fs form so a bare/unused destructure keeps the ambient-authority denial.
+fn confirmed_fs_promises_destructured_requires(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeMap<String, &'static str> {
+    let mut candidates: BTreeMap<String, &'static str> = BTreeMap::new();
+    for stmt in body {
+        if let Statement::VariableDeclaration(vd) = stmt {
+            for d in &vd.declarations {
+                let (Some(init), BindingPattern::ObjectPattern(props)) =
+                    (&d.initializer, &d.pattern)
+                else {
+                    continue;
+                };
+                if !is_require_fs_promises_module_initializer(init, binding_lookup) {
+                    continue;
+                }
+                for prop in props {
+                    if prop.computed {
+                        continue;
+                    }
+                    let capability = match &prop.key {
+                        Expression::Identifier(name) | Expression::StringLiteral(name) => {
+                            match name.as_str() {
+                                "readFile" => "fs:read",
+                                "writeFile" => "fs:write",
+                                _ => continue,
+                            }
+                        }
+                        _ => continue,
+                    };
+                    if let BindingPattern::Identifier(local) = &prop.value {
+                        candidates.insert(local.clone(), capability);
+                    }
+                }
+            }
+        }
+    }
+    candidates
+        .into_iter()
+        .filter(|(local, _)| {
+            body_top_level_expr_matches(body, &|e| {
+                expr_contains_matching_call(e, &|c| is_fs_named_callee(c, local))
+            })
+        })
+        .collect()
+}
+
+/// Confirmed fs/promises *sub-object* destructures (bd-1xl17.c):
+/// `const { promises } = require('fs')` (incl. `{ promises: fsp }` renames) whose
+/// destructured local is used as `<local>.readFile/writeFile(...)` at a top-level
+/// program position. Returns the set of local names, each recorded as an
+/// fs/promises *module-alias* sentinel so the existing member-call recognizer
+/// ([`fs_promises_builtin_call_capability`]) handles the call sites unchanged.
+/// Only the `promises` property is matched — sibling sync names destructured off
+/// `require('fs')` are outside bd-1xl17.c and keep their current behavior. Usage-
+/// gated like the simple-id require-binding form.
+fn confirmed_fs_promises_subobject_destructures(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for stmt in body {
+        if let Statement::VariableDeclaration(vd) = stmt {
+            for d in &vd.declarations {
+                let (Some(init), BindingPattern::ObjectPattern(props)) =
+                    (&d.initializer, &d.pattern)
+                else {
+                    continue;
+                };
+                if !is_require_fs_module_initializer(init, binding_lookup) {
+                    continue;
+                }
+                for prop in props {
+                    if prop.computed {
+                        continue;
+                    }
+                    let key_is_promises = matches!(&prop.key,
+                        Expression::Identifier(name) | Expression::StringLiteral(name)
+                            if name == "promises");
+                    if !key_is_promises {
+                        continue;
+                    }
+                    if let BindingPattern::Identifier(local) = &prop.value {
+                        candidates.insert(local.clone());
+                    }
+                }
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return candidates;
+    }
+    let mut used = BTreeSet::new();
+    for name in &candidates {
+        let single: BTreeSet<String> = std::iter::once(name.clone()).collect();
+        if body_top_level_expr_matches(body, &|e| expr_uses_fs_promises_alias_method(e, &single)) {
+            used.insert(name.clone());
+        }
+    }
+    used
+}
+
+/// If `pattern`/`init` form a confirmed *destructured* fs/promises require
+/// declaration, return the simple-identifier local names that should be bound to
+/// `undefined` (eliding the faulting `require(...)` load and the property
+/// extraction; there is no real fs module object to destructure). Two shapes
+/// (bd-1xl17.c), gated on at least one local having been confirmed at the program
+/// pre-scan:
+///   * `const { readFile } = require('fs/promises')` — locals recorded as
+///     fs/promises named-import sentinels (direct-call recognizer).
+///   * `const { promises } = require('fs')` — the `promises` local recorded as an
+///     fs/promises module-alias sentinel (member-call recognizer).
+///
+/// Returns `None` for any non-plain pattern (rest/nested/computed targets) or
+/// when no local is confirmed, leaving the existing ambient-denial path intact —
+/// the destructure analogue of the simple-id elision's usage gating. Unconfirmed
+/// sibling locals in a confirmed declaration are still bound to `undefined`
+/// (fail-closed: invoking one faults, exactly as the elided `require` would have),
+/// mirroring the ESM named-import elision.
+fn confirmed_fs_promises_destructure_locals(
+    pattern: &BindingPattern,
+    init: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<Vec<String>> {
+    let BindingPattern::ObjectPattern(props) = pattern else {
+        return None;
+    };
+    let from_fs_promises = is_require_fs_promises_module_initializer(init, binding_lookup);
+    let from_fs = !from_fs_promises && is_require_fs_module_initializer(init, binding_lookup);
+    if !from_fs_promises && !from_fs {
+        return None;
+    }
+    let mut locals = Vec::new();
+    let mut any_confirmed = false;
+    for prop in props {
+        // Only plain `{ name }` / `{ key: local }` props participate; bail on
+        // rest/nested/computed targets so unusual shapes keep their current path.
+        if prop.computed {
+            return None;
+        }
+        let BindingPattern::Identifier(local) = &prop.value else {
+            return None;
+        };
+        let confirmed = if from_fs_promises {
+            binding_lookup.contains_key(&fs_promises_named_import_sentinel(local, "fs:read"))
+                || binding_lookup.contains_key(&fs_promises_named_import_sentinel(local, "fs:write"))
+        } else {
+            binding_lookup.contains_key(&fs_promises_module_alias_sentinel(local))
+        };
+        any_confirmed |= confirmed;
+        locals.push(local.clone());
+    }
+    any_confirmed.then_some(locals)
 }
 
 /// Capability for bare Promise static member reads (`Promise.all`,
@@ -14667,6 +14975,238 @@ mod tests {
             lower_ir0_to_ir1(&ir0).is_err(),
             "an unconfirmed fs/promises require alias must keep the ambient-authority denial"
         );
+    }
+
+    /// bd-1xl17.c (CJS destructure): `const { readFile } = require('fs/promises');
+    /// readFile(path)` lowers to an fs:read host effect wrapped in promise:resolve.
+    /// The destructured local reuses the ESM named-import direct-call recognizer;
+    /// successful lowering (no ambient-denial panic) also proves the require load
+    /// was elided.
+    #[test]
+    fn cjs_fs_promises_destructured_read_lowers_to_promise_wrapped_hostcall_bd_1xl17_c() {
+        let ops = lower_script_source_ops(
+            "const { readFile } = require('fs/promises');\n\
+             readFile('out.txt');\n",
+            "cjs_fs_promises_destructured_read.js",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "fs:read"),
+            "destructured fs/promises readFile must lower to an fs:read host effect"
+        );
+        assert!(
+            ops_have_hostcall(&ops, "promise:resolve"),
+            "destructured fs/promises readFile must wrap its result in promise:resolve"
+        );
+    }
+
+    /// bd-1xl17.c (CJS destructure): `const { writeFile } = require('fs/promises');
+    /// writeFile(path, data)` lowers to an fs:write host effect wrapped in
+    /// promise:resolve.
+    #[test]
+    fn cjs_fs_promises_destructured_write_lowers_to_promise_wrapped_hostcall_bd_1xl17_c() {
+        let ops = lower_script_source_ops(
+            "const { writeFile } = require('fs/promises');\n\
+             writeFile('out.txt', 'bytes');\n",
+            "cjs_fs_promises_destructured_write.js",
+        );
+        assert!(ops_have_hostcall(&ops, "fs:write"));
+        assert!(
+            ops_have_hostcall(&ops, "promise:resolve"),
+            "destructured fs/promises writeFile must wrap its result in promise:resolve"
+        );
+    }
+
+    /// bd-1xl17.c (CJS destructure rename): `const { readFile: rf } =
+    /// require('fs/promises'); rf(path)` — the renamed local `rf` is the bound name
+    /// recognized at the call site, the property key `readFile` selects the
+    /// capability. Lowers to a promise-wrapped fs:read.
+    #[test]
+    fn cjs_fs_promises_destructured_rename_lowers_bd_1xl17_c() {
+        let ops = lower_script_source_ops(
+            "const { readFile: rf } = require('fs/promises');\n\
+             rf('out.txt');\n",
+            "cjs_fs_promises_destructured_rename.js",
+        );
+        assert!(ops_have_hostcall(&ops, "fs:read"));
+        assert!(ops_have_hostcall(&ops, "promise:resolve"));
+    }
+
+    /// bd-1xl17.c + .d (CJS destructure): `const { readFile } =
+    /// require('fs/promises'); readFile(path, 'utf8')` threads the encoding
+    /// (arg_count == 2 on the fs:read) and still wraps in promise:resolve.
+    #[test]
+    fn cjs_fs_promises_destructured_read_with_encoding_arity_two_bd_1xl17_c() {
+        let ops = lower_script_source_ops(
+            "const { readFile } = require('fs/promises');\n\
+             readFile('out.txt', 'utf8');\n",
+            "cjs_fs_promises_destructured_read_enc.js",
+        );
+        assert_eq!(fs_read_hostcall_arg_count(&ops), Some(2));
+        assert!(ops_have_hostcall(&ops, "promise:resolve"));
+    }
+
+    /// bd-1xl17.c fail-closed: an unused destructured fs/promises require
+    /// (`const { readFile } = require('fs/promises')` with no recognized call) is
+    /// NOT confirmed, so it is not elided and the `require('fs/promises')` keeps
+    /// hitting the always-deny ambient-authority gate (lowering rejects). The
+    /// destructure analogue of the require-binding unused gating.
+    #[test]
+    fn unused_fs_promises_destructured_require_is_not_recognized_bd_1xl17_c() {
+        let tree = crate::parser_api_stability::parse_script(
+            "const { readFile } = require('fs/promises');\n\
+             readFile.toString();\n",
+        )
+        .expect("parse script");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "cjs_fs_promises_destructured_unused.js");
+        assert!(
+            lower_ir0_to_ir1(&ir0).is_err(),
+            "an unconfirmed destructured fs/promises require must keep the ambient-authority denial"
+        );
+    }
+
+    /// bd-1xl17.c (sub-object inline): `require('fs').promises.readFile(path)` — the
+    /// promises API hung off the synchronous fs module — lowers to a promise-wrapped
+    /// fs:read.
+    #[test]
+    fn inline_require_fs_dot_promises_read_lowers_bd_1xl17_c() {
+        let ops = lower_script_source_ops(
+            "require('fs').promises.readFile('out.txt');\n",
+            "inline_require_fs_dot_promises_read.js",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "fs:read"),
+            "require('fs').promises.readFile must lower to an fs:read host effect"
+        );
+        assert!(
+            ops_have_hostcall(&ops, "promise:resolve"),
+            "require('fs').promises.readFile must wrap its result in promise:resolve"
+        );
+    }
+
+    /// bd-1xl17.c (sub-object inline write): `require('fs').promises.writeFile(path,
+    /// data)` lowers to a promise-wrapped fs:write.
+    #[test]
+    fn inline_require_fs_dot_promises_write_lowers_bd_1xl17_c() {
+        let ops = lower_script_source_ops(
+            "require('fs').promises.writeFile('out.txt', 'bytes');\n",
+            "inline_require_fs_dot_promises_write.js",
+        );
+        assert!(ops_have_hostcall(&ops, "fs:write"));
+        assert!(ops_have_hostcall(&ops, "promise:resolve"));
+    }
+
+    /// bd-1xl17.c (sub-object binding): `const fsp = require('fs').promises;
+    /// fsp.readFile(path)` — `fsp` aliases the promises sub-object — lowers to a
+    /// promise-wrapped fs:read (the `require('fs').promises` analogue of the
+    /// `const fsp = require('fs/promises')` binding form).
+    #[test]
+    fn cjs_require_fs_dot_promises_binding_lowers_bd_1xl17_c() {
+        let ops = lower_script_source_ops(
+            "const fsp = require('fs').promises;\n\
+             fsp.readFile('out.txt');\n",
+            "cjs_require_fs_dot_promises_binding.js",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "fs:read"),
+            "fsp.readFile (fsp = require('fs').promises) must lower to an fs:read host effect"
+        );
+        assert!(ops_have_hostcall(&ops, "promise:resolve"));
+    }
+
+    /// bd-1xl17.c (sub-object destructure): `const { promises } = require('fs');
+    /// promises.readFile(path)` — destructure the promises sub-object off the
+    /// synchronous fs module — lowers to a promise-wrapped fs:read.
+    #[test]
+    fn cjs_destructured_promises_off_fs_lowers_bd_1xl17_c() {
+        let ops = lower_script_source_ops(
+            "const { promises } = require('fs');\n\
+             promises.readFile('out.txt');\n",
+            "cjs_destructured_promises_off_fs.js",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "fs:read"),
+            "promises destructured off require('fs'): promises.readFile must lower to fs:read"
+        );
+        assert!(ops_have_hostcall(&ops, "promise:resolve"));
+    }
+
+    /// bd-1xl17.c fail-closed: a `require('fs').promises` binding used only as an
+    /// UNrecognized method (`fsp.stat`) is NOT confirmed, so it is not elided and
+    /// the inner `require('fs')` keeps hitting the ambient-authority denial
+    /// (lowering rejects). Preserves the require-rejection contract without
+    /// widening authority.
+    #[test]
+    fn unused_require_fs_dot_promises_binding_is_not_recognized_bd_1xl17_c() {
+        let tree = crate::parser_api_stability::parse_script(
+            "const fsp = require('fs').promises;\n\
+             fsp.stat('out.txt');\n",
+        )
+        .expect("parse script");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "cjs_require_fs_dot_promises_unused.js");
+        assert!(
+            lower_ir0_to_ir1(&ir0).is_err(),
+            "an unconfirmed require('fs').promises binding must keep the ambient-authority denial"
+        );
+    }
+
+    /// bd-1xl17.c (ESM namespace): `import * as fsp from 'node:fs/promises';
+    /// fsp.readFile(path)` lowers to a promise-wrapped fs:read and elides the
+    /// fs/promises module load (the namespace analogue of the require-binding form).
+    #[test]
+    fn esm_namespace_fs_promises_lowers_to_promise_wrapped_hostcall_bd_1xl17_c() {
+        let ops = lower_esm_source_ops(
+            "import * as fsp from 'node:fs/promises';\n\
+             fsp.readFile('out.txt');\n",
+            "esm_namespace_fs_promises.mjs",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "fs:read"),
+            "namespace fs/promises readFile must lower to an fs:read host effect"
+        );
+        assert!(
+            ops_have_hostcall(&ops, "promise:resolve"),
+            "namespace fs/promises readFile must wrap its result in promise:resolve"
+        );
+        assert!(
+            !ops_have_fs_promises_import_module(&ops),
+            "a confirmed fs/promises namespace import must elide the module load"
+        );
+    }
+
+    /// bd-1xl17.c (ESM default): `import fsp from 'node:fs/promises';
+    /// fsp.writeFile(path, data)` lowers to a promise-wrapped fs:write and elides
+    /// both the module load and the `default` extraction.
+    #[test]
+    fn esm_default_fs_promises_lowers_to_promise_wrapped_hostcall_bd_1xl17_c() {
+        let ops = lower_esm_source_ops(
+            "import fsp from 'fs/promises';\n\
+             fsp.writeFile('out.txt', 'bytes');\n",
+            "esm_default_fs_promises.mjs",
+        );
+        assert!(ops_have_hostcall(&ops, "fs:write"));
+        assert!(
+            ops_have_hostcall(&ops, "promise:resolve"),
+            "default fs/promises writeFile must wrap its result in promise:resolve"
+        );
+        assert!(
+            !ops_have_fs_promises_import_module(&ops),
+            "a confirmed fs/promises default import must elide the module load"
+        );
+    }
+
+    /// bd-1xl17.c fail-closed: a bare/UNUSED fs/promises namespace import is NOT
+    /// recognized — the module load is preserved and no fs HostCall is emitted.
+    #[test]
+    fn unused_fs_promises_namespace_import_is_not_recognized_bd_1xl17_c() {
+        let ops = lower_esm_source_ops(
+            "import * as fsp from 'node:fs/promises';\n",
+            "esm_namespace_fs_promises_unused.mjs",
+        );
+        assert!(
+            ops_have_fs_promises_import_module(&ops),
+            "an unused fs/promises namespace import must keep its module load"
+        );
+        assert!(!ops_have_hostcall(&ops, "fs:read"));
     }
 
     #[test]

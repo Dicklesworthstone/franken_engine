@@ -605,6 +605,14 @@ pub fn lower_ir0_to_ir1(
     for (local, capability) in confirmed_fs_promises_named_imports(&ir0.tree.body) {
         binding_lookup.insert(fs_promises_named_import_sentinel(&local, capability), 0);
     }
+    // bd-1xl17.c: fs/promises require-binding aliases (`const fsp =
+    // require('fs/promises')` used as `fsp.readFile/writeFile`) get a distinct
+    // module-alias sentinel consumed by `fs_promises_builtin_call_capability`,
+    // which lowers the member call to the fs: HostCall + a `promise:resolve` wrap.
+    // Usage-gated like the synchronous require-binding form (bd-1xl17.a).
+    for alias in confirmed_fs_promises_module_aliases(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(fs_promises_module_alias_sentinel(&alias), 0);
+    }
     let mut synthetic_export_index = 0u32;
     let mut synthetic_import_index = 0u32;
     let mut label_counter = 0u32;
@@ -2057,9 +2065,17 @@ fn lower_statement_to_ir1_with_flow(
                     // inline `require('fs').readFileSync` form. A bare/unused
                     // `const fs = require('fs')` is not recorded, so it still hits
                     // the ambient denial (preserving that contract).
+                    // bd-1xl17.c extends this to the fs/promises require-binding
+                    // (`const fsp = require('fs/promises')`): same elision (bind the
+                    // confirmed alias to undefined, skip the ambient-denied require)
+                    // — the fsp.readFile/writeFile calls are recognized + Promise-
+                    // wrapped at their member-call sites.
                     if let BindingPattern::Identifier(alias) = &d.pattern
-                        && is_require_fs_module_initializer(init, binding_lookup)
-                        && binding_lookup.contains_key(&fs_module_alias_sentinel(alias))
+                        && ((is_require_fs_module_initializer(init, binding_lookup)
+                            && binding_lookup.contains_key(&fs_module_alias_sentinel(alias)))
+                            || (is_require_fs_promises_module_initializer(init, binding_lookup)
+                                && binding_lookup
+                                    .contains_key(&fs_promises_module_alias_sentinel(alias))))
                     {
                         ops.push(Ir1Op::LoadLiteral {
                             value: Ir1Literal::Undefined,
@@ -8727,6 +8743,42 @@ fn lower_expression_to_ir1_inner(
                     return Ok(());
                 }
             }
+            if let Some(capability) = fs_promises_builtin_call_capability(callee, binding_lookup) {
+                // bd-1xl17.c: `require('fs/promises').readFile(path)` or the binding
+                // form `fsp.readFile(path)` (`const fsp = require('fs/promises')`).
+                // Lower to the SAME `fs:` HostCall as the synchronous member-call
+                // form (identical args + 1..=2 read arity), then wrap the result in
+                // a `promise:resolve` HostCall so the call evaluates to a Promise.
+                // Otherwise fall through so a malformed call is not mis-shaped.
+                let arity_ok = if capability == "fs:write" {
+                    arguments.len() == 2
+                } else {
+                    matches!(arguments.len(), 1 | 2)
+                };
+                if arity_ok {
+                    for arg in arguments {
+                        lower_expression_to_ir1(
+                            arg,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                            span_table,
+                        )?;
+                    }
+                    ops.push(Ir1Op::HostCall {
+                        capability: capability.to_string(),
+                        arg_count: arguments.len() as u32,
+                    });
+                    ops.push(Ir1Op::HostCall {
+                        capability: "promise:resolve".to_string(),
+                        arg_count: 1,
+                    });
+                    return Ok(());
+                }
+            }
             if let Some(capability) = fs_named_import_call_capability(callee, binding_lookup) {
                 // bd-1xl17.b: `readFileSync(path)` / `writeFileSync(path, data)`
                 // where the function was named-imported from 'node:fs'
@@ -11693,6 +11745,158 @@ fn fs_promises_named_import_call_capability(
     }
 }
 
+/// True when `expr` is exactly `require('fs/promises')` / `require('node:fs/promises')`
+/// with an unshadowed `require` — the initializer that aliases the promises fs
+/// module in `const fsp = require('fs/promises')` (bd-1xl17.c). Mirrors
+/// [`is_require_fs_module_initializer`].
+fn is_require_fs_promises_module_initializer(
+    expr: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    let Expression::Call {
+        callee, arguments, ..
+    } = expr
+    else {
+        return false;
+    };
+    if !matches!(callee.as_ref(), Expression::Identifier(name)
+        if name == "require" && !binding_lookup.contains_key(name.as_str()))
+    {
+        return false;
+    }
+    matches!(
+        arguments.as_slice(),
+        [Expression::StringLiteral(spec)] if is_fs_promises_module_specifier(spec)
+    )
+}
+
+/// Sentinel recording that `name` is bound to the fs/promises module via
+/// `const <name> = require('fs/promises')` (bd-1xl17.c). Distinct prefix from
+/// [`fs_module_alias_sentinel`] so the member-call recognizer knows the call is
+/// async (Promise-returning) and wraps the result in `promise:resolve`.
+fn fs_promises_module_alias_sentinel(name: &str) -> String {
+    format!("\0fsprommod\0{name}")
+}
+
+/// True when `callee` is `<obj>.readFile` / `.writeFile` whose object identifier
+/// is in `alias_names` — an fs/promises host method call on a
+/// `const fsp = require('fs/promises')` alias (bd-1xl17.c). Mirrors
+/// [`is_fs_alias_method_callee`] with the promises (un-suffixed) method names.
+fn is_fs_promises_alias_method_callee(callee: &Expression, alias_names: &BTreeSet<String>) -> bool {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee
+    else {
+        return false;
+    };
+    let Expression::Identifier(obj) = object.as_ref() else {
+        return false;
+    };
+    if !alias_names.contains(obj) {
+        return false;
+    }
+    matches!(property.as_ref(),
+        Expression::Identifier(m) | Expression::StringLiteral(m)
+            if m == "readFile" || m == "writeFile")
+}
+
+/// True when any top-level expression in `body` uses an fs/promises alias method
+/// (bd-1xl17.c). Mirrors [`expr_uses_fs_alias_method`].
+fn expr_uses_fs_promises_alias_method(expr: &Expression, alias_names: &BTreeSet<String>) -> bool {
+    expr_contains_matching_call(expr, &|callee| {
+        is_fs_promises_alias_method_callee(callee, alias_names)
+    })
+}
+
+/// Confirmed fs/promises module aliases (bd-1xl17.c): names bound via
+/// `const <name> = require('fs/promises')` AND used as
+/// `<name>.readFile/writeFile(...)` at a top-level position. Usage-gated exactly
+/// like the synchronous [`confirmed_fs_module_aliases`], so a bare/unused
+/// `const fsp = require('fs/promises')` keeps its current behavior.
+fn confirmed_fs_promises_module_aliases(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for stmt in body {
+        if let Statement::VariableDeclaration(vd) = stmt {
+            for d in &vd.declarations {
+                if let (BindingPattern::Identifier(name), Some(init)) = (&d.pattern, &d.initializer)
+                    && is_require_fs_promises_module_initializer(init, binding_lookup)
+                {
+                    candidates.insert(name.clone());
+                }
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return candidates;
+    }
+    let mut used = BTreeSet::new();
+    for name in &candidates {
+        let single: BTreeSet<String> = std::iter::once(name.clone()).collect();
+        if body_top_level_expr_matches(body, &|e| expr_uses_fs_promises_alias_method(e, &single)) {
+            used.insert(name.clone());
+        }
+    }
+    used
+}
+
+/// Recognize an fs/promises read/write member call — inline
+/// `require('fs/promises').readFile(path)` or binding `fsp.readFile(path)` where
+/// `fsp` was aliased via `const fsp = require('fs/promises')` (bd-1xl17.c) — and
+/// return its underlying `fs:` capability. The call site lowers this to the same
+/// `fs:` HostCall as the synchronous form plus a `promise:resolve` wrap. The async
+/// analogue of [`fs_builtin_call_capability`].
+fn fs_promises_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee
+    else {
+        return None;
+    };
+    let receiver_is_fs_promises = match object.as_ref() {
+        // inline `require('fs/promises')` / `require('node:fs/promises')` receiver.
+        Expression::Call {
+            callee: require_callee,
+            arguments: require_args,
+            ..
+        } => {
+            matches!(require_callee.as_ref(), Expression::Identifier(name) if name == "require")
+                && matches!(
+                    require_args.as_slice(),
+                    [Expression::StringLiteral(spec)] if is_fs_promises_module_specifier(spec)
+                )
+        }
+        // binding form: identifier aliased to the fs/promises module.
+        Expression::Identifier(alias) => {
+            binding_lookup.contains_key(&fs_promises_module_alias_sentinel(alias))
+        }
+        _ => false,
+    };
+    if !receiver_is_fs_promises {
+        return None;
+    }
+    let method = match property.as_ref() {
+        Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
+        _ => return None,
+    };
+    match method {
+        "readFile" => Some("fs:read"),
+        "writeFile" => Some("fs:write"),
+        _ => None,
+    }
+}
+
 /// Capability for bare Promise static member reads (`Promise.all`,
 /// `Promise.resolve`, ...). Unbound globals are not runtime bindings in IR1, so
 /// a member read needs a lowering-time shim that returns the corresponding
@@ -14408,6 +14612,61 @@ mod tests {
             "an unused fs/promises import must keep its module load"
         );
         assert!(!ops_have_hostcall(&ops, "fs:read"));
+    }
+
+    /// bd-1xl17.c (CJS binding): `const fsp = require('fs/promises');
+    /// fsp.readFile(path)` lowers to an fs:read host effect wrapped in
+    /// promise:resolve (the require-binding analogue of bd-1xl17.a, async).
+    #[test]
+    fn cjs_fs_promises_binding_lowers_to_promise_wrapped_hostcall_bd_1xl17_c() {
+        let ops = lower_script_source_ops(
+            "const fsp = require('fs/promises');\n\
+             fsp.readFile('out.txt');\n",
+            "cjs_fs_promises_binding.js",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "fs:read"),
+            "fs/promises binding readFile must lower to an fs:read host effect"
+        );
+        assert!(
+            ops_have_hostcall(&ops, "promise:resolve"),
+            "fs/promises binding readFile must wrap its result in promise:resolve"
+        );
+    }
+
+    /// bd-1xl17.c (CJS inline): `require('fs/promises').writeFile(path, data)`
+    /// lowers to an fs:write host effect wrapped in promise:resolve.
+    #[test]
+    fn cjs_fs_promises_inline_lowers_to_promise_wrapped_hostcall_bd_1xl17_c() {
+        let ops = lower_script_source_ops(
+            "require('fs/promises').writeFile('out.txt', 'bytes');\n",
+            "cjs_fs_promises_inline.js",
+        );
+        assert!(ops_have_hostcall(&ops, "fs:write"));
+        assert!(
+            ops_have_hostcall(&ops, "promise:resolve"),
+            "fs/promises inline writeFile must wrap its result in promise:resolve"
+        );
+    }
+
+    /// bd-1xl17.c fail-closed: an fs/promises require alias used only as an
+    /// UNrecognized method (`fsp.statSync`) is NOT confirmed, so it is not elided —
+    /// the `require('fs/promises')` keeps hitting the always-deny ambient-authority
+    /// gate (lowering rejects), exactly like any other un-recognized `require`.
+    /// Only confirmed `fsp.readFile/writeFile` usage opts into the fs: lowering, so
+    /// the require-rejection contract is preserved without any authority widening.
+    #[test]
+    fn unused_fs_promises_require_binding_is_not_recognized_bd_1xl17_c() {
+        let tree = crate::parser_api_stability::parse_script(
+            "const fsp = require('fs/promises');\n\
+             fsp.statSync('out.txt');\n",
+        )
+        .expect("parse script");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "cjs_fs_promises_unused.js");
+        assert!(
+            lower_ir0_to_ir1(&ir0).is_err(),
+            "an unconfirmed fs/promises require alias must keep the ambient-authority denial"
+        );
     }
 
     #[test]

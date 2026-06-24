@@ -3318,6 +3318,71 @@ mod tests {
         );
     }
 
+    /// bd-1xl17.c (CJS binding, end-to-end): `const fsp = require('fs/promises')`
+    /// with `fsp.writeFile/readFile` member calls compiles, lowers (fs: HostCalls
+    /// wrapped in promise:resolve), and EXECUTES through the real pipeline +
+    /// SandboxedHostIo — real bytes on disk + a [fs_write, fs_read] transcript (the
+    /// promise:resolve wraps are internal VM work, not host effects). Mock-free.
+    #[test]
+    fn cjs_fs_promises_binding_produces_host_effects_bd_1xl17_c() {
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+
+        let mut root = std::env::temp_dir();
+        root.push(format!(
+            "frankenengine_e2e_fs_promises_cjs_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+
+        let mut orch = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        orch.set_host_io(provider, Some(recorder_dyn));
+
+        let pkg = ExtensionPackage {
+            extension_id: "fs-e2e-promises-cjs".to_string(),
+            source: "const fsp = require('fs/promises');\n\
+                     fsp.writeFile('out.txt', 'real effect bytes');\n\
+                     fsp.readFile('out.txt');\n"
+                .to_string(),
+            source_file: None,
+            capabilities: vec![
+                "vm_dispatch".to_string(),
+                "heap_allocate".to_string(),
+                "fs_read".to_string(),
+                "fs_write".to_string(),
+            ],
+            version: "1.0.0".to_string(),
+            metadata: BTreeMap::new(),
+        };
+
+        let result = orch
+            .execute(&pkg)
+            .expect("fs/promises CJS binding program executes");
+
+        assert_eq!(
+            std::fs::read(root.join("out.txt")).expect("written file on disk"),
+            b"real effect bytes",
+            "fs/promises writeFile must have produced a real file in the sandbox"
+        );
+
+        let kinds: Vec<&str> = result
+            .host_effect_transcript
+            .iter()
+            .map(|(request, _)| request.kind())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["fs_write", "fs_read"],
+            "fs/promises CJS ops must surface fs_write then fs_read, got {kinds:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn try_new_rejects_zero_concurrency_envelope() {
         let err = match ExecutionOrchestrator::try_new(OrchestratorConfig {

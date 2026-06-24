@@ -112,5 +112,6 @@ path = "../franken-engine/tests/safety_decision_router_integration.rs"
 [dev-dependencies]
 frankenengine-engine = { path = "../franken-engine" }
 frankenengine-test-support = { path = "../franken-engine-test-support" }
+insta = { version = "1.39", features = ["filters"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

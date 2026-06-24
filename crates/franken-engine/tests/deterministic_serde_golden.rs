@@ -26,7 +26,7 @@ use frankenengine_engine::deterministic_serde::{
     CanonicalF64, CanonicalValue, EncodeBufferPool, encode_value, encode_value_into,
 };
 use proptest::prelude::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 #[derive(Serialize, Deserialize)]

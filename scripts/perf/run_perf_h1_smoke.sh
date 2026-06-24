@@ -115,7 +115,7 @@ strip_ansi_file() {
 
 reject_rch_local_fallback() {
     local log_path="$1"
-    if strip_ansi_file "$log_path" | grep -Eiq 'Remote execution failed: .*running locally|Remote toolchain failure, falling back to local|falling back to local|fallback to local|local fallback|running locally|\[RCH\] local \(|Failed to query daemon:.*running locally|Dependency preflight blocked remote execution|RCH-E326'; then
+    if grep -Eiq 'Remote execution failed: .*running locally|Remote toolchain failure, falling back to local|falling back to local|fallback to local|local fallback|running locally|\[RCH\] local \(|Failed to query daemon:.*running locally|Dependency preflight blocked remote execution|RCH-E326' < <(strip_ansi_file "$log_path"); then
         fail_log "rch reported local fallback or dependency-preflight failure in $log_path"
         return 1
     fi
@@ -167,12 +167,62 @@ run_rch_capture() {
 
 test_log_passed() {
     local log_path="$1"
-    grep -q "test result: ok" "$log_path" && ! grep -Eq "test result: FAILED|failures:" "$log_path"
+    grep -q "test result: ok" < <(strip_ansi_file "$log_path") && ! cargo_log_has_source_failure "$log_path"
+}
+
+cargo_log_has_source_failure() {
+    local log_path="$1"
+    grep -Eq '^test result: FAILED|^error(\[|:)|panicked at|^failures:' < <(strip_ansi_file "$log_path")
+}
+
+cargo_log_has_remote_start() {
+    local log_path="$1"
+    grep -Eq 'Selected worker:|Executing command remotely:' < <(strip_ansi_file "$log_path")
+}
+
+cargo_log_has_remote_finish() {
+    local log_path="$1"
+    grep -Eq 'Remote command finished: exit=' < <(strip_ansi_file "$log_path")
+}
+
+classify_remote_cargo_log() {
+    local log_path="$1"
+    local rc="$2"
+    if test_log_passed "$log_path"; then
+        echo "pass"
+    elif cargo_log_has_source_failure "$log_path"; then
+        echo "source_failure"
+    elif [[ "$rc" -eq 98 ]]; then
+        echo "local_fallback_refused"
+    elif cargo_log_has_remote_start "$log_path" && ! cargo_log_has_remote_finish "$log_path"; then
+        echo "transport_timeout"
+    else
+        echo "missing_remote_proof"
+    fi
+}
+
+remote_cargo_reason_code() {
+    local status="$1"
+    case "$status" in
+        pass) echo "remote_command_exit_zero" ;;
+        source_failure) echo "remote_source_diagnostic" ;;
+        local_fallback_refused) echo "local_fallback_refused" ;;
+        transport_timeout) echo "ssh_timeout_no_final_verdict" ;;
+        missing_remote_proof) echo "missing_worker_or_command_evidence" ;;
+        *) echo "unknown" ;;
+    esac
+}
+
+status_is_ok() {
+    case "$1" in
+        pass|skipped|self-check) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 golden_log_passed() {
     local log_path="$1"
-    strip_ansi_file "$log_path" | grep -Eq 'test evidence_ledger::tests::evidence_entry_signature_unchanged_post_cache \.\.\. ok'
+    grep -Eq 'test evidence_ledger::tests::evidence_entry_signature_unchanged_post_cache \.\.\. ok' < <(strip_ansi_file "$log_path")
 }
 
 prepare_criterion_pass1() {
@@ -404,6 +454,8 @@ fi
 UNIT_STATUS="skipped"
 GOLDEN_STATUS="skipped"
 BENCH_STATUS="skipped"
+UNIT_REASON=""
+BENCH_REASON=""
 BENCH_MEAN_NS=""
 
 if [[ "$MODE" == "self-check" ]]; then
@@ -465,15 +517,15 @@ BENCH_CMD=(
 run_rch_dry_run "evidence-ledger lib tests" "${RUN_DIR}/unit_rch_dry_run.json" "${TEST_CMD[@]}"
 unit_rc=0
 run_rch_capture "evidence-ledger lib tests" "${RUN_DIR}/unit.txt" "${TEST_CMD[@]}" || unit_rc=$?
-if [[ "$unit_rc" -eq 0 ]] || test_log_passed "${RUN_DIR}/unit.txt"; then
-    UNIT_STATUS="pass"
+UNIT_STATUS="$(classify_remote_cargo_log "${RUN_DIR}/unit.txt" "$unit_rc")"
+UNIT_REASON="$(remote_cargo_reason_code "$UNIT_STATUS")"
+if [[ "$UNIT_STATUS" == "pass" ]]; then
     log "evidence-ledger lib tests PASS"
 else
-    UNIT_STATUS="fail"
-    fail_log "evidence-ledger lib tests; rc=${unit_rc}; see ${RUN_DIR}/unit.txt"
+    fail_log "evidence-ledger lib tests; status=${UNIT_STATUS}; reason=${UNIT_REASON}; rc=${unit_rc}; see ${RUN_DIR}/unit.txt"
     write_fingerprint
     append_event "perf.profile.sample_collected" "sub_bench=${TARGET}" "sample_count=0" "duration_sec=0" "mode=${MODE}"
-    append_event "perf.profile.run_complete" "verdict=fail" "mean_ns=null" "baseline_ns=null" "delta_pct=null" "unit_status=${UNIT_STATUS}" "golden_status=${GOLDEN_STATUS}" "bench_status=${BENCH_STATUS}"
+    append_event "perf.profile.run_complete" "verdict=fail" "mean_ns=null" "baseline_ns=null" "delta_pct=null" "unit_status=${UNIT_STATUS}" "unit_reason=${UNIT_REASON}" "unit_rc=${unit_rc}" "golden_status=${GOLDEN_STATUS}" "bench_status=${BENCH_STATUS}"
     write_summary
     exit 1
 fi
@@ -510,11 +562,21 @@ PY
             log "${TARGET} mean ${BENCH_MEAN_NS} ns <= ${TARGET_MAX_MEAN_NS} ns"
         else
             BENCH_STATUS="fail"
+            BENCH_REASON="threshold_exceeded"
             fail_log "${TARGET} mean exceeded ${TARGET_MAX_MEAN_NS} ns; see ${BENCH_STATS_FILE}"
         fi
     else
-        BENCH_STATUS="fail"
-        fail_log "missing Criterion estimates after bench; rc=${bench_rc}; see ${RUN_DIR}/bench_output.txt"
+        BENCH_STATUS="$(classify_remote_cargo_log "${RUN_DIR}/bench_output.txt" "$bench_rc")"
+        if [[ "$BENCH_STATUS" == "pass" ]]; then
+            BENCH_STATUS="missing_remote_proof"
+        fi
+        BENCH_REASON="missing_criterion_estimates"
+        if [[ "$BENCH_STATUS" == "source_failure" ]]; then
+            BENCH_REASON="$(remote_cargo_reason_code "$BENCH_STATUS")"
+        elif [[ "$BENCH_STATUS" == "local_fallback_refused" || "$BENCH_STATUS" == "transport_timeout" ]]; then
+            BENCH_REASON="$(remote_cargo_reason_code "$BENCH_STATUS")"
+        fi
+        fail_log "missing Criterion estimates after bench; status=${BENCH_STATUS}; reason=${BENCH_REASON}; rc=${bench_rc}; see ${RUN_DIR}/bench_output.txt"
     fi
 else
     BENCH_STATUS="skipped"
@@ -567,15 +629,15 @@ with open(events_path, "a", encoding="utf-8") as fh:
 PY
 else
     all_pass_word="fail"
-    if [[ "$UNIT_STATUS" != "fail" && "$GOLDEN_STATUS" != "fail" && "$BENCH_STATUS" != "fail" ]]; then
+    if status_is_ok "$UNIT_STATUS" && status_is_ok "$GOLDEN_STATUS" && status_is_ok "$BENCH_STATUS"; then
         all_pass_word="pass"
     fi
-    append_event "perf.profile.run_complete" "verdict=${all_pass_word}" "mean_ns=null" "baseline_ns=null" "delta_pct=null" "unit_status=${UNIT_STATUS}" "golden_status=${GOLDEN_STATUS}" "bench_status=${BENCH_STATUS}"
+    append_event "perf.profile.run_complete" "verdict=${all_pass_word}" "mean_ns=null" "baseline_ns=null" "delta_pct=null" "unit_status=${UNIT_STATUS}" "unit_reason=${UNIT_REASON:-null}" "golden_status=${GOLDEN_STATUS}" "bench_status=${BENCH_STATUS}" "bench_reason=${BENCH_REASON:-null}"
 fi
 
 write_summary
 log "artifacts written to ${RUN_DIR}"
-if [[ "$UNIT_STATUS" == "fail" || "$GOLDEN_STATUS" == "fail" || "$BENCH_STATUS" == "fail" ]]; then
+if ! status_is_ok "$UNIT_STATUS" || ! status_is_ok "$GOLDEN_STATUS" || ! status_is_ok "$BENCH_STATUS"; then
     fail_log "H1 smoke did not pass"
     exit 1
 fi

@@ -68,12 +68,12 @@ fn frankenctl_verify_receipt_uses_cached_default_key() {
 fn ten_thousand_sequential_evidence_entries_share_signing_key() {
     // Tight loop emitting 10,000 evidence entries.
     // This is a smoke test against accidental cache invalidation.
-    // The cached key should eliminate repeated elliptic curve operations.
+    // The cached key should avoid repeated key construction on the hot path.
 
     const NUM_ENTRIES: usize = 10_000;
     let start = Instant::now();
 
-    let mut signatures = Vec::with_capacity(NUM_ENTRIES);
+    let mut entry_ids = Vec::with_capacity(NUM_ENTRIES);
 
     for i in 0..NUM_ENTRIES {
         let entry = EvidenceEntryBuilder::new(
@@ -93,8 +93,11 @@ fn ten_thousand_sequential_evidence_entries_share_signing_key() {
         .build()
         .expect("bulk entry must build");
 
-        // Entry built successfully using cached key - signature not directly accessible in current API
-        signatures.push(i as u8); // Use index as proxy for signature uniqueness tracking
+        assert!(
+            entry.signed_envelope.is_some(),
+            "entry {i} must be signed by the default evidence producer"
+        );
+        entry_ids.push(entry.entry_id);
     }
 
     let elapsed = start.elapsed();
@@ -108,21 +111,16 @@ fn ten_thousand_sequential_evidence_entries_share_signing_key() {
         elapsed
     );
 
-    // Sanity check: all signatures should be different (different inputs)
-    let mut unique_sigs = std::collections::BTreeSet::new();
-    for sig in &signatures {
-        unique_sigs.insert(*sig);
-    }
+    let unique_entry_ids = entry_ids.iter().collect::<std::collections::BTreeSet<_>>();
     assert_eq!(
-        unique_sigs.len(),
+        unique_entry_ids.len(),
         NUM_ENTRIES,
-        "all signatures should be unique (different trace/decision IDs)"
+        "all evidence entries should be unique (different trace/decision IDs)"
     );
 
+    let entries_per_ms = NUM_ENTRIES as f64 / (elapsed.as_secs_f64().max(f64::EPSILON) * 1_000.0);
     println!(
         "✓ Generated {} evidence entries in {:?} ({:.2} entries/ms)",
-        NUM_ENTRIES,
-        elapsed,
-        NUM_ENTRIES as f64 / elapsed.as_millis() as f64
+        NUM_ENTRIES, elapsed, entries_per_ms
     );
 }

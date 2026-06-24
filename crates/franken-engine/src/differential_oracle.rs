@@ -427,7 +427,11 @@ pub fn run_differential_oracle(input: &DifferentialOracleInput) -> DifferentialO
         ));
     }
     if input.backend_selected(DifferentialBackend::FrankenCore) {
-        backends.push(run_franken_core_backend(input.source.as_str()));
+        backends.push(run_franken_core_backend(
+            input.source.as_str(),
+            input.engine_instruction_budget,
+            input.engine_memory_budget,
+        ));
     }
 
     let canonicalization = canonicalize_backend_receipts(&backends);
@@ -658,11 +662,33 @@ fn run_franken_engine_backend(
     }
 }
 
-fn run_franken_core_backend(source: &str) -> DifferentialBackendReceipt {
+fn run_franken_core_backend(
+    source: &str,
+    instruction_budget: Option<u64>,
+    memory_budget: Option<u64>,
+) -> DifferentialBackendReceipt {
     let started = Instant::now();
-    match eval_with_franken_core(source) {
+    // Mirror the franken-engine lane: surface whichever budget levers were
+    // threaded so the receipt records that the secondary core lane honoured the
+    // same `--engine-budget` / `--engine-memory-budget` flags (bd-v4oaz).
+    let memory_budget_override = memory_budget.map(engine_memory_budget_from_heap_objects);
+    let mut budget_diagnostics: Vec<String> = Vec::new();
+    if let Some(budget) = instruction_budget {
+        budget_diagnostics.push(format!("instruction_budget_override={budget}"));
+    }
+    if let (Some(objects), Some(budget)) = (memory_budget, memory_budget_override) {
+        budget_diagnostics.push(format!(
+            "memory_budget_override={objects} heap_objects / {} bytes",
+            budget.max_total_memory_bytes
+        ));
+    }
+    match eval_with_franken_core(source, instruction_budget, memory_budget_override) {
         Ok(value) => {
             let stdout = value.clone();
+            let mut diagnostics = vec![
+                "frankenengine-core path dependency executed in-process through parser/lowering/QuickJsLane".to_string(),
+            ];
+            diagnostics.extend(budget_diagnostics);
             DifferentialBackendReceipt {
                 backend: DifferentialBackend::FrankenCore,
                 status: DifferentialBackendStatus::Completed,
@@ -683,13 +709,17 @@ fn run_franken_core_backend(source: &str) -> DifferentialBackendReceipt {
                 stderr_sha256: sha256_hex(b""),
                 stdout,
                 stderr: String::new(),
-                diagnostics: vec![
-                    "frankenengine-core path dependency executed in-process through parser/lowering/QuickJsLane".to_string(),
-                ],
+                diagnostics,
             }
         }
         Err(error) => {
             let stderr = format!("{}: {}", error.stage, error.message);
+            let mut diagnostics = vec![
+                format!("frankenengine-core backend failed during {}", error.stage),
+                "frankenengine-core path dependency is linked; no fallback lane was used"
+                    .to_string(),
+            ];
+            diagnostics.extend(budget_diagnostics);
             DifferentialBackendReceipt {
                 backend: DifferentialBackend::FrankenCore,
                 status: DifferentialBackendStatus::Failed,
@@ -710,11 +740,7 @@ fn run_franken_core_backend(source: &str) -> DifferentialBackendReceipt {
                 stderr,
                 stdout_sha256: sha256_hex(b""),
                 stderr_sha256: sha256_hex(format!("{}: {}", error.stage, error.message).as_bytes()),
-                diagnostics: vec![
-                    format!("frankenengine-core backend failed during {}", error.stage),
-                    "frankenengine-core path dependency is linked; no fallback lane was used"
-                        .to_string(),
-                ],
+                diagnostics,
             }
         }
     }
@@ -735,7 +761,11 @@ impl FrankenCoreBackendError {
     }
 }
 
-fn eval_with_franken_core(source: &str) -> Result<String, FrankenCoreBackendError> {
+fn eval_with_franken_core(
+    source: &str,
+    instruction_budget: Option<u64>,
+    memory_budget_override: Option<EngineMemoryBudget>,
+) -> Result<String, FrankenCoreBackendError> {
     let normalized = source.trim();
     if normalized.is_empty() {
         return Err(FrankenCoreBackendError {
@@ -774,6 +804,20 @@ fn eval_with_franken_core(source: &str) -> Result<String, FrankenCoreBackendErro
     config
         .granted_capabilities
         .insert(CoreRuntimeCapability::HeapAllocate);
+    // Thread the operator-facing budget levers into the core lane's config so a
+    // heavy benchmark program does not trip the 100k QuickJS instruction floor
+    // (or the heap-object/byte ceiling) on the secondary lane while the engine
+    // lane runs to completion. The heap-object ceiling and its proportional byte
+    // ceiling are derived by the same helper the engine lane uses, keeping the
+    // single `--engine-memory-budget` lever self-consistent across both lanes
+    // (bd-v4oaz).
+    if let Some(budget) = instruction_budget {
+        config.instruction_budget = budget;
+    }
+    if let Some(budget) = memory_budget_override {
+        config.max_heap_objects = budget.max_heap_objects;
+        config.max_total_memory_bytes = budget.max_total_memory_bytes;
+    }
     let result = CoreQuickJsLane::with_config(config)
         .execute(&lowering_output.ir3, "trace-differential-franken-core")
         .map_err(|error| FrankenCoreBackendError::new("execute", error))?;
@@ -1885,6 +1929,79 @@ mod tests {
             with.diagnostics
                 .iter()
                 .any(|line| line.starts_with("memory_budget_override=1000000 heap_objects")),
+            "memory-budget override must be recorded in diagnostics: {:?}",
+            with.diagnostics
+        );
+    }
+
+    #[test]
+    fn franken_core_backend_instruction_budget_lets_long_loop_complete() {
+        // bd-v4oaz: the secondary franken-core lane must honour the same
+        // `--engine-budget` instruction lever as the primary engine lane. A loop
+        // that needs more than the core QuickJS 100k instruction floor fails
+        // closed on the default budget but completes once the budget is threaded
+        // through eval_with_franken_core, and the override is recorded in the
+        // receipt diagnostics.
+        const LONG_LOOP: &str =
+            "var i = 0; var n = 0; while (i < 60000) { n = n + 1; i = i + 1; } n + 0;";
+
+        let without = run_franken_core_backend(LONG_LOOP, None, None);
+        assert_eq!(without.status, DifferentialBackendStatus::Failed);
+        assert!(
+            without.stderr.contains("instruction budget exhausted"),
+            "expected an instruction-budget fault on the default core budget, got: {}",
+            without.stderr
+        );
+
+        let with = run_franken_core_backend(LONG_LOOP, Some(2_000_000_000), None);
+        assert_eq!(
+            with.status,
+            DifferentialBackendStatus::Completed,
+            "raised instruction budget should let the core-lane loop complete: {}",
+            with.stderr
+        );
+        assert_eq!(with.value.as_deref(), Some("60000"));
+        assert!(
+            with.diagnostics
+                .iter()
+                .any(|line| line.starts_with("instruction_budget_override=2000000000")),
+            "instruction-budget override must be recorded in diagnostics: {:?}",
+            with.diagnostics
+        );
+    }
+
+    #[test]
+    fn franken_core_backend_memory_budget_lever_reaches_config() {
+        // bd-v4oaz: the `--engine-memory-budget` heap-object ceiling must reach
+        // the franken-core lane's interpreter config too. An object-allocating
+        // program completes on the default 100k heap-object ceiling but fails
+        // closed once the ceiling is lowered below what it needs, and the
+        // override is recorded in the receipt diagnostics. (Threading is proven
+        // via a tiny ceiling rather than a 100k+ object loop, so the proof does
+        // not depend on the core lane's heap-retention behaviour over huge
+        // loops.)
+        const OBJECT_PROG: &str = "var a={}; var b={}; var c={}; var d={}; var e={}; var f={}; var g={}; var h={}; 0 + 0;";
+
+        let without = run_franken_core_backend(OBJECT_PROG, None, None);
+        assert_eq!(
+            without.status,
+            DifferentialBackendStatus::Completed,
+            "object program should complete on the default heap-object ceiling: {}",
+            without.stderr
+        );
+        assert_eq!(without.value.as_deref(), Some("0"));
+
+        let with = run_franken_core_backend(OBJECT_PROG, None, Some(2));
+        assert_eq!(with.status, DifferentialBackendStatus::Failed);
+        assert!(
+            with.stderr.to_lowercase().contains("memory budget"),
+            "expected a memory-budget fault once the ceiling is lowered, got: {}",
+            with.stderr
+        );
+        assert!(
+            with.diagnostics
+                .iter()
+                .any(|line| line.starts_with("memory_budget_override=2 heap_objects")),
             "memory-budget override must be recorded in diagnostics: {:?}",
             with.diagnostics
         );

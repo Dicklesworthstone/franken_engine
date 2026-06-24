@@ -1,0 +1,41 @@
+{
+  "schema_version": "franken-engine.e8-refusal-ledger.v1",
+  "ledger_id": "e8-refusal-ledger-malformed",
+  "run_id": "frankenctl-run-malformed-refusal",
+  "contract_id": "contract-e8-malformed",
+  "result_class": "uncertified",
+  "threat_model_scope": "explicit_flow_ifc_v1",
+  "certifier_input_allowed": false,
+  "positive_non_use_claim_allowed": false,
+  "must_block_certificate": true,
+  "analyzed_surface_count": 2,
+  "unanalyzed_surface_count": 1,
+  "degraded_surface_count": 0,
+  "refusal_codes": [
+    {
+      "code": "unsupported_syntax_surface",
+      "class": "unknown_positive_claim_class",
+      "source_ref_id": "parser-diagnostic",
+      "remediation": "rerun the E8 refusal producer with reviewed claim vocabulary"
+    }
+  ],
+  "source_refs": [
+    {
+      "id": "parser-diagnostic",
+      "surface": "parser_unsupported_diagnostics",
+      "path": "crates/franken-engine/src/parser.rs"
+    }
+  ],
+  "evidence_refs": [
+    {
+      "id": "run-explain",
+      "kind": "runtime_explain_bundle",
+      "status": {
+        "unexpected": "status"
+      }
+    }
+  ],
+  "remediation_actions": [
+    "repair the refusal vocabulary and rerun the E8 producer"
+  ]
+}

@@ -78,6 +78,46 @@
     ]
   },
   {
+    "case_id": "e8-explicit-refusal",
+    "bundle_path": "scripts/testdata/e8_refusal_ledger/unsupported_syntax_uncertified.json",
+    "expected_decision": "not_promotable",
+    "expected_reason_codes": [
+      "explicit_e8_uncertified_refusal"
+    ],
+    "expected_e8_refusal_ledger": {
+      "ledger_id": "e8-refusal-ledger-unsupported-syntax",
+      "result_class": "uncertified",
+      "analyzed_surface_count": 2,
+      "unanalyzed_surface_count": 1,
+      "degraded_surface_count": 0,
+      "refusal_codes": [
+        "unsupported_syntax_surface"
+      ],
+      "source_ref_ids": [
+        "parser-diagnostic"
+      ],
+      "remediation_contains": "Preserve ledger_id"
+    }
+  },
+  {
+    "case_id": "e8-malformed-refusal",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/malformed_e8_refusal_ledger",
+    "expected_decision": "fail_closed",
+    "expected_reason_codes": [
+      "malformed_e8_refusal_ledger"
+    ],
+    "expected_e8_refusal_ledger": {
+      "ledger_id": "e8-refusal-ledger-malformed",
+      "result_class": "uncertified",
+      "analyzed_surface_count": 2,
+      "unanalyzed_surface_count": 1,
+      "degraded_surface_count": 0,
+      "refusal_codes": [
+        "unsupported_syntax_surface"
+      ]
+    }
+  },
+  {
     "case_id": "unsupported-schema",
     "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/unsupported_schema",
     "expected_decision": "unsupported",

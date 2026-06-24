@@ -238,6 +238,51 @@ fn e8_preflight_ledger_id_changes_when_contract_content_changes() {
 }
 
 #[test]
+fn e8_preflight_ledger_id_changes_when_run_input_content_changes() {
+    let mut contract = sample_contract();
+    contract.input_bindings[0].content_hash_hex = None;
+
+    let first_run_input_hash = ContentHash::compute(b"console.log('first-run-input')");
+    let second_run_input_hash = ContentHash::compute(b"console.log('second-run-input')");
+
+    let first_binding = contract
+        .bind_to_run(
+            "ext-integration-e8",
+            "fixtures/agent.js",
+            DEFAULT_DATA_CONTRACT_PURPOSE,
+            Some(&first_run_input_hash),
+        )
+        .expect("first run input should bind");
+    let second_binding = contract
+        .bind_to_run(
+            "ext-integration-e8",
+            "fixtures/agent.js",
+            DEFAULT_DATA_CONTRACT_PURPOSE,
+            Some(&second_run_input_hash),
+        )
+        .expect("second run input should bind");
+
+    assert_eq!(
+        first_binding.contract_hash_hex, second_binding.contract_hash_hex,
+        "contract content is identical; only the actual run-input hash differs"
+    );
+    assert_ne!(
+        first_binding.run_input_content_hash_hex, second_binding.run_input_content_hash_hex,
+        "bindings must retain the actual run-input content hash even when undeclared"
+    );
+
+    let first_receipt =
+        first_binding.uncertified_preflight_receipt("same-run-id", Some("same.explain.json"));
+    let second_receipt =
+        second_binding.uncertified_preflight_receipt("same-run-id", Some("same.explain.json"));
+
+    assert_ne!(
+        first_receipt.ledger_id, second_receipt.ledger_id,
+        "ledger ids must bind to the actual run-input content hash"
+    );
+}
+
+#[test]
 fn data_contract_preflight_without_explain_bundle_fails_closed() {
     let bound = sample_contract()
         .bind_to_run(

@@ -14,6 +14,7 @@ from typing import Any
 
 
 SCHEMA_VERSION = "franken-engine.external-trust-artifact-bundle-doctor.v1"
+E8_REFUSAL_LEDGER_SCHEMA = "franken-engine.e8-refusal-ledger.v1"
 
 SUPPORTED_SCHEMAS = {
     "franken-engine.proof-artifact-bundle.v1",
@@ -22,6 +23,7 @@ SUPPORTED_SCHEMAS = {
     "franken-engine.e2-differential-bundle.v1",
     "franken-engine.e3-recorder-bundle.v1",
     "franken-engine.e8-certificate-bundle.v1",
+    E8_REFUSAL_LEDGER_SCHEMA,
 }
 
 DEFAULT_REQUIRED_MEMBERS = ("events.jsonl", "commands.txt")
@@ -29,6 +31,45 @@ PATH_ESCAPE_REASON = "path_escape"
 MALFORMED_MANIFEST_REASON = "malformed_manifest"
 INVALID_REPLAY_COMMAND_REASON = "invalid_replay_command"
 INVALID_REQUIRED_MEMBER_REASON = "invalid_required_member"
+EXPLICIT_E8_REFUSAL_REASON = "explicit_e8_uncertified_refusal"
+MALFORMED_E8_REFUSAL_REASON = "malformed_e8_refusal_ledger"
+
+E8_RESULT_CLASSES = {
+    "certifiable_subset",
+    "uncertified",
+    "degraded",
+    "fail_closed",
+    "out_of_scope",
+}
+E8_NON_CERTIFIABLE_RESULT_CLASSES = {
+    "uncertified",
+    "degraded",
+    "fail_closed",
+    "out_of_scope",
+}
+E8_REFUSAL_CODE_CLASSES_BY_CODE = {
+    "missing_data_contract_binding": "missing_evidence",
+    "missing_run_input_hash": "missing_evidence",
+    "run_input_hash_mismatch": "fail_closed",
+    "unsupported_syntax_surface": "uncertified",
+    "unproven_ifc_propagation": "uncertified",
+    "missing_flow_proof_obligation": "missing_evidence",
+    "fallback_flow_envelope": "degraded",
+    "missing_declassification_receipt": "fail_closed",
+    "missing_source_span": "degraded",
+    "missing_explain_or_replay_bundle": "missing_evidence",
+    "out_of_scope_covert_channel": "out_of_scope",
+    "out_of_scope_timing_channel": "out_of_scope",
+}
+E8_REFUSAL_CODE_FIELDS = {"code", "class", "source_ref_id", "remediation"}
+E8_SOURCE_REF_FIELDS = {"id", "surface", "path", "symbol", "span"}
+E8_EVIDENCE_REF_FIELDS = {"id", "kind", "status", "artifact_path", "content_hash_hex"}
+E8_EVIDENCE_REF_STATUSES = {"present", "missing", "degraded", "malformed", "out_of_scope"}
+E8_COUNT_FIELDS = (
+    "analyzed_surface_count",
+    "unanalyzed_surface_count",
+    "degraded_surface_count",
+)
 
 MOCK_MARKERS = (
     "MockCertificate",
@@ -105,6 +146,14 @@ def load_manifest(path: Path) -> dict[str, Any]:
     return loaded
 
 
+def is_e8_refusal_ledger(manifest: dict[str, Any] | None) -> bool:
+    return bool(manifest) and manifest.get("schema_version") == E8_REFUSAL_LEDGER_SCHEMA
+
+
+def non_empty_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
 def display_path(path: Path) -> str:
     try:
         return path.relative_to(Path.cwd()).as_posix()
@@ -152,6 +201,8 @@ def find_manifest(bundle_path: Path) -> tuple[Path | None, dict[str, Any] | None
 def required_members(manifest: dict[str, Any] | None) -> tuple[list[dict[str, Any]], bool]:
     if not manifest:
         return [{"path": member, "required": True} for member in DEFAULT_REQUIRED_MEMBERS], False
+    if is_e8_refusal_ledger(manifest) and "required_members" not in manifest:
+        return [], False
 
     def declared_member_hash(raw_member: dict[str, Any]) -> tuple[str | None, bool]:
         declared_hashes: list[str] = []
@@ -351,14 +402,138 @@ def choose_decision(reason_codes: list[str]) -> str:
         MALFORMED_MANIFEST_REASON,
         INVALID_REPLAY_COMMAND_REASON,
         INVALID_REQUIRED_MEMBER_REASON,
+        MALFORMED_E8_REFUSAL_REASON,
     }
     if any(reason in fail_closed_reasons for reason in reason_codes):
         return "fail_closed"
     if "unsupported_schema" in reason_codes:
         return "unsupported"
+    if EXPLICIT_E8_REFUSAL_REASON in reason_codes:
+        return "not_promotable"
     if "stale_or_unfresh" in reason_codes:
         return "degraded"
     return "supported"
+
+
+def e8_refusal_ledger_view(manifest: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    refusal_codes = manifest.get("refusal_codes")
+    source_refs = manifest.get("source_refs")
+    evidence_refs = manifest.get("evidence_refs")
+    remediation_actions = manifest.get("remediation_actions")
+
+    view = {
+        "ledger_id": manifest.get("ledger_id"),
+        "run_id": manifest.get("run_id"),
+        "contract_id": manifest.get("contract_id"),
+        "result_class": manifest.get("result_class"),
+        "threat_model_scope": manifest.get("threat_model_scope"),
+        "certifier_input_allowed": manifest.get("certifier_input_allowed"),
+        "positive_non_use_claim_allowed": manifest.get("positive_non_use_claim_allowed"),
+        "must_block_certificate": manifest.get("must_block_certificate"),
+        "analyzed_surface_count": manifest.get("analyzed_surface_count"),
+        "unanalyzed_surface_count": manifest.get("unanalyzed_surface_count"),
+        "degraded_surface_count": manifest.get("degraded_surface_count"),
+        "refusal_codes": refusal_codes if isinstance(refusal_codes, list) else [],
+        "source_refs": source_refs if isinstance(source_refs, list) else [],
+        "evidence_refs": evidence_refs if isinstance(evidence_refs, list) else [],
+        "remediation_actions": (
+            remediation_actions if isinstance(remediation_actions, list) else []
+        ),
+    }
+
+    malformed = False
+    for field in ("ledger_id", "run_id", "contract_id", "threat_model_scope"):
+        malformed = malformed or not non_empty_string(manifest.get(field))
+    result_class = manifest.get("result_class")
+    malformed = malformed or not isinstance(result_class, str)
+    malformed = malformed or (
+        isinstance(result_class, str) and result_class not in E8_RESULT_CLASSES
+    )
+    malformed = malformed or manifest.get("threat_model_scope") != "explicit_flow_ifc_v1"
+    malformed = malformed or manifest.get("positive_non_use_claim_allowed") is not False
+    malformed = malformed or not isinstance(refusal_codes, list)
+    malformed = malformed or not isinstance(source_refs, list) or len(source_refs) == 0
+    malformed = malformed or not isinstance(evidence_refs, list)
+    malformed = malformed or not isinstance(remediation_actions, list)
+    for field in E8_COUNT_FIELDS:
+        count = manifest.get(field)
+        malformed = malformed or type(count) is not int or count < 0
+
+    source_ids: set[str] = set()
+    if isinstance(source_refs, list):
+        for source_ref in source_refs:
+            if not isinstance(source_ref, dict):
+                malformed = True
+                continue
+            if set(source_ref) - E8_SOURCE_REF_FIELDS:
+                malformed = True
+            source_id = source_ref.get("id")
+            if not non_empty_string(source_id):
+                malformed = True
+                continue
+            source_ids.add(str(source_id))
+            for field in ("surface", "path"):
+                malformed = malformed or not non_empty_string(source_ref.get(field))
+            for field in ("symbol", "span"):
+                if field in source_ref and not isinstance(source_ref.get(field), str):
+                    malformed = True
+
+    if isinstance(refusal_codes, list):
+        for refusal_code in refusal_codes:
+            if not isinstance(refusal_code, dict):
+                malformed = True
+                continue
+            if set(refusal_code) - E8_REFUSAL_CODE_FIELDS:
+                malformed = True
+            for field in ("code", "class", "source_ref_id", "remediation"):
+                malformed = malformed or not non_empty_string(refusal_code.get(field))
+            code = refusal_code.get("code")
+            refusal_class = refusal_code.get("class")
+            expected_class = (
+                E8_REFUSAL_CODE_CLASSES_BY_CODE.get(str(code))
+                if non_empty_string(code)
+                else None
+            )
+            malformed = malformed or expected_class is None
+            malformed = malformed or (
+                non_empty_string(refusal_class) and refusal_class != expected_class
+            )
+            source_ref_id = refusal_code.get("source_ref_id")
+            if non_empty_string(source_ref_id) and str(source_ref_id) not in source_ids:
+                malformed = True
+
+    if isinstance(evidence_refs, list):
+        for evidence_ref in evidence_refs:
+            if not isinstance(evidence_ref, dict):
+                malformed = True
+                continue
+            if set(evidence_ref) - E8_EVIDENCE_REF_FIELDS:
+                malformed = True
+            for field in ("id", "kind"):
+                malformed = malformed or not non_empty_string(evidence_ref.get(field))
+            status = evidence_ref.get("status")
+            malformed = malformed or not isinstance(status, str)
+            malformed = malformed or (
+                isinstance(status, str) and status not in E8_EVIDENCE_REF_STATUSES
+            )
+            for field in ("artifact_path", "content_hash_hex"):
+                if field in evidence_ref and not isinstance(evidence_ref.get(field), str):
+                    malformed = True
+
+    if isinstance(remediation_actions, list):
+        for remediation_action in remediation_actions:
+            malformed = malformed or not non_empty_string(remediation_action)
+
+    if isinstance(result_class, str) and result_class in E8_NON_CERTIFIABLE_RESULT_CLASSES:
+        malformed = malformed or manifest.get("certifier_input_allowed") is not False
+        malformed = malformed or manifest.get("must_block_certificate") is not True
+        malformed = malformed or not isinstance(refusal_codes, list) or len(refusal_codes) == 0
+    elif result_class == "certifiable_subset":
+        malformed = malformed or manifest.get("certifier_input_allowed") is not True
+        malformed = malformed or manifest.get("must_block_certificate") is not False
+        malformed = malformed or not isinstance(refusal_codes, list) or len(refusal_codes) != 0
+
+    return view, malformed
 
 
 def is_success_exit(decision: str) -> bool:
@@ -369,6 +544,7 @@ def build_receipt(bundle_path: Path, now_utc: str) -> dict[str, Any]:
     bundle_path = bundle_path.resolve()
     reason_codes: list[str] = []
     remediation: list[str] = []
+    e8_refusal_ledger: dict[str, Any] | None = None
 
     manifest_path, manifest, manifest_load_error = find_manifest(bundle_path)
     schema_version = str(manifest.get("schema_version", "")) if manifest else ""
@@ -388,6 +564,23 @@ def build_receipt(bundle_path: Path, now_utc: str) -> dict[str, Any]:
     elif schema_version not in SUPPORTED_SCHEMAS:
         reason_codes.append("unsupported_schema")
         remediation.append("Use a V1-supported evidence bundle schema or add explicit support.")
+
+    if manifest and is_e8_refusal_ledger(manifest):
+        e8_refusal_ledger, malformed_e8_refusal = e8_refusal_ledger_view(manifest)
+        if malformed_e8_refusal:
+            reason_codes.append(MALFORMED_E8_REFUSAL_REASON)
+            remediation.append("Treat the E8 refusal ledger as untrusted and rerun the E8 producer.")
+        elif e8_refusal_ledger["result_class"] in E8_NON_CERTIFIABLE_RESULT_CLASSES:
+            reason_codes.append(EXPLICIT_E8_REFUSAL_REASON)
+            remediation.extend(
+                action
+                for action in e8_refusal_ledger["remediation_actions"]
+                if non_empty_string(action)
+            )
+            remediation.append(
+                "Preserve ledger_id, refusal code, class, source reference, and remediation "
+                "while blocking positive non-use wording."
+            )
 
     invalid_required_member = False
     if manifest_load_error:
@@ -470,7 +663,11 @@ def build_receipt(bundle_path: Path, now_utc: str) -> dict[str, Any]:
             for line in command_member.read_text(encoding="utf-8", errors="replace").splitlines()
             if line.strip() and not line.lstrip().startswith("#")
         ]
-    if not replay_commands and not invalid_replay_command:
+    if (
+        not replay_commands
+        and not invalid_replay_command
+        and not is_e8_refusal_ledger(manifest)
+    ):
         reason_codes.append("replay_command_missing")
         remediation.append("Add an exact replay command to the manifest or commands.txt.")
 
@@ -568,6 +765,8 @@ def build_receipt(bundle_path: Path, now_utc: str) -> dict[str, Any]:
             "local_rich_renderer_shipped": False,
         },
     }
+    if e8_refusal_ledger is not None:
+        receipt_core["e8_refusal_ledger"] = e8_refusal_ledger
     return {
         **receipt_core,
         "receipt_id": f"bundle-doctor-{canonical_hash(receipt_core)[:16]}",

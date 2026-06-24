@@ -80,7 +80,7 @@ The V1 receipt model supports these input kinds:
 | `e2_differential_bundle` | `bundle_path`, `case_ids`, `runtime_arms` | Node/Bun/Franken divergence and denominator context. |
 | `e3_flight_recorder_output` | `trace_path`, `decision_ids`, `event_count` | Trace explanation context when present. |
 | `e8_certificate_bundle` | `contract_path`, `certificate_path`, `purpose_id` | Non-use certificate context; may be degraded until E8 certifier/capstone surfaces exist. |
-| `e8_refusal_ledger` | `ledger_path`, `schema_version`, `result_class` | Explicit refusal input, not missing evidence. |
+| `e8_refusal_ledger` | `ledger_path`, `ledger_id`, `schema_version`, `result_class` | Explicit refusal input, not missing evidence. |
 
 Every input record must preserve the source path and content hash when the bytes
 are available. If bytes are not available, the receipt must say so explicitly
@@ -113,7 +113,8 @@ Every explainer receipt must include:
 Receipts must be deterministic after volatile fields are scrubbed. Golden tests
 must scrub timestamps, absolute temp paths, hostnames, process ids, and worker
 ids while preserving semantic ids, reason codes, content hashes, and source
-paths.
+paths. E8 refusal-ledger explainers must also preserve `ledger_id`, because it
+is the content-addressed refusal identity that auditors use to compare runs.
 
 ## Decisions
 
@@ -161,7 +162,7 @@ The V1 reason-code vocabulary is:
 | `invalid_replay_command` | Bundle manifest declares replay command fields with non-string or empty string values. | Fix the manifest so every declared replay command is an exact non-empty command string. |
 | `stale_or_unfresh` | Freshness exceeds upstream maximum, cannot be computed, or any declared freshness alias is stale/malformed. | Regenerate evidence or emit degraded state. |
 | `unavailable_e8_certifier` | E8 certificate/capstone artifact is not yet available. | Emit degraded/non-promotable E8 report until certifier surfaces land. |
-| `explicit_e8_uncertified_refusal` | Non-certifiable ledger or refusal codes. | Preserve details; block positive wording. |
+| `explicit_e8_uncertified_refusal` | Non-certifiable ledger or refusal codes. | Preserve `ledger_id` and refusal details; block positive wording. |
 | `malformed_e8_refusal_ledger` | Invalid schema, code, class, or source ref. | Treat as untrusted; rerun the E8 producer. |
 | `duplicate_e8_identifier` | E8 route, binding, claim, purpose, or data-source id repeats where uniqueness is required. | Fix the data contract/certifier input and rerun upstream validation. |
 | `unknown_e8_claim_reference` | E8 certificate references a claim id absent from the matrix. | Add/correct matrix linkage or reject the certificate report. |

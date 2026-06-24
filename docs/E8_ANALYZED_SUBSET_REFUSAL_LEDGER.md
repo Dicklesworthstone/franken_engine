@@ -82,19 +82,24 @@ Use this sequence when authoring or reviewing an E8 refusal-ledger artifact:
    `threat_model_scope`. The schema version must be
    `franken-engine.e8-refusal-ledger.v1`, and the threat model must be
    `explicit_flow_ifc_v1`.
-2. Verify the source references first. Every refusal code must point at a
+2. Treat `ledger_id` as content-addressed refusal identity, not a display id.
+   Live preflight receipts must bind at least the run id, contract id, contract
+   content hash, run-input binding id, actual run-input content hash, explain
+   bundle path, and adversarial fixture set. Two receipts that differ in any of
+   those inputs must not share a `ledger_id`.
+3. Verify the source references first. Every refusal code must point at a
    declared `source_refs[].id`; a missing reference means the artifact is
    degraded at minimum and may need to fail closed.
-3. Check `positive_non_use_claim_allowed`. It must be `false` for every
+4. Check `positive_non_use_claim_allowed`. It must be `false` for every
    current fixture and for any runtime receipt that carries refusal evidence.
-4. Check `certifier_input_allowed` and `must_block_certificate` together.
+5. Check `certifier_input_allowed` and `must_block_certificate` together.
    Any `uncertified`, `degraded`, `fail_closed`, or `out_of_scope` result
    must set `certifier_input_allowed=false` and
    `must_block_certificate=true`.
-5. Compare every `refusal_codes[].code` and `refusal_codes[].class` with the
+6. Compare every `refusal_codes[].code` and `refusal_codes[].class` with the
    vocabulary above and with `docs/e8_refusal_ledger_schema_v1.json`.
    Unknown codes are not warnings; they are unreviewed claim language.
-6. Preserve the remediation text when feeding an external trust explainer.
+7. Preserve the remediation text when feeding an external trust explainer.
    Operators and auditors need to see why a run is uncertified, not just
    that the positive certificate was withheld.
 
@@ -135,6 +140,8 @@ The capstone must assert these invariants:
   is `uncertified` or `fail_closed`, never `certifiable_subset`.
 - If source hash or source provenance disagrees with the run input, the
   result is `fail_closed`.
+- If contract content or actual run-input content differs, the preflight
+  receipt must produce a different `ledger_id`.
 - If flow evidence comes from fallback or partial analysis, the result is
   `degraded` and cannot feed the certifier.
 - If the requested guarantee depends on covert or timing channels, the result

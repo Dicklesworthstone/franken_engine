@@ -28,6 +28,7 @@
     },
     "ledger_id": {
       "type": "string",
+      "description": "Content-addressed refusal identity derived from the run id, contract id, contract content hash, run-input binding id, actual run-input content hash, explain bundle path, and adversarial fixture set.",
       "minLength": 1
     },
     "run_id": {

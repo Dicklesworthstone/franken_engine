@@ -63,6 +63,42 @@ for idx in $(seq 0 "$((case_count - 1))"); do
     exit 1
   fi
 
+  expected_e8_refusal="$(jq -c ".[$idx].expected_e8_refusal_ledger // null" "${cases_json}")"
+  if [[ "${expected_e8_refusal}" != "null" ]]; then
+    if ! jq -e --argjson expected "${expected_e8_refusal}" '
+      .e8_refusal_ledger.ledger_id == $expected.ledger_id
+      and .e8_refusal_ledger.result_class == $expected.result_class
+      and (
+        ($expected.analyzed_surface_count // null) == null
+        or .e8_refusal_ledger.analyzed_surface_count == $expected.analyzed_surface_count
+      )
+      and (
+        ($expected.unanalyzed_surface_count // null) == null
+        or .e8_refusal_ledger.unanalyzed_surface_count == $expected.unanalyzed_surface_count
+      )
+      and (
+        ($expected.degraded_surface_count // null) == null
+        or .e8_refusal_ledger.degraded_surface_count == $expected.degraded_surface_count
+      )
+      and (
+        ($expected.refusal_codes // null) == null
+        or ((.e8_refusal_ledger.refusal_codes | map(.code) | sort) == ($expected.refusal_codes | sort))
+      )
+      and (
+        ($expected.source_ref_ids // null) == null
+        or ((.e8_refusal_ledger.source_refs | map(.id) | sort) == ($expected.source_ref_ids | sort))
+      )
+      and (
+        ($expected.remediation_contains // null) == null
+        or ((.remediation // [] | join("\n")) | contains($expected.remediation_contains))
+      )
+    ' "${output_path}" >/dev/null; then
+      printf 'FAIL %s: E8 refusal-ledger preservation predicate failed\n' "${case_id}" >&2
+      cat "${output_path}" >&2
+      exit 1
+    fi
+  fi
+
   if ! jq -e '
     .schema_version == "franken-engine.external-trust-artifact-bundle-doctor.v1"
     and (.receipt_id | startswith("bundle-doctor-"))

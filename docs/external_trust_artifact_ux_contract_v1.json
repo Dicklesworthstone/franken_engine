@@ -150,6 +150,7 @@
       "kind": "e8_refusal_ledger",
       "required_fields": [
         "ledger_path",
+        "ledger_id",
         "schema_version",
         "result_class"
       ]
@@ -383,7 +384,7 @@
     {
       "code": "explicit_e8_uncertified_refusal",
       "trigger": "E8 refusal ledger has refusal codes or a non-certifiable result class",
-      "remediation": "Preserve refusal code, class, source reference, and remediation while blocking positive non-use wording"
+      "remediation": "Preserve ledger_id, refusal code, class, source reference, and remediation while blocking positive non-use wording"
     },
     {
       "code": "malformed_e8_refusal_ledger",
@@ -536,6 +537,7 @@
     "Replay commands may be reported but must not be auto-executed by the explainer.",
     "E8 certificate reports remain degraded or not_promotable until certifier and capstone artifacts exist.",
     "Explicit E8 refusal ledgers must be reported as refusal evidence, not as missing certifier evidence.",
+    "External explainers must preserve E8 refusal ledger_id as the content-addressed refusal identity.",
     "No positive E8 non-use wording may be emitted when a refusal ledger has refusal codes or a non-certifiable result class.",
     "Future rich interactive UI must reuse /dp/frankentui.",
     "Any Cargo validation added by child beads must run through rch and reject local fallback."

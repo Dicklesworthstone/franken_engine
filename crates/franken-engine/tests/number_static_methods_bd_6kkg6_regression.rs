@@ -11,7 +11,7 @@ use frankenengine_engine::HybridRouter;
 fn eval(src: &str) -> String {
     let mut e = HybridRouter::default();
     match e.eval(src) {
-        Ok(o) => format!("{}", o.value),
+        Ok(o) => o.value.to_string(),
         Err(err) => format!("ERR={err}"),
     }
 }

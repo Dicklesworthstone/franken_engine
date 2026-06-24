@@ -21,7 +21,7 @@
     clippy::manual_abs_diff
 )]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use frankenengine_engine::eprocess_guardrail::{
     EProcessGuardrail, ExpectedLossMatrix, GuardrailError, GuardrailEvent, GuardrailRegistry,

@@ -52,8 +52,8 @@
       "git_tracked": true,
       "path": "README.md",
       "role": "primary_artifact",
-      "sha256": "576cd258e8ed99cf0e27f38ec204a64392788250955dcfd952a4c3b13473a275",
-      "size_bytes": 203906,
+      "sha256": "86596a29724171e760e42e16592b7c9ce23055c93f2ce6e2c1369cac5d332b00",
+      "size_bytes": 204793,
       "source": "head_blob"
     }
   ]

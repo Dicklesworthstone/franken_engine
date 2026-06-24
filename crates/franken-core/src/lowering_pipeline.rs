@@ -7299,9 +7299,15 @@ mod tests {
             .expect("IR2->IR3 should resolve conditional control-flow")
             .module;
 
+        // The condition value (`LoadBool false`) lands in register 1, not 0:
+        // module-level binding/temporary allocation starts at register 1 because
+        // r0 is reserved for the script completion value (bd-fqlfw.2.11.1). The
+        // jump TARGETS (instruction indices 3 and 5) are unaffected by register
+        // numbering. (bd-7duxc: this assertion's `cond: 0` was stale after the
+        // register-0 reservation landed.)
         assert!(matches!(
             ir3.instructions.get(1),
-            Some(Ir3Instruction::JumpIf { cond: 0, target: 3 })
+            Some(Ir3Instruction::JumpIf { cond: 1, target: 3 })
         ));
         assert!(matches!(
             ir3.instructions.get(2),

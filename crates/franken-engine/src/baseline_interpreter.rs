@@ -4594,8 +4594,15 @@ impl InterpreterCore {
         // Coerce the hostcall arg registers to strings for the tag->effect builder
         // (fs paths and contents are string operands in baseline IR3).
         let mut arg_strings: Vec<String> = Vec::with_capacity(args.count as usize);
+        // bd-rul7k: retain the raw second-arg Value so `fs:read` can resolve the
+        // options-object encoding form (`readFileSync(p, { encoding })`), whose
+        // object stringifies to a type name and would never match an encoding.
+        let mut second_arg_value: Option<Value> = None;
         for offset in 0..args.count {
             let value = self.read_reg(args.start + offset)?;
+            if offset == 1 {
+                second_arg_value = Some(value.clone());
+            }
             arg_strings.push(match value {
                 Value::Str(s) => s.to_string(),
                 Value::Int(i) => i.to_string(),
@@ -4624,13 +4631,14 @@ impl InterpreterCore {
         })?;
         Ok(match capability {
             "fs:read" => {
-                // bd-1xl17.d: Node parity for `readFileSync`'s return shape. The
-                // optional second arg (when present) is the character encoding:
-                // without it the call yields a `Buffer`, with a recognized
-                // encoding it yields the decoded string. The encoding is inert to
-                // the host effect itself (`create_effect_from_hostcall_tag` only
-                // consumes arg[1] for writes), so it only steers the value here.
-                let encoding = arg_strings.get(1).cloned();
+                // bd-1xl17.d / bd-rul7k: Node parity for `readFileSync`'s return
+                // shape. The optional second arg selects the character encoding,
+                // either as a bare string (`readFileSync(p, 'utf8')`) or an options
+                // object (`readFileSync(p, { encoding: 'utf8' })`); without a
+                // recognized encoding the call yields a `Buffer`. The encoding is
+                // inert to the host effect itself (`create_effect_from_hostcall_tag`
+                // only consumes arg[1] for writes), so it only steers the value here.
+                let encoding = self.resolve_fs_read_encoding(second_arg_value.as_ref());
                 match result.downcast::<Vec<u8>>() {
                     Ok(bytes) => self.decode_fs_read_result(&bytes, encoding.as_deref())?,
                     Err(_) => Value::Undefined,
@@ -4649,12 +4657,36 @@ impl InterpreterCore {
     /// produced to the JS value `readFileSync` would return. Without an encoding
     /// Node yields a `Buffer` (modeled here as a `Uint8Array`-backed value); with
     /// a recognized character encoding it yields the decoded string. The
+    /// bd-rul7k: resolve the character encoding for an `fs:read` (`readFileSync`)
+    /// from its optional second argument. Node accepts either a bare encoding
+    /// string (`readFileSync(p, 'utf8')`) or an options object
+    /// (`readFileSync(p, { encoding: 'utf8' })`). Returns the encoding string when
+    /// present; an options object whose own `encoding` property is absent or
+    /// non-string (e.g. `{ encoding: null }`) yields `None`, matching Node's
+    /// Buffer result, as does a missing second argument. Only the object's own
+    /// `encoding` property is consulted (no prototype walk), mirroring how Node
+    /// reads the options bag.
+    fn resolve_fs_read_encoding(&self, second_arg: Option<&Value>) -> Option<String> {
+        match second_arg? {
+            Value::Str(s) => Some(s.to_string()),
+            Value::Object(id) => match self
+                .heap
+                .get(id.0 as usize)
+                .and_then(|object| object.properties.get("encoding").cloned())
+            {
+                Some(Value::Str(s)) => Some(s.to_string()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// Node `BufferEncoding` values handled here: utf8/utf-8,
     /// utf16le/utf-16le/ucs2/ucs-2, latin1/binary, ascii, hex, base64, and
-    /// base64url. The options-object call form `readFileSync(path, { encoding })`
-    /// (which the lowering does not yet thread through) and unknown encodings
-    /// still fall back to the Buffer shape — tracked as bd-rul7k. The Buffer path
-    /// requires the `HeapAllocate` capability.
+    /// base64url. The bare-string and options-object encoding forms are both
+    /// resolved up front by [`Self::resolve_fs_read_encoding`]; unknown encodings
+    /// still fall back to the Buffer shape (Node would throw `TypeError`, tracked
+    /// as bd-rul7k). The Buffer path requires the `HeapAllocate` capability.
     fn decode_fs_read_result(
         &mut self,
         bytes: &[u8],
@@ -33911,14 +33943,63 @@ mod async_runtime_tests_current {
             "the utf8 read must surface the real file contents as a string"
         );
 
-        // All three real effects (one write + two reads) were captured in the
-        // replay transcript — the ledger source for bd-5r99w.12. The JS-visible
-        // return shape (undefined / Buffer / string) is orthogonal to what gets
-        // recorded: every dispatched fs effect still lands in the transcript.
+        // bd-rul7k: the OPTIONS-OBJECT form readFileSync(path, { encoding: 'utf8' })
+        // resolves the encoding from the object's own `encoding` property (the
+        // object itself stringifies to a type name and would never match an
+        // encoding), so it decodes identically to the bare-string form.
+        let options_id = core.mutate_heap(|h| {
+            let id = ObjectId(h.len() as u32);
+            let mut options = HeapObject::new();
+            options
+                .properties
+                .insert("encoding".to_string(), Value::str("utf8"));
+            h.push(options);
+            id
+        });
+        core.mutate_registers(|r| {
+            r[1] = Value::Object(options_id);
+        });
+        let read_via_options = core
+            .dispatch_host_io_hostcall("fs:read", RegRange { start: 0, count: 2 })
+            .expect("fs:read (options-object) dispatch");
+        assert_eq!(
+            read_via_options,
+            Value::Str(Arc::from("real effect bytes")),
+            "the options-object encoding form must decode like the bare-string form"
+        );
+
+        // bd-rul7k: an options object with no (or null) `encoding` falls back to a
+        // Buffer, matching Node.
+        let bufferish_id = core.mutate_heap(|h| {
+            let id = ObjectId(h.len() as u32);
+            let mut options = HeapObject::new();
+            options
+                .properties
+                .insert("flag".to_string(), Value::str("r"));
+            h.push(options);
+            id
+        });
+        core.mutate_registers(|r| {
+            r[1] = Value::Object(bufferish_id);
+        });
+        let read_no_encoding_option = core
+            .dispatch_host_io_hostcall("fs:read", RegRange { start: 0, count: 2 })
+            .expect("fs:read (options-object without encoding) dispatch");
+        assert!(
+            matches!(read_no_encoding_option, Value::Object(_)),
+            "an options object without an encoding must fall back to a Buffer"
+        );
+
+        // All five real effects (one write + four reads: no-encoding, utf8,
+        // options-object utf8, and options-object-without-encoding) were captured
+        // in the replay transcript — the ledger source for bd-5r99w.12. The
+        // JS-visible return shape (undefined / Buffer / string) is orthogonal to
+        // what gets recorded: every dispatched fs effect still lands in the
+        // transcript.
         assert_eq!(
             recorder.entries().len(),
-            3,
-            "all dispatched fs effects (write + two reads) must be recorded"
+            5,
+            "all dispatched fs effects (one write + four reads) must be recorded"
         );
 
         // With no provider installed, fs hostcalls stay fail-closed (undefined).

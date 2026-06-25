@@ -595,6 +595,21 @@ pub fn lower_ir0_to_ir1(
     for alias in confirmed_http_module_aliases(&ir0.tree.body, &binding_lookup) {
         binding_lookup.insert(http_module_alias_sentinel(&alias), 0);
     }
+    // bd-3894s (http leg ESM imports): mirror bd-1xl17.b's fs ESM lowering for
+    // http/https. Namespace/default http imports used as `http.get/request(...)`
+    // reuse the same module-alias sentinel above, so the existing
+    // `http_builtin_call_capability` member-call recognizer handles their call
+    // sites unchanged; named http imports (`import { get, request } from
+    // 'node:http'`) used as direct calls get a capability-encoding sentinel
+    // consumed by `http_named_import_call_capability`. Both are usage-gated,
+    // leaving bare/unused http imports at their current (runtime module-load)
+    // behavior — the fail-closed analogue of the require-binding usage-gating.
+    for alias in confirmed_http_namespace_import_aliases(&ir0.tree.body) {
+        binding_lookup.insert(http_module_alias_sentinel(&alias), 0);
+    }
+    for local in confirmed_http_named_imports(&ir0.tree.body) {
+        binding_lookup.insert(http_named_import_sentinel(&local, "net:request"), 0);
+    }
     // bd-1xl17.b: ESM fs imports. Namespace/default fs imports used as
     // `fs.readFileSync/...` reuse the same member-call sentinel above so the
     // existing recognizer (`fs_builtin_call_capability`) handles their call sites
@@ -714,11 +729,18 @@ pub fn lower_ir0_to_ir1(
                         // same way — its `fsp.readFile/...` calls are Promise-wrapped
                         // at the member-call sites via the promises module-alias
                         // sentinel.
+                        // bd-3894s: the http/https namespace analogue
+                        // (`import * as http from 'node:http'`) is elided the same
+                        // way when confirmed — its `http.get/request(...)` calls are
+                        // recognized + capability-gated at the member-call sites via
+                        // the shared http module-alias sentinel.
                         if (is_fs_module_specifier(&import.source)
                             && binding_lookup.contains_key(&fs_module_alias_sentinel(local)))
                             || (is_fs_promises_module_specifier(&import.source)
                                 && binding_lookup
                                     .contains_key(&fs_promises_module_alias_sentinel(local)))
+                            || (is_http_module_specifier(&import.source)
+                                && binding_lookup.contains_key(&http_module_alias_sentinel(local)))
                         {
                             ir1.ops.push(Ir1Op::LoadLiteral {
                                 value: Ir1Literal::Undefined,
@@ -745,11 +767,19 @@ pub fn lower_ir0_to_ir1(
                         // (`import fsp from 'node:fs/promises'`) is elided the same
                         // way — `fsp.readFile/...` is Promise-wrapped at its call
                         // sites via the promises module-alias sentinel.
+                        // bd-3894s: the http/https default analogue
+                        // (`import http from 'node:http'`) is elided the same way
+                        // when confirmed — `http.get/request(...)` is recognized at
+                        // its member-call sites via the shared http module-alias
+                        // sentinel, so both the module load and the `default`
+                        // extraction (which would fault) are skipped.
                         if (is_fs_module_specifier(&import.source)
                             && binding_lookup.contains_key(&fs_module_alias_sentinel(local)))
                             || (is_fs_promises_module_specifier(&import.source)
                                 && binding_lookup
                                     .contains_key(&fs_promises_module_alias_sentinel(local)))
+                            || (is_http_module_specifier(&import.source)
+                                && binding_lookup.contains_key(&http_module_alias_sentinel(local)))
                         {
                             ir1.ops.push(Ir1Op::LoadLiteral {
                                 value: Ir1Literal::Undefined,
@@ -782,7 +812,13 @@ pub fn lower_ir0_to_ir1(
                         // `import { readFile } from 'node:fs/promises'` likewise
                         // binds its locals to undefined and elides the module load;
                         // the calls are recognized + Promise-wrapped at their sites.
-                        let fs_named_import = (is_fs_module_specifier(&import.source)
+                        // bd-3894s: the http named-import analogue
+                        // (`import { get, request } from 'node:http'`) is elided the
+                        // same way when confirmed — every recognized http named
+                        // import maps to the single `net:request` capability, and
+                        // the calls are recognized at their direct-call sites by
+                        // `http_named_import_call_capability`.
+                        let named_builtin_import = (is_fs_module_specifier(&import.source)
                             && specifiers.iter().any(|spec| {
                                 binding_lookup.contains_key(&fs_named_import_sentinel(
                                     &spec.local_name,
@@ -803,8 +839,15 @@ pub fn lower_ir0_to_ir1(
                                             "fs:write",
                                         ),
                                     )
+                                }))
+                            || (is_http_module_specifier(&import.source)
+                                && specifiers.iter().any(|spec| {
+                                    binding_lookup.contains_key(&http_named_import_sentinel(
+                                        &spec.local_name,
+                                        "net:request",
+                                    ))
                                 }));
-                        if fs_named_import {
+                        if named_builtin_import {
                             for spec in specifiers {
                                 ir1.ops.push(Ir1Op::LoadLiteral {
                                     value: Ir1Literal::Undefined,
@@ -9027,6 +9070,35 @@ fn lower_expression_to_ir1_inner(
                     return Ok(());
                 }
             }
+            if let Some(capability) = http_named_import_call_capability(callee, binding_lookup) {
+                // bd-3894s (http leg ESM imports): `get(url)` / `request(url)`
+                // named-imported from 'node:http' (`import { get, request } from
+                // 'node:http'`, incl. `as` renames) — recorded as a sentinel by the
+                // program pre-scan. Lowers to the same `net:request` HostCall as the
+                // CJS require-binding/inline member-call forms, forwarding ONLY the
+                // URL operand (arg[0]) with arg_count == 1 — the slice-1 semantics
+                // shared with `http_builtin_call_capability`: options objects,
+                // callbacks, and request bodies are follow-up slices and must not be
+                // mis-shaped as the effect's URL. A 0-arg call is malformed: fall
+                // through so it is not silently mis-shaped.
+                if let Some(url_arg) = arguments.first() {
+                    lower_expression_to_ir1(
+                        url_arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                    ops.push(Ir1Op::HostCall {
+                        capability: capability.to_string(),
+                        arg_count: 1,
+                    });
+                    return Ok(());
+                }
+            }
             if let Some(capability) = date_builtin_call_capability(callee, binding_lookup) {
                 // `Date.now()` — the `Date` global has no eval-scope binding, so
                 // (like the Math-static interception) recognize the bare static
@@ -11904,6 +11976,112 @@ fn http_builtin_call_capability(
     match method {
         "get" | "request" => Some("net:request"),
         _ => None,
+    }
+}
+
+/// bd-3894s: true when `callee` is exactly the bare identifier `name` — the
+/// direct-call shape `get(url)` / `request(url)` of an http function brought in
+/// by a named ESM import `import { get, request } from 'node:http'`. The http
+/// analogue of [`is_fs_named_callee`]; the usage-lookahead target for
+/// [`expr_contains_matching_call`].
+fn is_http_named_callee(callee: &Expression, name: &str) -> bool {
+    matches!(callee, Expression::Identifier(n) if n == name)
+}
+
+/// bd-3894s: sentinel key recording that the local binding `local_name` is an
+/// http *named import* (`import { get } from 'node:http'`, incl. `as` renames)
+/// bound to `capability` ("net:request") AND used as a direct call. Mirror of
+/// [`fs_named_import_sentinel`]: lives in the lowering `binding_lookup`; the
+/// leading NUL and the `:` inside the capability cannot occur in a JS
+/// identifier, so the composite key never collides with a real binding. This
+/// lets the direct-call recognizer map `get(...)`/`request(...)` to its
+/// `net:request` hostcall without threading import provenance through the IR1
+/// recursion.
+fn http_named_import_sentinel(local_name: &str, capability: &str) -> String {
+    format!("\0httpnamed\0{capability}\0{local_name}")
+}
+
+/// bd-3894s: confirmed http *namespace/default* ESM import aliases — a local
+/// bound via `import * as http from 'node:http'` or `import http from
+/// 'node:http'` that is actually used as `<local>.get/request(...)` at a
+/// top-level program position. These reuse the SAME member-call recognizer and
+/// [`http_module_alias_sentinel`] as the require-binding form, so the call sites
+/// need no additional handling. Mirror of
+/// [`confirmed_fs_namespace_import_aliases`]; usage-gated so a bare/unused http
+/// import keeps its current (runtime module-load) behavior.
+fn confirmed_http_namespace_import_aliases(body: &[Statement]) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for stmt in body {
+        if let Statement::Import(import) = stmt
+            && is_http_module_specifier(&import.source)
+        {
+            match &import.clause {
+                ImportClause::Namespace { local } | ImportClause::Default { local } => {
+                    candidates.insert(local.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut used = BTreeSet::new();
+    for name in &candidates {
+        let single: BTreeSet<String> = std::iter::once(name.clone()).collect();
+        if body_top_level_expr_matches(body, &|e| expr_uses_http_alias_method(e, &single)) {
+            used.insert(name.clone());
+        }
+    }
+    used
+}
+
+/// bd-3894s: confirmed http *named* ESM imports — `import { get[, request] }
+/// from 'node:http'` (incl. `as` renames) whose local binding is used as a
+/// direct call `<local>(...)` at a top-level program position. Returns the set
+/// of local names; every recognized http named import maps to the single
+/// `net:request` capability (unlike fs's read/write split). Recorded as
+/// NUL-sentinels (see [`http_named_import_sentinel`]) and gated on usage, exactly
+/// like the fs named-import form.
+fn confirmed_http_named_imports(body: &[Statement]) -> BTreeSet<String> {
+    let mut candidates: BTreeSet<String> = BTreeSet::new();
+    for stmt in body {
+        if let Statement::Import(import) = stmt
+            && is_http_module_specifier(&import.source)
+            && let ImportClause::Named { specifiers } = &import.clause
+        {
+            for spec in specifiers {
+                if matches!(spec.import_name.as_str(), "get" | "request") {
+                    candidates.insert(spec.local_name.clone());
+                }
+            }
+        }
+    }
+    candidates
+        .into_iter()
+        .filter(|local| {
+            body_top_level_expr_matches(body, &|e| {
+                expr_contains_matching_call(e, &|c| is_http_named_callee(c, local))
+            })
+        })
+        .collect()
+}
+
+/// bd-3894s: recognize a direct call to an http *named import* — `get(url)` /
+/// `request(url)` brought in by `import { ... } from 'node:http'` — and return
+/// its `net:request` hostcall capability. The local name (respecting `as`
+/// renames) was recorded as a NUL-sentinel in `binding_lookup` by the program
+/// pre-scan, gated on actual direct-call usage so a bare/unused http import keeps
+/// its current behavior. The ESM-named-import analogue of
+/// [`http_builtin_call_capability`]'s inline/binding member-call recognition.
+fn http_named_import_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Identifier(name) = callee else {
+        return None;
+    };
+    if binding_lookup.contains_key(&http_named_import_sentinel(name, "net:request")) {
+        Some("net:request")
+    } else {
+        None
     }
 }
 
@@ -15009,6 +15187,12 @@ mod tests {
         })
     }
 
+    fn ops_have_http_import_module(ops: &[Ir1Op]) -> bool {
+        ops.iter().any(|op| {
+            matches!(op, Ir1Op::ImportModule { specifier } if is_http_module_specifier(specifier))
+        })
+    }
+
     /// bd-1xl17.b: a named ESM import (`import { writeFileSync, readFileSync } from
     /// 'node:fs'`) used as direct calls lowers to fs:write/fs:read HostCalls and
     /// elides the (fault-prone) node:fs module load.
@@ -15383,6 +15567,125 @@ mod tests {
         assert!(
             !ops_have_hostcall(&ops, "net:request"),
             "an fs binding must not be mis-recognized as a network hostcall"
+        );
+    }
+
+    /// bd-3894s (http leg ESM imports): a named ESM import (`import { get,
+    /// request } from 'node:http'`) used as direct calls lowers to `net:request`
+    /// HostCalls and elides the (fault-prone) node:http module load — the http
+    /// mirror of the fs named-import lowering (bd-1xl17.b).
+    #[test]
+    fn esm_named_http_import_lowers_to_net_request_bd_3894s() {
+        let ops = lower_esm_source_ops(
+            "import { get, request } from 'node:http';\n\
+             get('http://127.0.0.1:9/');\n\
+             request('http://127.0.0.1:9/');\n",
+            "esm_named_http.mjs",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "net:request"),
+            "named http imports used as get(url)/request(url) must lower to a net:request hostcall"
+        );
+        assert!(
+            !ops_have_http_import_module(&ops),
+            "node:http module load must be elided for the confirmed named import"
+        );
+    }
+
+    /// bd-3894s: named http import recognition respects `as` renames — the local
+    /// name (`req`), not the imported name, is what the call site uses.
+    #[test]
+    fn esm_named_http_import_rename_lowers_to_net_request_bd_3894s() {
+        let ops = lower_esm_source_ops(
+            "import { request as req } from 'node:http';\n\
+             req('http://127.0.0.1:9/');\n",
+            "esm_named_rename_http.mjs",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "net:request"),
+            "a renamed http named import must still lower to net:request"
+        );
+        assert!(
+            !ops_have_http_import_module(&ops),
+            "node:http module load must be elided"
+        );
+    }
+
+    /// bd-3894s: a namespace ESM import (`import * as http from 'node:http'`)
+    /// used as `http.get/request(...)` lowers via the shared member-call
+    /// recognizer + module-alias sentinel (mirror of the fs namespace form).
+    #[test]
+    fn esm_namespace_http_import_lowers_to_net_request_bd_3894s() {
+        let ops = lower_esm_source_ops(
+            "import * as http from 'node:http';\n\
+             http.get('http://127.0.0.1:9/');\n",
+            "esm_namespace_http.mjs",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "net:request"),
+            "import * as http from 'node:http'; http.get(url) must lower to net:request"
+        );
+        assert!(
+            !ops_have_http_import_module(&ops),
+            "node:http module load must be elided"
+        );
+    }
+
+    /// bd-3894s: a default ESM import (`import http from 'node:http'`) used as
+    /// `http.get/request(...)` lowers to a `net:request` HostCall.
+    #[test]
+    fn esm_default_http_import_lowers_to_net_request_bd_3894s() {
+        let ops = lower_esm_source_ops(
+            "import http from 'node:http';\n\
+             http.request('http://127.0.0.1:9/');\n",
+            "esm_default_http.mjs",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "net:request"),
+            "import http from 'node:http'; http.request(url) must lower to net:request"
+        );
+        assert!(
+            !ops_have_http_import_module(&ops),
+            "node:http module load must be elided"
+        );
+    }
+
+    /// bd-3894s fail-closed: a bare/UNUSED http import is NOT recognized — the
+    /// node:http module load is preserved and no network HostCall is emitted, so
+    /// the import keeps its current (runtime module-load) behavior. The ESM
+    /// analogue of the require-binding usage-gating that preserves the
+    /// ambient-authority denial of bare/unused requires.
+    #[test]
+    fn esm_unused_http_import_is_not_recognized_bd_3894s() {
+        let ops = lower_esm_source_ops(
+            "import { get } from 'node:http';\n",
+            "esm_unused_http.mjs",
+        );
+        assert!(
+            ops_have_http_import_module(&ops),
+            "an unused http named import must keep its module load (no recognition)"
+        );
+        assert!(
+            !ops_have_hostcall(&ops, "net:request"),
+            "an unused http named import must not emit a network hostcall"
+        );
+    }
+
+    /// bd-3894s specifier-gating: `get` is a common identifier — a named import
+    /// of `get` from a NON-http module (`import { get } from 'lodash'`) must NOT
+    /// be mis-recognized as an http egress. Only `node:http`/`node:https` (and
+    /// the bare `http`/`https`) specifiers register the http named sentinel, so
+    /// the direct call stays an ordinary call with no `net:request` hostcall.
+    #[test]
+    fn esm_named_get_from_non_http_module_does_not_lower_bd_3894s() {
+        let ops = lower_esm_source_ops(
+            "import { get } from 'lodash';\n\
+             get({}, 'k');\n",
+            "esm_named_get_lodash.mjs",
+        );
+        assert!(
+            !ops_have_hostcall(&ops, "net:request"),
+            "a `get` named-imported from a non-http module must not lower to a network hostcall"
         );
     }
 

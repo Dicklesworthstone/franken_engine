@@ -479,14 +479,8 @@ expression: actual_json
     "instructions": [
       {
         "LoadInt": {
-          "dst": 0,
-          "value": 0
-        }
-      },
-      {
-        "Move": {
           "dst": 1,
-          "src": 0
+          "value": 0
         }
       },
       {
@@ -496,21 +490,27 @@ expression: actual_json
         }
       },
       {
-        "LoadInt": {
+        "Move": {
           "dst": 3,
+          "src": 2
+        }
+      },
+      {
+        "LoadInt": {
+          "dst": 4,
           "value": 5
         }
       },
       {
         "Lt": {
-          "dst": 4,
-          "lhs": 2,
-          "rhs": 3
+          "dst": 5,
+          "lhs": 3,
+          "rhs": 4
         }
       },
       {
         "JumpIf": {
-          "cond": 4,
+          "cond": 5,
           "target": 7
         }
       },
@@ -522,60 +522,60 @@ expression: actual_json
       {
         "Move": {
           "dst": 0,
-          "src": 4
-        }
-      },
-      {
-        "Move": {
-          "dst": 6,
           "src": 5
         }
       },
       {
         "Move": {
           "dst": 7,
-          "src": 1
+          "src": 6
         }
       },
       {
         "Move": {
           "dst": 8,
-          "src": 7
+          "src": 2
+        }
+      },
+      {
+        "Move": {
+          "dst": 9,
+          "src": 8
         }
       },
       {
         "Call": {
-          "callee": 6,
+          "callee": 7,
           "args": {
-            "start": 8,
+            "start": 9,
             "count": 1
           },
-          "dst": 9
+          "dst": 10
         }
       },
       {
         "Move": {
           "dst": 0,
-          "src": 9
+          "src": 10
         }
       },
       {
         "LoadInt": {
-          "dst": 10,
+          "dst": 11,
           "value": 1
         }
       },
       {
         "Add": {
-          "dst": 1,
-          "lhs": 1,
-          "rhs": 10
+          "dst": 2,
+          "lhs": 2,
+          "rhs": 11
         }
       },
       {
         "Move": {
           "dst": 0,
-          "src": 1
+          "src": 2
         }
       },
       {
@@ -595,7 +595,7 @@ expression: actual_json
       {
         "entry": 0,
         "arity": 0,
-        "frame_size": 11,
+        "frame_size": 12,
         "name": "main",
         "is_generator": false
       }
@@ -665,7 +665,7 @@ expression: actual_json
     {
       "pass_id": "ir2_to_ir3",
       "input_hash": "sha256:78486ab6b317808bb6ca79337ddb475634971d0ce58fd3986226485627ec8f55",
-      "output_hash": "sha256:89475b8b98ed9c891e607c153bf12c7cf32417fcad208ce504ede770e0ac6e80",
+      "output_hash": "sha256:98ae901f4366630cee471e7dd7039cbdbdbe057fb6a057c2cd937ab3acab495e",
       "rollback_token": "sha256:78486ab6b317808bb6ca79337ddb475634971d0ce58fd3986226485627ec8f55",
       "invariant_checks": [
         {
@@ -709,7 +709,7 @@ expression: actual_json
     {
       "pass_id": "ir2_to_ir3",
       "input_hash": "sha256:78486ab6b317808bb6ca79337ddb475634971d0ce58fd3986226485627ec8f55",
-      "output_hash": "sha256:89475b8b98ed9c891e607c153bf12c7cf32417fcad208ce504ede770e0ac6e80",
+      "output_hash": "sha256:98ae901f4366630cee471e7dd7039cbdbdbe057fb6a057c2cd937ab3acab495e",
       "input_op_count": 20,
       "output_op_count": 19
     }

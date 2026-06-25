@@ -294,26 +294,26 @@ expression: actual_json
     "instructions": [
       {
         "LoadInt": {
-          "dst": 0,
+          "dst": 1,
           "value": 10
         }
       },
       {
         "Move": {
-          "dst": 1,
-          "src": 0
+          "dst": 2,
+          "src": 1
         }
       },
       {
         "LoadStr": {
-          "dst": 2,
+          "dst": 3,
           "pool_index": 0
         }
       },
       {
         "Move": {
-          "dst": 3,
-          "src": 2
+          "dst": 4,
+          "src": 3
         }
       },
       {
@@ -330,7 +330,7 @@ expression: actual_json
       {
         "entry": 0,
         "arity": 0,
-        "frame_size": 4,
+        "frame_size": 5,
         "name": "main",
         "is_generator": false
       }
@@ -400,7 +400,7 @@ expression: actual_json
     {
       "pass_id": "ir2_to_ir3",
       "input_hash": "sha256:ad0730f6024d2ba00269ccd4980bc8cd4187337086ecec1bcd77305b95e035a0",
-      "output_hash": "sha256:2902de80a9b465da00ae77c0a37efa9925e95d388fb256b0a172d13d9dc1b38e",
+      "output_hash": "sha256:ca6e738ab11e04d1541444c0cfa5e9089d6f72affdd49561f185904bb695997e",
       "rollback_token": "sha256:ad0730f6024d2ba00269ccd4980bc8cd4187337086ecec1bcd77305b95e035a0",
       "invariant_checks": [
         {
@@ -444,7 +444,7 @@ expression: actual_json
     {
       "pass_id": "ir2_to_ir3",
       "input_hash": "sha256:ad0730f6024d2ba00269ccd4980bc8cd4187337086ecec1bcd77305b95e035a0",
-      "output_hash": "sha256:2902de80a9b465da00ae77c0a37efa9925e95d388fb256b0a172d13d9dc1b38e",
+      "output_hash": "sha256:ca6e738ab11e04d1541444c0cfa5e9089d6f72affdd49561f185904bb695997e",
       "input_op_count": 7,
       "output_op_count": 6
     }

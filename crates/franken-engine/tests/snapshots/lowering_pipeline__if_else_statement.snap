@@ -362,26 +362,26 @@ expression: actual_json
     "instructions": [
       {
         "Move": {
-          "dst": 1,
-          "src": 0
+          "dst": 2,
+          "src": 1
         }
       },
       {
         "LoadInt": {
-          "dst": 2,
+          "dst": 3,
           "value": 0
         }
       },
       {
         "Gt": {
-          "dst": 3,
-          "lhs": 1,
-          "rhs": 2
+          "dst": 4,
+          "lhs": 2,
+          "rhs": 3
         }
       },
       {
         "JumpIf": {
-          "cond": 3,
+          "cond": 4,
           "target": 5
         }
       },
@@ -393,19 +393,19 @@ expression: actual_json
       {
         "Move": {
           "dst": 0,
-          "src": 3
+          "src": 4
         }
       },
       {
         "LoadStr": {
-          "dst": 4,
+          "dst": 5,
           "pool_index": 0
         }
       },
       {
         "Move": {
           "dst": 0,
-          "src": 4
+          "src": 5
         }
       },
       {
@@ -415,14 +415,14 @@ expression: actual_json
       },
       {
         "LoadStr": {
-          "dst": 5,
+          "dst": 6,
           "pool_index": 1
         }
       },
       {
         "Move": {
           "dst": 0,
-          "src": 5
+          "src": 6
         }
       },
       {
@@ -440,7 +440,7 @@ expression: actual_json
       {
         "entry": 0,
         "arity": 0,
-        "frame_size": 6,
+        "frame_size": 7,
         "name": "main",
         "is_generator": false
       }
@@ -510,7 +510,7 @@ expression: actual_json
     {
       "pass_id": "ir2_to_ir3",
       "input_hash": "sha256:6564f1f31e79d67d8e311dde4006e92be406d8067d6aa05285b8540034c7ba0d",
-      "output_hash": "sha256:b004ecb8303f33b078b7328d265c53930fa833e780521931c0936952ee5a1497",
+      "output_hash": "sha256:70857994adfe927e8a1dc728796f9fa0f0fb2ad05e6c5e1e6f35fa9dc5cd4a63",
       "rollback_token": "sha256:6564f1f31e79d67d8e311dde4006e92be406d8067d6aa05285b8540034c7ba0d",
       "invariant_checks": [
         {
@@ -554,7 +554,7 @@ expression: actual_json
     {
       "pass_id": "ir2_to_ir3",
       "input_hash": "sha256:6564f1f31e79d67d8e311dde4006e92be406d8067d6aa05285b8540034c7ba0d",
-      "output_hash": "sha256:b004ecb8303f33b078b7328d265c53930fa833e780521931c0936952ee5a1497",
+      "output_hash": "sha256:70857994adfe927e8a1dc728796f9fa0f0fb2ad05e6c5e1e6f35fa9dc5cd4a63",
       "input_op_count": 13,
       "output_op_count": 13
     }

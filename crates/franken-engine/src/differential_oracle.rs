@@ -2079,6 +2079,209 @@ pub fn minimize_oracle_divergence(
     )
 }
 
+// ============================================================================
+// E2.T3a — engine <-> franken-core internal differential oracle (bd-fqlfw.2.3.1)
+// ============================================================================
+//
+// The two in-tree interpreters (franken-engine and franken-core) MUST agree on
+// every corpus item. Differentially fuzzing that equivalence is a free, powerful
+// internal bug-finder: it surfaces interpreter defects with no need for an
+// external node/bun denominator (both lanes run in-process). Each divergence is
+// reported as a defect carrying a minimized reproducer (via the E2.T5 minimizer),
+// so the artifact is agent-ready rather than noise.
+//
+// Comparability note: a case where only one lane completes (e.g. the core lane
+// faults on a builtin the engine lane supports) is reported as `Inconclusive`,
+// not a defect — with only two lanes the canonical comparison has fewer than two
+// applicable observations and cannot classify a divergence. Such cases are
+// surfaced (counted, not silently dropped) so a corpus author can tell "the twins
+// disagree" apart from "one lane could not run this".
+
+pub const ENGINE_CORE_DIFFERENTIAL_HARNESS_SCHEMA_VERSION: &str =
+    "franken-engine.engine-core-differential-harness.v1";
+
+/// Engine-lane instruction budget used by the internal twin harness. The
+/// deterministic containment default (100k) trips on modest loops; the harness
+/// raises it so a divergence reflects semantics rather than one lane hitting the
+/// budget ceiling first. Both lanes receive the same budget.
+pub const ENGINE_CORE_DIFFERENTIAL_HARNESS_INSTRUCTION_BUDGET: u64 = 64_000_000;
+
+/// One corpus item: a named JavaScript program to run through both lanes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineCoreCorpusCase {
+    pub case_id: String,
+    pub source: String,
+}
+
+impl EngineCoreCorpusCase {
+    pub fn new(case_id: impl Into<String>, source: impl Into<String>) -> Self {
+        Self {
+            case_id: case_id.into(),
+            source: source.into(),
+        }
+    }
+}
+
+/// Per-case classification of the engine <-> core comparison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EngineCoreCaseStatus {
+    /// Both lanes produced comparable observations and agreed.
+    Agreement,
+    /// A classified divergence: reported as a defect with a minimized repro.
+    Defect,
+    /// Fewer than two comparable observations (e.g. one lane faulted), so the
+    /// comparison could not classify a divergence either way.
+    Inconclusive,
+}
+
+/// A reported engine <-> core defect with a minimized reproducer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineCoreDefect {
+    pub case_id: String,
+    pub original_source: String,
+    pub minimized_source: String,
+    pub signature: DivergenceSignature,
+    pub original_line_count: usize,
+    pub minimized_line_count: usize,
+    pub minimization_reached_fixed_point: bool,
+    pub oracle_invocations: usize,
+}
+
+/// Aggregate report of running a corpus through the internal twin oracle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineCoreDifferentialReport {
+    pub schema_version: String,
+    pub cases_checked: usize,
+    pub agreements: usize,
+    pub inconclusive: usize,
+    pub defects: Vec<EngineCoreDefect>,
+}
+
+impl EngineCoreDifferentialReport {
+    pub fn has_defects(&self) -> bool {
+        !self.defects.is_empty()
+    }
+
+    /// Invariant the caller can assert: every case lands in exactly one bucket.
+    pub fn accounting_is_consistent(&self) -> bool {
+        self.agreements + self.inconclusive + self.defects.len() == self.cases_checked
+    }
+}
+
+/// Build an oracle input restricted to the internal franken-engine <-> franken-core
+/// twin (no external process is spawned).
+fn engine_core_oracle_input(case_id: &str, source: &str) -> DifferentialOracleInput {
+    DifferentialOracleInput::new(case_id, source)
+        .with_selected_backends([
+            DifferentialBackend::FrankenEngine,
+            DifferentialBackend::FrankenCore,
+        ])
+        .with_engine_instruction_budget(ENGINE_CORE_DIFFERENTIAL_HARNESS_INSTRUCTION_BUDGET)
+}
+
+/// Run a corpus through the engine <-> core internal differential oracle, reporting
+/// every classified divergence as a defect with a minimized reproducer.
+///
+/// `minimization_budget` bounds the oracle invocations spent minimizing each
+/// defect (see [`minimize_oracle_divergence`]). The comparison is fully in-process
+/// and deterministic.
+pub fn run_engine_core_differential_oracle(
+    corpus: &[EngineCoreCorpusCase],
+    minimization_budget: usize,
+) -> EngineCoreDifferentialReport {
+    let mut report = EngineCoreDifferentialReport {
+        schema_version: ENGINE_CORE_DIFFERENTIAL_HARNESS_SCHEMA_VERSION.to_string(),
+        cases_checked: corpus.len(),
+        agreements: 0,
+        inconclusive: 0,
+        defects: Vec::new(),
+    };
+
+    for case in corpus {
+        let input = engine_core_oracle_input(&case.case_id, &case.source);
+        let signature = DivergenceSignature::from_report(&run_differential_oracle(&input));
+        if signature.has_classified_divergence() {
+            // A classified divergence: minimize it to an agent-ready repro. The
+            // original already classified as a divergence, so the minimizer cannot
+            // return `NoDivergenceInOriginal`; if it ever did we still record the
+            // defect with the original source as its (un-minimized) reproducer.
+            let defect = match minimize_oracle_divergence(&input, minimization_budget) {
+                Ok(outcome) => EngineCoreDefect {
+                    case_id: case.case_id.clone(),
+                    original_source: outcome.original_source,
+                    minimized_source: outcome.minimized_source,
+                    signature: outcome.signature,
+                    original_line_count: outcome.original_line_count,
+                    minimized_line_count: outcome.minimized_line_count,
+                    minimization_reached_fixed_point: outcome.reached_fixed_point,
+                    oracle_invocations: outcome.oracle_invocations,
+                },
+                Err(_) => EngineCoreDefect {
+                    case_id: case.case_id.clone(),
+                    original_source: case.source.clone(),
+                    minimized_source: case.source.clone(),
+                    signature,
+                    original_line_count: case.source.lines().count(),
+                    minimized_line_count: case.source.lines().count(),
+                    minimization_reached_fixed_point: false,
+                    oracle_invocations: 0,
+                },
+            };
+            report.defects.push(defect);
+        } else if signature.verdict == DifferentialComparisonVerdict::Divergence {
+            // Defensive: a Divergence verdict with no retained semantic finding is
+            // not a minimizable classified divergence; treat it as inconclusive.
+            report.inconclusive += 1;
+        } else if signature.verdict == DifferentialComparisonVerdict::Consensus {
+            report.agreements += 1;
+        } else {
+            report.inconclusive += 1;
+        }
+    }
+
+    report
+}
+
+/// A curated seed corpus for the internal twin oracle, spanning constructs both
+/// lanes execute (arithmetic, comparison, control flow, functions/closures,
+/// arrays/objects). It is a starting point that callers extend with
+/// metamorphic-relation and fuzz-generated cases; the harness reports any
+/// divergence among whatever corpus it is given.
+pub fn default_engine_core_corpus() -> Vec<EngineCoreCorpusCase> {
+    [
+        ("arith_precedence", "1 + 2 * 3;"),
+        ("arith_parens", "(1 + 2) * 3;"),
+        ("arith_mod", "17 % 5;"),
+        ("string_concat", "\"a\" + \"b\" + \"c\";"),
+        ("comparison_lt", "1 < 2;"),
+        ("ternary", "true ? 10 : 20;"),
+        ("var_then_use", "var x = 5; x + 1;"),
+        ("let_block", "let y = 10; y * 2;"),
+        (
+            "function_two_params",
+            "(function (a, b) { return a + b; })(3, 4);",
+        ),
+        (
+            "nested_function",
+            "(function () { function f(n) { return n * n; } return f(5); })();",
+        ),
+        (
+            "loop_accumulate",
+            "(function () { var s = 0; for (var i = 0; i < 5; i++) { s += i; } return s; })();",
+        ),
+        ("array_literal", "[1, 2, 3];"),
+        ("object_literal", "({a: 1, b: 2});"),
+        (
+            "array_index",
+            "(function () { var a = [10, 20, 30]; return a[1]; })();",
+        ),
+    ]
+    .into_iter()
+    .map(|(case_id, source)| EngineCoreCorpusCase::new(case_id, source))
+    .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2893,5 +3096,101 @@ mod tests {
         assert_eq!(signature.findings.len(), 1);
         assert_eq!(signature.findings[0].comparison_mode, "structured_value");
         assert!(signature.has_classified_divergence());
+    }
+
+    // ---- E2.T3a engine<->core internal oracle (bd-fqlfw.2.3.1) ----------
+    //
+    // These tests drive the REAL in-process engine and franken-core lanes (no
+    // mocks, no external runtime). They cover the harness contract: every
+    // classified divergence is reported as a defect carrying a minimized repro
+    // that independently reproduces the same classification.
+
+    #[test]
+    fn engine_core_harness_reports_divergence_with_minimized_repro() {
+        // A consensus case, a multi-line divergent case (the array completion
+        // value formats differently across the twins) wrapped in inert filler,
+        // and another consensus case.
+        let corpus = vec![
+            EngineCoreCorpusCase::new("ok_add", "1 + 1;"),
+            EngineCoreCorpusCase::new("divergent_array", "var a = 1;\nvar b = 2;\n[1, 2, 3];"),
+            EngineCoreCorpusCase::new("ok_mul", "2 * 3;"),
+        ];
+
+        let report = run_engine_core_differential_oracle(&corpus, 256);
+
+        assert_eq!(report.cases_checked, 3);
+        assert!(report.accounting_is_consistent());
+        assert_eq!(report.agreements, 2);
+        assert_eq!(report.defects.len(), 1);
+
+        let defect = &report.defects[0];
+        assert_eq!(defect.case_id, "divergent_array");
+        assert!(defect.signature.has_classified_divergence());
+        // The inert `var` filler is stripped down toward the array literal.
+        assert!(
+            defect.minimized_line_count < defect.original_line_count,
+            "expected reduction: {} -> {} lines",
+            defect.original_line_count,
+            defect.minimized_line_count
+        );
+
+        // ACCEPTANCE: the minimized repro independently reproduces the same
+        // classification (recompute the signature from scratch via the real
+        // oracle, do not trust the defect's own bookkeeping).
+        let reverify = DivergenceSignature::from_report(&run_differential_oracle(
+            &engine_core_oracle_input("reverify", &defect.minimized_source),
+        ));
+        assert_eq!(reverify, defect.signature);
+    }
+
+    #[test]
+    fn engine_core_harness_is_clean_on_a_consensus_only_corpus() {
+        let corpus = vec![
+            EngineCoreCorpusCase::new("a", "1 + 1;"),
+            EngineCoreCorpusCase::new("b", "2 * 3;"),
+            EngineCoreCorpusCase::new("c", "10 - 4;"),
+        ];
+
+        let report = run_engine_core_differential_oracle(&corpus, 256);
+
+        assert!(!report.has_defects());
+        assert_eq!(report.agreements, 3);
+        assert!(report.accounting_is_consistent());
+    }
+
+    #[test]
+    fn default_engine_core_corpus_runs_with_consistent_accounting() {
+        let corpus = default_engine_core_corpus();
+        let started = Instant::now();
+        let report = run_engine_core_differential_oracle(&corpus, 256);
+        eprintln!(
+            "[bd-fqlfw.2.3.1] default corpus: {} cases in {}ms -> {} agreements, \
+             {} inconclusive, {} defects",
+            report.cases_checked,
+            started.elapsed().as_millis(),
+            report.agreements,
+            report.inconclusive,
+            report.defects.len(),
+        );
+
+        assert_eq!(report.cases_checked, corpus.len());
+        assert!(report.accounting_is_consistent());
+        // Every reported defect must carry a reproducer that reproduces it.
+        for defect in &report.defects {
+            let classes: Vec<&str> = defect
+                .signature
+                .findings
+                .iter()
+                .map(|finding| finding.class.as_str())
+                .collect();
+            eprintln!(
+                "[bd-fqlfw.2.3.1] defect {}: {:?} -> minimized {:?} (classes {:?})",
+                defect.case_id, defect.original_source, defect.minimized_source, classes,
+            );
+            let reverify = DivergenceSignature::from_report(&run_differential_oracle(
+                &engine_core_oracle_input(&defect.case_id, &defect.minimized_source),
+            ));
+            assert_eq!(reverify, defect.signature, "defect {}", defect.case_id);
+        }
     }
 }

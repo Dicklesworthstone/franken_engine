@@ -1118,8 +1118,18 @@ fn divergence_evidence_text(
         evidence.push_str(receipt.stderr.as_str());
         evidence.push(' ');
         evidence.push_str(receipt.stdout.as_str());
-        evidence.push(' ');
-        evidence.push_str(receipt.diagnostics.join(" ").as_str());
+        // Lane diagnostics carry a classification signal only when the lane
+        // FAILED (the failure stage: parse / lower / execute, and the engine
+        // error namespace). For a *completed* lane the diagnostics are internal
+        // bookkeeping (route reason, budget overrides, and the franken-core stock
+        // "...parser/lowering/QuickJsLane" path-dependency note) whose stray
+        // keywords would otherwise misclassify a pure value divergence as e.g.
+        // Parser. Excluding completed-lane diagnostics keeps classification a
+        // function of the program's observable behavior (bd-fqlfw.2.3.2).
+        if receipt.status == DifferentialBackendStatus::Failed {
+            evidence.push(' ');
+            evidence.push_str(receipt.diagnostics.join(" ").as_str());
+        }
     }
     evidence.to_ascii_lowercase()
 }
@@ -2784,6 +2794,82 @@ mod tests {
             finding.reference_backends,
             vec![DifferentialBackend::NodeLts, DifferentialBackend::BunStable]
         );
+    }
+
+    #[test]
+    fn classifier_ignores_completed_lane_bookkeeping_diagnostics() {
+        // bd-fqlfw.2.3.2: a pure value divergence between two COMPLETED lanes
+        // must classify as Runtime even though the franken-core lane's stock
+        // path-dependency diagnostic mentions "parser"/"lowering". Bookkeeping
+        // diagnostics on a completed lane must not leak into classification.
+        let receipts = vec![
+            receipt(
+                DifferentialBackend::FrankenEngine,
+                DifferentialBackendStatus::Completed,
+                Some("[1, 2, 3]"),
+                "[1, 2, 3]",
+                "",
+                &["route_reason=default_quickjs_path"],
+            ),
+            receipt(
+                DifferentialBackend::FrankenCore,
+                DifferentialBackendStatus::Completed,
+                Some("1,2,3"),
+                "1,2,3",
+                "",
+                &[
+                    "frankenengine-core path dependency executed in-process through \
+                     parser/lowering/QuickJsLane",
+                ],
+            ),
+        ];
+        let canonicalization = canonicalize_backend_receipts(&receipts);
+        let taxonomy = classify_differential_divergences(&receipts, &canonicalization);
+
+        let finding = taxonomy
+            .findings
+            .iter()
+            .find(|finding| finding.comparison_mode == DifferentialComparisonMode::StructuredValue)
+            .expect("structured value divergence should be classified");
+        assert_eq!(
+            finding.class,
+            DifferentialDivergenceClass::Runtime,
+            "completed-lane bookkeeping must not classify a value divergence as Parser"
+        );
+    }
+
+    #[test]
+    fn classifier_still_reads_failed_lane_stage_diagnostics() {
+        // The complement of the fix: when a lane FAILS, its diagnostics carry the
+        // genuine classification signal (here the failure namespace is only in
+        // the diagnostics, not the stderr) and must still drive the class.
+        let receipts = vec![
+            receipt(
+                DifferentialBackend::NodeLts,
+                DifferentialBackendStatus::Failed,
+                None,
+                "",
+                "Error: boom\n",
+                &[],
+            ),
+            receipt(
+                DifferentialBackend::FrankenEngine,
+                DifferentialBackendStatus::Failed,
+                None,
+                "",
+                "Error: different\n",
+                &["eval.module.resolution_failed"],
+            ),
+        ];
+        let canonicalization = canonicalize_backend_receipts(&receipts);
+        let taxonomy = classify_differential_divergences(&receipts, &canonicalization);
+
+        let finding = taxonomy
+            .findings
+            .iter()
+            .find(|finding| finding.comparison_mode == DifferentialComparisonMode::ExceptionClass)
+            .expect("exception class divergence should be classified");
+        assert_eq!(finding.class, DifferentialDivergenceClass::ModuleResolution);
     }
 
     fn receipt(

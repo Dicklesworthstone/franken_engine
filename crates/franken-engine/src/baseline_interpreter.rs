@@ -60,6 +60,7 @@ use crate::checkpoint::{
 use crate::deterministic_replay::{NondeterminismSource, NondeterminismTrace};
 use crate::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId, derive_id};
 use crate::hash_tiers::ContentHash;
+use crate::algebraic_effects::EffectError;
 use crate::hostcall_effects_migration::{
     create_effect_from_hostcall_tag, create_handler_stack_from_profile_with_host_io,
 };
@@ -4665,11 +4666,32 @@ impl InterpreterCore {
             provider,
             self.host_io_recorder.clone(),
         );
-        let result = stack.handle_effect(effect.as_ref()).map_err(|err| {
-            InterpreterError::InternalError {
-                details: format!("host effect dispatch failed for {capability}: {err}"),
+        let result = match stack.handle_effect(effect.as_ref()) {
+            Ok(result) => result,
+            // bd-656a2 (http leg, denied path): a `net:` egress denied by the
+            // product-layer network policy (the franken_node SSRF gate, layered
+            // on the provider) surfaces here as a handler `CapabilityDenied`. The
+            // denial was ALREADY recorded in the host-effect transcript by the
+            // recorder inside the handler stack (route_host_io records every
+            // request/outcome, including the Err) — that recorded entry IS the
+            // fail-closed DENIED receipt the run --json effect ledger renders. So
+            // it must NOT abort the run as a fatal interpreter error, which would
+            // discard the whole transcript before it is harvested. Surface it as a
+            // fail-closed no-op: the egress did not reach the network, the call
+            // evaluates to `undefined` (slice 1 does not model the async `error`
+            // event a real ClientRequest would emit), and the run completes so the
+            // signed denied receipt is surfaced. Non-`net:` effects (e.g. fs) keep
+            // the prior fatal semantics; only the network policy-deny path, which
+            // a guest can trigger by design, is made non-fatal.
+            Err(EffectError::CapabilityDenied { .. }) if capability.starts_with("net:") => {
+                return Ok(Value::Undefined);
             }
-        })?;
+            Err(err) => {
+                return Err(InterpreterError::InternalError {
+                    details: format!("host effect dispatch failed for {capability}: {err}"),
+                });
+            }
+        };
         Ok(match capability {
             "fs:read" => {
                 // bd-1xl17.d / bd-rul7k: Node parity for `readFileSync`'s return
@@ -34285,6 +34307,91 @@ mod async_runtime_tests_current {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// bd-656a2 (http leg, denied path): when the installed host-I/O provider
+    /// DENIES a `net:request` egress (the franken_node SSRF gate blocking a
+    /// forbidden endpoint, e.g. cloud metadata), the interpreter dispatch must NOT
+    /// abort the run with a fatal error — that would discard the whole host-effect
+    /// transcript before it is harvested into the ledger. Instead it records the
+    /// fail-closed denial in the transcript (the run --json denied receipt) and
+    /// evaluates the call to `undefined`, so the program completes and the signed
+    /// denial is surfaced. fs effects keep their prior fatal-on-error semantics;
+    /// only the guest-triggerable network policy-deny path is made non-fatal.
+    #[test]
+    fn hostcall_net_request_denied_records_and_continues_bd_656a2() {
+        use frankenengine_extension_host::host_io::{
+            HostIoCapability, HostIoError, HostIoOutcome, HostIoProvider, HostIoRequest,
+            HostIoResponse, InMemoryHostIoTranscript,
+        };
+
+        /// A provider that fails every network egress closed (mirrors the SSRF
+        /// gate denying a blocked endpoint) and no-ops fs.
+        #[derive(Debug)]
+        struct DenyNetworkHostIo;
+        impl HostIoProvider for DenyNetworkHostIo {
+            fn name(&self) -> &str {
+                "deny-network"
+            }
+            fn perform(
+                &self,
+                request: &HostIoRequest,
+                _granted: &[HostIoCapability],
+            ) -> HostIoOutcome {
+                match request {
+                    HostIoRequest::NetworkSend { .. } | HostIoRequest::NetworkRecv { .. } => {
+                        Err(HostIoError::Denied {
+                            reason: "ssrf: endpoint blocked by policy".to_string(),
+                        })
+                    }
+                    HostIoRequest::FsRead { .. } => {
+                        Ok(HostIoResponse::FsRead { bytes: Vec::new() })
+                    }
+                    HostIoRequest::FsWrite { .. } => {
+                        Ok(HostIoResponse::FsWrite { bytes_written: 0 })
+                    }
+                }
+            }
+        }
+
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        let mut core = test_interpreter();
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        core.set_host_io(Arc::new(DenyNetworkHostIo), Some(recorder_dyn));
+
+        // reg0 = a blocked endpoint (cloud metadata), as the http.get(url) lowering
+        // forwards it.
+        core.mutate_registers(|r| {
+            r[0] = Value::Str(Arc::from("http://169.254.169.254/latest/meta-data/"));
+        });
+
+        // The denied egress must NOT fault the interpreter: the dispatch returns
+        // `undefined` and the run continues so the transcript can be harvested.
+        let result = core
+            .dispatch_host_io_hostcall("net:request", RegRange { start: 0, count: 1 })
+            .expect("a policy-denied net:request must not abort the run");
+        assert_eq!(
+            result,
+            Value::Undefined,
+            "a denied egress evaluates to undefined (no async error event modeled)"
+        );
+
+        // The denial is recorded as a fail-closed NetworkSend Err — the source of
+        // the ledger's denied receipt.
+        let entries = recorder.recorded_entries();
+        assert_eq!(
+            entries.len(),
+            1,
+            "the denied egress must still be recorded for the ledger"
+        );
+        assert!(
+            matches!(entries[0].0, HostIoRequest::NetworkSend { .. }),
+            "the recorded request is the attempted egress"
+        );
+        assert!(
+            entries[0].1.is_err(),
+            "the recorded outcome must be the fail-closed denial"
+        );
     }
 
     /// bd-rul7k: `decode_fs_read_result` honors the dependency-free single-arg

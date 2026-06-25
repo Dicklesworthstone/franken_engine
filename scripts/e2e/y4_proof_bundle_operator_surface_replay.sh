@@ -75,7 +75,7 @@ main() {
   # Re-verify the valid bundle => verified, exit 0, digest reproduces.
   local rc=0
   bash "${WRAPPER}" verify "${run_dir}/proof_bundle_valid.tar.gz" --via local \
-    --installed-lean 4.9.0 --installed-coq 8.19.2 \
+    --installed-lean 4.7.0 --installed-coq 8.19.2 \
     --json-out "${replay_dir}/verdict_valid.json" \
     --artifact-root "${replay_dir}/runs" >/dev/null 2>&1 || rc=$?
   local rclass rdigest oclass odigest
@@ -93,7 +93,7 @@ main() {
   # Re-verify the tampered bundle => proof_regression, exit 1.
   rc=0
   bash "${WRAPPER}" verify "${run_dir}/proof_bundle_tampered.tar.gz" --via local \
-    --installed-lean 4.9.0 \
+    --installed-lean 4.7.0 \
     --json-out "${replay_dir}/verdict_tampered.json" \
     --artifact-root "${replay_dir}/runs" >/dev/null 2>&1 || rc=$?
   local tclass otclass

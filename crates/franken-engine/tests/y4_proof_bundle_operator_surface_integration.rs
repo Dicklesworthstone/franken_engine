@@ -257,7 +257,7 @@ fn e2e_valid_bundle_verifies_aligned() {
         &root,
         &work,
         &tar,
-        &["--installed-lean", "4.9.0", "--installed-coq", "8.19.2"],
+        &["--installed-lean", "4.7.0", "--installed-coq", "8.19.2"],
     );
     assert_eq!(code, 0, "verified bundle should exit 0; verdict={json}");
     let r = ProofBundleVerificationRecord::from_operator_verdict_json(&json, "v1.0.0", epoch(1))
@@ -277,7 +277,7 @@ fn e2e_real_verdict_feeds_healthy_panel() {
     }
     let work = unique_dir("panel_ok");
     let tar = make_valid_bundle(&root, &work);
-    let (_code, json) = run_wrapper(&root, &work, &tar, &["--installed-lean", "4.9.0"]);
+    let (_code, json) = run_wrapper(&root, &work, &tar, &["--installed-lean", "4.7.0"]);
     let mut panel = ProofBundleStatusPanel::new("ops");
     panel.record(
         ProofBundleVerificationRecord::from_operator_verdict_json(&json, "v1.0.0", epoch(5))
@@ -295,8 +295,8 @@ fn e2e_toolchain_drift_is_advisory() {
     }
     let work = unique_dir("drift");
     let tar = make_valid_bundle(&root, &work);
-    // Bundle pins lean v4.9.0; operator runs v4.7.0 => drift, advisory exit 0.
-    let (code, json) = run_wrapper(&root, &work, &tar, &["--installed-lean", "4.7.0"]);
+    // Bundle pins lean v4.7.0; operator runs v4.6.0 => drift, advisory exit 0.
+    let (code, json) = run_wrapper(&root, &work, &tar, &["--installed-lean", "4.6.0"]);
     assert_eq!(code, 0, "drift is advisory (exit 0); verdict={json}");
     let r = ProofBundleVerificationRecord::from_operator_verdict_json(&json, "v1.0.0", epoch(1))
         .expect("ingest");
@@ -318,7 +318,7 @@ fn e2e_strict_version_promotes_drift_to_exit_2() {
         &root,
         &work,
         &tar,
-        &["--installed-lean", "4.7.0", "--strict-version"],
+        &["--installed-lean", "4.6.0", "--strict-version"],
     );
     assert_eq!(code, 2, "strict drift should exit 2; verdict={json}");
     let r = ProofBundleVerificationRecord::from_operator_verdict_json(&json, "v1.0.0", epoch(1))
@@ -334,12 +334,12 @@ fn e2e_expected_pin_mismatch_is_drift() {
     }
     let work = unique_dir("expmismatch");
     let tar = make_valid_bundle(&root, &work);
-    // Bundle pins v4.9.0 but operator EXPECTED v4.7.0 => expected_mismatch.
+    // Bundle pins v4.7.0 but operator EXPECTED v4.9.0 => expected_mismatch.
     let (code, json) = run_wrapper(
         &root,
         &work,
         &tar,
-        &["--expected-lean", "4.7.0", "--installed-lean", "4.9.0"],
+        &["--expected-lean", "4.9.0", "--installed-lean", "4.7.0"],
     );
     assert_eq!(code, 0);
     let r = ProofBundleVerificationRecord::from_operator_verdict_json(&json, "v1.0.0", epoch(1))
@@ -357,7 +357,7 @@ fn e2e_tampered_bundle_is_proof_regression() {
     let work = unique_dir("tamper");
     let valid = make_valid_bundle(&root, &work);
     let tampered = make_tampered_bundle(&valid, &work);
-    let (code, json) = run_wrapper(&root, &work, &tampered, &["--installed-lean", "4.9.0"]);
+    let (code, json) = run_wrapper(&root, &work, &tampered, &["--installed-lean", "4.7.0"]);
     assert_eq!(
         code, 1,
         "tampered bundle should fail closed (exit 1); verdict={json}"
@@ -381,8 +381,8 @@ fn e2e_regression_drives_panel_compromised() {
     let work = unique_dir("compromised");
     let valid = make_valid_bundle(&root, &work);
     let tampered = make_tampered_bundle(&valid, &work);
-    let (_c1, ok_json) = run_wrapper(&root, &work, &valid, &["--installed-lean", "4.9.0"]);
-    let (_c2, bad_json) = run_wrapper(&root, &work, &tampered, &["--installed-lean", "4.9.0"]);
+    let (_c1, ok_json) = run_wrapper(&root, &work, &valid, &["--installed-lean", "4.7.0"]);
+    let (_c2, bad_json) = run_wrapper(&root, &work, &tampered, &["--installed-lean", "4.7.0"]);
     let mut panel = ProofBundleStatusPanel::new("ops");
     panel.record(
         ProofBundleVerificationRecord::from_operator_verdict_json(&ok_json, "v1.0.0", epoch(1))
@@ -404,8 +404,8 @@ fn e2e_two_releases_mixed_is_drifting() {
     }
     let work = unique_dir("mixed");
     let tar = make_valid_bundle(&root, &work);
-    let (_a, verified) = run_wrapper(&root, &work, &tar, &["--installed-lean", "4.9.0"]);
-    let (_b, drifted) = run_wrapper(&root, &work, &tar, &["--installed-lean", "4.7.0"]);
+    let (_a, verified) = run_wrapper(&root, &work, &tar, &["--installed-lean", "4.7.0"]);
+    let (_b, drifted) = run_wrapper(&root, &work, &tar, &["--installed-lean", "4.6.0"]);
     let panel = ProofBundleStatusPanel::default()
         .with_record(
             ProofBundleVerificationRecord::from_operator_verdict_json(
@@ -484,7 +484,7 @@ fn e2e_verify_extracted_dir_path() {
     // The exporter also stages an unpacked bundle dir at export/bundle/.
     let bundle_dir = work.join("export").join("bundle");
     assert!(bundle_dir.is_dir(), "staged bundle dir should exist");
-    let (code, json) = run_wrapper(&root, &work, &bundle_dir, &["--installed-lean", "4.9.0"]);
+    let (code, json) = run_wrapper(&root, &work, &bundle_dir, &["--installed-lean", "4.7.0"]);
     assert_eq!(code, 0, "dir-path verify should pass; verdict={json}");
     let r = ProofBundleVerificationRecord::from_operator_verdict_json(&json, "v1.0.0", epoch(1))
         .expect("ingest");

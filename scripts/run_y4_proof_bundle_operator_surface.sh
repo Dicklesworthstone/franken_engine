@@ -225,7 +225,7 @@ run_ci() {
 
   # --- PIN 1: round-trip verify ---
   local rc=0
-  run_wrapper "${valid}" "${RUN_DIR}/verdict_valid.json" --installed-lean 4.9.0 --installed-coq 8.19.2 || rc=$?
+  run_wrapper "${valid}" "${RUN_DIR}/verdict_valid.json" --installed-lean 4.7.0 --installed-coq 8.19.2 || rc=$?
   local vclass vdigest
   vclass="$(json_get "${RUN_DIR}/verdict_valid.json" classification)"
   vdigest="$(json_get "${RUN_DIR}/verdict_valid.json" recomputed_recheck_digest)"
@@ -248,7 +248,7 @@ json.dump(proof, open(p, "w"), indent=2, sort_keys=True); open(p, "a").write("\n
   ( cd "${tstage}" && tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 \
       --numeric-owner -czf "${RUN_DIR}/proof_bundle_tampered.tar.gz" "${broot}" )
   rc=0
-  run_wrapper "${RUN_DIR}/proof_bundle_tampered.tar.gz" "${RUN_DIR}/verdict_tampered.json" --installed-lean 4.9.0 || rc=$?
+  run_wrapper "${RUN_DIR}/proof_bundle_tampered.tar.gz" "${RUN_DIR}/verdict_tampered.json" --installed-lean 4.7.0 || rc=$?
   local tclass tfail
   tclass="$(json_get "${RUN_DIR}/verdict_tampered.json" classification)"
   tfail="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("failing_claims",[])))' "${RUN_DIR}/verdict_tampered.json" 2>/dev/null || echo 0)"
@@ -259,13 +259,16 @@ json.dump(proof, open(p, "w"), indent=2, sort_keys=True); open(p, "a").write("\n
   fi
 
   # --- PIN 3: version drift is distinct from regression ---
+  # Bundle pins lean v4.7.0 (ADR-0007); an operator on a different toolchain
+  # (here 4.6.0) drifts. 4.7.0 is now the aligned case, so the drift fixture
+  # must use a non-pin version.
   local drift_ok=1
   rc=0
-  run_wrapper "${valid}" "${RUN_DIR}/verdict_drift.json" --installed-lean 4.7.0 || rc=$?
+  run_wrapper "${valid}" "${RUN_DIR}/verdict_drift.json" --installed-lean 4.6.0 || rc=$?
   local dclass; dclass="$(json_get "${RUN_DIR}/verdict_drift.json" classification)"
   [[ "${rc}" -eq 0 && "${dclass}" == "version_drift" ]] || drift_ok=0
   rc=0
-  run_wrapper "${valid}" "${RUN_DIR}/verdict_strict.json" --installed-lean 4.7.0 --strict-version || rc=$?
+  run_wrapper "${valid}" "${RUN_DIR}/verdict_strict.json" --installed-lean 4.6.0 --strict-version || rc=$?
   local sclass; sclass="$(json_get "${RUN_DIR}/verdict_strict.json" classification)"
   [[ "${rc}" -eq 2 && "${sclass}" == "version_drift" ]] || drift_ok=0
   if [[ "${drift_ok}" -eq 1 ]]; then

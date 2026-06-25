@@ -161,7 +161,7 @@ PY
 record_cmd() { printf '$ %s\n' "$*" >>"${COMMANDS_PATH}"; }
 
 # Detect a host proof-assistant version, best-effort. Echoes a bare semver
-# (e.g. 4.9.0) or empty. Args: <tool> <version-arg>.
+# (e.g. 4.7.0) or empty. Args: <tool> <version-arg>.
 detect_assistant_version() {
   local tool="$1" varg="$2"
   command -v "${tool}" >/dev/null 2>&1 || { printf '' ; return 0; }
@@ -171,8 +171,8 @@ detect_assistant_version() {
   printf '%s' "${out}" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true
 }
 
-# Normalize a pin string to a bare semver. "leanprover/lean4:v4.9.0" -> 4.9.0,
-# "coq-8.19.2" -> 8.19.2, "v4.7.0" -> 4.7.0. Echoes empty if none found.
+# Normalize a pin string to a bare semver. "leanprover/lean4:v4.7.0" -> 4.7.0,
+# "coq-8.19.2" -> 8.19.2, "v4.6.0" -> 4.6.0. Echoes empty if none found.
 normalize_pin() {
   printf '%s' "${1:-}" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true
 }
@@ -555,7 +555,7 @@ run_selftest() {
 
   # 1. valid bundle, aligned toolchain => verified, exit 0.
   local rc=0
-  "$0" verify "${valid}" --via local --installed-lean 4.9.0 --installed-coq 8.19.2 \
+  "$0" verify "${valid}" --via local --installed-lean 4.7.0 --installed-coq 8.19.2 \
     --json-out "${work}/v_verified.json" >/dev/null 2>&1 || rc=$?
   if [[ "${rc}" -eq 0 ]] && grep -q '"classification": "verified"' "${work}/v_verified.json"; then
     echo "[${COMPONENT}] selftest 1/4 verified (aligned)            : PASS"
@@ -564,8 +564,9 @@ run_selftest() {
   fi
 
   # 2. valid bundle, drifted toolchain => version_drift, advisory exit 0.
+  #    Bundle pins v4.7.0, so the drift fixture uses a non-pin version (4.6.0).
   rc=0
-  "$0" verify "${valid}" --via local --installed-lean 4.7.0 \
+  "$0" verify "${valid}" --via local --installed-lean 4.6.0 \
     --json-out "${work}/v_drift.json" >/dev/null 2>&1 || rc=$?
   if [[ "${rc}" -eq 0 ]] && grep -q '"classification": "version_drift"' "${work}/v_drift.json"; then
     echo "[${COMPONENT}] selftest 2/4 version_drift (advisory exit0) : PASS"
@@ -575,7 +576,7 @@ run_selftest() {
 
   # 3. valid bundle, drifted toolchain, --strict-version => exit 2.
   rc=0
-  "$0" verify "${valid}" --via local --installed-lean 4.7.0 --strict-version \
+  "$0" verify "${valid}" --via local --installed-lean 4.6.0 --strict-version \
     --json-out "${work}/v_strict.json" >/dev/null 2>&1 || rc=$?
   if [[ "${rc}" -eq 2 ]] && grep -q '"classification": "version_drift"' "${work}/v_strict.json"; then
     echo "[${COMPONENT}] selftest 3/4 version_drift (strict exit2)   : PASS"
@@ -602,7 +603,7 @@ open(p, "a").write("\n")
   ( cd "${tstage}" && tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 \
       --numeric-owner -czf "${work}/proof_bundle_tampered.tar.gz" "${broot}" )
   rc=0
-  "$0" verify "${work}/proof_bundle_tampered.tar.gz" --via local --installed-lean 4.9.0 \
+  "$0" verify "${work}/proof_bundle_tampered.tar.gz" --via local --installed-lean 4.7.0 \
     --json-out "${work}/v_regression.json" >/dev/null 2>&1 || rc=$?
   if [[ "${rc}" -eq 1 ]] && grep -q '"classification": "proof_regression"' "${work}/v_regression.json"; then
     echo "[${COMPONENT}] selftest 4/4 proof_regression (exit1)       : PASS"

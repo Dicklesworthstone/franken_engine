@@ -4711,6 +4711,15 @@ impl InterpreterCore {
                 }
                 Value::Undefined
             }
+            // bd-656a2 (http leg): `http.get(url)` / `http.request(url)`. The real,
+            // bounded NetworkSend egress effect already ran and was recorded in the
+            // host-effect transcript above (the ledger source the run --json effect
+            // ledger renders). Node's `http.get`/`http.request` return a
+            // ClientRequest object delivered alongside a response via callback/event;
+            // modeling that object + the response readable stream is a follow-up
+            // slice. Slice 1 evaluates the call to `undefined` — only the recorded
+            // host effect is load-bearing for the L1 proof-carrying acceptance bar.
+            "net:request" => Value::Undefined,
             _ => Value::Undefined,
         })
     }
@@ -10181,11 +10190,17 @@ impl InterpreterCore {
                         self.dispatch_timer_hostcall(&capability.0, args)?
                     } else if capability.0.starts_with("builtin:") {
                         self.dispatch_builtin_hostcall(&capability.0, args, Some(module))?
-                    } else if capability.0.starts_with("fs:") {
+                    } else if capability.0.starts_with("fs:") || capability.0.starts_with("net:") {
                         // bd-f5b04.2.7: when a sandboxed host-I/O provider is
                         // installed, dispatch the (already-authorized) fs hostcall
                         // through the algebraic-effects stack to perform a real,
                         // recorded host effect; otherwise it returns undefined.
+                        // bd-656a2: the http leg routes `net:request` (emitted by
+                        // the JS http.get/http.request lowering) through the SAME
+                        // seam — it performs+records a real NetworkSend host effect
+                        // via the sandboxed provider's network mechanism. The gate
+                        // above (`check_hostcall_capability_gate`) has already
+                        // authorized it against the granted NetworkEgress capability.
                         self.dispatch_host_io_hostcall(&capability.0, args)?
                     } else {
                         // Non-promise hostcalls return undefined in baseline.
@@ -34150,7 +34165,8 @@ mod async_runtime_tests_current {
             r[0] = Value::Str(Arc::from("real.txt"));
             r[1] = Value::Str(Arc::from("bogus-encoding"));
         });
-        let bad_encoding = core.dispatch_host_io_hostcall("fs:read", RegRange { start: 0, count: 2 });
+        let bad_encoding =
+            core.dispatch_host_io_hostcall("fs:read", RegRange { start: 0, count: 2 });
         assert!(
             matches!(bad_encoding, Err(InterpreterError::TypeError { .. })),
             "fs:read with an unknown encoding must throw TypeError, got {bad_encoding:?}"
@@ -34173,6 +34189,99 @@ mod async_runtime_tests_current {
             bare_result,
             Value::Undefined,
             "no provider installed => fail-closed undefined"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// bd-656a2 (http leg): when a sandboxed host-I/O provider is installed, the
+    /// interpreter's `net:request` hostcall dispatch (emitted by the JS
+    /// http.get/http.request lowering) performs and records a REAL network egress
+    /// host effect — it opens a TCP connection to the URL's `host:port`, writes a
+    /// framed HTTP/1.1 GET request, and appends the `NetworkSend` to the host-I/O
+    /// transcript (the ledger source). Verified against an in-process loopback
+    /// listener that observes the request bytes on the wire.
+    #[test]
+    fn hostcall_net_request_dispatch_performs_real_egress_bd_656a2() {
+        use frankenengine_extension_host::host_io::{
+            HostIoRequest, InMemoryHostIoTranscript, SandboxedHostIo,
+        };
+        use std::io::Read;
+        use std::time::Duration;
+
+        // A loopback listener stands in for the remote endpoint; capture the bytes
+        // the egress writes so the test proves a real request crossed the socket.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("listener addr");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _peer) = listener.accept().expect("accept egress connection");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("server read timeout");
+            let mut buf = vec![0u8; 256];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            buf.truncate(n);
+            buf
+        });
+
+        // The sandboxed provider needs a real root for its fs arms; the network
+        // arm ignores it. Use a unique scratch dir like the fs dispatch test.
+        let mut root = std::env::temp_dir();
+        root.push(format!("frankenengine_interp_net_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        let mut core = test_interpreter();
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        core.set_host_io(provider, Some(recorder_dyn));
+
+        // reg0 = the URL operand, exactly as the http.get(url) lowering forwards it.
+        let url = format!("http://{addr}/");
+        core.mutate_registers(|r| {
+            r[0] = Value::Str(Arc::from(url.as_str()));
+        });
+
+        // The dispatch returns `undefined` (slice 1 does not model ClientRequest),
+        // but the egress is real and recorded.
+        let result = core
+            .dispatch_host_io_hostcall("net:request", RegRange { start: 0, count: 1 })
+            .expect("net:request dispatch");
+        assert_eq!(
+            result,
+            Value::Undefined,
+            "http.get/request slice 1 evaluates to undefined"
+        );
+
+        let received = server.join().expect("server thread");
+        let wire = String::from_utf8_lossy(&received);
+        assert!(
+            wire.starts_with("GET / HTTP/1.1\r\n"),
+            "the loopback server must have received a framed HTTP/1.1 GET, got {wire:?}"
+        );
+        assert!(
+            wire.contains(&format!("Host: {addr}\r\n")),
+            "the request must carry the Host header for the endpoint, got {wire:?}"
+        );
+
+        // The egress landed in the host-effect transcript as a NetworkSend (the
+        // proof-carrying ledger entry the L1 http.request subject is built from).
+        let entries = recorder.recorded_entries();
+        assert_eq!(entries.len(), 1, "exactly one host effect recorded");
+        match &entries[0].0 {
+            HostIoRequest::NetworkSend { endpoint, .. } => {
+                assert_eq!(
+                    endpoint,
+                    &addr.to_string(),
+                    "endpoint resolves to host:port"
+                );
+            }
+            other => panic!("expected a NetworkSend host effect, got {other:?}"),
+        }
+        assert!(
+            entries[0].1.is_ok(),
+            "the recorded egress outcome must be a successful send"
         );
 
         let _ = std::fs::remove_dir_all(&root);

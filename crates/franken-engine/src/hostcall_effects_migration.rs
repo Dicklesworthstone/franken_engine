@@ -348,11 +348,15 @@ impl FullCapsHandler {
                         reason: "Expected (url, method, headers, body) network parameters"
                             .to_string(),
                     })?;
-                let (url, _method, _headers, body) = *params;
-                Ok(HostIoRequest::NetworkSend {
-                    endpoint: url,
-                    payload: body.unwrap_or_default(),
-                })
+                let (url, method, headers, body) = *params;
+                // bd-656a2: turn the semantic http intent (url + method + headers
+                // + body) into the raw wire request the network mechanism sends.
+                // The url is split into a concrete `host:port` connect endpoint
+                // (so `SandboxedHostIo::connect`'s `to_socket_addrs` can resolve
+                // it) and an HTTP/1.1 request line + Host header + body payload.
+                let (endpoint, payload) =
+                    http_request_to_wire(&url, &method, &headers, body.as_deref());
+                Ok(HostIoRequest::NetworkSend { endpoint, payload })
             }
             other => Err(EffectError::InvalidParameters {
                 effect_name: other.to_string(),
@@ -755,6 +759,54 @@ pub fn create_handler_stack_from_profile_with_host_io(
 ///
 /// This function provides compatibility with the existing hostcall dispatch system
 /// by converting hostcall tags and parameters to the new Effect types.
+/// bd-656a2: serialize a semantic http request (`url` + `method` + `headers` +
+/// optional `body`) into the raw bytes the network mechanism writes to the
+/// socket, plus the concrete `host:port` endpoint to connect to.
+///
+/// This is deliberately a minimal, dependency-free HTTP/1.1 request builder
+/// (the engine has no http/url crate): it strips a leading `http://`/`https://`
+/// scheme, splits the remainder into an authority (`host[:port]`) and a request
+/// path (defaulting to `/`), defaults the port to 80 when the authority omits
+/// one, and emits `"<METHOD> <path> HTTP/1.1\r\nHost: <authority>\r\n"` followed
+/// by any caller-supplied headers, the blank-line terminator, and the body. The
+/// product layer (`franken_node`) owns SSRF policy and must authorize the
+/// endpoint BEFORE this effect is issued — this function performs no policy
+/// check, only framing.
+fn http_request_to_wire(
+    url: &str,
+    method: &str,
+    headers: &[(String, String)],
+    body: Option<&[u8]>,
+) -> (String, Vec<u8>) {
+    let rest = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+        .unwrap_or(url);
+    let (authority, path) = match rest.find('/') {
+        Some(idx) => (&rest[..idx], &rest[idx..]),
+        None => (rest, "/"),
+    };
+    let endpoint = if authority.contains(':') {
+        authority.to_string()
+    } else {
+        format!("{authority}:80")
+    };
+    let request_target = if path.is_empty() { "/" } else { path };
+    let mut request = format!("{method} {request_target} HTTP/1.1\r\nHost: {authority}\r\n");
+    for (name, value) in headers {
+        request.push_str(name);
+        request.push_str(": ");
+        request.push_str(value);
+        request.push_str("\r\n");
+    }
+    request.push_str("\r\n");
+    let mut payload = request.into_bytes();
+    if let Some(body) = body {
+        payload.extend_from_slice(body);
+    }
+    (endpoint, payload)
+}
+
 pub fn create_effect_from_hostcall_tag(
     tag: &str,
     args: &[String],
@@ -824,6 +876,26 @@ pub fn create_effect_from_hostcall_tag(
             let effect = ModuleHostcallEffect {
                 module_path,
                 import_type,
+            };
+            Ok(Box::new(effect))
+        }
+        // bd-656a2: the http leg. The JS `http.get(url)` / `http.request(url)`
+        // lowering (CJS require-binding/inline form, mirror of the fs lowering)
+        // emits a `net:request` HostCall carrying the URL as arg[0]. Slice 1 is
+        // the GET egress (`http.get` and the default `http.request` method are
+        // GET); request bodies, options objects, callbacks, the ClientRequest/
+        // response objects, `fetch`, and ESM `http` imports are follow-up slices.
+        // The URL is turned into a concrete `host:port` endpoint plus an HTTP/1.1
+        // request payload at the effect->HostIoRequest boundary
+        // (`host_io_request_from_effect`), keeping this builder a pure semantic
+        // intent carrier.
+        tag if tag.starts_with("net:") => {
+            let url = args.first().cloned().unwrap_or_default();
+            let effect = NetworkHostcallEffect {
+                url,
+                method: "GET".to_string(),
+                headers: Vec::new(),
+                body: None,
             };
             Ok(Box::new(effect))
         }
@@ -971,6 +1043,73 @@ mod tests {
         ) -> Result<HostIoResponse, HostIoError> {
             panic!("provider must not be called in replay mode");
         }
+    }
+
+    /// bd-656a2 (http leg): the `net:request` hostcall tag (emitted by the JS
+    /// http.get/http.request lowering) builds a `hostcall:network` effect that
+    /// round-trips through `host_io_request_from_effect` to a concrete
+    /// `host:port` NetworkSend carrying a framed HTTP/1.1 GET request.
+    #[test]
+    fn create_effect_from_net_request_tag_builds_network_effect_bd_656a2() {
+        let effect =
+            create_effect_from_hostcall_tag("net:request", &["http://example.test/p".to_string()])
+                .expect("net:request tag must build a network effect");
+        assert_eq!(effect.effect_name(), "hostcall:network");
+        let request = FullCapsHandler::host_io_request_from_effect(effect.as_ref())
+            .expect("network effect must map to a HostIoRequest");
+        match request {
+            HostIoRequest::NetworkSend { endpoint, payload } => {
+                assert_eq!(
+                    endpoint, "example.test:80",
+                    "url with no port must default to :80 and strip the path"
+                );
+                let wire = String::from_utf8(payload).expect("ascii request line");
+                assert!(
+                    wire.starts_with("GET /p HTTP/1.1\r\n"),
+                    "request line must target the path: {wire:?}"
+                );
+                assert!(
+                    wire.contains("Host: example.test\r\n"),
+                    "Host header must carry the authority: {wire:?}"
+                );
+            }
+            other => panic!("expected NetworkSend, got {other:?}"),
+        }
+    }
+
+    /// bd-656a2: unit coverage for the dependency-free HTTP/1.1 wire builder —
+    /// scheme stripping, default port/path, header emission, and body framing.
+    #[test]
+    fn http_request_to_wire_defaults_and_framing_bd_656a2() {
+        // explicit port + multi-segment path are preserved verbatim.
+        let (endpoint, payload) =
+            http_request_to_wire("http://127.0.0.1:8080/a/b", "GET", &[], None);
+        assert_eq!(endpoint, "127.0.0.1:8080");
+        let wire = String::from_utf8(payload).unwrap();
+        assert!(wire.starts_with("GET /a/b HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n"));
+
+        // no scheme and no path -> default port 80 and default request target "/".
+        let (endpoint, payload) = http_request_to_wire("example.test", "GET", &[], None);
+        assert_eq!(endpoint, "example.test:80");
+        let wire = String::from_utf8(payload).unwrap();
+        assert!(wire.starts_with("GET / HTTP/1.1\r\nHost: example.test\r\n"));
+
+        // caller headers are emitted and the body follows the blank-line terminator.
+        let (_endpoint, payload) = http_request_to_wire(
+            "http://h:1/",
+            "POST",
+            &[("X-T".to_string(), "1".to_string())],
+            Some(b"hi"),
+        );
+        let wire = String::from_utf8(payload).unwrap();
+        assert!(
+            wire.contains("X-T: 1\r\n"),
+            "header must be framed: {wire:?}"
+        );
+        assert!(
+            wire.ends_with("\r\n\r\nhi"),
+            "body follows terminator: {wire:?}"
+        );
     }
 
     #[test]

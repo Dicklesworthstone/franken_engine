@@ -150,8 +150,13 @@ impl RuntimeCapability {
             "builtin" => Some(Self::Builtin),
 
             // Short aliases used in IR / tests
-            "network" | "net" | "net:connect" | "net:fetch" | "net:outbound" | "net.write"
-            | "network.write" => Some(Self::NetworkEgress),
+            // bd-656a2: `net:request` is the tag emitted by the JS http.get/
+            // http.request lowering (the http leg of the proof-carrying host
+            // effect producer); it maps to the same NetworkEgress capability as
+            // the other short network aliases so the hostcall gate authorizes it
+            // only when network egress was granted on the run path.
+            "network" | "net" | "net:connect" | "net:fetch" | "net:outbound" | "net:request"
+            | "net.write" | "network.write" => Some(Self::NetworkEgress),
             "fs" | "fs:read" | "fs.read" => Some(Self::FsRead),
             "fs:write" | "fs.write" => Some(Self::FsWrite),
             "module:require" | "module:import" | "module.import" => Some(Self::ModuleLoad),

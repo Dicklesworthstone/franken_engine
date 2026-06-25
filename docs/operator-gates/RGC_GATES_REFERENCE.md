@@ -3298,4 +3298,110 @@ byte-identical correctness-verdict hash while allowing wall-clock timing to vary
 the strict third-party verifier deliberately rejects; they are covered by
 `scripts/run_e2_denominator_bundle_gate.sh` and are out of scope here.
 
+## Reproducibility verifier (third-party) (bd-cixqu.14.4, Track N N.4)
+
+The N.3 gate above proves the *corpus* is universally verifier-consumable. N.4 is
+the operator/auditor surface for verifying a *single* published bundle and
+diagnosing *why* a replay diverged. It composes two scripts over the N.2 single
+source of truth (`scripts/third_party_repro_lock_verifier.sh`):
+
+- `runbooks/scripts/run_third_party_verifier.sh` — re-checks one claim-evidence
+  bundle (the N.1 triple `env.json` + `manifest.json` + `repro.lock`) and emits a
+  typed verdict (`franken-engine.third-party-verifier-operator-verdict.v1`).
+- `runbooks/scripts/diagnose_env_drift.sh` — diffs a recorded `env.json` against
+  the replay host and classifies every difference as platform / toolchain /
+  dependency drift (`franken-engine.env-drift-diagnosis.v1`).
+
+The public auditor walkthrough is [`docs/THIRD_PARTY_VERIFICATION.md`](../THIRD_PARTY_VERIFICATION.md);
+the verifier toolkit reference is [`docs/THIRD_PARTY_VERIFIER_TOOLKIT.md`](../THIRD_PARTY_VERIFIER_TOOLKIT.md).
+
+### Running the verifier
+
+```bash
+# Verify a published bundle directory (auto-diagnoses env drift against this host).
+runbooks/scripts/run_third_party_verifier.sh verify docs/evidence/FE-CLAIM-001
+
+# Verify a bare repro.lock (no triple-completeness requirement).
+runbooks/scripts/run_third_party_verifier.sh verify path/to/repro.lock --no-diagnose
+
+# Actually re-run the locked replay commands (needs cargo/rch); default is plan-only.
+runbooks/scripts/run_third_party_verifier.sh verify docs/evidence/FE-CLAIM-001 --execute
+
+# Prove every classification without an engine build.
+runbooks/scripts/run_third_party_verifier.sh selftest
+```
+
+Reconciliation note: N.2 shipped as a *scripted* verifier environment, not a
+pre-built docker image (the only clean-room image in the repo is Y.2's). So the
+default path (`--via local`) runs the scripted verifier directly. For hermetic
+isolation an auditor can supply their own pinned base image:
+
+```bash
+runbooks/scripts/run_third_party_verifier.sh verify docs/evidence/FE-CLAIM-001 \
+  --via docker --image <pinned-image-with-bash+jq>
+```
+
+Both paths invoke the *identical* N.2 checker, so a verdict can never fork between
+them. The docker path is plan-only (a clean room has no cargo/rch).
+
+Classifications and exit codes:
+
+- `verified` (exit 0) — the lock validated (plan-only) or replayed to its expected
+  outcome (`--execute`); environment aligned or drift suppressed. Safe.
+- `env_drift` (exit 0 advisory, exit 2 under `--strict-drift`) — the lock still
+  validates, but the recorded `env.json` differs from the replay host. Reproduce
+  on a matching environment before concluding.
+- `verification_failed` (exit 1, fail-closed) — the verifier rejected the lock or
+  a replay command failed. The artifact is NOT verified; escalate to maintainers.
+- `bundle_incomplete` (exit 1) — the N.1 triple is missing a member. Re-export the
+  bundle. (`3` is CLI/environment error: missing target, docker requested without
+  an image, etc.)
+
+### Pinning a repro.lock from a published artifact
+
+A published bundle ships its own `repro.lock`; pin it by content hash so a later
+re-verify proves you re-checked the *same* lock the release published:
+
+```bash
+# Record the lock's content hash (length-prefixed canonical hashing is internal;
+# the file hash is the operator-facing pin).
+sha256sum docs/evidence/FE-CLAIM-001/repro.lock
+
+# The lock's own provenance: schema, source commit, and command sequence.
+jq '{schema_version, source_commit, replay}' docs/evidence/FE-CLAIM-001/repro.lock
+```
+
+The operator verdict echoes `lock_schema_version` and `source_commit` so the pin
+is captured in the run bundle (`artifacts/third_party_verifier_operator/<ts>/`).
+
+### Interpreting env.json drift (recorded vs replayed)
+
+When `run_third_party_verifier.sh` reports `env_drift`, run the diagnostician for
+the field-level breakdown:
+
+```bash
+# Diff the recorded env against the live host (add --lock for input-hash drift).
+runbooks/scripts/diagnose_env_drift.sh diagnose \
+  --recorded docs/evidence/FE-CLAIM-001/env.json \
+  --lock docs/evidence/FE-CLAIM-001/repro.lock
+
+# Compare two recorded snapshots (e.g. two published releases) — hermetic.
+runbooks/scripts/diagnose_env_drift.sh diagnose \
+  --recorded release-a/env.json --current release-b/env.json
+```
+
+The three drift classes, and what each means for a divergent replay:
+
+| Drift class | Fields compared | What a divergence means |
+|---|---|---|
+| **platform drift** | `host.architecture` (CPU), `host.kernel`, `host.os_version`, `host.platform` | The replay ran on a different machine class. Platform-sensitive outputs may legitimately differ; reproduce on a matching platform. |
+| **toolchain drift** | `toolchain.cargo_version`, `toolchain.rust_version`, `toolchain.rustc_target` | The Rust toolchain differs. Pin the recorded toolchain before concluding the artifact regressed. |
+| **dependency drift** | `project.commit`; with `--lock`, the locked `inputs.primary_artifact.hash` and the presence of every declared dependency file | The *inputs* differ. A divergent replay is expected, not a regression. |
+
+Only when all three class counts are zero (`verdict: aligned`) does a divergent
+verify implicate the artifact/claim itself rather than the environment. Per
+bd-cixqu.45 both scripts write content-addressed run bundles
+(`artifacts/{third_party_verifier_operator,env_drift_diagnosis}/<ts>/` with
+`events.jsonl`, `commands.txt`, the typed verdict, and `run_manifest.json`).
+
 ## Limitations

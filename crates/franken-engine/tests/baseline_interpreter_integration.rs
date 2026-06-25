@@ -196,6 +196,31 @@ fn assert_both_builtin_lanes_value(module: &Ir3Module, expected: Value, label: &
     assert_eq!(v8.value, expected, "v8 mismatch for {label}");
 }
 
+fn assert_lane_range_error(
+    result: Result<ExecutionResult, InterpreterError>,
+    lane: &str,
+    label: &str,
+) {
+    match result {
+        Err(InterpreterError::RangeError { message }) => {
+            assert!(
+                !message.is_empty(),
+                "{lane} RangeError message was empty for {label}"
+            );
+        }
+        Err(err) => panic!("{lane} should throw RangeError for {label}, got {err:?}"),
+        Ok(result) => panic!(
+            "{lane} should throw RangeError for {label}, returned {:?}",
+            result.value
+        ),
+    }
+}
+
+fn assert_both_builtin_lanes_range_error(module: &Ir3Module, label: &str) {
+    assert_lane_range_error(qjs_run_with_builtin(module), "quickjs", label);
+    assert_lane_range_error(v8_run_with_builtin(module), "v8", label);
+}
+
 fn call_builtin_math_random(dst: u32) -> Ir3Instruction {
     Ir3Instruction::HostCall {
         capability: CapabilityTag("builtin:MathRandom".to_string()),
@@ -207,6 +232,30 @@ fn call_builtin_math_random(dst: u32) -> Ir3Instruction {
 fn call_builtin_number_to_string(dst: u32) -> Ir3Instruction {
     Ir3Instruction::HostCall {
         capability: CapabilityTag("builtin:NumberPrototypeToString".to_string()),
+        args: RegRange { start: 0, count: 2 },
+        dst,
+    }
+}
+
+fn call_builtin_number_to_fixed(dst: u32) -> Ir3Instruction {
+    Ir3Instruction::HostCall {
+        capability: CapabilityTag("builtin:NumberPrototypeToFixed".to_string()),
+        args: RegRange { start: 0, count: 2 },
+        dst,
+    }
+}
+
+fn call_builtin_number_to_exponential(dst: u32) -> Ir3Instruction {
+    Ir3Instruction::HostCall {
+        capability: CapabilityTag("builtin:NumberPrototypeToExponential".to_string()),
+        args: RegRange { start: 0, count: 2 },
+        dst,
+    }
+}
+
+fn call_builtin_number_to_precision(dst: u32) -> Ir3Instruction {
+    Ir3Instruction::HostCall {
+        capability: CapabilityTag("builtin:NumberPrototypeToPrecision".to_string()),
         args: RegRange { start: 0, count: 2 },
         dst,
     }
@@ -10635,10 +10684,66 @@ fn number_to_string_invalid_radix_handling() {
             call_builtin_number_to_string(2),
             Ir3Instruction::Return { value: 2 },
         ]);
-        assert_both_builtin_lanes_value(
+        assert_both_builtin_lanes_range_error(
             &module,
-            Value::str("RangeError"),
             &format!("Number.toString invalid radix {radix}"),
+        );
+    }
+}
+
+#[test]
+fn number_to_fixed_invalid_digits_throw_range_error() {
+    for digits in [-1, 101] {
+        let module = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 42 },
+            Ir3Instruction::LoadInt {
+                dst: 1,
+                value: digits,
+            },
+            call_builtin_number_to_fixed(2),
+            Ir3Instruction::Return { value: 2 },
+        ]);
+        assert_both_builtin_lanes_range_error(
+            &module,
+            &format!("Number.toFixed invalid digits {digits}"),
+        );
+    }
+}
+
+#[test]
+fn number_to_exponential_invalid_fraction_digits_throw_range_error() {
+    for digits in [-1, 101] {
+        let module = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 42 },
+            Ir3Instruction::LoadInt {
+                dst: 1,
+                value: digits,
+            },
+            call_builtin_number_to_exponential(2),
+            Ir3Instruction::Return { value: 2 },
+        ]);
+        assert_both_builtin_lanes_range_error(
+            &module,
+            &format!("Number.toExponential invalid fractionDigits {digits}"),
+        );
+    }
+}
+
+#[test]
+fn number_to_precision_invalid_precision_throw_range_error() {
+    for precision in [0, 101] {
+        let module = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 42 },
+            Ir3Instruction::LoadInt {
+                dst: 1,
+                value: precision,
+            },
+            call_builtin_number_to_precision(2),
+            Ir3Instruction::Return { value: 2 },
+        ]);
+        assert_both_builtin_lanes_range_error(
+            &module,
+            &format!("Number.toPrecision invalid precision {precision}"),
         );
     }
 }

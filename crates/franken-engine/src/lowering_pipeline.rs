@@ -622,6 +622,17 @@ pub fn lower_ir0_to_ir1(
     for (local, capability) in confirmed_fs_named_imports(&ir0.tree.body) {
         binding_lookup.insert(fs_named_import_sentinel(&local, capability), 0);
     }
+    // bd-rmaze: destructured CJS sync-fs requires
+    // (`const { readFileSync } = require('fs')`) record each destructured local
+    // as the SAME named-import sentinel as the ESM named form, so the direct-call
+    // recognizer (`fs_named_import_call_capability`) + the named-import dispatch
+    // (which disambiguates the sync `readFileSync` from the async-callback
+    // `readFile` on the trailing closure) handle their call sites unchanged; the
+    // declaration itself is elided to undefined bindings. Usage-gated like every
+    // other fs form.
+    for (local, capability) in confirmed_fs_destructured_requires(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(fs_named_import_sentinel(&local, capability), 0);
+    }
     // bd-1xl17.c: fs/promises named imports (`import { readFile } from
     // 'node:fs/promises'`) used as direct calls get their own capability-encoding
     // sentinel consumed by `fs_promises_named_import_call_capability`, which lowers
@@ -2158,9 +2169,20 @@ fn lower_statement_to_ir1_with_flow(
                 // elided require would have). Uses `Discard` (not `Pop`) per the
                 // empty-completion contract so it never clobbers register 0.
                 // Mirrors the ESM named-import elision (bd-1xl17.b/.c).
+                // bd-rmaze: the same elision covers destructured *synchronous* fs
+                // requires — `const { readFileSync } = require('fs')` (incl. the
+                // async-callback `readFile`) — via `confirmed_fs_destructure_locals`;
+                // their direct calls are recognized at the call sites by
+                // `fs_named_import_call_capability`. The fs/promises shape is tried
+                // first; `const { promises } = require('fs')` is NOT an
+                // `fs_named_import_sentinel`, so the sync helper returns `None` for
+                // it and the fs/promises branch handles it.
                 if let Some(init) = &d.initializer
                     && let Some(locals) =
                         confirmed_fs_promises_destructure_locals(&d.pattern, init, binding_lookup)
+                            .or_else(|| {
+                                confirmed_fs_destructure_locals(&d.pattern, init, binding_lookup)
+                            })
                 {
                     for local in &locals {
                         if let Some(&local_bid) = binding_lookup.get(local) {
@@ -12295,6 +12317,111 @@ fn confirmed_fs_named_imports(body: &[Statement]) -> BTreeMap<String, &'static s
         .collect()
 }
 
+/// bd-rmaze: confirmed *destructured CJS* sync-fs requires — `const {
+/// readFileSync[, writeFileSync, readFile, writeFile] } = require('fs')` (incl.
+/// `{ readFileSync: rd }` renames) whose destructured local is used as a direct
+/// call `<local>(...)` at a top-level program position. Returns a map local-name
+/// -> fs capability ("fs:read"/"fs:write"). The CJS-destructure analogue of
+/// [`confirmed_fs_named_imports`] (the ESM named import) — both record the same
+/// [`fs_named_import_sentinel`], so the shared direct-call recognizer
+/// [`fs_named_import_call_capability`] + the named-import dispatch (which already
+/// disambiguates the sync `readFileSync` from the async-callback `readFile` on
+/// the trailing closure) handle the call sites unchanged. Mirrors
+/// [`confirmed_fs_promises_destructured_requires`] for the synchronous module.
+/// Usage-gated: a bare/unused destructured require is not recorded and keeps the
+/// ambient-authority denial of `require('fs')`.
+fn confirmed_fs_destructured_requires(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeMap<String, &'static str> {
+    let mut candidates: BTreeMap<String, &'static str> = BTreeMap::new();
+    for stmt in body {
+        if let Statement::VariableDeclaration(vd) = stmt {
+            for d in &vd.declarations {
+                let (Some(init), BindingPattern::ObjectPattern(props)) = (&d.initializer, &d.pattern)
+                else {
+                    continue;
+                };
+                if !is_require_fs_module_initializer(init, binding_lookup) {
+                    continue;
+                }
+                for prop in props {
+                    if prop.computed {
+                        continue;
+                    }
+                    let capability = match &prop.key {
+                        Expression::Identifier(name) | Expression::StringLiteral(name) => {
+                            match name.as_str() {
+                                // sync forms
+                                "readFileSync" => "fs:read",
+                                "writeFileSync" => "fs:write",
+                                // async callback forms — same fs: capability; the
+                                // trailing callback closure is detected at dispatch.
+                                "readFile" => "fs:read",
+                                "writeFile" => "fs:write",
+                                _ => continue,
+                            }
+                        }
+                        _ => continue,
+                    };
+                    if let BindingPattern::Identifier(local) = &prop.value {
+                        candidates.insert(local.clone(), capability);
+                    }
+                }
+            }
+        }
+    }
+    candidates
+        .into_iter()
+        .filter(|(local, _)| {
+            body_top_level_expr_matches(body, &|e| {
+                expr_contains_matching_call(e, &|c| is_fs_named_callee(c, local))
+            })
+        })
+        .collect()
+}
+
+/// bd-rmaze: if `pattern`/`init` form a confirmed *destructured* sync-fs require
+/// (`const { readFileSync } = require('fs')`), return the simple-identifier local
+/// names to bind to `undefined` (eliding the faulting `require('fs')` load and
+/// the property extraction; there is no real fs module object). Gated on at least
+/// one local having been confirmed at the program pre-scan (recorded as an
+/// [`fs_named_import_sentinel`]). Returns `None` for any non-plain pattern
+/// (rest/nested/computed targets) or when no local is confirmed, leaving the
+/// existing ambient-denial path intact. Unconfirmed sibling locals in a confirmed
+/// declaration are still bound to `undefined` (fail-closed: invoking one faults,
+/// exactly as the elided require would have). The synchronous analogue of
+/// [`confirmed_fs_promises_destructure_locals`] (whose `const { promises } =
+/// require('fs')` shape this defers to — a `promises` local is not an
+/// `fs_named_import_sentinel`, so this returns `None` for it).
+fn confirmed_fs_destructure_locals(
+    pattern: &BindingPattern,
+    init: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<Vec<String>> {
+    let BindingPattern::ObjectPattern(props) = pattern else {
+        return None;
+    };
+    if !is_require_fs_module_initializer(init, binding_lookup) {
+        return None;
+    }
+    let mut locals = Vec::new();
+    let mut any_confirmed = false;
+    for prop in props {
+        if prop.computed {
+            return None;
+        }
+        let BindingPattern::Identifier(local) = &prop.value else {
+            return None;
+        };
+        let confirmed = binding_lookup.contains_key(&fs_named_import_sentinel(local, "fs:read"))
+            || binding_lookup.contains_key(&fs_named_import_sentinel(local, "fs:write"));
+        any_confirmed |= confirmed;
+        locals.push(local.clone());
+    }
+    any_confirmed.then_some(locals)
+}
+
 /// Recognize a direct call to an fs *named import* — `readFileSync(path)` /
 /// `writeFileSync(path, data)` brought in by `import { ... } from 'node:fs'`
 /// (bd-1xl17.b) — and return its `fs:` hostcall capability. The local name
@@ -16107,6 +16234,93 @@ mod tests {
         assert!(
             lower_ir0_to_ir1(&ir0).is_err(),
             "an unconfirmed destructured fs/promises require must keep the ambient-authority denial"
+        );
+    }
+
+    /// bd-rmaze (CJS destructured sync fs): `const { readFileSync } =
+    /// require('fs'); readFileSync(path)` lowers to an fs:read host effect. The
+    /// destructured local reuses the named-import direct-call recognizer;
+    /// successful lowering (no ambient-denial panic) also proves the
+    /// `require('fs')` load was elided.
+    #[test]
+    fn cjs_fs_destructured_readsync_lowers_bd_rmaze() {
+        let ops = lower_script_source_ops(
+            "const { readFileSync } = require('fs');\n\
+             readFileSync('out.txt');\n",
+            "cjs_fs_destructured_readsync.js",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "fs:read"),
+            "destructured sync readFileSync must lower to an fs:read host effect"
+        );
+    }
+
+    /// bd-rmaze: `const { writeFileSync } = require('fs'); writeFileSync(path,
+    /// data)` lowers to an fs:write host effect.
+    #[test]
+    fn cjs_fs_destructured_writesync_lowers_bd_rmaze() {
+        let ops = lower_script_source_ops(
+            "const { writeFileSync } = require('fs');\n\
+             writeFileSync('out.txt', 'bytes');\n",
+            "cjs_fs_destructured_writesync.js",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "fs:write"),
+            "destructured sync writeFileSync must lower to an fs:write host effect"
+        );
+    }
+
+    /// bd-rmaze (CJS destructured ASYNC callback fs): `const { readFile } =
+    /// require('fs'); readFile(path, cb)` reuses the same fs:read host effect as
+    /// the sync form — the trailing callback closure is detected at dispatch. This
+    /// is the destructured-require gap that was unhandled for BOTH sync and async
+    /// before bd-rmaze.
+    #[test]
+    fn cjs_fs_destructured_readfile_callback_lowers_bd_rmaze() {
+        let ops = lower_script_source_ops(
+            "const { readFile } = require('fs');\n\
+             readFile('out.txt', function (err, data) {});\n",
+            "cjs_fs_destructured_readfile_cb.js",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "fs:read"),
+            "destructured async readFile(path, cb) must lower to an fs:read host effect"
+        );
+    }
+
+    /// bd-rmaze (CJS destructure rename): `const { readFileSync: rd } =
+    /// require('fs'); rd(path)` — the renamed local `rd` is the bound name
+    /// recognized at the call site; the property key `readFileSync` selects the
+    /// capability.
+    #[test]
+    fn cjs_fs_destructured_rename_lowers_bd_rmaze() {
+        let ops = lower_script_source_ops(
+            "const { readFileSync: rd } = require('fs');\n\
+             rd('out.txt');\n",
+            "cjs_fs_destructured_rename.js",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "fs:read"),
+            "a renamed destructured readFileSync must still lower to fs:read"
+        );
+    }
+
+    /// bd-rmaze fail-closed: an unused destructured sync-fs require (`const {
+    /// readFileSync } = require('fs')` with no recognized call) is NOT confirmed,
+    /// so it is not elided and the `require('fs')` keeps hitting the always-deny
+    /// ambient-authority gate (lowering rejects). The synchronous analogue of the
+    /// fs/promises destructured unused gating.
+    #[test]
+    fn unused_fs_destructured_require_is_not_recognized_bd_rmaze() {
+        let tree = crate::parser_api_stability::parse_script(
+            "const { readFileSync } = require('fs');\n\
+             readFileSync.toString();\n",
+        )
+        .expect("parse script");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "cjs_fs_destructured_unused.js");
+        assert!(
+            lower_ir0_to_ir1(&ir0).is_err(),
+            "an unconfirmed destructured sync-fs require must keep the ambient-authority denial"
         );
     }
 

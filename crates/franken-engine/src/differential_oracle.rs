@@ -1802,6 +1802,283 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
+// ============================================================================
+// E2.T5 — Divergence-preserving case minimization (bd-fqlfw.2.5)
+// ============================================================================
+//
+// The minimizer delta-debugs a failing program down to a minimal source that
+// PRESERVES its specific classified divergence, so the artifact an operator or
+// agent receives is gold (the smallest program that still reproduces the bug)
+// rather than noise.
+//
+// The "property under test" is a program's [`DivergenceSignature`]: the taxonomy
+// verdict plus the sorted multiset of `(comparison_mode, divergence_class)`
+// labels emitted by [`classify_differential_divergences`] (E2.T3). A reduction
+// is accepted ONLY when the candidate's signature is identical to the original's,
+// which means the minimizer can never
+//   * collapse a real divergence into consensus,
+//   * swap one divergence class for another, or
+//   * minimize away an `IntentionalSecurityDivergence` (intentional-vs-bug is
+//     part of the class, hence part of the signature).
+//
+// Only findings whose comparison mode *contributes to the semantic verdict*
+// (structured value, exception class) enter the signature. Stdout/stderr exact
+// matches and — critically — the wall-clock `TimingEnvelope` are excluded,
+// because timing is non-deterministic and would make the minimizer's fixed point
+// unstable across re-runs. This keeps the signature a stable function of the
+// program's *correctness* behavior, which is exactly the property worth
+// preserving.
+
+pub const DIFFERENTIAL_ORACLE_MINIMIZATION_SCHEMA_VERSION: &str =
+    "franken-engine.differential-oracle.minimization.v1";
+
+/// Default oracle-invocation budget for [`minimize_oracle_divergence`]. Each
+/// invocation re-runs the selected lanes once; the budget bounds the cost of
+/// minimizing pathological inputs while still being generous enough for the
+/// line counts a real corpus case carries.
+pub const DIFFERENTIAL_ORACLE_MINIMIZATION_DEFAULT_BUDGET: usize = 512;
+
+/// One classified finding reduced to its stable, comparable labels.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct DivergenceSignatureEntry {
+    pub comparison_mode: String,
+    pub class: String,
+}
+
+/// A stable, order-independent fingerprint of a program's *classified* divergence.
+///
+/// Two programs share a signature iff they reach the same taxonomy `verdict` and
+/// emit the same multiset of semantic `(comparison_mode, class)` findings. The
+/// signature deliberately ignores volatile detail (human messages, evidence
+/// hashes, affected-backend ordering, timing) so that two source variants which
+/// reproduce the *same* divergence compare equal even though their reports differ
+/// in incidental fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DivergenceSignature {
+    pub verdict: DifferentialComparisonVerdict,
+    pub findings: Vec<DivergenceSignatureEntry>,
+}
+
+impl DivergenceSignature {
+    /// Build the signature directly from a divergence-taxonomy report. Only
+    /// findings whose comparison mode contributes to the semantic verdict are
+    /// retained, and the resulting multiset is sorted so the signature is
+    /// order-independent.
+    pub fn from_taxonomy(report: &DifferentialDivergenceTaxonomyReport) -> Self {
+        let mut findings = report
+            .findings
+            .iter()
+            .filter(|finding| finding.comparison_mode.contributes_to_semantic_verdict())
+            .map(|finding| DivergenceSignatureEntry {
+                comparison_mode: finding.comparison_mode.stable_label().to_string(),
+                class: finding.class.stable_label().to_string(),
+            })
+            .collect::<Vec<_>>();
+        findings.sort();
+        Self {
+            verdict: report.verdict,
+            findings,
+        }
+    }
+
+    /// Convenience: derive the signature from a full oracle report.
+    pub fn from_report(report: &DifferentialOracleReport) -> Self {
+        Self::from_taxonomy(&report.divergence_taxonomy)
+    }
+
+    /// A signature represents a real, minimizable divergence when at least one
+    /// semantic finding survived the filter. A program with no semantic findings
+    /// (consensus, insufficient data, or a timing-only difference) is not a
+    /// classified divergence and cannot be minimized.
+    pub fn has_classified_divergence(&self) -> bool {
+        !self.findings.is_empty()
+    }
+}
+
+/// Why a minimization request could not produce a result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DifferentialMinimizationError {
+    /// The original source does not exhibit a classified divergence, so there is
+    /// nothing to minimize. The minimizer refuses to manufacture one.
+    NoDivergenceInOriginal,
+}
+
+impl std::fmt::Display for DifferentialMinimizationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoDivergenceInOriginal => f.write_str(
+                "original source exhibits no classified divergence; nothing to minimize",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DifferentialMinimizationError {}
+
+/// The result of minimizing a diverging program.
+///
+/// On success the `minimized_source` reproduces the original's classified
+/// divergence (`classification_preserved` is always `true`) under the same lane
+/// selection. `reached_fixed_point` is `false` only when the oracle-invocation
+/// budget was exhausted before the minimizer could prove 1-minimality; the
+/// reported source is still a valid (signature-preserving) reduction, just not
+/// necessarily the smallest one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DifferentialMinimizationOutcome {
+    pub schema_version: String,
+    pub original_source: String,
+    pub minimized_source: String,
+    /// The divergence signature shared by the original and minimized sources.
+    pub signature: DivergenceSignature,
+    pub original_line_count: usize,
+    pub minimized_line_count: usize,
+    pub original_len_bytes: usize,
+    pub minimized_len_bytes: usize,
+    pub accepted_reductions: usize,
+    pub oracle_invocations: usize,
+    pub reached_fixed_point: bool,
+    pub classification_preserved: bool,
+}
+
+fn render_lines(lines: &[&str], indices: &[usize]) -> String {
+    indices
+        .iter()
+        .map(|&i| lines[i])
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Delta-debug `source` (line granularity) down to a minimal program that
+/// preserves its classified divergence, using `classify` as the divergence
+/// oracle.
+///
+/// `classify` maps a candidate source to its [`DivergenceSignature`]; the
+/// production wiring is [`minimize_oracle_divergence`], which runs the real
+/// differential oracle, but the algorithm is generic so it can be exercised
+/// deterministically. The original source is classified once up front; if it has
+/// no classified divergence the call fails with
+/// [`DifferentialMinimizationError::NoDivergenceInOriginal`].
+///
+/// The reduction is a complement-based `ddmin`: it removes ever-finer chunks of
+/// lines and keeps a removal only when the candidate's signature still equals the
+/// original's, escalating granularity down to single lines so the result is
+/// 1-minimal (no single remaining line can be dropped without changing the
+/// classification). `max_oracle_invocations` bounds the number of `classify`
+/// calls; if the budget is hit the best signature-preserving reduction found so
+/// far is returned with `reached_fixed_point == false`.
+pub fn minimize_divergence_source<F>(
+    source: &str,
+    mut classify: F,
+    max_oracle_invocations: usize,
+) -> Result<DifferentialMinimizationOutcome, DifferentialMinimizationError>
+where
+    F: FnMut(&str) -> DivergenceSignature,
+{
+    let original_lines: Vec<&str> = source.lines().collect();
+    let mut invocations: usize = 0;
+
+    // Classify the original program (counts against the budget).
+    let target = classify(source);
+    invocations += 1;
+    if !target.has_classified_divergence() {
+        return Err(DifferentialMinimizationError::NoDivergenceInOriginal);
+    }
+
+    let mut kept: Vec<usize> = (0..original_lines.len()).collect();
+    let mut accepted: usize = 0;
+    let mut reached_fixed_point = true;
+
+    // Complement-based delta debugging. `n` is the current chunk count; each pass
+    // tries removing one chunk at a time, escalating to finer chunks when a pass
+    // makes no progress, until single-line removals are exhausted (1-minimal).
+    // Any accepted removal restarts the outer loop, so reaching the end of an
+    // inner pass means nothing at this granularity could be dropped.
+    let mut n = 2usize;
+    'outer: while kept.len() >= 2 {
+        let chunk_count = n.min(kept.len());
+        let chunk_size = kept.len().div_ceil(chunk_count);
+        let mut start = 0usize;
+        while start < kept.len() {
+            let end = (start + chunk_size).min(kept.len());
+            // Candidate = kept with the chunk [start, end) removed.
+            let candidate: Vec<usize> = kept[..start]
+                .iter()
+                .chain(kept[end..].iter())
+                .copied()
+                .collect();
+            if candidate.is_empty() {
+                start = end;
+                continue;
+            }
+            if invocations >= max_oracle_invocations {
+                reached_fixed_point = false;
+                break 'outer;
+            }
+            let candidate_source = render_lines(&original_lines, &candidate);
+            let signature = classify(&candidate_source);
+            invocations += 1;
+            if signature == target {
+                kept = candidate;
+                accepted += 1;
+                // Shrink granularity and restart the pass on the smaller set.
+                n = n.saturating_sub(1).max(2);
+                continue 'outer;
+            }
+            start = end;
+        }
+        // Inner pass removed nothing at this granularity.
+        if n >= kept.len() {
+            // Every single-line removal was rejected: 1-minimal.
+            break;
+        }
+        n = (n * 2).min(kept.len());
+    }
+
+    let minimized_source = render_lines(&original_lines, &kept);
+    let minimized_len_bytes = minimized_source.len();
+    Ok(DifferentialMinimizationOutcome {
+        schema_version: DIFFERENTIAL_ORACLE_MINIMIZATION_SCHEMA_VERSION.to_string(),
+        original_source: source.to_string(),
+        minimized_source,
+        signature: target,
+        original_line_count: original_lines.len(),
+        minimized_line_count: kept.len(),
+        original_len_bytes: source.len(),
+        minimized_len_bytes,
+        accepted_reductions: accepted,
+        oracle_invocations: invocations,
+        reached_fixed_point,
+        classification_preserved: true,
+    })
+}
+
+/// Minimize a diverging case using the real differential oracle as the
+/// divergence predicate.
+///
+/// Each candidate is re-run through [`run_differential_oracle`] with the same
+/// lane selection, budgets, and runtime specs as `input`, swapping only the
+/// source and a per-step case id so reports stay distinguishable. For a hermetic,
+/// fully in-process run, restrict `input.selected_backends` to
+/// `[FrankenEngine, FrankenCore]` (the internal twin): no external process is
+/// spawned and the result is deterministic.
+pub fn minimize_oracle_divergence(
+    input: &DifferentialOracleInput,
+    max_oracle_invocations: usize,
+) -> Result<DifferentialMinimizationOutcome, DifferentialMinimizationError> {
+    let mut step: u64 = 0;
+    minimize_divergence_source(
+        input.source.as_str(),
+        |candidate| {
+            step += 1;
+            let mut probe = input.clone();
+            probe.source = candidate.to_string();
+            probe.case_id = format!("{}::min{step}", input.case_id);
+            DivergenceSignature::from_report(&run_differential_oracle(&probe))
+        },
+        max_oracle_invocations,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2343,5 +2620,278 @@ mod tests {
             .iter()
             .find(|comparison| comparison.mode == mode)
             .unwrap_or_else(|| panic!("missing {mode:?} comparison"))
+    }
+
+    // ---- E2.T5 divergence-preserving minimizer (bd-fqlfw.2.5) -----------
+    //
+    // These tests exercise the `ddmin` algorithm directly through a synthetic,
+    // deterministic divergence predicate so the reduction logic is covered
+    // exhaustively and without a heavy build. The real-oracle wiring
+    // (`minimize_oracle_divergence`) is exercised end-to-end in
+    // `tests/differential_oracle_minimization_bd_fqlfw_2_5.rs`.
+
+    fn synth_sig(
+        verdict: DifferentialComparisonVerdict,
+        entries: &[(&str, &str)],
+    ) -> DivergenceSignature {
+        let mut findings = entries
+            .iter()
+            .map(|(mode, class)| DivergenceSignatureEntry {
+                comparison_mode: (*mode).to_string(),
+                class: (*class).to_string(),
+            })
+            .collect::<Vec<_>>();
+        findings.sort();
+        DivergenceSignature { verdict, findings }
+    }
+
+    fn consensus_sig() -> DivergenceSignature {
+        DivergenceSignature {
+            verdict: DifferentialComparisonVerdict::Consensus,
+            findings: Vec::new(),
+        }
+    }
+
+    fn runtime_div_sig() -> DivergenceSignature {
+        synth_sig(
+            DifferentialComparisonVerdict::Divergence,
+            &[("structured_value", "runtime")],
+        )
+    }
+
+    fn has_line(source: &str, marker: &str) -> bool {
+        source.lines().any(|line| line.trim() == marker)
+    }
+
+    fn synth_finding(
+        class: DifferentialDivergenceClass,
+        mode: DifferentialComparisonMode,
+    ) -> DifferentialDivergenceFinding {
+        DifferentialDivergenceFinding {
+            class,
+            comparison_mode: mode,
+            message: String::new(),
+            affected_backends: Vec::new(),
+            reference_backends: Vec::new(),
+            evidence_group_hashes: Vec::new(),
+            remediation_hint: String::new(),
+            waiver_id: None,
+        }
+    }
+
+    fn synth_taxonomy(
+        verdict: DifferentialComparisonVerdict,
+        findings: Vec<DifferentialDivergenceFinding>,
+    ) -> DifferentialDivergenceTaxonomyReport {
+        DifferentialDivergenceTaxonomyReport {
+            schema_version: DIFFERENTIAL_ORACLE_DIVERGENCE_TAXONOMY_SCHEMA_VERSION.to_string(),
+            verdict,
+            findings,
+            diagnostics: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn minimizer_strips_filler_to_the_single_required_line() {
+        let source = "// filler a\n// filler b\nBUG\n// filler c\n// filler d";
+        let outcome = minimize_divergence_source(
+            source,
+            |candidate| {
+                if has_line(candidate, "BUG") {
+                    runtime_div_sig()
+                } else {
+                    consensus_sig()
+                }
+            },
+            512,
+        )
+        .expect("source diverges, so minimization must succeed");
+
+        assert_eq!(outcome.minimized_source, "BUG");
+        assert_eq!(outcome.minimized_line_count, 1);
+        assert_eq!(outcome.original_line_count, 5);
+        assert!(outcome.classification_preserved);
+        assert!(outcome.reached_fixed_point);
+        assert!(outcome.signature.has_classified_divergence());
+        assert!(outcome.minimized_len_bytes < outcome.original_len_bytes);
+        assert!(outcome.accepted_reductions >= 1);
+    }
+
+    #[test]
+    fn minimizer_keeps_every_line_required_for_the_classification() {
+        // The divergence requires BOTH marker lines; the result must be exactly
+        // those two (1-minimal), in original order, with all filler removed.
+        let source = "x\nAAA\ny\nz\nBBB\nw";
+        let outcome = minimize_divergence_source(
+            source,
+            |candidate| {
+                if has_line(candidate, "AAA") && has_line(candidate, "BBB") {
+                    runtime_div_sig()
+                } else {
+                    consensus_sig()
+                }
+            },
+            512,
+        )
+        .expect("source diverges");
+
+        let lines: Vec<&str> = outcome.minimized_source.lines().collect();
+        assert_eq!(lines, vec!["AAA", "BBB"]);
+        assert_eq!(outcome.minimized_line_count, 2);
+        assert!(outcome.reached_fixed_point);
+        assert!(outcome.classification_preserved);
+    }
+
+    #[test]
+    fn minimizer_refuses_a_non_diverging_original() {
+        let err = minimize_divergence_source("a\nb\nc", |_| consensus_sig(), 512)
+            .expect_err("a consensus program is not minimizable");
+        assert_eq!(err, DifferentialMinimizationError::NoDivergenceInOriginal);
+    }
+
+    #[test]
+    fn minimizer_is_idempotent_on_an_already_minimal_case() {
+        let outcome = minimize_divergence_source(
+            "BUG",
+            |candidate| {
+                if has_line(candidate, "BUG") {
+                    runtime_div_sig()
+                } else {
+                    consensus_sig()
+                }
+            },
+            512,
+        )
+        .expect("source diverges");
+
+        assert_eq!(outcome.minimized_source, "BUG");
+        assert_eq!(outcome.accepted_reductions, 0);
+        assert!(outcome.reached_fixed_point);
+        // Only the original classification call was needed.
+        assert_eq!(outcome.oracle_invocations, 1);
+    }
+
+    #[test]
+    fn minimizer_never_drops_a_distinct_divergence_class() {
+        // The original reproduces two distinct classes. Dropping either marker
+        // would change the signature (e.g. to runtime-only), so a faithful
+        // minimizer must keep both — it can never minimize away the intentional
+        // security divergence to leave a plain runtime bug, or vice versa.
+        let classify = |candidate: &str| {
+            let mut entries: Vec<(&str, &str)> = Vec::new();
+            if has_line(candidate, "SEC") {
+                entries.push(("structured_value", "intentional_security_divergence"));
+            }
+            if has_line(candidate, "RUN") {
+                entries.push(("structured_value", "runtime"));
+            }
+            if entries.is_empty() {
+                consensus_sig()
+            } else {
+                synth_sig(DifferentialComparisonVerdict::Divergence, &entries)
+            }
+        };
+
+        let source = "f1\nSEC\nf2\nRUN\nf3";
+        let outcome = minimize_divergence_source(source, classify, 512).expect("source diverges");
+
+        let lines: Vec<&str> = outcome.minimized_source.lines().collect();
+        assert_eq!(lines, vec!["SEC", "RUN"]);
+        assert_eq!(outcome.signature.findings.len(), 2);
+        let classes: Vec<&str> = outcome
+            .signature
+            .findings
+            .iter()
+            .map(|finding| finding.class.as_str())
+            .collect();
+        assert!(classes.contains(&"intentional_security_divergence"));
+        assert!(classes.contains(&"runtime"));
+    }
+
+    #[test]
+    fn minimizer_respects_the_oracle_invocation_budget() {
+        let source = (0..50)
+            .map(|i| {
+                if i == 25 {
+                    "BUG".to_string()
+                } else {
+                    format!("// filler {i}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let outcome = minimize_divergence_source(
+            &source,
+            |candidate| {
+                if has_line(candidate, "BUG") {
+                    runtime_div_sig()
+                } else {
+                    consensus_sig()
+                }
+            },
+            3,
+        )
+        .expect("source diverges");
+
+        assert!(!outcome.reached_fixed_point);
+        assert!(outcome.oracle_invocations <= 3);
+        assert!(outcome.classification_preserved);
+        // Even a budget-truncated reduction still reproduces the divergence.
+        assert!(has_line(&outcome.minimized_source, "BUG"));
+    }
+
+    #[test]
+    fn signature_is_order_independent_and_excludes_non_semantic_modes() {
+        let forward = synth_taxonomy(
+            DifferentialComparisonVerdict::Divergence,
+            vec![
+                synth_finding(
+                    DifferentialDivergenceClass::Parser,
+                    DifferentialComparisonMode::StructuredValue,
+                ),
+                synth_finding(
+                    DifferentialDivergenceClass::Runtime,
+                    DifferentialComparisonMode::ExceptionClass,
+                ),
+            ],
+        );
+        let reversed = synth_taxonomy(
+            DifferentialComparisonVerdict::Divergence,
+            vec![
+                synth_finding(
+                    DifferentialDivergenceClass::Runtime,
+                    DifferentialComparisonMode::ExceptionClass,
+                ),
+                synth_finding(
+                    DifferentialDivergenceClass::Parser,
+                    DifferentialComparisonMode::StructuredValue,
+                ),
+            ],
+        );
+        assert_eq!(
+            DivergenceSignature::from_taxonomy(&forward),
+            DivergenceSignature::from_taxonomy(&reversed),
+        );
+
+        // A timing-envelope finding is non-deterministic and must be excluded so
+        // the minimizer's fixed point stays stable across re-runs.
+        let with_timing = synth_taxonomy(
+            DifferentialComparisonVerdict::Divergence,
+            vec![
+                synth_finding(
+                    DifferentialDivergenceClass::Runtime,
+                    DifferentialComparisonMode::StructuredValue,
+                ),
+                synth_finding(
+                    DifferentialDivergenceClass::Runtime,
+                    DifferentialComparisonMode::TimingEnvelope,
+                ),
+            ],
+        );
+        let signature = DivergenceSignature::from_taxonomy(&with_timing);
+        assert_eq!(signature.findings.len(), 1);
+        assert_eq!(signature.findings[0].comparison_mode, "structured_value");
+        assert!(signature.has_classified_divergence());
     }
 }

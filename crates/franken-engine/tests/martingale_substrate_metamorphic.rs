@@ -18,13 +18,9 @@ use frankenengine_engine::baseline_interpreter::{HookAction, HookContext};
 use frankenengine_engine::bayesian_posterior::{Posterior, RiskState};
 use frankenengine_engine::expected_loss_selector::ContainmentAction;
 use frankenengine_engine::fleet_immune_protocol::ContainmentAction as ThresholdContainmentAction;
-use frankenengine_engine::guardplane_adapter::{
-    GuardplaneAdapter, GuardplaneDecisionRecord, GuardplaneOperation,
-};
+use frankenengine_engine::guardplane_adapter::GuardplaneDecisionRecord;
 use frankenengine_engine::hash_tiers::ContentHash;
-use frankenengine_engine::martingale_decision_ledger::{
-    MartingaleLedger, MartingaleState, StoppingThreshold,
-};
+use frankenengine_engine::martingale_decision_ledger::{MartingaleLedger, StoppingThreshold};
 use frankenengine_engine::runtime_decision_core::{
     AsymmetricLossPolicy, RegimeEstimate, default_routing_loss_policy,
 };
@@ -790,6 +786,12 @@ impl HistoricalCaseGenerator {
     }
 }
 
+impl Default for HistoricalCaseGenerator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Adapter for new martingale decision substrate.
 pub struct MartingaleDecisionAdapter {
     ledger: MartingaleLedger,
@@ -816,6 +818,7 @@ impl MartingaleDecisionAdapter {
         let candidates = &context.candidates;
         let risk_posteriors = &context.risk_posteriors;
         let regime = context.regime;
+        let _stopping_threshold = self.ledger.threshold();
 
         // Use new martingale substrate to make decision
         let decision_result =
@@ -832,7 +835,7 @@ impl MartingaleDecisionAdapter {
     fn convert_to_legacy_format(
         &self,
         decision: String,
-        context: &TestDecisionContext,
+        _context: &TestDecisionContext,
     ) -> Result<GuardplaneDecisionRecord, String> {
         use frankenengine_engine::guardplane_adapter::*;
 
@@ -864,6 +867,12 @@ impl MartingaleDecisionAdapter {
     }
 }
 
+impl Default for MartingaleDecisionAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Test Implementation
 // ---------------------------------------------------------------------------
@@ -882,9 +891,8 @@ fn test_martingale_substrate_metamorphic_preservation() {
 
     let mut adapter = MartingaleDecisionAdapter::new();
     let mut passed = 0;
-    let mut failed = 0;
 
-    for (i, case) in cases.iter().enumerate() {
+    for case in cases {
         tracing::info!(
             case_id = %case.case_id,
             description = %case.description,
@@ -924,7 +932,6 @@ fn test_martingale_substrate_metamorphic_preservation() {
                 "✓ Verdict preserved byte-for-byte"
             );
         } else {
-            failed += 1;
             tracing::error!(
                 case_id = %case.case_id,
                 legacy_hash = %legacy_hash.to_hex(),
@@ -947,6 +954,7 @@ fn test_martingale_substrate_metamorphic_preservation() {
         }
     }
 
+    let failed = cases.len().saturating_sub(passed);
     println!(
         "Metamorphic test results: {} passed, {} failed",
         passed, failed

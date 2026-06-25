@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![allow(dead_code)]
 
 //! Reusable JS conformance runner for YouTube BotGuard gap work.
 //!

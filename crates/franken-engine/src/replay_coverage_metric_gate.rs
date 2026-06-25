@@ -55,17 +55,12 @@ impl ReplayVerificationStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReplayEnvelopeShape {
+    #[default]
     LegacyPerEntry,
     MerkleBatched,
-}
-
-impl Default for ReplayEnvelopeShape {
-    fn default() -> Self {
-        Self::LegacyPerEntry
-    }
 }
 
 impl ReplayEnvelopeShape {

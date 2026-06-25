@@ -4299,13 +4299,44 @@ pub fn lower_ir2_to_ir3(
                         label_id: *label_id,
                     });
                 }
-                Ir1Op::JumpIfFalsy { label_id } | Ir1Op::JumpIfFalsyConsume { label_id } => {
+                Ir1Op::JumpIfFalsy { label_id } => {
+                    // Jump to `label_id` when the condition is FALSY. The
+                    // interpreter's `JumpIf` jumps on TRUTHY, so a bare
+                    // `JumpIf { cond, target: label }` here INVERTED every
+                    // function-body conditional and loop test — `if (c) {..}`
+                    // skipped its body when `c` was true and a `for`/`while`
+                    // test fell straight through to the loop end, so a
+                    // loop-accumulate IIFE returned its pre-loop value
+                    // (bd-my5ar). Emit the same two-instruction
+                    // "skip-on-truthy, then unconditional jump-to-label"
+                    // pattern the module-level loop uses (`PendingJump::JumpIfFalsy`).
+                    // Non-consuming: the condition register stays on the value
+                    // stack for the trailing `Pop` the lowering emits after the test.
                     let cond = fn_value_stack.pop().unwrap_or(0);
-                    let idx = ir3.instructions.len();
+                    let truthy_skip_index = ir3.instructions.len();
                     ir3.instructions
                         .push(Ir3Instruction::JumpIf { cond, target: 0 });
-                    fn_pending_jumps.push(PendingJump::Conditional {
-                        instruction_index: idx,
+                    let falsy_jump_index = ir3.instructions.len();
+                    ir3.instructions.push(Ir3Instruction::Jump { target: 0 });
+                    fn_pending_jumps.push(PendingJump::JumpIfFalsy {
+                        truthy_skip_index,
+                        falsy_jump_index,
+                        label_id: *label_id,
+                    });
+                    fn_value_stack.push(cond);
+                }
+                Ir1Op::JumpIfFalsyConsume { label_id } => {
+                    // Same falsy-jump shape as `JumpIfFalsy`, but consumes the
+                    // condition register (does not leave it on the value stack).
+                    let cond = fn_value_stack.pop().unwrap_or(0);
+                    let truthy_skip_index = ir3.instructions.len();
+                    ir3.instructions
+                        .push(Ir3Instruction::JumpIf { cond, target: 0 });
+                    let falsy_jump_index = ir3.instructions.len();
+                    ir3.instructions.push(Ir3Instruction::Jump { target: 0 });
+                    fn_pending_jumps.push(PendingJump::JumpIfFalsy {
+                        truthy_skip_index,
+                        falsy_jump_index,
                         label_id: *label_id,
                     });
                 }
@@ -4641,6 +4672,30 @@ pub fn lower_ir2_to_ir3(
                                 *jump_target = target;
                             }
                             _ => {}
+                        }
+                    }
+                }
+                PendingJump::JumpIfFalsy {
+                    truthy_skip_index,
+                    falsy_jump_index,
+                    label_id,
+                } => {
+                    // Wire the two-instruction falsy-jump pattern emitted above:
+                    // `JumpIf` skips the unconditional `Jump` when the condition
+                    // is truthy (so control falls through past the loop/if
+                    // target); the `Jump` carries the falsy branch to `label_id`.
+                    if let Some(&falsy_target) = fn_label_targets.get(&label_id) {
+                        let truthy_target = (falsy_jump_index + 1) as u32;
+                        if let Ir3Instruction::JumpIf { cond, .. } =
+                            ir3.instructions[truthy_skip_index]
+                        {
+                            ir3.instructions[truthy_skip_index] = Ir3Instruction::JumpIf {
+                                cond,
+                                target: truthy_target,
+                            };
+                            ir3.instructions[falsy_jump_index] = Ir3Instruction::Jump {
+                                target: falsy_target,
+                            };
                         }
                     }
                 }

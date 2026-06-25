@@ -3733,6 +3733,13 @@ fn parse_expression(
         return result;
     }
 
+    // Prefix / postfix increment & decrement (`++` / `--`). MUST run before the
+    // binary scanner, which would otherwise mis-split `i++` on its `+` (and
+    // before unary, which collapsed `++i` to a double `UnaryPlus`) — bd-my5ar.
+    if let Some(result) = try_parse_update(expression, span, context, recursion_depth) {
+        return result;
+    }
+
     // Try binary expression with precedence scanning.
     if let Some(result) = try_parse_binary(expression, span, context, recursion_depth) {
         return result;
@@ -5039,6 +5046,84 @@ fn match_binary_operator_at(bytes: &[u8], i: usize) -> Option<(BinaryOperator, u
 // ---------------------------------------------------------------------------
 // Unary prefix parsing
 // ---------------------------------------------------------------------------
+
+/// bd-my5ar: Parse prefix / postfix `++` / `--` update expressions. The
+/// string-based parser previously had no notion of update operators, so postfix
+/// `i++` was mis-split by the binary `+` scanner into `i + Raw("+")` and prefix
+/// `++i` collapsed into a double `UnaryPlus` (`+(+i)`) — neither actually
+/// incremented the operand, which surfaced as the franken-engine <-> franken-core
+/// loop-accumulate completion-value divergence (`for (var i…; i++)` never advanced
+/// `i`).
+///
+/// Both forms desugar to the equivalent compound assignment (`i += 1` / `i -= 1`),
+/// reusing the existing `AssignmentOperator::AddAssign` / `SubtractAssign`
+/// lowering. In statement and `for`-update position — where the expression value
+/// is discarded — and for the prefix form generally, this is exact ES semantics.
+/// The only residual gap is the *value* of a postfix update whose result is
+/// consumed (`x = i++` yields the incremented value rather than the prior one);
+/// that narrower case is tracked as a follow-up and is strictly better than the
+/// prior fully-broken parse.
+fn try_parse_update(
+    expr: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+    recursion_depth: u64,
+) -> Option<ParseResult<Expression>> {
+    let trimmed = expr.trim();
+
+    // The operand of `++`/`--` must be a simple assignment target (reference).
+    fn is_update_target(expression: &Expression) -> bool {
+        matches!(
+            expression,
+            Expression::Identifier(_)
+                | Expression::Member { .. }
+                | Expression::OptionalMember { .. }
+        )
+    }
+
+    let build = |arg: Expression, op: AssignmentOperator| -> Expression {
+        Expression::Assignment {
+            operator: op,
+            left: Box::new(arg),
+            right: Box::new(Expression::NumericLiteral(1)),
+        }
+    };
+
+    for (token, op) in [
+        ("++", AssignmentOperator::AddAssign),
+        ("--", AssignmentOperator::SubtractAssign),
+    ] {
+        let sym = token.as_bytes()[0];
+        // Prefix: `++x` / `--x`.
+        if let Some(rest) = trimmed.strip_prefix(token) {
+            let rest = rest.trim();
+            // Guard against `+++…`/`---…` chains and a missing operand: the
+            // operand itself must not start with the same `+`/`-` symbol.
+            if !rest.is_empty() && rest.as_bytes()[0] != sym {
+                if let Ok(arg) = parse_expression(rest, span, context, recursion_depth + 1) {
+                    if is_update_target(&arg) {
+                        return Some(Ok(build(arg, op)));
+                    }
+                }
+            }
+        }
+        // Postfix: `x++` / `x--`.
+        if let Some(head) = trimmed.strip_suffix(token) {
+            let head = head.trim();
+            // Guard against `x+++…`/`x---…` and operator-adjacent forms: the
+            // target itself must not end with the same `+`/`-` symbol.
+            if !head.is_empty() && head.as_bytes()[head.len() - 1] != sym {
+                if let Ok(arg) = parse_expression(head, span, context, recursion_depth + 1) {
+                    if is_update_target(&arg) {
+                        return Some(Ok(build(arg, op)));
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
 
 fn try_parse_unary_prefix(
     expr: &str,

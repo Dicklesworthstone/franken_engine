@@ -9099,6 +9099,41 @@ fn lower_expression_to_ir1_inner(
                     return Ok(());
                 }
             }
+            if let Some(capability) = fetch_builtin_call_capability(callee, binding_lookup) {
+                // bd-3894s (http leg, fetch global): `fetch(url[, init])` — the bare
+                // unshadowed WHATWG/Node global — lowers to the same `net:request`
+                // HostCall as `http.get`, forwarding ONLY the URL operand (arg[0]).
+                // Unlike the http member-call forms, `fetch` returns a Promise, so
+                // the egress result is wrapped in `promise:resolve` (mirroring the
+                // fs/promises named-import lowering) — `fetch(url)` evaluates to a
+                // Promise. Slice-1 forwards only arg[0]: the request-`init` object
+                // (`fetch(url, { method, body })`) is currently INERT — the effect
+                // builder frames a GET regardless — so method/body extraction from
+                // the init object is a follow-up slice. The endpoint (arg[0]) the
+                // SSRF gate authorizes is correct for both arities. A 0-arg call is
+                // malformed: fall through so it is not silently mis-shaped.
+                if let Some(url_arg) = arguments.first() {
+                    lower_expression_to_ir1(
+                        url_arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                    ops.push(Ir1Op::HostCall {
+                        capability: capability.to_string(),
+                        arg_count: 1,
+                    });
+                    ops.push(Ir1Op::HostCall {
+                        capability: "promise:resolve".to_string(),
+                        arg_count: 1,
+                    });
+                    return Ok(());
+                }
+            }
             if let Some(capability) = date_builtin_call_capability(callee, binding_lookup) {
                 // `Date.now()` — the `Date` global has no eval-scope binding, so
                 // (like the Math-static interception) recognize the bare static
@@ -12082,6 +12117,31 @@ fn http_named_import_call_capability(
         Some("net:request")
     } else {
         None
+    }
+}
+
+/// bd-3894s (http leg, fetch global): capability for a bare `fetch(url)` call —
+/// the WHATWG/Node global HTTP entry point. Like the timer/global-function
+/// builtins it is invoked as a bare identifier (not a member access), so it is
+/// recognized here rather than by the http member-call recognizer
+/// [`http_builtin_call_capability`]. Returns the same `net:request` egress
+/// capability as `http.get`/`http.request`. Returns `None` when `fetch` is
+/// shadowed by a user binding in scope (e.g. `const fetch = ...`), so a local
+/// `fetch` is never reinterpreted as the host egress — the fail-closed shadowing
+/// gate shared with [`timer_builtin_call_capability`].
+fn fetch_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Identifier(name) = callee else {
+        return None;
+    };
+    if binding_lookup.contains_key(name.as_str()) {
+        return None;
+    }
+    match name.as_str() {
+        "fetch" => Some("net:request"),
+        _ => None,
     }
 }
 
@@ -15686,6 +15746,89 @@ mod tests {
         assert!(
             !ops_have_hostcall(&ops, "net:request"),
             "a `get` named-imported from a non-http module must not lower to a network hostcall"
+        );
+    }
+
+    /// bd-3894s (http leg, fetch global): the bare `fetch(url)` global lowers to
+    /// a `net:request` HostCall — the egress proof for the dominant modern HTTP
+    /// idiom, shared with `http.get`/`http.request`.
+    #[test]
+    fn fetch_global_lowers_to_net_request_bd_3894s() {
+        let ops = lower_script_source_ops(
+            "fetch('http://127.0.0.1:9/');\n",
+            "fetch_global.js",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "net:request"),
+            "fetch(url) must lower to a net:request hostcall"
+        );
+    }
+
+    /// bd-3894s: `fetch(url, init)` still lowers to `net:request` — slice-1
+    /// forwards only the URL operand (arg[0]); the request-init object is inert
+    /// (the egress is framed as a GET) until method/body extraction lands.
+    #[test]
+    fn fetch_global_with_init_lowers_to_net_request_bd_3894s() {
+        let ops = lower_script_source_ops(
+            "fetch('http://127.0.0.1:9/', { method: 'POST' });\n",
+            "fetch_global_init.js",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "net:request"),
+            "fetch(url, init) must still lower to a net:request hostcall (init inert in slice-1)"
+        );
+    }
+
+    /// bd-3894s: `fetch` returns a Promise, so the lowering wraps the egress
+    /// result in `promise:resolve` — `fetch(url)` evaluates to a Promise (mirror
+    /// of the fs/promises named-import lowering). The resolved value is undefined
+    /// until response modeling lands.
+    #[test]
+    fn fetch_global_returns_promise_bd_3894s() {
+        let ops = lower_script_source_ops(
+            "fetch('http://127.0.0.1:9/');\n",
+            "fetch_global_promise.js",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "net:request"),
+            "fetch must emit the net:request egress"
+        );
+        assert!(
+            ops_have_hostcall(&ops, "promise:resolve"),
+            "fetch must wrap its result in promise:resolve so fetch(url) is a Promise"
+        );
+    }
+
+    /// bd-3894s fail-closed: a user-shadowed `fetch` (`const fetch = ...`) is a
+    /// local function, NOT the host global, so the recognizer must NOT report it
+    /// as the host egress (the shadowing gate shared with the timer/global-
+    /// function builtins). This is checked directly on the recognizer rather
+    /// than end-to-end because `fetch` is ALSO ambient-authority-gated at the
+    /// identifier level (a bare `fetch` reference trips a NetConnect ambient
+    /// violation, line ~7257), so a shadowed `fetch(url)` fail-closes at the
+    /// ambient gate before emitting ops — it can never be observed as a stray
+    /// net:request. The recognizer gate is what defends against the engine
+    /// mis-lowering the user's own `fetch` to a FALSE egress proof.
+    #[test]
+    fn shadowed_fetch_does_not_lower_bd_3894s() {
+        let callee = Expression::Identifier("fetch".to_string());
+
+        // Unshadowed: the bare global is recognized as the net:request egress.
+        let unshadowed: BTreeMap<String, BindingId> = BTreeMap::new();
+        assert_eq!(
+            fetch_builtin_call_capability(&callee, &unshadowed),
+            Some("net:request"),
+            "an unshadowed bare `fetch` must be recognized as a net:request egress"
+        );
+
+        // Shadowed by a user binding in scope: NOT recognized — this is the gate
+        // that prevents a false egress proof for the user's own `fetch`.
+        let mut shadowed: BTreeMap<String, BindingId> = BTreeMap::new();
+        shadowed.insert("fetch".to_string(), 0);
+        assert_eq!(
+            fetch_builtin_call_capability(&callee, &shadowed),
+            None,
+            "a user-shadowed `fetch` binding must not be recognized as a network egress"
         );
     }
 

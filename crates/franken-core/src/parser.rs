@@ -5099,12 +5099,12 @@ fn try_parse_update(
             let rest = rest.trim();
             // Guard against `+++…`/`---…` chains and a missing operand: the
             // operand itself must not start with the same `+`/`-` symbol.
-            if !rest.is_empty() && rest.as_bytes()[0] != sym {
-                if let Ok(arg) = parse_expression(rest, span, context, recursion_depth + 1) {
-                    if is_update_target(&arg) {
-                        return Some(Ok(build(arg, op)));
-                    }
-                }
+            if !rest.is_empty()
+                && rest.as_bytes()[0] != sym
+                && let Ok(arg) = parse_expression(rest, span, context, recursion_depth + 1)
+                && is_update_target(&arg)
+            {
+                return Some(Ok(build(arg, op)));
             }
         }
         // Postfix: `x++` / `x--`.
@@ -5112,12 +5112,12 @@ fn try_parse_update(
             let head = head.trim();
             // Guard against `x+++…`/`x---…` and operator-adjacent forms: the
             // target itself must not end with the same `+`/`-` symbol.
-            if !head.is_empty() && head.as_bytes()[head.len() - 1] != sym {
-                if let Ok(arg) = parse_expression(head, span, context, recursion_depth + 1) {
-                    if is_update_target(&arg) {
-                        return Some(Ok(build(arg, op)));
-                    }
-                }
+            if !head.is_empty()
+                && head.as_bytes()[head.len() - 1] != sym
+                && let Ok(arg) = parse_expression(head, span, context, recursion_depth + 1)
+                && is_update_target(&arg)
+            {
+                return Some(Ok(build(arg, op)));
             }
         }
     }

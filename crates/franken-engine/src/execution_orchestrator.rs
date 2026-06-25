@@ -3161,6 +3161,75 @@ mod tests {
         );
     }
 
+    /// bd-rul7k item 3 (end-to-end): an explicit UNKNOWN `readFileSync` encoding
+    /// throws a JS-catchable `TypeError` synchronously, BEFORE the read runs —
+    /// matching Node. The program catches it (writing a marker file from the catch
+    /// block) and the host-effect transcript shows only the two writes (NO fs_read),
+    /// proving the bad-encoding read was rejected before any effect was performed.
+    #[test]
+    fn read_unknown_encoding_throws_catchable_type_error_bd_rul7k() {
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+
+        let mut root = std::env::temp_dir();
+        root.push(format!("frankenengine_e2e_fs_badenc_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+
+        let mut orch = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        orch.set_host_io(provider, Some(recorder_dyn));
+
+        let pkg = ExtensionPackage {
+            extension_id: "fs-e2e-bad-encoding".to_string(),
+            source: "require('fs').writeFileSync('out.txt', 'real effect bytes');\n\
+                     try {\n\
+                       require('fs').readFileSync('out.txt', 'bogus-encoding');\n\
+                     } catch (e) {\n\
+                       require('fs').writeFileSync('caught.txt', 'caught');\n\
+                     }\n"
+                .to_string(),
+            source_file: None,
+            capabilities: vec![
+                "vm_dispatch".to_string(),
+                "heap_allocate".to_string(),
+                "fs_read".to_string(),
+                "fs_write".to_string(),
+            ],
+            version: "1.0.0".to_string(),
+            metadata: BTreeMap::new(),
+        };
+
+        let result = orch
+            .execute(&pkg)
+            .expect("program with a caught bad-encoding read executes to completion");
+
+        // The catch block ran — proving the unknown-encoding TypeError is a real,
+        // JS-catchable throw.
+        assert_eq!(
+            std::fs::read(root.join("caught.txt")).expect("catch-block marker on disk"),
+            b"caught",
+            "the unknown-encoding TypeError must be catchable by JS try/catch"
+        );
+
+        // Only the two writes were recorded — the bad-encoding read was rejected
+        // BEFORE any host effect was performed (no spurious fs_read).
+        let kinds: Vec<&str> = result
+            .host_effect_transcript
+            .iter()
+            .map(|(request, _)| request.kind())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["fs_write", "fs_write"],
+            "an unknown encoding must throw before the read — no fs_read effect, got {kinds:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// bd-1xl17.a (binding form): the idiomatic `const fs = require('fs'); ...`
     /// binding form — not only the inline `require('fs').readFileSync` form —
     /// lowers to `fs:` HostCalls that perform real sandboxed I/O and surface a

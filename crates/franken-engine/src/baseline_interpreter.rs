@@ -4630,6 +4630,27 @@ impl InterpreterCore {
                 other => other.type_name().to_string(),
             });
         }
+        // bd-rul7k item 3: validate an explicit `fs:read` encoding BEFORE performing
+        // the read. Node's `readFileSync`/`readFile` throw `TypeError('Unknown
+        // encoding')` synchronously for an unrecognized encoding — no read is
+        // performed and (for the callback form) the callback is never scheduled. We
+        // return a JS-catchable `TypeError` here, before the effect is built/run, so
+        // no spurious read effect is recorded in the host-effect transcript. The
+        // resolved encoding is reused below for the return-shape decode.
+        let fs_read_encoding = if capability == "fs:read" {
+            let encoding = self.resolve_fs_read_encoding(second_arg_value.as_ref());
+            if let Some(ref enc) = encoding
+                && !Self::is_recognized_fs_encoding(enc)
+            {
+                return Err(InterpreterError::TypeError {
+                    expected: "a recognized Node BufferEncoding".to_string(),
+                    got: format!("Unknown encoding: {enc}"),
+                });
+            }
+            encoding
+        } else {
+            None
+        };
         let effect = create_effect_from_hostcall_tag(capability, &arg_strings).map_err(|err| {
             InterpreterError::InternalError {
                 details: format!("host effect build failed for {capability}: {err}"),
@@ -4655,12 +4676,12 @@ impl InterpreterCore {
                 // shape. The optional second arg selects the character encoding,
                 // either as a bare string (`readFileSync(p, 'utf8')`) or an options
                 // object (`readFileSync(p, { encoding: 'utf8' })`); without a
-                // recognized encoding the call yields a `Buffer`. The encoding is
-                // inert to the host effect itself (`create_effect_from_hostcall_tag`
-                // only consumes arg[1] for writes), so it only steers the value here.
-                let encoding = self.resolve_fs_read_encoding(second_arg_value.as_ref());
+                // recognized encoding the call yields a `Buffer`. The encoding was
+                // resolved and validated up front (`fs_read_encoding`) so it only
+                // steers the value here; it is inert to the host effect itself
+                // (`create_effect_from_hostcall_tag` consumes arg[1] only for writes).
                 let value = match result.downcast::<Vec<u8>>() {
-                    Ok(bytes) => self.decode_fs_read_result(&bytes, encoding.as_deref())?,
+                    Ok(bytes) => self.decode_fs_read_result(&bytes, fs_read_encoding.as_deref())?,
                     Err(_) => Value::Undefined,
                 };
                 if let Some(closure_id) = callback_closure {
@@ -4738,12 +4759,37 @@ impl InterpreterCore {
         }
     }
 
+    /// bd-rul7k item 3: true when `encoding` is a Node `BufferEncoding` recognized
+    /// by [`Self::decode_fs_read_result`] (case-insensitive). Kept in lock-step
+    /// with the decode arms below — every recognized arm there must be listed here.
+    /// Used by `dispatch_host_io_hostcall` to reject an unknown `fs:read` encoding
+    /// with a JS-catchable `TypeError` BEFORE the read runs, matching Node.
+    fn is_recognized_fs_encoding(encoding: &str) -> bool {
+        matches!(
+            encoding.to_ascii_lowercase().as_str(),
+            "utf8"
+                | "utf-8"
+                | "utf16le"
+                | "utf-16le"
+                | "ucs2"
+                | "ucs-2"
+                | "latin1"
+                | "binary"
+                | "ascii"
+                | "hex"
+                | "base64"
+                | "base64url"
+        )
+    }
+
     /// Node `BufferEncoding` values handled here: utf8/utf-8,
     /// utf16le/utf-16le/ucs2/ucs-2, latin1/binary, ascii, hex, base64, and
     /// base64url. The bare-string and options-object encoding forms are both
-    /// resolved up front by [`Self::resolve_fs_read_encoding`]; unknown encodings
-    /// still fall back to the Buffer shape (Node would throw `TypeError`, tracked
-    /// as bd-rul7k). The Buffer path requires the `HeapAllocate` capability.
+    /// resolved up front by [`Self::resolve_fs_read_encoding`] and validated by
+    /// [`Self::is_recognized_fs_encoding`] (an unknown encoding throws `TypeError`
+    /// at dispatch before this is reached, bd-rul7k item 3). A `None` encoding (no
+    /// arg, or `{ encoding: null }`) yields the Buffer shape, which requires the
+    /// `HeapAllocate` capability.
     fn decode_fs_read_result(
         &mut self,
         bytes: &[u8],
@@ -34095,6 +34141,24 @@ mod async_runtime_tests_current {
             recorder.entries().len(),
             5,
             "all dispatched fs effects (one write + four reads) must be recorded"
+        );
+
+        // bd-rul7k item 3: an explicit UNKNOWN encoding throws a JS-catchable
+        // TypeError BEFORE the read runs — Node parity — so NO spurious read effect
+        // is recorded (the transcript count stays at 5).
+        core.mutate_registers(|r| {
+            r[0] = Value::Str(Arc::from("real.txt"));
+            r[1] = Value::Str(Arc::from("bogus-encoding"));
+        });
+        let bad_encoding = core.dispatch_host_io_hostcall("fs:read", RegRange { start: 0, count: 2 });
+        assert!(
+            matches!(bad_encoding, Err(InterpreterError::TypeError { .. })),
+            "fs:read with an unknown encoding must throw TypeError, got {bad_encoding:?}"
+        );
+        assert_eq!(
+            recorder.entries().len(),
+            5,
+            "an unknown encoding must be rejected BEFORE the read — no extra effect recorded"
         );
 
         // With no provider installed, fs hostcalls stay fail-closed (undefined).

@@ -6,8 +6,10 @@
 //! a real sandboxed provider is deliberately installed.
 
 use serde::{Deserialize, Serialize};
-use std::io::Read;
+use std::io::{Read, Write};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
 /// Capability a guest must hold for the host to perform a given I/O request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -142,6 +144,12 @@ pub fn capability_granted(granted: &[HostIoCapability], required: HostIoCapabili
 /// per-blob cap.
 pub const SANDBOXED_HOST_IO_MAX_BYTES: u64 = 16 * 1024 * 1024;
 
+/// Per-operation network timeout for [`SandboxedHostIo`] connect/read/write.
+/// Bounds how long a single guest network effect may block so a slow or
+/// unreachable endpoint fails closed deterministically instead of hanging the
+/// runtime (a hung effect would also stall replay/transcript determinism).
+pub const SANDBOXED_HOST_IO_NETWORK_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// A real, sandboxed [`HostIoProvider`] that performs genuine filesystem reads
 /// and writes confined to a single canonicalized root directory.
 ///
@@ -164,10 +172,23 @@ pub const SANDBOXED_HOST_IO_MAX_BYTES: u64 = 16 * 1024 * 1024;
 ///   against parser-bomb / OOM inputs (including a file that grows between
 ///   `stat` and `read`).
 ///
-/// Network effects are deliberately **not** performed here in the first tranche:
-/// `NetworkSend` / `NetworkRecv` fail closed with [`HostIoError::Denied`].
-/// Network egress must transit the product-layer SSRF policy rather than a
-/// duplicated, weaker engine-side check.
+/// Network effects (`NetworkSend` / `NetworkRecv`) are also **performed for
+/// real** here: a `NetworkSend` opens a TCP connection to the endpoint and
+/// writes the payload; a `NetworkRecv` connects and reads a bounded response.
+/// Each is capability-checked, byte-bounded against `max_bytes`, and time-bounded
+/// by [`SANDBOXED_HOST_IO_NETWORK_TIMEOUT`] so a slow/unreachable peer fails
+/// closed instead of hanging.
+///
+/// SECURITY INVARIANT — the provider is the network *mechanism*, not the network
+/// *policy*. It deliberately performs **no** SSRF / egress-allowlist / DNS-rebind
+/// check: endpoint authorization is the product layer's responsibility
+/// (`franken_node` `security::ssrf_policy` / `network_guard`) and MUST gate the
+/// endpoint *before* a `NetworkSend` / `NetworkRecv` request is ever issued to
+/// this provider. Duplicating a weaker check here would invite drift; the engine
+/// trusts that a request which reaches it has already been authorized. (Today no
+/// guest JS path lowers to a network hostcall — `create_effect_from_hostcall_tag`
+/// has no network arm — so this mechanism stays dormant until that lowering and
+/// the product-layer SSRF gate land together.)
 #[derive(Debug, Clone)]
 pub struct SandboxedHostIo {
     root: PathBuf,
@@ -366,6 +387,97 @@ impl SandboxedHostIo {
             bytes_written: u64::try_from(data.len()).unwrap_or(u64::MAX),
         })
     }
+
+    /// Open a time-bounded TCP connection to `endpoint`.
+    ///
+    /// This performs **no** SSRF / egress-policy check — endpoint authorization
+    /// is the product layer's responsibility and must happen before the request
+    /// reaches this provider (see the type-level SECURITY INVARIANT). The
+    /// connection carries a bounded connect/read/write timeout so a slow or
+    /// unreachable peer fails closed instead of hanging.
+    fn connect(&self, endpoint: &str) -> Result<TcpStream, HostIoError> {
+        if endpoint.is_empty() {
+            return Err(HostIoError::SandboxViolation {
+                detail: "empty network endpoint".to_string(),
+            });
+        }
+        if endpoint.contains('\0') {
+            return Err(HostIoError::SandboxViolation {
+                detail: "network endpoint contains a NUL byte".to_string(),
+            });
+        }
+        // Resolve to a concrete socket address so a bounded connect timeout can
+        // be applied (`TcpStream::connect` itself takes no timeout).
+        let addr = endpoint
+            .to_socket_addrs()
+            .map_err(|err| HostIoError::Io {
+                detail: format!("resolve {endpoint}: {err}"),
+            })?
+            .next()
+            .ok_or_else(|| HostIoError::Io {
+                detail: format!("resolve {endpoint}: no addresses"),
+            })?;
+        let stream = TcpStream::connect_timeout(&addr, SANDBOXED_HOST_IO_NETWORK_TIMEOUT).map_err(
+            |err| HostIoError::Io {
+                detail: format!("connect {endpoint}: {err}"),
+            },
+        )?;
+        stream
+            .set_read_timeout(Some(SANDBOXED_HOST_IO_NETWORK_TIMEOUT))
+            .map_err(|err| HostIoError::Io {
+                detail: format!("set read timeout {endpoint}: {err}"),
+            })?;
+        stream
+            .set_write_timeout(Some(SANDBOXED_HOST_IO_NETWORK_TIMEOUT))
+            .map_err(|err| HostIoError::Io {
+                detail: format!("set write timeout {endpoint}: {err}"),
+            })?;
+        Ok(stream)
+    }
+
+    fn network_send(&self, endpoint: &str, payload: &[u8]) -> HostIoOutcome {
+        if u64::try_from(payload.len()).unwrap_or(u64::MAX) > self.max_bytes {
+            return Err(HostIoError::Io {
+                detail: format!(
+                    "network send of {} bytes to {endpoint} exceeds the {}-byte cap",
+                    payload.len(),
+                    self.max_bytes
+                ),
+            });
+        }
+        let mut stream = self.connect(endpoint)?;
+        stream.write_all(payload).map_err(|err| HostIoError::Io {
+            detail: format!("send to {endpoint}: {err}"),
+        })?;
+        stream.flush().map_err(|err| HostIoError::Io {
+            detail: format!("flush to {endpoint}: {err}"),
+        })?;
+        Ok(HostIoResponse::NetworkSend {
+            bytes_sent: u64::try_from(payload.len()).unwrap_or(u64::MAX),
+        })
+    }
+
+    fn network_recv(&self, endpoint: &str, max_len: u64) -> HostIoOutcome {
+        // Bound the read by the smaller of the caller-requested length and the
+        // provider's per-operation cap.
+        let cap = max_len.min(self.max_bytes);
+        let stream = self.connect(endpoint)?;
+        let mut bytes = Vec::new();
+        // Bounded read: cap+1 so a peer that streams more than the cap fails
+        // closed rather than being silently truncated.
+        stream
+            .take(cap.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|err| HostIoError::Io {
+                detail: format!("recv from {endpoint}: {err}"),
+            })?;
+        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > cap {
+            return Err(HostIoError::Io {
+                detail: format!("network recv from {endpoint} exceeds the {cap}-byte cap"),
+            });
+        }
+        Ok(HostIoResponse::NetworkRecv { bytes })
+    }
 }
 
 impl HostIoProvider for SandboxedHostIo {
@@ -383,12 +495,11 @@ impl HostIoProvider for SandboxedHostIo {
         match request {
             HostIoRequest::FsRead { path } => self.fs_read(path),
             HostIoRequest::FsWrite { path, data } => self.fs_write(path, data),
-            HostIoRequest::NetworkSend { .. } | HostIoRequest::NetworkRecv { .. } => {
-                Err(HostIoError::Denied {
-                    reason: "sandboxed host I/O provider performs filesystem effects only; \
-                             network egress is deferred to the SSRF-gated tranche"
-                        .to_string(),
-                })
+            HostIoRequest::NetworkSend { endpoint, payload } => {
+                self.network_send(endpoint, payload)
+            }
+            HostIoRequest::NetworkRecv { endpoint, max_len } => {
+                self.network_recv(endpoint, *max_len)
             }
         }
     }
@@ -889,30 +1000,147 @@ mod tests {
     }
 
     #[test]
-    fn sandboxed_network_effects_are_denied() {
+    fn sandboxed_network_send_delivers_real_bytes() {
+        use std::net::TcpListener;
+        let scratch = ScratchDir::new();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let addr = listener.local_addr().expect("local addr");
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            let mut received = Vec::new();
+            sock.read_to_end(&mut received).expect("server read");
+            received
+        });
+        let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
+        let out = provider
+            .perform(
+                &HostIoRequest::NetworkSend {
+                    endpoint: addr.to_string(),
+                    payload: b"GET / HTTP/1.0\r\n\r\n".to_vec(),
+                },
+                &[HostIoCapability::NetworkSend],
+            )
+            .expect("network send");
+        assert_eq!(out, HostIoResponse::NetworkSend { bytes_sent: 18 });
+        // The bytes really crossed the socket to the listening server.
+        let received = server.join().expect("server thread");
+        assert_eq!(received, b"GET / HTTP/1.0\r\n\r\n");
+    }
+
+    #[test]
+    fn sandboxed_network_recv_reads_real_bytes() {
+        use std::net::TcpListener;
+        let scratch = ScratchDir::new();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let addr = listener.local_addr().expect("local addr");
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            sock.write_all(b"HTTP/1.0 200 OK\r\n\r\nbody")
+                .expect("server write");
+            // Drop `sock` to close the connection so the client's bounded
+            // read_to_end sees EOF and returns.
+        });
+        let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
+        let out = provider
+            .perform(
+                &HostIoRequest::NetworkRecv {
+                    endpoint: addr.to_string(),
+                    max_len: 4096,
+                },
+                &[HostIoCapability::NetworkRecv],
+            )
+            .expect("network recv");
+        assert_eq!(
+            out,
+            HostIoResponse::NetworkRecv {
+                bytes: b"HTTP/1.0 200 OK\r\n\r\nbody".to_vec()
+            }
+        );
+        server.join().expect("server thread");
+    }
+
+    #[test]
+    fn sandboxed_network_missing_capability_fails_closed() {
         let scratch = ScratchDir::new();
         let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
-        let send = provider.perform(
+        let outcome = provider.perform(
             &HostIoRequest::NetworkSend {
-                endpoint: "example.com:443".to_string(),
+                endpoint: "127.0.0.1:9".to_string(),
+                payload: vec![1, 2, 3],
+            },
+            &[], // no capability granted
+        );
+        assert!(
+            matches!(
+                outcome,
+                Err(HostIoError::CapabilityMissing {
+                    capability: HostIoCapability::NetworkSend
+                })
+            ),
+            "missing capability must fail closed before any connect, got {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn sandboxed_network_send_oversize_fails_closed() {
+        let scratch = ScratchDir::new();
+        let provider = SandboxedHostIo::with_root_and_limit(&scratch.path, 8).expect("provider");
+        // The byte cap is enforced BEFORE any connection is attempted, so no
+        // server is needed (and none is left hanging on accept).
+        let outcome = provider.perform(
+            &HostIoRequest::NetworkSend {
+                endpoint: "127.0.0.1:9".to_string(),
+                payload: vec![0u8; 9],
+            },
+            &[HostIoCapability::NetworkSend],
+        );
+        assert!(
+            matches!(outcome, Err(HostIoError::Io { .. })),
+            "oversize network send must fail closed, got {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn sandboxed_network_recv_oversize_fails_closed() {
+        use std::net::TcpListener;
+        let scratch = ScratchDir::new();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let addr = listener.local_addr().expect("local addr");
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            // Stream more than the 8-byte cap; ignore a broken pipe if the
+            // client tears the connection down first.
+            let _ = sock.write_all(&[7u8; 9]);
+        });
+        let provider = SandboxedHostIo::with_root_and_limit(&scratch.path, 8).expect("provider");
+        let outcome = provider.perform(
+            &HostIoRequest::NetworkRecv {
+                endpoint: addr.to_string(),
+                max_len: 4096,
+            },
+            &[HostIoCapability::NetworkRecv],
+        );
+        assert!(
+            matches!(outcome, Err(HostIoError::Io { .. })),
+            "oversize network recv must fail closed, got {outcome:?}"
+        );
+        let _ = server.join();
+    }
+
+    #[test]
+    fn sandboxed_network_empty_endpoint_fails_closed() {
+        let scratch = ScratchDir::new();
+        let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
+        let outcome = provider.perform(
+            &HostIoRequest::NetworkSend {
+                endpoint: String::new(),
                 payload: vec![1, 2, 3],
             },
             &[HostIoCapability::NetworkSend],
         );
         assert!(
-            matches!(send, Err(HostIoError::Denied { .. })),
-            "network send must be denied in the fs-only tranche, got {send:?}"
-        );
-        let recv = provider.perform(
-            &HostIoRequest::NetworkRecv {
-                endpoint: "example.com:443".to_string(),
-                max_len: 16,
-            },
-            &[HostIoCapability::NetworkRecv],
-        );
-        assert!(
-            matches!(recv, Err(HostIoError::Denied { .. })),
-            "network recv must be denied in the fs-only tranche, got {recv:?}"
+            matches!(outcome, Err(HostIoError::SandboxViolation { .. })),
+            "empty endpoint must fail closed, got {outcome:?}"
         );
     }
 

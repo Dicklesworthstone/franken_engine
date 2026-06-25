@@ -36,5 +36,6 @@ from PLAN section 3.2 to the shipped example directories in this repository.
 - `04_bench_vs_node` - Performance benchmarking
 - `11_cli_workflow_smoke` - CLI workflow demonstration
 - `12_frankenctl_react_demo` - Fail-closed React compile contract demo
+- `23_differential_oracle` - Cross-runtime differential oracle: `./examples/23_differential_oracle/demo.sh`
 
 Each example directory contains its own README plus the command listed above.

@@ -2486,6 +2486,32 @@ Reflexive claim-evidence integrity (`FE-CLAIM-025`) means the claim-to-proof dis
 
 ---
 
+## Differential Oracle (cross-runtime equivalence)
+
+The differential oracle runs the same JavaScript program through multiple backends — the native `franken-engine` lane, the extracted `franken-core` lane, and (when present) reference runtimes Node and Bun — canonicalizes each backend's observable result, and classifies any disagreement. It is both a correctness oracle (the cross-runtime lockstep comparison behind `FE-CLAIM-022`) and a free internal bug-finder (the `franken-engine` ↔ `franken-core` twin). The operator-facing surface is `frankenctl oracle`:
+
+```bash
+# Run one case across the two hermetic in-process lanes; emit a content-addressed bundle.
+frankenctl oracle run ./case.js --engines franken,core --bundle ./out --json
+
+# Re-verify the preserved bundle byte-identically (integrity + semantic verdict).
+frankenctl oracle report ./out --json
+```
+
+A bundle directory carries `manifest.json` (sha256-indexed artifacts + `bundle_id`), `report.json` (per-backend receipts, canonicalization report, divergence taxonomy), and `repro.lock` (the re-run recipe + determinism contract). Exit codes: `0` consensus, `3` divergence, `4` insufficient-data/degraded, `2` io.
+
+**Reading a divergence.** Every classified divergence carries one of seven taxonomy classes — `parser`, `lowering`, `runtime`, `module_resolution`, `hostcall_policy`, `intentional_security_divergence` (a deliberate FrankenEngine security boundary; carries a `waiver_id` and is not a defect), and `reference_runtime_bug` (the FrankenEngine lanes agree and the reference runtime is the outlier). The full taxonomy, bundle anatomy, and triage steps are in the operator runbook [`docs/DW_DIFFERENTIAL_ORACLE_V1.md`](./docs/DW_DIFFERENTIAL_ORACLE_V1.md).
+
+**Degraded path.** Requesting a reference runtime that is not installed does not silently drop the lane and assert consensus: the run is marked degraded, exits non-zero (`4`), and writes a `degraded_receipt.json` (`FE-REPRO-0007`). "Denominator unavailable" is recorded as a distinct evidence state from "we know it diverges".
+
+**Reproducing a result.** `repro.lock` pins the *semantic verdict* over canonical structured values and exception classes — not wall-clock timing (so `allow_wall_clock=true`). Re-run the recorded command and confirm `frankenctl oracle report` reports the same verdict.
+
+**Node/Bun denominator (`FE-CLAIM-010`, TARGETED).** The cross-runtime throughput goal is **TARGETED**, not observed. A measured, fairness-compliant Node/Bun denominator is linked at [`docs/perf/e2_denominator_bundle_v1`](./docs/perf/e2_denominator_bundle_v1) (with a `repro.lock` partner and an environment manifest). On that corpus the native baseline interpreter is currently slower than both Node and Bun, so the throughput target is not met and the claim stays TARGETED — backed by a measured denominator rather than absence of data. The oracle will not fabricate a denominator: a single-lane run reports `insufficient_data` (exit `4`), and the matrix gate rejects simulated (`hot_paths_simulation`) or mock (`MockCertificate`) evidence.
+
+The capstone gate is `./scripts/run_dw_differential_oracle.sh ci` (replay: `./scripts/e2e/dw_differential_oracle_replay.sh bundle`); a runnable demo is [`examples/23_differential_oracle/demo.sh`](./examples/23_differential_oracle/demo.sh).
+
+---
+
 ## About Contributions
 
 > *About Contributions:* Please don't take this the wrong way, but I do not accept outside contributions for any of my projects. I simply don't have the mental bandwidth to review anything, and it's my name on the thing, so I'm responsible for any problems it causes; thus, the risk-reward is highly asymmetric from my perspective. I'd also have to worry about other "stakeholders," which seems unwise for tools I mostly make for myself for free. Feel free to submit issues, and even PRs if you want to illustrate a proposed fix, but know I won't merge them directly. Instead, I'll have Claude or Codex review submissions via `gh` and independently decide whether and how to address them. Bug reports in particular are welcome. Sorry if this offends, but I want to avoid wasted time and hurt feelings. I understand this isn't in sync with the prevailing open-source ethos that seeks community contributions, but it's the only way I can move at this velocity and keep my sanity.

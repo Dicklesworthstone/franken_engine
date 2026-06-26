@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{Shutdown, TcpStream, ToSocketAddrs};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
@@ -41,6 +41,19 @@ pub enum HostIoRequest {
     FsWrite { path: String, data: Vec<u8> },
     NetworkSend { endpoint: String, payload: Vec<u8> },
     NetworkRecv { endpoint: String, max_len: u64 },
+    /// A single-socket request/response round trip: connect to `endpoint`, write
+    /// `payload` (the framed request), then read the reply back on the *same*
+    /// socket bounded by `max_len`. `NetworkSend` (egress-only) and `NetworkRecv`
+    /// (a fresh socket) cannot carry an HTTP request/response pair across one
+    /// connection; `NetworkRequest` is the shape a `http.get`/`fetch` needs so the
+    /// guest can observe the real response (status/headers/body). The egress is
+    /// the security-relevant action, so it carries `HostIoCapability::NetworkSend`
+    /// and is gated by the product-layer SSRF policy exactly like `NetworkSend`.
+    NetworkRequest {
+        endpoint: String,
+        payload: Vec<u8>,
+        max_len: u64,
+    },
 }
 
 impl HostIoRequest {
@@ -51,6 +64,9 @@ impl HostIoRequest {
             Self::FsWrite { .. } => HostIoCapability::FsWrite,
             Self::NetworkSend { .. } => HostIoCapability::NetworkSend,
             Self::NetworkRecv { .. } => HostIoCapability::NetworkRecv,
+            // The egress write is the gated action; reading the reply on the same
+            // socket is its natural completion, not a separately-grantable read.
+            Self::NetworkRequest { .. } => HostIoCapability::NetworkSend,
         }
     }
 
@@ -61,6 +77,7 @@ impl HostIoRequest {
             Self::FsWrite { .. } => "fs_write",
             Self::NetworkSend { .. } => "network_send",
             Self::NetworkRecv { .. } => "network_recv",
+            Self::NetworkRequest { .. } => "network_request",
         }
     }
 }
@@ -73,6 +90,9 @@ pub enum HostIoResponse {
     FsWrite { bytes_written: u64 },
     NetworkSend { bytes_sent: u64 },
     NetworkRecv { bytes: Vec<u8> },
+    /// Raw response bytes read back on the same socket by a [`HostIoRequest::NetworkRequest`]
+    /// round trip (status line + headers + body, exactly as the peer sent them).
+    NetworkRequest { response: Vec<u8> },
 }
 
 /// Failure result of a host I/O request.
@@ -478,6 +498,57 @@ impl SandboxedHostIo {
         }
         Ok(HostIoResponse::NetworkRecv { bytes })
     }
+
+    /// A single-socket request/response round trip: connect once, write the
+    /// framed `payload`, flush, then read the reply back on the *same* socket
+    /// (bounded by `min(max_len, max_bytes)`). This is the mechanism behind a
+    /// guest `http.get`/`fetch`: the response bytes returned here are the real
+    /// status line + headers + body the peer sent, which the engine parses into a
+    /// JS response object. Read termination relies on the peer closing the
+    /// connection after responding (the engine frames `Connection: close`), so
+    /// `read_to_end` returns at EOF rather than blocking until the read timeout.
+    fn network_request(&self, endpoint: &str, payload: &[u8], max_len: u64) -> HostIoOutcome {
+        if u64::try_from(payload.len()).unwrap_or(u64::MAX) > self.max_bytes {
+            return Err(HostIoError::Io {
+                detail: format!(
+                    "network request payload of {} bytes to {endpoint} exceeds the {}-byte cap",
+                    payload.len(),
+                    self.max_bytes
+                ),
+            });
+        }
+        // Bound the response read by the smaller of the caller-requested length
+        // and the provider's per-operation cap.
+        let cap = max_len.min(self.max_bytes);
+        let mut stream = self.connect(endpoint)?;
+        stream.write_all(payload).map_err(|err| HostIoError::Io {
+            detail: format!("send to {endpoint}: {err}"),
+        })?;
+        stream.flush().map_err(|err| HostIoError::Io {
+            detail: format!("flush to {endpoint}: {err}"),
+        })?;
+        // Half-close the write direction: we send nothing more on this connection,
+        // so signal end-of-request to the peer. This lets a peer that reads the
+        // request to EOF (rather than parsing its framing) respond and close, and
+        // it leaves our read half open to receive the reply. Best-effort: a peer
+        // that already closed makes this a no-op.
+        let _ = stream.shutdown(Shutdown::Write);
+        // Read the reply on the SAME socket. cap+1 so a peer that streams more
+        // than the cap fails closed rather than being silently truncated.
+        let mut response = Vec::new();
+        stream
+            .take(cap.saturating_add(1))
+            .read_to_end(&mut response)
+            .map_err(|err| HostIoError::Io {
+                detail: format!("recv from {endpoint}: {err}"),
+            })?;
+        if u64::try_from(response.len()).unwrap_or(u64::MAX) > cap {
+            return Err(HostIoError::Io {
+                detail: format!("network response from {endpoint} exceeds the {cap}-byte cap"),
+            });
+        }
+        Ok(HostIoResponse::NetworkRequest { response })
+    }
 }
 
 impl HostIoProvider for SandboxedHostIo {
@@ -501,6 +572,11 @@ impl HostIoProvider for SandboxedHostIo {
             HostIoRequest::NetworkRecv { endpoint, max_len } => {
                 self.network_recv(endpoint, *max_len)
             }
+            HostIoRequest::NetworkRequest {
+                endpoint,
+                payload,
+                max_len,
+            } => self.network_request(endpoint, payload, *max_len),
         }
     }
 }
@@ -1057,6 +1133,77 @@ mod tests {
             }
         );
         server.join().expect("server thread");
+    }
+
+    /// bd-3894s slice (4): a `NetworkRequest` is a single-socket round trip — the
+    /// request is written and the reply read back on the *same* connection. The
+    /// server reads the (half-closed) request to EOF, then responds and closes; the
+    /// client returns the full response bytes.
+    #[test]
+    fn sandboxed_network_request_round_trips_on_one_socket() {
+        use std::net::TcpListener;
+        let scratch = ScratchDir::new();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let addr = listener.local_addr().expect("local addr");
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            // The client half-closes its write side after sending, so read_to_end
+            // returns the full request at EOF (no request-framing parser needed).
+            let mut request = Vec::new();
+            sock.read_to_end(&mut request).expect("server read request");
+            sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nbody")
+                .expect("server write response");
+            // Dropping `sock` closes the connection so the client read terminates.
+            request
+        });
+        let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
+        let out = provider
+            .perform(
+                &HostIoRequest::NetworkRequest {
+                    endpoint: addr.to_string(),
+                    payload: b"GET /x HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n".to_vec(),
+                    max_len: 4096,
+                },
+                // The round trip is authorized by the egress (send) capability.
+                &[HostIoCapability::NetworkSend],
+            )
+            .expect("network request");
+        assert_eq!(
+            out,
+            HostIoResponse::NetworkRequest {
+                response: b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nbody".to_vec()
+            },
+            "the round trip returns the peer's full response"
+        );
+        let request = server.join().expect("server thread");
+        assert_eq!(
+            request,
+            b"GET /x HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n",
+            "the request really crossed the socket"
+        );
+    }
+
+    /// bd-3894s slice (4): `NetworkRequest` requires the `NetworkSend` capability
+    /// (the egress is the gated action); without it the round trip fails closed
+    /// before any socket opens.
+    #[test]
+    fn sandboxed_network_request_missing_capability_fails_closed() {
+        let scratch = ScratchDir::new();
+        let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
+        let out = provider.perform(
+            &HostIoRequest::NetworkRequest {
+                endpoint: "127.0.0.1:9".to_string(),
+                payload: b"GET / HTTP/1.1\r\n\r\n".to_vec(),
+                max_len: 4096,
+            },
+            &[HostIoCapability::FsRead],
+        );
+        assert_eq!(
+            out,
+            Err(HostIoError::CapabilityMissing {
+                capability: HostIoCapability::NetworkSend
+            })
+        );
     }
 
     #[test]

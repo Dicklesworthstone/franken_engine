@@ -20,6 +20,7 @@ use crate::algebraic_effects::{
 use crate::capability::{CapabilityProfile, ProfileKind, RuntimeCapability};
 use frankenengine_extension_host::host_io::{
     HostIoError, HostIoProvider, HostIoRecorder, HostIoRequest, HostIoResponse,
+    SANDBOXED_HOST_IO_MAX_BYTES,
 };
 
 // ---------------------------------------------------------------------------
@@ -356,7 +357,16 @@ impl FullCapsHandler {
                 // it) and an HTTP/1.1 request line + Host header + body payload.
                 let (endpoint, payload) =
                     http_request_to_wire(&url, &method, &headers, body.as_deref());
-                Ok(HostIoRequest::NetworkSend { endpoint, payload })
+                // bd-3894s slice (4): route the egress as a single-socket
+                // round trip so the guest can observe the real response. The
+                // response read is bounded by the same per-operation byte cap the
+                // provider enforces. (`NetworkSend` would only carry the egress and
+                // close the socket before any reply could be read.)
+                Ok(HostIoRequest::NetworkRequest {
+                    endpoint,
+                    payload,
+                    max_len: SANDBOXED_HOST_IO_MAX_BYTES,
+                })
             }
             other => Err(EffectError::InvalidParameters {
                 effect_name: other.to_string(),
@@ -371,6 +381,9 @@ impl FullCapsHandler {
             HostIoResponse::FsWrite { bytes_written } => EffectResult::new(*bytes_written),
             HostIoResponse::NetworkSend { bytes_sent } => EffectResult::new(*bytes_sent),
             HostIoResponse::NetworkRecv { bytes } => EffectResult::new(bytes.clone()),
+            // bd-3894s slice (4): the raw response bytes flow back to the
+            // interpreter, which parses them into a JS response object.
+            HostIoResponse::NetworkRequest { response } => EffectResult::new(response.clone()),
         }
     }
 }
@@ -817,6 +830,18 @@ fn http_request_to_wire(
             request.push_str("\r\n");
         }
     }
+    // bd-3894s slice (4): the network mechanism does a single-socket round trip
+    // and reads the response to EOF. HTTP/1.1 defaults to keep-alive, so unless
+    // the peer is told to close, that read would block until the connect/read
+    // timeout. Synthesize `Connection: close` (unless the caller already framed a
+    // `Connection` header) so the peer closes after responding and the round trip
+    // terminates promptly — exactly what a minimal one-shot HTTP client does.
+    let has_connection_header = headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("connection"));
+    if !has_connection_header {
+        request.push_str("Connection: close\r\n");
+    }
     request.push_str("\r\n");
     let mut payload = request.into_bytes();
     if let Some(body) = body {
@@ -1070,6 +1095,9 @@ mod tests {
                 HostIoRequest::NetworkRecv { max_len, .. } => HostIoResponse::NetworkRecv {
                     bytes: vec![0; *max_len as usize],
                 },
+                HostIoRequest::NetworkRequest { .. } => HostIoResponse::NetworkRequest {
+                    response: b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_vec(),
+                },
             })
         }
     }
@@ -1094,7 +1122,10 @@ mod tests {
     /// bd-656a2 (http leg): the `net:request` hostcall tag (emitted by the JS
     /// http.get/http.request lowering) builds a `hostcall:network` effect that
     /// round-trips through `host_io_request_from_effect` to a concrete
-    /// `host:port` NetworkSend carrying a framed HTTP/1.1 GET request.
+    /// `host:port` NetworkRequest carrying a framed HTTP/1.1 GET request.
+    /// bd-3894s slice (4): the request is a single-socket `NetworkRequest`
+    /// round trip (not a fire-and-forget `NetworkSend`) so the guest can observe
+    /// the response, and the framing carries `Connection: close`.
     #[test]
     fn create_effect_from_net_request_tag_builds_network_effect_bd_656a2() {
         let effect =
@@ -1104,7 +1135,9 @@ mod tests {
         let request = FullCapsHandler::host_io_request_from_effect(effect.as_ref())
             .expect("network effect must map to a HostIoRequest");
         match request {
-            HostIoRequest::NetworkSend { endpoint, payload } => {
+            HostIoRequest::NetworkRequest {
+                endpoint, payload, ..
+            } => {
                 assert_eq!(
                     endpoint, "example.test:80",
                     "url with no port must default to :80 and strip the path"
@@ -1118,8 +1151,12 @@ mod tests {
                     wire.contains("Host: example.test\r\n"),
                     "Host header must carry the authority: {wire:?}"
                 );
+                assert!(
+                    wire.contains("Connection: close\r\n"),
+                    "round-trip framing must request connection close: {wire:?}"
+                );
             }
-            other => panic!("expected NetworkSend, got {other:?}"),
+            other => panic!("expected NetworkRequest, got {other:?}"),
         }
     }
 
@@ -1139,8 +1176,11 @@ mod tests {
         assert_eq!(effect.effect_name(), "hostcall:network");
         let request = FullCapsHandler::host_io_request_from_effect(effect.as_ref())
             .expect("network effect must map to a HostIoRequest");
-        let HostIoRequest::NetworkSend { endpoint, payload } = request else {
-            panic!("expected a NetworkSend host io request");
+        let HostIoRequest::NetworkRequest {
+            endpoint, payload, ..
+        } = request
+        else {
+            panic!("expected a NetworkRequest host io request");
         };
         assert_eq!(endpoint, "example.test:80");
         let wire = String::from_utf8(payload).expect("ascii request line");
@@ -1167,11 +1207,36 @@ mod tests {
     #[test]
     fn http_request_to_wire_defaults_and_framing_bd_656a2() {
         // explicit port + multi-segment path are preserved verbatim.
+        // bd-3894s slice (4): the round-trip framing now appends `Connection: close`
+        // (so the peer closes and the response read terminates) before the
+        // blank-line terminator.
         let (endpoint, payload) =
             http_request_to_wire("http://127.0.0.1:8080/a/b", "GET", &[], None);
         assert_eq!(endpoint, "127.0.0.1:8080");
         let wire = String::from_utf8(payload).unwrap();
-        assert!(wire.starts_with("GET /a/b HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n"));
+        assert_eq!(
+            wire, "GET /a/b HTTP/1.1\r\nHost: 127.0.0.1:8080\r\nConnection: close\r\n\r\n",
+            "round-trip GET frames Host + Connection: close: {wire:?}"
+        );
+
+        // bd-3894s slice (4): a caller-supplied `Connection` header is honored and
+        // not duplicated.
+        let (_endpoint, payload) = http_request_to_wire(
+            "http://h:1/",
+            "GET",
+            &[("Connection".to_string(), "keep-alive".to_string())],
+            None,
+        );
+        let wire = String::from_utf8(payload).unwrap();
+        assert_eq!(
+            wire.to_ascii_lowercase().matches("connection:").count(),
+            1,
+            "caller Connection header is honored and not duplicated: {wire:?}"
+        );
+        assert!(
+            wire.contains("Connection: keep-alive\r\n"),
+            "caller Connection value is preserved: {wire:?}"
+        );
 
         // no scheme and no path -> default port 80 and default request target "/".
         let (endpoint, payload) = http_request_to_wire("example.test", "GET", &[], None);

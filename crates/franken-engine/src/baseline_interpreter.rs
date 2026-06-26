@@ -4750,15 +4750,23 @@ impl InterpreterCore {
                 }
                 Value::Undefined
             }
-            // bd-656a2 (http leg): `http.get(url)` / `http.request(url)`. The real,
-            // bounded NetworkSend egress effect already ran and was recorded in the
-            // host-effect transcript above (the ledger source the run --json effect
-            // ledger renders). Node's `http.get`/`http.request` return a
-            // ClientRequest object delivered alongside a response via callback/event;
-            // modeling that object + the response readable stream is a follow-up
-            // slice. Slice 1 evaluates the call to `undefined` — only the recorded
-            // host effect is load-bearing for the L1 proof-carrying acceptance bar.
-            "net:request" => Value::Undefined,
+            // bd-3894s slice (4) (http leg): `http.get(url)` / `http.request(url)` /
+            // `fetch(url)`. The single-socket `NetworkRequest` round trip both sent
+            // the egress AND read the peer's reply back; `result` carries the raw
+            // HTTP/1.1 response bytes (the same bytes the signed host-effect
+            // transcript records as the effect's post-state). Parse them into a JS
+            // response object — `{ status, statusText, ok, headers, body }` — so the
+            // guest observes the REAL response instead of `undefined`. `fetch`'s
+            // lowering promise-wraps this value, so `await fetch(url)` resolves to
+            // the response object. Modeling the full Node `ClientRequest` /
+            // `IncomingMessage` readable-stream event sequence (and `http.get(url,
+            // cb)` callback delivery of the response) remains a follow-up; returning
+            // the response object as the call value is the load-bearing
+            // "http calls return real responses" deliverable.
+            "net:request" => match result.downcast::<Vec<u8>>() {
+                Ok(bytes) => self.build_net_response_value(&bytes)?,
+                Err(_) => Value::Undefined,
+            },
             _ => Value::Undefined,
         })
     }
@@ -4946,6 +4954,75 @@ impl InterpreterCore {
         let values: Vec<Value> = bytes.iter().map(|&b| Value::Int(i64::from(b))).collect();
         let view = self.alloc_typed_array_from_values(TypedArrayKind::Uint8, &values)?;
         Ok(Value::Object(view))
+    }
+
+    /// bd-3894s slice (4): parse the raw HTTP/1.1 response bytes a `net:request`
+    /// round trip read back into the JS response object `http.get`/`fetch` returns.
+    /// The shape is a pragmatic blend of Node's `IncomingMessage` and the WHATWG
+    /// `Response`: `{ status, statusText, ok, headers, body }`, where:
+    /// - `status` is the numeric status code (0 if the response is unparseable),
+    /// - `statusText` is the reason phrase,
+    /// - `ok` is `true` for a 2xx status (WHATWG `Response.ok` semantics),
+    /// - `headers` is a plain object of lower-cased header name -> value (the
+    ///   lower-casing matches `fetch` `Headers` / Node's `res.headers`; the last
+    ///   value wins on a duplicate name, which is `alloc_object_with_properties`'s
+    ///   natural overwrite behavior),
+    /// - `body` is the response body decoded as a UTF-8 (lossy) string.
+    ///
+    /// Header/body framing is split at the first CRLFCRLF. A response with no
+    /// header terminator (a malformed or empty reply) yields `status: 0`, empty
+    /// headers, and an empty body rather than erroring — the egress still happened
+    /// and is recorded; the guest simply sees a non-OK response.
+    fn build_net_response_value(&mut self, raw: &[u8]) -> Result<Value, InterpreterError> {
+        let (head, body): (&[u8], &[u8]) = match raw.windows(4).position(|w| w == b"\r\n\r\n") {
+            Some(idx) => (&raw[..idx], &raw[idx + 4..]),
+            None => (raw, &[][..]),
+        };
+        let head_str = String::from_utf8_lossy(head);
+        let mut lines = head_str.split("\r\n");
+        let status_line = lines.next().unwrap_or("");
+        // "HTTP/1.1 200 OK" -> version / code / reason. `splitn(3, ' ')` keeps a
+        // multi-word reason phrase (e.g. "404 Not Found") intact.
+        let mut status_parts = status_line.splitn(3, ' ');
+        let _version = status_parts.next().unwrap_or("");
+        let status: i64 = status_parts
+            .next()
+            .and_then(|code| code.trim().parse::<i64>().ok())
+            .unwrap_or(0);
+        let status_text = status_parts.next().unwrap_or("").trim().to_string();
+
+        // Collect header name/value pairs (lower-cased names, trimmed values).
+        // Hold the owned strings so the `&str` keys handed to
+        // `alloc_object_with_properties` stay valid for the call.
+        let header_pairs: Vec<(String, Value)> = lines
+            .filter_map(|line| {
+                if line.is_empty() {
+                    return None;
+                }
+                line.split_once(':').map(|(name, value)| {
+                    (
+                        name.trim().to_ascii_lowercase(),
+                        Value::str(value.trim()),
+                    )
+                })
+            })
+            .collect();
+        let header_props: Vec<(&str, Value)> = header_pairs
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.clone()))
+            .collect();
+        let headers_id = self.alloc_object_with_properties(&header_props)?;
+
+        let body_str = String::from_utf8_lossy(body).into_owned();
+        let ok = (200..300).contains(&status);
+        let response_id = self.alloc_object_with_properties(&[
+            ("status", Value::Int(status)),
+            ("statusText", Value::str(status_text.as_str())),
+            ("ok", Value::Bool(ok)),
+            ("headers", Value::Object(headers_id)),
+            ("body", Value::str(body_str.as_str())),
+        ])?;
+        Ok(Value::Object(response_id))
     }
 
     // ---------------------------------------------------------------------------
@@ -34315,11 +34392,14 @@ mod async_runtime_tests_current {
         use frankenengine_extension_host::host_io::{
             HostIoRequest, InMemoryHostIoTranscript, SandboxedHostIo,
         };
-        use std::io::Read;
+        use std::io::{Read, Write};
         use std::time::Duration;
 
-        // A loopback listener stands in for the remote endpoint; capture the bytes
-        // the egress writes so the test proves a real request crossed the socket.
+        // A loopback listener stands in for the remote endpoint. bd-3894s slice (4):
+        // the dispatch now does a single-socket request/response round trip, so the
+        // server reads the (half-closed) request to EOF, then sends a response and
+        // closes so the client's response read terminates. Capture the request bytes
+        // so the test still proves a real, framed request crossed the socket.
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
         let addr = listener.local_addr().expect("listener addr");
         let server = std::thread::spawn(move || {
@@ -34327,10 +34407,13 @@ mod async_runtime_tests_current {
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .expect("server read timeout");
-            let mut buf = vec![0u8; 256];
-            let n = stream.read(&mut buf).unwrap_or(0);
-            buf.truncate(n);
-            buf
+            let mut received = Vec::new();
+            let _ = stream.read_to_end(&mut received);
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\nhi",
+            );
+            let _ = stream.flush();
+            received
         });
 
         // The sandboxed provider needs a real root for its fs arms; the network
@@ -34352,15 +34435,45 @@ mod async_runtime_tests_current {
             r[0] = Value::Str(Arc::from(url.as_str()));
         });
 
-        // The dispatch returns `undefined` (slice 1 does not model ClientRequest),
-        // but the egress is real and recorded.
+        // bd-3894s slice (4): the dispatch now returns the PARSED response object
+        // (status/statusText/ok/headers/body), not undefined.
         let result = core
             .dispatch_host_io_hostcall("net:request", RegRange { start: 0, count: 1 })
             .expect("net:request dispatch");
+        let Value::Object(response_id) = result else {
+            panic!("net:request must return a response object, got {result:?}");
+        };
+        let response = core
+            .heap
+            .get(response_id.0 as usize)
+            .expect("response object on the heap");
         assert_eq!(
-            result,
-            Value::Undefined,
-            "http.get/request slice 1 evaluates to undefined"
+            response.properties.get("status"),
+            Some(&Value::Int(200)),
+            "the parsed response carries the numeric status code"
+        );
+        assert_eq!(
+            response.properties.get("ok"),
+            Some(&Value::Bool(true)),
+            "a 2xx status reports ok = true"
+        );
+        assert_eq!(
+            response.properties.get("body"),
+            Some(&Value::str("hi")),
+            "the response body is decoded back to JS"
+        );
+        let headers_id = match response.properties.get("headers") {
+            Some(Value::Object(id)) => *id,
+            other => panic!("response carries a headers object, got {other:?}"),
+        };
+        let headers = core
+            .heap
+            .get(headers_id.0 as usize)
+            .expect("headers object on the heap");
+        assert_eq!(
+            headers.properties.get("content-type"),
+            Some(&Value::str("text/plain")),
+            "response header names are lower-cased and values decoded"
         );
 
         let received = server.join().expect("server thread");
@@ -34374,23 +34487,23 @@ mod async_runtime_tests_current {
             "the request must carry the Host header for the endpoint, got {wire:?}"
         );
 
-        // The egress landed in the host-effect transcript as a NetworkSend (the
-        // proof-carrying ledger entry the L1 http.request subject is built from).
+        // The round trip landed in the host-effect transcript as a NetworkRequest
+        // (the proof-carrying ledger entry the L1 http.request subject is built from).
         let entries = recorder.recorded_entries();
         assert_eq!(entries.len(), 1, "exactly one host effect recorded");
         match &entries[0].0 {
-            HostIoRequest::NetworkSend { endpoint, .. } => {
+            HostIoRequest::NetworkRequest { endpoint, .. } => {
                 assert_eq!(
                     endpoint,
                     &addr.to_string(),
                     "endpoint resolves to host:port"
                 );
             }
-            other => panic!("expected a NetworkSend host effect, got {other:?}"),
+            other => panic!("expected a NetworkRequest host effect, got {other:?}"),
         }
         assert!(
             entries[0].1.is_ok(),
-            "the recorded egress outcome must be a successful send"
+            "the recorded round-trip outcome must be a successful response"
         );
 
         let _ = std::fs::remove_dir_all(&root);
@@ -34407,12 +34520,13 @@ mod async_runtime_tests_current {
         use frankenengine_extension_host::host_io::{
             HostIoRequest, InMemoryHostIoTranscript, SandboxedHostIo,
         };
-        use std::io::Read;
+        use std::io::{Read, Write};
         use std::time::Duration;
 
         // A loopback listener captures the bytes the egress writes so the test
-        // proves the resolved method/headers/body crossed the socket. The egress
-        // closes the socket after writing, so read_to_end terminates cleanly.
+        // proves the resolved method/headers/body crossed the socket. bd-3894s
+        // slice (4): the round trip reads the (half-closed) request to EOF, then
+        // replies and closes so the client's response read terminates.
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
         let addr = listener.local_addr().expect("listener addr");
         let server = std::thread::spawn(move || {
@@ -34422,6 +34536,10 @@ mod async_runtime_tests_current {
                 .expect("server read timeout");
             let mut buf = Vec::new();
             let _ = stream.read_to_end(&mut buf);
+            let _ = stream.write_all(
+                b"HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: 4\r\n\r\ndone",
+            );
+            let _ = stream.flush();
             buf
         });
 
@@ -34474,12 +34592,33 @@ mod async_runtime_tests_current {
             r[1] = Value::Object(options_id);
         });
 
-        // Slice (2) still evaluates the call to `undefined` (response modeling is a
-        // follow-up slice); the load-bearing change is the framed/recorded request.
+        // bd-3894s slice (4): the dispatch returns the parsed response object; the
+        // framed/recorded request still faithfully carries the resolved POST + body.
         let result = core
             .dispatch_host_io_hostcall("net:request", RegRange { start: 0, count: 2 })
             .expect("net:request dispatch");
-        assert_eq!(result, Value::Undefined);
+        let Value::Object(response_id) = result else {
+            panic!("net:request must return a response object, got {result:?}");
+        };
+        let response = core
+            .heap
+            .get(response_id.0 as usize)
+            .expect("response object on the heap");
+        assert_eq!(
+            response.properties.get("status"),
+            Some(&Value::Int(201)),
+            "the parsed response carries the numeric status code"
+        );
+        assert_eq!(
+            response.properties.get("ok"),
+            Some(&Value::Bool(true)),
+            "a 2xx status reports ok = true"
+        );
+        assert_eq!(
+            response.properties.get("body"),
+            Some(&Value::str("done")),
+            "the response body is decoded back to JS"
+        );
 
         let received = server.join().expect("server thread");
         let wire = String::from_utf8_lossy(&received);
@@ -34509,7 +34648,9 @@ mod async_runtime_tests_current {
         let entries = recorder.recorded_entries();
         assert_eq!(entries.len(), 1, "exactly one host effect recorded");
         match &entries[0].0 {
-            HostIoRequest::NetworkSend { endpoint, payload } => {
+            HostIoRequest::NetworkRequest {
+                endpoint, payload, ..
+            } => {
                 assert_eq!(endpoint, &addr.to_string(), "endpoint resolves to host:port");
                 let recorded = String::from_utf8_lossy(payload);
                 assert!(
@@ -34518,7 +34659,7 @@ mod async_runtime_tests_current {
                     "the recorded effect must faithfully carry the POST + body, got {recorded:?}"
                 );
             }
-            other => panic!("expected a NetworkSend host effect, got {other:?}"),
+            other => panic!("expected a NetworkRequest host effect, got {other:?}"),
         }
 
         let _ = std::fs::remove_dir_all(&root);
@@ -34554,11 +34695,11 @@ mod async_runtime_tests_current {
                 _granted: &[HostIoCapability],
             ) -> HostIoOutcome {
                 match request {
-                    HostIoRequest::NetworkSend { .. } | HostIoRequest::NetworkRecv { .. } => {
-                        Err(HostIoError::Denied {
-                            reason: "ssrf: endpoint blocked by policy".to_string(),
-                        })
-                    }
+                    HostIoRequest::NetworkSend { .. }
+                    | HostIoRequest::NetworkRecv { .. }
+                    | HostIoRequest::NetworkRequest { .. } => Err(HostIoError::Denied {
+                        reason: "ssrf: endpoint blocked by policy".to_string(),
+                    }),
                     HostIoRequest::FsRead { .. } => {
                         Ok(HostIoResponse::FsRead { bytes: Vec::new() })
                     }
@@ -34591,8 +34732,8 @@ mod async_runtime_tests_current {
             "a denied egress evaluates to undefined (no async error event modeled)"
         );
 
-        // The denial is recorded as a fail-closed NetworkSend Err — the source of
-        // the ledger's denied receipt.
+        // The denial is recorded as a fail-closed NetworkRequest Err — the source
+        // of the ledger's denied receipt.
         let entries = recorder.recorded_entries();
         assert_eq!(
             entries.len(),
@@ -34600,13 +34741,66 @@ mod async_runtime_tests_current {
             "the denied egress must still be recorded for the ledger"
         );
         assert!(
-            matches!(entries[0].0, HostIoRequest::NetworkSend { .. }),
+            matches!(entries[0].0, HostIoRequest::NetworkRequest { .. }),
             "the recorded request is the attempted egress"
         );
         assert!(
             entries[0].1.is_err(),
             "the recorded outcome must be the fail-closed denial"
         );
+    }
+
+    /// bd-3894s slice (4): `build_net_response_value` parses raw HTTP/1.1 response
+    /// bytes into the JS response object — status code, reason phrase, ok flag,
+    /// lower-cased headers, and the decoded body.
+    #[test]
+    fn build_net_response_value_parses_status_headers_body_bd_3894s() {
+        let mut core = test_interpreter();
+        let raw = b"HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nX-Trace: abc\r\n\r\nmissing";
+        let Value::Object(id) = core
+            .build_net_response_value(raw)
+            .expect("parse response")
+        else {
+            panic!("expected a response object");
+        };
+        let response = core.heap.get(id.0 as usize).expect("response object");
+        assert_eq!(response.properties.get("status"), Some(&Value::Int(404)));
+        assert_eq!(
+            response.properties.get("statusText"),
+            Some(&Value::str("Not Found")),
+            "a multi-word reason phrase is preserved intact"
+        );
+        assert_eq!(
+            response.properties.get("ok"),
+            Some(&Value::Bool(false)),
+            "a 4xx status is not ok"
+        );
+        assert_eq!(response.properties.get("body"), Some(&Value::str("missing")));
+        let Some(Value::Object(headers_id)) = response.properties.get("headers") else {
+            panic!("response carries a headers object");
+        };
+        let headers = core.heap.get(headers_id.0 as usize).expect("headers object");
+        assert_eq!(
+            headers.properties.get("content-type"),
+            Some(&Value::str("text/plain")),
+            "header names are lower-cased"
+        );
+        assert_eq!(headers.properties.get("x-trace"), Some(&Value::str("abc")));
+    }
+
+    /// bd-3894s slice (4): a malformed/empty reply (no CRLFCRLF header terminator)
+    /// yields a non-OK `status: 0` response rather than erroring — the egress still
+    /// happened and is recorded; the guest simply sees a failed response.
+    #[test]
+    fn build_net_response_value_handles_empty_reply_bd_3894s() {
+        let mut core = test_interpreter();
+        let Value::Object(id) = core.build_net_response_value(b"").expect("parse empty") else {
+            panic!("expected a response object");
+        };
+        let response = core.heap.get(id.0 as usize).expect("response object");
+        assert_eq!(response.properties.get("status"), Some(&Value::Int(0)));
+        assert_eq!(response.properties.get("ok"), Some(&Value::Bool(false)));
+        assert_eq!(response.properties.get("body"), Some(&Value::str("")));
     }
 
     /// bd-rul7k: `decode_fs_read_result` honors the dependency-free single-arg

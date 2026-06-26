@@ -1,0 +1,35 @@
+{
+  "commands": [
+    "target/release/franken_coverage_frontier --run-suite <tc39/test262 checkout> --coverage-summary --out coverage_summary.json",
+    "scripts/build_coverage_summary_bundle.py --summary coverage_summary.json --out-dir docs/coverage/es2020_coverage_summary_bundle_v1"
+  ],
+  "determinism": {
+    "allow_network": false,
+    "allow_randomness": false,
+    "allow_wall_clock": false,
+    "max_clock_skew_seconds": 0,
+    "note": "the locked expected output is the coverage report_digest (a pure function of the per-view (view, passed, total) counts); re-running the engine over the same test262 corpus commit reproduces it byte-for-byte",
+    "reproducible_assertion": "report_digest"
+  },
+  "expected_outputs": [
+    {
+      "kind": "coverage_report_digest",
+      "path": "coverage_summary.json#report_digest",
+      "sha256": "cae596c43a5e4b4018b7dcbc06fbd037af255b0e756cec2cb9002bbd808e0ed8"
+    }
+  ],
+  "generated_at_utc": "20260626T200450Z",
+  "inputs": [
+    {
+      "kind": "test262_corpus_commit",
+      "path": "tc39/test262",
+      "sha256": "d0c1b4555b03dd404873fd6422a4b5da00136500"
+    }
+  ],
+  "schema_version": "franken-engine.repro-lock.v1",
+  "source_commit": "5e77ab86dc36a5c379037f37e45425f0c4733351",
+  "verification": {
+    "command": "./scripts/run_coverage_summary_bundle_gate.sh ci",
+    "expected_verdict": "pass"
+  }
+}

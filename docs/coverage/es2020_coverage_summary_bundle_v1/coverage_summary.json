@@ -1,0 +1,55 @@
+{
+  "corpus_commit": "d0c1b4555b03dd404873fd6422a4b5da00136500",
+  "floor_view": "builtin",
+  "floor_view_executed_millionths": 16664,
+  "in_scope_passed": 6201,
+  "in_scope_total": 47514,
+  "intentional_divergence_count": 0,
+  "limitations": [
+    "scope: ES2020-normative observable surface (language/* + built-ins/*); excludes intl402, annexB, proposals, and harness",
+    "EXECUTED means the engine evaluated a positive case without an engine error, or correctly rejected a negative case; assertion outcomes are NOT verified — this is an execution-coverage measure, not a spec-conformance pass-rate",
+    "the stricter harness-based ES2020 conformance pass-rate (assertions enforced, Test262 includes preloaded) is far lower — see docs/test262_real_corpus_pass_rate_v1.json; this executed-% must not be read as a conformance score",
+    "the runner does not preload Test262 harness includes (assert.js, sta.js, propertyHelper.js), so cases that call those helpers are recorded as engine errors and excluded from executed"
+  ],
+  "observable_surface_executed_millionths": 130508,
+  "report_digest": "cae596c43a5e4b4018b7dcbc06fbd037af255b0e756cec2cb9002bbd808e0ed8",
+  "schema_version": "franken-engine.coverage-summary.v1",
+  "views": [
+    {
+      "executed_millionths": 248125,
+      "passed": 1026,
+      "total": 4135,
+      "view": "async"
+    },
+    {
+      "executed_millionths": 16664,
+      "passed": 378,
+      "total": 22683,
+      "view": "builtin"
+    },
+    {
+      "executed_millionths": 170782,
+      "passed": 1383,
+      "total": 8098,
+      "view": "control-flow"
+    },
+    {
+      "executed_millionths": 0,
+      "passed": 0,
+      "total": 0,
+      "view": "intentional-divergence"
+    },
+    {
+      "executed_millionths": 425000,
+      "passed": 714,
+      "total": 1680,
+      "view": "module"
+    },
+    {
+      "executed_millionths": 247298,
+      "passed": 2700,
+      "total": 10918,
+      "view": "parser"
+    }
+  ]
+}

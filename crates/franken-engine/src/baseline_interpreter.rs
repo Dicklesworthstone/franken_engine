@@ -63,6 +63,7 @@ use crate::hash_tiers::ContentHash;
 use crate::algebraic_effects::EffectError;
 use crate::hostcall_effects_migration::{
     create_effect_from_hostcall_tag, create_handler_stack_from_profile_with_host_io,
+    create_network_effect,
 };
 use crate::hostcall_telemetry::{
     FlowLabel, HostcallResult as TelemetryHostcallResult, HostcallType as TelemetryHostcallType,
@@ -4652,11 +4653,27 @@ impl InterpreterCore {
         } else {
             None
         };
-        let effect = create_effect_from_hostcall_tag(capability, &arg_strings).map_err(|err| {
-            InterpreterError::InternalError {
-                details: format!("host effect build failed for {capability}: {err}"),
-            }
-        })?;
+        // bd-3894s slice (2): the `net:request` request `method`/`headers`/`body`
+        // live in the call's options/init object (`fetch(url, { method, headers,
+        // body })` / `http.request(url, { method, headers })`) — a structured JS
+        // value the string-args `create_effect_from_hostcall_tag` boundary cannot
+        // see (it would frame a bodyless GET regardless). Resolve those fields off
+        // the heap here and build the network effect directly so the recorded,
+        // signed EffectReceipt AND the wire egress faithfully reflect the real
+        // request: a POST-with-body must never be sent — or recorded — as a benign
+        // GET. Non-`net:` capabilities keep the string-args builder unchanged.
+        let effect = if capability.starts_with("net:") {
+            let url = arg_strings.first().cloned().unwrap_or_default();
+            let (method, headers, body) =
+                self.resolve_net_request_options(second_arg_value.as_ref());
+            create_network_effect(url, method, headers, body)
+        } else {
+            create_effect_from_hostcall_tag(capability, &arg_strings).map_err(|err| {
+                InterpreterError::InternalError {
+                    details: format!("host effect build failed for {capability}: {err}"),
+                }
+            })?
+        };
         // Build a Full handler stack backed by the provider (+ recorder) for this
         // dispatch. Full grants all capabilities so the stack's gate never
         // re-denies what the interpreter already authorized; the provider performs
@@ -4786,6 +4803,76 @@ impl InterpreterCore {
                 Some(Value::Str(s)) => Some(s.to_string()),
                 _ => None,
             },
+            _ => None,
+        }
+    }
+
+    /// bd-3894s slice (2): resolve the request `method`, `headers`, and `body`
+    /// from a `fetch(url, init)` / `http.request(url, options)` options object so
+    /// the network host effect (and its signed receipt) reflect the REAL request
+    /// rather than a hardcoded bodyless GET. The options object is the call's
+    /// SECOND argument, forwarded by the http/fetch lowering (`net:request`
+    /// arg[1]) and retained here as `second_arg`.
+    ///
+    /// Node-ish parity for the recognized fields:
+    /// - `method`: trimmed + upper-cased; defaults to `"GET"` when absent/blank.
+    /// - `headers`: a nested `{ name: value }` object; values are coerced to
+    ///   strings and emitted in the object's deterministic `BTreeMap` key order
+    ///   so the recorded effect is byte-reproducible. Non-stringable header
+    ///   values are skipped rather than mis-framed.
+    /// - `body`: a string (or stringified integer) becomes the request body;
+    ///   anything else — including the `http.request` writable-stream form that
+    ///   carries the body via `req.write`/`req.end` (a follow-up slice) — yields
+    ///   no body here.
+    ///
+    /// A non-object second arg (the callback closure in `http.get(url, cb)`,
+    /// `undefined`, etc.) yields the bodyless-GET defaults, leaving the existing
+    /// slice-1 GET egress unchanged.
+    fn resolve_net_request_options(
+        &self,
+        second_arg: Option<&Value>,
+    ) -> (String, Vec<(String, String)>, Option<Vec<u8>>) {
+        let defaults = || ("GET".to_string(), Vec::new(), None);
+        let Some(Value::Object(id)) = second_arg else {
+            return defaults();
+        };
+        let Some(options) = self.heap.get(id.0 as usize) else {
+            return defaults();
+        };
+        let method = match options.properties.get("method") {
+            Some(Value::Str(s)) if !s.trim().is_empty() => s.trim().to_ascii_uppercase(),
+            _ => "GET".to_string(),
+        };
+        let headers = match options.properties.get("headers") {
+            Some(Value::Object(hid)) => self
+                .heap
+                .get(hid.0 as usize)
+                .map(|h| {
+                    h.properties
+                        .iter()
+                        .filter_map(|(name, value)| {
+                            Self::net_header_value(value).map(|v| (name.clone(), v))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        let body = match options.properties.get("body") {
+            Some(Value::Str(s)) => Some(s.as_bytes().to_vec()),
+            Some(Value::Int(i)) => Some(i.to_string().into_bytes()),
+            _ => None,
+        };
+        (method, headers, body)
+    }
+
+    /// bd-3894s slice (2): coerce a single header value to its wire string. A
+    /// string is emitted verbatim and an integer is stringified; anything else
+    /// (object/closure/etc.) is skipped rather than mis-framed as a header value.
+    fn net_header_value(value: &Value) -> Option<String> {
+        match value {
+            Value::Str(s) => Some(s.to_string()),
+            Value::Int(i) => Some(i.to_string()),
             _ => None,
         }
     }
@@ -34305,6 +34392,134 @@ mod async_runtime_tests_current {
             entries[0].1.is_ok(),
             "the recorded egress outcome must be a successful send"
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// bd-3894s slice (2): a `net:request` whose SECOND argument is a
+    /// `fetch(url, init)` / `http.request(url, options)` options object
+    /// (`{ method, headers, body }`) must frame the REAL method/headers/body onto
+    /// the wire — and record them in the host-effect transcript — instead of the
+    /// hardcoded bodyless GET of slice 1. A POST-with-body proof must never be
+    /// recorded (or sent) as a benign GET.
+    #[test]
+    fn hostcall_net_request_dispatch_frames_post_body_from_options_bd_3894s() {
+        use frankenengine_extension_host::host_io::{
+            HostIoRequest, InMemoryHostIoTranscript, SandboxedHostIo,
+        };
+        use std::io::Read;
+        use std::time::Duration;
+
+        // A loopback listener captures the bytes the egress writes so the test
+        // proves the resolved method/headers/body crossed the socket. The egress
+        // closes the socket after writing, so read_to_end terminates cleanly.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("listener addr");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _peer) = listener.accept().expect("accept egress connection");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("server read timeout");
+            let mut buf = Vec::new();
+            let _ = stream.read_to_end(&mut buf);
+            buf
+        });
+
+        let mut root = std::env::temp_dir();
+        root.push(format!(
+            "frankenengine_interp_net_post_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        let mut core = test_interpreter();
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        core.set_host_io(provider, Some(recorder_dyn));
+
+        // reg0 = URL operand; reg1 = the options object the lowering now forwards as
+        // arg[1]: `{ method: 'post', headers: { 'Content-Type': 'text/plain' },
+        // body: 'payload' }`. The lowercase method also exercises the resolver's
+        // Node-parity upper-casing.
+        let url = format!("http://{addr}/submit");
+        let options_id = core.mutate_heap(|h| {
+            let headers_id = ObjectId(h.len() as u32);
+            let mut headers = HeapObject::new();
+            headers
+                .properties
+                .insert("Content-Type".to_string(), Value::str("text/plain"));
+            h.push(headers);
+
+            let options_id = ObjectId(h.len() as u32);
+            let mut options = HeapObject::new();
+            options
+                .properties
+                .insert("method".to_string(), Value::str("post"));
+            options
+                .properties
+                .insert("headers".to_string(), Value::Object(headers_id));
+            options
+                .properties
+                .insert("body".to_string(), Value::str("payload"));
+            h.push(options);
+            options_id
+        });
+        core.mutate_registers(|r| {
+            if r.len() < 2 {
+                r.resize(2, Value::Undefined);
+            }
+            r[0] = Value::Str(Arc::from(url.as_str()));
+            r[1] = Value::Object(options_id);
+        });
+
+        // Slice (2) still evaluates the call to `undefined` (response modeling is a
+        // follow-up slice); the load-bearing change is the framed/recorded request.
+        let result = core
+            .dispatch_host_io_hostcall("net:request", RegRange { start: 0, count: 2 })
+            .expect("net:request dispatch");
+        assert_eq!(result, Value::Undefined);
+
+        let received = server.join().expect("server thread");
+        let wire = String::from_utf8_lossy(&received);
+        assert!(
+            wire.starts_with("POST /submit HTTP/1.1\r\n"),
+            "the (upper-cased) method from the options object must frame the request line, got {wire:?}"
+        );
+        assert!(
+            wire.contains(&format!("Host: {addr}\r\n")),
+            "the Host header must carry the endpoint, got {wire:?}"
+        );
+        assert!(
+            wire.contains("Content-Type: text/plain\r\n"),
+            "the headers object must be framed onto the wire, got {wire:?}"
+        );
+        assert!(
+            wire.contains("Content-Length: 7\r\n"),
+            "the body length must be framed, got {wire:?}"
+        );
+        assert!(
+            wire.ends_with("\r\n\r\npayload"),
+            "the body from the options object must follow the blank-line terminator, got {wire:?}"
+        );
+
+        // The egress with the resolved method/body landed in the host-effect
+        // transcript (the proof-carrying ledger source) — faithfully, not as a GET.
+        let entries = recorder.recorded_entries();
+        assert_eq!(entries.len(), 1, "exactly one host effect recorded");
+        match &entries[0].0 {
+            HostIoRequest::NetworkSend { endpoint, payload } => {
+                assert_eq!(endpoint, &addr.to_string(), "endpoint resolves to host:port");
+                let recorded = String::from_utf8_lossy(payload);
+                assert!(
+                    recorded.starts_with("POST /submit HTTP/1.1\r\n")
+                        && recorded.ends_with("\r\n\r\npayload"),
+                    "the recorded effect must faithfully carry the POST + body, got {recorded:?}"
+                );
+            }
+            other => panic!("expected a NetworkSend host effect, got {other:?}"),
+        }
 
         let _ = std::fs::remove_dir_all(&root);
     }

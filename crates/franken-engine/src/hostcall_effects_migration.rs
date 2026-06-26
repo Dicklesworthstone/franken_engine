@@ -799,6 +799,24 @@ fn http_request_to_wire(
         request.push_str(value);
         request.push_str("\r\n");
     }
+    // bd-3894s slice (2): a request that carries a body needs an explicit framing
+    // length so the peer knows where the body ends. Node/undici synthesize a
+    // `Content-Length` header automatically when the caller did not supply an
+    // explicit framing header; mirror that so the egress is a well-formed
+    // HTTP/1.1 request AND the recorded host effect faithfully reflects the bytes
+    // actually sent. Only synthesized when a body is present and the caller set
+    // neither `Content-Length` nor `Transfer-Encoding` (case-insensitive).
+    if let Some(body) = body {
+        let has_framing_header = headers.iter().any(|(name, _)| {
+            name.eq_ignore_ascii_case("content-length")
+                || name.eq_ignore_ascii_case("transfer-encoding")
+        });
+        if !has_framing_header {
+            request.push_str("Content-Length: ");
+            request.push_str(&body.len().to_string());
+            request.push_str("\r\n");
+        }
+    }
     request.push_str("\r\n");
     let mut payload = request.into_bytes();
     if let Some(body) = body {
@@ -903,6 +921,34 @@ pub fn create_effect_from_hostcall_tag(
             effect_name: tag.to_string(),
         }),
     }
+}
+
+/// bd-3894s slice (2): build the network host effect from a fully-resolved
+/// request intent (`url` + `method` + `headers` + optional `body`).
+///
+/// The string-args `create_effect_from_hostcall_tag` builder above can only
+/// recover the URL (arg[0]) and always frames a bodyless `GET`, because the
+/// request `method`/`headers`/`body` live in the call's options/init object
+/// (`fetch(url, { method, headers, body })` / `http.request(url, { method,
+/// headers })`), a structured JS value that the interpreter — not the
+/// string-args boundary — must read off the heap. The interpreter resolves
+/// those fields (`resolve_net_request_options`) and calls this so the recorded,
+/// signed EffectReceipt AND the wire egress faithfully reflect the real request
+/// (a `POST` with a body must never be recorded — or sent — as a benign `GET`).
+/// Keeping the `Box<dyn ErasedEffect>` construction here avoids leaking the
+/// effect-trait machinery into the interpreter.
+pub fn create_network_effect(
+    url: String,
+    method: String,
+    headers: Vec<(String, String)>,
+    body: Option<Vec<u8>>,
+) -> Box<dyn ErasedEffect> {
+    Box::new(NetworkHostcallEffect {
+        url,
+        method,
+        headers,
+        body,
+    })
 }
 
 #[cfg(test)]
@@ -1077,6 +1123,45 @@ mod tests {
         }
     }
 
+    /// bd-3894s slice (2): `create_network_effect` carries the resolved request
+    /// `method` + `headers` + `body` (recovered by the interpreter from a
+    /// `fetch(url, init)` / `http.request(url, options)` options object) all the
+    /// way through to the framed HTTP/1.1 wire request, so a POST-with-body is
+    /// sent — and recorded — faithfully rather than collapsed to a bodyless GET.
+    #[test]
+    fn create_network_effect_frames_method_headers_and_body_bd_3894s() {
+        let effect = create_network_effect(
+            "http://example.test/submit".to_string(),
+            "POST".to_string(),
+            vec![("Content-Type".to_string(), "application/json".to_string())],
+            Some(b"{\"k\":1}".to_vec()),
+        );
+        assert_eq!(effect.effect_name(), "hostcall:network");
+        let request = FullCapsHandler::host_io_request_from_effect(effect.as_ref())
+            .expect("network effect must map to a HostIoRequest");
+        let HostIoRequest::NetworkSend { endpoint, payload } = request else {
+            panic!("expected a NetworkSend host io request");
+        };
+        assert_eq!(endpoint, "example.test:80");
+        let wire = String::from_utf8(payload).expect("ascii request line");
+        assert!(
+            wire.starts_with("POST /submit HTTP/1.1\r\n"),
+            "method + target framed: {wire:?}"
+        );
+        assert!(
+            wire.contains("Content-Type: application/json\r\n"),
+            "caller header framed: {wire:?}"
+        );
+        assert!(
+            wire.contains("Content-Length: 7\r\n"),
+            "synthesized framing length matches the body: {wire:?}"
+        );
+        assert!(
+            wire.ends_with("\r\n\r\n{\"k\":1}"),
+            "body follows the blank-line terminator: {wire:?}"
+        );
+    }
+
     /// bd-656a2: unit coverage for the dependency-free HTTP/1.1 wire builder —
     /// scheme stripping, default port/path, header emission, and body framing.
     #[test]
@@ -1095,6 +1180,8 @@ mod tests {
         assert!(wire.starts_with("GET / HTTP/1.1\r\nHost: example.test\r\n"));
 
         // caller headers are emitted and the body follows the blank-line terminator.
+        // bd-3894s slice (2): a body with no caller framing header gets an
+        // auto-synthesized Content-Length so the egress is a well-formed request.
         let (_endpoint, payload) = http_request_to_wire(
             "http://h:1/",
             "POST",
@@ -1103,12 +1190,44 @@ mod tests {
         );
         let wire = String::from_utf8(payload).unwrap();
         assert!(
+            wire.starts_with("POST / HTTP/1.1\r\nHost: h:1\r\n"),
+            "method/target/host framed: {wire:?}"
+        );
+        assert!(
             wire.contains("X-T: 1\r\n"),
             "header must be framed: {wire:?}"
         );
         assert!(
+            wire.contains("Content-Length: 2\r\n"),
+            "a body with no caller framing header gets a synthesized Content-Length: {wire:?}"
+        );
+        assert!(
             wire.ends_with("\r\n\r\nhi"),
             "body follows terminator: {wire:?}"
+        );
+
+        // bd-3894s slice (2): a caller-supplied framing header (Content-Length or
+        // Transfer-Encoding, case-insensitive) is honored, not duplicated.
+        let (_endpoint, payload) = http_request_to_wire(
+            "http://h:1/",
+            "POST",
+            &[("content-length".to_string(), "5".to_string())],
+            Some(b"hello"),
+        );
+        let wire = String::from_utf8(payload).unwrap();
+        assert_eq!(
+            wire.to_ascii_lowercase().matches("content-length").count(),
+            1,
+            "caller Content-Length is honored and not duplicated: {wire:?}"
+        );
+        assert!(wire.ends_with("\r\n\r\nhello"), "body framed: {wire:?}");
+
+        // bd-3894s slice (2): a bodyless GET is unchanged — no synthesized framing.
+        let (_endpoint, payload) = http_request_to_wire("http://h:1/", "GET", &[], None);
+        let wire = String::from_utf8(payload).unwrap();
+        assert!(
+            !wire.to_ascii_lowercase().contains("content-length"),
+            "bodyless GET carries no synthesized Content-Length: {wire:?}"
         );
     }
 

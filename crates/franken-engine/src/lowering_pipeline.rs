@@ -9067,13 +9067,15 @@ fn lower_expression_to_ir1_inner(
                 // effect — the egress the run --json effect ledger renders. Like
                 // the fs forms we do NOT lower the inner `require('http')` receiver
                 // (there is no real http module object; that path would fault at
-                // runtime); recognition is purely syntactic. Slice 1 forwards ONLY
-                // the URL operand (arg[0]) and emits arg_count == 1 so options
-                // objects / callbacks / request bodies are never mis-shaped as the
-                // effect's URL — `http.request` bodies, options, the ClientRequest/
-                // response objects, `fetch`, and ESM http imports are follow-up
-                // slices. A 0-arg call is malformed: fall through so it is not
-                // silently mis-shaped.
+                // runtime); recognition is purely syntactic. Forward the URL
+                // operand (arg[0]) and, when present, the options object (arg[1] —
+                // `http.request(url, { method, headers })`) so the interpreter can
+                // frame the real method/headers/body (bd-3894s slice 2) instead of
+                // a hardcoded GET. The callback (arg[2]) and the writable-stream
+                // request body (`req.write`/`req.end`) are follow-up slices and are
+                // not forwarded; a non-object arg[1] (e.g. `http.get(url, cb)`)
+                // resolves to the GET defaults at dispatch. A 0-arg call is
+                // malformed: fall through so it is not silently mis-shaped.
                 if let Some(url_arg) = arguments.first() {
                     lower_expression_to_ir1(
                         url_arg,
@@ -9085,9 +9087,23 @@ fn lower_expression_to_ir1_inner(
                         label_counter,
                         span_table,
                     )?;
+                    let mut arg_count = 1u32;
+                    if let Some(options_arg) = arguments.get(1) {
+                        lower_expression_to_ir1(
+                            options_arg,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                            span_table,
+                        )?;
+                        arg_count = 2;
+                    }
                     ops.push(Ir1Op::HostCall {
                         capability: capability.to_string(),
-                        arg_count: 1,
+                        arg_count,
                     });
                     return Ok(());
                 }
@@ -9097,12 +9113,13 @@ fn lower_expression_to_ir1_inner(
                 // named-imported from 'node:http' (`import { get, request } from
                 // 'node:http'`, incl. `as` renames) — recorded as a sentinel by the
                 // program pre-scan. Lowers to the same `net:request` HostCall as the
-                // CJS require-binding/inline member-call forms, forwarding ONLY the
-                // URL operand (arg[0]) with arg_count == 1 — the slice-1 semantics
-                // shared with `http_builtin_call_capability`: options objects,
-                // callbacks, and request bodies are follow-up slices and must not be
-                // mis-shaped as the effect's URL. A 0-arg call is malformed: fall
-                // through so it is not silently mis-shaped.
+                // CJS require-binding/inline member-call forms, forwarding the URL
+                // operand (arg[0]) and, when present, the options object (arg[1]),
+                // shared with `http_builtin_call_capability`: the interpreter frames
+                // the real method/headers/body (bd-3894s slice 2) from the options
+                // object instead of a hardcoded GET. Callbacks and the writable-
+                // stream request body remain follow-up slices. A 0-arg call is
+                // malformed: fall through so it is not silently mis-shaped.
                 if let Some(url_arg) = arguments.first() {
                     lower_expression_to_ir1(
                         url_arg,
@@ -9114,9 +9131,23 @@ fn lower_expression_to_ir1_inner(
                         label_counter,
                         span_table,
                     )?;
+                    let mut arg_count = 1u32;
+                    if let Some(options_arg) = arguments.get(1) {
+                        lower_expression_to_ir1(
+                            options_arg,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                            span_table,
+                        )?;
+                        arg_count = 2;
+                    }
                     ops.push(Ir1Op::HostCall {
                         capability: capability.to_string(),
-                        arg_count: 1,
+                        arg_count,
                     });
                     return Ok(());
                 }
@@ -9128,10 +9159,10 @@ fn lower_expression_to_ir1_inner(
                 // Unlike the http member-call forms, `fetch` returns a Promise, so
                 // the egress result is wrapped in `promise:resolve` (mirroring the
                 // fs/promises named-import lowering) — `fetch(url)` evaluates to a
-                // Promise. Slice-1 forwards only arg[0]: the request-`init` object
-                // (`fetch(url, { method, body })`) is currently INERT — the effect
-                // builder frames a GET regardless — so method/body extraction from
-                // the init object is a follow-up slice. The endpoint (arg[0]) the
+                // Promise. The request-`init` object (`fetch(url, { method,
+                // headers, body })`) is forwarded as arg[1] below so the interpreter
+                // frames the real method/headers/body from it (bd-3894s slice 2).
+                // The endpoint (arg[0]) the
                 // SSRF gate authorizes is correct for both arities. A 0-arg call is
                 // malformed: fall through so it is not silently mis-shaped.
                 if let Some(url_arg) = arguments.first() {
@@ -9145,9 +9176,26 @@ fn lower_expression_to_ir1_inner(
                         label_counter,
                         span_table,
                     )?;
+                    // bd-3894s slice (2): forward the request-`init` object (arg[1])
+                    // so the interpreter frames the real method/headers/body from
+                    // `fetch(url, { method, headers, body })` instead of a GET.
+                    let mut arg_count = 1u32;
+                    if let Some(init_arg) = arguments.get(1) {
+                        lower_expression_to_ir1(
+                            init_arg,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                            span_table,
+                        )?;
+                        arg_count = 2;
+                    }
                     ops.push(Ir1Op::HostCall {
                         capability: capability.to_string(),
-                        arg_count: 1,
+                        arg_count,
                     });
                     ops.push(Ir1Op::HostCall {
                         capability: "promise:resolve".to_string(),
@@ -15368,6 +15416,20 @@ mod tests {
         )
     }
 
+    /// bd-3894s slice (2): the `arg_count` of the first `net:request` HostCall in
+    /// the lowered ops — 1 for a bare `get(url)` / `fetch(url)` (URL only), 2 once
+    /// the options/init object (arg[1]) is forwarded so the interpreter can frame
+    /// the real method/headers/body.
+    fn net_request_arg_count(ops: &[Ir1Op]) -> Option<u32> {
+        ops.iter().find_map(|op| match op {
+            Ir1Op::HostCall {
+                capability,
+                arg_count,
+            } if capability == "net:request" => Some(*arg_count),
+            _ => None,
+        })
+    }
+
     fn ops_have_fs_import_module(ops: &[Ir1Op]) -> bool {
         ops.iter().any(|op| {
             matches!(op, Ir1Op::ImportModule { specifier } if is_fs_module_specifier(specifier))
@@ -15891,18 +15953,64 @@ mod tests {
         );
     }
 
-    /// bd-3894s: `fetch(url, init)` still lowers to `net:request` — slice-1
-    /// forwards only the URL operand (arg[0]); the request-init object is inert
-    /// (the egress is framed as a GET) until method/body extraction lands.
+    /// bd-3894s slice (2): `fetch(url, init)` forwards the request-`init` object
+    /// as arg[1] (arg_count == 2) so the interpreter frames the real
+    /// method/headers/body from it. A bare `fetch(url)` forwards only the URL
+    /// (arg_count == 1), leaving the unchanged slice-1 GET egress.
     #[test]
-    fn fetch_global_with_init_lowers_to_net_request_bd_3894s() {
+    fn fetch_global_with_init_forwards_options_arg_bd_3894s() {
         let ops = lower_script_source_ops(
             "fetch('http://127.0.0.1:9/', { method: 'POST' });\n",
             "fetch_global_init.js",
         );
         assert!(
             ops_have_hostcall(&ops, "net:request"),
-            "fetch(url, init) must still lower to a net:request hostcall (init inert in slice-1)"
+            "fetch(url, init) must lower to a net:request hostcall"
+        );
+        assert_eq!(
+            net_request_arg_count(&ops),
+            Some(2),
+            "fetch(url, init) must forward the init object as arg[1] (arg_count == 2)"
+        );
+
+        let bare = lower_script_source_ops("fetch('http://127.0.0.1:9/');\n", "fetch_bare.js");
+        assert_eq!(
+            net_request_arg_count(&bare),
+            Some(1),
+            "a bare fetch(url) forwards only the URL (arg_count == 1)"
+        );
+    }
+
+    /// bd-3894s slice (2): `http.request(url, { method, headers })` forwards the
+    /// options object as arg[1] (arg_count == 2); a bare `http.get(url)` stays at
+    /// arg_count == 1. The same options-forwarding applies to all http/fetch
+    /// recognizer forms that share the `net:request` lowering.
+    #[test]
+    fn http_request_with_options_forwards_options_arg_bd_3894s() {
+        let ops = lower_script_source_ops(
+            "const http = require('http');\n\
+             http.request('http://127.0.0.1:9/', { method: 'PUT' });\n",
+            "http_request_options.js",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "net:request"),
+            "http.request(url, options) must lower to a net:request hostcall"
+        );
+        assert_eq!(
+            net_request_arg_count(&ops),
+            Some(2),
+            "http.request(url, options) must forward the options object as arg[1]"
+        );
+
+        let bare = lower_script_source_ops(
+            "const http = require('http');\n\
+             http.get('http://127.0.0.1:9/');\n",
+            "http_get_bare.js",
+        );
+        assert_eq!(
+            net_request_arg_count(&bare),
+            Some(1),
+            "a bare http.get(url) forwards only the URL (arg_count == 1)"
         );
     }
 

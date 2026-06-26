@@ -21,6 +21,9 @@
 //!   --cross-reference        Truth-gate: cross-reference clusters against the
 //!                            parser/lowering gap inventories. Exits 3 if any
 //!                            cluster is an undocumented gap. (Excludes --rank.)
+//!   --coverage-summary       Emit the weighted ES2020 coverage summary: six
+//!                            category views + a single headline executed-%, with
+//!                            a floor that exposes the weakest view. (Exclusive.)
 //!   --sample-count <N>       Cap tests for --run-suite (0 = all; default 2000).
 //!   --pattern <glob>         Glob filter for --run-suite.
 //!   --construct-depth <N>    Path depth for Test262 construct keys (default 3).
@@ -45,6 +48,9 @@ use frankenengine_engine::coverage_frontier_rank::{
     ConstructCensus, UsageSignal, construct_census_from_conformance, merge_censuses, rank_clusters,
 };
 use frankenengine_engine::coverage_frontier_xref::{cross_reference, default_inventory_entries};
+use frankenengine_engine::coverage_summary::{
+    CoverageView, ViewCount, accumulate_conformance, finalize_summary,
+};
 use frankenengine_engine::differential_oracle::{
     default_engine_core_corpus, run_engine_core_differential_oracle,
 };
@@ -68,6 +74,7 @@ OPTIONS:
     --rank                   Emit the ranked report (impact = count × usage × locality)
     --usage-signal <path>    JSON usage signal (construct → weight millionths), --rank only
     --cross-reference        Truth-gate clusters vs parser/lowering gap inventories (exit 3 on drift)
+    --coverage-summary       Emit the weighted ES2020 coverage summary (6 views + headline)
     --sample-count <N>       Cap tests for --run-suite (0 = all; default 2000)
     --pattern <glob>         Glob filter for --run-suite
     --construct-depth <N>    Construct-key path depth (default 3)
@@ -83,6 +90,7 @@ struct Args {
     rank: bool,
     usage_signal: Option<PathBuf>,
     cross_reference: bool,
+    coverage_summary: bool,
     sample_count: usize,
     pattern: Option<String>,
     construct_depth: usize,
@@ -99,6 +107,7 @@ impl Default for Args {
             rank: false,
             usage_signal: None,
             cross_reference: false,
+            coverage_summary: false,
             sample_count: 2000,
             pattern: None,
             construct_depth: DEFAULT_CONSTRUCT_DEPTH,
@@ -124,6 +133,7 @@ fn parse_args() -> Result<Option<Args>, String> {
             "--rank" => args.rank = true,
             "--usage-signal" => args.usage_signal = Some(PathBuf::from(value()?)),
             "--cross-reference" => args.cross_reference = true,
+            "--coverage-summary" => args.coverage_summary = true,
             "--sample-count" => {
                 args.sample_count = value()?
                     .parse()
@@ -147,19 +157,24 @@ fn parse_args() -> Result<Option<Args>, String> {
     Ok(Some(args))
 }
 
-/// Failure observations plus the per-construct pass/fail census needed for the
-/// locality factor (populated from Test262 conformance sources only).
+/// Failure observations, the per-construct census (locality factor), and the
+/// per-view coverage tally (weighted coverage summary), accumulated from the
+/// Test262 conformance sources.
 struct Collected {
     observations: Vec<FailureObservation>,
     census: BTreeMap<String, ConstructCensus>,
+    coverage_tally: BTreeMap<CoverageView, ViewCount>,
+    corpus_commit: String,
 }
 
-/// Fold one conformance report into the running observation list and census.
+/// Fold one conformance report into the running observation list, census, and
+/// coverage tally.
 fn ingest_conformance(
     report: &ConformanceReport,
     depth: usize,
     observations: &mut Vec<FailureObservation>,
     census: &mut BTreeMap<String, ConstructCensus>,
+    coverage_tally: &mut BTreeMap<CoverageView, ViewCount>,
 ) {
     observations.extend(observations_from_conformance(report, depth));
     let merged = merge_censuses(
@@ -167,11 +182,14 @@ fn ingest_conformance(
         &construct_census_from_conformance(report, depth),
     );
     *census = merged;
+    accumulate_conformance(report, coverage_tally);
 }
 
 fn collect(args: &Args) -> Result<Collected, String> {
     let mut observations = Vec::new();
     let mut census: BTreeMap<String, ConstructCensus> = BTreeMap::new();
+    let mut coverage_tally: BTreeMap<CoverageView, ViewCount> = BTreeMap::new();
+    let mut corpus_commit = String::new();
 
     for report_path in &args.reports {
         let raw = std::fs::read_to_string(report_path)
@@ -183,11 +201,15 @@ fn collect(args: &Args) -> Result<Collected, String> {
             report_path.display(),
             report.test_records.len()
         );
+        if !report.test262_commit.is_empty() {
+            corpus_commit = report.test262_commit.clone();
+        }
         ingest_conformance(
             &report,
             args.construct_depth,
             &mut observations,
             &mut census,
+            &mut coverage_tally,
         );
     }
 
@@ -209,11 +231,15 @@ fn collect(args: &Args) -> Result<Collected, String> {
             report.overall.total_tests,
             report.total_discovered
         );
+        if !report.test262_commit.is_empty() {
+            corpus_commit = report.test262_commit.clone();
+        }
         ingest_conformance(
             &report,
             args.construct_depth,
             &mut observations,
             &mut census,
+            &mut coverage_tally,
         );
     }
 
@@ -233,6 +259,8 @@ fn collect(args: &Args) -> Result<Collected, String> {
     Ok(Collected {
         observations,
         census,
+        coverage_tally,
+        corpus_commit,
     })
 }
 
@@ -271,11 +299,44 @@ fn run() -> Result<ExitCode, String> {
     if args.usage_signal.is_some() && !args.rank {
         return Err("--usage-signal requires --rank".to_string());
     }
-    if args.rank && args.cross_reference {
-        return Err("--rank and --cross-reference are mutually exclusive".to_string());
+    let exclusive = [args.rank, args.cross_reference, args.coverage_summary]
+        .iter()
+        .filter(|f| **f)
+        .count();
+    if exclusive > 1 {
+        return Err(
+            "--rank, --cross-reference, and --coverage-summary are mutually exclusive".to_string(),
+        );
     }
 
     let collected = collect(&args)?;
+
+    if args.coverage_summary {
+        let limitations = vec![
+            "scope: ES2020-normative observable surface (language/* + built-ins/*); excludes intl402, annexB, proposals, and harness".to_string(),
+            "EXECUTED means the engine evaluated a positive case without an engine error, or correctly rejected a negative case; assertion outcomes are NOT verified — this is an execution-coverage measure, not a spec-conformance pass-rate".to_string(),
+            "the stricter harness-based ES2020 conformance pass-rate (assertions enforced, Test262 includes preloaded) is far lower — see docs/test262_real_corpus_pass_rate_v1.json; this executed-% must not be read as a conformance score".to_string(),
+            "the runner does not preload Test262 harness includes (assert.js, sta.js, propertyHelper.js), so cases that call those helpers are recorded as engine errors and excluded from executed".to_string(),
+        ];
+        let commit = if collected.corpus_commit.is_empty() {
+            "unknown".to_string()
+        } else {
+            collected.corpus_commit.clone()
+        };
+        let summary = finalize_summary(&collected.coverage_tally, commit, 0, limitations);
+        eprintln!(
+            "[coverage_frontier] coverage summary: {}/{} in-scope executed = {} millionths; floor view `{}` = {} millionths; digest {}",
+            summary.in_scope_passed,
+            summary.in_scope_total,
+            summary.observable_surface_executed_millionths,
+            summary.floor_view,
+            summary.floor_view_executed_millionths,
+            summary.report_digest
+        );
+        emit(&summary, &args.out)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
     let report: CoverageFrontierReport = cluster_failures(
         &collected.observations,
         args.construct_depth,

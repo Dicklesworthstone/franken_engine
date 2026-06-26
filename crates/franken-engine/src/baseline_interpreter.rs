@@ -52,6 +52,7 @@ use subtle::ConstantTimeEq;
 
 use frankenengine_extension_host::host_io::{HostIoProvider, HostIoRecorder};
 
+use crate::algebraic_effects::EffectError;
 use crate::ast::ParseGoal;
 use crate::capability::{CapabilityProfile, RuntimeCapability};
 use crate::checkpoint::{
@@ -60,7 +61,6 @@ use crate::checkpoint::{
 use crate::deterministic_replay::{NondeterminismSource, NondeterminismTrace};
 use crate::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId, derive_id};
 use crate::hash_tiers::ContentHash;
-use crate::algebraic_effects::EffectError;
 use crate::hostcall_effects_migration::{
     create_effect_from_hostcall_tag, create_handler_stack_from_profile_with_host_io,
     create_network_effect,
@@ -5000,10 +5000,7 @@ impl InterpreterCore {
                     return None;
                 }
                 line.split_once(':').map(|(name, value)| {
-                    (
-                        name.trim().to_ascii_lowercase(),
-                        Value::str(value.trim()),
-                    )
+                    (name.trim().to_ascii_lowercase(), Value::str(value.trim()))
                 })
             })
             .collect();
@@ -34651,7 +34648,11 @@ mod async_runtime_tests_current {
             HostIoRequest::NetworkRequest {
                 endpoint, payload, ..
             } => {
-                assert_eq!(endpoint, &addr.to_string(), "endpoint resolves to host:port");
+                assert_eq!(
+                    endpoint,
+                    &addr.to_string(),
+                    "endpoint resolves to host:port"
+                );
                 let recorded = String::from_utf8_lossy(payload);
                 assert!(
                     recorded.starts_with("POST /submit HTTP/1.1\r\n")
@@ -34756,11 +34757,9 @@ mod async_runtime_tests_current {
     #[test]
     fn build_net_response_value_parses_status_headers_body_bd_3894s() {
         let mut core = test_interpreter();
-        let raw = b"HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nX-Trace: abc\r\n\r\nmissing";
-        let Value::Object(id) = core
-            .build_net_response_value(raw)
-            .expect("parse response")
-        else {
+        let raw =
+            b"HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nX-Trace: abc\r\n\r\nmissing";
+        let Value::Object(id) = core.build_net_response_value(raw).expect("parse response") else {
             panic!("expected a response object");
         };
         let response = core.heap.get(id.0 as usize).expect("response object");
@@ -34775,11 +34774,17 @@ mod async_runtime_tests_current {
             Some(&Value::Bool(false)),
             "a 4xx status is not ok"
         );
-        assert_eq!(response.properties.get("body"), Some(&Value::str("missing")));
+        assert_eq!(
+            response.properties.get("body"),
+            Some(&Value::str("missing"))
+        );
         let Some(Value::Object(headers_id)) = response.properties.get("headers") else {
             panic!("response carries a headers object");
         };
-        let headers = core.heap.get(headers_id.0 as usize).expect("headers object");
+        let headers = core
+            .heap
+            .get(headers_id.0 as usize)
+            .expect("headers object");
         assert_eq!(
             headers.properties.get("content-type"),
             Some(&Value::str("text/plain")),

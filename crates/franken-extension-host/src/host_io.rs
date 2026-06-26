@@ -37,10 +37,21 @@ impl HostIoCapability {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum HostIoRequest {
-    FsRead { path: String },
-    FsWrite { path: String, data: Vec<u8> },
-    NetworkSend { endpoint: String, payload: Vec<u8> },
-    NetworkRecv { endpoint: String, max_len: u64 },
+    FsRead {
+        path: String,
+    },
+    FsWrite {
+        path: String,
+        data: Vec<u8>,
+    },
+    NetworkSend {
+        endpoint: String,
+        payload: Vec<u8>,
+    },
+    NetworkRecv {
+        endpoint: String,
+        max_len: u64,
+    },
     /// A single-socket request/response round trip: connect to `endpoint`, write
     /// `payload` (the framed request), then read the reply back on the *same*
     /// socket bounded by `max_len`. `NetworkSend` (egress-only) and `NetworkRecv`
@@ -86,13 +97,23 @@ impl HostIoRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum HostIoResponse {
-    FsRead { bytes: Vec<u8> },
-    FsWrite { bytes_written: u64 },
-    NetworkSend { bytes_sent: u64 },
-    NetworkRecv { bytes: Vec<u8> },
+    FsRead {
+        bytes: Vec<u8>,
+    },
+    FsWrite {
+        bytes_written: u64,
+    },
+    NetworkSend {
+        bytes_sent: u64,
+    },
+    NetworkRecv {
+        bytes: Vec<u8>,
+    },
     /// Raw response bytes read back on the same socket by a [`HostIoRequest::NetworkRequest`]
     /// round trip (status line + headers + body, exactly as the peer sent them).
-    NetworkRequest { response: Vec<u8> },
+    NetworkRequest {
+        response: Vec<u8>,
+    },
 }
 
 /// Failure result of a host I/O request.
@@ -1177,8 +1198,7 @@ mod tests {
         );
         let request = server.join().expect("server thread");
         assert_eq!(
-            request,
-            b"GET /x HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n",
+            request, b"GET /x HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n",
             "the request really crossed the socket"
         );
     }

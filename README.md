@@ -2512,6 +2512,37 @@ The capstone gate is `./scripts/run_dw_differential_oracle.sh ci` (replay: `./sc
 
 ---
 
+## Conformance Frontier (ranked coverage gaps)
+
+The conformance frontier turns raw conformance failures into a prioritized, machine-readable worklist. It clusters Test262 and differential-oracle FAILURES by the spec construct they exercise, ranks the clusters by a transparent impact score, truth-gates them against the parser/lowering gap inventories, publishes a single weighted coverage figure, and can emit a deduplicated auto-bead-filing plan so the next-most-valuable language gap is one command away. It is the read side of the "ranked gaps → scaffold" loop: where the differential oracle *finds* divergences, the frontier *organizes* them by where fixing them buys the most coverage. The operator-facing surface is the `franken_coverage_frontier` binary:
+
+```bash
+cargo build --release -p frankenengine-engine --bin franken_coverage_frontier
+
+# Rank the current failure frontier into an impact-ordered worklist (hermetic seed corpus).
+./target/release/franken_coverage_frontier --engine-core-oracle --rank --out frontier_rank.json
+
+# Publish the weighted ES2020 coverage summary (six views + a single headline figure).
+./target/release/franken_coverage_frontier --engine-core-oracle --coverage-summary --out coverage_summary.json
+
+# Emit a gated, idempotent auto-bead-filing PLAN for the top-N clusters (review before filing).
+./target/release/franken_coverage_frontier --engine-core-oracle --file-beads --top-n 10 --out filing_plan.json
+```
+
+Failure sources combine: `--report <conformance.json>` (a `franken_test262_runner` report, repeatable), `--run-suite <tc39/test262 checkout>` (run Test262 in-process), and `--engine-core-oracle` (the hermetic `franken-engine` ↔ `franken-core` seed corpus, no external corpus required). The report modes `--rank`, `--cross-reference`, `--coverage-summary`, and `--file-beads` are mutually exclusive; the default (no mode) emits the raw cluster list.
+
+**The ranked worklist.** Every cluster has a content-hashed `cluster_id` derived from the construct identity only (never failure counts), so the same gap keeps the same id across runs and is a stable dedup handle. `--rank` orders clusters by `impact = failing_count × usage × locality` — all fixed-point millionths, no floating point — and carries a per-cluster `explanation` of how the score was reached. `usage` defaults to a neutral weight unless a real `--usage-signal` corpus scan is supplied (the tool never fabricates usage data); `locality` is the construct family's pass-fraction. The result answers "which construct, if executed, unblocks the most stuck tests?".
+
+**Six weighted views, and why the headline is a summary, not a proof.** `--coverage-summary` reports the fraction of the ES2020 observable surface the engine *executes*, broken into six category views — `parser`, `builtin`, `control-flow`, `async`, `module`, `intentional-divergence` — plus a single headline figure and a `floor_view` that surfaces the weakest category so a single number cannot hide a gap. "Executed" means the engine evaluated a positive case without an engine error, or correctly rejected a negative case; **assertion outcomes are not checked, so this is an execution-coverage measure, not a spec-conformance pass-rate.** On the ES2020-normative tc39/test262 profile the engine currently executes ~13.05% of the observable surface (weakest view `builtin` ~1.67%); the stricter harness-based conformance pass-rate is far lower (~0.25%, see [`docs/test262_real_corpus_pass_rate_v1.json`](./docs/test262_real_corpus_pass_rate_v1.json)). This figure is published as `FE-CLAIM-026`, which is **TARGETED** (a conservative lower bound that stays a target until coverage is materially higher) — read it as a frontier measurement, never as a conformance score.
+
+**Idempotent auto-bead filing with E4 scaffolds.** `--file-beads` emits a plan-only `BeadFilingPlan`: one proposal per top-N cluster carrying its failing sample cases, a priority, the exact (reviewable) `br create` command, and a scaffold matched to the cluster's kind — a real `IntrinsicRow {…}` snippet (with a `// TODO` on every field) for `built-ins/*` gaps, a parser/lowering note for `language/*` gaps, and an oracle-triage note for runtime divergences (it never fabricates an inapplicable intrinsic row). Filing is dedup-keyed on the `cluster_id` via a `--ledger`: a cluster already in the ledger is reported as skipped, never re-proposed. Filing is plan-only by default (the human-review path); re-running with `--execute --ledger <path>` actually runs `br create` per proposal and persists the ledger. An agent driving the loop reads the ranked plan, picks the top proposal, and fills in the scaffold — see the contributor flow in *Extending FrankenEngine* and the E4 intrinsic table.
+
+**Truth gate.** `--cross-reference` joins clusters to the `parser_gap_inventory.rs` / `lowering_gap_inventory.rs` inventories and exits **3** if any cluster is an *undocumented* gap (a failure with no inventory entry), so a regression cannot quietly grow the frontier without being recorded. Exit codes for the binary: `0` report/plan emitted (truth gate passed under `--cross-reference`); `2` usage error / no source selected / a `--execute` filing failed; `3` truth-gate failure (undocumented gaps).
+
+The capstone gate is `./scripts/run_dw_conformance_frontier.sh ci` (replay: `./scripts/e2e/dw_conformance_frontier_replay.sh bundle`); a runnable demo is [`examples/24_conformance_frontier/demo.sh`](./examples/24_conformance_frontier/demo.sh), and the operator runbook (modes, bundle anatomy, exit-code triage, and the "pick the next highest-value language gap" walkthrough) is [`runbooks/dw_conformance_frontier.md`](./runbooks/dw_conformance_frontier.md).
+
+---
+
 ## About Contributions
 
 > *About Contributions:* Please don't take this the wrong way, but I do not accept outside contributions for any of my projects. I simply don't have the mental bandwidth to review anything, and it's my name on the thing, so I'm responsible for any problems it causes; thus, the risk-reward is highly asymmetric from my perspective. I'd also have to worry about other "stakeholders," which seems unwise for tools I mostly make for myself for free. Feel free to submit issues, and even PRs if you want to illustrate a proposed fix, but know I won't merge them directly. Instead, I'll have Claude or Codex review submissions via `gh` and independently decide whether and how to address them. Bug reports in particular are welcome. Sorry if this offends, but I want to avoid wasted time and hurt feelings. I understand this isn't in sync with the prevailing open-source ethos that seeks community contributions, but it's the only way I can move at this velocity and keep my sanity.

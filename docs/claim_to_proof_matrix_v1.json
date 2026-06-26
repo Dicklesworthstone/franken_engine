@@ -533,6 +533,26 @@
         "start_line": 2485
       },
       "verification_command": "cargo test -p frankenengine-engine --test claim_evidence_adversarial_corpus"
+    },
+    {
+      "actual_wording_state": "target",
+      "allowed_state": "target",
+      "artifact_path": "docs/coverage/es2020_coverage_summary_bundle_v1/coverage_summary.json",
+      "claim_id": "FE-CLAIM-026",
+      "claim_scope": "conformance",
+      "claim_text": "The measured fraction of the ES2020 observable surface the engine executes is published as a single content-addressed, gated coverage figure, broken into six weighted category views (parser, builtin, control-flow, async, module, intentional-divergence) with a floor that exposes the weakest view.",
+      "decision": "stay_target_conservative_lower_bound",
+      "downgrade_text": "Target: execute a high fraction of the ES2020 observable surface. The published figure is a conservative lower bound and stays a target until coverage is materially higher.",
+      "freshness_days": null,
+      "owning_bead": "bd-fqlfw.7.4",
+      "reason": "A reproducible, content-addressed weighted coverage summary is linked (docs/coverage/es2020_coverage_summary_bundle_v1, bd-fqlfw.7.4). On the ES2020-normative tc39/test262 profile (language/* + built-ins/*) the engine EXECUTES 6201/47514 = 130508 millionths (~13.0508%) of the observable surface, where executed = evaluated without an engine error (positive) or correctly rejected (negative); assertion outcomes are not verified, so this is an execution-coverage measure, NOT a conformance pass-rate (the stricter harness-based ES2020 conformance pass-rate is far lower, ~0.25%, docs/test262_real_corpus_pass_rate_v1.json). Weakest view 'builtin' at 16664 millionths. Six weighted views plus the floor prevent a single gamed percentage; stays target. Gated by ./scripts/run_coverage_summary_bundle_gate.sh ci.",
+      "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
+      "source_span": {
+        "start_line": 1419,
+        "end_line": 1432,
+        "must_contain": "targets executing a high fraction of the ES2020 observable"
+      },
+      "verification_command": "./scripts/run_coverage_summary_bundle_gate.sh ci"
     }
   ],
   "freshness_eprocess_policy": {

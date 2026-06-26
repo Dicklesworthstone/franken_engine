@@ -1415,3 +1415,18 @@ Output contract:
 - At least 4 publishable technical reports with reproducible artifact bundles.
 - At least 2 externally replicated high-impact claims.
 - At least 1 open benchmark or verification tool release adopted outside the project.
+
+## 17. ES2020 Observable-Surface Coverage (target)
+
+FrankenEngine targets executing a high fraction of the ES2020 observable
+surface — the `language/*` + `built-ins/*` tc39/test262 normative profile —
+reported as a single content-addressed, gated coverage figure broken into six
+weighted category views (parser, builtin, control-flow, async, module, and
+intentional-divergence) so that no single category can stand in for the whole.
+
+The headline figure is the honest aggregate over the conformance views, always
+published alongside a floor that exposes the weakest view, so a strong category
+cannot hide a weak one behind a flattering average. The figure is a conservative
+lower bound (the runner does not preload Test262 harness includes) and is
+tracked as a target by `FE-CLAIM-026`, held honest by the same claim-to-proof,
+evidence-manifest, and Merkle-ledger machinery that gates every other claim.

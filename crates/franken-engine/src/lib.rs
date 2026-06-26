@@ -132,6 +132,7 @@ pub mod counterfactual_evaluator;
 pub mod counterfactual_generation_guard;
 pub mod counterfactual_intervention_planner;
 pub mod counterfactual_replay_engine;
+pub mod coverage_frontier;
 pub mod cross_arch_reproducibility;
 pub mod cross_platform_reproducibility;
 pub mod cross_repo_contract;

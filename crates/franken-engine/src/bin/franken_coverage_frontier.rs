@@ -1,8 +1,9 @@
-//! `franken_coverage_frontier` (`bd-fqlfw.7.1` E7.T1 + `bd-fqlfw.7.2` E7.T2) —
-//! operator binary that clusters Test262 and differential-oracle FAILURES by
-//! spec construct into a deterministic, content-hashed coverage-frontier
-//! report, and (with `--rank`) ranks those clusters by a transparent impact
-//! score.
+//! `franken_coverage_frontier` (`bd-fqlfw.7.1` E7.T1 + `bd-fqlfw.7.2` E7.T2 +
+//! `bd-fqlfw.7.5` E7.T5) — operator binary that clusters Test262 and
+//! differential-oracle FAILURES by spec construct into a deterministic,
+//! content-hashed coverage-frontier report, ranks those clusters by a transparent
+//! impact score (`--rank`), and turns the ranked frontier into a gated, idempotent
+//! auto-bead-filing plan (`--file-beads`).
 //!
 //! Failure sources (combine any):
 //!   --report <path>          Consume a Test262 `ConformanceReport` JSON (as
@@ -15,9 +16,20 @@
 //! Options:
 //!   --rank                   Emit the ranked report (impact = failing-count ×
 //!                            usage × locality) instead of the raw cluster list.
+//!   --file-beads             Emit a gated auto-bead-filing PLAN for the top-N
+//!                            ranked clusters (each carries its failing cases + an
+//!                            E4 intrinsic-table scaffold). Plan-only by default —
+//!                            review it, then re-run with --execute to file.
+//!   --execute                With --file-beads: actually run `br create` for each
+//!                            proposal and update the dedup ledger (requires
+//!                            --ledger). Off by default (the human-review path).
+//!   --ledger <path>          Dedup ledger JSON (cluster_id -> filed bead). Read to
+//!                            skip already-filed clusters; rewritten by --execute.
+//!   --top-n <N>              Clusters considered for --file-beads (default 10).
+//!   --parent <id>            Parent bead id threaded into each filing command.
 //!   --usage-signal <path>    JSON usage signal (construct → weight millionths)
-//!                            from a real npm corpus scan; only used with --rank.
-//!                            Absent ⇒ neutral usage (no fabricated frequencies).
+//!                            from a real npm corpus scan; used with --rank or
+//!                            --file-beads. Absent ⇒ neutral (no fabrication).
 //!   --cross-reference        Truth-gate: cross-reference clusters against the
 //!                            parser/lowering gap inventories. Exits 3 if any
 //!                            cluster is an undocumented gap. (Excludes --rank.)
@@ -31,18 +43,22 @@
 //!   --out <path>             Write the report JSON here (always also to stdout).
 //!   -h, --help               Print this help.
 //!
-//! Exit codes: 0 report emitted (and truth gate passed, if --cross-reference);
-//! 2 usage error / no source selected; 3 truth-gate failure (undocumented gaps).
+//! Exit codes: 0 report/plan emitted (and truth gate passed, if --cross-reference);
+//! 2 usage error / no source selected / a --execute filing failed; 3 truth-gate
+//! failure (undocumented gaps).
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
-use std::process::ExitCode;
+use std::path::{Path, PathBuf};
+use std::process::{Command, ExitCode};
 
 use serde::Serialize;
 
 use frankenengine_engine::coverage_frontier::{
     CoverageFrontierReport, DEFAULT_CONSTRUCT_DEPTH, DEFAULT_SAMPLE_LIMIT, FailureObservation,
     cluster_failures, observations_from_conformance, observations_from_engine_core_report,
+};
+use frankenengine_engine::coverage_frontier_filing::{
+    BeadFilingPlan, DEFAULT_TOP_N, FiledLedger, build_filing_plan,
 };
 use frankenengine_engine::coverage_frontier_rank::{
     ConstructCensus, UsageSignal, construct_census_from_conformance, merge_censuses, rank_clusters,
@@ -72,7 +88,12 @@ SOURCES (select at least one; combinable):
 
 OPTIONS:
     --rank                   Emit the ranked report (impact = count × usage × locality)
-    --usage-signal <path>    JSON usage signal (construct → weight millionths), --rank only
+    --file-beads             Emit a gated auto-bead-filing plan for the top-N ranked clusters
+    --execute                With --file-beads: file the beads via `br create` (requires --ledger)
+    --ledger <path>          Dedup ledger JSON (cluster_id -> filed bead); rewritten by --execute
+    --top-n <N>              Clusters considered for --file-beads (default 10)
+    --parent <id>            Parent bead id threaded into each --file-beads command
+    --usage-signal <path>    JSON usage signal (construct → weight millionths), --rank/--file-beads
     --cross-reference        Truth-gate clusters vs parser/lowering gap inventories (exit 3 on drift)
     --coverage-summary       Emit the weighted ES2020 coverage summary (6 views + headline)
     --sample-count <N>       Cap tests for --run-suite (0 = all; default 2000)
@@ -88,6 +109,11 @@ struct Args {
     run_suite: Option<PathBuf>,
     engine_core_oracle: bool,
     rank: bool,
+    file_beads: bool,
+    execute: bool,
+    ledger: Option<PathBuf>,
+    top_n: usize,
+    parent: Option<String>,
     usage_signal: Option<PathBuf>,
     cross_reference: bool,
     coverage_summary: bool,
@@ -105,6 +131,11 @@ impl Default for Args {
             run_suite: None,
             engine_core_oracle: false,
             rank: false,
+            file_beads: false,
+            execute: false,
+            ledger: None,
+            top_n: DEFAULT_TOP_N,
+            parent: None,
             usage_signal: None,
             cross_reference: false,
             coverage_summary: false,
@@ -131,6 +162,15 @@ fn parse_args() -> Result<Option<Args>, String> {
             "--run-suite" => args.run_suite = Some(PathBuf::from(value()?)),
             "--engine-core-oracle" => args.engine_core_oracle = true,
             "--rank" => args.rank = true,
+            "--file-beads" => args.file_beads = true,
+            "--execute" => args.execute = true,
+            "--ledger" => args.ledger = Some(PathBuf::from(value()?)),
+            "--top-n" => {
+                args.top_n = value()?
+                    .parse()
+                    .map_err(|_| "--top-n expects an integer".to_string())?;
+            }
+            "--parent" => args.parent = Some(value()?),
             "--usage-signal" => args.usage_signal = Some(PathBuf::from(value()?)),
             "--cross-reference" => args.cross_reference = true,
             "--coverage-summary" => args.coverage_summary = true,
@@ -271,6 +311,114 @@ fn load_usage_signal(path: &PathBuf) -> Result<UsageSignal, String> {
         .map_err(|err| format!("parsing usage signal {}: {err}", path.display()))
 }
 
+/// Load the dedup ledger from `path`. A missing file is treated as an empty
+/// ledger (first run); a present-but-unparseable file is a hard error so a
+/// corrupt ledger never silently re-files everything.
+fn load_ledger(path: &Path) -> Result<FiledLedger, String> {
+    match std::fs::read_to_string(path) {
+        Ok(raw) => serde_json::from_str(&raw)
+            .map_err(|err| format!("parsing ledger {}: {err}", path.display())),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(FiledLedger::new()),
+        Err(err) => Err(format!("reading ledger {}: {err}", path.display())),
+    }
+}
+
+/// Persist the dedup ledger to `path` as pretty JSON (records are a `BTreeMap`,
+/// so the on-disk order is deterministic).
+fn save_ledger(path: &Path, ledger: &FiledLedger) -> Result<(), String> {
+    let json =
+        serde_json::to_string_pretty(ledger).map_err(|err| format!("serializing ledger: {err}"))?;
+    std::fs::write(path, format!("{json}\n"))
+        .map_err(|err| format!("writing ledger {}: {err}", path.display()))
+}
+
+/// Result of attempting to file one proposal.
+#[derive(Debug, Clone, Serialize)]
+struct FiledBeadResult {
+    cluster_id: String,
+    /// The created bead id (empty on failure).
+    bead_id: String,
+    ok: bool,
+    message: String,
+}
+
+/// The emitted record when `--file-beads --execute` actually files beads.
+#[derive(Debug, Clone, Serialize)]
+struct BeadFilingExecution {
+    plan: BeadFilingPlan,
+    results: Vec<FiledBeadResult>,
+    ledger_records: usize,
+}
+
+/// Execute a filing plan: run `br create` for each proposal, recording each
+/// filed cluster in the ledger. Failures are captured per-proposal (the caller
+/// surfaces a non-zero exit) rather than aborting the whole batch — a transient
+/// `br` failure on one bead must not lose the ids already filed.
+///
+/// Uses the proposal's structured fields (title/priority/labels/body) as direct
+/// process args (no shell), so the body's newlines/quotes need no escaping; the
+/// `--silent` flag makes `br` print only the new id on stdout. This mirrors the
+/// reviewable `br_create_command` string the plan carries.
+fn execute_filing_plan(
+    plan: &BeadFilingPlan,
+    ledger: &mut FiledLedger,
+    parent: Option<&str>,
+) -> Vec<FiledBeadResult> {
+    let mut results = Vec::with_capacity(plan.proposals.len());
+    for proposal in &plan.proposals {
+        let mut cmd = Command::new("br");
+        cmd.arg("create")
+            .arg(&proposal.title)
+            .arg("-t")
+            .arg("task")
+            .arg("-p")
+            .arg(&proposal.priority)
+            .arg("-l")
+            .arg(&proposal.labels)
+            .arg("-d")
+            .arg(&proposal.body)
+            .arg("--silent");
+        if let Some(parent) = parent {
+            cmd.arg("--parent").arg(parent);
+        }
+        match cmd.output() {
+            Ok(out) if out.status.success() => {
+                let bead_id = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                ledger.record(
+                    proposal.cluster_id.clone(),
+                    bead_id.clone(),
+                    proposal.construct.clone(),
+                    "filed by franken_coverage_frontier --file-beads --execute",
+                );
+                results.push(FiledBeadResult {
+                    cluster_id: proposal.cluster_id.clone(),
+                    bead_id,
+                    ok: true,
+                    message: "created".to_string(),
+                });
+            }
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                results.push(FiledBeadResult {
+                    cluster_id: proposal.cluster_id.clone(),
+                    bead_id: String::new(),
+                    ok: false,
+                    message: format!("br create failed: {}", stderr.trim()),
+                });
+            }
+            Err(err) => {
+                results.push(FiledBeadResult {
+                    cluster_id: proposal.cluster_id.clone(),
+                    bead_id: String::new(),
+                    ok: false,
+                    message: format!("spawning br failed: {err}"),
+                });
+            }
+        }
+    }
+    results
+}
+
 fn emit<T: Serialize>(report: &T, out: &Option<PathBuf>) -> Result<(), String> {
     let json =
         serde_json::to_string_pretty(report).map_err(|err| format!("serializing report: {err}"))?;
@@ -296,16 +444,31 @@ fn run() -> Result<ExitCode, String> {
                 + USAGE,
         );
     }
-    if args.usage_signal.is_some() && !args.rank {
-        return Err("--usage-signal requires --rank".to_string());
+    if args.usage_signal.is_some() && !args.rank && !args.file_beads {
+        return Err("--usage-signal requires --rank or --file-beads".to_string());
     }
-    let exclusive = [args.rank, args.cross_reference, args.coverage_summary]
-        .iter()
-        .filter(|f| **f)
-        .count();
+    let exclusive = [
+        args.rank,
+        args.cross_reference,
+        args.coverage_summary,
+        args.file_beads,
+    ]
+    .iter()
+    .filter(|f| **f)
+    .count();
     if exclusive > 1 {
         return Err(
-            "--rank, --cross-reference, and --coverage-summary are mutually exclusive".to_string(),
+            "--rank, --file-beads, --cross-reference, and --coverage-summary are mutually exclusive"
+                .to_string(),
+        );
+    }
+    if args.execute && !args.file_beads {
+        return Err("--execute requires --file-beads".to_string());
+    }
+    if args.execute && args.ledger.is_none() {
+        return Err(
+            "--execute requires --ledger <path> so the dedup ledger is persisted after filing"
+                .to_string(),
         );
     }
 
@@ -363,6 +526,61 @@ fn run() -> Result<ExitCode, String> {
         } else {
             ExitCode::from(3)
         });
+    }
+
+    if args.file_beads {
+        let usage = match &args.usage_signal {
+            Some(path) => Some(load_usage_signal(path)?),
+            None => None,
+        };
+        let ranked = rank_clusters(&report, &collected.census, usage.as_ref());
+        let mut ledger = match &args.ledger {
+            Some(path) => load_ledger(path)?,
+            None => FiledLedger::new(),
+        };
+        let plan = build_filing_plan(
+            &ranked,
+            &report,
+            &ledger,
+            args.top_n,
+            args.parent.as_deref(),
+        );
+        eprintln!(
+            "[coverage_frontier] file-beads plan: {} considered, {} new proposals, {} skipped (dedup); plan digest {}",
+            plan.considered_count, plan.proposal_count, plan.skipped_count, plan.plan_digest
+        );
+
+        if args.execute {
+            let results = execute_filing_plan(&plan, &mut ledger, args.parent.as_deref());
+            // Persist the dedup ledger so a re-run skips what we just filed.
+            // (Validated above: --execute requires --ledger.)
+            if let Some(path) = &args.ledger {
+                save_ledger(path, &ledger)?;
+                eprintln!(
+                    "[coverage_frontier] wrote {} ledger records to {}",
+                    ledger.records.len(),
+                    path.display()
+                );
+            }
+            let any_failed = results.iter().any(|r| !r.ok);
+            let execution = BeadFilingExecution {
+                plan,
+                results,
+                ledger_records: ledger.records.len(),
+            };
+            emit(&execution, &args.out)?;
+            return Ok(if any_failed {
+                ExitCode::from(2)
+            } else {
+                ExitCode::SUCCESS
+            });
+        }
+
+        eprintln!(
+            "[coverage_frontier] plan-only (review then re-run with --execute --ledger <path> to file)"
+        );
+        emit(&plan, &args.out)?;
+        return Ok(ExitCode::SUCCESS);
     }
 
     if args.rank {

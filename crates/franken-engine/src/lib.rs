@@ -133,6 +133,7 @@ pub mod counterfactual_generation_guard;
 pub mod counterfactual_intervention_planner;
 pub mod counterfactual_replay_engine;
 pub mod coverage_frontier;
+pub mod coverage_frontier_filing;
 pub mod coverage_frontier_rank;
 pub mod coverage_frontier_xref;
 pub mod coverage_summary;

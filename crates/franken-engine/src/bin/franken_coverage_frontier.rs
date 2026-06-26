@@ -18,6 +18,9 @@
 //!   --usage-signal <path>    JSON usage signal (construct → weight millionths)
 //!                            from a real npm corpus scan; only used with --rank.
 //!                            Absent ⇒ neutral usage (no fabricated frequencies).
+//!   --cross-reference        Truth-gate: cross-reference clusters against the
+//!                            parser/lowering gap inventories. Exits 3 if any
+//!                            cluster is an undocumented gap. (Excludes --rank.)
 //!   --sample-count <N>       Cap tests for --run-suite (0 = all; default 2000).
 //!   --pattern <glob>         Glob filter for --run-suite.
 //!   --construct-depth <N>    Path depth for Test262 construct keys (default 3).
@@ -25,7 +28,8 @@
 //!   --out <path>             Write the report JSON here (always also to stdout).
 //!   -h, --help               Print this help.
 //!
-//! Exit codes: 0 report emitted; 2 usage error / no source selected.
+//! Exit codes: 0 report emitted (and truth gate passed, if --cross-reference);
+//! 2 usage error / no source selected; 3 truth-gate failure (undocumented gaps).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -40,6 +44,7 @@ use frankenengine_engine::coverage_frontier::{
 use frankenengine_engine::coverage_frontier_rank::{
     ConstructCensus, UsageSignal, construct_census_from_conformance, merge_censuses, rank_clusters,
 };
+use frankenengine_engine::coverage_frontier_xref::{cross_reference, default_inventory_entries};
 use frankenengine_engine::differential_oracle::{
     default_engine_core_corpus, run_engine_core_differential_oracle,
 };
@@ -62,6 +67,7 @@ SOURCES (select at least one; combinable):
 OPTIONS:
     --rank                   Emit the ranked report (impact = count × usage × locality)
     --usage-signal <path>    JSON usage signal (construct → weight millionths), --rank only
+    --cross-reference        Truth-gate clusters vs parser/lowering gap inventories (exit 3 on drift)
     --sample-count <N>       Cap tests for --run-suite (0 = all; default 2000)
     --pattern <glob>         Glob filter for --run-suite
     --construct-depth <N>    Construct-key path depth (default 3)
@@ -76,6 +82,7 @@ struct Args {
     engine_core_oracle: bool,
     rank: bool,
     usage_signal: Option<PathBuf>,
+    cross_reference: bool,
     sample_count: usize,
     pattern: Option<String>,
     construct_depth: usize,
@@ -91,6 +98,7 @@ impl Default for Args {
             engine_core_oracle: false,
             rank: false,
             usage_signal: None,
+            cross_reference: false,
             sample_count: 2000,
             pattern: None,
             construct_depth: DEFAULT_CONSTRUCT_DEPTH,
@@ -115,6 +123,7 @@ fn parse_args() -> Result<Option<Args>, String> {
             "--engine-core-oracle" => args.engine_core_oracle = true,
             "--rank" => args.rank = true,
             "--usage-signal" => args.usage_signal = Some(PathBuf::from(value()?)),
+            "--cross-reference" => args.cross_reference = true,
             "--sample-count" => {
                 args.sample_count = value()?
                     .parse()
@@ -262,6 +271,9 @@ fn run() -> Result<ExitCode, String> {
     if args.usage_signal.is_some() && !args.rank {
         return Err("--usage-signal requires --rank".to_string());
     }
+    if args.rank && args.cross_reference {
+        return Err("--rank and --cross-reference are mutually exclusive".to_string());
+    }
 
     let collected = collect(&args)?;
     let report: CoverageFrontierReport = cluster_failures(
@@ -273,6 +285,24 @@ fn run() -> Result<ExitCode, String> {
         "[coverage_frontier] {} failures -> {} clusters (digest {})",
         report.total_failures, report.cluster_count, report.report_digest
     );
+
+    if args.cross_reference {
+        let xref = cross_reference(&report, &default_inventory_entries());
+        eprintln!(
+            "[coverage_frontier] truth gate: {} clusters -> {} reconciled, {} undocumented ({}); digest {}",
+            xref.total_clusters,
+            xref.reconciled_count,
+            xref.undocumented_count,
+            if xref.truth_gate_pass { "PASS" } else { "FAIL" },
+            xref.report_digest
+        );
+        emit(&xref, &args.out)?;
+        return Ok(if xref.truth_gate_pass {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::from(3)
+        });
+    }
 
     if args.rank {
         let usage = match &args.usage_signal {

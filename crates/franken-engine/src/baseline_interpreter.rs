@@ -899,6 +899,13 @@ pub enum BuiltinFunctionKind {
     /// accumulated body) and returns the parsed response object. Idempotent: a
     /// second `.end()` is a no-op that returns `undefined`.
     ClientRequestEnd,
+    /// bd-3894s slice (2d): `EventEmitter.prototype.on(event, listener)` shared by the
+    /// HTTP `ClientRequest` (writable) and `IncomingMessage` (readable) stream objects.
+    /// Registers `listener` for `event` in the interpreter's `event_listeners`
+    /// side-table and returns the receiver for chaining (`res.on('data', …).on('end',
+    /// …)`). Stream events are emitted on later event-loop turns: `'data'`/`'end'` on
+    /// a response stream, `'response'`/`'error'` on a request.
+    EmitterOn,
     /// `performance.now()` — deterministic virtual-clock read for replayable
     /// sandbox execution (bd-8enww.5.3).
     PerformanceNow,
@@ -1756,6 +1763,16 @@ impl BuiltinFunction {
         }
     }
 
+    /// bd-3894s slice (2d): `EventEmitter.prototype.on` for the HTTP stream objects.
+    fn emitter_on() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::EmitterOn,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn performance_now() -> Self {
         Self {
             kind: BuiltinFunctionKind::PerformanceNow,
@@ -2161,6 +2178,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::DateGetTime => "getTime",
             BuiltinFunctionKind::ClientRequestWrite => "write",
             BuiltinFunctionKind::ClientRequestEnd => "end",
+            BuiltinFunctionKind::EmitterOn => "on",
             BuiltinFunctionKind::PerformanceNow => "now",
             BuiltinFunctionKind::DataViewGetUint8 => "getUint8",
             BuiltinFunctionKind::DataViewSetUint8 => "setUint8",
@@ -4328,6 +4346,29 @@ pub enum ExecutionSeed {
 // InterpreterCore — shared execution engine
 // ---------------------------------------------------------------------------
 
+/// bd-3894s slice (2d): the readable-stream emission phase for an HTTP
+/// `IncomingMessage` response. The single-shot response body is delivered as one
+/// `'data'` chunk (only when non-empty — Node emits no `'data'` for an empty body)
+/// followed by `'end'`, each on its own event-loop turn so a `res.on('data', …);
+/// res.on('end', …)` pair registered inside the response callback observes Node's
+/// data→end ordering.
+#[derive(Debug, Clone, Copy)]
+enum StreamEventPhase {
+    Data,
+    End,
+}
+
+/// bd-3894s slice (2d): a deferred readable-stream emission scheduled as an
+/// `IoCompletion` macrotask. Carries the target `IncomingMessage` object and the
+/// phase to emit; the listener closures are looked up from `event_listeners` when
+/// the macrotask fires, so they reflect every `res.on(...)` registered up to that
+/// turn (the response callback that registers them ran on an earlier turn).
+#[derive(Debug, Clone, Copy)]
+struct PendingStreamEmission {
+    object_id: ObjectId,
+    phase: StreamEventPhase,
+}
+
 /// The core interpreter loop shared between both lanes.
 pub struct InterpreterCore {
     config: InterpreterConfig,
@@ -4450,6 +4491,19 @@ pub struct InterpreterCore {
     /// drains the entry by seq when it fires, so the map never retains completed
     /// callbacks.
     pending_io_callbacks: BTreeMap<u64, Vec<Value>>,
+    /// bd-3894s slice (2d): registered event listeners for the HTTP stream objects
+    /// (`ClientRequest` writable / `IncomingMessage` readable), keyed by heap object
+    /// id then event name, each value the closure ids registered via `.on(event, cb)`
+    /// in registration order (Node fires listeners in the order they were added).
+    /// Held on the interpreter (not the heap) so listeners survive across event-loop
+    /// turns — they are registered on the `'response'` callback turn and fired on
+    /// later `'data'`/`'end'` turns. Mirrors the `pending_io_callbacks` side-table.
+    event_listeners: BTreeMap<ObjectId, BTreeMap<String, Vec<u32>>>,
+    /// bd-3894s slice (2d): deferred readable-stream emissions (`'data'`/`'end'`),
+    /// keyed by the `IoCompletion` macrotask registration sequence (parallel to
+    /// `pending_io_callbacks`, which carries closure callbacks). Drained by
+    /// `execute_macrotask_callback` when the macrotask fires.
+    pending_stream_emissions: BTreeMap<u64, PendingStreamEmission>,
     /// Active promise combinator trackers keyed by combinator id.
     promise_combinators: BTreeMap<u64, PromiseCombinatorState>,
     /// Watchers keyed by promise handle for combinator updates.
@@ -4572,6 +4626,8 @@ impl InterpreterCore {
             promise_store: crate::promise_model::PromiseStore::new(),
             event_loop: crate::promise_model::EventLoop::new(),
             pending_io_callbacks: BTreeMap::new(),
+            event_listeners: BTreeMap::new(),
+            pending_stream_emissions: BTreeMap::new(),
             promise_combinators: BTreeMap::new(),
             promise_combinator_watchers: BTreeMap::new(),
             next_promise_combinator_id: 0,
@@ -4680,18 +4736,35 @@ impl InterpreterCore {
             };
             let (method, headers, body) = self.resolve_net_request_options(options.as_ref());
             let response = self.perform_net_request_effect(url, method, headers, body)?;
-            return match response_callback {
-                // Only deliver `cb(res)` for a real response. A denied/failed egress
-                // returns `undefined` from the seam (the signed DENIED receipt is
-                // already recorded); firing the `'response'` callback there would be a
-                // false success — Node raises an `'error'` event instead (a follow-up
-                // slice), so we simply do not invoke the response callback.
-                Some(cid) if !matches!(response, Value::Undefined) => {
-                    self.schedule_io_callback(cid, vec![response]);
-                    Ok(Value::Undefined)
-                }
-                _ => Ok(response),
+            // The egress produced a real `IncomingMessage` (`Value::Object`) on
+            // success, or `Value::Undefined` on a denied/failed egress (the signed
+            // DENIED receipt is already recorded).
+            let response_obj = match &response {
+                Value::Object(rid) => Some(*rid),
+                _ => None,
             };
+            // Only deliver `cb(res)` for a real response. Firing the response callback
+            // on a denied egress would be a false success — Node raises an `'error'`
+            // event instead (surfaced on the `ClientRequest` `.on('error')` path), so
+            // here (the bare `http.get(url, cb)` form, which exposes no request object)
+            // we simply do not invoke the callback.
+            let result = match response_callback {
+                Some(cid) if response_obj.is_some() => {
+                    self.schedule_io_callback(cid, vec![response]);
+                    Value::Undefined
+                }
+                _ => response,
+            };
+            // bd-3894s slice (2d): when a real response was produced, drive its
+            // readable stream (`'data'` then `'end'`) on later turns so
+            // `res.on('data'|'end', …)` listeners fire — whether registered inside the
+            // response callback above OR after a synchronous `const res =
+            // http.get(url)`. The emission is scheduled after the callback (higher
+            // registration seq), so it lands on a turn where the listeners exist.
+            if let Some(rid) = response_obj {
+                self.schedule_stream_emission(rid, StreamEventPhase::Data);
+            }
+            return Ok(result);
         }
         let Some(provider) = self.host_io.clone() else {
             return Ok(Value::Undefined);
@@ -4976,6 +5049,130 @@ impl InterpreterCore {
         self.pending_io_callbacks.insert(seq, callback_args);
     }
 
+    /// bd-3894s slice (2d): register an event listener closure for `event` on the
+    /// stream object `target_id`, preserving registration order. Backs the shared
+    /// `EventEmitter.prototype.on` for the HTTP `ClientRequest`/`IncomingMessage`
+    /// objects.
+    fn register_event_listener(&mut self, target_id: ObjectId, event: &str, closure_id: u32) {
+        self.event_listeners
+            .entry(target_id)
+            .or_default()
+            .entry(event.to_string())
+            .or_default()
+            .push(closure_id);
+    }
+
+    /// bd-3894s slice (2d): the closure ids registered for `event` on `target_id`,
+    /// cloned so the caller can invoke them without holding a borrow on
+    /// `event_listeners`. Empty when no listener was registered.
+    fn event_listeners_for(&self, target_id: ObjectId, event: &str) -> Vec<u32> {
+        self.event_listeners
+            .get(&target_id)
+            .and_then(|by_event| by_event.get(event))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// bd-3894s slice (2d): schedule a deferred readable-stream emission (`'data'` or
+    /// `'end'`) for `object_id` on the next event-loop turn. It reuses the same
+    /// `IoCompletion` macrotask phase as the response callback (a sentinel
+    /// `ClosureHandle(0)` is stored — `execute_macrotask_callback` recognizes the
+    /// emission by its registration sequence and dispatches it BEFORE the
+    /// closure-callback path, so the sentinel is never invoked). Because it is
+    /// scheduled after the response callback, it orders onto a LATER turn, by which
+    /// point the callback has registered its `res.on('data'|'end', …)` listeners.
+    fn schedule_stream_emission(&mut self, object_id: ObjectId, phase: StreamEventPhase) {
+        let seq = self.event_loop.schedule_io_completion(
+            crate::closure_model::ClosureHandle(0),
+            crate::ifc_artifacts::Label::Public,
+        );
+        self.pending_stream_emissions
+            .insert(seq, PendingStreamEmission { object_id, phase });
+    }
+
+    /// bd-3894s slice (2d): emit one readable-stream phase for an `IncomingMessage`
+    /// on the current event-loop turn. `'data'` delivers the whole response body as a
+    /// single chunk (only when non-empty — Node emits no `'data'` for an empty body)
+    /// to each `res.on('data', …)` listener, then schedules the `'end'` phase for the
+    /// next turn; `'end'` fires each `res.on('end', …)` listener with no argument and
+    /// releases the object's listener table. The listeners registered during the
+    /// `'response'` callback are present because that callback ran on an earlier turn.
+    fn drive_stream_emission(
+        &mut self,
+        emission: PendingStreamEmission,
+        module: Option<&Ir3Module>,
+    ) -> Result<(), InterpreterError> {
+        let PendingStreamEmission { object_id, phase } = emission;
+        match phase {
+            StreamEventPhase::Data => {
+                let chunk = self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .and_then(|obj| obj.properties.get("body"))
+                    .cloned()
+                    .unwrap_or(Value::Undefined);
+                let has_body = matches!(&chunk, Value::Str(s) if !s.is_empty());
+                if has_body {
+                    for closure_id in self.event_listeners_for(object_id, "data") {
+                        self.invoke_stream_listener(module, closure_id, vec![chunk.clone()])?;
+                    }
+                }
+                // `'end'` always follows `'data'`, on its own turn.
+                self.schedule_stream_emission(object_id, StreamEventPhase::End);
+                Ok(())
+            }
+            StreamEventPhase::End => {
+                for closure_id in self.event_listeners_for(object_id, "end") {
+                    self.invoke_stream_listener(module, closure_id, Vec::new())?;
+                }
+                // The response stream is fully consumed; drop its listener table so
+                // the side-table stays bounded to in-flight streams.
+                self.event_listeners.remove(&object_id);
+                Ok(())
+            }
+        }
+    }
+
+    /// bd-3894s slice (2d): invoke a stream-event listener closure with `args`,
+    /// reusing the audited synchronous closure-invocation path (the same one the
+    /// response callback, timer, and promise reactions use). A missing module context
+    /// (the test-only event-loop path) or a dangling closure id is skipped without
+    /// error so a malformed listener cannot fault the whole event loop.
+    fn invoke_stream_listener(
+        &mut self,
+        module: Option<&Ir3Module>,
+        closure_id: u32,
+        args: Vec<Value>,
+    ) -> Result<(), InterpreterError> {
+        let Some(module) = module else {
+            return Ok(());
+        };
+        if self.closures.get(closure_id as usize).is_none() {
+            return Ok(());
+        }
+        self.invoke_inline_method_call(
+            Some(module),
+            Value::Closure(closure_id),
+            Value::Undefined,
+            args,
+        )?;
+        Ok(())
+    }
+
+    /// bd-3894s slice (2d): build the `Error`-shaped value delivered to a
+    /// `req.on('error', …)` listener when the deferred egress is denied or fails. Node
+    /// passes an `Error`; we model it as an object carrying `message` and `code` so a
+    /// listener can branch on `err.code`. The denial itself is already recorded as a
+    /// signed DENIED `EffectReceipt`; this only surfaces it to the request's `'error'`
+    /// event (the egress never reached the network).
+    fn build_request_error_value(&mut self) -> Result<Value, InterpreterError> {
+        let err_id = self.alloc_object_with_properties(&[
+            ("message", Value::str("net request failed")),
+            ("code", Value::str("ERR_NETWORK")),
+        ])?;
+        Ok(Value::Object(err_id))
+    }
+
     /// bd-1xl17.d / bd-rul7k: map the raw bytes a successful `fs:read` host effect
     /// produced to the JS value `readFileSync` would return. Without an encoding
     /// Node yields a `Buffer` (modeled here as a `Uint8Array`-backed value); with
@@ -5131,7 +5328,9 @@ impl InterpreterCore {
                 // dropped by chunks_exact (Node would surface a replacement char);
                 // the common even-length case is faithful.
                 let units: Vec<u16> = bytes
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
                     .collect();
                 Some(String::from_utf16_lossy(&units))
@@ -5214,7 +5413,14 @@ impl InterpreterCore {
 
         let body_str = String::from_utf8_lossy(body).into_owned();
         let ok = (200..300).contains(&status);
+        // bd-3894s slice (2d): tag the response `IncomingMessage` so `res.on('data'|
+        // 'end'|'error', …)` resolves to the shared `EventEmitter.prototype.on` via
+        // the `__type` member-access path. The own data properties below
+        // (`status`/`body`/`headers`/`ok`/`statusText`) still win property resolution,
+        // so the tag only adds the readable-stream `.on` method — direct reads like
+        // `res.status` / `res.body` are unchanged.
         let response_id = self.alloc_object_with_properties(&[
+            ("__type", Value::str("IncomingMessage")),
             ("status", Value::Int(status)),
             ("statusText", Value::str(status_text.as_str())),
             ("ok", Value::Bool(ok)),
@@ -8016,16 +8222,18 @@ impl InterpreterCore {
                 Ok(Value::Bool(true))
             }
             BuiltinFunctionKind::ClientRequestEnd => {
-                // bd-3894s slice (2b)+(2c): `req.end([chunk])` — append an optional
-                // final chunk, then perform the deferred `net:request` egress with the
-                // method/headers captured at construction and the accumulated body.
-                // When `http.request(url[, opts], cb)` registered a response callback
-                // (captured as `__response_cb` at construction, slice 2c), `cb(res)`
-                // is delivered on the next event-loop turn after the egress and
-                // `.end()` evaluates to `undefined`; otherwise `.end()` returns the
-                // response synchronously (slice 4). A trailing closure passed to
-                // `.end()` ITSELF is the legacy `end(cb)` FINISH callback (distinct
-                // from the response callback) and is still skipped — a follow-up.
+                // bd-3894s slice (2b)+(2c)+(2d): `req.end([chunk][, cb])` — append an
+                // optional final chunk, then perform the deferred `net:request` egress
+                // with the method/headers captured at construction and the accumulated
+                // body. After the egress the response is delivered to the
+                // `http.request(url[, opts], cb)` response callback (`__response_cb`,
+                // slice 2c) AND to every `req.on('response', …)` listener (slice 2d),
+                // and the `IncomingMessage` readable stream is driven (`'data'`/`'end'`
+                // on later turns). A trailing closure passed to `.end()` ITSELF is the
+                // `end(cb)` FINISH callback (distinct from the response callback),
+                // fired once the request is sent. A denied/failed egress fires the
+                // request's `'error'` listeners instead of any response. With no async
+                // consumer `.end()` returns the response synchronously (slice 4).
                 // Idempotent: a second `.end()` is a no-op that returns `undefined`.
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let Value::Object(req_id) = receiver else {
@@ -8035,12 +8243,24 @@ impl InterpreterCore {
                         got: receiver.type_name().to_string(),
                     });
                 };
-                // Optional final data chunk (`end(data)`); a closure arg is the
-                // legacy `end(cb)` form — not a body chunk — so it is skipped.
-                if let Some(chunk) = self.builtin_arg(args, 0)?
+                // bd-3894s slice (2d): `req.end([data][, cb])` — a trailing closure is
+                // the `end(cb)` FINISH callback (fired once the request is sent), NOT a
+                // body chunk; a leading non-closure arg is the final body chunk
+                // (`end(data)`). Detect the finish callback from the last arg and
+                // append any leading data chunk to the writable `__body`.
+                let arg0 = self.builtin_arg(args, 0)?;
+                let arg1 = self.builtin_arg(args, 1)?;
+                // The finish callback is the last closure argument (`end(cb)` or
+                // `end(data, cb)`); the or-pattern prefers the arg1 binding when both
+                // are closures.
+                let finish_cb: Option<u32> = match (&arg0, &arg1) {
+                    (_, Some(Value::Closure(cid))) | (Some(Value::Closure(cid)), _) => Some(*cid),
+                    _ => None,
+                };
+                if let Some(chunk) = arg0.as_ref()
                     && !matches!(chunk, Value::Closure(_))
                 {
-                    let chunk_str = Self::client_request_chunk_string(&chunk);
+                    let chunk_str = Self::client_request_chunk_string(chunk);
                     if !chunk_str.is_empty() {
                         let req_index = req_id.0 as usize;
                         self.mutate_heap(|heap| {
@@ -8111,20 +8331,83 @@ impl InterpreterCore {
                 // Mark ended BEFORE the egress so a re-entrant `.end()` is a no-op.
                 self.set_object_property(req_id, "__ended".to_string(), Value::Bool(true))?;
                 let response = self.perform_net_request_effect(url, method, headers, body)?;
-                // bd-3894s slice (2c): deliver `cb(res)` on the next event-loop turn
-                // when `http.request(url[, opts], cb)` registered a response callback
-                // and the egress produced a real response; the call then evaluates to
-                // `undefined` (the async model). With no callback the response is
-                // returned synchronously as the value of `.end()` (slice-4 behavior).
-                // A denied/failed egress (response `undefined`) does not fire the
-                // callback — Node raises an `'error'` event there (a follow-up slice).
-                match response_cb {
-                    Some(cid) if !matches!(response, Value::Undefined) => {
-                        self.schedule_io_callback(cid, vec![response]);
+                // bd-3894s slice (2d): the request's own event listeners, registered
+                // via `req.on('response'|'error', …)` synchronously before `.end()`.
+                let response_listeners = self.event_listeners_for(req_id, "response");
+                let error_listeners = self.event_listeners_for(req_id, "error");
+                match response {
+                    Value::Object(rid) => {
+                        // bd-3894s slice (2c)+(2d): deliver the response to the
+                        // `http.request(url[, opts], cb)` callback AND to every
+                        // `req.on('response', …)` listener on the next event-loop turn.
+                        // The `end(cb)` finish callback (request sent) fires first.
+                        if let Some(cid) = finish_cb {
+                            self.schedule_io_callback(cid, Vec::new());
+                        }
+                        if let Some(cid) = response_cb {
+                            self.schedule_io_callback(cid, vec![Value::Object(rid)]);
+                        }
+                        for cid in &response_listeners {
+                            self.schedule_io_callback(*cid, vec![Value::Object(rid)]);
+                        }
+                        // Drive the `IncomingMessage` readable stream (`'data'`/`'end'`)
+                        // after those deliveries (higher registration seq => later turn
+                        // => the `res.on('data'|'end', …)` listeners they register
+                        // exist). Scheduled unconditionally for a real response so a
+                        // synchronous `const res = http.request(url).end(); res.on(...)`
+                        // also streams.
+                        self.schedule_stream_emission(rid, StreamEventPhase::Data);
+                        // An async consumer (response callback / `'response'` listener /
+                        // finish callback) makes `.end()` evaluate to `undefined`; with
+                        // none, the response is returned synchronously (slice-4 model).
+                        if response_cb.is_some()
+                            || !response_listeners.is_empty()
+                            || finish_cb.is_some()
+                        {
+                            Ok(Value::Undefined)
+                        } else {
+                            Ok(Value::Object(rid))
+                        }
+                    }
+                    _ => {
+                        // Denied/failed egress: surface it to the request's `'error'`
+                        // listeners (deferred) instead of firing any response/data/end.
+                        // The signed DENIED `EffectReceipt` is already recorded.
+                        if !error_listeners.is_empty() {
+                            let err = self.build_request_error_value()?;
+                            for cid in &error_listeners {
+                                self.schedule_io_callback(*cid, vec![err.clone()]);
+                            }
+                        }
                         Ok(Value::Undefined)
                     }
-                    _ => Ok(response),
                 }
+            }
+            BuiltinFunctionKind::EmitterOn => {
+                // bd-3894s slice (2d): `emitter.on(event, listener)` — register
+                // `listener` for `event` on the receiver stream object and return the
+                // receiver (Node's `.on` returns `this`, enabling
+                // `res.on('data', …).on('end', …)` chaining). The listeners are stored
+                // in the interpreter side-table and invoked when the matching stream
+                // event is emitted on a later event-loop turn (`'data'`/`'end'` on a
+                // response, `'response'`/`'error'` on a request). A non-string event
+                // name or non-closure listener is a no-op registration.
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(target_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "EventEmitter receiver for .on(event, listener)".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let event = match self.builtin_arg(args, 0)? {
+                    Some(Value::Str(s)) => Some(s.to_string()),
+                    _ => None,
+                };
+                let listener = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                if let (Some(event), Value::Closure(closure_id)) = (event, listener) {
+                    self.register_event_listener(target_id, &event, closure_id);
+                }
+                Ok(Value::Object(target_id))
             }
             BuiltinFunctionKind::PerformanceNow => {
                 self.dispatch_builtin_hostcall("builtin:PerformanceNow", args, Some(module))
@@ -14488,6 +14771,12 @@ impl InterpreterCore {
             // deferred egress.
             ("ClientRequest", "write") => Some(BuiltinFunction::client_request_write()),
             ("ClientRequest", "end") => Some(BuiltinFunction::client_request_end()),
+            // bd-3894s slice (2d): `req.on('response'|'error', …)` on the writable
+            // request and `res.on('data'|'end'|'error', …)` on the readable response
+            // both resolve to the shared `EventEmitter.prototype.on` via the `__type`
+            // tag, exactly like `.write`/`.end` above.
+            ("ClientRequest", "on") => Some(BuiltinFunction::emitter_on()),
+            ("IncomingMessage", "on") => Some(BuiltinFunction::emitter_on()),
             ("RegExp", "test") => Some(BuiltinFunction::regexp_test()),
             ("DataView", "getUint8") => Some(BuiltinFunction::data_view_get_uint8()),
             ("DataView", "setUint8") => Some(BuiltinFunction::data_view_set_uint8()),
@@ -16389,6 +16678,17 @@ impl InterpreterCore {
                 result.map(|_| ())
             }
             crate::promise_model::MacrotaskSource::IoCompletion => {
+                // bd-3894s slice (2d): a deferred readable-stream emission
+                // (`'data'`/`'end'` on an `IncomingMessage`) carries no real handler
+                // closure — it is identified by its registration sequence and
+                // dispatched here BEFORE the closure-callback path, so the sentinel
+                // `ClosureHandle(0)` it stored is never invoked as a closure.
+                if let Some(emission) = self
+                    .pending_stream_emissions
+                    .remove(&macrotask.registration_seq)
+                {
+                    return self.drive_stream_emission(emission, module);
+                }
                 // bd-201vt / bd-3894s slice (2c): an async host-I/O callback — a fs
                 // callback (`fs.readFile`/`fs.writeFile`, err-first `cb(err[, data])`)
                 // or an http response callback (`http.get`/`http.request`'s
@@ -35670,6 +35970,383 @@ mod async_runtime_tests_current {
             entries[0].1.is_err(),
             "the recorded outcome must be the fail-closed denial"
         );
+    }
+
+    /// bd-3894s slice (2d): the parsed response object is tagged `IncomingMessage` so
+    /// `res.on('data'|'end'|'error', …)` resolves to the shared
+    /// `EventEmitter.prototype.on` via the `__type` member-access path, while the own
+    /// data properties (`status`/`body`/`headers`/`ok`) are untouched.
+    #[test]
+    fn build_net_response_value_tags_incoming_message_bd_3894s() {
+        let mut core = test_interpreter();
+        let raw = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+        let Value::Object(id) = core.build_net_response_value(raw).expect("parse response") else {
+            panic!("expected a response object");
+        };
+        let response = core.heap.get(id.0 as usize).expect("response object");
+        assert_eq!(
+            response.properties.get("__type"),
+            Some(&Value::str("IncomingMessage")),
+            "the response is a readable-stream IncomingMessage"
+        );
+        // The data properties still win property resolution (the tag only adds `.on`).
+        assert_eq!(response.properties.get("status"), Some(&Value::Int(200)));
+        assert_eq!(response.properties.get("body"), Some(&Value::str("hello")));
+        assert_eq!(response.properties.get("ok"), Some(&Value::Bool(true)));
+    }
+
+    /// bd-3894s slice (2d): both the readable `IncomingMessage` and the writable
+    /// `ClientRequest` resolve `.on` to the shared `EmitterOn` builtin via their
+    /// `__type` tag; an unrelated tag does not gain an `.on` method.
+    #[test]
+    fn incoming_message_and_client_request_resolve_on_method_bd_3894s() {
+        for tag in ["IncomingMessage", "ClientRequest"] {
+            let resolved = InterpreterCore::collection_prototype_method(tag, "on")
+                .unwrap_or_else(|| panic!("{tag}.on must resolve to a builtin"));
+            assert!(
+                matches!(resolved.kind, BuiltinFunctionKind::EmitterOn),
+                "{tag}.on resolves to the shared EventEmitter.on builtin"
+            );
+        }
+        assert!(
+            InterpreterCore::collection_prototype_method("Map", "on").is_none(),
+            "a non-emitter __type tag does not gain an .on method"
+        );
+    }
+
+    /// bd-3894s slice (2d): `emitter.on(event, listener)` registers listeners in
+    /// registration order (Node fires them in the order added) and returns the
+    /// receiver so `res.on('data', …).on('end', …)` chains. A non-string event or a
+    /// non-closure listener is a no-op registration.
+    #[test]
+    fn emitter_on_registers_listeners_in_order_and_returns_receiver_bd_3894s() {
+        let mut core = test_interpreter();
+        let module = test_module_with_functions(vec![], vec![]);
+        let on = BuiltinFunction::emitter_on();
+        let target_id = core.mutate_heap(|h| {
+            let id = ObjectId(h.len() as u32);
+            let mut obj = HeapObject::new();
+            obj.properties
+                .insert("__type".to_string(), Value::str("IncomingMessage"));
+            h.push(obj);
+            id
+        });
+
+        // res.on('data', closure#7)
+        core.mutate_registers(|r| {
+            if r.len() < 2 {
+                r.resize(2, Value::Undefined);
+            }
+            r[0] = Value::str("data");
+            r[1] = Value::Closure(7);
+        });
+        let returned = core
+            .dispatch_builtin_function(
+                &module,
+                &on,
+                RegRange { start: 0, count: 2 },
+                Some(Value::Object(target_id)),
+            )
+            .expect("emitter.on dispatch");
+        assert_eq!(
+            returned,
+            Value::Object(target_id),
+            "emitter.on returns the receiver for chaining"
+        );
+
+        // res.on('data', closure#8) — second 'data' listener, registration order kept.
+        core.mutate_registers(|r| r[1] = Value::Closure(8));
+        core.dispatch_builtin_function(
+            &module,
+            &on,
+            RegRange { start: 0, count: 2 },
+            Some(Value::Object(target_id)),
+        )
+        .expect("second data listener");
+
+        // res.on('end', closure#9)
+        core.mutate_registers(|r| {
+            r[0] = Value::str("end");
+            r[1] = Value::Closure(9);
+        });
+        core.dispatch_builtin_function(
+            &module,
+            &on,
+            RegRange { start: 0, count: 2 },
+            Some(Value::Object(target_id)),
+        )
+        .expect("end listener");
+
+        assert_eq!(
+            core.event_listeners_for(target_id, "data"),
+            vec![7, 8],
+            "data listeners are kept in registration order"
+        );
+        assert_eq!(core.event_listeners_for(target_id, "end"), vec![9]);
+
+        // A non-closure listener does not register.
+        core.mutate_registers(|r| {
+            r[0] = Value::str("error");
+            r[1] = Value::Int(0);
+        });
+        core.dispatch_builtin_function(
+            &module,
+            &on,
+            RegRange { start: 0, count: 2 },
+            Some(Value::Object(target_id)),
+        )
+        .expect("non-closure listener is a no-op");
+        assert!(
+            core.event_listeners_for(target_id, "error").is_empty(),
+            "a non-closure listener is not registered"
+        );
+    }
+
+    /// bd-3894s slice (2d): scheduling the readable-stream `'data'` phase drives a
+    /// `'data'` turn that then schedules the `'end'` turn; after `'end'` the object's
+    /// listener table is released. Exercised on the module-less event-loop path (the
+    /// listener closures are not invoked there — that is proven by the node mock-free
+    /// e2e); this asserts the data→end chaining and the cleanup are mechanism-correct.
+    #[test]
+    fn stream_emission_drives_data_then_end_and_clears_listeners_bd_3894s() {
+        let mut core = test_interpreter();
+        let obj_id = core.mutate_heap(|h| {
+            let id = ObjectId(h.len() as u32);
+            let mut obj = HeapObject::new();
+            obj.properties
+                .insert("__type".to_string(), Value::str("IncomingMessage"));
+            obj.properties
+                .insert("body".to_string(), Value::str("chunk-bytes"));
+            h.push(obj);
+            id
+        });
+        core.register_event_listener(obj_id, "data", 11);
+        core.register_event_listener(obj_id, "data", 12);
+        core.register_event_listener(obj_id, "end", 13);
+
+        core.schedule_stream_emission(obj_id, StreamEventPhase::Data);
+        assert_eq!(
+            core.pending_stream_emissions.len(),
+            1,
+            "the 'data' emission is scheduled as one IoCompletion macrotask"
+        );
+
+        core.run_event_loop_until_idle();
+
+        assert!(
+            core.pending_stream_emissions.is_empty(),
+            "both the 'data' and the chained 'end' emission drained"
+        );
+        assert!(
+            core.event_listeners.get(&obj_id).is_none(),
+            "the 'end' phase released the object's listener table"
+        );
+    }
+
+    /// bd-3894s slice (2d): a failed egress (here: no host-I/O provider, so the seam
+    /// yields `undefined`) fires the request's `req.on('error', …)` listeners with an
+    /// Error-shaped value carrying `code`, and fires no response/data/end. `.end()`
+    /// evaluates to `undefined`.
+    #[test]
+    fn client_request_on_error_fires_on_failed_egress_bd_3894s() {
+        let mut core = test_interpreter();
+        let module = test_module_with_functions(vec![], vec![]);
+
+        // http.request('http://127.0.0.1:0/') — build the writable request (no egress).
+        core.mutate_registers(|r| {
+            if r.is_empty() {
+                r.resize(1, Value::Undefined);
+            }
+            r[0] = Value::str("http://127.0.0.1:0/");
+        });
+        let req = core
+            .dispatch_client_request_create(RegRange { start: 0, count: 1 })
+            .expect("client request creation");
+        let Value::Object(req_id) = req else {
+            panic!("expected a ClientRequest object");
+        };
+
+        // req.on('error', closure#9)
+        let on = BuiltinFunction::emitter_on();
+        core.mutate_registers(|r| {
+            if r.len() < 2 {
+                r.resize(2, Value::Undefined);
+            }
+            r[0] = Value::str("error");
+            r[1] = Value::Closure(9);
+        });
+        core.dispatch_builtin_function(
+            &module,
+            &on,
+            RegRange { start: 0, count: 2 },
+            Some(Value::Object(req_id)),
+        )
+        .expect("req.on('error')");
+
+        // req.end() — no host-I/O provider is set, so the egress seam returns
+        // undefined (the failed-egress path) and the 'error' event fires.
+        let end = BuiltinFunction::client_request_end();
+        let result = core
+            .dispatch_builtin_function(
+                &module,
+                &end,
+                RegRange { start: 0, count: 0 },
+                Some(Value::Object(req_id)),
+            )
+            .expect("req.end with a failed egress");
+        assert_eq!(
+            result,
+            Value::Undefined,
+            "a failed egress evaluates .end() to undefined (no response is returned)"
+        );
+
+        assert_eq!(
+            core.pending_io_callbacks.len(),
+            1,
+            "the 'error' listener is scheduled as a pending IoCompletion macrotask"
+        );
+        let args = core
+            .pending_io_callbacks
+            .values()
+            .next()
+            .expect("a scheduled error callback")
+            .clone();
+        assert_eq!(
+            args.len(),
+            1,
+            "the 'error' listener receives a single Error arg"
+        );
+        let Value::Object(err_id) = args[0] else {
+            panic!("the error arg must be an Error object, got {:?}", args[0]);
+        };
+        let err = core.heap.get(err_id.0 as usize).expect("error object");
+        assert_eq!(
+            err.properties.get("code"),
+            Some(&Value::str("ERR_NETWORK")),
+            "the Error carries a code the listener can branch on"
+        );
+        assert!(
+            core.pending_stream_emissions.is_empty(),
+            "a failed egress drives no readable-stream 'data'/'end'"
+        );
+    }
+
+    /// bd-3894s slice (2d): `http.request(url)` with a `req.on('response', …)`
+    /// listener (and no `http.request(url, opts, cb)` callback) delivers the parsed
+    /// response to the listener on the next event-loop turn and `.end()` evaluates to
+    /// `undefined`; the readable stream is scheduled to drive afterward.
+    #[test]
+    fn client_request_on_response_listener_receives_response_bd_3894s() {
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+        use std::io::{Read, Write};
+        use std::time::Duration;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("listener addr");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _peer) = listener.accept().expect("accept egress connection");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("server read timeout");
+            let mut received = Vec::new();
+            let _ = stream.read_to_end(&mut received);
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+            let _ = stream.flush();
+            received
+        });
+
+        let mut root = std::env::temp_dir();
+        root.push(format!(
+            "frankenengine_interp_req_on_resp_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        let mut core = test_interpreter();
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        core.set_host_io(provider, Some(recorder_dyn));
+        let module = test_module_with_functions(vec![], vec![]);
+
+        // const req = http.request(url) — writable request, no callback, no egress.
+        let url = format!("http://{addr}/");
+        core.mutate_registers(|r| {
+            if r.is_empty() {
+                r.resize(1, Value::Undefined);
+            }
+            r[0] = Value::Str(Arc::from(url.as_str()));
+        });
+        let req = core
+            .dispatch_client_request_create(RegRange { start: 0, count: 1 })
+            .expect("client request creation");
+        let Value::Object(req_id) = req else {
+            panic!("expected a ClientRequest object");
+        };
+
+        // req.on('response', closure#5)
+        let on = BuiltinFunction::emitter_on();
+        core.mutate_registers(|r| {
+            if r.len() < 2 {
+                r.resize(2, Value::Undefined);
+            }
+            r[0] = Value::str("response");
+            r[1] = Value::Closure(5);
+        });
+        core.dispatch_builtin_function(
+            &module,
+            &on,
+            RegRange { start: 0, count: 2 },
+            Some(Value::Object(req_id)),
+        )
+        .expect("req.on('response')");
+
+        // req.end() — perform the deferred egress and schedule the 'response' delivery.
+        let end = BuiltinFunction::client_request_end();
+        let result = core
+            .dispatch_builtin_function(
+                &module,
+                &end,
+                RegRange { start: 0, count: 0 },
+                Some(Value::Object(req_id)),
+            )
+            .expect("req.end");
+        assert_eq!(
+            result,
+            Value::Undefined,
+            "a req.on('response') consumer makes .end() async (returns undefined)"
+        );
+
+        // The 'response' listener was scheduled with the parsed response object.
+        assert_eq!(
+            core.pending_io_callbacks.len(),
+            1,
+            "the 'response' listener is scheduled as a pending IoCompletion macrotask"
+        );
+        let args = core
+            .pending_io_callbacks
+            .values()
+            .next()
+            .expect("a scheduled response listener")
+            .clone();
+        let Value::Object(resp_id) = args[0] else {
+            panic!(
+                "the listener arg must be the response object, got {:?}",
+                args[0]
+            );
+        };
+        let resp = core.heap.get(resp_id.0 as usize).expect("response object");
+        assert_eq!(resp.properties.get("status"), Some(&Value::Int(200)));
+        assert_eq!(resp.properties.get("body"), Some(&Value::str("ok")));
+        // The readable stream is scheduled to drive 'data'/'end' after the delivery.
+        assert_eq!(
+            core.pending_stream_emissions.len(),
+            1,
+            "the IncomingMessage readable stream is scheduled to emit after delivery"
+        );
+
+        let _ = server.join().expect("server thread");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// bd-3894s slice (4): `build_net_response_value` parses raw HTTP/1.1 response

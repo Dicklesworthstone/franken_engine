@@ -403,7 +403,7 @@ impl PromiseStore {
 
         // Drain reactions before mutating state to avoid borrow issues.
         let record = self.get_mut(handle)?;
-        let reactions: Vec<PromiseReaction> = record.reactions.drain(..).collect();
+        let reactions: Vec<PromiseReaction> = std::mem::take(&mut record.reactions);
         record.state = PromiseState::Fulfilled(value.clone());
         record.label = label.clone();
 
@@ -442,7 +442,7 @@ impl PromiseStore {
         }
 
         let record = self.get_mut(handle)?;
-        let reactions: Vec<PromiseReaction> = record.reactions.drain(..).collect();
+        let reactions: Vec<PromiseReaction> = std::mem::take(&mut record.reactions);
         let has_reject_handler = reactions
             .iter()
             .any(|r| r.kind == ReactionKind::Reject && r.handler.is_some());

@@ -3306,7 +3306,7 @@ fn lower_statement_to_ir1_with_flow(
             } else {
                 let after_label = alloc_label(label_counter);
                 let mut child = label_ctx.clone();
-                let mut names: Vec<String> = child.pending.drain(..).collect();
+                let mut names: Vec<String> = std::mem::take(&mut child.pending);
                 names.push(labeled.label.clone());
                 for name in names {
                     child.frames.push(LabelFrame {

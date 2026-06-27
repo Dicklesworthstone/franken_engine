@@ -11014,7 +11014,7 @@ mod tests {
                 .reason_codes
                 .contains(&"stale_tracker_state".to_string())
         );
-        assert_eq!(output.bead.as_ref().expect("bead").found, false);
+        assert!(!output.bead.as_ref().expect("bead").found);
     }
 
     #[test]

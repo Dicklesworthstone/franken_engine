@@ -15,7 +15,7 @@ use frankenengine_engine::differential_privacy_posterior::{
     DeterministicTestNoiseGenerator, PrivacyBudget, PrivacyParameters, PrivacyPreservingAggregator,
 };
 use frankenengine_engine::federated_posterior_aggregation::{
-    AggregatedPosteriorUpdate, AggregationCoordinator, LocalPosteriorProvider, PosteriorDelta,
+    AggregationCoordinator, LocalPosteriorProvider, PosteriorDelta,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::{fleet_immune_protocol::NodeId, security_epoch::SecurityEpoch};
@@ -30,6 +30,7 @@ pub enum RiskLevel {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct Timestamp(u64);
 
 impl Timestamp {
@@ -49,6 +50,7 @@ pub struct AggregationConfig {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct SecureAggregationSession {
     pub current_round: AggregationRound,
     config: AggregationConfig,
@@ -95,6 +97,7 @@ pub enum AggregationRound {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct Participant {
     id: ParticipantId,
 }
@@ -109,6 +112,7 @@ impl Participant {
 pub struct ParticipantId(pub String);
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct MaskedContribution {
     participant_id: ParticipantId,
     values: Vec<i64>,
@@ -141,10 +145,10 @@ fn end_to_end_privacy_preserving_fleet_learning() {
     ];
 
     let epoch = SecurityEpoch::from_raw(5000);
-    let timestamp = Timestamp::from_millis(1640995500000);
+    let _timestamp = Timestamp::from_millis(1640995500000);
 
     // Each node generates local posterior evidence
-    let local_posteriors = vec![
+    let local_posteriors = [
         // Node 1: High confidence in malicious classification
         create_posterior_map(vec![
             (RiskLevel::Benign, 100_000),
@@ -175,13 +179,13 @@ fn end_to_end_privacy_preserving_fleet_learning() {
         ]),
     ];
 
-    let confidence_levels = vec![900_000, 850_000, 700_000, 600_000];
+    let confidence_levels = [900_000, 850_000, 700_000, 600_000];
 
     // === LAYER 1: Federated Posterior Aggregation ===
-    let coordinator = AggregationCoordinator::new(NodeId::new("coordinator".to_string()), epoch);
+    let _coordinator = AggregationCoordinator::new(NodeId::new("coordinator".to_string()), epoch);
     let mut local_providers = vec![];
 
-    for (i, node_id) in nodes.iter().enumerate() {
+    for node_id in &nodes {
         let provider = LocalPosteriorProvider::new(node_id.clone(), epoch);
         local_providers.push(provider);
     }
@@ -205,8 +209,8 @@ fn end_to_end_privacy_preserving_fleet_learning() {
 
     // === LAYER 2: Differential Privacy Protection ===
     let privacy_params = PrivacyParameters::new(1_000_000, 10).unwrap();
-    let mut privacy_budget = PrivacyBudget::new(20_000_000, 100, epoch).unwrap(); // 20.0ε, 1e-4δ
-    let dp_aggregator = PrivacyPreservingAggregator::new(privacy_params.clone(), epoch);
+    let _privacy_budget = PrivacyBudget::new(20_000_000, 100, epoch).unwrap(); // 20.0ε, 1e-4δ
+    let dp_aggregator = PrivacyPreservingAggregator::new(privacy_params, epoch);
 
     // Apply differential privacy to each local posterior
     let mut private_deltas = vec![];
@@ -215,7 +219,7 @@ fn end_to_end_privacy_preserving_fleet_learning() {
         let private_delta =
             frankenengine_engine::differential_privacy_posterior::PrivatePosteriorDelta::from_delta(
                 delta,
-                privacy_params.clone(),
+                privacy_params,
                 format!("round_{}", i),
                 &mut noise_generator,
             );
@@ -249,7 +253,7 @@ fn end_to_end_privacy_preserving_fleet_learning() {
     let _share_seeds = secure_session.start_aggregation(&mut rng).unwrap();
 
     // Convert differentially private posteriors to secure aggregation format
-    let secure_inputs: Vec<Vec<i64>> = vec![vec![
+    let _secure_inputs: Vec<Vec<i64>> = vec![vec![
         dp_aggregate.aggregate_delta_benign_millionths,
         dp_aggregate.aggregate_delta_anomalous_millionths,
         dp_aggregate.aggregate_delta_malicious_millionths,
@@ -283,7 +287,7 @@ fn end_to_end_privacy_preserving_fleet_learning() {
         ),
     ];
 
-    let masked_aggregate = secure_session
+    let _masked_aggregate = secure_session
         .aggregate_contributions(masked_contributions)
         .unwrap();
 
@@ -358,15 +362,15 @@ fn end_to_end_privacy_preserving_fleet_learning() {
 /// Test privacy budget exhaustion handling
 #[test]
 fn privacy_budget_exhaustion_handling() {
-    let mut rng = thread_rng();
+    let _rng = thread_rng();
 
     // Create a very small privacy budget to force exhaustion
     let epoch = SecurityEpoch::from_raw(1000);
     let privacy_params = PrivacyParameters::new(2_000_000, 10).unwrap();
-    let mut privacy_budget = PrivacyBudget::new(3_000_000, 100, epoch).unwrap(); // 3.0ε, 1e-4δ
+    let _privacy_budget = PrivacyBudget::new(3_000_000, 100, epoch).unwrap(); // 3.0ε, 1e-4δ
 
     let node = NodeId::new("test_node".to_string());
-    let timestamp = Timestamp::from_millis(1640995200000);
+    let _timestamp = Timestamp::from_millis(1640995200000);
 
     let posterior = create_posterior_map(vec![
         (RiskLevel::Benign, 500_000),
@@ -390,7 +394,7 @@ fn privacy_budget_exhaustion_handling() {
     let result1 =
         frankenengine_engine::differential_privacy_posterior::PrivatePosteriorDelta::from_delta(
             delta.clone(),
-            privacy_params.clone(),
+            privacy_params,
             "budget_test_1".to_string(),
             &mut noise_generator,
         );
@@ -453,15 +457,15 @@ fn privacy_verification_e2e() {
     // This test verifies that the complete privacy-preserving pipeline
     // maintains the fundamental privacy guarantees
 
-    let mut rng = thread_rng();
-    let nodes = vec![
+    let _rng = thread_rng();
+    let nodes = [
         NodeId::new("node_1".to_string()),
         NodeId::new("node_2".to_string()),
         NodeId::new("node_3".to_string()),
     ];
 
     // Create distinct individual posteriors
-    let individual_posteriors = vec![
+    let individual_posteriors = [
         create_posterior_map(vec![
             (RiskLevel::Benign, 800_000),
             (RiskLevel::Malicious, 200_000),
@@ -477,11 +481,11 @@ fn privacy_verification_e2e() {
     ];
 
     let epoch = SecurityEpoch::from_raw(2000);
-    let timestamp = Timestamp::from_millis(1640995300000);
+    let _timestamp = Timestamp::from_millis(1640995300000);
 
     // Privacy-preserving aggregation
     let privacy_params = PrivacyParameters::new(1_000_000, 10).unwrap();
-    let dp_aggregator = PrivacyPreservingAggregator::new(privacy_params.clone(), epoch);
+    let dp_aggregator = PrivacyPreservingAggregator::new(privacy_params, epoch);
 
     let mut private_deltas = vec![];
     let mut noise_generator = DeterministicTestNoiseGenerator::new();
@@ -501,7 +505,7 @@ fn privacy_verification_e2e() {
         let private_delta =
             frankenengine_engine::differential_privacy_posterior::PrivatePosteriorDelta::from_delta(
                 delta,
-                privacy_params.clone(),
+                privacy_params,
                 format!("verification_round_{}", i),
                 &mut noise_generator,
             );
@@ -553,11 +557,11 @@ fn logging_privacy_compliance() {
     // respects the logging discipline: no individual peer contributions
     // should be logged or accessible
 
-    let mut rng = thread_rng();
+    let _rng = thread_rng();
 
     let node = NodeId::new("sensitive_node".to_string());
     let epoch = SecurityEpoch::from_raw(3000);
-    let timestamp = Timestamp::from_millis(1640995400000);
+    let _timestamp = Timestamp::from_millis(1640995400000);
 
     // Simulate sensitive individual data
     let sensitive_posterior = create_posterior_map(vec![

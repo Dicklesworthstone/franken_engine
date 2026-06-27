@@ -9074,31 +9074,21 @@ fn lower_expression_to_ir1_inner(
                 // effect ledger renders. Like the fs forms we do NOT lower the
                 // inner `require('http')` receiver (there is no real http module
                 // object; that path would fault at runtime); recognition is purely
-                // syntactic. Forward the URL operand (arg[0]) and, when present, the
-                // options object (arg[1] — `http.request(url, { method, headers })`)
-                // so the interpreter frames the real method/headers and seeds the
-                // ClientRequest body (bd-3894s slice 2) instead of a hardcoded GET.
-                // A request body added via `req.write`/`req.end` is accumulated on
-                // the ClientRequest object at dispatch (slice 2b); the response
-                // callback (arg[2]) remains a follow-up slice. A non-object arg[1]
-                // (e.g. `http.get(url, cb)`) resolves to the GET defaults at
-                // dispatch. A 0-arg call is malformed: fall through so it is not
-                // silently mis-shaped.
-                if let Some(url_arg) = arguments.first() {
-                    lower_expression_to_ir1(
-                        url_arg,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        label_counter,
-                        span_table,
-                    )?;
-                    let mut arg_count = 1u32;
-                    if let Some(options_arg) = arguments.get(1) {
+                // syntactic. Forward ALL arguments in source order — the URL operand
+                // (arg[0]), the optional options object (arg[1] — `http.request(url,
+                // { method, headers })`), and the optional trailing response callback
+                // (`http.get(url[, opts], cb)`, slice 2c). The interpreter
+                // disambiguates: it frames the real method/headers and seeds the
+                // ClientRequest body from an options object (bd-3894s slice 2; a
+                // non-object arg[1] such as a bare callback resolves to the GET
+                // defaults), accumulates a `req.write`/`req.end` body on the
+                // ClientRequest at dispatch (slice 2b), and delivers `cb(res)` to a
+                // trailing `Value::Closure` after the egress (slice 2c). A 0-arg call
+                // is malformed: fall through so it is not silently mis-shaped.
+                if !arguments.is_empty() {
+                    for arg in arguments {
                         lower_expression_to_ir1(
-                            options_arg,
+                            arg,
                             ops,
                             bindings,
                             binding_lookup,
@@ -9107,11 +9097,10 @@ fn lower_expression_to_ir1_inner(
                             label_counter,
                             span_table,
                         )?;
-                        arg_count = 2;
                     }
                     ops.push(Ir1Op::HostCall {
                         capability: capability.to_string(),
-                        arg_count,
+                        arg_count: arguments.len() as u32,
                     });
                     return Ok(());
                 }
@@ -9123,28 +9112,18 @@ fn lower_expression_to_ir1_inner(
                 // program pre-scan. Lowers to the SAME capability as the CJS
                 // require-binding/inline member-call forms (`get` -> `net:request`
                 // immediate egress, `request` -> `net:client_request` writable
-                // ClientRequest, slice 2b), forwarding the URL operand (arg[0]) and,
-                // when present, the options object (arg[1]), shared with
+                // ClientRequest, slice 2b), forwarding ALL arguments in source order —
+                // the URL operand (arg[0]), the optional options object (arg[1]), and
+                // the optional trailing response callback (slice 2c) — shared with
                 // `http_builtin_call_capability`: the interpreter frames the real
-                // method/headers (bd-3894s slice 2) from the options object instead
-                // of a hardcoded GET. The response callback remains a follow-up
-                // slice. A 0-arg call is malformed: fall through so it is not
-                // silently mis-shaped.
-                if let Some(url_arg) = arguments.first() {
-                    lower_expression_to_ir1(
-                        url_arg,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        label_counter,
-                        span_table,
-                    )?;
-                    let mut arg_count = 1u32;
-                    if let Some(options_arg) = arguments.get(1) {
+                // method/headers (bd-3894s slice 2) from an options object instead of
+                // a hardcoded GET, and delivers `cb(res)` to a trailing closure after
+                // the egress (slice 2c). A 0-arg call is malformed: fall through so it
+                // is not silently mis-shaped.
+                if !arguments.is_empty() {
+                    for arg in arguments {
                         lower_expression_to_ir1(
-                            options_arg,
+                            arg,
                             ops,
                             bindings,
                             binding_lookup,
@@ -9153,11 +9132,10 @@ fn lower_expression_to_ir1_inner(
                             label_counter,
                             span_table,
                         )?;
-                        arg_count = 2;
                     }
                     ops.push(Ir1Op::HostCall {
                         capability: capability.to_string(),
-                        arg_count,
+                        arg_count: arguments.len() as u32,
                     });
                     return Ok(());
                 }
@@ -16055,6 +16033,69 @@ mod tests {
             net_request_arg_count(&bare),
             Some(1),
             "a bare http.get(url) forwards only the URL (arg_count == 1)"
+        );
+    }
+
+    /// bd-3894s slice (2c): `http.get(url, cb)` — the Node response-callback form —
+    /// forwards the trailing callback closure as arg[1] (`net:request` arg_count ==
+    /// 2), so the interpreter can detect the trailing `Value::Closure` and deliver
+    /// `cb(res)` after the egress. (Previously the callback was dropped: the lowering
+    /// capped `net:request` at arg_count 2 but treated arg[1] purely as options.)
+    #[test]
+    fn http_get_with_callback_forwards_callback_arg_bd_3894s() {
+        let ops = lower_script_source_ops(
+            "require('http').get('http://127.0.0.1:9/', (res) => {});\n",
+            "http_get_callback.js",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "net:request"),
+            "http.get(url, cb) must lower to a net:request hostcall"
+        );
+        assert_eq!(
+            net_request_arg_count(&ops),
+            Some(2),
+            "http.get(url, cb) must forward the trailing callback closure as arg[1]"
+        );
+    }
+
+    /// bd-3894s slice (2c): `http.get(url, options, cb)` — options AND a response
+    /// callback — forwards all THREE arguments (`net:request` arg_count == 3). The
+    /// interpreter frames the request from the arg[1] options object and delivers
+    /// `cb(res)` to the trailing closure at arg[2]. (Previously arg[2] was dropped —
+    /// the lowering capped `net:request` at arg_count 2.)
+    #[test]
+    fn http_get_with_options_and_callback_forwards_three_args_bd_3894s() {
+        let ops = lower_script_source_ops(
+            "const http = require('http');\n\
+             http.get('http://127.0.0.1:9/', { method: 'GET' }, (res) => {});\n",
+            "http_get_options_callback.js",
+        );
+        assert_eq!(
+            net_request_arg_count(&ops),
+            Some(3),
+            "http.get(url, options, cb) must forward url + options + callback"
+        );
+    }
+
+    /// bd-3894s slice (2c): `http.request(url, options, cb)` forwards all three
+    /// arguments on the `net:client_request` lowering (arg_count == 3). The
+    /// interpreter captures the trailing callback as the ClientRequest's response
+    /// callback and delivers `cb(res)` from the deferred `.end()` egress.
+    #[test]
+    fn http_request_with_callback_forwards_to_net_client_request_bd_3894s() {
+        let ops = lower_script_source_ops(
+            "const http = require('http');\n\
+             http.request('http://127.0.0.1:9/', { method: 'POST' }, (res) => {});\n",
+            "http_request_callback.js",
+        );
+        assert!(
+            ops_have_hostcall(&ops, "net:client_request"),
+            "http.request(url, options, cb) must lower to a net:client_request hostcall"
+        );
+        assert_eq!(
+            first_hostcall_arg_count(&ops, "net:client_request"),
+            Some(3),
+            "http.request(url, options, cb) must forward url + options + callback"
         );
     }
 

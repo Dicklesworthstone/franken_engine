@@ -4660,8 +4660,38 @@ impl InterpreterCore {
             } else {
                 None
             };
+            // bd-3894s slice (2c): a trailing closure is the Node response callback —
+            // `http.get(url[, options], cb)`. It can sit at arg[1] (no options) or
+            // arg[2] (with options); either way it is the LAST argument, so detect a
+            // `Value::Closure` in the final slot. (A non-closure last arg — the bare
+            // URL, an options object, or a `fetch` init — is not a callback.) When
+            // present the egress runs as usual and `cb(res)` is delivered on the next
+            // event-loop turn (mirroring the fs async callback form), and the call
+            // itself evaluates to `undefined`. The `options` read above already
+            // resolves a callback-at-arg[1] to the bodyless-GET defaults, so the
+            // framed request is unaffected.
+            let response_callback = if args.count >= 2 {
+                match self.read_reg(args.start + args.count - 1)? {
+                    Value::Closure(cid) => Some(cid),
+                    _ => None,
+                }
+            } else {
+                None
+            };
             let (method, headers, body) = self.resolve_net_request_options(options.as_ref());
-            return self.perform_net_request_effect(url, method, headers, body);
+            let response = self.perform_net_request_effect(url, method, headers, body)?;
+            return match response_callback {
+                // Only deliver `cb(res)` for a real response. A denied/failed egress
+                // returns `undefined` from the seam (the signed DENIED receipt is
+                // already recorded); firing the `'response'` callback there would be a
+                // false success — Node raises an `'error'` event instead (a follow-up
+                // slice), so we simply do not invoke the response callback.
+                Some(cid) if !matches!(response, Value::Undefined) => {
+                    self.schedule_io_callback(cid, vec![response]);
+                    Ok(Value::Undefined)
+                }
+                _ => Ok(response),
+            };
         }
         let Some(provider) = self.host_io.clone() else {
             return Ok(Value::Undefined);
@@ -4763,7 +4793,7 @@ impl InterpreterCore {
                     // callbacks off the current call stack), and the call itself
                     // evaluates to `undefined`. The encoding still steers `data`'s
                     // Buffer-vs-string shape via the resolver above.
-                    self.schedule_fs_callback(closure_id, vec![Value::Null, value]);
+                    self.schedule_io_callback(closure_id, vec![Value::Null, value]);
                     Value::Undefined
                 } else {
                     value
@@ -4779,7 +4809,7 @@ impl InterpreterCore {
                     // and was recorded above; defer the err-first `cb(null)` to the
                     // next event-loop turn. (Node's writeFile callback takes only the
                     // error argument.)
-                    self.schedule_fs_callback(closure_id, vec![Value::Null]);
+                    self.schedule_io_callback(closure_id, vec![Value::Null]);
                 }
                 Value::Undefined
             }
@@ -4884,6 +4914,23 @@ impl InterpreterCore {
         } else {
             None
         };
+        // bd-3894s slice (2c): a trailing closure is the Node response callback —
+        // `http.request(url[, options], cb)`. Unlike the immediate `http.get` form,
+        // the response does not exist until `.end()` performs the deferred egress, so
+        // the callback is CAPTURED on the ClientRequest now (as `__response_cb`) and
+        // delivered `cb(res)` from `.end()`. It is the LAST argument (arg[1] with no
+        // options, arg[2] with), so detect a `Value::Closure` in the final slot; a
+        // non-closure last arg (URL / options object) is not a callback. The
+        // `options` read above already resolves a callback-at-arg[1] to the GET
+        // defaults, so the framed request is unaffected.
+        let response_callback = if args.count >= 2 {
+            match self.read_reg(args.start + args.count - 1)? {
+                Value::Closure(cid) => Value::Closure(cid),
+                _ => Value::Undefined,
+            }
+        } else {
+            Value::Undefined
+        };
         let (method, headers, body) = self.resolve_net_request_options(options.as_ref());
         // Persist the resolved headers as a child object so `.end()` can re-read
         // them (the headers are captured at request-construction time, matching
@@ -4906,19 +4953,22 @@ impl InterpreterCore {
             ("__headers", Value::Object(headers_id)),
             ("__body", Value::str(initial_body.as_str())),
             ("__ended", Value::Bool(false)),
+            ("__response_cb", response_callback),
         ])?;
         Ok(Value::Object(request_id))
     }
 
-    /// bd-201vt: schedule an async fs callback (`fs.readFile`/`fs.writeFile`
-    /// callback forms) to run on the next event-loop turn. The host effect has
-    /// already been performed and recorded synchronously by the caller; this only
-    /// defers the JS callback invocation so it runs off the current call stack,
-    /// matching Node's `IoCompletion`-phase scheduling. `callback_args` is the
-    /// err-first argument list (`[null]` for writes, `[null, data]` for reads); it
+    /// bd-201vt / bd-3894s slice (2c): schedule an async host-I/O callback to run on
+    /// the next event-loop turn. Shared by the fs async callback forms
+    /// (`fs.readFile`/`fs.writeFile`, err-first `[null]` / `[null, data]`) AND the
+    /// http response-callback forms (`http.get`/`http.request`'s `cb(res)`, a single
+    /// response argument). The host effect has already been performed and recorded
+    /// synchronously by the caller; this only defers the JS callback invocation so it
+    /// runs off the current call stack, matching Node's `IoCompletion`-phase
+    /// scheduling. `callback_args` is whatever the caller delivers to the closure; it
     /// is stashed by the macrotask's registration sequence and drained when the
     /// macrotask fires in `execute_macrotask_callback`.
-    fn schedule_fs_callback(&mut self, closure_id: u32, callback_args: Vec<Value>) {
+    fn schedule_io_callback(&mut self, closure_id: u32, callback_args: Vec<Value>) {
         let seq = self.event_loop.schedule_io_completion(
             crate::closure_model::ClosureHandle(closure_id),
             crate::ifc_artifacts::Label::Public,
@@ -7966,12 +8016,17 @@ impl InterpreterCore {
                 Ok(Value::Bool(true))
             }
             BuiltinFunctionKind::ClientRequestEnd => {
-                // bd-3894s slice (2b): `req.end([chunk])` — append an optional final
-                // chunk, then perform the deferred `net:request` egress with the
+                // bd-3894s slice (2b)+(2c): `req.end([chunk])` — append an optional
+                // final chunk, then perform the deferred `net:request` egress with the
                 // method/headers captured at construction and the accumulated body.
-                // A trailing callback closure (`end(cb)`) is ignored for now
-                // (response-callback delivery is a follow-up slice). Idempotent: a
-                // second `.end()` is a no-op that returns `undefined`.
+                // When `http.request(url[, opts], cb)` registered a response callback
+                // (captured as `__response_cb` at construction, slice 2c), `cb(res)`
+                // is delivered on the next event-loop turn after the egress and
+                // `.end()` evaluates to `undefined`; otherwise `.end()` returns the
+                // response synchronously (slice 4). A trailing closure passed to
+                // `.end()` ITSELF is the legacy `end(cb)` FINISH callback (distinct
+                // from the response callback) and is still skipped — a follow-up.
+                // Idempotent: a second `.end()` is a no-op that returns `undefined`.
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let Value::Object(req_id) = receiver else {
                     return Err(InterpreterError::TypeError {
@@ -8034,10 +8089,18 @@ impl InterpreterCore {
                             Some(Value::Str(s)) => s.to_string(),
                             _ => String::new(),
                         };
-                        Some((url, method, headers, body_str))
+                        // bd-3894s slice (2c): the response callback captured by
+                        // `http.request(url[, opts], cb)` at construction. Delivered
+                        // `cb(res)` below, after the deferred egress produces the
+                        // response (on the first `.end()` only).
+                        let response_cb = match req.properties.get("__response_cb") {
+                            Some(Value::Closure(cid)) => Some(*cid),
+                            _ => None,
+                        };
+                        Some((url, method, headers, body_str, response_cb))
                     }
                 };
-                let Some((url, method, headers, body_str)) = captured else {
+                let Some((url, method, headers, body_str, response_cb)) = captured else {
                     return Ok(Value::Undefined);
                 };
                 let body = if body_str.is_empty() {
@@ -8047,7 +8110,21 @@ impl InterpreterCore {
                 };
                 // Mark ended BEFORE the egress so a re-entrant `.end()` is a no-op.
                 self.set_object_property(req_id, "__ended".to_string(), Value::Bool(true))?;
-                self.perform_net_request_effect(url, method, headers, body)
+                let response = self.perform_net_request_effect(url, method, headers, body)?;
+                // bd-3894s slice (2c): deliver `cb(res)` on the next event-loop turn
+                // when `http.request(url[, opts], cb)` registered a response callback
+                // and the egress produced a real response; the call then evaluates to
+                // `undefined` (the async model). With no callback the response is
+                // returned synchronously as the value of `.end()` (slice-4 behavior).
+                // A denied/failed egress (response `undefined`) does not fire the
+                // callback — Node raises an `'error'` event there (a follow-up slice).
+                match response_cb {
+                    Some(cid) if !matches!(response, Value::Undefined) => {
+                        self.schedule_io_callback(cid, vec![response]);
+                        Ok(Value::Undefined)
+                    }
+                    _ => Ok(response),
+                }
             }
             BuiltinFunctionKind::PerformanceNow => {
                 self.dispatch_builtin_hostcall("builtin:PerformanceNow", args, Some(module))
@@ -16312,12 +16389,14 @@ impl InterpreterCore {
                 result.map(|_| ())
             }
             crate::promise_model::MacrotaskSource::IoCompletion => {
-                // bd-201vt: an async fs callback (`fs.readFile`/`fs.writeFile`
-                // callback form). The host effect already ran and was recorded at
-                // dispatch; here we invoke the JS callback err-first with the
-                // arguments stashed by `schedule_fs_callback`, keyed by this
-                // macrotask's registration sequence. Draining the entry keeps the
-                // side-table bounded to in-flight callbacks.
+                // bd-201vt / bd-3894s slice (2c): an async host-I/O callback — a fs
+                // callback (`fs.readFile`/`fs.writeFile`, err-first `cb(err[, data])`)
+                // or an http response callback (`http.get`/`http.request`'s
+                // `cb(res)`). The host effect already ran and was recorded at
+                // dispatch; here we invoke the JS callback with the arguments stashed
+                // by `schedule_io_callback`, keyed by this macrotask's registration
+                // sequence. Draining the entry keeps the side-table bounded to
+                // in-flight callbacks.
                 let closure_id = macrotask.handler.0;
                 if self.closures.get(closure_id as usize).is_none() {
                     return Err(InterpreterError::TypeError {
@@ -35249,6 +35328,262 @@ mod async_runtime_tests_current {
             other => panic!("expected a NetworkRequest host effect, got {other:?}"),
         }
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// bd-3894s slice (2c) (http leg, response callback): the `http.get(url, cb)` /
+    /// `http.get(url, opts, cb)` form lowers to a `net:request` HostCall carrying the
+    /// trailing callback closure as the last argument. When the dispatch sees that
+    /// trailing `Value::Closure` it (a) performs + records the real egress exactly as
+    /// the bare `http.get(url)` form does, (b) schedules the response callback as an
+    /// `IoCompletion` macrotask delivering `cb(res)` on the next event-loop turn (the
+    /// same deferral the fs async callback form uses), and (c) evaluates the call
+    /// itself to `undefined` (the async model). Verified against an in-process
+    /// loopback listener that replies + closes the round trip.
+    #[test]
+    fn net_request_with_response_callback_schedules_delivery_bd_3894s() {
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+        use std::io::{Read, Write};
+        use std::time::Duration;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("listener addr");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _peer) = listener.accept().expect("accept egress connection");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("server read timeout");
+            let mut received = Vec::new();
+            let _ = stream.read_to_end(&mut received);
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+            let _ = stream.flush();
+            received
+        });
+
+        let mut root = std::env::temp_dir();
+        root.push(format!(
+            "frankenengine_interp_net_cb_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        let mut core = test_interpreter();
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        core.set_host_io(provider, Some(recorder_dyn));
+
+        // reg0 = URL, reg1 = the response callback closure, exactly as the
+        // `http.get(url, cb)` lowering forwards them (url + trailing closure).
+        let url = format!("http://{addr}/");
+        core.mutate_registers(|r| {
+            if r.len() < 2 {
+                r.resize(2, Value::Undefined);
+            }
+            r[0] = Value::Str(Arc::from(url.as_str()));
+            r[1] = Value::Closure(0);
+        });
+
+        let result = core
+            .dispatch_host_io_hostcall("net:request", RegRange { start: 0, count: 2 })
+            .expect("net:request dispatch with a response callback");
+        assert_eq!(
+            result,
+            Value::Undefined,
+            "the callback form evaluates to undefined (cb(res) is delivered async)"
+        );
+
+        // The egress still happened and was recorded exactly once — the response
+        // callback does not change the recorded effect.
+        assert_eq!(
+            recorder.recorded_entries().len(),
+            1,
+            "exactly one egress recorded for the callback form"
+        );
+
+        // The response callback was scheduled with the parsed response object — the
+        // proof `cb(res)` will fire on the next event-loop turn with the REAL
+        // response (status/body), not undefined.
+        assert_eq!(
+            core.pending_io_callbacks.len(),
+            1,
+            "the response callback must be scheduled as a pending IoCompletion macrotask"
+        );
+        let args = core
+            .pending_io_callbacks
+            .values()
+            .next()
+            .expect("a scheduled callback")
+            .clone();
+        assert_eq!(
+            args.len(),
+            1,
+            "the http response callback is invoked with a single response arg (NOT err-first)"
+        );
+        let Value::Object(resp_id) = args[0] else {
+            panic!(
+                "the scheduled callback arg must be the response object, got {:?}",
+                args[0]
+            );
+        };
+        let resp = core
+            .heap
+            .get(resp_id.0 as usize)
+            .expect("response object on the heap");
+        assert_eq!(
+            resp.properties.get("status"),
+            Some(&Value::Int(200)),
+            "cb(res) receives the parsed response status"
+        );
+        assert_eq!(
+            resp.properties.get("body"),
+            Some(&Value::str("ok")),
+            "cb(res) receives the parsed response body"
+        );
+
+        let _ = server.join().expect("server thread");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// bd-3894s slice (2c) (http leg, ClientRequest response callback): the
+    /// `http.request(url, opts, cb)` form captures the trailing callback as the
+    /// ClientRequest's `__response_cb` at construction (NO egress yet). When
+    /// `req.end()` performs the deferred egress and reads the response, the callback
+    /// is delivered `cb(res)` on the next event-loop turn and `.end()` evaluates to
+    /// `undefined` — vs. the no-callback form, which returns the response
+    /// synchronously (covered by
+    /// `client_request_write_end_frames_accumulated_body_bd_3894s`).
+    #[test]
+    fn client_request_with_response_callback_delivers_after_end_bd_3894s() {
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+        use std::io::{Read, Write};
+        use std::time::Duration;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("listener addr");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _peer) = listener.accept().expect("accept egress connection");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("server read timeout");
+            let mut buf = Vec::new();
+            let _ = stream.read_to_end(&mut buf);
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+            let _ = stream.flush();
+            buf
+        });
+
+        let mut root = std::env::temp_dir();
+        root.push(format!(
+            "frankenengine_interp_clientreq_cb_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        let mut core = test_interpreter();
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        core.set_host_io(provider, Some(recorder_dyn));
+
+        // http.request(url, { method: 'POST' }, cb): reg0 = url, reg1 = options,
+        // reg2 = the response callback closure (the trailing arg).
+        let url = format!("http://{addr}/submit");
+        let options_id = core.mutate_heap(|h| {
+            let options_id = ObjectId(h.len() as u32);
+            let mut options = HeapObject::new();
+            options
+                .properties
+                .insert("method".to_string(), Value::str("POST"));
+            h.push(options);
+            options_id
+        });
+        core.mutate_registers(|r| {
+            if r.len() < 3 {
+                r.resize(3, Value::Undefined);
+            }
+            r[0] = Value::Str(Arc::from(url.as_str()));
+            r[1] = Value::Object(options_id);
+            r[2] = Value::Closure(0);
+        });
+
+        let req = core
+            .dispatch_client_request_create(RegRange { start: 0, count: 3 })
+            .expect("client request creation with a response callback");
+        let Value::Object(req_id) = req else {
+            panic!("http.request must return a ClientRequest object, got {req:?}");
+        };
+        // The response callback is captured on the ClientRequest, NOT egressed yet.
+        assert_eq!(
+            core.heap
+                .get(req_id.0 as usize)
+                .and_then(|o| o.properties.get("__response_cb"))
+                .cloned(),
+            Some(Value::Closure(0)),
+            "the response callback is captured as __response_cb at construction"
+        );
+        assert!(
+            recorder.recorded_entries().is_empty(),
+            "creating a ClientRequest must NOT egress — even with a response callback"
+        );
+
+        let module = test_module_with_functions(vec![], vec![]);
+        let end = BuiltinFunction::client_request_end();
+        let ended = core
+            .dispatch_builtin_function(
+                &module,
+                &end,
+                RegRange { start: 0, count: 0 },
+                Some(Value::Object(req_id)),
+            )
+            .expect("req.end with a registered response callback");
+        assert_eq!(
+            ended,
+            Value::Undefined,
+            "with a response callback, .end() evaluates to undefined (cb(res) is async)"
+        );
+
+        // Exactly one egress recorded by the deferred .end(), and the response
+        // callback scheduled with the parsed response object.
+        assert_eq!(
+            recorder.recorded_entries().len(),
+            1,
+            "the deferred .end() egress is recorded exactly once"
+        );
+        assert_eq!(
+            core.pending_io_callbacks.len(),
+            1,
+            "the response callback must be scheduled after the .end() egress"
+        );
+        let args = core
+            .pending_io_callbacks
+            .values()
+            .next()
+            .expect("a scheduled callback")
+            .clone();
+        assert_eq!(
+            args.len(),
+            1,
+            "cb(res) is invoked with a single response arg"
+        );
+        let Value::Object(resp_id) = args[0] else {
+            panic!(
+                "the scheduled callback arg must be the response object, got {:?}",
+                args[0]
+            );
+        };
+        assert_eq!(
+            core.heap
+                .get(resp_id.0 as usize)
+                .and_then(|o| o.properties.get("status"))
+                .cloned(),
+            Some(Value::Int(200)),
+            "cb(res) receives the parsed response status"
+        );
+
+        let _ = server.join().expect("server thread");
         let _ = std::fs::remove_dir_all(&root);
     }
 

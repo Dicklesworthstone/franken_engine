@@ -3171,7 +3171,10 @@ mod tests {
         use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
 
         let mut root = std::env::temp_dir();
-        root.push(format!("frankenengine_e2e_fs_badenc_{}", std::process::id()));
+        root.push(format!(
+            "frankenengine_e2e_fs_badenc_{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("scratch root");
 
@@ -3190,7 +3193,7 @@ mod tests {
                      } catch (e) {\n\
                        require('fs').writeFileSync('caught.txt', 'caught');\n\
                      }\n"
-                .to_string(),
+            .to_string(),
             source_file: None,
             capabilities: vec![
                 "vm_dispatch".to_string(),

@@ -888,6 +888,17 @@ pub enum BuiltinFunctionKind {
     /// internal `__timestamp` in milliseconds, or NaN for a non-Date receiver
     /// (bd-cseei).
     DateGetTime,
+    /// bd-3894s slice (2b): `ClientRequest.prototype.write(chunk)` — receiver-aware;
+    /// appends `chunk` (string/number-coerced) to the request object's writable
+    /// `__body` buffer and returns `true` (Node's writable-stream `write` returns a
+    /// boolean backpressure signal). The egress is deferred until `.end()`.
+    ClientRequestWrite,
+    /// bd-3894s slice (2b): `ClientRequest.prototype.end([chunk])` — receiver-aware;
+    /// appends an optional final `chunk` to `__body`, then performs the deferred
+    /// `net:request` egress (method/headers captured at construction + the
+    /// accumulated body) and returns the parsed response object. Idempotent: a
+    /// second `.end()` is a no-op that returns `undefined`.
+    ClientRequestEnd,
     /// `performance.now()` — deterministic virtual-clock read for replayable
     /// sandbox execution (bd-8enww.5.3).
     PerformanceNow,
@@ -1725,6 +1736,26 @@ impl BuiltinFunction {
         }
     }
 
+    /// bd-3894s slice (2b): `ClientRequest.prototype.write`.
+    fn client_request_write() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ClientRequestWrite,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    /// bd-3894s slice (2b): `ClientRequest.prototype.end`.
+    fn client_request_end() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ClientRequestEnd,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn performance_now() -> Self {
         Self {
             kind: BuiltinFunctionKind::PerformanceNow,
@@ -2128,6 +2159,8 @@ impl BuiltinFunction {
             BuiltinFunctionKind::MapClear => "clear",
             BuiltinFunctionKind::SetClear => "clear",
             BuiltinFunctionKind::DateGetTime => "getTime",
+            BuiltinFunctionKind::ClientRequestWrite => "write",
+            BuiltinFunctionKind::ClientRequestEnd => "end",
             BuiltinFunctionKind::PerformanceNow => "now",
             BuiltinFunctionKind::DataViewGetUint8 => "getUint8",
             BuiltinFunctionKind::DataViewSetUint8 => "setUint8",
@@ -4588,17 +4621,48 @@ impl InterpreterCore {
         self.host_io_recorder = recorder;
     }
 
-    /// Dispatch an `fs:` hostcall through the installed sandboxed host-I/O
-    /// provider, performing (and recording) a real host effect and mapping the
-    /// result back into a JS [`Value`]. Returns [`Value::Undefined`] when no
-    /// provider is installed, preserving the fail-closed baseline. The capability
-    /// gate has already authorized the call before this point; the provider
-    /// re-checks the single required capability and performs the real I/O.
+    /// Dispatch an `fs:` or `net:request` hostcall through the installed sandboxed
+    /// host-I/O provider, performing (and recording) a real host effect and mapping
+    /// the result back into a JS [`Value`]. The `net:request` egress is split off up
+    /// front to the shared [`Self::perform_net_request_effect`] seam (also used by
+    /// the deferred `ClientRequest.end()` egress); `fs:` capabilities take the
+    /// string-args builder path below. Returns [`Value::Undefined`] when no provider
+    /// is installed, preserving the fail-closed baseline. The capability gate has
+    /// already authorized the call before this point; the provider re-checks the
+    /// single required capability and performs the real I/O.
     fn dispatch_host_io_hostcall(
         &mut self,
         capability: &str,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
+        // bd-3894s slice (2b): the `net:request` egress is handled by a single
+        // shared seam — [`Self::perform_net_request_effect`] — used by BOTH the
+        // immediate `http.get`/`fetch` forms (which reach here as a `net:request`
+        // HostCall) AND the deferred `ClientRequest.end()` egress (which calls the
+        // helper directly from the builtin). Resolving the request options off the
+        // heap and performing the round trip here, separate from the fs string-args
+        // path below, keeps the wire egress and the signed EffectReceipt faithful
+        // to the real method/headers/body. (`net:client_request`, the
+        // ClientRequest-CREATION tag, is intercepted earlier in the IR3 HostCall
+        // dispatch and never reaches this function.)
+        if capability.starts_with("net:") {
+            let url = if args.count >= 1 {
+                match self.read_reg(args.start)? {
+                    Value::Str(s) => s.to_string(),
+                    Value::Int(i) => i.to_string(),
+                    _ => String::new(),
+                }
+            } else {
+                String::new()
+            };
+            let options = if args.count >= 2 {
+                Some(self.read_reg(args.start + 1)?)
+            } else {
+                None
+            };
+            let (method, headers, body) = self.resolve_net_request_options(options.as_ref());
+            return self.perform_net_request_effect(url, method, headers, body);
+        }
         let Some(provider) = self.host_io.clone() else {
             return Ok(Value::Undefined);
         };
@@ -4653,27 +4717,14 @@ impl InterpreterCore {
         } else {
             None
         };
-        // bd-3894s slice (2): the `net:request` request `method`/`headers`/`body`
-        // live in the call's options/init object (`fetch(url, { method, headers,
-        // body })` / `http.request(url, { method, headers })`) — a structured JS
-        // value the string-args `create_effect_from_hostcall_tag` boundary cannot
-        // see (it would frame a bodyless GET regardless). Resolve those fields off
-        // the heap here and build the network effect directly so the recorded,
-        // signed EffectReceipt AND the wire egress faithfully reflect the real
-        // request: a POST-with-body must never be sent — or recorded — as a benign
-        // GET. Non-`net:` capabilities keep the string-args builder unchanged.
-        let effect = if capability.starts_with("net:") {
-            let url = arg_strings.first().cloned().unwrap_or_default();
-            let (method, headers, body) =
-                self.resolve_net_request_options(second_arg_value.as_ref());
-            create_network_effect(url, method, headers, body)
-        } else {
-            create_effect_from_hostcall_tag(capability, &arg_strings).map_err(|err| {
-                InterpreterError::InternalError {
-                    details: format!("host effect build failed for {capability}: {err}"),
-                }
-            })?
-        };
+        // Build the fs host effect from the string-coerced operands. (The
+        // `net:request` egress is resolved off the heap and performed up front by
+        // the shared seam above, so only fs capabilities reach this builder.)
+        let effect = create_effect_from_hostcall_tag(capability, &arg_strings).map_err(|err| {
+            InterpreterError::InternalError {
+                details: format!("host effect build failed for {capability}: {err}"),
+            }
+        })?;
         // Build a Full handler stack backed by the provider (+ recorder) for this
         // dispatch. Full grants all capabilities so the stack's gate never
         // re-denies what the interpreter already authorized; the provider performs
@@ -4685,24 +4736,6 @@ impl InterpreterCore {
         );
         let result = match stack.handle_effect(effect.as_ref()) {
             Ok(result) => result,
-            // bd-656a2 (http leg, denied path): a `net:` egress denied by the
-            // product-layer network policy (the franken_node SSRF gate, layered
-            // on the provider) surfaces here as a handler `CapabilityDenied`. The
-            // denial was ALREADY recorded in the host-effect transcript by the
-            // recorder inside the handler stack (route_host_io records every
-            // request/outcome, including the Err) — that recorded entry IS the
-            // fail-closed DENIED receipt the run --json effect ledger renders. So
-            // it must NOT abort the run as a fatal interpreter error, which would
-            // discard the whole transcript before it is harvested. Surface it as a
-            // fail-closed no-op: the egress did not reach the network, the call
-            // evaluates to `undefined` (slice 1 does not model the async `error`
-            // event a real ClientRequest would emit), and the run completes so the
-            // signed denied receipt is surfaced. Non-`net:` effects (e.g. fs) keep
-            // the prior fatal semantics; only the network policy-deny path, which
-            // a guest can trigger by design, is made non-fatal.
-            Err(EffectError::CapabilityDenied { .. }) if capability.starts_with("net:") => {
-                return Ok(Value::Undefined);
-            }
             Err(err) => {
                 return Err(InterpreterError::InternalError {
                     details: format!("host effect dispatch failed for {capability}: {err}"),
@@ -4750,25 +4783,131 @@ impl InterpreterCore {
                 }
                 Value::Undefined
             }
-            // bd-3894s slice (4) (http leg): `http.get(url)` / `http.request(url)` /
-            // `fetch(url)`. The single-socket `NetworkRequest` round trip both sent
-            // the egress AND read the peer's reply back; `result` carries the raw
-            // HTTP/1.1 response bytes (the same bytes the signed host-effect
-            // transcript records as the effect's post-state). Parse them into a JS
-            // response object — `{ status, statusText, ok, headers, body }` — so the
-            // guest observes the REAL response instead of `undefined`. `fetch`'s
-            // lowering promise-wraps this value, so `await fetch(url)` resolves to
-            // the response object. Modeling the full Node `ClientRequest` /
-            // `IncomingMessage` readable-stream event sequence (and `http.get(url,
-            // cb)` callback delivery of the response) remains a follow-up; returning
-            // the response object as the call value is the load-bearing
-            // "http calls return real responses" deliverable.
-            "net:request" => match result.downcast::<Vec<u8>>() {
-                Ok(bytes) => self.build_net_response_value(&bytes)?,
-                Err(_) => Value::Undefined,
-            },
             _ => Value::Undefined,
         })
+    }
+
+    /// bd-3894s slice (4)+(2b): perform a `net:request` host effect from already-
+    /// resolved request fields and return the JS value the call evaluates to.
+    ///
+    /// This is the single shared seam for ALL http egress:
+    /// - the immediate `http.get(url)` / `fetch(url)` forms, which reach it via the
+    ///   `net:request` arm of [`Self::dispatch_host_io_hostcall`], and
+    /// - the deferred `ClientRequest.end()` egress (slice 2b), which calls it
+    ///   directly from the [`BuiltinFunctionKind::ClientRequestEnd`] dispatch once
+    ///   the writable-stream body has been accumulated via `req.write`/`req.end`.
+    ///
+    /// Both routes therefore frame the identical wire request, run it through the
+    /// same `CapabilityProfile::full()` handler stack backed by the sandboxed
+    /// provider (the franken_node SSRF gate, when installed) and the recorder, and
+    /// record the same signed `EffectReceipt` in the host-effect transcript — so a
+    /// POST-with-body sent via `req.write` is recorded with byte-for-byte the same
+    /// fidelity as one sent via `fetch(url, { body })`. The single-socket
+    /// `NetworkRequest` round trip both sends the egress and reads the peer's reply;
+    /// the raw HTTP/1.1 response bytes are parsed into the JS response object
+    /// `{ status, statusText, ok, headers, body }` ([`Self::build_net_response_value`]).
+    ///
+    /// A product-layer network-policy denial (the SSRF gate) surfaces as a handler
+    /// `CapabilityDenied`. The denial was ALREADY recorded in the host-effect
+    /// transcript by the recorder inside the handler stack (`route_host_io` records
+    /// every request/outcome, including the Err) — that recorded entry IS the
+    /// fail-closed DENIED receipt the run --json effect ledger renders. So it must
+    /// NOT abort the run as a fatal interpreter error (which would discard the whole
+    /// transcript before harvest): it is a fail-closed no-op — the egress did not
+    /// reach the network, the call evaluates to `undefined`, and the run completes
+    /// so the signed denied receipt is surfaced. When no sandboxed provider is
+    /// installed the call also evaluates to `undefined` (no effect performed).
+    fn perform_net_request_effect(
+        &mut self,
+        url: String,
+        method: String,
+        headers: Vec<(String, String)>,
+        body: Option<Vec<u8>>,
+    ) -> Result<Value, InterpreterError> {
+        let Some(provider) = self.host_io.clone() else {
+            return Ok(Value::Undefined);
+        };
+        let effect = create_network_effect(url, method, headers, body);
+        // Build a Full handler stack backed by the provider (+ recorder) for this
+        // dispatch. Full grants all capabilities so the stack's gate never
+        // re-denies what the interpreter already authorized; the provider performs
+        // the real, capability-checked effect and the recorder logs it.
+        let mut stack = create_handler_stack_from_profile_with_host_io(
+            &CapabilityProfile::full(),
+            provider,
+            self.host_io_recorder.clone(),
+        );
+        let result = match stack.handle_effect(effect.as_ref()) {
+            Ok(result) => result,
+            Err(EffectError::CapabilityDenied { .. }) => {
+                return Ok(Value::Undefined);
+            }
+            Err(err) => {
+                return Err(InterpreterError::InternalError {
+                    details: format!("host effect dispatch failed for net:request: {err}"),
+                });
+            }
+        };
+        match result.downcast::<Vec<u8>>() {
+            Ok(bytes) => self.build_net_response_value(&bytes),
+            Err(_) => Ok(Value::Undefined),
+        }
+    }
+
+    /// bd-3894s slice (2b): build the writable `ClientRequest` object returned by
+    /// `http.request(url[, opts])`. This does NOT egress — it captures the request
+    /// target (`__url`), method (`__method`), and headers (`__headers`, a child
+    /// object of lower-`net_header_value`-coerced pairs) from the options object,
+    /// and seeds the writable body buffer (`__body`) from any `opts.body`. The
+    /// returned object carries the `__type: "ClientRequest"` tag so member access
+    /// resolves `.write`/`.end` to their receiver-aware builtins
+    /// ([`Self::collection_prototype_method`]); `.end()` performs the deferred
+    /// egress via [`Self::perform_net_request_effect`]. The hostcall capability gate
+    /// already authorized `NetworkEgress` for the `net:client_request` tag at this
+    /// call site, so the later `.end()` egress is pre-authorized at the engine
+    /// capability layer.
+    fn dispatch_client_request_create(
+        &mut self,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let url = if args.count >= 1 {
+            match self.read_reg(args.start)? {
+                Value::Str(s) => s.to_string(),
+                Value::Int(i) => i.to_string(),
+                _ => String::new(),
+            }
+        } else {
+            String::new()
+        };
+        let options = if args.count >= 2 {
+            Some(self.read_reg(args.start + 1)?)
+        } else {
+            None
+        };
+        let (method, headers, body) = self.resolve_net_request_options(options.as_ref());
+        // Persist the resolved headers as a child object so `.end()` can re-read
+        // them (the headers are captured at request-construction time, matching
+        // Node — a later mutation of the original options object does not change
+        // the framed request).
+        let header_props: Vec<(&str, Value)> = headers
+            .iter()
+            .map(|(name, value)| (name.as_str(), Value::str(value.as_str())))
+            .collect();
+        let headers_id = self.alloc_object_with_properties(&header_props)?;
+        // Seed the writable body buffer from any `opts.body`. `req.write`/`req.end`
+        // append to this buffer; the bytes are sent on `.end()`.
+        let initial_body = body
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .unwrap_or_default();
+        let request_id = self.alloc_object_with_properties(&[
+            ("__type", Value::str("ClientRequest")),
+            ("__url", Value::str(url.as_str())),
+            ("__method", Value::str(method.as_str())),
+            ("__headers", Value::Object(headers_id)),
+            ("__body", Value::str(initial_body.as_str())),
+            ("__ended", Value::Bool(false)),
+        ])?;
+        Ok(Value::Object(request_id))
     }
 
     /// bd-201vt: schedule an async fs callback (`fs.readFile`/`fs.writeFile`
@@ -4882,6 +5021,19 @@ impl InterpreterCore {
             Value::Str(s) => Some(s.to_string()),
             Value::Int(i) => Some(i.to_string()),
             _ => None,
+        }
+    }
+
+    /// bd-3894s slice (2b): coerce a `req.write(chunk)`/`req.end(chunk)` argument to
+    /// the bytes appended to the request body. A string contributes verbatim and an
+    /// integer is stringified (Node coerces a number chunk to its decimal string);
+    /// any other value (object/closure/undefined/Buffer) contributes nothing — a
+    /// faithful Buffer/Uint8Array body chunk is a follow-up to this slice.
+    fn client_request_chunk_string(chunk: &Value) -> String {
+        match chunk {
+            Value::Str(s) => s.to_string(),
+            Value::Int(i) => i.to_string(),
+            _ => String::new(),
         }
     }
 
@@ -7784,6 +7936,119 @@ impl InterpreterCore {
                 }
                 Ok(Value::Float(f64::NAN.into()))
             }
+            BuiltinFunctionKind::ClientRequestWrite => {
+                // bd-3894s slice (2b): `req.write(chunk)` — append the chunk to the
+                // receiver ClientRequest's writable `__body` buffer; the egress is
+                // deferred until `.end()`. Returns `true` (the Node writable-stream
+                // backpressure signal; our buffered model never applies
+                // backpressure). A non-string/number chunk contributes nothing (a
+                // faithful Buffer/Uint8Array body is a follow-up).
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(req_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "ClientRequest receiver for ClientRequest.prototype.write"
+                            .to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let chunk = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let chunk_str = Self::client_request_chunk_string(&chunk);
+                if !chunk_str.is_empty() {
+                    let req_index = req_id.0 as usize;
+                    self.mutate_heap(|heap| {
+                        if let Some(req) = heap.get_mut(req_index)
+                            && let Some(Value::Str(buf)) = req.properties.get_mut("__body")
+                        {
+                            *buf = Arc::from(format!("{buf}{chunk_str}"));
+                        }
+                    });
+                }
+                Ok(Value::Bool(true))
+            }
+            BuiltinFunctionKind::ClientRequestEnd => {
+                // bd-3894s slice (2b): `req.end([chunk])` — append an optional final
+                // chunk, then perform the deferred `net:request` egress with the
+                // method/headers captured at construction and the accumulated body.
+                // A trailing callback closure (`end(cb)`) is ignored for now
+                // (response-callback delivery is a follow-up slice). Idempotent: a
+                // second `.end()` is a no-op that returns `undefined`.
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(req_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "ClientRequest receiver for ClientRequest.prototype.end"
+                            .to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                // Optional final data chunk (`end(data)`); a closure arg is the
+                // legacy `end(cb)` form — not a body chunk — so it is skipped.
+                if let Some(chunk) = self.builtin_arg(args, 0)?
+                    && !matches!(chunk, Value::Closure(_))
+                {
+                    let chunk_str = Self::client_request_chunk_string(&chunk);
+                    if !chunk_str.is_empty() {
+                        let req_index = req_id.0 as usize;
+                        self.mutate_heap(|heap| {
+                            if let Some(req) = heap.get_mut(req_index)
+                                && let Some(Value::Str(buf)) = req.properties.get_mut("__body")
+                            {
+                                *buf = Arc::from(format!("{buf}{chunk_str}"));
+                            }
+                        });
+                    }
+                }
+                // Capture the request state (immutable reads) before the mutable
+                // egress. `None` => already ended (idempotent no-op).
+                let req_index = req_id.0 as usize;
+                let captured = {
+                    let Some(req) = self.heap.get(req_index) else {
+                        return Ok(Value::Undefined);
+                    };
+                    if matches!(req.properties.get("__ended"), Some(Value::Bool(true))) {
+                        None
+                    } else {
+                        let url = match req.properties.get("__url") {
+                            Some(Value::Str(s)) => s.to_string(),
+                            _ => String::new(),
+                        };
+                        let method = match req.properties.get("__method") {
+                            Some(Value::Str(s)) => s.to_string(),
+                            _ => "GET".to_string(),
+                        };
+                        let headers: Vec<(String, String)> = match req.properties.get("__headers") {
+                            Some(Value::Object(hid)) => self
+                                .heap
+                                .get(hid.0 as usize)
+                                .map(|h| {
+                                    h.properties
+                                        .iter()
+                                        .filter_map(|(name, value)| {
+                                            Self::net_header_value(value).map(|v| (name.clone(), v))
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
+                            _ => Vec::new(),
+                        };
+                        let body_str = match req.properties.get("__body") {
+                            Some(Value::Str(s)) => s.to_string(),
+                            _ => String::new(),
+                        };
+                        Some((url, method, headers, body_str))
+                    }
+                };
+                let Some((url, method, headers, body_str)) = captured else {
+                    return Ok(Value::Undefined);
+                };
+                let body = if body_str.is_empty() {
+                    None
+                } else {
+                    Some(body_str.into_bytes())
+                };
+                // Mark ended BEFORE the egress so a re-entrant `.end()` is a no-op.
+                self.set_object_property(req_id, "__ended".to_string(), Value::Bool(true))?;
+                self.perform_net_request_effect(url, method, headers, body)
+            }
             BuiltinFunctionKind::PerformanceNow => {
                 self.dispatch_builtin_hostcall("builtin:PerformanceNow", args, Some(module))
             }
@@ -10373,6 +10638,17 @@ impl InterpreterCore {
                         self.dispatch_timer_hostcall(&capability.0, args)?
                     } else if capability.0.starts_with("builtin:") {
                         self.dispatch_builtin_hostcall(&capability.0, args, Some(module))?
+                    } else if capability.0 == "net:client_request" {
+                        // bd-3894s slice (2b): `http.request(url[, opts])` builds a
+                        // writable `ClientRequest` object here WITHOUT egressing —
+                        // the body is accumulated via `req.write`/`req.end` and the
+                        // deferred egress fires from `.end()`. The capability gate
+                        // above already authorized NetworkEgress at creation time
+                        // (`net:client_request` maps to NetworkEgress), so the
+                        // deferred `.end()` egress is pre-authorized at the engine
+                        // capability layer; the per-endpoint SSRF policy still
+                        // applies at `.end()` via the sandboxed provider.
+                        self.dispatch_client_request_create(args)?
                     } else if capability.0.starts_with("fs:") || capability.0.starts_with("net:") {
                         // bd-f5b04.2.7: when a sandboxed host-I/O provider is
                         // installed, dispatch the (already-authorized) fs hostcall
@@ -14128,6 +14404,13 @@ impl InterpreterCore {
             ("Map", "clear") => Some(BuiltinFunction::map_clear()),
             ("Set", "clear") => Some(BuiltinFunction::set_clear()),
             ("Date", "getTime") => Some(BuiltinFunction::date_get_time()),
+            // bd-3894s slice (2b): the writable `ClientRequest` returned by
+            // `http.request(url[, opts])` exposes `.write`/`.end` via member access,
+            // exactly like Map/Set/Date expose their methods through the `__type`
+            // tag. `.write` accumulates the request body; `.end` performs the
+            // deferred egress.
+            ("ClientRequest", "write") => Some(BuiltinFunction::client_request_write()),
+            ("ClientRequest", "end") => Some(BuiltinFunction::client_request_end()),
             ("RegExp", "test") => Some(BuiltinFunction::regexp_test()),
             ("DataView", "getUint8") => Some(BuiltinFunction::data_view_get_uint8()),
             ("DataView", "setUint8") => Some(BuiltinFunction::data_view_set_uint8()),
@@ -34658,6 +34941,309 @@ mod async_runtime_tests_current {
                     recorded.starts_with("POST /submit HTTP/1.1\r\n")
                         && recorded.ends_with("\r\n\r\npayload"),
                     "the recorded effect must faithfully carry the POST + body, got {recorded:?}"
+                );
+            }
+            other => panic!("expected a NetworkRequest host effect, got {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// bd-3894s slice (2b): `http.request(url, { method, headers, body })` builds a
+    /// writable `ClientRequest` object WITHOUT egressing. It captures the request
+    /// target, the (Node-parity upper-cased) method, the headers (as a child object
+    /// captured at construction time), seeds the writable `__body` buffer from any
+    /// `opts.body`, and is tagged `__type: "ClientRequest"` so `.write`/`.end`
+    /// resolve via member access.
+    #[test]
+    fn client_request_create_builds_writable_request_object_bd_3894s() {
+        let mut core = test_interpreter();
+        // http.request(url, { method: 'put', headers: { 'X-Trace': 'abc' },
+        //                     body: 'seed' }) — lowercase method exercises the
+        // resolver's Node-parity upper-casing.
+        let url = "http://127.0.0.1:9/submit";
+        let options_id = core.mutate_heap(|h| {
+            let headers_id = ObjectId(h.len() as u32);
+            let mut headers = HeapObject::new();
+            headers
+                .properties
+                .insert("X-Trace".to_string(), Value::str("abc"));
+            h.push(headers);
+
+            let options_id = ObjectId(h.len() as u32);
+            let mut options = HeapObject::new();
+            options
+                .properties
+                .insert("method".to_string(), Value::str("put"));
+            options
+                .properties
+                .insert("headers".to_string(), Value::Object(headers_id));
+            options
+                .properties
+                .insert("body".to_string(), Value::str("seed"));
+            h.push(options);
+            options_id
+        });
+        core.mutate_registers(|r| {
+            if r.len() < 2 {
+                r.resize(2, Value::Undefined);
+            }
+            r[0] = Value::str(url);
+            r[1] = Value::Object(options_id);
+        });
+
+        let req = core
+            .dispatch_client_request_create(RegRange { start: 0, count: 2 })
+            .expect("client request creation");
+        let Value::Object(req_id) = req else {
+            panic!("http.request must return a ClientRequest object, got {req:?}");
+        };
+        let obj = core
+            .heap
+            .get(req_id.0 as usize)
+            .expect("request object on the heap");
+        assert_eq!(
+            obj.properties.get("__type"),
+            Some(&Value::str("ClientRequest")),
+            "the object is tagged ClientRequest so `.write`/`.end` resolve by member access"
+        );
+        assert_eq!(
+            obj.properties.get("__url"),
+            Some(&Value::str(url)),
+            "captures the request URL"
+        );
+        assert_eq!(
+            obj.properties.get("__method"),
+            Some(&Value::str("PUT")),
+            "the method is upper-cased per Node parity"
+        );
+        assert_eq!(
+            obj.properties.get("__body"),
+            Some(&Value::str("seed")),
+            "the writable body buffer is seeded from opts.body"
+        );
+        assert_eq!(
+            obj.properties.get("__ended"),
+            Some(&Value::Bool(false)),
+            "a fresh ClientRequest is not yet ended"
+        );
+        let Some(Value::Object(headers_id)) = obj.properties.get("__headers") else {
+            panic!("headers must be captured as a child object");
+        };
+        let headers = core
+            .heap
+            .get(headers_id.0 as usize)
+            .expect("captured headers object");
+        assert_eq!(
+            headers.properties.get("X-Trace"),
+            Some(&Value::str("abc")),
+            "headers are captured at construction time (a later options mutation cannot change them)"
+        );
+    }
+
+    /// bd-3894s slice (2b): the writable-stream `ClientRequest` round trip —
+    /// `const req = http.request(url, { method, headers }); req.write(a);
+    /// req.write(b); req.end(c)` — frames the request body ACCUMULATED across the
+    /// `write`/`end` calls and performs the egress only on `.end()`. The egress goes
+    /// through the same sandboxed provider + recorder as the immediate `http.get`/
+    /// `fetch` forms, so the body lands on the wire AND in the signed host-effect
+    /// transcript with identical fidelity; `.end()` returns the parsed response.
+    #[test]
+    fn client_request_write_end_frames_accumulated_body_bd_3894s() {
+        use frankenengine_extension_host::host_io::{
+            HostIoRequest, InMemoryHostIoTranscript, SandboxedHostIo,
+        };
+        use std::io::{Read, Write};
+        use std::time::Duration;
+
+        // A loopback listener captures the framed request so the test proves the
+        // accumulated write/end body crossed the socket, then replies + closes so
+        // the client's response read terminates (the slice-4 round trip).
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("listener addr");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _peer) = listener.accept().expect("accept egress connection");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("server read timeout");
+            let mut buf = Vec::new();
+            let _ = stream.read_to_end(&mut buf);
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+            let _ = stream.flush();
+            buf
+        });
+
+        let mut root = std::env::temp_dir();
+        root.push(format!(
+            "frankenengine_interp_clientreq_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        let mut core = test_interpreter();
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        core.set_host_io(provider, Some(recorder_dyn));
+
+        // http.request(url, { method: 'POST', headers: { 'Content-Type':
+        // 'text/plain' } }) — no body in the options; the body is built by writes.
+        let url = format!("http://{addr}/submit");
+        let options_id = core.mutate_heap(|h| {
+            let headers_id = ObjectId(h.len() as u32);
+            let mut headers = HeapObject::new();
+            headers
+                .properties
+                .insert("Content-Type".to_string(), Value::str("text/plain"));
+            h.push(headers);
+
+            let options_id = ObjectId(h.len() as u32);
+            let mut options = HeapObject::new();
+            options
+                .properties
+                .insert("method".to_string(), Value::str("POST"));
+            options
+                .properties
+                .insert("headers".to_string(), Value::Object(headers_id));
+            h.push(options);
+            options_id
+        });
+        core.mutate_registers(|r| {
+            if r.len() < 2 {
+                r.resize(2, Value::Undefined);
+            }
+            r[0] = Value::Str(Arc::from(url.as_str()));
+            r[1] = Value::Object(options_id);
+        });
+
+        let req = core
+            .dispatch_client_request_create(RegRange { start: 0, count: 2 })
+            .expect("client request creation");
+        let Value::Object(req_id) = req else {
+            panic!("http.request must return a ClientRequest object, got {req:?}");
+        };
+        assert!(
+            recorder.recorded_entries().is_empty(),
+            "creating a ClientRequest must NOT egress — the egress is deferred to .end()"
+        );
+
+        let module = test_module_with_functions(vec![], vec![]);
+        let write = BuiltinFunction::client_request_write();
+
+        // req.write('Hello, ')
+        core.mutate_registers(|r| {
+            if r.is_empty() {
+                r.resize(1, Value::Undefined);
+            }
+            r[0] = Value::str("Hello, ");
+        });
+        let w1 = core
+            .dispatch_builtin_function(
+                &module,
+                &write,
+                RegRange { start: 0, count: 1 },
+                Some(Value::Object(req_id)),
+            )
+            .expect("req.write 1");
+        assert_eq!(w1, Value::Bool(true), "req.write returns the boolean true");
+
+        // req.write('world')
+        core.mutate_registers(|r| {
+            r[0] = Value::str("world");
+        });
+        core.dispatch_builtin_function(
+            &module,
+            &write,
+            RegRange { start: 0, count: 1 },
+            Some(Value::Object(req_id)),
+        )
+        .expect("req.write 2");
+
+        assert!(
+            recorder.recorded_entries().is_empty(),
+            "writes before end() must NOT egress"
+        );
+
+        // req.end('!') — append the final chunk and perform the egress.
+        let end = BuiltinFunction::client_request_end();
+        core.mutate_registers(|r| {
+            r[0] = Value::str("!");
+        });
+        let response = core
+            .dispatch_builtin_function(
+                &module,
+                &end,
+                RegRange { start: 0, count: 1 },
+                Some(Value::Object(req_id)),
+            )
+            .expect("req.end");
+        let Value::Object(response_id) = response else {
+            panic!("req.end() must return the parsed response object, got {response:?}");
+        };
+        let resp = core
+            .heap
+            .get(response_id.0 as usize)
+            .expect("response object on the heap");
+        assert_eq!(
+            resp.properties.get("status"),
+            Some(&Value::Int(200)),
+            "end() returns the parsed response status"
+        );
+        assert_eq!(
+            resp.properties.get("body"),
+            Some(&Value::str("ok")),
+            "end() returns the parsed response body"
+        );
+
+        // A second end() is an idempotent no-op (no second egress).
+        let again = core
+            .dispatch_builtin_function(
+                &module,
+                &end,
+                RegRange { start: 0, count: 0 },
+                Some(Value::Object(req_id)),
+            )
+            .expect("second req.end");
+        assert_eq!(
+            again,
+            Value::Undefined,
+            "a second end() is an idempotent no-op"
+        );
+
+        let received = server.join().expect("server thread");
+        let wire = String::from_utf8_lossy(&received);
+        assert!(
+            wire.starts_with("POST /submit HTTP/1.1\r\n"),
+            "the method from the options object frames the request line, got {wire:?}"
+        );
+        assert!(
+            wire.contains("Content-Type: text/plain\r\n"),
+            "the captured headers are framed onto the wire, got {wire:?}"
+        );
+        assert!(
+            wire.contains("Content-Length: 13\r\n"),
+            "the accumulated write/end body length must be framed, got {wire:?}"
+        );
+        assert!(
+            wire.ends_with("\r\n\r\nHello, world!"),
+            "the body accumulated across write/end must follow the blank-line terminator, got {wire:?}"
+        );
+
+        // Exactly one egress recorded in the signed transcript, carrying the body
+        // — the proof-carrying ledger source for the write/end request.
+        let entries = recorder.recorded_entries();
+        assert_eq!(
+            entries.len(),
+            1,
+            "exactly one host effect recorded — the deferred .end() egress"
+        );
+        match &entries[0].0 {
+            HostIoRequest::NetworkRequest { payload, .. } => {
+                let recorded = String::from_utf8_lossy(payload);
+                assert!(
+                    recorded.ends_with("\r\n\r\nHello, world!"),
+                    "the recorded effect faithfully carries the write/end body, got {recorded:?}"
                 );
             }
             other => panic!("expected a NetworkRequest host effect, got {other:?}"),

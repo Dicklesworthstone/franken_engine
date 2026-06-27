@@ -607,8 +607,8 @@ pub fn lower_ir0_to_ir1(
     for alias in confirmed_http_namespace_import_aliases(&ir0.tree.body) {
         binding_lookup.insert(http_module_alias_sentinel(&alias), 0);
     }
-    for local in confirmed_http_named_imports(&ir0.tree.body) {
-        binding_lookup.insert(http_named_import_sentinel(&local, "net:request"), 0);
+    for (local, capability) in confirmed_http_named_imports(&ir0.tree.body) {
+        binding_lookup.insert(http_named_import_sentinel(&local, capability), 0);
     }
     // bd-1xl17.b: ESM fs imports. Namespace/default fs imports used as
     // `fs.readFileSync/...` reuse the same member-call sentinel above so the
@@ -856,6 +856,9 @@ pub fn lower_ir0_to_ir1(
                                     binding_lookup.contains_key(&http_named_import_sentinel(
                                         &spec.local_name,
                                         "net:request",
+                                    )) || binding_lookup.contains_key(&http_named_import_sentinel(
+                                        &spec.local_name,
+                                        "net:client_request",
                                     ))
                                 }));
                         if named_builtin_import {
@@ -9060,22 +9063,27 @@ fn lower_expression_to_ir1_inner(
                 }
             }
             if let Some(capability) = http_builtin_call_capability(callee, binding_lookup) {
-                // bd-656a2 (http leg): `http.get(url)` / `http.request(url)` (CJS
-                // require-binding/inline form, the http mirror of the fs lowering)
-                // lower to a `net:request` HostCall so the interpreter's host-I/O
-                // seam performs and records a real, capability-gated network host
-                // effect — the egress the run --json effect ledger renders. Like
-                // the fs forms we do NOT lower the inner `require('http')` receiver
-                // (there is no real http module object; that path would fault at
-                // runtime); recognition is purely syntactic. Forward the URL
-                // operand (arg[0]) and, when present, the options object (arg[1] —
-                // `http.request(url, { method, headers })`) so the interpreter can
-                // frame the real method/headers/body (bd-3894s slice 2) instead of
-                // a hardcoded GET. The callback (arg[2]) and the writable-stream
-                // request body (`req.write`/`req.end`) are follow-up slices and are
-                // not forwarded; a non-object arg[1] (e.g. `http.get(url, cb)`)
-                // resolves to the GET defaults at dispatch. A 0-arg call is
-                // malformed: fall through so it is not silently mis-shaped.
+                // bd-656a2 / bd-3894s (http leg): `http.get(url)` lowers to a
+                // `net:request` HostCall (immediate egress; the round trip fires at
+                // the call site) while `http.request(url[, opts])` lowers to a
+                // `net:client_request` HostCall (slice 2b: build a writable
+                // `ClientRequest` object; `.end()` performs the deferred egress).
+                // The recognizer picks the capability; both route through the
+                // interpreter's host-I/O seam to perform+record a real,
+                // capability-gated network host effect — the egress the run --json
+                // effect ledger renders. Like the fs forms we do NOT lower the
+                // inner `require('http')` receiver (there is no real http module
+                // object; that path would fault at runtime); recognition is purely
+                // syntactic. Forward the URL operand (arg[0]) and, when present, the
+                // options object (arg[1] — `http.request(url, { method, headers })`)
+                // so the interpreter frames the real method/headers and seeds the
+                // ClientRequest body (bd-3894s slice 2) instead of a hardcoded GET.
+                // A request body added via `req.write`/`req.end` is accumulated on
+                // the ClientRequest object at dispatch (slice 2b); the response
+                // callback (arg[2]) remains a follow-up slice. A non-object arg[1]
+                // (e.g. `http.get(url, cb)`) resolves to the GET defaults at
+                // dispatch. A 0-arg call is malformed: fall through so it is not
+                // silently mis-shaped.
                 if let Some(url_arg) = arguments.first() {
                     lower_expression_to_ir1(
                         url_arg,
@@ -9112,14 +9120,16 @@ fn lower_expression_to_ir1_inner(
                 // bd-3894s (http leg ESM imports): `get(url)` / `request(url)`
                 // named-imported from 'node:http' (`import { get, request } from
                 // 'node:http'`, incl. `as` renames) — recorded as a sentinel by the
-                // program pre-scan. Lowers to the same `net:request` HostCall as the
-                // CJS require-binding/inline member-call forms, forwarding the URL
-                // operand (arg[0]) and, when present, the options object (arg[1]),
-                // shared with `http_builtin_call_capability`: the interpreter frames
-                // the real method/headers/body (bd-3894s slice 2) from the options
-                // object instead of a hardcoded GET. Callbacks and the writable-
-                // stream request body remain follow-up slices. A 0-arg call is
-                // malformed: fall through so it is not silently mis-shaped.
+                // program pre-scan. Lowers to the SAME capability as the CJS
+                // require-binding/inline member-call forms (`get` -> `net:request`
+                // immediate egress, `request` -> `net:client_request` writable
+                // ClientRequest, slice 2b), forwarding the URL operand (arg[0]) and,
+                // when present, the options object (arg[1]), shared with
+                // `http_builtin_call_capability`: the interpreter frames the real
+                // method/headers (bd-3894s slice 2) from the options object instead
+                // of a hardcoded GET. The response callback remains a follow-up
+                // slice. A 0-arg call is malformed: fall through so it is not
+                // silently mis-shaped.
                 if let Some(url_arg) = arguments.first() {
                     lower_expression_to_ir1(
                         url_arg,
@@ -12079,7 +12089,17 @@ fn http_builtin_call_capability(
         _ => return None,
     };
     match method {
-        "get" | "request" => Some("net:request"),
+        // `http.get(url)` auto-ends and carries no writable request body, so it
+        // keeps the immediate `net:request` egress (the round trip fires at the
+        // call site and the call evaluates to the response).
+        "get" => Some("net:request"),
+        // bd-3894s slice (2b): `http.request(url[, opts])` returns a writable
+        // `ClientRequest` whose body is built incrementally via `req.write`/
+        // `req.end`. It lowers to `net:client_request`, which the interpreter
+        // turns into a ClientRequest object (no egress); `.end()` performs the
+        // deferred egress. This matches Node, where `http.request` REQUIRES an
+        // explicit `.end()` and never sends at the call site.
+        "request" => Some("net:client_request"),
         _ => None,
     }
 }
@@ -12140,28 +12160,33 @@ fn confirmed_http_namespace_import_aliases(body: &[Statement]) -> BTreeSet<Strin
 
 /// bd-3894s: confirmed http *named* ESM imports — `import { get[, request] }
 /// from 'node:http'` (incl. `as` renames) whose local binding is used as a
-/// direct call `<local>(...)` at a top-level program position. Returns the set
-/// of local names; every recognized http named import maps to the single
-/// `net:request` capability (unlike fs's read/write split). Recorded as
-/// NUL-sentinels (see [`http_named_import_sentinel`]) and gated on usage, exactly
-/// like the fs named-import form.
-fn confirmed_http_named_imports(body: &[Statement]) -> BTreeSet<String> {
-    let mut candidates: BTreeSet<String> = BTreeSet::new();
+/// direct call `<local>(...)` at a top-level program position. Returns a map of
+/// local name -> capability: `get` keeps the immediate `net:request` egress,
+/// while `request` (bd-3894s slice 2b) maps to `net:client_request` so a named
+/// `request(url)` builds a writable `ClientRequest` exactly like the member-call
+/// `http.request(url)` form. Recorded as capability-encoding NUL-sentinels (see
+/// [`http_named_import_sentinel`]) and gated on usage, exactly like the fs
+/// named-import form ([`confirmed_fs_named_imports`]).
+fn confirmed_http_named_imports(body: &[Statement]) -> BTreeMap<String, &'static str> {
+    let mut candidates: BTreeMap<String, &'static str> = BTreeMap::new();
     for stmt in body {
         if let Statement::Import(import) = stmt
             && is_http_module_specifier(&import.source)
             && let ImportClause::Named { specifiers } = &import.clause
         {
             for spec in specifiers {
-                if matches!(spec.import_name.as_str(), "get" | "request") {
-                    candidates.insert(spec.local_name.clone());
-                }
+                let capability = match spec.import_name.as_str() {
+                    "get" => "net:request",
+                    "request" => "net:client_request",
+                    _ => continue,
+                };
+                candidates.insert(spec.local_name.clone(), capability);
             }
         }
     }
     candidates
         .into_iter()
-        .filter(|local| {
+        .filter(|(local, _)| {
             body_top_level_expr_matches(body, &|e| {
                 expr_contains_matching_call(e, &|c| is_http_named_callee(c, local))
             })
@@ -12171,11 +12196,13 @@ fn confirmed_http_named_imports(body: &[Statement]) -> BTreeSet<String> {
 
 /// bd-3894s: recognize a direct call to an http *named import* — `get(url)` /
 /// `request(url)` brought in by `import { ... } from 'node:http'` — and return
-/// its `net:request` hostcall capability. The local name (respecting `as`
-/// renames) was recorded as a NUL-sentinel in `binding_lookup` by the program
-/// pre-scan, gated on actual direct-call usage so a bare/unused http import keeps
-/// its current behavior. The ESM-named-import analogue of
-/// [`http_builtin_call_capability`]'s inline/binding member-call recognition.
+/// its hostcall capability (`net:request` for `get`, `net:client_request` for
+/// `request`; see [`confirmed_http_named_imports`]). The local name (respecting
+/// `as` renames) was recorded as a capability-encoding NUL-sentinel in
+/// `binding_lookup` by the program pre-scan, gated on actual direct-call usage so
+/// a bare/unused http import keeps its current behavior. The ESM-named-import
+/// analogue of [`http_builtin_call_capability`]'s inline/binding member-call
+/// recognition.
 fn http_named_import_call_capability(
     callee: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
@@ -12185,6 +12212,8 @@ fn http_named_import_call_capability(
     };
     if binding_lookup.contains_key(&http_named_import_sentinel(name, "net:request")) {
         Some("net:request")
+    } else if binding_lookup.contains_key(&http_named_import_sentinel(name, "net:client_request")) {
+        Some("net:client_request")
     } else {
         None
     }
@@ -12386,7 +12415,8 @@ fn confirmed_fs_destructured_requires(
     for stmt in body {
         if let Statement::VariableDeclaration(vd) = stmt {
             for d in &vd.declarations {
-                let (Some(init), BindingPattern::ObjectPattern(props)) = (&d.initializer, &d.pattern)
+                let (Some(init), BindingPattern::ObjectPattern(props)) =
+                    (&d.initializer, &d.pattern)
                 else {
                     continue;
                 };
@@ -15416,18 +15446,24 @@ mod tests {
         )
     }
 
-    /// bd-3894s slice (2): the `arg_count` of the first `net:request` HostCall in
-    /// the lowered ops — 1 for a bare `get(url)` / `fetch(url)` (URL only), 2 once
-    /// the options/init object (arg[1]) is forwarded so the interpreter can frame
-    /// the real method/headers/body.
-    fn net_request_arg_count(ops: &[Ir1Op]) -> Option<u32> {
+    /// bd-3894s: the `arg_count` of the first HostCall carrying `cap` in the
+    /// lowered ops — 1 for a bare URL-only call, 2 once the options/init object
+    /// (arg[1]) is forwarded so the interpreter can frame the real
+    /// method/headers/body.
+    fn first_hostcall_arg_count(ops: &[Ir1Op], cap: &str) -> Option<u32> {
         ops.iter().find_map(|op| match op {
             Ir1Op::HostCall {
                 capability,
                 arg_count,
-            } if capability == "net:request" => Some(*arg_count),
+            } if capability == cap => Some(*arg_count),
             _ => None,
         })
+    }
+
+    /// bd-3894s slice (2): the `arg_count` of the first `net:request` HostCall —
+    /// the immediate `http.get`/`fetch` egress form.
+    fn net_request_arg_count(ops: &[Ir1Op]) -> Option<u32> {
+        first_hostcall_arg_count(ops, "net:request")
     }
 
     fn ops_have_fs_import_module(ops: &[Ir1Op]) -> bool {
@@ -15752,18 +15788,24 @@ mod tests {
         );
     }
 
-    /// bd-656a2: the inline form `require('http').request(url)` lowers to a
-    /// `net:request` HostCall (the http mirror of inline
-    /// `require('fs').readFileSync`).
+    /// bd-656a2 / bd-3894s slice (2b): the inline form
+    /// `require('http').request(url)` lowers to a `net:client_request` HostCall —
+    /// `http.request` returns a writable `ClientRequest` (it does NOT egress at the
+    /// call site, unlike `http.get`), so it gets the ClientRequest-creation
+    /// capability, not the immediate `net:request` egress.
     #[test]
-    fn http_inline_request_lowers_to_net_request_bd_656a2() {
+    fn http_inline_request_lowers_to_net_client_request_bd_3894s() {
         let ops = lower_script_source_ops(
             "require('http').request('http://127.0.0.1:9/');\n",
             "http_inline_request.js",
         );
         assert!(
-            ops_have_hostcall(&ops, "net:request"),
-            "require('http').request(url) must lower to a net:request hostcall"
+            ops_have_hostcall(&ops, "net:client_request"),
+            "require('http').request(url) must lower to a net:client_request hostcall"
+        );
+        assert!(
+            !ops_have_hostcall(&ops, "net:request"),
+            "http.request must NOT lower to the immediate net:request egress"
         );
     }
 
@@ -15820,9 +15862,11 @@ mod tests {
     }
 
     /// bd-3894s (http leg ESM imports): a named ESM import (`import { get,
-    /// request } from 'node:http'`) used as direct calls lowers to `net:request`
+    /// request } from 'node:http'`) used as direct calls lowers to the http
     /// HostCalls and elides the (fault-prone) node:http module load — the http
-    /// mirror of the fs named-import lowering (bd-1xl17.b).
+    /// mirror of the fs named-import lowering (bd-1xl17.b). `get` keeps the
+    /// immediate `net:request` egress while `request` (slice 2b) lowers to
+    /// `net:client_request` (writable ClientRequest).
     #[test]
     fn esm_named_http_import_lowers_to_net_request_bd_3894s() {
         let ops = lower_esm_source_ops(
@@ -15833,7 +15877,11 @@ mod tests {
         );
         assert!(
             ops_have_hostcall(&ops, "net:request"),
-            "named http imports used as get(url)/request(url) must lower to a net:request hostcall"
+            "named http import `get(url)` must lower to a net:request hostcall"
+        );
+        assert!(
+            ops_have_hostcall(&ops, "net:client_request"),
+            "named http import `request(url)` must lower to a net:client_request hostcall"
         );
         assert!(
             !ops_have_http_import_module(&ops),
@@ -15842,7 +15890,8 @@ mod tests {
     }
 
     /// bd-3894s: named http import recognition respects `as` renames — the local
-    /// name (`req`), not the imported name, is what the call site uses.
+    /// name (`req`), not the imported name, is what the call site uses. `request`
+    /// (slice 2b) lowers to `net:client_request` even under a rename.
     #[test]
     fn esm_named_http_import_rename_lowers_to_net_request_bd_3894s() {
         let ops = lower_esm_source_ops(
@@ -15851,8 +15900,8 @@ mod tests {
             "esm_named_rename_http.mjs",
         );
         assert!(
-            ops_have_hostcall(&ops, "net:request"),
-            "a renamed http named import must still lower to net:request"
+            ops_have_hostcall(&ops, "net:client_request"),
+            "a renamed http `request` named import must still lower to net:client_request"
         );
         assert!(
             !ops_have_http_import_module(&ops),
@@ -15881,7 +15930,8 @@ mod tests {
     }
 
     /// bd-3894s: a default ESM import (`import http from 'node:http'`) used as
-    /// `http.get/request(...)` lowers to a `net:request` HostCall.
+    /// `http.request(...)` lowers via the shared member-call recognizer to a
+    /// `net:client_request` HostCall (slice 2b: writable ClientRequest).
     #[test]
     fn esm_default_http_import_lowers_to_net_request_bd_3894s() {
         let ops = lower_esm_source_ops(
@@ -15890,8 +15940,8 @@ mod tests {
             "esm_default_http.mjs",
         );
         assert!(
-            ops_have_hostcall(&ops, "net:request"),
-            "import http from 'node:http'; http.request(url) must lower to net:request"
+            ops_have_hostcall(&ops, "net:client_request"),
+            "import http from 'node:http'; http.request(url) must lower to net:client_request"
         );
         assert!(
             !ops_have_http_import_module(&ops),
@@ -15906,10 +15956,7 @@ mod tests {
     /// ambient-authority denial of bare/unused requires.
     #[test]
     fn esm_unused_http_import_is_not_recognized_bd_3894s() {
-        let ops = lower_esm_source_ops(
-            "import { get } from 'node:http';\n",
-            "esm_unused_http.mjs",
-        );
+        let ops = lower_esm_source_ops("import { get } from 'node:http';\n", "esm_unused_http.mjs");
         assert!(
             ops_have_http_import_module(&ops),
             "an unused http named import must keep its module load (no recognition)"
@@ -15943,10 +15990,7 @@ mod tests {
     /// idiom, shared with `http.get`/`http.request`.
     #[test]
     fn fetch_global_lowers_to_net_request_bd_3894s() {
-        let ops = lower_script_source_ops(
-            "fetch('http://127.0.0.1:9/');\n",
-            "fetch_global.js",
-        );
+        let ops = lower_script_source_ops("fetch('http://127.0.0.1:9/');\n", "fetch_global.js");
         assert!(
             ops_have_hostcall(&ops, "net:request"),
             "fetch(url) must lower to a net:request hostcall"
@@ -15981,10 +16025,10 @@ mod tests {
         );
     }
 
-    /// bd-3894s slice (2): `http.request(url, { method, headers })` forwards the
-    /// options object as arg[1] (arg_count == 2); a bare `http.get(url)` stays at
-    /// arg_count == 1. The same options-forwarding applies to all http/fetch
-    /// recognizer forms that share the `net:request` lowering.
+    /// bd-3894s slice (2)+(2b): `http.request(url, { method, headers })` forwards
+    /// the options object as arg[1] (arg_count == 2) on the `net:client_request`
+    /// lowering (the writable ClientRequest seeds its method/headers from it); a
+    /// bare `http.get(url)` stays at arg_count == 1 on `net:request`.
     #[test]
     fn http_request_with_options_forwards_options_arg_bd_3894s() {
         let ops = lower_script_source_ops(
@@ -15993,11 +16037,11 @@ mod tests {
             "http_request_options.js",
         );
         assert!(
-            ops_have_hostcall(&ops, "net:request"),
-            "http.request(url, options) must lower to a net:request hostcall"
+            ops_have_hostcall(&ops, "net:client_request"),
+            "http.request(url, options) must lower to a net:client_request hostcall"
         );
         assert_eq!(
-            net_request_arg_count(&ops),
+            first_hostcall_arg_count(&ops, "net:client_request"),
             Some(2),
             "http.request(url, options) must forward the options object as arg[1]"
         );
@@ -16020,10 +16064,8 @@ mod tests {
     /// until response modeling lands.
     #[test]
     fn fetch_global_returns_promise_bd_3894s() {
-        let ops = lower_script_source_ops(
-            "fetch('http://127.0.0.1:9/');\n",
-            "fetch_global_promise.js",
-        );
+        let ops =
+            lower_script_source_ops("fetch('http://127.0.0.1:9/');\n", "fetch_global_promise.js");
         assert!(
             ops_have_hostcall(&ops, "net:request"),
             "fetch must emit the net:request egress"

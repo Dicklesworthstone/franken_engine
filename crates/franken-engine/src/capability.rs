@@ -155,8 +155,17 @@ impl RuntimeCapability {
             // effect producer); it maps to the same NetworkEgress capability as
             // the other short network aliases so the hostcall gate authorizes it
             // only when network egress was granted on the run path.
+            // bd-3894s slice (2b): `net:client_request` is the tag emitted by the
+            // `http.request(url[, opts])` lowering. It does NOT egress at the call
+            // site — it builds a `ClientRequest` writable-stream object whose
+            // `.end()` performs the egress later, through the same SSRF-gated
+            // provider. It maps to `NetworkEgress` here so the hostcall capability
+            // gate fires at CREATION time: a ClientRequest cannot even be
+            // constructed unless network egress was granted, closing the bypass
+            // where the deferred `.end()` egress would otherwise skip the engine
+            // capability gate (`.end()` runs as a builtin, not a HostCall IR op).
             "network" | "net" | "net:connect" | "net:fetch" | "net:outbound" | "net:request"
-            | "net.write" | "network.write" => Some(Self::NetworkEgress),
+            | "net:client_request" | "net.write" | "network.write" => Some(Self::NetworkEgress),
             "fs" | "fs:read" | "fs.read" => Some(Self::FsRead),
             "fs:write" | "fs.write" => Some(Self::FsWrite),
             "module:require" | "module:import" | "module.import" => Some(Self::ModuleLoad),
@@ -1788,6 +1797,12 @@ mod tests {
         );
         assert_eq!(
             RuntimeCapability::from_tag_str("net:connect"),
+            Some(RuntimeCapability::NetworkEgress)
+        );
+        // bd-3894s slice (2b): the ClientRequest-creation tag maps to NetworkEgress
+        // so the hostcall capability gate fires at `http.request(...)` time.
+        assert_eq!(
+            RuntimeCapability::from_tag_str("net:client_request"),
             Some(RuntimeCapability::NetworkEgress)
         );
         assert_eq!(

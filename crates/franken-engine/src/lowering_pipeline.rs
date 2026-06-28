@@ -4755,6 +4755,68 @@ pub fn lower_ir2_to_ir3(
                 binding_id,
                 operator,
             } => {
+                // bd-8enww.4.4: a closure-captured / runtime / TDZ-tracked binding
+                // lives in the scope chain, not a register. Its reads already lower
+                // to `LoadScoped` (see `Ir1Op::LoadBinding` above); without the
+                // matching `StoreScoped`/`InitBinding` here, an assignment
+                // expression would write a dead register and silently drop the
+                // update (the subsequent `LoadScoped` re-reads the stale value).
+                // Mirror the deferred-function-body `AssignOp` handler.
+                if scoped_runtime_binding_ids.contains(binding_id) {
+                    let src = pop_lowering_value(&mut value_stack)?;
+                    let name = binding_id_to_name
+                        .get(binding_id)
+                        .cloned()
+                        .unwrap_or_else(|| format!("__binding_{binding_id}"));
+                    match operator {
+                        AssignmentOperator::Assign => {
+                            let pool_index = push_constant_optimized(&mut constant_pool, &name);
+                            if tdz_binding_ids.contains(binding_id)
+                                && tdz_initialized.insert(*binding_id)
+                            {
+                                // First store to a still-uninitialized TDZ lexical is
+                                // its initializer — clear the dead zone (StoreScoped
+                                // would reject it). Mirrors the StoreBinding handler.
+                                ir3.instructions.push(Ir3Instruction::InitBinding {
+                                    name_pool_index: pool_index,
+                                    src,
+                                });
+                            } else {
+                                ir3.instructions.push(Ir3Instruction::StoreScoped {
+                                    src,
+                                    name_pool_index: pool_index,
+                                });
+                            }
+                            value_stack.push(src);
+                        }
+                        AssignmentOperator::LogicalAndAssign
+                        | AssignmentOperator::LogicalOrAssign
+                        | AssignmentOperator::NullishCoalescingAssign => {
+                            return Err(LoweringPipelineError::InvariantViolation {
+                                detail: "logical compound assignments must be short-circuit lowered before IR3",
+                            });
+                        }
+                        _ => {
+                            // Compound assignment to a scoped binding: read the
+                            // current value via LoadScoped, apply the op, store back.
+                            let pool_index = push_constant_optimized(&mut constant_pool, &name);
+                            let lhs = alloc_register(&mut register_cursor);
+                            ir3.instructions.push(Ir3Instruction::LoadScoped {
+                                dst: lhs,
+                                name_pool_index: pool_index,
+                            });
+                            let result = alloc_register(&mut register_cursor);
+                            let instr = lower_assign_op_to_ir3(*operator, result, lhs, src);
+                            ir3.instructions.push(instr);
+                            ir3.instructions.push(Ir3Instruction::StoreScoped {
+                                src: result,
+                                name_pool_index: pool_index,
+                            });
+                            value_stack.push(result);
+                        }
+                    }
+                    continue;
+                }
                 let dst = *binding_registers
                     .entry(*binding_id)
                     .or_insert_with(|| alloc_register(&mut register_cursor));

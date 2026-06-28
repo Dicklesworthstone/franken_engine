@@ -218,6 +218,30 @@ fn behavior_vectors() -> Vec<JsConformanceVector> {
             r#"var c = "uncaught"; try { new Function("var o = null; return o.x;")(); } catch (e) { c = e.name; } c;"#,
             "TypeError",
         ),
+        // -- catchability ACROSS the generated->caller boundary (explicit throw)
+        // bd-8enww.4.7: an explicit `throw` inside a generated function is now
+        // catchable by the caller and binds the ORIGINAL thrown value — the
+        // primitive value travels verbatim, and a thrown Error object preserves
+        // its name/message (which exercises the shared-heap survival of the
+        // thrown object across the generated frame's snapshot restore).
+        JsConformanceVector::caught_value(
+            "fc-cross-boundary-explicit-throw-primitive",
+            CATEGORY,
+            r#"var c = "uncaught"; try { new Function("throw 'boom';")(); } catch (e) { c = e; } c;"#,
+            "boom",
+        ),
+        JsConformanceVector::caught_value(
+            "fc-cross-boundary-explicit-throw-error-message",
+            CATEGORY,
+            r#"var c = "uncaught"; try { new Function("throw new Error('bad');")(); } catch (e) { c = e.message; } c;"#,
+            "bad",
+        ),
+        JsConformanceVector::caught_value(
+            "fc-cross-boundary-explicit-throw-error-name",
+            CATEGORY,
+            r#"var c = "uncaught"; try { new Function("throw new TypeError('nope');")(); } catch (e) { c = e.name; } c;"#,
+            "TypeError",
+        ),
         // -- AC#4: typed-array interaction (Track B landed) ------------------
         JsConformanceVector::value(
             "fc-ta-uint8-set-get",
@@ -580,32 +604,31 @@ fn adversarial_infinite_generated_loop_halts_deterministically() {
 // --- Catchability boundary: explicit throw crossing the generated frame ------
 
 #[test]
-fn explicit_throw_crossing_generated_boundary_surfaces_not_swallowed() {
-    // KNOWN BOUNDARY (tracked by bd-8enww.4.7): an *explicit* `throw`
-    // inside a generated function does not (yet) propagate into an enclosing
-    // try/catch in the CALLER — unlike a native runtime error, which does
-    // (see `fc-cross-boundary-native-error-catchable`). The important
-    // fail-closed property today is that the thrown value is NOT silently
-    // swallowed: it surfaces at the eval boundary carrying the value.
-    //
-    // try/catch *inside* a generated body already catches explicit throws
-    // (see `fc-inbody-try-catch-explicit-throw`), so generated code can handle
-    // its own exceptions; only the cross-frame re-raise is pending.
+fn explicit_throw_crossing_generated_boundary_is_catchable_by_caller() {
+    // bd-8enww.4.7 (CLOSED): an *explicit* `throw` inside a generated function
+    // now propagates into an enclosing try/catch in the CALLER, carrying the
+    // ORIGINAL thrown value — symmetric with a native runtime error, which was
+    // already catchable (see `fc-cross-boundary-native-error-catchable`). The
+    // caller's handler binds the thrown value verbatim.
     let mut router = HybridRouter::default();
-    let err = router
+    let out = router
         .eval(r#"var c = "uncaught"; try { new Function("throw 'boom';")(); } catch (e) { c = e; } c;"#)
-        .expect_err("explicit throw crossing the generated boundary surfaces today");
-    assert!(
-        err.message.contains("uncaught exception") && err.message.contains("boom"),
-        "the thrown value must surface (not be swallowed): {}",
-        err.message
+        .expect("explicit throw crossing the generated boundary is now catchable");
+    assert_eq!(
+        out.value, "boom",
+        "the caller's catch must bind the original thrown value",
     );
 
-    // Deterministic surfacing.
-    let err2 = HybridRouter::default()
+    // With NO enclosing handler the throw still fails closed deterministically:
+    // the value surfaces at the eval boundary, never silently swallowed.
+    let err = HybridRouter::default()
         .eval(r#"new Function("throw 'boom';")();"#)
-        .expect_err("explicit throw surfaces");
-    assert!(err2.message.contains("boom"));
+        .expect_err("an uncaught explicit throw still surfaces");
+    assert!(
+        err.message.contains("uncaught exception") && err.message.contains("boom"),
+        "the thrown value must surface when uncaught: {}",
+        err.message
+    );
 }
 
 // --- Determinism: identical generated source ⇒ identical observable result ----

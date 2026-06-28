@@ -10244,6 +10244,65 @@ impl InterpreterCore {
         self.catch_frames.iter().any(|f| f.call_depth <= depth)
     }
 
+    /// Route an explicit `throw` that escaped an *isolated re-entrant run* into
+    /// the caller's catch frames (bd-8enww.4.7).
+    ///
+    /// A `Function`-constructor-generated function
+    /// ([`Self::call_generated_function_artifact`]) and an inline method/callback
+    /// call ([`Self::invoke_inline_method_call`]) both execute the callee in a
+    /// *cleared* catch-frame context, so an enclosing `try`/`catch` in the caller
+    /// is invisible to the inner [`Self::run_loop`]. On an uncaught explicit
+    /// `throw` those paths return [`InterpreterError::UncaughtException`] while
+    /// preserving the thrown value+label in `pending_exception` (re-armed after
+    /// the snapshot restore) precisely so the enclosing frame can re-raise it.
+    ///
+    /// This re-raises that preserved value into the caller's frames, mirroring
+    /// the `Throw` instruction's unwinding exactly (and the `ForOfNext` iterator
+    /// re-raise, bd-bg9l1.27.7). It deliberately fires only for
+    /// `UncaughtException` paired with a preserved `pending_exception`: a *native*
+    /// runtime fault is already routed by [`Self::run_loop`] (it stays a
+    /// JS-catchable variant, e.g. `TypeError`), and a same-frame `throw` already
+    /// consulted the catch stack before returning — so neither is disturbed.
+    ///
+    /// Returns `Ok(None)` when the throw was routed to a handler (or rejected
+    /// into an async boundary): `ip` is positioned and the dispatch loop should
+    /// `continue`. Returns `Ok(Some(err))` when the error is not a routable
+    /// cross-boundary throw, or no eligible handler remained — the dispatch loop
+    /// should propagate `err` unchanged (identical surfacing to today).
+    fn route_isolated_explicit_throw(
+        &mut self,
+        err: InterpreterError,
+    ) -> Result<Option<InterpreterError>, InterpreterError> {
+        if !matches!(err, InterpreterError::UncaughtException { .. }) {
+            return Ok(Some(err));
+        }
+        let Some(thrown) = self.pending_exception.clone() else {
+            return Ok(Some(err));
+        };
+        // Capture the exception's label before the suspend resets the shadow
+        // (bd-l0d6z), then re-arm the pending exception with the preserved
+        // value+label, exactly like the `Throw` instruction.
+        let thrown_label = self.pending_exception_label.clone();
+        self.suspend_current_abrupt_completion();
+        self.pending_return = None;
+        self.pending_exception = Some(thrown.clone());
+        self.pending_exception_label = thrown_label;
+        if let Some(frame) = self.pop_exception_target_frame()? {
+            self.ip = frame.catch_target;
+            Ok(None)
+        } else if self.reject_nearest_async_boundary(thrown.clone())? {
+            Ok(None)
+        } else {
+            // No enclosing handler: surface as an uncaught exception carrying the
+            // original thrown value — byte-identical to the inner `Throw` arm's
+            // own `UncaughtException` value (both use `uncaught_exception_description`).
+            self.suspended_abrupt_completions.clear();
+            Ok(Some(InterpreterError::UncaughtException {
+                value: Self::uncaught_exception_description(&thrown),
+            }))
+        }
+    }
+
     /// Drive the bytecode dispatch loop, converting *native* runtime errors
     /// (TypeError from `null.x`, ReferenceError from TDZ access, …) into JS
     /// exceptions that are catchable by JS `try`/`catch` (bd-8enww.4.3).
@@ -10596,7 +10655,20 @@ impl InterpreterCore {
                     }
 
                     if let Value::BuiltinFunction(builtin) = &callee_val {
-                        let result = self.dispatch_builtin_function(module, builtin, args, None)?;
+                        // An explicit `throw` inside a generated function (or an
+                        // inline callback the builtin runs) escapes the isolated
+                        // run as `UncaughtException` with the thrown value
+                        // preserved; route it into THIS frame's catch handler
+                        // rather than letting `?` escape the caller's try/catch
+                        // (bd-8enww.4.7).
+                        let result =
+                            match self.dispatch_builtin_function(module, builtin, args, None) {
+                                Ok(value) => value,
+                                Err(err) => match self.route_isolated_explicit_throw(err)? {
+                                    None => continue,
+                                    Some(err) => return Err(err),
+                                },
+                            };
                         self.write_reg(dst, result)?;
                         // IFC: builtin results derive entirely from the arg
                         // registers (incl. any callback lanes the builtin runs,
@@ -11040,12 +11112,23 @@ impl InterpreterCore {
                     }
 
                     if let Value::BuiltinFunction(builtin) = &callee_val {
-                        let result = self.dispatch_builtin_function(
+                        // Mirror the plain-`Call` arm: an explicit `throw` that
+                        // escapes a generated function or an inline callback the
+                        // builtin runs (e.g. `arr.forEach(() => { throw … })`)
+                        // must be catchable by an enclosing try/catch in this
+                        // frame (bd-8enww.4.7).
+                        let result = match self.dispatch_builtin_function(
                             module,
                             builtin,
                             args,
                             Some(receiver_val),
-                        )?;
+                        ) {
+                            Ok(value) => value,
+                            Err(err) => match self.route_isolated_explicit_throw(err)? {
+                                None => continue,
+                                Some(err) => return Err(err),
+                            },
+                        };
                         self.write_reg(dst, result)?;
                         // IFC: a receiver-aware builtin's result derives from
                         // the receiver and the arg registers (e.g. a Secret

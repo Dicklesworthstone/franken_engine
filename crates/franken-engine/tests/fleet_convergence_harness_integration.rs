@@ -105,9 +105,14 @@ fn integration_convergence_no_partition_succeeds_or_quorum_fails() {
         } => {
             assert!(checkpoint_seq > 0, "Checkpoint sequence should be positive");
             assert!(participating_nodes > 0, "Should have participating nodes");
+            // Exactly one extension's quarantine decision was broadcast, so the
+            // checkpoint can resolve at most one containment decision. (A prior
+            // `>= 0` form was vacuous on an unsigned count; a `> 0` lower bound
+            // would be flaky because the local node may converge before the
+            // broadcast intent propagates into its pending set.)
             assert!(
-                decisions_resolved >= 0,
-                "Decisions resolved should be non-negative"
+                decisions_resolved <= 1,
+                "At most one containment decision resolved (single extension broadcast)"
             );
         }
         ConvergenceResult::QuorumNotReached {
@@ -146,7 +151,7 @@ fn integration_convergence_permanent_partition_must_refuse() {
         ConvergenceResult::QuorumNotReached {
             required_nodes,
             available_nodes,
-            partition_detected,
+            partition_detected: _,
         } => {
             // This is the expected NEGATIVE result
             assert!(required_nodes > 0, "Required nodes should be positive");
@@ -219,7 +224,7 @@ fn integration_multiple_convergence_attempts() {
 
     // Test multiple convergence verification attempts
     for i in 1..=3 {
-        let result = harness
+        let _result = harness
             .verify_convergence()
             .expect("Convergence verification should work");
 
@@ -300,10 +305,12 @@ fn integration_multiple_quarantine_decisions() {
 
 #[test]
 fn integration_custom_configuration() {
-    let mut config = ConvergenceHarnessConfig::default();
-    config.default_node_count = 8;
-    config.max_simulation_steps = 500;
-    config.convergence_timeout_ms = 60_000;
+    let config = ConvergenceHarnessConfig {
+        default_node_count: 8,
+        max_simulation_steps: 500,
+        convergence_timeout_ms: 60_000,
+        ..Default::default()
+    };
 
     let harness = FleetConvergenceHarness::with_config(config.clone())
         .expect("Should create harness with custom config");
@@ -360,7 +367,12 @@ fn integration_statistics_and_logging() {
     // Test simulation statistics
     let sim_stats = harness.simulation_stats();
     assert_eq!(sim_stats.total_instances, 4);
-    assert!(sim_stats.simulation_steps >= 0);
+    // A quarantine decision was broadcast before run_steps, so at least one
+    // message is processed and the simulator step counter advances past zero.
+    assert!(
+        sim_stats.simulation_steps > 0,
+        "broadcast + run_steps should advance the simulator step counter"
+    );
 
     // Test quarantine statistics
     let quar_stats = harness.quarantine_stats();
@@ -484,7 +496,7 @@ fn integration_comprehensive_fleet_lifecycle() {
 
     harness.run_steps(20).expect("Steps should execute");
 
-    let result1 = harness
+    let _result1 = harness
         .verify_convergence()
         .expect("Verification should work");
 
@@ -509,7 +521,7 @@ fn integration_comprehensive_fleet_lifecycle() {
 
     harness.run_steps(30).expect("Steps should execute");
 
-    let result2 = harness
+    let _result2 = harness
         .verify_convergence()
         .expect("Verification should work");
 

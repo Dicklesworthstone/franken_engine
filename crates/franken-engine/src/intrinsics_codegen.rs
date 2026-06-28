@@ -180,7 +180,7 @@ impl GeneratedGlue<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::intrinsics_table::{Arity, IfcPropagation, ReceiverKind, SEED_ROWS, ThisCoercion};
+    use crate::intrinsics_table::SEED_ROWS;
 
     // Exercise the declaration macro itself (proves `define_intrinsics! { .. }` expands).
     mod macro_demo {

@@ -9,7 +9,7 @@
 #![forbid(unsafe_code)]
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -23,7 +23,7 @@ fn temp_dir(name: &str) -> PathBuf {
     dir
 }
 
-fn write_corpus(dir: &PathBuf, cases: &[(&str, &str)]) -> PathBuf {
+fn write_corpus(dir: &Path, cases: &[(&str, &str)]) -> PathBuf {
     let mut manifest_cases = Vec::new();
     for (id, source) in cases {
         let file = format!("programs/{id}.js");
@@ -41,7 +41,7 @@ fn write_corpus(dir: &PathBuf, cases: &[(&str, &str)]) -> PathBuf {
     manifest
 }
 
-fn run_perf(manifest: &PathBuf, report_path: &PathBuf, events_path: &PathBuf) -> serde_json::Value {
+fn run_perf(manifest: &Path, report_path: &Path, events_path: &Path) -> serde_json::Value {
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args([
             "differential-oracle",

@@ -64,7 +64,10 @@ fn make_test_value(i: usize) -> CanonicalValue {
         "name".to_string(),
         CanonicalValue::String(format!("entry-{i}")),
     );
-    m.insert("flag".to_string(), CanonicalValue::Bool(i % 2 == 0));
+    m.insert(
+        "flag".to_string(),
+        CanonicalValue::Bool(i.is_multiple_of(2)),
+    );
     m.insert(
         "data".to_string(),
         CanonicalValue::Bytes(vec![i as u8; i % 17]),

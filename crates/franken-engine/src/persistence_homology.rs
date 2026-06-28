@@ -1501,7 +1501,7 @@ mod tests {
 
     #[test]
     fn test_bars_to_points_conversion() {
-        let bars = vec![PersistenceBar {
+        let bars = [PersistenceBar {
             birth: FilterValue::from_millionths(100_000), // 0.1
             death: Some(FilterValue::from_millionths(300_000)), // 0.3
             dimension: 0,
@@ -1594,7 +1594,7 @@ mod tests {
 
     #[test]
     fn test_sum_total_persistence() {
-        let bars = vec![
+        let bars = [
             PersistenceBar {
                 birth: FilterValue::from_millionths(100_000),
                 death: Some(FilterValue::from_millionths(300_000)), // Persistence = 200_000
@@ -1628,7 +1628,7 @@ mod tests {
 
     #[test]
     fn test_infinite_bars_handling() {
-        let bars = vec![PersistenceBar {
+        let bars = [PersistenceBar {
             birth: FilterValue::from_millionths(100_000),
             death: None, // Infinite bar
             dimension: 1,

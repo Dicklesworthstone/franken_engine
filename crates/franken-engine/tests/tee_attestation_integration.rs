@@ -14,10 +14,8 @@ use std::sync::Mutex;
 use frankenengine_engine::evidence_contract::{
     ActionType, AttestationValidityWindow, DecisionAction, ExpectedLossEntry, PosteriorSnapshot,
     ReceiptRecord, SignatureAlgorithm, SignatureBundle, TeeAttestationBinding,
-    VerificationMetadata,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
-use frankenengine_engine::signature_preimage::SigningKey;
 use frankenengine_engine::tee_attestation_policy::{
     AttestationFreshnessWindow, MeasurementAlgorithm, MeasurementDigest, PlatformTrustRoot,
     RevocationFallback, RevocationSource, RevocationSourceType, TeeAttestationPolicy, TeePlatform,
@@ -166,12 +164,10 @@ fn valid_attestation_policy() -> TeeAttestationPolicy {
 fn test_tee_capability_detection_not_available() {
     let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     unsafe {
-        unsafe {
-            std::env::remove_var("FRANKEN_TEE_ENABLED");
-        }
-        unsafe {
-            std::env::remove_var("FRANKEN_TEE_ERROR");
-        }
+        std::env::remove_var("FRANKEN_TEE_ENABLED");
+    }
+    unsafe {
+        std::env::remove_var("FRANKEN_TEE_ERROR");
     }
 
     let generator = create_test_generator();
@@ -184,12 +180,10 @@ fn test_tee_capability_detection_not_available() {
 fn test_tee_capability_detection_available() {
     let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     unsafe {
-        unsafe {
-            std::env::set_var("FRANKEN_TEE_ENABLED", "true");
-        }
-        unsafe {
-            std::env::remove_var("FRANKEN_TEE_ERROR");
-        }
+        std::env::set_var("FRANKEN_TEE_ENABLED", "true");
+    }
+    unsafe {
+        std::env::remove_var("FRANKEN_TEE_ERROR");
     }
 
     let generator = create_test_generator();
@@ -203,9 +197,7 @@ fn test_tee_capability_detection_available() {
     );
 
     unsafe {
-        unsafe {
-            std::env::remove_var("FRANKEN_TEE_ENABLED");
-        }
+        std::env::remove_var("FRANKEN_TEE_ENABLED");
     }
 }
 
@@ -213,12 +205,10 @@ fn test_tee_capability_detection_available() {
 fn test_tee_capability_detection_error() {
     let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     unsafe {
-        unsafe {
-            std::env::remove_var("FRANKEN_TEE_ENABLED");
-        }
-        unsafe {
-            std::env::set_var("FRANKEN_TEE_ERROR", "Hardware malfunction");
-        }
+        std::env::remove_var("FRANKEN_TEE_ENABLED");
+    }
+    unsafe {
+        std::env::set_var("FRANKEN_TEE_ERROR", "Hardware malfunction");
     }
 
     let generator = create_test_generator();
@@ -227,9 +217,7 @@ fn test_tee_capability_detection_error() {
     assert!(matches!(capability, TeeCapability::Error { .. }));
 
     unsafe {
-        unsafe {
-            std::env::remove_var("FRANKEN_TEE_ERROR");
-        }
+        std::env::remove_var("FRANKEN_TEE_ERROR");
     }
 }
 
@@ -365,7 +353,7 @@ fn test_safe_mode_attestation_record_structure() {
     let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let generator = create_test_generator();
     let decision_data = b"test decision data";
-    let reason = "Custom fallback reason";
+    let _reason = "Custom fallback reason";
 
     // Use the internal method for testing
     // Note: In a real implementation, this would be a public testing utility
@@ -760,9 +748,7 @@ fn test_tee_quote_config_customization() {
     // Verify the configuration is applied
     // (This would be more testable with accessor methods on TeeQuoteGenerator)
     unsafe {
-        unsafe {
-            std::env::set_var("FRANKEN_TEE_ENABLED", "true");
-        }
+        std::env::set_var("FRANKEN_TEE_ENABLED", "true");
     }
     let result = generator.generate_quote(b"config test", "config_nonce");
 

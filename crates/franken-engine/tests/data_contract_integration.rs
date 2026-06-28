@@ -96,6 +96,7 @@ fn bind_sample_contract() -> frankenengine_engine::data_contract::DataContractRu
         .expect("contract should bind")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn adversarial_fixture(
     fixture_id: &str,
     scenario: &str,

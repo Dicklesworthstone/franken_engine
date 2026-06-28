@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 // OBSERVED claims that should have reproducibility bundles
 const OBSERVED_CLAIMS: &[&str] = &[
@@ -44,10 +44,9 @@ fn load_json_file(path: &Path) -> serde_json::Result<Value> {
 }
 
 fn assert_required_keys(json: &Value, required_keys: &[&str], file_type: &str, claim_id: &str) {
-    let obj = json.as_object().expect(&format!(
-        "{} should be JSON object for {}",
-        file_type, claim_id
-    ));
+    let obj = json
+        .as_object()
+        .unwrap_or_else(|| panic!("{} should be JSON object for {}", file_type, claim_id));
 
     for key in required_keys {
         assert!(
@@ -172,7 +171,7 @@ fn env_json_files_exist_and_parseable() {
         assert!(env_path.exists(), "env.json should exist for {}", claim_id);
 
         let _json = load_json_file(&env_path)
-            .expect(&format!("env.json should be valid JSON for {}", claim_id));
+            .unwrap_or_else(|_| panic!("env.json should be valid JSON for {}", claim_id));
     }
 }
 
@@ -186,10 +185,8 @@ fn manifest_json_files_exist_and_parseable() {
             claim_id
         );
 
-        let _json = load_json_file(&manifest_path).expect(&format!(
-            "manifest.json should be valid JSON for {}",
-            claim_id
-        ));
+        let _json = load_json_file(&manifest_path)
+            .unwrap_or_else(|_| panic!("manifest.json should be valid JSON for {}", claim_id));
     }
 }
 
@@ -204,7 +201,7 @@ fn repro_lock_files_exist_and_parseable() {
         );
 
         let _json = load_json_file(&lock_path)
-            .expect(&format!("repro.lock should be valid JSON for {}", claim_id));
+            .unwrap_or_else(|_| panic!("repro.lock should be valid JSON for {}", claim_id));
     }
 }
 
@@ -213,10 +210,7 @@ fn bundles_contain_only_expected_files() {
     for claim_id in OBSERVED_CLAIMS {
         let bundle_dir = bundle_path(claim_id);
         let entries: Vec<_> = fs::read_dir(&bundle_dir)
-            .expect(&format!(
-                "Should be able to read bundle dir for {}",
-                claim_id
-            ))
+            .unwrap_or_else(|_| panic!("Should be able to read bundle dir for {}", claim_id))
             .collect::<Result<Vec<_>, _>>()
             .expect("Should be able to list directory entries");
 
@@ -250,10 +244,12 @@ fn bundle_files_are_non_empty() {
     for claim_id in OBSERVED_CLAIMS {
         for file in REQUIRED_BUNDLE_FILES {
             let file_path = bundle_path(claim_id).join(file);
-            let metadata = fs::metadata(&file_path).expect(&format!(
-                "Should be able to get metadata for {} in {}",
-                file, claim_id
-            ));
+            let metadata = fs::metadata(&file_path).unwrap_or_else(|_| {
+                panic!(
+                    "Should be able to get metadata for {} in {}",
+                    file, claim_id
+                )
+            });
 
             assert!(
                 metadata.len() > 0,
@@ -270,10 +266,9 @@ fn bundle_files_have_utf8_content() {
     for claim_id in OBSERVED_CLAIMS {
         for file in REQUIRED_BUNDLE_FILES {
             let file_path = bundle_path(claim_id).join(file);
-            let _content = fs::read_to_string(&file_path).expect(&format!(
-                "File {} should be valid UTF-8 for claim {}",
-                file, claim_id
-            ));
+            let _content = fs::read_to_string(&file_path).unwrap_or_else(|_| {
+                panic!("File {} should be valid UTF-8 for claim {}", file, claim_id)
+            });
         }
     }
 }
@@ -284,7 +279,7 @@ fn bundle_files_end_with_lf_newline() {
         for file in REQUIRED_BUNDLE_FILES {
             let file_path = bundle_path(claim_id).join(file);
             let content = fs::read_to_string(&file_path)
-                .expect(&format!("Should be able to read {} for {}", file, claim_id));
+                .unwrap_or_else(|_| panic!("Should be able to read {} for {}", file, claim_id));
 
             assert!(
                 content.ends_with('\n'),
@@ -310,11 +305,11 @@ fn json_files_are_properly_formatted() {
         for file in &["env.json", "manifest.json", "repro.lock"] {
             let file_path = bundle_path(claim_id).join(file);
             let content = fs::read_to_string(&file_path)
-                .expect(&format!("Should be able to read {} for {}", file, claim_id));
+                .unwrap_or_else(|_| panic!("Should be able to read {} for {}", file, claim_id));
 
             // Should parse as JSON
             let json: Value = serde_json::from_str(&content)
-                .expect(&format!("{} should be valid JSON for {}", file, claim_id));
+                .unwrap_or_else(|_| panic!("{} should be valid JSON for {}", file, claim_id));
 
             // Should be an object
             assert!(
@@ -325,7 +320,7 @@ fn json_files_are_properly_formatted() {
             );
 
             // Re-serialization should be deterministic (lexicographic key ordering)
-            let canonical =
+            let _canonical =
                 serde_json::to_string_pretty(&json).expect("Should be able to serialize JSON");
 
             // Keys should be in sorted order (basic check)
@@ -362,15 +357,15 @@ fn env_json_schema_compliance() {
 
     for claim_id in OBSERVED_CLAIMS {
         let env_path = bundle_path(claim_id).join("env.json");
-        let json =
-            load_json_file(&env_path).expect(&format!("env.json should load for {}", claim_id));
+        let json = load_json_file(&env_path)
+            .unwrap_or_else(|_| panic!("env.json should load for {}", claim_id));
 
         assert_required_keys(&json, required_keys, "env.json", claim_id);
 
         // Verify schema version format
         let schema_version = json["schema_version"]
             .as_str()
-            .expect(&format!("schema_version should be string for {}", claim_id));
+            .unwrap_or_else(|| panic!("schema_version should be string for {}", claim_id));
         assert!(
             schema_version.contains(".env.v"),
             "env.json schema_version should contain '.env.v' for {}",
@@ -383,12 +378,12 @@ fn env_json_schema_compliance() {
 fn env_json_project_section_complete() {
     for claim_id in OBSERVED_CLAIMS {
         let env_path = bundle_path(claim_id).join("env.json");
-        let json =
-            load_json_file(&env_path).expect(&format!("env.json should load for {}", claim_id));
+        let json = load_json_file(&env_path)
+            .unwrap_or_else(|_| panic!("env.json should load for {}", claim_id));
 
         let project = json["project"]
             .as_object()
-            .expect(&format!("project should be object for {}", claim_id));
+            .unwrap_or_else(|| panic!("project should be object for {}", claim_id));
 
         let required_project_keys = &["name", "version", "repository", "commit", "claim_scope"];
         for key in required_project_keys {
@@ -406,13 +401,12 @@ fn env_json_project_section_complete() {
 fn env_json_timestamps_valid() {
     for claim_id in OBSERVED_CLAIMS {
         let env_path = bundle_path(claim_id).join("env.json");
-        let json =
-            load_json_file(&env_path).expect(&format!("env.json should load for {}", claim_id));
+        let json = load_json_file(&env_path)
+            .unwrap_or_else(|_| panic!("env.json should load for {}", claim_id));
 
-        let timestamp = json["captured_at_utc"].as_str().expect(&format!(
-            "captured_at_utc should be string for {}",
-            claim_id
-        ));
+        let timestamp = json["captured_at_utc"]
+            .as_str()
+            .unwrap_or_else(|| panic!("captured_at_utc should be string for {}", claim_id));
 
         // Should be valid ISO-8601 timestamp
         assert!(
@@ -427,12 +421,12 @@ fn env_json_timestamps_valid() {
 fn env_json_hash_fields_present() {
     for claim_id in OBSERVED_CLAIMS {
         let env_path = bundle_path(claim_id).join("env.json");
-        let json =
-            load_json_file(&env_path).expect(&format!("env.json should load for {}", claim_id));
+        let json = load_json_file(&env_path)
+            .unwrap_or_else(|_| panic!("env.json should load for {}", claim_id));
 
         let schema_hash = json["schema_hash"]
             .as_str()
-            .expect(&format!("schema_hash should be string for {}", claim_id));
+            .unwrap_or_else(|| panic!("schema_hash should be string for {}", claim_id));
 
         assert!(
             schema_hash.starts_with("sha256:"),
@@ -463,14 +457,14 @@ fn manifest_json_schema_compliance() {
     for claim_id in OBSERVED_CLAIMS {
         let manifest_path = bundle_path(claim_id).join("manifest.json");
         let json = load_json_file(&manifest_path)
-            .expect(&format!("manifest.json should load for {}", claim_id));
+            .unwrap_or_else(|_| panic!("manifest.json should load for {}", claim_id));
 
         assert_required_keys(&json, required_keys, "manifest.json", claim_id);
 
         // Verify schema version format
         let schema_version = json["schema_version"]
             .as_str()
-            .expect(&format!("schema_version should be string for {}", claim_id));
+            .unwrap_or_else(|| panic!("schema_version should be string for {}", claim_id));
         assert!(
             schema_version.contains(".manifest.v"),
             "manifest.json schema_version should contain '.manifest.v' for {}",
@@ -484,11 +478,11 @@ fn manifest_json_claim_section_complete() {
     for claim_id in OBSERVED_CLAIMS {
         let manifest_path = bundle_path(claim_id).join("manifest.json");
         let json = load_json_file(&manifest_path)
-            .expect(&format!("manifest.json should load for {}", claim_id));
+            .unwrap_or_else(|_| panic!("manifest.json should load for {}", claim_id));
 
         let claim = json["claim"]
             .as_object()
-            .expect(&format!("claim should be object for {}", claim_id));
+            .unwrap_or_else(|| panic!("claim should be object for {}", claim_id));
 
         let required_claim_keys = &["id", "scope", "state", "original_artifact_path"];
         for key in required_claim_keys {
@@ -503,7 +497,7 @@ fn manifest_json_claim_section_complete() {
         // Verify claim ID matches
         let claim_id_in_manifest = claim["id"]
             .as_str()
-            .expect(&format!("claim.id should be string for {}", claim_id));
+            .unwrap_or_else(|| panic!("claim.id should be string for {}", claim_id));
         assert_eq!(
             claim_id_in_manifest, *claim_id,
             "claim.id should match expected claim ID"
@@ -512,7 +506,7 @@ fn manifest_json_claim_section_complete() {
         // Verify state is observed
         let state = claim["state"]
             .as_str()
-            .expect(&format!("claim.state should be string for {}", claim_id));
+            .unwrap_or_else(|| panic!("claim.state should be string for {}", claim_id));
         assert_eq!(
             state, "observed",
             "claim.state should be 'observed' for {}",
@@ -526,11 +520,11 @@ fn manifest_json_artifacts_section_complete() {
     for claim_id in OBSERVED_CLAIMS {
         let manifest_path = bundle_path(claim_id).join("manifest.json");
         let json = load_json_file(&manifest_path)
-            .expect(&format!("manifest.json should load for {}", claim_id));
+            .unwrap_or_else(|_| panic!("manifest.json should load for {}", claim_id));
 
         let artifacts = json["artifacts"]
             .as_object()
-            .expect(&format!("artifacts should be object for {}", claim_id));
+            .unwrap_or_else(|| panic!("artifacts should be object for {}", claim_id));
 
         let required_artifact_keys = &[
             "primary",
@@ -555,11 +549,11 @@ fn manifest_json_provenance_tracking() {
     for claim_id in OBSERVED_CLAIMS {
         let manifest_path = bundle_path(claim_id).join("manifest.json");
         let json = load_json_file(&manifest_path)
-            .expect(&format!("manifest.json should load for {}", claim_id));
+            .unwrap_or_else(|_| panic!("manifest.json should load for {}", claim_id));
 
         let provenance = json["provenance"]
             .as_object()
-            .expect(&format!("provenance should be object for {}", claim_id));
+            .unwrap_or_else(|| panic!("provenance should be object for {}", claim_id));
 
         // Should track generation source
         assert!(provenance.contains_key("generated_by"));
@@ -591,15 +585,15 @@ fn repro_lock_schema_compliance() {
 
     for claim_id in OBSERVED_CLAIMS {
         let lock_path = bundle_path(claim_id).join("repro.lock");
-        let json =
-            load_json_file(&lock_path).expect(&format!("repro.lock should load for {}", claim_id));
+        let json = load_json_file(&lock_path)
+            .unwrap_or_else(|_| panic!("repro.lock should load for {}", claim_id));
 
         assert_required_keys(&json, required_keys, "repro.lock", claim_id);
 
         // Verify schema version format
         let schema_version = json["schema_version"]
             .as_str()
-            .expect(&format!("schema_version should be string for {}", claim_id));
+            .unwrap_or_else(|| panic!("schema_version should be string for {}", claim_id));
         assert!(
             schema_version.contains(".lock.v"),
             "repro.lock schema_version should contain '.lock.v' for {}",
@@ -612,12 +606,12 @@ fn repro_lock_schema_compliance() {
 fn repro_lock_determinism_configuration() {
     for claim_id in OBSERVED_CLAIMS {
         let lock_path = bundle_path(claim_id).join("repro.lock");
-        let json =
-            load_json_file(&lock_path).expect(&format!("repro.lock should load for {}", claim_id));
+        let json = load_json_file(&lock_path)
+            .unwrap_or_else(|_| panic!("repro.lock should load for {}", claim_id));
 
         let determinism = json["determinism"]
             .as_object()
-            .expect(&format!("determinism should be object for {}", claim_id));
+            .unwrap_or_else(|| panic!("determinism should be object for {}", claim_id));
 
         let required_det_keys = &[
             "mode",
@@ -648,21 +642,20 @@ fn repro_lock_determinism_configuration() {
 fn repro_lock_commands_complete() {
     for claim_id in OBSERVED_CLAIMS {
         let lock_path = bundle_path(claim_id).join("repro.lock");
-        let json =
-            load_json_file(&lock_path).expect(&format!("repro.lock should load for {}", claim_id));
+        let json = load_json_file(&lock_path)
+            .unwrap_or_else(|_| panic!("repro.lock should load for {}", claim_id));
 
         let commands = json["commands"]
             .as_object()
-            .expect(&format!("commands should be object for {}", claim_id));
+            .unwrap_or_else(|| panic!("commands should be object for {}", claim_id));
 
         assert!(commands.contains_key("verification"));
         assert!(commands.contains_key("environment_setup"));
         assert!(commands.contains_key("cleanup"));
 
-        let verification = commands["verification"].as_str().expect(&format!(
-            "verification command should be string for {}",
-            claim_id
-        ));
+        let verification = commands["verification"]
+            .as_str()
+            .unwrap_or_else(|| panic!("verification command should be string for {}", claim_id));
         assert!(
             !verification.is_empty(),
             "verification command should not be empty for {}",
@@ -682,18 +675,17 @@ fn manifest_id_consistency_across_files() {
         let lock_path = bundle_path(claim_id).join("repro.lock");
 
         let manifest_json = load_json_file(&manifest_path)
-            .expect(&format!("manifest.json should load for {}", claim_id));
-        let lock_json =
-            load_json_file(&lock_path).expect(&format!("repro.lock should load for {}", claim_id));
+            .unwrap_or_else(|_| panic!("manifest.json should load for {}", claim_id));
+        let lock_json = load_json_file(&lock_path)
+            .unwrap_or_else(|_| panic!("repro.lock should load for {}", claim_id));
 
-        let manifest_id_from_manifest = manifest_json["manifest_id"].as_str().expect(&format!(
-            "manifest_id should exist in manifest.json for {}",
-            claim_id
-        ));
-        let manifest_id_from_lock = lock_json["manifest_id"].as_str().expect(&format!(
-            "manifest_id should exist in repro.lock for {}",
-            claim_id
-        ));
+        let manifest_id_from_manifest =
+            manifest_json["manifest_id"].as_str().unwrap_or_else(|| {
+                panic!("manifest_id should exist in manifest.json for {}", claim_id)
+            });
+        let manifest_id_from_lock = lock_json["manifest_id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("manifest_id should exist in repro.lock for {}", claim_id));
 
         assert_eq!(
             manifest_id_from_manifest, manifest_id_from_lock,
@@ -710,12 +702,12 @@ fn timestamp_ordering_consistency() {
         let manifest_path = bundle_path(claim_id).join("manifest.json");
         let lock_path = bundle_path(claim_id).join("repro.lock");
 
-        let env_json =
-            load_json_file(&env_path).expect(&format!("env.json should load for {}", claim_id));
+        let env_json = load_json_file(&env_path)
+            .unwrap_or_else(|_| panic!("env.json should load for {}", claim_id));
         let manifest_json = load_json_file(&manifest_path)
-            .expect(&format!("manifest.json should load for {}", claim_id));
-        let lock_json =
-            load_json_file(&lock_path).expect(&format!("repro.lock should load for {}", claim_id));
+            .unwrap_or_else(|_| panic!("manifest.json should load for {}", claim_id));
+        let lock_json = load_json_file(&lock_path)
+            .unwrap_or_else(|_| panic!("repro.lock should load for {}", claim_id));
 
         // All should have timestamps
         assert!(env_json["captured_at_utc"].is_string());

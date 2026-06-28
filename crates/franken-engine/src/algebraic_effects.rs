@@ -1807,6 +1807,8 @@ mod tests {
             }
         }
 
+        // Retained for builder API symmetry with with_priority.
+        #[allow(dead_code)]
         fn with_capabilities(mut self, caps: EffectCapabilities) -> Self {
             self.capabilities = caps;
             self

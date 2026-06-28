@@ -260,7 +260,6 @@ mod tests {
     use std::os::unix::process::ExitStatusExt;
     #[cfg(windows)]
     use std::os::windows::process::ExitStatusExt;
-    use std::process::{Command, Stdio};
 
     #[test]
     fn runtime_id_string_conversion() {

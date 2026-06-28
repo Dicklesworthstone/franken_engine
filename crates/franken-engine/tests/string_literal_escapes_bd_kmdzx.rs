@@ -65,11 +65,13 @@ fn single_quoted_escaped_apostrophe() {
 // ---- unicode / hex escapes -----------------------------------------------
 
 #[test]
+#[allow(non_snake_case)] // `A` denotes the character U+0041, distinct from `a`
 fn unicode_brace_escape_to_A() {
     assert_eq!(eval(r#"let x = "\u{41}"; x === 'A';"#), "true");
 }
 
 #[test]
+#[allow(non_snake_case)] // `A` denotes the character U+0041, distinct from `a`
 fn hex_escape_to_A() {
     assert_eq!(eval(r#"let x = "\x41"; x === 'A';"#), "true");
 }

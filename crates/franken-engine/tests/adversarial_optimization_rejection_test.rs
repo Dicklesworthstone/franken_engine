@@ -22,14 +22,6 @@
     clippy::manual_abs_diff
 )]
 
-use std::collections::{BTreeMap, BTreeSet};
-
-use frankenengine_engine::counterexample_synthesizer::*;
-use frankenengine_engine::hash_tiers::ContentHash;
-use frankenengine_engine::security_epoch::SecurityEpoch;
-use frankenengine_engine::superoptimization_gate::*;
-use frankenengine_engine::translation_validation::*;
-
 /// Creates a contrived optimization that looks preserving but has subtle bug.
 ///
 /// This optimization appears to correctly handle simple cases (x + 0 = x)
@@ -91,7 +83,7 @@ fn create_adversarial_test_vector() -> OptimizationTestVector {
 
 /// Simulates a translation validation gate that should catch the bug.
 fn validate_optimization(
-    opt: &ContrivedOptimization,
+    _opt: &ContrivedOptimization,
     test_vectors: &[OptimizationTestVector],
 ) -> ValidationResult {
     // Simple regression testing would pass

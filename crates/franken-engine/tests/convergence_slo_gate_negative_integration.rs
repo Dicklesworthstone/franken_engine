@@ -2,8 +2,7 @@
 //! Tests bd-cixqu.2.6 requirement: convergence gate REFUSES claims when partition profile is non-stable
 
 use frankenengine_engine::convergence_slo::{
-    ConvergenceGate, ConvergenceGateResult, FleetPartitionProfile, FleetPartitionProfiles,
-    PartitionGateConfig,
+    ConvergenceGate, FleetPartitionProfile, FleetPartitionProfiles, PartitionGateConfig,
 };
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -452,6 +451,7 @@ fn test_manifest_generation_for_refusal() {
 ///   * floor (not rounding) of the percentage threshold,
 ///   * `minimum_required_nodes` dominating a smaller percentage threshold,
 ///   * the percentage threshold dominating a smaller minimum.
+///
 /// For refused cases it asserts the verdict reason echoes the exact computed
 /// `required` value, so a regression in the threshold math (off-by-one,
 /// rounding, dropping the `.max(min)`) breaks the test rather than silently

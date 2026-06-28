@@ -1283,7 +1283,7 @@ mod tests {
     fn test_translation_validation_proof_derive_id() {
         let source_digest = "abc123";
         let target_digest = "def456";
-        let timestamp = 1234567890_000_000_000u64;
+        let timestamp = 1_234_567_890_000_000_000_u64;
         let zone = "test_zone";
 
         let proof_id = TranslationValidationProof::derive_proof_id(
@@ -1311,7 +1311,7 @@ mod tests {
         // ("a|","b") and ("a","|b") share the concatenation of the two digests
         // but are distinct (source, target) pairs; length-prefixing must keep
         // their derived proof ids apart (the `|`-delimiter boundary collision).
-        let ts = 1234567890_000_000_000u64;
+        let ts = 1_234_567_890_000_000_000_u64;
         let zone = "test_zone";
         let a = TranslationValidationProof::derive_proof_id("a|", "b", ts, zone)
             .expect("valid proof ID");

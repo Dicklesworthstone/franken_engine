@@ -86,7 +86,7 @@ fn workloads() -> Vec<Workload> {
             class: "pure_cpu",
             instruction_count: 96,
             hostcall_count: 0,
-            levels: SecurityLevel::all().iter().copied().collect(),
+            levels: SecurityLevel::all().to_vec(),
             hostcall_kind: SmeHostcallKind::ClockRead,
             hostcall_caller: SecurityLevel::Public,
             propagation_sources: vec![
@@ -126,7 +126,7 @@ fn workloads() -> Vec<Workload> {
             class: "real_runtime_hot_paths",
             instruction_count: 128,
             hostcall_count: 16,
-            levels: SecurityLevel::all().iter().copied().collect(),
+            levels: SecurityLevel::all().to_vec(),
             hostcall_kind: SmeHostcallKind::PolicyRequest,
             hostcall_caller: SecurityLevel::Public,
             propagation_sources: vec![
@@ -182,11 +182,10 @@ fn run_secure_multi_execution(workload: &Workload) -> ContentHash {
 
     let mut digest_input = Vec::new();
     let mut emitted_hostcalls = 0_u64;
-    let hostcall_interval = if workload.hostcall_count == 0 {
-        u64::MAX
-    } else {
-        (workload.instruction_count / workload.hostcall_count).max(1)
-    };
+    let hostcall_interval = workload
+        .instruction_count
+        .checked_div(workload.hostcall_count)
+        .map_or(u64::MAX, |v| v.max(1));
 
     for step in 0..workload.instruction_count {
         let should_emit_hostcall =

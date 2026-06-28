@@ -5,8 +5,7 @@
 //! operators in realistic scenarios.
 
 use frankenengine_engine::attack_grammar_synthesizer::{
-    AttackGrammarSynthesizer, AttackStrategy, ExploitSeverity, ExploitTarget, MutationOperator,
-    SynthesisConfig,
+    AttackGrammarSynthesizer, AttackStrategy, ExploitSeverity, ExploitTarget, SynthesisConfig,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use std::collections::BTreeSet;

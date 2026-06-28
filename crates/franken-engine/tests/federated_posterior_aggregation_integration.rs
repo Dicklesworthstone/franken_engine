@@ -260,7 +260,7 @@ fn end_to_end_federated_learning_workflow() {
         .unwrap();
 
     // Each node observes different evidence about the suspicious extension
-    let evidence_observations = vec![
+    let evidence_observations = [
         // Node 1: High resource usage, moderate call rate
         Evidence {
             extension_id: "suspicious_crypto_extension".to_string(),
@@ -314,7 +314,7 @@ fn end_to_end_federated_learning_workflow() {
     ];
 
     // Confidence weights for each node (based on their reliability/track record)
-    let confidence_weights = vec![900_000, 850_000, 800_000, 750_000, 880_000];
+    let confidence_weights = [900_000, 850_000, 800_000, 750_000, 880_000];
 
     // Each node updates its local posterior and generates a delta
     let mut computed_deltas = Vec::new();
@@ -360,14 +360,14 @@ fn end_to_end_federated_learning_workflow() {
     assert_eq!(aggregated_update.epoch, SecurityEpoch::from_raw(10));
 
     // Apply aggregated update to each node's local state
-    for (_, provider) in fleet_providers.iter_mut() {
+    for provider in fleet_providers.values_mut() {
         provider
             .apply_aggregated_update(&aggregated_update)
             .unwrap();
     }
 
     // Verify that all nodes now have updated posteriors reflecting fleet-wide learning
-    for (_, provider) in fleet_providers.iter() {
+    for provider in fleet_providers.values() {
         let updated_posterior = provider
             .get_local_posterior("suspicious_crypto_extension")
             .unwrap();
@@ -401,7 +401,7 @@ fn aggregated_posterior_update_mathematical_properties() {
         participant_count: 4,
         evidence_fingerprint: frankenengine_engine::hash_tiers::ContentHash::compute(b"test"),
         epoch: SecurityEpoch::from_raw(1),
-        aggregation_timestamp_ns: 1640995200_000_000_000,
+        aggregation_timestamp_ns: 1_640_995_200_000_000_000,
     };
 
     let updated_posterior = aggregated.apply_to_posterior(&initial_posterior);

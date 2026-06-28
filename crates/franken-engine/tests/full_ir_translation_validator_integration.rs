@@ -5,7 +5,7 @@
 //! Tests the complete IR coverage extending G.4/G.5 to cover all transformations:
 //! IR0 (SyntaxIR) → IR1 (SpecIR) → IR2 (CapabilityIR) → IR3 (ExecIR)
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use frankenengine_engine::full_ir_translation_validator::{
     FullIrValidationContext, IrLevel, IrTransformationStep, generate_full_ir_test_cases,

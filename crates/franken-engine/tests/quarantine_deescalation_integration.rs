@@ -391,7 +391,7 @@ fn test_fallback_path_scenarios() {
             BTreeMap::new(),
             &operator_key,
         )
-        .expect(&format!("{} decision creation should succeed", description));
+        .unwrap_or_else(|_| panic!("{description} decision creation should succeed"));
 
         // Verify the fallback path is correctly preserved.
         let fallback_display = format!("{}", decision.fallback_path);
@@ -450,7 +450,7 @@ fn test_quarantine_reason_types() {
             BTreeMap::new(),
             &operator_key,
         )
-        .expect(&format!("Decision {} creation should succeed", i));
+        .unwrap_or_else(|_| panic!("Decision {i} creation should succeed"));
 
         // Verify each quarantine reason type is handled correctly.
         let reason_display = format!("{}", decision.original_quarantine_reason);

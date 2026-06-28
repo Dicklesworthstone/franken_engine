@@ -738,7 +738,7 @@ mod tests {
 
     #[test]
     fn test_readmission_receipt_creation_and_verification() {
-        let (operator_key, operator_verification_key) = make_test_keys();
+        let (operator_key, _operator_verification_key) = make_test_keys();
         let (system_key, system_verification_key) = make_test_keys();
         let epoch = SecurityEpoch::from_raw(42);
 

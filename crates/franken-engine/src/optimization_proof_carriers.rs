@@ -2124,10 +2124,7 @@ mod tests {
 
     /// Reuse the policy_theorem_engine availability probe.
     fn z3_is_available() -> bool {
-        match invoke_z3("(check-sat)", 1) {
-            Ok(_) => true,
-            Err(_) => false,
-        }
+        invoke_z3("(check-sat)", 1).is_ok()
     }
 
     #[test]

@@ -1537,7 +1537,7 @@ mod tests {
         let mut signed = base.clone();
         signed.signature = AuthenticityHash::compute_keyed(key, &signed.signing_preimage());
         let forged = ContainmentReceipt {
-            signature: signed.signature.clone(),
+            signature: signed.signature,
             ..shifted
         };
         assert!(signed.verify_signature(key));

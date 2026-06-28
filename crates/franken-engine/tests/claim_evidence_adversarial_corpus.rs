@@ -52,7 +52,8 @@ fn adversarial_overpromotions_are_all_rejected() {
     // Each weakening is one corpus case the hardened gate must reject. These map to
     // the bead's enumerated cases: gitignored artifact, pending/backfill receipt,
     // and evidence aged past the freshness bound.
-    let cases: Vec<(&str, fn(&mut EvidenceFacts))> = vec![
+    type WeakeningCase = (&'static str, fn(&mut EvidenceFacts));
+    let cases: Vec<WeakeningCase> = vec![
         ("gitignored-artifact", |f| f.artifact_git_tracked = false),
         ("pending-or-backfill-receipt", |f| {
             f.verification_passed = false

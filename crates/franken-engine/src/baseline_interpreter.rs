@@ -29286,6 +29286,7 @@ impl InterpreterCore {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     fn recompute_estimated_memory_bytes(&self) -> u64 {
         self.heap
             .iter()
@@ -29315,6 +29316,7 @@ impl InterpreterCore {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     fn sync_estimated_memory_bytes(&mut self) -> Result<u64, InterpreterError> {
         let requested_bytes = self.recompute_estimated_memory_bytes();
         if requested_bytes > self.config.max_total_memory_bytes {
@@ -29486,6 +29488,7 @@ impl InterpreterCore {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     fn rollback_call_setup(&mut self) {
         let previous_scope_bytes = self.scope_chain_memory_bytes();
         let previous_closure_bytes = self.closures_memory_bytes();
@@ -33984,9 +33987,8 @@ mod hostcall_capability_classification_tests {
     fn recordable_tag_truncation_respects_utf8_boundaries() {
         // U+1234 (ETHIOPIC SYLLABLE SEE) is 3 bytes in UTF-8 (E1 88 B4).
         let codepoint = '\u{1234}';
-        let attacker: String = std::iter::repeat(codepoint)
-            .take(CAPABILITY_TAG_RECORD_BYTE_CAP * 4)
-            .collect();
+        let attacker: String =
+            std::iter::repeat_n(codepoint, CAPABILITY_TAG_RECORD_BYTE_CAP * 4).collect();
         let rec = recordable_capability_tag(&attacker);
         // Must still be valid UTF-8 (the assertion is implicit — &str
         // can only exist if it is).
@@ -36339,7 +36341,7 @@ mod async_runtime_tests_current {
             "both the 'data' and the chained 'end' emission drained"
         );
         assert!(
-            core.event_listeners.get(&obj_id).is_none(),
+            !core.event_listeners.contains_key(&obj_id),
             "the 'end' phase released the object's listener table"
         );
     }
@@ -48731,7 +48733,7 @@ mod lazy_seed_tests {
         let seed_l = lazy.capture_execution_seed();
 
         // Apply same write sequence to both cores
-        for v in (0..16).map(|i| Value::Int(i)) {
+        for v in (0..16).map(Value::Int) {
             eager.mutate_registers(|r| r[0] = v.clone());
             lazy.mutate_registers(|r| r[0] = v);
         }

@@ -647,7 +647,6 @@ impl CompositeAlternative {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::security_epoch::SecurityEpoch;
 
     #[test]
     fn test_arl_computation_normal_mean_shift() {

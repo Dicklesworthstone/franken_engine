@@ -5,7 +5,7 @@
 //! Tests the G.5 implementation that extends G.4 pure expression validation
 //! to cover statements, control flow, and SSA phi node handling.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use frankenengine_engine::statement_translation_validator::{
     ControlFlowNode, LemmaType, PhiNode, StatementKind, StatementValidationContext,

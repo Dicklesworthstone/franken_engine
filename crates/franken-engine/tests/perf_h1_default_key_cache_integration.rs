@@ -77,8 +77,8 @@ fn ten_thousand_sequential_evidence_entries_share_signing_key() {
 
     for i in 0..NUM_ENTRIES {
         let entry = EvidenceEntryBuilder::new(
-            &format!("trace-{}", i),
-            &format!("decision-{}", i),
+            format!("trace-{}", i),
+            format!("decision-{}", i),
             "bulk-test-policy",
             SecurityEpoch::from_raw(1),
             DecisionType::ContractEvaluation,

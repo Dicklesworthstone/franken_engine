@@ -1066,7 +1066,7 @@ mod tests {
         assert!(*estimated_mean >= 1_100_000 && *estimated_mean <= 1_300_000);
 
         // Test clamping to range
-        let clamped_params = alt.estimate_post_change_parameters(&vec![10_000_000]); // Way above range
+        let clamped_params = alt.estimate_post_change_parameters(&[10_000_000]); // Way above range
         let clamped_mean = clamped_params
             .get("estimated_mean_millionths")
             .expect("should have clamped mean");

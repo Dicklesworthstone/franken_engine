@@ -10,7 +10,7 @@
 #![forbid(unsafe_code)]
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use clap::{Parser, Subcommand};
@@ -476,7 +476,7 @@ fn save_comprehensive_reports(
     }
 }
 
-fn save_single_report(report: &str, output_dir: &PathBuf, filename: &str) {
+fn save_single_report(report: &str, output_dir: &Path, filename: &str) {
     let path = output_dir.join(filename);
     match fs::write(&path, report) {
         Ok(()) => println!("Report saved to: {}", path.display()),

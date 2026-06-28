@@ -3135,7 +3135,7 @@ mod tests {
         let budget = BudgetEnvelope::try_new(1000, 2000, 3000, 4000).unwrap();
         let authority = AuthorityLattice::new(LabelClass::Internal, caps, budget);
 
-        let result = lattice.propagate_unified_authority(&[authority.clone()]);
+        let result = lattice.propagate_unified_authority(std::slice::from_ref(&authority));
         assert_eq!(result, authority);
     }
 
@@ -3288,7 +3288,6 @@ mod tests {
 
     #[test]
     fn unified_authority_preserves_existing_per_axis_semantics() {
-        use crate::unified_authority_algebra::CapabilityKind;
         let lattice = Ir2FlowLattice::new("test");
 
         // Test that unified operations are consistent with per-axis operations

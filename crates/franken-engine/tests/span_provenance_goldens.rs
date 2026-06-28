@@ -322,6 +322,7 @@ fn golden_ir2_method_call_carries_span() {
 }
 
 #[test]
+#[allow(non_snake_case)] // name mirrors the JS `createElement` desugar target
 fn golden_ir2_jsx_desugar_createElement_call_carries_span() {
     // Native JSX has no core AST node: `Expression::Jsx` does not exist and
     // the lowering pipeline has no JSX arm (JSX is an FRX-track concern that

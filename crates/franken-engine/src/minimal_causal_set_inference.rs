@@ -1096,7 +1096,7 @@ mod integration_tests {
             DecisionType::SecurityAction,
         );
 
-        let enriched_builder = enrich_evidence_entry_with_causal_analysis(builder, &causal_set);
+        let _enriched_builder = enrich_evidence_entry_with_causal_analysis(builder, &causal_set);
         // Note: Can't easily test the final EvidenceEntry without completing the builder
         // but we verify the enrichment function compiles and runs without error
     }

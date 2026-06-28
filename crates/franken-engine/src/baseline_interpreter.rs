@@ -12326,10 +12326,10 @@ impl InterpreterCore {
                             Value::Bool(b) => (if b { "true" } else { "false" }).to_string(),
                             Value::Null => "null".to_string(),
                             Value::Undefined => "undefined".to_string(),
-                            Value::Object(_)
-                            | Value::Iterator(_)
-                            | Value::Generator(_)
-                            | Value::Accessor { .. } => "[object Object]".to_string(),
+                            Value::Object(id) => self.object_to_coerced_string(id),
+                            Value::Iterator(_) | Value::Generator(_) | Value::Accessor { .. } => {
+                                "[object Object]".to_string()
+                            }
                             Value::Promise(_) => "[object Promise]".to_string(),
                             Value::Function(_)
                             | Value::Closure(_)
@@ -12973,9 +12973,8 @@ impl InterpreterCore {
             }
             (Value::Str(x), other) => {
                 let other_str = match other {
-                    Value::Object(_) | Value::Iterator(_) | Value::Generator(_) => {
-                        "[object Object]".to_string()
-                    }
+                    Value::Object(id) => self.object_to_coerced_string(*id),
+                    Value::Iterator(_) | Value::Generator(_) => "[object Object]".to_string(),
                     Value::Promise(_) => "[object Promise]".to_string(),
                     Value::Function(_)
                     | Value::Closure(_)
@@ -12988,9 +12987,8 @@ impl InterpreterCore {
             }
             (other, Value::Str(y)) => {
                 let other_str = match other {
-                    Value::Object(_) | Value::Iterator(_) | Value::Generator(_) => {
-                        "[object Object]".to_string()
-                    }
+                    Value::Object(id) => self.object_to_coerced_string(*id),
+                    Value::Iterator(_) | Value::Generator(_) => "[object Object]".to_string(),
                     Value::Promise(_) => "[object Promise]".to_string(),
                     Value::Function(_)
                     | Value::Closure(_)
@@ -29257,9 +29255,10 @@ impl InterpreterCore {
             }
             Value::Str(s) => s.to_string(),
             Value::Object(id) => {
-                // Try to get a simple string representation
-                if let Some(_obj) = self.heap.get(id.0 as usize) {
-                    "[object Object]".to_string() // Keep it simple
+                // Error instances stringify as `<name>: <message>`; other
+                // objects keep the `[object Object]` tag (bd-8enww.4.5).
+                if self.heap.get(id.0 as usize).is_some() {
+                    self.object_to_coerced_string(*id)
                 } else {
                     format!("[object#{}]", id.0)
                 }
@@ -29281,6 +29280,54 @@ impl InterpreterCore {
             }
             Value::Accessor { .. } => "[object Object]".to_string(),
         }
+    }
+
+    /// bd-8enww.4.5 (YTBG-D5): string coercion for a heap object id. Error
+    /// instances stringify via Error.prototype.toString semantics (their
+    /// `name`/`message` properties); every other object keeps the ordinary
+    /// `[object Object]` tag. Shared by all object→string coercion sites
+    /// (`value_to_string`, `+` concatenation, template literals) so error
+    /// stringification is uniform and deterministic.
+    fn object_to_coerced_string(&self, id: ObjectId) -> String {
+        self.error_object_to_string(id)
+            .unwrap_or_else(|| "[object Object]".to_string())
+    }
+
+    /// Returns the Error.prototype.toString rendering of `id` when it is an
+    /// Error instance, else `None`. Per ECMAScript §20.5.3.4 the result is
+    /// `name`, `message`, or `"<name>: <message>"` depending on which parts are
+    /// non-empty (`name` defaults to `"Error"`, `message` to `""`). Detection
+    /// walks the prototype chain to the realm's `Error.prototype`, so all
+    /// subclasses (TypeError, RangeError, ReferenceError, …) are covered.
+    /// Non-string `name`/`message` use the static primitive stringifier, which
+    /// never re-enters this path (avoiding pathological self-referential
+    /// recursion).
+    fn error_object_to_string(&self, id: ObjectId) -> Option<String> {
+        let error_prototype = *self.builtin_prototypes.get("Error")?;
+        if !self
+            .prototype_chain_contains(id, error_prototype)
+            .unwrap_or(false)
+        {
+            return None;
+        }
+        let object = self.heap.get(id.0 as usize)?;
+        let name = match object.properties.get("name") {
+            None | Some(Value::Undefined) => "Error".to_string(),
+            Some(Value::Str(s)) => s.to_string(),
+            Some(other) => Self::value_to_primitive_string(other),
+        };
+        let message = match object.properties.get("message") {
+            None | Some(Value::Undefined) => String::new(),
+            Some(Value::Str(s)) => s.to_string(),
+            Some(other) => Self::value_to_primitive_string(other),
+        };
+        Some(if name.is_empty() {
+            message
+        } else if message.is_empty() {
+            name
+        } else {
+            format!("{name}: {message}")
+        })
     }
 
     // -- Register access ---------------------------------------------------

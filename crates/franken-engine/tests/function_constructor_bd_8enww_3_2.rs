@@ -53,7 +53,9 @@ fn function_constructor_invalid_body_fails_with_source_context() {
 }
 
 #[test]
-fn generated_function_invocation_remains_fail_closed_for_next_slice() {
-    let err = eval_error(r#"new Function("return 1;")();"#);
-    assert!(err.contains("bd-8enww.3.3"), "{err}");
+fn generated_function_invocation_executes_after_bd_8enww_3_3() {
+    // The 3.2 slice left invocation fail-closed pending bd-8enww.3.3; that slice
+    // is now implemented (see function_constructor_invocation_bd_8enww_3_3.rs),
+    // so a generated function with no parameters executes its body and returns.
+    assert_eq!(eval_value(r#"new Function("return 1;")();"#), "1");
 }

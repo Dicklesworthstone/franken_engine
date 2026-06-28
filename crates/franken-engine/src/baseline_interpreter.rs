@@ -2582,7 +2582,11 @@ struct CjsModuleContext {
 
 #[derive(Debug, Clone)]
 struct GeneratedFunctionArtifact {
+    // Retained: captured constructor source for diagnostics; not yet consumed.
+    #[allow(dead_code)]
     parameter_source: String,
+    // Retained: captured constructor source for diagnostics; not yet consumed.
+    #[allow(dead_code)]
     body_source: String,
     compiled_module: Ir3Module,
     function_index: u32,
@@ -6720,9 +6724,26 @@ impl InterpreterCore {
         format!("function anonymous({parameter_source}) {{\n{body_source}\n}}")
     }
 
+    /// Invoke a function produced by the `Function` constructor (bd-8enww.3.3).
+    ///
+    /// The generated function's executable program lives in its own
+    /// `Ir3Module` (the artifact's `compiled_module`), distinct from the module
+    /// the interpreter is currently running. We execute it re-entrantly using
+    /// the same wrapper-module + `run_loop` pattern as
+    /// `invoke_inline_method_call`: clone the artifact module, append a `Call`
+    /// of the generated function descriptor followed by a `Return`, isolate the
+    /// execution state, run, then restore the caller's state.
+    ///
+    /// Scope discipline (ES2020 §19.2.1.1.1 CreateDynamicFunction): a function
+    /// built by the `Function` constructor closes over the *global* environment
+    /// only — never the construction-site or call-site locals. We enforce this
+    /// by collapsing the scope chain to the single global frame for the duration
+    /// of the call, so the body can read globals but cannot see any caller
+    /// locals (which would be both nonstandard and a containment leak).
     fn call_generated_function_artifact(
-        &self,
+        &mut self,
         builtin: &BuiltinFunction,
+        args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let artifact_id =
             builtin
@@ -6732,23 +6753,178 @@ impl InterpreterCore {
                     expected: "generated function artifact id".to_string(),
                     got: builtin.module_specifier.clone(),
                 })?;
-        let artifact = self.generated_functions.get(artifact_id).ok_or_else(|| {
-            InterpreterError::TypeError {
-                expected: "generated function artifact".to_string(),
-                got: format!("missing artifact#{artifact_id}"),
+
+        // Read the call arguments out of the caller's registers BEFORE any
+        // execution-state reset (the `RegRange` is relative to the caller's
+        // current register base).
+        let mut arguments = Vec::with_capacity(args.count as usize);
+        for index in 0..args.count {
+            let value = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
+            arguments.push(value);
+        }
+
+        // Clone the artifact's compiled program out of `self` so the `&self`
+        // borrow is released before the `&mut self` execution below.
+        let (mut wrapper, function_index) = {
+            let artifact = self.generated_functions.get(artifact_id).ok_or_else(|| {
+                InterpreterError::TypeError {
+                    expected: "generated function artifact".to_string(),
+                    got: format!("missing artifact#{artifact_id}"),
+                }
+            })?;
+            (artifact.compiled_module.clone(), artifact.function_index)
+        };
+
+        let arg_count =
+            u32::try_from(arguments.len()).map_err(|_| InterpreterError::TypeError {
+                expected: "u32-bounded generated-function argument count".to_string(),
+                got: format!("{} arguments", arguments.len()),
+            })?;
+        // r0 holds the callee descriptor; arguments occupy r1..r1+arg_count.
+        let required_registers =
+            1u32.checked_add(arg_count)
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "u32-bounded generated-function register budget".to_string(),
+                    got: format!("1 callee register + {arg_count} arguments"),
+                })?;
+        if required_registers > self.config.max_registers {
+            return Err(InterpreterError::TypeError {
+                expected: "generated-function arguments within register budget".to_string(),
+                got: format!(
+                    "{required_registers} registers required but max is {}",
+                    self.config.max_registers
+                ),
+            });
+        }
+
+        let wrapper_start = wrapper.instructions.len();
+        wrapper.instructions.push(Ir3Instruction::Call {
+            callee: 0,
+            args: RegRange {
+                start: 1,
+                count: arg_count,
+            },
+            dst: 0,
+        });
+        wrapper
+            .instructions
+            .push(Ir3Instruction::Return { value: 0 });
+
+        // Capture the realm/global environment frames BEFORE any state reset.
+        // A `Function`-constructor function closes over the global environment
+        // only — i.e. every scope frame that existed before the first active
+        // user-function call. `call_stack[0].saved_scope_depth` records exactly
+        // that depth; when no user call is active (a top-level invocation) every
+        // current frame is part of the global environment. Keeping these bottom
+        // frames preserves globals (injected runtime globals + top-level
+        // declarations) while dropping all construction-site/call-site locals,
+        // which would be both nonstandard and a containment leak.
+        let global_scope_depth = self
+            .call_stack
+            .first()
+            .map(|frame| frame.saved_scope_depth)
+            .unwrap_or(self.scope_chain.frames.len())
+            .clamp(1, self.scope_chain.frames.len().max(1));
+        let global_scope_frames = self
+            .scope_chain
+            .frames
+            .get(..global_scope_depth)
+            .map(<[ScopeFrame]>::to_vec)
+            .unwrap_or_else(|| self.scope_chain.frames.clone());
+
+        // Contained-codegen capability envelope: grant the generated function
+        // exactly the capabilities its OWN compiled module statically declares,
+        // filtered to the same safe set (`Builtin` / `Console` / `Timer`) the
+        // eval lane router grants from a top-level module's required set. The
+        // parent's grants were derived from the parent source, which never saw
+        // the generated body — so without this, builtin calls (and even the
+        // `builtin:ReferenceError` raised for an unbound reference) inside
+        // generated code fail closed with `CapabilityDenied`. We never widen
+        // beyond the safe set, so generated code cannot acquire fs/net/process
+        // authority the parent itself could not. Restored after the call.
+        let generated_capabilities: Vec<RuntimeCapability> = wrapper
+            .required_capabilities
+            .iter()
+            .filter_map(|tag| RuntimeCapability::from_tag_str(&tag.0))
+            .filter(|capability| {
+                matches!(
+                    capability,
+                    RuntimeCapability::Builtin
+                        | RuntimeCapability::Console
+                        | RuntimeCapability::Timer
+                )
+            })
+            .collect();
+        let previous_granted_capabilities = self.config.granted_capabilities.clone();
+
+        let snapshot = self.snapshot_module_execution();
+        let saved_active_cjs_context = self.active_cjs_context.clone();
+        let setup_previous_register_bytes = self.registers_memory_bytes();
+        let setup_previous_scope_bytes = self.scope_chain_memory_bytes();
+        let setup_previous_call_stack_bytes = self.call_stack_memory_bytes();
+        let mut wrapper_memory_committed = false;
+        let result = (|| -> Result<Value, InterpreterError> {
+            self.registers =
+                SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
+            self.call_stack.clear();
+            self.ip = wrapper_start;
+            self.register_base = 0;
+            self.catch_frames.clear();
+            self.pending_exception = None;
+            self.pending_return = None;
+            self.suspended_abrupt_completions.clear();
+            self.finally_modes.clear();
+            self.current_module_specifier = Some(wrapper.header.source_label.clone());
+            // Global-only scope: keep just the realm global environment captured
+            // above so the body sees globals but no caller locals.
+            self.scope_chain.frames = global_scope_frames;
+            for capability in &generated_capabilities {
+                self.config.granted_capabilities.insert(*capability);
             }
-        })?;
-        Err(InterpreterError::TypeError {
-            expected: "generated function invocation semantics (bd-8enww.3.3)".to_string(),
-            got: format!(
-                "compiled artifact#{} params={} body_bytes={} function_index={} functions={}",
-                artifact_id,
-                artifact.parameter_source,
-                artifact.body_source.len(),
-                artifact.function_index,
-                artifact.compiled_module.function_table.len()
-            ),
-        })
+            self.apply_register_scope_call_stack_memory_delta(
+                setup_previous_register_bytes,
+                setup_previous_scope_bytes,
+                setup_previous_call_stack_bytes,
+            )?;
+            wrapper_memory_committed = true;
+            self.write_reg(0, Value::Function(function_index))?;
+            // `arg_count == arguments.len()` and `1 + arg_count <=
+            // max_registers` were validated above, so every register index
+            // `1 + index` fits in u32 and stays within the register budget.
+            for (index, argument) in arguments.into_iter().enumerate() {
+                let register = 1u32 + index as u32;
+                self.write_reg(register, argument)?;
+            }
+            self.run_loop(&wrapper)
+        })();
+        // Preserve a thrown value across the snapshot restore so an enclosing
+        // try/catch in the caller can still observe it (same contract as
+        // `invoke_inline_method_call`).
+        let thrown_value = match &result {
+            Err(InterpreterError::UncaughtException { .. }) => self
+                .pending_exception
+                .clone()
+                .map(|v| (v, self.pending_exception_label.clone())),
+            _ => None,
+        };
+        let previous_register_bytes = self.registers_memory_bytes();
+        let previous_scope_bytes = self.scope_chain_memory_bytes();
+        let previous_call_stack_bytes = self.call_stack_memory_bytes();
+        self.restore_module_execution(snapshot);
+        self.active_cjs_context = saved_active_cjs_context;
+        self.config.granted_capabilities = previous_granted_capabilities;
+        if wrapper_memory_committed {
+            self.apply_register_scope_call_stack_memory_delta(
+                previous_register_bytes,
+                previous_scope_bytes,
+                previous_call_stack_bytes,
+            )?;
+        }
+        if let Some((value, label)) = thrown_value {
+            self.pending_exception = Some(value);
+            self.pending_exception_label = label;
+        }
+        result
     }
 
     fn dispatch_builtin_function(
@@ -6784,7 +6960,9 @@ impl InterpreterCore {
             BuiltinFunctionKind::FunctionConstructor => {
                 self.construct_generated_function(module, args)
             }
-            BuiltinFunctionKind::GeneratedFunction => self.call_generated_function_artifact(builtin),
+            BuiltinFunctionKind::GeneratedFunction => {
+                self.call_generated_function_artifact(builtin, args)
+            }
             BuiltinFunctionKind::IteratorNext => {
                 let iterator_handle =
                     builtin
@@ -11660,6 +11838,29 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::Construct { callee, args, dst } => {
                     let callee_val = self.read_reg(callee)?;
+
+                    // `new f(...)` where `f` was produced by the `Function`
+                    // constructor (bd-8enww.3.3 AC#4). v1 deliberately refuses
+                    // [[Construct]] on generated functions deterministically:
+                    // generated functions are invocable only via a plain call
+                    // (which binds `this = undefined` and returns the body's
+                    // completion value). Full [[Construct]] semantics (fresh
+                    // `this` object + the return-object-or-this rule) for
+                    // dynamically generated functions are deferred to a later
+                    // slice rather than approximated by a plain call, which
+                    // would be nonstandard. BotGuard (the driving consumer)
+                    // never constructs generated functions.
+                    if let Value::BuiltinFunction(builtin) = &callee_val
+                        && builtin.kind == BuiltinFunctionKind::GeneratedFunction
+                    {
+                        return Err(InterpreterError::TypeError {
+                            expected: "plain call of a Function-constructor-generated function"
+                                .to_string(),
+                            got: "construct (new f(...)) on a generated function is unsupported \
+                                  in v1 (bd-8enww.3.3): invoke it as a plain call instead"
+                                .to_string(),
+                        });
+                    }
 
                     if let Value::BuiltinFunction(builtin) = &callee_val {
                         let result = self.dispatch_builtin_function(module, builtin, args, None)?;

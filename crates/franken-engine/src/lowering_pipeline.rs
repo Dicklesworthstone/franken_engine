@@ -2149,6 +2149,18 @@ fn lower_statement_to_ir1_with_flow(
                 }
             }
             for d in &vd.declarations {
+                // bd-8enww.4.3 (YTBG-D3): a `let`/`const` name read earlier in
+                // this scope created a read-only forward-reference placeholder
+                // (a temporal-dead-zone access like `x; let x = 1;`). Demote that
+                // placeholder to a pure reservation so the declaration below
+                // claims its id cleanly instead of panicking on a spurious
+                // duplicate-declaration conflict. Genuine redeclarations are
+                // unaffected (see `demote_forward_ref_phantom`).
+                if matches!(binding_kind, BindingKind::Let | BindingKind::Const) {
+                    for name in d.pattern.binding_names() {
+                        demote_forward_ref_phantom(name, ops.as_slice(), bindings, binding_lookup);
+                    }
+                }
                 // Allocate all bindings referenced by the pattern first.
                 let primary_bid = alloc_pattern_primary_binding(
                     bindings,
@@ -4177,6 +4189,10 @@ pub fn lower_ir2_to_ir3(
     let mut iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
     let mut pending_jumps = Vec::<PendingJump>::new();
     let mut catch_entry_labels = BTreeSet::<u32>::new();
+    // bd-8enww.4.3 (YTBG-D3): tracks TDZ-tracked lexical bindings whose
+    // dead-zone-clearing first store (InitBinding) has already been emitted, so
+    // subsequent assignments fall through to StoreScoped.
+    let mut tdz_initialized = BTreeSet::<BindingId>::new();
     // Deferred function bodies:
     // (body_ir1_ops, param_names, name, free_vars, free_var_ids, is_generator, is_async).
     // After the main code + Halt, each body is lowered into the instruction
@@ -4263,13 +4279,75 @@ pub fn lower_ir2_to_ir3(
             scoped_runtime_binding_ids.insert(*binding_id);
         }
     }
-    if !shared_top_level_capture_names.is_empty() {
+
+    // bd-8enww.4.3 (YTBG-D3): temporal-dead-zone tracking. A lexical
+    // (`let`/`const`) binding that is *read before it is first stored* in linear
+    // IR2 order is in its temporal dead zone at that read (e.g. the `x;` in
+    // `x; let x = 1;`). Route such bindings through the runtime scope chain so
+    // the read lowers to `LoadScoped`, whose uninitialized-binding check raises a
+    // JS-catchable ReferenceError, instead of a register move that would yield a
+    // stale value. Their declaration's first store lowers to `InitBinding`
+    // (clearing the dead zone); later assignments use `StoreScoped`. Captures,
+    // loop variables, and ordinary declare-before-use bindings store before they
+    // load and so are never tracked here.
+    let lexical_binding_ids: BTreeSet<BindingId> = ir2
+        .scopes
+        .iter()
+        .flat_map(|scope| scope.bindings.iter())
+        .filter(|binding| matches!(binding.kind, BindingKind::Let | BindingKind::Const))
+        .map(|binding| binding.binding_id)
+        .collect();
+    let mut tdz_binding_ids = BTreeSet::<BindingId>::new();
+    if !lexical_binding_ids.is_empty() {
+        let mut first_load = BTreeMap::<BindingId, usize>::new();
+        let mut first_store = BTreeMap::<BindingId, usize>::new();
+        for (index, op) in ir2.ops.iter().enumerate() {
+            match &op.inner {
+                Ir1Op::LoadBinding { binding_id } => {
+                    first_load.entry(*binding_id).or_insert(index);
+                }
+                Ir1Op::StoreBinding { binding_id } => {
+                    first_store.entry(*binding_id).or_insert(index);
+                }
+                _ => {}
+            }
+        }
+        for id in &lexical_binding_ids {
+            if let (Some(&load_at), Some(&store_at)) = (first_load.get(id), first_store.get(id))
+                && load_at < store_at
+            {
+                tdz_binding_ids.insert(*id);
+            }
+        }
+    }
+    for id in &tdz_binding_ids {
+        scoped_runtime_binding_ids.insert(*id);
+    }
+    let tdz_decl_names: Vec<String> = tdz_binding_ids
+        .iter()
+        .filter_map(|id| binding_id_to_name.get(id).cloned())
+        .collect();
+
+    if !shared_top_level_capture_names.is_empty() || !tdz_decl_names.is_empty() {
         ir3.instructions.push(Ir3Instruction::PushScope);
         for name in &shared_top_level_capture_names {
+            // A capture that is also TDZ-tracked is declared just below as an
+            // uninitialized `let`; declaring it here (kind=var, initialized)
+            // would defeat its dead-zone check.
+            if tdz_decl_names.contains(name) {
+                continue;
+            }
             let pool_idx = push_constant_optimized(&mut constant_pool, name);
             ir3.instructions.push(Ir3Instruction::DeclareBinding {
                 name_pool_index: pool_idx,
                 kind: 0,
+            });
+        }
+        for name in &tdz_decl_names {
+            let pool_idx = push_constant_optimized(&mut constant_pool, name);
+            ir3.instructions.push(Ir3Instruction::DeclareBinding {
+                name_pool_index: pool_idx,
+                kind: 1,
             });
         }
     }
@@ -4405,7 +4483,23 @@ pub fn lower_ir2_to_ir3(
             }
             Ir1Op::StoreBinding { binding_id } => {
                 let src = pop_lowering_value(&mut value_stack)?;
-                if scoped_runtime_binding_ids.contains(binding_id) {
+                if tdz_binding_ids.contains(binding_id) && tdz_initialized.insert(*binding_id) {
+                    // bd-8enww.4.3 (YTBG-D3): the first store to a TDZ-tracked
+                    // lexical is its initializer — clear the dead zone with
+                    // InitBinding (StoreScoped rejects a still-uninitialized
+                    // binding). `BTreeSet::insert` returns true only on the first
+                    // store, so later assignments fall through to StoreScoped.
+                    let name = binding_id_to_name
+                        .get(binding_id)
+                        .cloned()
+                        .unwrap_or_else(|| format!("__binding_{binding_id}"));
+                    let pool_index = push_constant_optimized(&mut constant_pool, &name);
+                    ir3.instructions.push(Ir3Instruction::InitBinding {
+                        name_pool_index: pool_index,
+                        src,
+                    });
+                    value_stack.push(src);
+                } else if scoped_runtime_binding_ids.contains(binding_id) {
                     let name = binding_id_to_name
                         .get(binding_id)
                         .cloned()
@@ -7134,6 +7228,57 @@ fn alloc_binding(
     });
     binding_lookup.insert(name.to_string(), binding_id);
     Ok(binding_id)
+}
+
+/// bd-8enww.4.3 (YTBG-D3): demote a read-only forward-reference placeholder so a
+/// later lexical declaration can claim its reserved id without a spurious
+/// duplicate-declaration conflict.
+///
+/// When an identifier is *read* before its `let`/`const` declaration is lowered
+/// (a temporal-dead-zone access such as `x; let x = 1;`),
+/// `lower_expression_to_ir1` materializes a placeholder `ResolvedBinding`
+/// (kind `Let`) so the load has a stable id. Without intervention the imminent
+/// declaration would collide with that placeholder in `alloc_binding` and raise
+/// `DuplicateLetConstDeclaration`, panicking the lowering of any TDZ access.
+///
+/// This drops the placeholder's `ResolvedBinding` (keeping its id reserved in
+/// `binding_lookup`) so the real declaration is treated as the first definition.
+/// A genuine re-declaration (`let x; let x;`) is preserved: the first
+/// declaration has already emitted a `StoreBinding` for the id, so the
+/// `already_stored` guard below fails and the conflict still surfaces. Only
+/// `Let`/`Const`-kinded placeholders are eligible, so `var`/function/parameter
+/// bindings keep their normal conflict semantics.
+fn demote_forward_ref_phantom(
+    name: &str,
+    ops: &[Ir1Op],
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) {
+    let Some(&id) = binding_lookup.get(name) else {
+        return;
+    };
+    // Only a lexically-kinded placeholder can trigger the duplicate-let/const
+    // conflict; a pure reservation has no `ResolvedBinding` entry and is already
+    // claimable, while var/function/parameter bindings are handled elsewhere.
+    let is_lexical_placeholder = bindings
+        .iter()
+        .any(|b| b.binding_id == id && matches!(b.kind, BindingKind::Let | BindingKind::Const));
+    if !is_lexical_placeholder {
+        return;
+    }
+    // A real prior declaration of this id always emits a `StoreBinding` for its
+    // initializer (an explicit value or `undefined`). Its presence means this is
+    // a genuine redeclaration, not a forward reference — leave it to conflict.
+    let already_stored = ops
+        .iter()
+        .any(|op| matches!(op, Ir1Op::StoreBinding { binding_id } if *binding_id == id));
+    if already_stored {
+        return;
+    }
+    // Demote the placeholder to a pure reservation: drop its `ResolvedBinding`
+    // (ids are unique per the IR1 scope-graph invariant, so there is at most
+    // one) while keeping the reserved id in `binding_lookup`.
+    bindings.retain(|b| b.binding_id != id);
 }
 
 fn alloc_shadow_binding(

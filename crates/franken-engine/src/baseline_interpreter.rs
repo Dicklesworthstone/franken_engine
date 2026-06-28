@@ -161,6 +161,12 @@ const DEFAULT_QUICKJS_BUDGET: u64 = 100_000;
 /// Default instruction budget for the throughput profile.
 const DEFAULT_V8_BUDGET: u64 = 1_000_000;
 
+/// Upper bound on retained `Function`-constructor audit entries (bd-8enww.3.4).
+/// The shared instruction budget already bounds how many generated functions
+/// adversarial code can construct or invoke; this is a secondary memory guard
+/// so the audit trail itself stays bounded even under a pathological budget.
+const MAX_GENERATED_CODE_AUDIT_ENTRIES: usize = 65_536;
+
 /// Default register file size for the deterministic profile.
 const DEFAULT_QUICKJS_MAX_REGISTERS: u32 = 256;
 
@@ -367,6 +373,23 @@ fn interpreter_error_telemetry_code(err: &InterpreterError) -> u32 {
         InterpreterError::RequireSpecifierNotString { .. }
         | InterpreterError::ImportSpecifierNotString { .. } => 12,
         _ => 0,
+    }
+}
+
+/// Map an [`InterpreterError`] to a short, stable string code for the
+/// generated-code audit trail (bd-8enww.3.4 / YTBG-C4). Deterministic across
+/// runs and free of variable/adversarial payload text, so the audit `outcome`
+/// stays a clean fault classification rather than embedding hostile thrown
+/// content. A new error variant added later falls into the catch-all bucket.
+fn generated_code_fault_code(err: &InterpreterError) -> &'static str {
+    match err {
+        InterpreterError::CapabilityDenied { .. } => "capability_denied",
+        InterpreterError::BudgetExhausted { .. } => "budget_exhausted",
+        InterpreterError::MemoryBudgetExceeded { .. } => "memory_budget_exceeded",
+        InterpreterError::UncaughtException { .. } => "uncaught_exception",
+        InterpreterError::TypeError { .. } => "type_error",
+        InterpreterError::RangeError { .. } => "range_error",
+        _ => "error",
     }
 }
 
@@ -2580,14 +2603,32 @@ struct CjsModuleContext {
     module_specifier: String,
 }
 
+/// Deterministic, content-addressed provenance for a function produced by the
+/// `Function` constructor (bd-8enww.3.4 / YTBG-C4). BotGuard-style generated
+/// code is intentionally adversarial, so every artifact carries an auditable
+/// identity derived from its construction site and source content — distilled
+/// to hashes rather than retaining the (potentially hostile) raw source text,
+/// mirroring the `hostcall_arguments_hash` posture of not persisting raw values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GeneratedFunctionProvenance {
+    /// Stable synthetic source id (`genfn:<16 hex>`), a pure function of the
+    /// construction-site label and the length-prefixed parameter/body source.
+    /// Identical (site, source) always yields the same id, so the audit trail
+    /// is content-addressed and re-derivable across runs.
+    source_id: String,
+    /// Hex SHA-256 of the full generated source text.
+    source_hash: String,
+    /// Hex SHA-256 of the parameter source alone.
+    parameter_hash: String,
+    /// Construction-site label: the module specifier active when the artifact
+    /// was constructed (e.g. `<eval>` for top-level dynamic construction).
+    construction_site: String,
+}
+
 #[derive(Debug, Clone)]
 struct GeneratedFunctionArtifact {
-    // Retained: captured constructor source for diagnostics; not yet consumed.
-    #[allow(dead_code)]
-    parameter_source: String,
-    // Retained: captured constructor source for diagnostics; not yet consumed.
-    #[allow(dead_code)]
-    body_source: String,
+    /// Content-addressed provenance recorded at construction (bd-8enww.3.4).
+    provenance: GeneratedFunctionProvenance,
     compiled_module: Ir3Module,
     function_index: u32,
 }
@@ -4010,6 +4051,58 @@ pub struct InterpreterEvent {
 }
 
 // ---------------------------------------------------------------------------
+// Generated-code audit surface (bd-8enww.3.4 / YTBG-C4)
+// ---------------------------------------------------------------------------
+
+/// What a [`GeneratedCodeAuditEntry`] records about `Function`-constructor code.
+///
+/// BotGuard-style dynamically generated code is intentionally adversarial and
+/// heavy, so construction *and* invocation of every generated function are
+/// surfaced as auditable events rather than running unobserved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GeneratedCodeEventKind {
+    /// `new Function(...)` produced a callable artifact (compile-time event).
+    Constructed,
+    /// A generated function ran to a normal completion.
+    Invoked,
+    /// A generated function's invocation ended in an error (thrown exception,
+    /// exhausted budget, denied capability, …).
+    Faulted,
+}
+
+/// One auditable event in the lifecycle of `Function`-constructor-generated
+/// code (bd-8enww.3.4 / YTBG-C4). Carries the content-addressed source identity
+/// plus the budget consumed by an invocation, so an operator can attribute
+/// instruction spend and runtime errors back to a specific generated source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GeneratedCodeAuditEntry {
+    /// Stable synthetic source id of the generated function (`genfn:<hex>`).
+    pub source_id: String,
+    /// Hex SHA-256 of the full generated source text.
+    pub source_hash: String,
+    /// Hex SHA-256 of the parameter source.
+    pub parameter_hash: String,
+    /// Construction-site label (module specifier active at construction).
+    pub construction_site: String,
+    /// Which lifecycle event this entry records.
+    pub kind: GeneratedCodeEventKind,
+    /// Instructions consumed by *this* invocation (the shared interpreter
+    /// budget delta across the call). `0` for a `Constructed` event.
+    pub instructions_consumed: u64,
+    /// JS call-stack depth of the caller at invocation entry. `0` for a
+    /// `Constructed` event.
+    pub caller_call_depth: usize,
+    /// Safe capabilities (`builtin`/`console`/`timer`) granted to the generated
+    /// body for this invocation, as canonical tag strings. Empty for a
+    /// `Constructed` event. Dangerous capabilities are never present here — the
+    /// contained-codegen envelope filters them out (see
+    /// [`InterpreterCore::contained_codegen_capability_grant`]).
+    pub granted_capabilities: Vec<String>,
+    /// Outcome label: `"constructed"`, `"completed"`, or `"faulted:<code>"`.
+    pub outcome: String,
+}
+
+// ---------------------------------------------------------------------------
 // Console output capture (RC-1.10: console.log/error/warn)
 // ---------------------------------------------------------------------------
 
@@ -4062,6 +4155,11 @@ pub struct ExecutionResult {
     /// enforcement, array-cache invalidation, property/prototype resolution) in
     /// capture order so callers can replay or cross-validate the run.
     pub nondeterminism_trace: NondeterminismTrace,
+    /// Auditable lifecycle events for `Function`-constructor-generated code
+    /// (bd-8enww.3.4 / YTBG-C4): one entry per construction and per invocation,
+    /// carrying content-addressed source identity and the instruction budget the
+    /// generated body consumed. Empty when no dynamic code was generated.
+    pub generated_code_audit: Vec<GeneratedCodeAuditEntry>,
 }
 
 // ExecutionSeed moved to line 2266 as an enum for lazy materialization (PERF-H2.2)
@@ -4429,6 +4527,15 @@ pub struct InterpreterCore {
     telemetry_recorder: TelemetryRecorder,
     /// Structured events.
     events: Vec<InterpreterEvent>,
+    /// Append-only audit trail for `Function`-constructor-generated code
+    /// (bd-8enww.3.4). Like `events`, this is observability that survives the
+    /// re-entrant snapshot/restore of a generated-function call and is drained
+    /// into [`ExecutionResult`] at the end of execution. Bounded by
+    /// [`MAX_GENERATED_CODE_AUDIT_ENTRIES`] so adversarial code that constructs
+    /// or invokes generated functions in a tight loop cannot grow it without
+    /// bound (the shared instruction budget is the primary bound; this is a
+    /// secondary memory guard).
+    generated_code_audit: Vec<GeneratedCodeAuditEntry>,
     /// Witness sequence counter.
     witness_seq: u64,
     /// Trace ID for logging.
@@ -4607,6 +4714,7 @@ impl InterpreterCore {
             security_observability: RuntimeSecurityObservability::new(),
             telemetry_recorder: TelemetryRecorder::new(RecorderConfig::default()),
             events: Vec::new(),
+            generated_code_audit: Vec::new(),
             witness_seq: 0,
             trace_id,
             register_base: 0,
@@ -5832,6 +5940,7 @@ impl InterpreterCore {
             console_output: std::mem::take(&mut self.console_output),
             iteration_traces: std::mem::take(&mut self.iteration_traces),
             nondeterminism_trace: self.nondeterminism_trace.clone(),
+            generated_code_audit: std::mem::take(&mut self.generated_code_audit),
         }
     }
 
@@ -6708,9 +6817,34 @@ impl InterpreterCore {
                 got: format!("exceeded u32::MAX ({})", self.generated_functions.len()),
             }
         })?;
+
+        // bd-8enww.3.4: stamp the artifact with content-addressed provenance and
+        // emit a `Constructed` audit event so the construction of adversarial
+        // dynamic code is observable, not silent. The construction site is the
+        // module specifier currently executing.
+        let construction_site = self
+            .current_module_specifier
+            .clone()
+            .unwrap_or_else(|| "<unknown>".to_string());
+        let provenance = Self::derive_generated_function_provenance(
+            &construction_site,
+            &parameter_source,
+            &body_source,
+        );
+        self.record_generated_code_event(GeneratedCodeAuditEntry {
+            source_id: provenance.source_id.clone(),
+            source_hash: provenance.source_hash.clone(),
+            parameter_hash: provenance.parameter_hash.clone(),
+            construction_site: provenance.construction_site.clone(),
+            kind: GeneratedCodeEventKind::Constructed,
+            instructions_consumed: 0,
+            caller_call_depth: 0,
+            granted_capabilities: Vec::new(),
+            outcome: "constructed".to_string(),
+        });
+
         self.generated_functions.push(GeneratedFunctionArtifact {
-            parameter_source,
-            body_source,
+            provenance,
             compiled_module: lowering_output.ir3,
             function_index: function_index as u32,
         });
@@ -6722,6 +6856,91 @@ impl InterpreterCore {
 
     fn function_constructor_source(parameter_source: &str, body_source: &str) -> String {
         format!("function anonymous({parameter_source}) {{\n{body_source}\n}}")
+    }
+
+    /// Derive deterministic, content-addressed provenance for a generated
+    /// function (bd-8enww.3.4 / YTBG-C4). The synthetic `source_id` is a pure
+    /// function of the construction-site label and the *length-prefixed*
+    /// parameter/body source, so two distinct decompositions of the same byte
+    /// stream cannot collide (the project's canonical-hashing discipline). The
+    /// source/parameter hashes are the auditable distillation that lets the
+    /// trail attribute spend without retaining hostile raw source text.
+    fn derive_generated_function_provenance(
+        construction_site: &str,
+        parameter_source: &str,
+        body_source: &str,
+    ) -> GeneratedFunctionProvenance {
+        fn mix(buf: &mut Vec<u8>, field: &[u8]) {
+            buf.extend_from_slice(&(field.len() as u64).to_le_bytes());
+            buf.extend_from_slice(field);
+        }
+        let full_source = Self::function_constructor_source(parameter_source, body_source);
+        let mut preimage: Vec<u8> = Vec::new();
+        preimage.extend_from_slice(b"franken-engine.generated-function-provenance.v1\n");
+        mix(&mut preimage, construction_site.as_bytes());
+        mix(&mut preimage, parameter_source.as_bytes());
+        mix(&mut preimage, body_source.as_bytes());
+        let id_hex = ContentHash::compute(&preimage).to_hex();
+        GeneratedFunctionProvenance {
+            source_id: format!("genfn:{}", &id_hex[..16]),
+            source_hash: ContentHash::compute(full_source.as_bytes()).to_hex(),
+            parameter_hash: ContentHash::compute(parameter_source.as_bytes()).to_hex(),
+            construction_site: construction_site.to_string(),
+        }
+    }
+
+    /// Contained-codegen capability envelope (bd-8enww.3.3 / 3.4 security
+    /// accounting): a `Function`-constructor body is granted *only* the safe
+    /// subset (`Builtin` / `Console` / `Timer`) of whatever its own compiled
+    /// module statically declares. Dangerous capabilities (fs / net / process /
+    /// …) that adversarial generated code might declare are filtered out here,
+    /// so constructing code at runtime can never be an authority-escalation
+    /// vector — the safe set is the hard ceiling for dynamic construction,
+    /// independent of what the generated body asks for.
+    fn contained_codegen_capability_grant(
+        required_capabilities: &[CapabilityTag],
+    ) -> Vec<RuntimeCapability> {
+        required_capabilities
+            .iter()
+            .filter_map(|tag| RuntimeCapability::from_tag_str(&tag.0))
+            .filter(|capability| {
+                matches!(
+                    capability,
+                    RuntimeCapability::Builtin
+                        | RuntimeCapability::Console
+                        | RuntimeCapability::Timer
+                )
+            })
+            .collect()
+    }
+
+    /// Append a generated-code audit entry (bd-8enww.3.4) and mirror a compact
+    /// summary into the standard structured-event log. Bounded by
+    /// [`MAX_GENERATED_CODE_AUDIT_ENTRIES`]; once the cap is reached, further
+    /// entries are dropped deterministically (the shared instruction budget is
+    /// the primary bound, so this cap is only ever hit under a pathological
+    /// budget).
+    fn record_generated_code_event(&mut self, entry: GeneratedCodeAuditEntry) {
+        let event_name = match entry.kind {
+            GeneratedCodeEventKind::Constructed => "generated_code.constructed",
+            GeneratedCodeEventKind::Invoked => "generated_code.invoked",
+            GeneratedCodeEventKind::Faulted => "generated_code.faulted",
+        };
+        let event_outcome = match entry.kind {
+            GeneratedCodeEventKind::Faulted => "fail",
+            _ => "ok",
+        };
+        self.push_event(
+            event_name,
+            event_outcome,
+            Some(&format!(
+                "{} consumed={} outcome={}",
+                entry.source_id, entry.instructions_consumed, entry.outcome
+            )),
+        );
+        if self.generated_code_audit.len() < MAX_GENERATED_CODE_AUDIT_ENTRIES {
+            self.generated_code_audit.push(entry);
+        }
     }
 
     /// Invoke a function produced by the `Function` constructor (bd-8enww.3.3).
@@ -6763,16 +6982,21 @@ impl InterpreterCore {
             arguments.push(value);
         }
 
-        // Clone the artifact's compiled program out of `self` so the `&self`
-        // borrow is released before the `&mut self` execution below.
-        let (mut wrapper, function_index) = {
+        // Clone the artifact's compiled program (and its provenance, for the
+        // bd-8enww.3.4 audit entry) out of `self` so the `&self` borrow is
+        // released before the `&mut self` execution below.
+        let (mut wrapper, function_index, provenance) = {
             let artifact = self.generated_functions.get(artifact_id).ok_or_else(|| {
                 InterpreterError::TypeError {
                     expected: "generated function artifact".to_string(),
                     got: format!("missing artifact#{artifact_id}"),
                 }
             })?;
-            (artifact.compiled_module.clone(), artifact.function_index)
+            (
+                artifact.compiled_module.clone(),
+                artifact.function_index,
+                artifact.provenance.clone(),
+            )
         };
 
         let arg_count =
@@ -6834,28 +7058,26 @@ impl InterpreterCore {
 
         // Contained-codegen capability envelope: grant the generated function
         // exactly the capabilities its OWN compiled module statically declares,
-        // filtered to the same safe set (`Builtin` / `Console` / `Timer`) the
-        // eval lane router grants from a top-level module's required set. The
+        // filtered to the safe set (`Builtin` / `Console` / `Timer`). The
         // parent's grants were derived from the parent source, which never saw
         // the generated body — so without this, builtin calls (and even the
         // `builtin:ReferenceError` raised for an unbound reference) inside
-        // generated code fail closed with `CapabilityDenied`. We never widen
-        // beyond the safe set, so generated code cannot acquire fs/net/process
-        // authority the parent itself could not. Restored after the call.
-        let generated_capabilities: Vec<RuntimeCapability> = wrapper
-            .required_capabilities
-            .iter()
-            .filter_map(|tag| RuntimeCapability::from_tag_str(&tag.0))
-            .filter(|capability| {
-                matches!(
-                    capability,
-                    RuntimeCapability::Builtin
-                        | RuntimeCapability::Console
-                        | RuntimeCapability::Timer
-                )
-            })
-            .collect();
+        // generated code fail closed with `CapabilityDenied`. The filter never
+        // widens beyond the safe set, so dynamically constructed code can never
+        // acquire fs/net/process authority — the security-accounting heart of
+        // bd-8enww.3.4 AC#4. Restored after the call.
+        let generated_capabilities =
+            Self::contained_codegen_capability_grant(&wrapper.required_capabilities);
         let previous_granted_capabilities = self.config.granted_capabilities.clone();
+
+        // bd-8enww.3.4: capture the caller's JS call-stack depth and the shared
+        // instruction-budget reading BEFORE the re-entrant run, so the audit
+        // entry can attribute exact budget spend and call context to this
+        // generated function. The instruction counter is deliberately NOT part
+        // of `snapshot_module_execution`, so the post-call delta reflects the
+        // generated body's real spend against the one shared budget.
+        let caller_call_depth = self.call_stack.len();
+        let instructions_before = self.instructions_executed;
 
         let snapshot = self.snapshot_module_execution();
         let saved_active_cjs_context = self.active_cjs_context.clone();
@@ -6924,6 +7146,37 @@ impl InterpreterCore {
             self.pending_exception = Some(value);
             self.pending_exception_label = label;
         }
+
+        // bd-8enww.3.4: record the invocation in the audit trail with the exact
+        // instruction budget the generated body consumed. The shared counter is
+        // NOT rolled back by `restore_module_execution`, so this delta is the
+        // real spend — adversarial generated code cannot hide its cost.
+        let instructions_consumed = self
+            .instructions_executed
+            .saturating_sub(instructions_before);
+        let (kind, outcome) = match &result {
+            Ok(_) => (GeneratedCodeEventKind::Invoked, "completed".to_string()),
+            Err(error) => (
+                GeneratedCodeEventKind::Faulted,
+                format!("faulted:{}", generated_code_fault_code(error)),
+            ),
+        };
+        let granted_capabilities = generated_capabilities
+            .iter()
+            .map(RuntimeCapability::to_string)
+            .collect();
+        self.record_generated_code_event(GeneratedCodeAuditEntry {
+            source_id: provenance.source_id,
+            source_hash: provenance.source_hash,
+            parameter_hash: provenance.parameter_hash,
+            construction_site: provenance.construction_site,
+            kind,
+            instructions_consumed,
+            caller_call_depth,
+            granted_capabilities,
+            outcome,
+        });
+
         result
     }
 
@@ -33262,6 +33515,142 @@ mod active_builtin_regressions {
         assert!(
             matches!(unsupported, InterpreterError::TypeError { .. }),
             "expected deterministic TypeError for unsupported typed-array method, got {unsupported:?}"
+        );
+    }
+
+    // -- bd-8enww.3.4 (YTBG-C4): generated-code provenance + security envelope --
+
+    #[test]
+    fn generated_provenance_is_deterministic_and_well_formed() {
+        let a =
+            InterpreterCore::derive_generated_function_provenance("<eval>", "x", "return x * 2;");
+        let b =
+            InterpreterCore::derive_generated_function_provenance("<eval>", "x", "return x * 2;");
+        // Pure function of (site, params, body): identical inputs ⇒ identical id.
+        assert_eq!(a, b);
+        // Synthetic id shape: `genfn:` + 16 lowercase hex chars.
+        assert!(a.source_id.starts_with("genfn:"), "{}", a.source_id);
+        let hex = a.source_id.trim_start_matches("genfn:");
+        assert_eq!(hex.len(), 16, "{}", a.source_id);
+        assert!(
+            hex.bytes().all(|b| b.is_ascii_hexdigit()),
+            "{}",
+            a.source_id
+        );
+        // The component hashes are full SHA-256 hex.
+        assert_eq!(a.source_hash.len(), 64);
+        assert_eq!(a.parameter_hash.len(), 64);
+        assert_eq!(a.construction_site, "<eval>");
+    }
+
+    #[test]
+    fn generated_provenance_distinguishes_body_params_and_site() {
+        let base =
+            InterpreterCore::derive_generated_function_provenance("<eval>", "x", "return x;");
+        let other_body =
+            InterpreterCore::derive_generated_function_provenance("<eval>", "x", "return x + 1;");
+        let other_params =
+            InterpreterCore::derive_generated_function_provenance("<eval>", "y", "return x;");
+        let other_site =
+            InterpreterCore::derive_generated_function_provenance("<mod-a>", "x", "return x;");
+        // No two distinct (site, params, body) triples collide on the source id.
+        assert_ne!(base.source_id, other_body.source_id);
+        assert_ne!(base.source_id, other_params.source_id);
+        assert_ne!(base.source_id, other_site.source_id);
+        // The body hash is sensitive to the body, the parameter hash to params.
+        assert_ne!(base.source_hash, other_body.source_hash);
+        assert_ne!(base.parameter_hash, other_params.parameter_hash);
+    }
+
+    #[test]
+    fn generated_provenance_length_prefix_prevents_field_collision() {
+        // Without length-prefixing, ("ab", "c") and ("a", "bc") would mix to the
+        // same byte stream. The canonical encoding must keep them distinct.
+        let left = InterpreterCore::derive_generated_function_provenance("<eval>", "ab", "c");
+        let right = InterpreterCore::derive_generated_function_provenance("<eval>", "a", "bc");
+        assert_ne!(left.source_id, right.source_id);
+    }
+
+    #[test]
+    fn contained_codegen_envelope_filters_out_dangerous_capabilities() {
+        // A generated module that *declares* dangerous authority (fs/process/
+        // network) is granted ONLY the safe subset. This is the security-
+        // accounting core of AC#4: constructing code at runtime can never be an
+        // authority-escalation vector beyond the safe ceiling.
+        let declared = [
+            CapabilityTag("builtin".to_string()),
+            CapabilityTag("fs_read".to_string()),
+            CapabilityTag("fs_write".to_string()),
+            CapabilityTag("process_spawn".to_string()),
+            CapabilityTag("network_egress".to_string()),
+            CapabilityTag("console".to_string()),
+            CapabilityTag("timer".to_string()),
+        ];
+        let granted = InterpreterCore::contained_codegen_capability_grant(&declared);
+        assert!(granted.contains(&RuntimeCapability::Builtin));
+        assert!(granted.contains(&RuntimeCapability::Console));
+        assert!(granted.contains(&RuntimeCapability::Timer));
+        for dangerous in [
+            RuntimeCapability::FsRead,
+            RuntimeCapability::FsWrite,
+            RuntimeCapability::ProcessSpawn,
+            RuntimeCapability::NetworkEgress,
+        ] {
+            assert!(
+                !granted.contains(&dangerous),
+                "dynamic code must never receive {dangerous} by declaring it"
+            );
+        }
+        assert_eq!(granted.len(), 3);
+    }
+
+    #[test]
+    fn contained_codegen_envelope_is_empty_for_no_or_unknown_tags() {
+        assert!(InterpreterCore::contained_codegen_capability_grant(&[]).is_empty());
+        let unknown = [CapabilityTag("not_a_real_capability".to_string())];
+        assert!(InterpreterCore::contained_codegen_capability_grant(&unknown).is_empty());
+    }
+
+    #[test]
+    fn generated_code_fault_codes_are_stable_classifications() {
+        // The audit `outcome` for a faulting invocation is a stable, payload-free
+        // classification — never the raw (possibly adversarial) error text.
+        assert_eq!(
+            generated_code_fault_code(&InterpreterError::BudgetExhausted {
+                executed: 100,
+                budget: 100,
+            }),
+            "budget_exhausted"
+        );
+        assert_eq!(
+            generated_code_fault_code(&InterpreterError::CapabilityDenied {
+                capability: "fs_read".to_string(),
+            }),
+            "capability_denied"
+        );
+        assert_eq!(
+            generated_code_fault_code(&InterpreterError::UncaughtException {
+                value: "Error: boom".to_string(),
+            }),
+            "uncaught_exception"
+        );
+        assert_eq!(
+            generated_code_fault_code(&InterpreterError::TypeError {
+                expected: "a".to_string(),
+                got: "b".to_string(),
+            }),
+            "type_error"
+        );
+        assert_eq!(
+            generated_code_fault_code(&InterpreterError::RangeError {
+                message: "x".to_string(),
+            }),
+            "range_error"
+        );
+        // A new/unmapped variant falls into the catch-all bucket.
+        assert_eq!(
+            generated_code_fault_code(&InterpreterError::DivisionByZero),
+            "error"
         );
     }
 

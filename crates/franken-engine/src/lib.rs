@@ -1283,6 +1283,12 @@ pub struct EvalOutcome {
     pub console_output: Vec<baseline_interpreter::ConsoleEntry>,
     #[serde(default)]
     pub source_ingestion: SourceIngestionSummary,
+    /// Audit trail for `Function`-constructor-generated code executed during
+    /// this eval (bd-8enww.3.4 / YTBG-C4): content-addressed source identity
+    /// plus per-invocation instruction-budget spend. Empty unless the source
+    /// constructed and ran dynamic code.
+    #[serde(default)]
+    pub generated_code_audit: Vec<baseline_interpreter::GeneratedCodeAuditEntry>,
 }
 
 #[allow(clippy::result_large_err)]
@@ -1846,6 +1852,7 @@ fn eval_with_lane(
         route_reason,
         console_output: output.console_output,
         source_ingestion: prepared.source_ingestion,
+        generated_code_audit: output.generated_code_audit,
     })
 }
 
@@ -1859,6 +1866,7 @@ fn engine_kind_for_lane(lane: LaneChoice) -> EngineKind {
 struct NativeEvalOutput {
     value: String,
     console_output: Vec<baseline_interpreter::ConsoleEntry>,
+    generated_code_audit: Vec<baseline_interpreter::GeneratedCodeAuditEntry>,
 }
 
 #[allow(clippy::result_large_err)]
@@ -1958,6 +1966,7 @@ fn eval_via_native_pipeline(
     Ok(NativeEvalOutput {
         value: routed.result.value.to_string(),
         console_output: routed.result.console_output,
+        generated_code_audit: routed.result.generated_code_audit,
     })
 }
 
@@ -2673,6 +2682,7 @@ mod tests {
             route_reason: RouteReason::ContainsAwaitKeyword,
             console_output: Vec::new(),
             source_ingestion: SourceIngestionSummary::default(),
+            generated_code_audit: Vec::new(),
         };
         let json = serde_json::to_string(&outcome).expect("eval outcome should serialize to JSON");
         let decoded: EvalOutcome =

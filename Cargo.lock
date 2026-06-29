@@ -1670,7 +1670,7 @@ dependencies = [
 
 [[package]]
 name = "fsqlite-error"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "thiserror",
 ]
@@ -4545,12 +4545,12 @@ dependencies = [
 
 [[patch.unused]]
 name = "fsqlite"
-version = "0.1.12"
+version = "0.1.13"
 
 [[patch.unused]]
 name = "fsqlite-core"
-version = "0.1.12"
+version = "0.1.13"
 
 [[patch.unused]]
 name = "fsqlite-types"
-version = "0.1.12"
+version = "0.1.13"

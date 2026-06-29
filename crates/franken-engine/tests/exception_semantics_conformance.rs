@@ -756,6 +756,62 @@ fn conformance_source_finally_order_matches_node_ground_truth() {
     }
 }
 
+/// bd-8enww.4.9 regression: a `let` / `const` declared inside a `finally` block
+/// whose try has abrupt-completion forwarders (a `break`/`continue` targeting an
+/// enclosing loop/label) used to be rejected at lowering as
+/// `DuplicateLetConstDeclaration`. The finalizer body is inlined once per
+/// completion path, so the lexical name was re-registered in the shared binding
+/// namespace and collided on the second copy. The fix isolates only the
+/// finalizer-declared lexical names per inlined copy (free-var references such as
+/// an assignment to an outer captured `log` are preserved), so each copy gets a
+/// fresh binding and the captured-var side effect survives the abrupt exit.
+#[test]
+fn conformance_lexical_decl_in_finally_with_abrupt_exit_forwarders() {
+    let cases = [
+        // `let` in a finally reached via `break <label>` (multi-copy inline).
+        (
+            "let-in-finally-break",
+            r#"let log = ""; outer: { try { break outer; } finally { let k = "f"; log = log + k; } } log;"#,
+            "f",
+        ),
+        // `const` in a finally reached via a `return` forwarder.
+        (
+            "const-in-finally-return",
+            r#"function f() { try { return 2; } finally { const c = 9; c; } } f();"#,
+            "2",
+        ),
+        // Two lexicals in one finally.
+        (
+            "two-lets-in-finally-return",
+            r#"function f() { try { return 0; } finally { let a = 1; let b = 2; a + b; } } f();"#,
+            "0",
+        ),
+        // `let` loop variable inside a finally reached via a `return` forwarder.
+        (
+            "for-let-in-finally-return",
+            r#"function f() { try { return 1; } finally { for (let j = 0; j < 1; j = j + 1) {} } } f();"#,
+            "1",
+        ),
+        // Single-copy finally with a `let` must keep working (normal path only).
+        (
+            "let-in-finally-normal-path",
+            r#"let log = ""; try { log = log + "t"; } finally { let m = ":f"; log = log + m; } log;"#,
+            "t:f",
+        ),
+        // Captured-var side effect in a nested finally before `continue <label>`
+        // survives the double-finally abrupt exit (the case-734 shape).
+        (
+            "captured-side-effect-survives-continue-outer",
+            r#"let log = ""; function f() { outer: for (let i = 0; i < 1; i = i + 1) { try { return "outer"; } finally { for (let j = 0; j < 1; j = j + 1) { try { throw "inner"; } finally { log = log + "inner;"; continue outer; } } log = log + "bad"; } } return "done"; } let result = f(); log + result;"#,
+            "inner;done",
+        ),
+    ];
+
+    for (name, source, expected) in cases {
+        assert_eq!(eval_source(source), expected, "{name}");
+    }
+}
+
 #[test]
 fn conformance_eval_catches_thrown_object_values() {
     assert_eq!(

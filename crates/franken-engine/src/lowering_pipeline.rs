@@ -40,9 +40,9 @@ impl ConstantPool {
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{
-    ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, ExportKind, Expression,
-    ImportClause, MethodKind, ObjectPatternProperty, ObjectPropertyKind, ParseGoal, SourceSpan,
-    Statement, UnaryOperator, VariableDeclarationKind,
+    ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, BlockStatement, ExportKind,
+    Expression, ImportClause, MethodKind, ObjectPatternProperty, ObjectPropertyKind, ParseGoal,
+    SourceSpan, Statement, UnaryOperator, VariableDeclarationKind,
 };
 use crate::effect_set::{EffectKind, EffectSet};
 use crate::flow_lattice::{
@@ -2104,6 +2104,164 @@ fn lower_statement_to_ir1(
     )
 }
 
+/// bd-8enww.4.9: collect the lexically-declared names (`let` / `const` / named
+/// `class`) a `finally` body introduces into the flat lowering binding
+/// namespace.
+///
+/// A `finally` block is INLINED once per try-completion path (the main
+/// normal/throw/return copy at the finalizer label plus one copy per
+/// break/continue forwarder). Only one copy runs at runtime, but every copy is
+/// lowered, so each re-registers the finalizer's lexical declarations into the
+/// shared (flat) `binding_lookup`. Without per-copy isolation the second copy's
+/// re-declaration of the same lexical name collides in [`alloc_binding`] and is
+/// rejected as `DuplicateLetConstDeclaration`.
+///
+/// We deliberately exclude:
+/// - `var` declarations (function-scoped; re-merging is legal per
+///   [`check_binding_conflict`]),
+/// - free-variable references / assignments to outer or captured bindings
+///   (e.g. `finally { log = "ran"; }` — `log` is not declared here, so removing
+///   it would drop the binding the deferred free-var resolver needs and lose the
+///   store-back side effect), and
+/// - nested function bodies (their lexical declarations live in their own
+///   binding scope and never reach this namespace).
+fn collect_finalizer_lexical_names(body: &[Statement], out: &mut BTreeSet<String>) {
+    for stmt in body {
+        collect_lexical_names_in_statement(stmt, out);
+    }
+}
+
+fn collect_lexical_names_in_statement(stmt: &Statement, out: &mut BTreeSet<String>) {
+    let is_lexical = |kind: VariableDeclarationKind| {
+        matches!(
+            kind,
+            VariableDeclarationKind::Let | VariableDeclarationKind::Const
+        )
+    };
+    match stmt {
+        Statement::VariableDeclaration(decl) if is_lexical(decl.kind) => {
+            for declarator in &decl.declarations {
+                for name in declarator.pattern.binding_names() {
+                    out.insert(name.to_string());
+                }
+            }
+        }
+        Statement::ClassDeclaration(class) => {
+            if let Some(name) = &class.name {
+                out.insert(name.clone());
+            }
+        }
+        Statement::Block(block) => collect_finalizer_lexical_names(&block.body, out),
+        Statement::If(stmt) => {
+            collect_lexical_names_in_statement(&stmt.consequent, out);
+            if let Some(alt) = &stmt.alternate {
+                collect_lexical_names_in_statement(alt, out);
+            }
+        }
+        Statement::For(stmt) => {
+            if let Some(init) = &stmt.init {
+                collect_lexical_names_in_statement(init, out);
+            }
+            collect_lexical_names_in_statement(&stmt.body, out);
+        }
+        Statement::ForIn(stmt) => {
+            if stmt.binding_kind.is_some_and(is_lexical) {
+                for name in stmt.binding.binding_names() {
+                    out.insert(name.to_string());
+                }
+            }
+            collect_lexical_names_in_statement(&stmt.body, out);
+        }
+        Statement::ForOf(stmt) => {
+            if stmt.binding_kind.is_some_and(is_lexical) {
+                for name in stmt.binding.binding_names() {
+                    out.insert(name.to_string());
+                }
+            }
+            collect_lexical_names_in_statement(&stmt.body, out);
+        }
+        Statement::While(stmt) => collect_lexical_names_in_statement(&stmt.body, out),
+        Statement::DoWhile(stmt) => collect_lexical_names_in_statement(&stmt.body, out),
+        Statement::With(stmt) => collect_lexical_names_in_statement(&stmt.body, out),
+        Statement::Labeled(stmt) => collect_lexical_names_in_statement(&stmt.body, out),
+        Statement::Switch(stmt) => {
+            for case in &stmt.cases {
+                collect_finalizer_lexical_names(&case.consequent, out);
+            }
+        }
+        Statement::TryCatch(stmt) => {
+            collect_finalizer_lexical_names(&stmt.block.body, out);
+            if let Some(handler) = &stmt.handler {
+                collect_finalizer_lexical_names(&handler.body.body, out);
+            }
+            if let Some(finalizer) = &stmt.finalizer {
+                collect_finalizer_lexical_names(&finalizer.body, out);
+            }
+        }
+        // VariableDeclaration(var), function declarations (own scope), and
+        // leaf statements introduce no colliding lexical name here.
+        _ => {}
+    }
+}
+
+/// bd-8enww.4.9: lower one inlined copy of a `finally` body with per-copy
+/// isolation of its lexical declarations.
+///
+/// The finalizer is inlined once per try-completion path; each copy must get
+/// FRESH binding ids for any `let` / `const` / `class` it declares, so the next
+/// inlined copy (and any code after the `try`) does not see a stale binding and
+/// collide. We snapshot only the to-be-redeclared lexical names (see
+/// [`collect_finalizer_lexical_names`]), lower the body, then restore exactly
+/// those entries — free-variable references added during lowering (e.g. an
+/// assignment to an outer captured `log`) are left in place. When the finalizer
+/// declares no lexical bindings this is a no-op and lowering is byte-identical to
+/// the previous inline.
+#[allow(clippy::too_many_arguments)]
+fn lower_finalizer_body_isolated(
+    finalizer: &BlockStatement,
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    scope_id: ScopeId,
+    label_counter: &mut u32,
+    span_table: &mut Vec<Ir1OpSpanEntry>,
+    control_flow: ControlFlowTargets,
+    label_ctx: &LabelContext,
+) -> Result<(), LoweringPipelineError> {
+    let mut lexical_names = BTreeSet::new();
+    collect_finalizer_lexical_names(&finalizer.body, &mut lexical_names);
+    let saved: Vec<(String, Option<BindingId>)> = lexical_names
+        .iter()
+        .map(|name| (name.clone(), binding_lookup.get(name).copied()))
+        .collect();
+    for inner in &finalizer.body {
+        lower_statement_to_ir1_with_flow(
+            inner,
+            ops,
+            bindings,
+            binding_lookup,
+            binding_index,
+            scope_id,
+            label_counter,
+            span_table,
+            control_flow,
+            label_ctx,
+        )?;
+    }
+    for (name, previous) in saved {
+        match previous {
+            Some(id) => {
+                binding_lookup.insert(name, id);
+            }
+            None => {
+                binding_lookup.remove(&name);
+            }
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn lower_statement_to_ir1_with_flow(
     statement: &Statement,
@@ -2930,20 +3088,18 @@ fn lower_statement_to_ir1_with_flow(
                     });
                     ops.push(Ir1Op::EndTry);
                     if let Some(finalizer) = &tc.finalizer {
-                        for inner in &finalizer.body {
-                            lower_statement_to_ir1_with_flow(
-                                inner,
-                                ops,
-                                bindings,
-                                binding_lookup,
-                                binding_index,
-                                scope_id,
-                                label_counter,
-                                span_table,
-                                control_flow,
-                                label_ctx,
-                            )?;
-                        }
+                        lower_finalizer_body_isolated(
+                            finalizer,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            label_counter,
+                            span_table,
+                            control_flow,
+                            label_ctx,
+                        )?;
                     }
                     ops.push(Ir1Op::Jump {
                         label_id: actual_break_label,
@@ -2955,20 +3111,18 @@ fn lower_statement_to_ir1_with_flow(
                     });
                     ops.push(Ir1Op::EndTry);
                     if let Some(finalizer) = &tc.finalizer {
-                        for inner in &finalizer.body {
-                            lower_statement_to_ir1_with_flow(
-                                inner,
-                                ops,
-                                bindings,
-                                binding_lookup,
-                                binding_index,
-                                scope_id,
-                                label_counter,
-                                span_table,
-                                control_flow,
-                                label_ctx,
-                            )?;
-                        }
+                        lower_finalizer_body_isolated(
+                            finalizer,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            label_counter,
+                            span_table,
+                            control_flow,
+                            label_ctx,
+                        )?;
                     }
                     ops.push(Ir1Op::Jump {
                         label_id: actual_continue_label,
@@ -3061,20 +3215,18 @@ fn lower_statement_to_ir1_with_flow(
                                     id: via_break_label,
                                 });
                                 ops.push(Ir1Op::EndTry);
-                                for inner in &finalizer.body {
-                                    lower_statement_to_ir1_with_flow(
-                                        inner,
-                                        ops,
-                                        bindings,
-                                        binding_lookup,
-                                        binding_index,
-                                        scope_id,
-                                        label_counter,
-                                        span_table,
-                                        control_flow,
-                                        label_ctx,
-                                    )?;
-                                }
+                                lower_finalizer_body_isolated(
+                                    finalizer,
+                                    ops,
+                                    bindings,
+                                    binding_lookup,
+                                    binding_index,
+                                    scope_id,
+                                    label_counter,
+                                    span_table,
+                                    control_flow,
+                                    label_ctx,
+                                )?;
                                 ops.push(Ir1Op::Jump {
                                     label_id: actual_break_label,
                                 });
@@ -3086,20 +3238,18 @@ fn lower_statement_to_ir1_with_flow(
                                     id: via_continue_label,
                                 });
                                 ops.push(Ir1Op::EndTry);
-                                for inner in &finalizer.body {
-                                    lower_statement_to_ir1_with_flow(
-                                        inner,
-                                        ops,
-                                        bindings,
-                                        binding_lookup,
-                                        binding_index,
-                                        scope_id,
-                                        label_counter,
-                                        span_table,
-                                        control_flow,
-                                        label_ctx,
-                                    )?;
-                                }
+                                lower_finalizer_body_isolated(
+                                    finalizer,
+                                    ops,
+                                    bindings,
+                                    binding_lookup,
+                                    binding_index,
+                                    scope_id,
+                                    label_counter,
+                                    span_table,
+                                    control_flow,
+                                    label_ctx,
+                                )?;
                                 ops.push(Ir1Op::Jump {
                                     label_id: actual_continue_label,
                                 });
@@ -3155,20 +3305,18 @@ fn lower_statement_to_ir1_with_flow(
                 ops.push(Ir1Op::Label { id: fl });
                 ops.push(Ir1Op::EnterFinally);
                 if let Some(finalizer) = &tc.finalizer {
-                    for inner in &finalizer.body {
-                        lower_statement_to_ir1_with_flow(
-                            inner,
-                            ops,
-                            bindings,
-                            binding_lookup,
-                            binding_index,
-                            scope_id,
-                            label_counter,
-                            span_table,
-                            finalizer_control_flow,
-                            &finalizer_label_ctx,
-                        )?;
-                    }
+                    lower_finalizer_body_isolated(
+                        finalizer,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        label_counter,
+                        span_table,
+                        finalizer_control_flow,
+                        &finalizer_label_ctx,
+                    )?;
                 }
                 let has_finalizer_forwarders = !finalizer_break_forwarders.is_empty()
                     || !finalizer_continue_forwarders.is_empty();

@@ -3596,7 +3596,7 @@ fn lower_statement_to_ir1_with_flow(
                 });
                 body_ops.push(Ir1Op::Return);
             }
-            rewrite_unresolved_function_body_loads(
+            let runtime_global_loads = rewrite_unresolved_function_body_loads(
                 &mut body_ops,
                 &body_lookup,
                 &pre_lower_names,
@@ -3617,6 +3617,7 @@ fn lower_statement_to_ir1_with_flow(
                 body_ops,
                 free_vars,
                 free_var_ids,
+                runtime_global_loads,
                 is_generator: func.is_generator,
                 is_async: func.is_async,
                 rest_param_index,
@@ -3727,6 +3728,7 @@ fn lower_statement_to_ir1_with_flow(
                 body_ops,
                 free_vars: Vec::new(),
                 free_var_ids: Vec::new(),
+                runtime_global_loads: Vec::new(),
                 is_generator: false,
                 is_async: false,
                 rest_param_index,
@@ -3881,6 +3883,7 @@ fn lower_statement_to_ir1_with_flow(
                     body_ops: m_body_ops,
                     free_vars: Vec::new(),
                     free_var_ids: Vec::new(),
+                    runtime_global_loads: Vec::new(),
                     is_generator: false,
                     is_async: false,
                     rest_param_index: m_rest_param_index,
@@ -4342,7 +4345,8 @@ pub fn lower_ir2_to_ir3(
     // subsequent assignments fall through to StoreScoped.
     let mut tdz_initialized = BTreeSet::<BindingId>::new();
     // Deferred function bodies:
-    // (body_ir1_ops, param_names, name, free_vars, free_var_ids, is_generator, is_async).
+    // (body_ir1_ops, param_names, name, free_vars, free_var_ids,
+    //  runtime_global_loads, is_generator, is_async, rest_param_index).
     // After the main code + Halt, each body is lowered into the instruction
     // stream and registered in function_table.  Index 0 is reserved for main.
     #[allow(clippy::type_complexity)]
@@ -4352,6 +4356,7 @@ pub fn lower_ir2_to_ir3(
         Option<String>,
         Vec<String>,
         Vec<BindingId>,
+        Vec<(String, BindingId)>, // runtime_global_loads (bd-ylpdp)
         bool,
         bool,
         Option<u32>, // rest_param_index (bd-zs4d5)
@@ -4394,23 +4399,18 @@ pub fn lower_ir2_to_ir3(
             scoped_runtime_binding_ids.insert(*binding_id);
         }
     }
-    if let Some(binding_id) = name_to_binding_id.get("process") {
-        scoped_runtime_binding_ids.insert(*binding_id);
-    }
-    if let Some(binding_id) = name_to_binding_id.get("console") {
-        scoped_runtime_binding_ids.insert(*binding_id);
-    }
-    if let Some(binding_id) = name_to_binding_id.get("Function") {
-        scoped_runtime_binding_ids.insert(*binding_id);
-    }
-    // bd-8enww.5.3 (YTBG-E3): `performance` is a runtime-injected global object
-    // (deterministic `performance.now()` shim). Like `console`/`process`, its
-    // loads must route through the runtime scope chain so `typeof performance`
-    // and `performance.now()` resolve the injected object instead of decaying to
-    // an undeclared-identifier `undefined` (which made `performance.now()` a
-    // TypeError on undefined).
-    if let Some(binding_id) = name_to_binding_id.get("performance") {
-        scoped_runtime_binding_ids.insert(*binding_id);
+    // bd-8enww.5.3 (YTBG-E3) + bd-ylpdp: route bare references to the
+    // runtime-injected global objects (`process`/`console`/`Function`/
+    // `performance`) through the runtime scope chain so `typeof performance`,
+    // `performance.now()`, `new Function(...)`, etc. resolve the injected object
+    // instead of decaying to an undeclared-identifier `undefined` (which made
+    // `performance.now()` a TypeError on undefined). Shared with the
+    // function-body lowering via `PREDECLARED_RUNTIME_GLOBALS` so the two paths
+    // cannot drift.
+    for &global_name in PREDECLARED_RUNTIME_GLOBALS {
+        if let Some(binding_id) = name_to_binding_id.get(global_name) {
+            scoped_runtime_binding_ids.insert(*binding_id);
+        }
     }
 
     let top_level_function_decl_names: BTreeSet<String> = ir2
@@ -5385,6 +5385,7 @@ pub fn lower_ir2_to_ir3(
                 body_ops,
                 free_vars,
                 free_var_ids,
+                runtime_global_loads,
                 is_generator,
                 is_async,
                 rest_param_index,
@@ -5426,6 +5427,7 @@ pub fn lower_ir2_to_ir3(
                         Some(name.clone()),
                         free_vars.clone(),
                         free_var_ids.clone(),
+                        runtime_global_loads.clone(),
                         *is_generator,
                         *is_async,
                         *rest_param_index,
@@ -5476,6 +5478,7 @@ pub fn lower_ir2_to_ir3(
                 body_ops,
                 free_vars,
                 free_var_ids,
+                runtime_global_loads,
                 is_generator,
                 is_async,
                 rest_param_index,
@@ -5512,6 +5515,7 @@ pub fn lower_ir2_to_ir3(
                     name.clone(),
                     free_vars.clone(),
                     free_var_ids.clone(),
+                    runtime_global_loads.clone(),
                     *is_generator,
                     *is_async,
                     *rest_param_index,
@@ -5869,6 +5873,7 @@ pub fn lower_ir2_to_ir3(
             fn_name,
             free_vars,
             free_var_ids,
+            fn_runtime_global_loads,
             fn_is_generator,
             _fn_is_async,
             fn_rest_param_index,
@@ -5930,6 +5935,19 @@ pub fn lower_ir2_to_ir3(
             .iter()
             .copied()
             .zip(free_vars.iter().cloned())
+            .collect();
+        // bd-ylpdp: bare references to runtime-injected globals
+        // (`PREDECLARED_RUNTIME_GLOBALS`) recorded by
+        // `rewrite_unresolved_function_body_loads`. Their surviving `LoadBinding`
+        // is routed to a `LoadScoped` (below) that resolves against the injected
+        // realm global frame — which the closure already captures via the
+        // whole-scope-chain snapshot in `CreateClosure`. Unlike free vars these
+        // are deliberately NOT in `free_vars`, so the closure-capture machinery
+        // never declares a same-named (undefined) binding that would shadow the
+        // real global.
+        let runtime_global_id_to_name: BTreeMap<BindingId, String> = fn_runtime_global_loads
+            .iter()
+            .map(|(name, id)| (*id, name.clone()))
             .collect();
 
         // Pre-scan: detect if any child function captures free variables.
@@ -6023,6 +6041,24 @@ pub fn lower_ir2_to_ir3(
                 Ir1Op::LoadBinding { binding_id } => {
                     if let Some(name) = fv_id_to_name.get(binding_id) {
                         // Free variable: load from scope chain by name.
+                        let dst = alloc_register(&mut fn_reg);
+                        let pool_idx = push_constant_optimized(&mut constant_pool, name);
+                        ir3.instructions.push(Ir3Instruction::LoadScoped {
+                            dst,
+                            name_pool_index: pool_idx,
+                        });
+                        fn_value_stack.push(dst);
+                    } else if let Some(name) = runtime_global_id_to_name.get(binding_id) {
+                        // bd-ylpdp: bare reference to a runtime-injected global
+                        // (Function/console/process/performance). Resolve it via
+                        // the scope chain, which bottoms at the injected realm
+                        // global frame, so `new Function(...)`, `performance.now()`,
+                        // and `typeof performance` work inside a function body
+                        // instead of throwing ReferenceError or decaying to a dead
+                        // register read. Mirrors the free-var path but with no
+                        // capture: the global frame is already in the closure's
+                        // whole-scope-chain snapshot, and keeping the name out of
+                        // `free_vars` avoids a shadowing capture.
                         let dst = alloc_register(&mut fn_reg);
                         let pool_idx = push_constant_optimized(&mut constant_pool, name);
                         ir3.instructions.push(Ir3Instruction::LoadScoped {
@@ -6469,6 +6505,7 @@ pub fn lower_ir2_to_ir3(
                     name: inner_name,
                     free_vars: inner_fv,
                     free_var_ids: inner_fv_ids,
+                    runtime_global_loads: inner_runtime_global_loads,
                     is_generator: inner_gen,
                     is_async: inner_async,
                     rest_param_index: inner_rest,
@@ -6488,6 +6525,7 @@ pub fn lower_ir2_to_ir3(
                         Some(inner_name.clone()),
                         inner_fv.clone(),
                         inner_fv_ids.clone(),
+                        inner_runtime_global_loads.clone(),
                         *inner_gen,
                         *inner_async,
                         *inner_rest,
@@ -6525,6 +6563,7 @@ pub fn lower_ir2_to_ir3(
                     name: inner_name,
                     free_vars: inner_fv,
                     free_var_ids: inner_fv_ids,
+                    runtime_global_loads: inner_runtime_global_loads,
                     is_generator: inner_gen,
                     is_async: inner_async,
                     rest_param_index: inner_rest,
@@ -6537,6 +6576,7 @@ pub fn lower_ir2_to_ir3(
                         inner_name.clone(),
                         inner_fv.clone(),
                         inner_fv_ids.clone(),
+                        inner_runtime_global_loads.clone(),
                         *inner_gen,
                         *inner_async,
                         *inner_rest,
@@ -7543,6 +7583,17 @@ fn collect_free_vars(
     (names, ids)
 }
 
+/// Canonical names of the runtime-injected global objects that resolve through
+/// the runtime scope chain. `inject_runtime_globals` (baseline_interpreter.rs)
+/// seeds these into the realm global frame, so a bare reference must lower to a
+/// `LoadScoped` to reach the injected object rather than decaying to `undefined`
+/// or a `ReferenceError`. Both the top-level IR2→IR3 path
+/// (`scoped_runtime_binding_ids`) and the function-body lowering
+/// (`rewrite_unresolved_function_body_loads`) consume this single list so the
+/// two paths cannot drift. Keep in sync with `inject_runtime_globals`.
+/// (bd-ylpdp; the YTBG/BotGuard `new Function` + `performance` spine.)
+const PREDECLARED_RUNTIME_GLOBALS: &[&str] = &["Function", "console", "performance", "process"];
+
 fn emit_reference_error_throw(ops: &mut Vec<Ir1Op>, name: &str) {
     ops.push(Ir1Op::LoadLiteral {
         value: Ir1Literal::String(format!("{name} is not defined")),
@@ -7557,12 +7608,22 @@ fn emit_reference_error_throw(ops: &mut Vec<Ir1Op>, name: &str) {
     });
 }
 
+/// Resolve free-floating identifier loads in a function body that have no
+/// source-level binding.
+///
+/// Returns the `(name, binding_id)` pairs of bare runtime-global references
+/// (`PREDECLARED_RUNTIME_GLOBALS`) found unresolved in the body. The caller
+/// threads these into the function's `runtime_global_loads` so the deferred IR3
+/// body pass routes their surviving `LoadBinding`s to `LoadScoped` (resolved
+/// against the injected realm global frame) instead of throwing. Genuinely
+/// unresolved names (not runtime globals, not immediately under `typeof`) are
+/// still rewritten to a catchable `ReferenceError` throw. (bd-ylpdp)
 fn rewrite_unresolved_function_body_loads(
     body_ops: &mut Vec<Ir1Op>,
     body_lookup: &BTreeMap<String, BindingId>,
     pre_lower_names: &BTreeSet<String>,
     outer_lookup: &BTreeMap<String, BindingId>,
-) {
+) -> Vec<(String, BindingId)> {
     let mut locally_defined_ids = BTreeSet::new();
     for op in body_ops.iter() {
         match op {
@@ -7584,13 +7645,30 @@ fn rewrite_unresolved_function_body_loads(
         .collect();
 
     if unresolved_by_id.is_empty() {
-        return;
+        return Vec::new();
     }
+
+    // A bare reference to a runtime-injected global (Function/console/process/
+    // performance) has no source-level binding, so it lands here as
+    // "unresolved". Rather than throw, route it to a scope-chain load: collect
+    // its (name, binding_id) for the caller to record in `runtime_global_loads`
+    // and leave the `LoadBinding` in place for the deferred IR3 pass to lower to
+    // `LoadScoped`. These ids are excluded from the ReferenceError rewrite below
+    // — including the `typeof` arm — so `typeof performance` resolves the
+    // injected object ("object") rather than yielding "undefined" (bd-ylpdp).
+    let runtime_global_loads: Vec<(String, BindingId)> = unresolved_by_id
+        .iter()
+        .filter(|(_, name)| PREDECLARED_RUNTIME_GLOBALS.contains(&name.as_str()))
+        .map(|(binding_id, name)| (name.clone(), *binding_id))
+        .collect();
+    let runtime_global_ids: BTreeSet<BindingId> =
+        runtime_global_loads.iter().map(|(_, id)| *id).collect();
 
     let mut rewritten = Vec::with_capacity(body_ops.len());
     for index in 0..body_ops.len() {
         if let Ir1Op::LoadBinding { binding_id } = &body_ops[index]
             && let Some(name) = unresolved_by_id.get(binding_id)
+            && !runtime_global_ids.contains(binding_id)
             && !matches!(
                 body_ops.get(index.saturating_add(1)),
                 Some(Ir1Op::UnaryOp {
@@ -7604,6 +7682,7 @@ fn rewrite_unresolved_function_body_loads(
         rewritten.push(body_ops[index].clone());
     }
     *body_ops = rewritten;
+    runtime_global_loads
 }
 
 fn alloc_internal_binding(
@@ -10933,7 +11012,7 @@ fn lower_expression_to_ir1_inner(
                 }
                 body_ops.push(Ir1Op::Return);
             }
-            rewrite_unresolved_function_body_loads(
+            let arrow_runtime_global_loads = rewrite_unresolved_function_body_loads(
                 &mut body_ops,
                 &body_lookup,
                 &pre_lower_names,
@@ -10947,6 +11026,7 @@ fn lower_expression_to_ir1_inner(
                 body_ops,
                 free_vars: arrow_free_vars,
                 free_var_ids: arrow_free_var_ids,
+                runtime_global_loads: arrow_runtime_global_loads,
                 is_generator: false,
                 is_async: *is_async,
                 rest_param_index,
@@ -11035,7 +11115,7 @@ fn lower_expression_to_ir1_inner(
                 });
                 body_ops.push(Ir1Op::Return);
             }
-            rewrite_unresolved_function_body_loads(
+            let fn_runtime_global_loads = rewrite_unresolved_function_body_loads(
                 &mut body_ops,
                 &body_lookup,
                 &pre_lower_names,
@@ -11068,6 +11148,7 @@ fn lower_expression_to_ir1_inner(
                 body_ops,
                 free_vars: fn_free_vars,
                 free_var_ids: fn_free_var_ids,
+                runtime_global_loads: fn_runtime_global_loads,
                 is_generator: *is_generator,
                 is_async: *is_async,
                 rest_param_index,
@@ -11497,6 +11578,7 @@ fn lower_expression_to_ir1_inner(
                 body_ops,
                 free_vars: Vec::new(),
                 free_var_ids: Vec::new(),
+                runtime_global_loads: Vec::new(),
                 is_generator: false,
                 is_async: false,
                 rest_param_index,
@@ -11633,6 +11715,7 @@ fn lower_expression_to_ir1_inner(
                     body_ops: m_body_ops,
                     free_vars: Vec::new(),
                     free_var_ids: Vec::new(),
+                    runtime_global_loads: Vec::new(),
                     is_generator: false,
                     is_async: false,
                     rest_param_index: m_rest_param_index,

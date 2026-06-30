@@ -478,6 +478,17 @@ pub enum Ir1Op {
         /// the function's own name — breaking recursion and captured-var
         /// write-back (bd-g0aok / bd-p89tp).
         free_var_ids: Vec<BindingId>,
+        /// Body binding-ids (paired with their source names) of bare references
+        /// to well-known runtime-injected globals (`Function`, `console`,
+        /// `process`, `performance`) that have no source-level binding. The
+        /// deferred IR3 body pass routes each to a `LoadScoped` so the load
+        /// resolves against the injected realm global frame instead of throwing
+        /// `ReferenceError` — the function-body counterpart of the top-level
+        /// `scoped_runtime_binding_ids` path. Kept separate from `free_vars`
+        /// (enclosing-scope captures) so the closure-capture machinery never
+        /// declares or shadows them (bd-ylpdp).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        runtime_global_loads: Vec<(String, BindingId)>,
         /// True when the source function is a generator (`function*`).
         is_generator: bool,
         /// True when the source function is async (`async function`).
@@ -499,6 +510,10 @@ pub enum Ir1Op {
         /// Body binding-ids of each free variable, aligned 1:1 with `free_vars`
         /// (see DeclareFunction).
         free_var_ids: Vec<BindingId>,
+        /// Bare references to runtime-injected globals routed to `LoadScoped`
+        /// (see DeclareFunction; bd-ylpdp).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        runtime_global_loads: Vec<(String, BindingId)>,
         /// True when the source function is a generator (`function*`).
         is_generator: bool,
         /// True when the source function is async (`async function` or `async () =>`).
@@ -697,6 +712,7 @@ impl Ir1Op {
                 body_ops,
                 free_vars,
                 free_var_ids: _,
+                runtime_global_loads: _,
                 is_generator,
                 is_async,
                 rest_param_index: _,
@@ -735,6 +751,7 @@ impl Ir1Op {
                 body_ops,
                 free_vars,
                 free_var_ids: _,
+                runtime_global_loads: _,
                 is_generator,
                 is_async,
                 rest_param_index: _,

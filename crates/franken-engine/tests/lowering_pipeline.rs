@@ -204,6 +204,7 @@ fn lower_ir2_to_ir3_rejects_deferred_function_value_stack_underflow() {
         body_ops: vec![Ir1Op::Return],
         free_vars: Vec::new(),
         free_var_ids: Vec::new(),
+        runtime_global_loads: Vec::new(),
         is_generator: false,
         is_async: false,
         rest_param_index: None,

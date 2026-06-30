@@ -1,0 +1,19 @@
+{
+  "schema_version": "franken-engine.botguard-potoken-fixture.v1",
+  "fixture_id": "potoken-synthetic-offline-v1",
+  "fixture_kind": "synthetic_botguard_potoken",
+  "source_url": "synthetic://franken_engine/botguard_potoken_smoke/v1/base.js",
+  "source_observed_utc": "2026-06-30T00:00:00Z",
+  "source_sha256": "sha256:7cce0d27c35ad42028a927bdf0e07d6c3c74522ccb3fbe13ffb7933331e9cf58",
+  "extracted_js_sha256": "sha256:2d14efc3c83c792006b3112060167be09b68aabb7a3960dc11d47cf3672a2598",
+  "entrypoint": "computePoToken",
+  "extracted_js": "var fold = new Function(\"a\", \"b\", \"return ((a * 31) + b) & 65535;\"); var t0 = performance.now(); var t1 = performance.now(); var monotonic = (t1 >= t0) ? 1 : 0; function computePoToken(challenge) { var buf = new Uint8Array(challenge.length); for (var i = 0; i < challenge.length; i = i + 1) { buf[i] = challenge.charCodeAt(i) & 255; } var acc = 0; for (var j = 0; j < buf.length; j = j + 1) { acc = fold(acc, buf[j]); } acc = (acc + monotonic) & 65535; var guard; try { if (acc < 0) { throw \"neg\"; } guard = \"ok\"; } catch (e) { guard = \"err\"; } return \"potoken.v1:\" + acc + \":mono=\" + monotonic + \":\" + guard; }",
+  "challenge_input": "fe-offline-bg-challenge-2026",
+  "deterministic_env": {
+    "instruction_budget": 5000000,
+    "performance_base_tick": 0,
+    "clock_source": "deterministic_instruction_tick"
+  },
+  "expected_output": "potoken.v1:45501:mono=1:ok",
+  "notes": "Synthetic offline reproducer (NOT real YouTube). Proves the engine-side PO-token path runs BotGuard-shaped JS offline: typed arrays + Function ctor + deterministic performance.now + try/catch; expected_output is independently computed by the generator's Python oracle (a differential check). DESIGN CONSTRAINTS surfaced while building this fixture (engine limitations real franken_whisper fixtures must respect or that need follow-up): (1) `new Function(...)` and `performance.now()` only resolve at TOP LEVEL -- inside a nested function body they throw, so the generated mixer + timing read are created at top level and captured by the entrypoint; (2) the challenge_input avoids the substrings token/key/secret/password because the IFC layer labels those Secret and fails-closed any derived loop guard. These are tracked as a YTBG follow-up."
+}

@@ -1289,6 +1289,16 @@ pub struct EvalOutcome {
     /// constructed and ran dynamic code.
     #[serde(default)]
     pub generated_code_audit: Vec<baseline_interpreter::GeneratedCodeAuditEntry>,
+    /// Total deterministic interpreter instructions consumed by this eval — the
+    /// "consumed steps" of the execution-budget log (bd-8enww.5.5 / YTBG-E5).
+    /// Compare it against the budget passed to `eval_with_instruction_budget` /
+    /// `eval_with_budgets` (or the containment default for plain `eval`). This is
+    /// populated only for a completed eval; a budget-exhaustion fault is surfaced
+    /// as an error whose message carries the consumed/limit pair, not as an
+    /// outcome. The per-`Function`-constructor breakdown lives in
+    /// `generated_code_audit`.
+    #[serde(default)]
+    pub instructions_executed: u64,
 }
 
 #[allow(clippy::result_large_err)]
@@ -1853,6 +1863,7 @@ fn eval_with_lane(
         console_output: output.console_output,
         source_ingestion: prepared.source_ingestion,
         generated_code_audit: output.generated_code_audit,
+        instructions_executed: output.instructions_executed,
     })
 }
 
@@ -1867,6 +1878,7 @@ struct NativeEvalOutput {
     value: String,
     console_output: Vec<baseline_interpreter::ConsoleEntry>,
     generated_code_audit: Vec<baseline_interpreter::GeneratedCodeAuditEntry>,
+    instructions_executed: u64,
 }
 
 #[allow(clippy::result_large_err)]
@@ -1967,6 +1979,7 @@ fn eval_via_native_pipeline(
         value: routed.result.value.to_string(),
         console_output: routed.result.console_output,
         generated_code_audit: routed.result.generated_code_audit,
+        instructions_executed: routed.result.instructions_executed,
     })
 }
 
@@ -2683,6 +2696,7 @@ mod tests {
             console_output: Vec::new(),
             source_ingestion: SourceIngestionSummary::default(),
             generated_code_audit: Vec::new(),
+            instructions_executed: 7,
         };
         let json = serde_json::to_string(&outcome).expect("eval outcome should serialize to JSON");
         let decoded: EvalOutcome =

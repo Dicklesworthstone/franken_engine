@@ -1000,6 +1000,36 @@ fn likely_botguard_gap_spike_vectors_are_logged_with_current_observations() {
     );
 }
 
+/// bd-8enww.5.3 (YTBG-E3): the deterministic `performance` shim is live through
+/// the public `HybridRouter` surface — the path BotGuard / PO-token fixtures use.
+/// These are the two `performance` spike vectors that were confirmed gaps in the
+/// bd-8enww.5.2 spike (`typeof performance` -> `undefined`, `performance.now()` ->
+/// `eval.runtime.fault`); they are pinned here as HARD regressions so a broken or
+/// missing `performance` global fails this test rather than silently downgrading
+/// to a logged spike observation. The deterministic monotonic read also guards the
+/// replay contract (a later read never precedes an earlier one).
+#[test]
+fn performance_shim_vectors_pass_through_hybrid_router() {
+    let vectors = [
+        JsConformanceVector::value(
+            "ytbg-performance-global-type",
+            "performance",
+            "typeof performance",
+            "object",
+        ),
+        JsConformanceVector::value(
+            "ytbg-performance-now-monotonic-type",
+            "performance",
+            "var a=performance.now(); var b=performance.now(); typeof a + ':' + (b >= a)",
+            "number:true",
+        ),
+    ];
+    let report = assert_js_conformance_vectors(&vectors);
+    assert_eq!(report.total_vectors, vectors.len() as u32);
+    assert_eq!(report.passed, vectors.len() as u32);
+    assert_eq!(report.failed, 0);
+}
+
 #[test]
 fn real_youtube_fixture_contract_is_self_documenting() {
     assert!(REAL_YOUTUBE_FIXTURE_CONTRACT.contains(REAL_YOUTUBE_FIXTURE_ENV));

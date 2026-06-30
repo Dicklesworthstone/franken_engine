@@ -4403,6 +4403,15 @@ pub fn lower_ir2_to_ir3(
     if let Some(binding_id) = name_to_binding_id.get("Function") {
         scoped_runtime_binding_ids.insert(*binding_id);
     }
+    // bd-8enww.5.3 (YTBG-E3): `performance` is a runtime-injected global object
+    // (deterministic `performance.now()` shim). Like `console`/`process`, its
+    // loads must route through the runtime scope chain so `typeof performance`
+    // and `performance.now()` resolve the injected object instead of decaying to
+    // an undeclared-identifier `undefined` (which made `performance.now()` a
+    // TypeError on undefined).
+    if let Some(binding_id) = name_to_binding_id.get("performance") {
+        scoped_runtime_binding_ids.insert(*binding_id);
+    }
 
     let top_level_function_decl_names: BTreeSet<String> = ir2
         .ops

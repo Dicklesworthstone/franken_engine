@@ -609,6 +609,10 @@ enum GatesMode {
         out_dir: PathBuf,
         config: Option<PathBuf>,
     },
+    CompoundingRedTeam {
+        out_dir: PathBuf,
+        config: Option<PathBuf>,
+    },
     AdversarialCampaign {
         out_dir: PathBuf,
     },
@@ -3235,6 +3239,30 @@ fn parse_gates_command(args: &[String]) -> Result<CommandSpec, String> {
                 .ok_or_else(|| "gates signature-drift requires --out-dir <dir>".to_string())?;
             Ok(CommandSpec::Gates(GatesArgs {
                 mode: GatesMode::SignatureDrift { out_dir, config },
+            }))
+        }
+        "compounding-red-team" => {
+            let mut out_dir: Option<PathBuf> = None;
+            let mut config: Option<PathBuf> = None;
+
+            let mut index = 1; // Skip "compounding-red-team"
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--out-dir" => {
+                        out_dir = Some(PathBuf::from(next_arg(args, &mut index, "--out-dir")?))
+                    }
+                    "--config" => {
+                        config = Some(PathBuf::from(next_arg(args, &mut index, "--config")?))
+                    }
+                    flag => return Err(format!("unknown compounding-red-team flag `{flag}`")),
+                }
+                index += 1;
+            }
+
+            let out_dir = out_dir
+                .ok_or_else(|| "gates compounding-red-team requires --out-dir <dir>".to_string())?;
+            Ok(CommandSpec::Gates(GatesArgs {
+                mode: GatesMode::CompoundingRedTeam { out_dir, config },
             }))
         }
         other => Err(format!("unknown gates subcommand `{other}`")),
@@ -8929,6 +8957,41 @@ fn execute_gates(args: GatesArgs) -> Result<i32, String> {
                 config.as_deref(),
             ))
         }
+        GatesMode::CompoundingRedTeam { out_dir, config } => {
+            use frankenengine_engine::compounding_red_team_campaign::{
+                CampaignConfig, engine_containment_oracle, run_campaign, write_bundle,
+            };
+            use frankenengine_engine::corpus_promotion::PromotedLedger;
+
+            let campaign_config = match &config {
+                Some(path) => {
+                    let text = std::fs::read_to_string(path).map_err(|e| {
+                        format!("failed to read campaign config {}: {e}", path.display())
+                    })?;
+                    CampaignConfig::from_toml(&text)
+                        .map_err(|e| format!("invalid campaign config: {e}"))?
+                }
+                None => CampaignConfig::default(),
+            };
+
+            let ledger = PromotedLedger::new();
+            let bundle = run_campaign(&campaign_config, &ledger, engine_containment_oracle)
+                .map_err(|e| format!("compounding red-team campaign failed: {e}"))?;
+            let artifacts = write_bundle(&bundle, &out_dir)
+                .map_err(|e| format!("failed to write campaign bundle: {e}"))?;
+
+            println!("✅ Compounding red-team campaign completed");
+            println!("📁 Bundle directory: {}", out_dir.display());
+            println!("🔖 Bundle digest: {}", bundle.bundle_digest);
+            println!(
+                "📊 explored {} / promoted {} / rejected {} ({} artifacts)",
+                bundle.statistics.candidates_explored,
+                bundle.statistics.promoted,
+                bundle.statistics.rejected,
+                artifacts.len(),
+            );
+            Ok(0)
+        }
         _ => Err(
             "Unsupported gates subcommand. Use 'frankenctl help gates' to see available commands."
                 .to_string(),
@@ -10695,6 +10758,7 @@ fn gates_usage() -> String {
         "gates usage:",
         "  frankenctl gates zero-placeholder --out-dir <dir> [--waivers <file>]",
         "  frankenctl gates signature-drift --out-dir <dir> [--config <file>]",
+        "  frankenctl gates compounding-red-team --out-dir <dir> [--config <file>]",
         "  frankenctl gates adversarial-campaign --out-dir <dir>",
         "  frankenctl gates ambient-mock-guard --out-dir <dir>",
         "  frankenctl gates ifc-conformance --out-dir <dir>",
@@ -13142,6 +13206,36 @@ mod tests {
         let args = vec!["gates".to_string(), "signature-drift".to_string()];
         let error = parse_command(&args).expect_err("missing out-dir should fail");
         assert_eq!(error, "gates signature-drift requires --out-dir <dir>");
+    }
+
+    #[test]
+    fn parse_gates_compounding_red_team_command_parses_advertised_flags() {
+        let args = vec![
+            "gates".to_string(),
+            "compounding-red-team".to_string(),
+            "--out-dir".to_string(),
+            "test/gates/compounding".to_string(),
+            "--config".to_string(),
+            "campaign.toml".to_string(),
+        ];
+        let result = parse_command(&args).expect("should parse valid compounding-red-team command");
+        if let CommandSpec::Gates(gates_args) = result {
+            if let GatesMode::CompoundingRedTeam { out_dir, config } = gates_args.mode {
+                assert_eq!(out_dir, PathBuf::from("test/gates/compounding"));
+                assert_eq!(config, Some(PathBuf::from("campaign.toml")));
+            } else {
+                panic!("expected CompoundingRedTeam mode");
+            }
+        } else {
+            panic!("expected Gates command");
+        }
+    }
+
+    #[test]
+    fn parse_gates_compounding_red_team_command_requires_out_dir() {
+        let args = vec!["gates".to_string(), "compounding-red-team".to_string()];
+        let error = parse_command(&args).expect_err("missing out-dir should fail");
+        assert_eq!(error, "gates compounding-red-team requires --out-dir <dir>");
     }
 
     #[test]

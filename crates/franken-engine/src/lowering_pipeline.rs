@@ -7729,6 +7729,110 @@ fn required_effect_for_ambient_authority(
     }
 }
 
+/// Lower a `typeof` operand while suppressing the ambient-authority gate on the
+/// operand's OWN reference (bd-846vj).
+///
+/// `typeof` inspects a reference's type without exercising the authority a real
+/// read would (spec: `typeof <unresolved>` is `"undefined"`, never a throw), so an
+/// ambient-authority identifier or a static `obj.prop` member appearing directly
+/// under `typeof` — `typeof process`, `typeof process.env`, `typeof require` — must
+/// not trip the gate. Only the OUTERMOST reference is exempted: a nested read that
+/// reaches THROUGH a gated member (e.g. `typeof process.env.SECRET`, whose inner
+/// `process.env` is a genuine env read on the way to `.SECRET`) still faults,
+/// because lowering the object chain re-enters the normal (checked) member arm.
+///
+/// Returns `Ok(true)` when it lowered the operand (the caller then emits the
+/// `TypeOf` op), or `Ok(false)` when the operand is not an ambient-gated shape and
+/// should fall through to the general lowering. A user binding that shadows the
+/// name takes precedence (no suppression).
+#[allow(clippy::too_many_arguments)]
+fn lower_typeof_operand_suppressing_ambient(
+    argument: &Expression,
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    root_scope_id: ScopeId,
+    label_counter: &mut u32,
+    span_table: &mut Vec<Ir1OpSpanEntry>,
+) -> Result<bool, LoweringPipelineError> {
+    match argument {
+        Expression::Identifier(name)
+            if !binding_lookup.contains_key(name.as_str())
+                && required_effect_for_ambient_authority(name, None).is_some() =>
+        {
+            // Plain binding load (a forward-ref placeholder resolved later to the
+            // runtime global), skipping the Identifier arm's ambient check.
+            let id = *binding_index;
+            *binding_index = binding_index.saturating_add(1);
+            bindings.push(ResolvedBinding {
+                name: name.clone(),
+                binding_id: id,
+                scope: root_scope_id,
+                kind: BindingKind::Let,
+            });
+            binding_lookup.insert(name.clone(), id);
+            ops.push(Ir1Op::LoadBinding { binding_id: id });
+            Ok(true)
+        }
+        Expression::Member {
+            object,
+            property,
+            computed: false,
+            ..
+        } => {
+            let Expression::Identifier(obj_name) = object.as_ref() else {
+                return Ok(false);
+            };
+            let prop_name = match property.as_ref() {
+                Expression::Identifier(p) | Expression::StringLiteral(p) => p.as_str(),
+                _ => return Ok(false),
+            };
+            if binding_lookup.contains_key(obj_name.as_str())
+                || required_effect_for_ambient_authority(obj_name, Some(prop_name)).is_none()
+            {
+                return Ok(false);
+            }
+            // Load the object identifier WITHOUT its own ambient check (mirrors the
+            // bare-identifier arm above): lowering the receiver through the normal
+            // path would re-trigger the gate on the bare `process`/`require`/…
+            // object (e.g. `typeof process.env` faulting on `process`). Then read
+            // `.prop`, also skipping the member arm's check.
+            let obj_binding = if let Some(existing) = binding_lookup.get(obj_name.as_str()) {
+                *existing
+            } else {
+                let id = *binding_index;
+                *binding_index = binding_index.saturating_add(1);
+                bindings.push(ResolvedBinding {
+                    name: obj_name.clone(),
+                    binding_id: id,
+                    scope: root_scope_id,
+                    kind: BindingKind::Let,
+                });
+                binding_lookup.insert(obj_name.clone(), id);
+                id
+            };
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: obj_binding,
+            });
+            let key = lower_member_property_key_to_ir1(
+                property,
+                false,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+                span_table,
+            )?;
+            ops.push(Ir1Op::GetProperty { key });
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
 /// The ambient-authority [`EffectSet`] lowering enforces for `scope_id`.
 ///
 /// Lowering applies a fixed deny-by-default baseline — the empty effect set,
@@ -8413,6 +8517,29 @@ fn lower_expression_to_ir1_inner(
             {
                 ops.push(Ir1Op::LoadLiteral {
                     value: Ir1Literal::String("function".to_string()),
+                });
+                return Ok(());
+            }
+
+            // bd-846vj: `typeof` never exercises ambient authority — an ambient
+            // identifier/member directly under `typeof` (`typeof process`,
+            // `typeof process.env`, `typeof require`, …) must not fault the
+            // ambient-authority gate. Suppress the gate on the operand's own
+            // reference; nested reads through a gated member still fault.
+            if *operator == UnaryOperator::Typeof
+                && lower_typeof_operand_suppressing_ambient(
+                    argument,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
+                )?
+            {
+                ops.push(Ir1Op::UnaryOp {
+                    operator: *operator,
                 });
                 return Ok(());
             }

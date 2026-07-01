@@ -24,9 +24,37 @@ fn test_console_operations_integration_regression() {
 
 #[test]
 fn test_process_global_minimal_shape_regression() {
+    // bd-846vj: `typeof` inspects a reference's type without exercising ambient
+    // authority (spec: `typeof <unresolved>` is "undefined", never a throw), so
+    // `typeof process` / `typeof process.env` resolve the minimal injected
+    // `process` global to "object" without an `env.read` capability.
     assert_eq!(eval_value("typeof process"), "object");
     assert_eq!(eval_value("typeof process.env"), "object");
-    assert_eq!(eval_value("process.argv.length"), "0");
+
+    // A REAL read of the `process` shape (`process.argv`, `process.env.X`, …) IS
+    // an ambient-authority exercise and stays gated under the deny-all lowering
+    // posture — the SAME gate the red-team `process` scenarios rely on to reject
+    // bare `process` / `process.exit` / `process[computed]` access. So
+    // `process.argv.length` is rejected rather than returning "0"; the
+    // minimal-process-global feature is reduced to typeof-shape (a benign
+    // trusted-context shape read is tracked separately, see bd-846vj).
+    let mut engine = QuickJsInspiredNativeEngine;
+    match engine.eval("process.argv.length") {
+        Ok(outcome) => panic!(
+            "expected `process.argv.length` to be denied by the ambient-authority gate, \
+             got value {:?}",
+            outcome.value
+        ),
+        Err(error) => {
+            let rendered = format!("{error:?}").to_lowercase();
+            assert!(
+                rendered.contains("ambient")
+                    || rendered.contains("env.read")
+                    || rendered.contains("env_read"),
+                "expected an ambient-authority denial for `process.argv.length`, got: {error:?}"
+            );
+        }
+    }
 }
 
 #[test]

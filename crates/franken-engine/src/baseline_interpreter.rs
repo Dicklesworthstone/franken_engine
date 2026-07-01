@@ -11542,7 +11542,39 @@ impl InterpreterCore {
                     } else if capability.0.starts_with("timer:") {
                         self.dispatch_timer_hostcall(&capability.0, args)?
                     } else if capability.0.starts_with("builtin:") {
-                        self.dispatch_builtin_hostcall(&capability.0, args, Some(module))?
+                        // bd-8enww.4.10: a `builtin:` hostcall can run a user
+                        // callback whose explicit `throw` escapes its isolated
+                        // lane as `UncaughtException` with the thrown value
+                        // preserved — e.g. `Array.from(xs, x => { throw v })` via
+                        // the `builtin:ArrayFrom` mapper mini-lane, or an
+                        // array-literal `[…].some(x => { throw v })` via the
+                        // `builtin:ArrayPrototypeSome` fast-path. Route it into
+                        // THIS frame's catch handler exactly like the `Call` /
+                        // `CallMethod` builtin arms, rather than letting `?` escape
+                        // an enclosing `try`/`catch` — the AC#3 catchability
+                        // follow-up in the bd-8enww.4.7 / bd-8enww.4.8 family.
+                        // (Non-throw hostcall errors are a no-op through the
+                        // router and propagate unchanged.)
+                        match self.dispatch_builtin_hostcall(&capability.0, args, Some(module)) {
+                            Ok(value) => value,
+                            Err(err) => match self.route_isolated_explicit_throw(err)? {
+                                None => {
+                                    // IFC (bd-8enww.4.8 throw-path mirror): the
+                                    // escaping value is seeded from the arg
+                                    // registers (which include the receiver array /
+                                    // source as arg 0), so join their labels onto
+                                    // the re-armed exception label — mirrors the
+                                    // success-path `dst` join below so a Secret
+                                    // receiver/arg cannot launder to a Public catch
+                                    // binding now that the mini-lane preserves the
+                                    // original thrown value.
+                                    self.pending_exception_label =
+                                        self.pending_exception_label.join(&args_label);
+                                    continue;
+                                }
+                                Some(err) => return Err(err),
+                            },
+                        }
                     } else if capability.0 == "net:client_request" {
                         // bd-3894s slice (2b): `http.request(url[, opts])` builds a
                         // writable `ClientRequest` object here WITHOUT egressing —
@@ -37781,6 +37813,82 @@ mod async_runtime_tests_current {
                 .expect("catch binding label should exist"),
             &crate::ifc_artifacts::Label::Secret,
             "an explicit reducer throw over a Secret array must taint the catch binding"
+        );
+    }
+
+    /// bd-8enww.4.10 (IFC soundness for the hostcall-path catchability fix): the
+    /// array-literal `[…].some(cb)` fast-path dispatches through the `HostCall`
+    /// IR3 instruction (`builtin:ArrayPrototypeSome`), not `CallMethod`. When the
+    /// predicate explicitly throws one of the receiver array's elements, the new
+    /// throw-path join at the `builtin:` hostcall arm must raise the caught
+    /// binding to the join of the arg-register labels (which include the receiver
+    /// array as arg 0); otherwise a Secret array whose predicate throws an element
+    /// would launder that element to a Public catch binding. Throw-path sibling of
+    /// the CallMethod-side `reducer_explicit_throw_over_secret_array_taints_catch_binding`.
+    #[test]
+    fn array_hostcall_explicit_throw_over_secret_array_taints_catch_binding() {
+        let module = test_module_with_functions(
+            vec![
+                // try { r3 = some_hostcall(arr, predicate) } catch (r1) { }
+                Ir3Instruction::BeginTry {
+                    catch_target: 3,
+                    finally_target: None,
+                },
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("builtin:ArrayPrototypeSome".to_string()),
+                    args: RegRange { start: 8, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::EnterCatch { dst: 1 },
+                Ir3Instruction::Halt,
+                // Predicate callback body: throw the current element (local reg 0).
+                Ir3Instruction::Throw { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 5,
+                arity: 3,
+                frame_size: 5,
+                name: Some("throwing_predicate".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+
+        let mut core = test_interpreter();
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::Builtin);
+        let array_id = core
+            .alloc_array_from_values(&[Value::Int(1), Value::Int(2), Value::Int(3)])
+            .expect("array allocation should succeed");
+        core.mutate_registers(|r| {
+            r[8] = Value::Object(array_id);
+            r[9] = Value::Function(0);
+        });
+        core.set_register_label(8, crate::ifc_artifacts::Label::Secret)
+            .expect("receiver (arg 0) label should be settable");
+        // Seed the catch binding strictly below Secret to prove the throw-path
+        // join raises it (a no-op would leave it at this stale Public).
+        core.set_register_label(1, crate::ifc_artifacts::Label::Public)
+            .expect("catch binding label should be settable");
+
+        core.execute(&module)
+            .expect("a predicate that throws should be caught in-frame");
+
+        // The predicate threw its current element (the first, Int(1)); the catch
+        // binding holds it verbatim...
+        assert_eq!(
+            core.registers[1],
+            Value::Int(1),
+            "the catch binding must hold the predicate's thrown element verbatim"
+        );
+        // ...and carries at least the receiver's Secret label (no laundering).
+        assert_eq!(
+            core.get_register_label(1)
+                .expect("catch binding label should exist"),
+            &crate::ifc_artifacts::Label::Secret,
+            "an explicit predicate throw over a Secret array (hostcall path) must taint the catch binding"
         );
     }
 

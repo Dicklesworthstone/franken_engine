@@ -19,14 +19,16 @@
 //! preserved the value AND are caught via the `CallMethod` route; they are
 //! covered here as regression guards.
 //!
-//! Scope boundary (found while closing this bead): `Array.from` and the
-//! short-circuit predicates `some`/`every`/`find` preserve the thrown VALUE but
-//! their throw currently escapes an enclosing `try`/`catch` (surfaces as
-//! `uncaught exception: …`), because they are dispatched off the `Call`/
-//! `CallMethod` builtin arms that apply `route_isolated_explicit_throw`
-//! (`Array.from` goes through the `"builtin:ArrayFrom"` hostcall path). That is a
-//! distinct catchability routing gap in the bd-8enww.4.7 family (this bead's
-//! AC#3), tracked in its own follow-up bead — not fixed here.
+//! Scope boundary (found while closing this bead, later CLOSED by bd-8enww.4.10):
+//! `Array.from` and the array-literal fast-path `[…].some(cb)` are dispatched as
+//! `builtin:` HOSTCALLS (the `HostCall` IR3 instruction), not the `Call`/
+//! `CallMethod` builtin arms that apply `route_isolated_explicit_throw`, so their
+//! explicit callback throw preserved the VALUE (this bead) but originally escaped
+//! an enclosing `try`/`catch`. (The originally-suspected `every`/`find` were in
+//! fact already caught — they have no literal fast-path and go through
+//! `CallMethod`.) bd-8enww.4.10 routed the `builtin:` hostcall arm through the
+//! same unwinding + IFC join, so those throws are now catchable; see
+//! `array_callback_catchability_bd_8enww_4_10.rs`.
 //!
 //! These tests drive the public `HybridRouter::eval` surface (the parent-bead
 //! acceptance path) and assert observable values, not interpreter internals. The
@@ -128,24 +130,24 @@ fn reduce_crossed_throw_can_be_rethrown_to_outer_handler() {
 // --- Array.from mapper: the sibling legacy mini-lane (value preserved) --------
 
 #[test]
-fn array_from_mapper_throw_preserves_original_value_in_surfaced_error() {
+fn array_from_mapper_throw_caught_with_original_value() {
     // `Array.from` runs its map fn through the same legacy mini-lane as the
-    // reducer, so the value fix makes an explicit mapper `throw` surface the
+    // reducer, so THIS (4.8) fix makes an explicit mapper `throw` carry the
     // ORIGINAL value ("map") rather than a re-boxed "unsupported instruction"
     // error.
     //
-    // NOTE: unlike `reduce`, `Array.from` is dispatched via the hostcall path
-    // (`"builtin:ArrayFrom"`), NOT the `Call`/`CallMethod` builtin arms that
-    // apply `route_isolated_explicit_throw`, so the throw is currently UNCAUGHT
-    // even inside a `try`/`catch`. That catchability routing gap is distinct
-    // from this bead's value-fidelity scope and is tracked separately (the
-    // bd-8enww.4.7 family / this bead's AC#3). Here we pin the value fidelity
-    // this fix delivers via the surfaced (uncaught) message.
-    let m =
-        uncaught(r#"try { Array.from([1,2,3], function(x){ throw "map"; }); } catch (e) { e; }"#);
-    assert!(
-        m.contains("uncaught exception") && m.contains("map"),
-        "Array.from mapper throw must surface the original value, not a wrapped error: {m}",
+    // The follow-up bd-8enww.4.10 then closed the catchability routing gap noted
+    // when this bead landed: `Array.from` is dispatched via the `builtin:ArrayFrom`
+    // hostcall, which now routes an explicit callback throw through
+    // `route_isolated_explicit_throw` just like the `Call`/`CallMethod` arms — so
+    // the throw is CAUGHT by an enclosing `try`/`catch`, binding the original
+    // value this 4.8 fix preserved. (Deeper catchability coverage lives in
+    // `array_callback_catchability_bd_8enww_4_10.rs`.)
+    assert_eq!(
+        caught(
+            r#"var c = "no"; try { Array.from([1,2,3], function(x){ throw "map"; }); } catch (e) { c = e; } c;"#
+        ),
+        "map",
     );
 }
 

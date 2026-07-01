@@ -2049,6 +2049,11 @@ struct ParseExecutionContext<'a> {
     /// Current statement nesting depth (if/for/while/try/switch/function bodies).
     /// Guards against stack overflow from deeply nested statements.
     statement_depth: u64,
+    /// Current binding-pattern nesting depth (destructuring: `[[[...]]]`,
+    /// `{a:{b:{c:...}}}`). Guards against stack overflow from deeply nested
+    /// destructuring patterns, whose recursive descent is separate from the
+    /// statement/expression guards (bd-c4lhp).
+    pattern_depth: u64,
     /// Whether the current parsing context is in strict mode.
     strict_mode: bool,
 }
@@ -2547,6 +2552,7 @@ fn parse_source(
         token_count,
         max_recursion_observed: 0,
         statement_depth: 0,
+        pattern_depth: 0,
         strict_mode: false,
     };
 
@@ -3478,6 +3484,35 @@ fn validate_named_export_specifiers(
 
 /// Parse a binding pattern: identifier, `{ ... }` object, or `[ ... ]` array.
 fn parse_binding_pattern(
+    source: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+) -> ParseResult<BindingPattern> {
+    // Guard against stack overflow from deeply nested destructuring patterns
+    // (`[[[...]]]`, `{a:{b:{c:...}}}`). Their recursive descent is separate from
+    // the statement/expression depth guards, so without this a deeply nested
+    // pattern would overflow the native stack and abort the process rather than
+    // surface a recoverable budget error (bd-c4lhp).
+    context.pattern_depth += 1;
+    if context.pattern_depth > context.options.budget.max_recursion_depth {
+        context.pattern_depth -= 1;
+        return Err(ParseError::new(
+            ParseErrorCode::BudgetExceeded,
+            format!(
+                "binding-pattern nesting budget exceeded: depth={} max={}",
+                context.options.budget.max_recursion_depth,
+                context.options.budget.max_recursion_depth
+            ),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+    let result = parse_binding_pattern_inner(source, span, context);
+    context.pattern_depth -= 1;
+    result
+}
+
+fn parse_binding_pattern_inner(
     source: &str,
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
@@ -11276,6 +11311,81 @@ mod tests {
         }
     }
 
+    /// Parse `source` under a small recursion budget so the depth guards fire
+    /// well before the native stack is at risk of overflow.
+    fn parse_with_recursion_limit(
+        source: &str,
+        max_recursion_depth: u64,
+    ) -> ParseResult<SyntaxTree> {
+        let parser = CanonicalEs2020Parser;
+        let options = ParserOptions {
+            mode: ParserMode::ScalarReference,
+            budget: ParserBudget {
+                max_source_bytes: 1 << 20,
+                max_token_count: 1 << 20,
+                max_recursion_depth,
+            },
+        };
+        parser.parse_with_options(source, ParseGoal::Script, &options)
+    }
+
+    /// bd-c4lhp: deeply nested array destructuring must surface a recoverable
+    /// budget error, never overflow the native stack. Before the fix,
+    /// `parse_binding_pattern` recursed with no depth guard, so this input
+    /// aborted the process (SIGABRT, "thread '…' has overflowed its stack").
+    #[test]
+    fn deeply_nested_array_destructuring_is_depth_bounded_bd_c4lhp() {
+        let depth = 2000;
+        let src = format!("let {}x{} = 0;", "[".repeat(depth), "]".repeat(depth));
+        let err = parse_with_recursion_limit(&src, 32)
+            .expect_err("deep array destructuring must hit the pattern budget");
+        assert_eq!(err.code, ParseErrorCode::BudgetExceeded);
+        assert!(
+            err.message
+                .contains("binding-pattern nesting budget exceeded"),
+            "expected the binding-pattern guard, got: {}",
+            err.message
+        );
+    }
+
+    /// bd-c4lhp: the same guard bounds deeply nested object destructuring.
+    #[test]
+    fn deeply_nested_object_destructuring_is_depth_bounded_bd_c4lhp() {
+        let depth = 2000;
+        let src = format!("let {}x{} = 0;", "{a:".repeat(depth), "}".repeat(depth));
+        let err = parse_with_recursion_limit(&src, 32)
+            .expect_err("deep object destructuring must hit the pattern budget");
+        assert_eq!(err.code, ParseErrorCode::BudgetExceeded);
+        assert!(
+            err.message
+                .contains("binding-pattern nesting budget exceeded"),
+            "expected the binding-pattern guard, got: {}",
+            err.message
+        );
+    }
+
+    /// The pattern-depth guard bounds nesting without rejecting valid patterns:
+    /// a moderately nested destructuring pattern below the limit still parses.
+    #[test]
+    fn moderately_nested_destructuring_still_parses_bd_c4lhp() {
+        parse_with_recursion_limit("let [a, [b, [c, [d]]]] = x;", 32)
+            .expect("shallow destructuring must parse cleanly");
+        parse_with_recursion_limit("let { a: { b: { c: d } } } = x;", 32)
+            .expect("shallow object destructuring must parse cleanly");
+    }
+
+    /// bd-c4lhp: the sibling expression depth guard likewise bounds deeply
+    /// nested parentheses — deep nesting is uniformly a recoverable budget
+    /// error, never a process abort.
+    #[test]
+    fn deeply_nested_parentheses_are_depth_bounded_bd_c4lhp() {
+        let depth = 2000;
+        let src = format!("{}1{};", "(".repeat(depth), ")".repeat(depth));
+        let err = parse_with_recursion_limit(&src, 32)
+            .expect_err("deep parentheses must hit the recursion budget");
+        assert_eq!(err.code, ParseErrorCode::BudgetExceeded);
+    }
+
     #[test]
     fn utf8_boundary_safe_scanner_matches_scalar_reference_for_ascii_inputs() {
         let cases = [
@@ -13349,6 +13459,7 @@ mod tests {
             token_count: 0,
             max_recursion_observed: 0,
             statement_depth: 0,
+            pattern_depth: 0,
             strict_mode: false,
         };
         parse_statement(source, ParseGoal::Script, span, &mut context)

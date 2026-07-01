@@ -10665,7 +10665,23 @@ impl InterpreterCore {
                             match self.dispatch_builtin_function(module, builtin, args, None) {
                                 Ok(value) => value,
                                 Err(err) => match self.route_isolated_explicit_throw(err)? {
-                                    None => continue,
+                                    None => {
+                                        // IFC (bd-8enww.4.8): an explicit throw
+                                        // escaping the builtin's callback lane
+                                        // carries a value seeded from the arg
+                                        // registers, so join their labels onto the
+                                        // re-armed exception label — the throw-path
+                                        // mirror of the success-path join below.
+                                        // Required now that the legacy reduce /
+                                        // Array.from mini-lanes preserve the
+                                        // original thrown value (not a Public
+                                        // engine error), so a Secret arg cannot
+                                        // launder to a Public catch binding.
+                                        let escaped = self.join_arg_range_label(args)?;
+                                        self.pending_exception_label =
+                                            self.pending_exception_label.join(&escaped);
+                                        continue;
+                                    }
                                     Some(err) => return Err(err),
                                 },
                             };
@@ -11125,7 +11141,22 @@ impl InterpreterCore {
                         ) {
                             Ok(value) => value,
                             Err(err) => match self.route_isolated_explicit_throw(err)? {
-                                None => continue,
+                                None => {
+                                    // IFC (bd-8enww.4.8): mirror the success-path
+                                    // receiver+args label join (below) onto an
+                                    // explicit throw escaping the builtin's
+                                    // callback lane, so a Secret array's reducer
+                                    // that throws one of its elements cannot
+                                    // launder to a Public catch binding now that
+                                    // the legacy mini-lane preserves the original
+                                    // thrown value.
+                                    let escaped = self
+                                        .join_arg_range_label(args)?
+                                        .join(self.get_register_label(receiver)?);
+                                    self.pending_exception_label =
+                                        self.pending_exception_label.join(&escaped);
+                                    continue;
+                                }
                                 Some(err) => return Err(err),
                             },
                         };
@@ -19568,6 +19599,30 @@ impl InterpreterCore {
                 Ir3Instruction::Halt => {
                     return Ok(Value::Undefined);
                 }
+                Ir3Instruction::Throw { value } => {
+                    // bd-8enww.4.8: preserve the callback's explicitly-thrown
+                    // value so an enclosing `try`/`catch` binds the ORIGINAL
+                    // value verbatim, instead of the wrapped "unsupported
+                    // instruction" TypeError this `match` used to surface via its
+                    // `other` arm (which the caller then re-boxed into a generic
+                    // Error object — the `[object …]` symptom of this bug).
+                    //
+                    // Mirror the modern `Throw` arm: arm `pending_exception` with
+                    // the value and surface an `UncaughtException`. The `Call` /
+                    // `CallMethod` builtin dispatch that ran this reducer then
+                    // routes it through `route_isolated_explicit_throw` into the
+                    // caller's catch frames, re-raising the preserved value. This
+                    // legacy mini-lane tracks no per-register labels, so the
+                    // escaping value's confidentiality is re-established (as a
+                    // sound upper bound) by the receiver+args label join on the
+                    // dispatch site's throw path.
+                    let thrown = Self::read_local_register(&local_registers, value)?;
+                    self.pending_exception = Some(thrown.clone());
+                    self.pending_exception_label = Label::Public;
+                    return Err(InterpreterError::UncaughtException {
+                        value: Self::uncaught_exception_description(&thrown),
+                    });
+                }
                 other => {
                     return Err(InterpreterError::TypeError {
                         expected: "simple synchronous reducer callback".to_string(),
@@ -19799,6 +19854,22 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::Halt => {
                     return Ok(Value::Undefined);
+                }
+                Ir3Instruction::Throw { value } => {
+                    // bd-8enww.4.8: same legacy mini-lane family as the reducer
+                    // callback above — preserve the mapper's explicitly-thrown
+                    // value so an enclosing `try`/`catch` sees the ORIGINAL value
+                    // rather than a re-boxed "unsupported instruction" Error. The
+                    // `Array.from` dispatch routes this `UncaughtException`
+                    // through `route_isolated_explicit_throw`, which re-raises the
+                    // preserved value; the dispatch site's throw-path label join
+                    // re-establishes confidentiality for this label-less lane.
+                    let thrown = Self::read_local_register(&local_registers, value)?;
+                    self.pending_exception = Some(thrown.clone());
+                    self.pending_exception_label = Label::Public;
+                    return Err(InterpreterError::UncaughtException {
+                        value: Self::uncaught_exception_description(&thrown),
+                    });
                 }
                 other => {
                     return Err(InterpreterError::TypeError {
@@ -37627,6 +37698,89 @@ mod async_runtime_tests_current {
                 .expect("dst register label should exist"),
             &crate::ifc_artifacts::Label::Secret,
             "builtin method result must inherit the receiver's label (bd-ooaka.1)"
+        );
+    }
+
+    /// bd-8enww.4.8 (IFC soundness for the value-fidelity fix): the legacy
+    /// reduce mini-lane now preserves a callback's explicitly-thrown value —
+    /// which can be a real element of the receiver array. Because the mini-lane
+    /// tracks no per-register labels, the `CallMethod` throw-path join must raise
+    /// the caught binding to the receiver's label; otherwise a Secret array whose
+    /// reducer throws one of its elements would launder that element to a Public
+    /// catch binding. This is the throw-path sibling of
+    /// `builtin_method_result_inherits_receiver_label` (the success path).
+    #[test]
+    fn reducer_explicit_throw_over_secret_array_taints_catch_binding() {
+        let mut module = test_module_with_functions(
+            vec![
+                // try { r3 = arr.reduce(reducer, 0) } catch (r1) { }
+                Ir3Instruction::BeginTry {
+                    catch_target: 4,
+                    finally_target: None,
+                },
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 2,
+                },
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 2,
+                    args: RegRange { start: 8, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::EnterCatch { dst: 1 },
+                Ir3Instruction::Halt,
+                // Reducer callback body: throw the current element (local reg 1).
+                Ir3Instruction::Throw { value: 1 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 6,
+                arity: 4,
+                frame_size: 5,
+                name: Some("throwing_reducer".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        module.constant_pool.push("reduce".to_string());
+
+        let mut core = test_interpreter();
+        let array_id = core
+            .alloc_array_from_values(&[Value::Int(1), Value::Int(2), Value::Int(3)])
+            .expect("array allocation should succeed");
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(array_id);
+            r[8] = Value::Function(0);
+            r[9] = Value::Int(0);
+        });
+        core.set_register_label(0, crate::ifc_artifacts::Label::Secret)
+            .expect("receiver label should be settable");
+        // Seed the catch binding strictly below Secret to prove the throw-path
+        // join raises it (a no-op would leave it at this stale Public).
+        core.set_register_label(1, crate::ifc_artifacts::Label::Public)
+            .expect("catch binding label should be settable");
+
+        core.execute(&module)
+            .expect("a reducer that throws should be caught in-frame");
+
+        // The reducer threw its current element (the first element, Int(1), with
+        // accumulator seeded to 0); the catch binding holds it verbatim...
+        assert_eq!(
+            core.registers[1],
+            Value::Int(1),
+            "the catch binding must hold the reducer's thrown element verbatim"
+        );
+        // ...and carries at least the receiver's Secret label (no laundering).
+        assert_eq!(
+            core.get_register_label(1)
+                .expect("catch binding label should exist"),
+            &crate::ifc_artifacts::Label::Secret,
+            "an explicit reducer throw over a Secret array must taint the catch binding"
         );
     }
 

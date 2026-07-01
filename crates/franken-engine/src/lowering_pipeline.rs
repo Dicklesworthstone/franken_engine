@@ -3601,6 +3601,7 @@ fn lower_statement_to_ir1_with_flow(
                 &body_lookup,
                 &pre_lower_names,
                 binding_lookup,
+                None,
             );
 
             // Identify free variables: bindings created as forward
@@ -7623,6 +7624,7 @@ fn rewrite_unresolved_function_body_loads(
     body_lookup: &BTreeMap<String, BindingId>,
     pre_lower_names: &BTreeSet<String>,
     outer_lookup: &BTreeMap<String, BindingId>,
+    self_name: Option<&str>,
 ) -> Vec<(String, BindingId)> {
     let mut locally_defined_ids = BTreeSet::new();
     for op in body_ops.iter() {
@@ -7664,11 +7666,28 @@ fn rewrite_unresolved_function_body_loads(
     let runtime_global_ids: BTreeSet<BindingId> =
         runtime_global_loads.iter().map(|(_, id)| *id).collect();
 
+    // A NAMED function EXPRESSION may reference its own name inside its body
+    // (`let f = function g(n){ ... g(n-1) }`). The name `g` is not bound in the
+    // enclosing scope, so it lands here as "unresolved"; but the caller appends
+    // it to the function's `free_var_ids` (see the `CreateFunction` self-name
+    // append), so at runtime it resolves via `LoadScoped` against the closure's
+    // self-bound captured scope. Preserve its `LoadBinding` rather than rewriting
+    // it to a ReferenceError throw — exactly as we do for runtime globals — so
+    // the self-reference resolves in every use position, not just under `typeof`
+    // (otherwise `typeof g` worked but `g(0)` / `g === f` threw "g is not
+    // defined"). (bd-g8blf)
+    let self_name_ids: BTreeSet<BindingId> = unresolved_by_id
+        .iter()
+        .filter(|(_, name)| self_name == Some(name.as_str()))
+        .map(|(binding_id, _)| *binding_id)
+        .collect();
+
     let mut rewritten = Vec::with_capacity(body_ops.len());
     for index in 0..body_ops.len() {
         if let Ir1Op::LoadBinding { binding_id } = &body_ops[index]
             && let Some(name) = unresolved_by_id.get(binding_id)
             && !runtime_global_ids.contains(binding_id)
+            && !self_name_ids.contains(binding_id)
             && !matches!(
                 body_ops.get(index.saturating_add(1)),
                 Some(Ir1Op::UnaryOp {
@@ -11144,6 +11163,7 @@ fn lower_expression_to_ir1_inner(
                 &body_lookup,
                 &pre_lower_names,
                 binding_lookup,
+                None,
             );
             let (arrow_free_vars, arrow_free_var_ids) =
                 collect_free_vars(&body_lookup, &pre_lower_names, binding_lookup);
@@ -11247,6 +11267,7 @@ fn lower_expression_to_ir1_inner(
                 &body_lookup,
                 &pre_lower_names,
                 binding_lookup,
+                name.as_deref(),
             );
             let (mut fn_free_vars, mut fn_free_var_ids) =
                 collect_free_vars(&body_lookup, &pre_lower_names, binding_lookup);

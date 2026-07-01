@@ -127,6 +127,7 @@ pub mod controller_composition_matrix;
 pub mod controller_composition_stability_gate;
 pub mod controller_interference_guard;
 pub mod convergence_slo;
+pub mod corpus_promotion;
 pub mod counterexample_synthesizer;
 pub mod counterfactual_evaluator;
 pub mod counterfactual_generation_guard;

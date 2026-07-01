@@ -7343,6 +7343,21 @@ const fn is_two_char_operator(first: u8, second: u8) -> bool {
     )
 }
 
+/// The ASCII bytes that ES2020 §11.2 `WhiteSpace` treats as insignificant
+/// between tokens: `<SP>`, `<TAB>`, `<VT>`, `<FF>`, `<CR>`, `<LF>`.
+///
+/// This deliberately includes `U+000B VERTICAL TAB`, which `u8::is_ascii_whitespace`
+/// (the WhatWG-Infra definition Rust follows) omits. That omission was the
+/// source of the SIMD-vs-scalar token-count divergence tracked by bd-2noh9: the
+/// SIMD [`Utf8BoundarySafeScanner`] classifies `<VT>` as whitespace via
+/// `LEX_CLASS_WHITESPACE` (so it produces no token), while the scalar reference
+/// used `is_ascii_whitespace` and counted a lone `<VT>` as a symbol token. This
+/// predicate mirrors the SIMD whitespace class exactly (see
+/// `build_lex_byte_class_table`) so both counters agree with the ES spec.
+const fn is_ascii_lexical_whitespace(byte: u8) -> bool {
+    matches!(byte, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r')
+}
+
 #[inline]
 const fn utf8_codepoint_len_from_lead(lead: u8) -> usize {
     if lead < 0x80 {
@@ -7581,7 +7596,7 @@ fn count_lexical_tokens_scalar_reference(input: &str) -> u64 {
 
     while index < bytes.len() {
         let byte = bytes[index];
-        if byte.is_ascii_whitespace() {
+        if is_ascii_lexical_whitespace(byte) {
             index = index.saturating_add(1);
             continue;
         }
@@ -11200,6 +11215,65 @@ mod tests {
         assert!(lex_has_class(b'\"', LEX_CLASS_QUOTE));
         assert!(lex_has_class(b'=', LEX_CLASS_TWO_CHAR_OPERATOR_LEAD));
         assert!(!lex_has_class(b'+', LEX_CLASS_TWO_CHAR_OPERATOR_LEAD));
+        // bd-2noh9: `<VT>` (0x0B) and `<FF>` (0x0C) are ES2020 WhiteSpace.
+        assert!(lex_has_class(0x0b, LEX_CLASS_WHITESPACE));
+        assert!(lex_has_class(0x0c, LEX_CLASS_WHITESPACE));
+    }
+
+    /// The scalar reference's whitespace predicate must classify the exact same
+    /// byte set as the SIMD scanner's `LEX_CLASS_WHITESPACE` bit — otherwise the
+    /// two token counters diverge (bd-2noh9). This locks the two independent
+    /// implementations together without coupling their code paths.
+    #[test]
+    fn ascii_lexical_whitespace_matches_the_simd_whitespace_class_bd_2noh9() {
+        for byte in 0u8..=255 {
+            assert_eq!(
+                is_ascii_lexical_whitespace(byte),
+                lex_has_class(byte, LEX_CLASS_WHITESPACE),
+                "whitespace classification disagrees for byte {byte:#04x}"
+            );
+        }
+        // Pin the specific WhatWG-Infra vs ES2020 gap: `is_ascii_whitespace`
+        // omits `<VT>`, but the lexical-whitespace predicate must include it.
+        assert!(is_ascii_lexical_whitespace(0x0b));
+        assert!(!0x0b_u8.is_ascii_whitespace());
+    }
+
+    /// Regression for bd-2noh9: a `<VT>` (U+000B) between/around tokens must be
+    /// treated as whitespace by BOTH counters (it produces no token), and an
+    /// exhaustive control-byte differential must show no residual SIMD-vs-scalar
+    /// divergence on ASCII input.
+    #[test]
+    fn vertical_tab_token_count_parity_bd_2noh9() {
+        // `<VT>` splits two identifiers but is not itself a token: `a <VT> b`
+        // is two tokens, exactly like `a b`.
+        assert_eq!(count_lexical_tokens("a\u{000b}b"), 2);
+        assert_eq!(count_lexical_tokens_scalar_reference("a\u{000b}b"), 2);
+        assert_eq!(count_lexical_tokens("a b"), 2);
+        // A run of only whitespace (including `<VT>`) yields zero tokens.
+        assert_eq!(count_lexical_tokens("\u{000b}\u{000c}\t \r\n"), 0);
+        assert_eq!(
+            count_lexical_tokens_scalar_reference("\u{000b}\u{000c}\t \r\n"),
+            0
+        );
+
+        // Exhaustive differential: every ASCII control/space byte, each embedded
+        // between two identifiers and standing alone, must count identically
+        // under the SIMD scanner and the scalar reference.
+        for byte in 0u8..=0x7f {
+            let embedded = format!("a{}b", byte as char);
+            assert_eq!(
+                count_lexical_tokens(&embedded),
+                count_lexical_tokens_scalar_reference(&embedded),
+                "embedded parity drift for byte {byte:#04x}"
+            );
+            let alone = (byte as char).to_string();
+            assert_eq!(
+                count_lexical_tokens(&alone),
+                count_lexical_tokens_scalar_reference(&alone),
+                "standalone parity drift for byte {byte:#04x}"
+            );
+        }
     }
 
     #[test]
@@ -11214,6 +11288,13 @@ mod tests {
             "`hello ${name}`",
             "`value ${foo({ bar: 1 })}`",
             "`unterminated ${value`",
+            // bd-2noh9: `<VT>` (U+000B) is ES2020 §11.2 WhiteSpace but is omitted
+            // by `is_ascii_whitespace`; exercise it between and around tokens.
+            "a\u{000b}b",
+            "return\u{000b}x",
+            "\u{000b}\u{000b}\u{000b}",
+            "a\u{000b}\u{000c}\u{0009}b",
+            "x\u{000b}==\u{000b}y",
         ];
 
         for source in cases {

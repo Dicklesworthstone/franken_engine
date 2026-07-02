@@ -42466,269 +42466,6 @@ mod tests {
         ));
     }
 
-    #[derive(Clone, Debug)]
-    enum H8MemoryValue {
-        Undefined,
-        Int(i64),
-        Str(String),
-    }
-
-    impl H8MemoryValue {
-        fn to_runtime_value(&self) -> Value {
-            match self {
-                Self::Undefined => Value::Undefined,
-                Self::Int(value) => Value::Int(*value),
-                Self::Str(value) => Value::str(value.clone()),
-            }
-        }
-    }
-
-    #[derive(Clone, Debug)]
-    enum H8MemoryAccountingOp {
-        WriteReg {
-            reg: u32,
-            value: H8MemoryValue,
-        },
-        AllocObject,
-        SetProperty {
-            object_slot: usize,
-            key: String,
-            value: H8MemoryValue,
-        },
-        RemoveProperty {
-            object_slot: usize,
-            key: String,
-        },
-        AllocForInIterator {
-            keys: Vec<String>,
-        },
-        AllocForOfIterator {
-            values: Vec<H8MemoryValue>,
-            next_method: H8MemoryValue,
-        },
-        PushScope,
-        BindCurrentScope {
-            name: String,
-            value: H8MemoryValue,
-        },
-        PopScope,
-        AllocateClosure {
-            function_index: u32,
-        },
-    }
-
-    impl H8MemoryAccountingOp {
-        fn apply(
-            &self,
-            core: &mut InterpreterCore,
-            object_ids: &mut Vec<ObjectId>,
-        ) -> Result<(), InterpreterError> {
-            match self {
-                Self::WriteReg { reg, value } => core.write_reg(*reg, value.to_runtime_value()),
-                Self::AllocObject => {
-                    let id = core.alloc_object_with_prototype(None)?;
-                    object_ids.push(id);
-                    Ok(())
-                }
-                Self::SetProperty {
-                    object_slot,
-                    key,
-                    value,
-                } => {
-                    let object_id = object_id_for_slot(core, object_ids, *object_slot)?;
-                    core.set_object_property(object_id, key.clone(), value.to_runtime_value())
-                }
-                Self::RemoveProperty { object_slot, key } => {
-                    let Some(object_id) = object_ids.get(*object_slot % object_ids.len().max(1))
-                    else {
-                        return Ok(());
-                    };
-                    core.remove_object_property(*object_id, key)?;
-                    Ok(())
-                }
-                Self::AllocForInIterator { keys } => {
-                    let object_id = object_id_for_slot(core, object_ids, 0)?;
-                    core.alloc_iterator(RuntimeIteratorState::ForIn(RuntimeForInState {
-                        object_id,
-                        keys: keys.clone(),
-                        next_index: 0,
-                        deleted_keys: BTreeSet::new(),
-                        done: false,
-                        closed: false,
-                        trace_index: 0,
-                    }))?;
-                    Ok(())
-                }
-                Self::AllocForOfIterator {
-                    values,
-                    next_method,
-                } => {
-                    core.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
-                        values: values.iter().map(H8MemoryValue::to_runtime_value).collect(),
-                        next_index: 0,
-                        iterator_object: None,
-                        next_method: Some(next_method.to_runtime_value()),
-                        done: false,
-                        closed: false,
-                        return_called: false,
-                        trace_index: 0,
-                    }))?;
-                    Ok(())
-                }
-                Self::PushScope => {
-                    let previous_scope_bytes = core.scope_chain_memory_bytes();
-                    core.scope_chain.push(core.config.max_scope_depth)?;
-                    core.apply_scope_chain_memory_delta(previous_scope_bytes)?;
-                    Ok(())
-                }
-                Self::BindCurrentScope { name, value } => {
-                    let previous_scope_bytes = core.scope_chain_memory_bytes();
-                    let previous_closure_bytes = core.closures_memory_bytes();
-                    let replacement = value.to_runtime_value();
-                    let frame_index = if let Some((frame_index, binding)) =
-                        core.scope_chain.resolve_mut_with_index(name)
-                    {
-                        binding.value = replacement.clone();
-                        binding.initialized = true;
-                        Some(frame_index)
-                    } else {
-                        let frame_index = core.scope_chain.frames.len().saturating_sub(1);
-                        let current = core.scope_chain.current_mut()?;
-                        current.declare(name.clone(), BindingKind::Let);
-                        let binding = current.get_mut(name).ok_or_else(|| {
-                            InterpreterError::InternalError {
-                                details: format!("missing declared test binding {name}"),
-                            }
-                        })?;
-                        binding.value = replacement.clone();
-                        binding.initialized = true;
-                        Some(frame_index)
-                    };
-                    if let Some(frame_index) = frame_index {
-                        core.propagate_scope_binding_update_to_closure_captures(
-                            frame_index,
-                            name,
-                            &replacement,
-                        );
-                    }
-                    core.apply_scope_and_closure_memory_delta(
-                        previous_scope_bytes,
-                        previous_closure_bytes,
-                    )?;
-                    Ok(())
-                }
-                Self::PopScope => {
-                    if core.scope_chain.depth() > 1 {
-                        let previous_scope_bytes = core.scope_chain_memory_bytes();
-                        core.scope_chain.pop();
-                        core.apply_scope_chain_memory_delta(previous_scope_bytes)?;
-                    }
-                    Ok(())
-                }
-                Self::AllocateClosure { function_index } => {
-                    let previous_closure_bytes = core.closures_memory_bytes();
-                    core.closures.push(ClosureValue {
-                        function_index: *function_index,
-                        captured_env: core.scope_chain.snapshot(),
-                    });
-                    core.apply_closures_memory_delta(previous_closure_bytes)?;
-                    Ok(())
-                }
-            }
-        }
-    }
-
-    fn object_id_for_slot(
-        core: &mut InterpreterCore,
-        object_ids: &mut Vec<ObjectId>,
-        object_slot: usize,
-    ) -> Result<ObjectId, InterpreterError> {
-        if object_ids.is_empty() {
-            let id = core.alloc_object_with_prototype(None)?;
-            object_ids.push(id);
-        }
-        Ok(object_ids[object_slot % object_ids.len()])
-    }
-
-    fn h8_memory_value_strategy() -> impl Strategy<Value = H8MemoryValue> {
-        prop_oneof![
-            Just(H8MemoryValue::Undefined),
-            (0_i64..4096).prop_map(H8MemoryValue::Int),
-            "[a-z]{0,24}".prop_map(H8MemoryValue::Str),
-        ]
-    }
-
-    fn h8_memory_key_strategy() -> impl Strategy<Value = String> {
-        "[a-z][a-z0-9]{0,8}".prop_map(|value| value)
-    }
-
-    fn h8_memory_accounting_op_strategy() -> impl Strategy<Value = H8MemoryAccountingOp> {
-        let value = h8_memory_value_strategy();
-        let key = h8_memory_key_strategy();
-        prop_oneof![
-            (0_u32..16, value.clone())
-                .prop_map(|(reg, value)| { H8MemoryAccountingOp::WriteReg { reg, value } }),
-            Just(H8MemoryAccountingOp::AllocObject),
-            (0_usize..32, key.clone(), value.clone()).prop_map(|(object_slot, key, value)| {
-                H8MemoryAccountingOp::SetProperty {
-                    object_slot,
-                    key,
-                    value,
-                }
-            }),
-            (0_usize..32, key.clone()).prop_map(|(object_slot, key)| {
-                H8MemoryAccountingOp::RemoveProperty { object_slot, key }
-            }),
-            prop::collection::vec(key.clone(), 0..6)
-                .prop_map(|keys| H8MemoryAccountingOp::AllocForInIterator { keys }),
-            (prop::collection::vec(value.clone(), 0..6), value.clone(),).prop_map(
-                |(values, next_method)| H8MemoryAccountingOp::AllocForOfIterator {
-                    values,
-                    next_method,
-                }
-            ),
-            Just(H8MemoryAccountingOp::PushScope),
-            (key, value.clone()).prop_map(|(name, value)| {
-                H8MemoryAccountingOp::BindCurrentScope { name, value }
-            }),
-            Just(H8MemoryAccountingOp::PopScope),
-            (0_u32..64).prop_map(|function_index| H8MemoryAccountingOp::AllocateClosure {
-                function_index,
-            }),
-        ]
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(1024))]
-
-        #[test]
-        fn incremental_memory_estimate_matches_eager(
-            ops in prop::collection::vec(h8_memory_accounting_op_strategy(), 0..=256),
-        ) {
-            let mut config = test_quickjs_config();
-            config.max_heap_objects = 10_000;
-            config.max_total_memory_bytes = 256 * 1024 * 1024;
-            config.max_scope_depth = 1024;
-            let mut core = InterpreterCore::new(config, "h8-memory-proptest");
-            let mut object_ids = Vec::new();
-
-            for (index, op) in ops.iter().enumerate() {
-                let result = op.apply(&mut core, &mut object_ids);
-                prop_assert!(
-                    result.is_ok(),
-                    "memory accounting op {index} failed unexpectedly: {op:?}; error={result:?}",
-                );
-                let eager = core.recompute_estimated_memory_bytes();
-                let incremental = core.estimated_memory_bytes();
-                prop_assert_eq!(
-                    incremental,
-                    eager,
-                    "incremental memory estimate drift after op {index}: {op:?}",
-                );
-            }
-        }
-    }
-
     #[test]
     fn estimated_memory_bytes_tracks_property_growth() {
         let config = test_quickjs_config();
@@ -50372,6 +50109,302 @@ mod string_intrinsic_table_parity_tests {
                 "{}: a fully-generated family must auto-propagate (no Custom rows)",
                 row.name
             );
+        }
+    }
+}
+
+// Relocated current-API memory-accounting tests (bd-n0sap partial fix ->
+// unblocks bd-o4cbn.13.2). These exercise only the current InterpreterCore
+// memory-accounting API (write_reg / alloc_* / set_object_property /
+// recompute_estimated_memory_bytes / estimated_memory_bytes) and were trapped
+// behind the `legacy_lib_tests_bd_2j7uk` opt-in gate purely by sharing `mod
+// tests` with the not-yet-ported legacy tests. Moving them into this non-gated
+// module runs them in default validation; the remaining legacy tests in the
+// gated module still await the full port (bd-n0sap).
+#[cfg(test)]
+mod memory_accounting_tests {
+    use super::*;
+    use proptest::prelude::*;
+    use proptest::strategy::BoxedStrategy;
+
+    fn test_quickjs_config() -> InterpreterConfig {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
+        config
+    }
+
+    #[derive(Clone, Debug)]
+    enum H8MemoryValue {
+        Undefined,
+        Int(i64),
+        Str(String),
+    }
+
+    impl H8MemoryValue {
+        fn to_runtime_value(&self) -> Value {
+            match self {
+                Self::Undefined => Value::Undefined,
+                Self::Int(value) => Value::Int(*value),
+                Self::Str(value) => Value::str(value.clone()),
+            }
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    enum H8MemoryAccountingOp {
+        WriteReg {
+            reg: u32,
+            value: H8MemoryValue,
+        },
+        AllocObject,
+        SetProperty {
+            object_slot: usize,
+            key: String,
+            value: H8MemoryValue,
+        },
+        RemoveProperty {
+            object_slot: usize,
+            key: String,
+        },
+        AllocForInIterator {
+            keys: Vec<String>,
+        },
+        AllocForOfIterator {
+            values: Vec<H8MemoryValue>,
+            next_method: H8MemoryValue,
+        },
+        PushScope,
+        BindCurrentScope {
+            name: String,
+            value: H8MemoryValue,
+        },
+        PopScope,
+        AllocateClosure {
+            function_index: u32,
+        },
+    }
+
+    impl H8MemoryAccountingOp {
+        fn apply(
+            &self,
+            core: &mut InterpreterCore,
+            object_ids: &mut Vec<ObjectId>,
+        ) -> Result<(), InterpreterError> {
+            match self {
+                Self::WriteReg { reg, value } => core.write_reg(*reg, value.to_runtime_value()),
+                Self::AllocObject => {
+                    let id = core.alloc_object_with_prototype(None)?;
+                    object_ids.push(id);
+                    Ok(())
+                }
+                Self::SetProperty {
+                    object_slot,
+                    key,
+                    value,
+                } => {
+                    let object_id = object_id_for_slot(core, object_ids, *object_slot)?;
+                    core.set_object_property(object_id, key.clone(), value.to_runtime_value())
+                }
+                Self::RemoveProperty { object_slot, key } => {
+                    let Some(object_id) = object_ids.get(*object_slot % object_ids.len().max(1))
+                    else {
+                        return Ok(());
+                    };
+                    core.remove_object_property(*object_id, key)?;
+                    Ok(())
+                }
+                Self::AllocForInIterator { keys } => {
+                    let object_id = object_id_for_slot(core, object_ids, 0)?;
+                    core.alloc_iterator(RuntimeIteratorState::ForIn(RuntimeForInState {
+                        object_id,
+                        keys: keys.clone(),
+                        next_index: 0,
+                        deleted_keys: BTreeSet::new(),
+                        done: false,
+                        closed: false,
+                        trace_index: 0,
+                    }))?;
+                    Ok(())
+                }
+                Self::AllocForOfIterator {
+                    values,
+                    next_method,
+                } => {
+                    core.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
+                        values: values.iter().map(H8MemoryValue::to_runtime_value).collect(),
+                        next_index: 0,
+                        iterator_object: None,
+                        next_method: Some(next_method.to_runtime_value()),
+                        done: false,
+                        closed: false,
+                        return_called: false,
+                        trace_index: 0,
+                    }))?;
+                    Ok(())
+                }
+                Self::PushScope => {
+                    let previous_scope_bytes = core.scope_chain_memory_bytes();
+                    core.scope_chain.push(core.config.max_scope_depth)?;
+                    core.apply_scope_chain_memory_delta(previous_scope_bytes)?;
+                    Ok(())
+                }
+                Self::BindCurrentScope { name, value } => {
+                    let previous_scope_bytes = core.scope_chain_memory_bytes();
+                    let previous_closure_bytes = core.closures_memory_bytes();
+                    let replacement = value.to_runtime_value();
+                    let frame_index = if let Some((frame_index, binding)) =
+                        core.scope_chain.resolve_mut_with_index(name)
+                    {
+                        binding.value = replacement.clone();
+                        binding.initialized = true;
+                        Some(frame_index)
+                    } else {
+                        let frame_index = core.scope_chain.frames.len().saturating_sub(1);
+                        let current = core.scope_chain.current_mut()?;
+                        current.declare(name.clone(), BindingKind::Let);
+                        let binding = current.get_mut(name).ok_or_else(|| {
+                            InterpreterError::InternalError {
+                                details: format!("missing declared test binding {name}"),
+                            }
+                        })?;
+                        binding.value = replacement.clone();
+                        binding.initialized = true;
+                        Some(frame_index)
+                    };
+                    if let Some(frame_index) = frame_index {
+                        core.propagate_scope_binding_update_to_closure_captures(
+                            frame_index,
+                            name,
+                            &replacement,
+                        );
+                    }
+                    core.apply_scope_and_closure_memory_delta(
+                        previous_scope_bytes,
+                        previous_closure_bytes,
+                    )?;
+                    Ok(())
+                }
+                Self::PopScope => {
+                    if core.scope_chain.depth() > 1 {
+                        let previous_scope_bytes = core.scope_chain_memory_bytes();
+                        core.scope_chain.pop();
+                        core.apply_scope_chain_memory_delta(previous_scope_bytes)?;
+                    }
+                    Ok(())
+                }
+                Self::AllocateClosure { function_index } => {
+                    let previous_closure_bytes = core.closures_memory_bytes();
+                    core.closures.push(ClosureValue {
+                        function_index: *function_index,
+                        captured_env: core.scope_chain.snapshot(),
+                    });
+                    core.apply_closures_memory_delta(previous_closure_bytes)?;
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    fn object_id_for_slot(
+        core: &mut InterpreterCore,
+        object_ids: &mut Vec<ObjectId>,
+        object_slot: usize,
+    ) -> Result<ObjectId, InterpreterError> {
+        if object_ids.is_empty() {
+            let id = core.alloc_object_with_prototype(None)?;
+            object_ids.push(id);
+        }
+        Ok(object_ids[object_slot % object_ids.len()])
+    }
+
+    // These sub-strategies are `.clone()`d across several `prop_oneof!` arms in
+    // `h8_memory_accounting_op_strategy`, so they must be `Clone`. An opaque
+    // `impl Strategy` return type is not `Clone`; `BoxedStrategy<T>` is.
+    fn h8_memory_value_strategy() -> BoxedStrategy<H8MemoryValue> {
+        prop_oneof![
+            Just(H8MemoryValue::Undefined),
+            (0_i64..4096).prop_map(H8MemoryValue::Int),
+            "[a-z]{0,24}".prop_map(H8MemoryValue::Str),
+        ]
+        .boxed()
+    }
+
+    fn h8_memory_key_strategy() -> BoxedStrategy<String> {
+        "[a-z][a-z0-9]{0,8}".prop_map(|value| value).boxed()
+    }
+
+    fn h8_memory_accounting_op_strategy() -> impl Strategy<Value = H8MemoryAccountingOp> {
+        let value = h8_memory_value_strategy();
+        let key = h8_memory_key_strategy();
+        prop_oneof![
+            (0_u32..16, value.clone())
+                .prop_map(|(reg, value)| { H8MemoryAccountingOp::WriteReg { reg, value } }),
+            Just(H8MemoryAccountingOp::AllocObject),
+            (0_usize..32, key.clone(), value.clone()).prop_map(|(object_slot, key, value)| {
+                H8MemoryAccountingOp::SetProperty {
+                    object_slot,
+                    key,
+                    value,
+                }
+            }),
+            (0_usize..32, key.clone()).prop_map(|(object_slot, key)| {
+                H8MemoryAccountingOp::RemoveProperty { object_slot, key }
+            }),
+            prop::collection::vec(key.clone(), 0..6)
+                .prop_map(|keys| H8MemoryAccountingOp::AllocForInIterator { keys }),
+            (prop::collection::vec(value.clone(), 0..6), value.clone(),).prop_map(
+                |(values, next_method)| H8MemoryAccountingOp::AllocForOfIterator {
+                    values,
+                    next_method,
+                }
+            ),
+            Just(H8MemoryAccountingOp::PushScope),
+            (key, value.clone()).prop_map(|(name, value)| {
+                H8MemoryAccountingOp::BindCurrentScope { name, value }
+            }),
+            Just(H8MemoryAccountingOp::PopScope),
+            (0_u32..64).prop_map(|function_index| H8MemoryAccountingOp::AllocateClosure {
+                function_index,
+            }),
+        ]
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1024))]
+
+        #[test]
+        fn incremental_memory_estimate_matches_eager(
+            ops in prop::collection::vec(h8_memory_accounting_op_strategy(), 0..=256),
+        ) {
+            let mut config = test_quickjs_config();
+            config.max_heap_objects = 10_000;
+            config.max_total_memory_bytes = 256 * 1024 * 1024;
+            config.max_scope_depth = 1024;
+            let mut core = InterpreterCore::new(config, "h8-memory-proptest");
+            let mut object_ids = Vec::new();
+
+            for (index, op) in ops.iter().enumerate() {
+                let result = op.apply(&mut core, &mut object_ids);
+                prop_assert!(
+                    result.is_ok(),
+                    "memory accounting op {} failed unexpectedly: {:?}; error={:?}",
+                    index,
+                    op,
+                    result,
+                );
+                let eager = core.recompute_estimated_memory_bytes();
+                let incremental = core.estimated_memory_bytes();
+                prop_assert_eq!(
+                    incremental,
+                    eager,
+                    "incremental memory estimate drift after op {}: {:?}",
+                    index,
+                    op,
+                );
+            }
         }
     }
 }

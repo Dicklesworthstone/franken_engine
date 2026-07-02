@@ -625,15 +625,14 @@ mod tests {
             EngineCoreCorpusCase, run_engine_core_differential_oracle,
         };
         // A corpus carrying at least one genuine divergence so the adapter and
-        // clustering are exercised on a real defect (not vacuously). The default
-        // corpus is now at full parity (bd-rkmpj), so we use the consumed-postfix
-        // case (`var x = i++`, the open bd-xi3bk gap) to seed a real defect.
+        // clustering are exercised on a real defect (not vacuously). The array/
+        // object (bd-rkmpj) and consumed-postfix (bd-xi3bk) cases are at parity
+        // now, so we seed a stable architectural divergence: `typeof console` is
+        // "object" in the engine (runtime globals injected) but "undefined" in
+        // franken-core (no runtime globals).
         let corpus = vec![
             EngineCoreCorpusCase::new("ok_add", "1 + 1;"),
-            EngineCoreCorpusCase::new(
-                "divergent_postfix",
-                "(function () { var i = 5; var x = i++; return x; })();",
-            ),
+            EngineCoreCorpusCase::new("divergent_typeof_global", "typeof console;"),
         ];
         let report = run_engine_core_differential_oracle(&corpus, 64);
         let observations = observations_from_engine_core_report(&report);

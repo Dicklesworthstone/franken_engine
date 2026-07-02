@@ -1411,6 +1411,25 @@ impl UnaryOperator {
     }
 }
 
+/// Update operator kinds (`++` / `--`). Distinct from `AssignmentOperator`
+/// because an update expression carries `ToNumber`-then-increment semantics and
+/// a prefix/postfix result-value distinction that a compound assignment cannot
+/// express (bd-xi3bk).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UpdateOperator {
+    Increment,
+    Decrement,
+}
+
+impl UpdateOperator {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Increment => "++",
+            Self::Decrement => "--",
+        }
+    }
+}
+
 /// Assignment operator kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AssignmentOperator {
@@ -1534,6 +1553,17 @@ pub enum Expression {
     Unary {
         operator: UnaryOperator,
         argument: Box<Expression>,
+    },
+    /// Update expression `++x` / `x++` / `--x` / `x--`. `prefix` selects the
+    /// result value (new value when true, prior value when false). The operand
+    /// is `ToNumber`-coerced before incrementing, which a desugaring to `x += 1`
+    /// cannot reproduce for a consumed postfix or a non-numeric operand
+    /// (bd-xi3bk). The parser only emits this for identifier operands; member
+    /// operands still desugar to a compound assignment.
+    Update {
+        operator: UpdateOperator,
+        argument: Box<Expression>,
+        prefix: bool,
     },
     Assignment {
         operator: AssignmentOperator,
@@ -1710,6 +1740,22 @@ impl Expression {
                     CanonicalValue::String(operator.as_str().to_string()),
                 );
                 map.insert("argument".to_string(), argument.canonical_value());
+            }
+            Self::Update {
+                operator,
+                argument,
+                prefix,
+            } => {
+                map.insert(
+                    "kind".to_string(),
+                    CanonicalValue::String("update".to_string()),
+                );
+                map.insert(
+                    "operator".to_string(),
+                    CanonicalValue::String(operator.as_str().to_string()),
+                );
+                map.insert("argument".to_string(), argument.canonical_value());
+                map.insert("prefix".to_string(), CanonicalValue::Bool(*prefix));
             }
             Self::Assignment {
                 operator,

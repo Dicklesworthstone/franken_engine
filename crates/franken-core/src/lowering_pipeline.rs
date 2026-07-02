@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::ast::{
     ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, ExportKind, Expression,
     ImportClause, MethodDefinition, MethodKind, ParseGoal, SourceSpan, Statement, UnaryOperator,
-    VariableDeclarationKind,
+    UpdateOperator, VariableDeclarationKind,
 };
 use crate::flow_lattice::{
     Clearance, DeclassificationObligation, FlowCheckResult as LatticeFlowCheckResult,
@@ -5663,6 +5663,87 @@ fn lower_expression_to_ir1(
             ops.push(Ir1Op::UnaryOp {
                 operator: *operator,
             });
+        }
+        Expression::Update {
+            operator,
+            argument,
+            prefix,
+        } => {
+            // The parser only emits `Update` for identifier operands (member
+            // operands still desugar to a compound assignment — bd-xi3bk).
+            let Expression::Identifier(name) = argument.as_ref() else {
+                return Err(unsupported_frontier_expression_error(
+                    "update_target",
+                    "FE-LOWER-UPDATE-0001",
+                    "lower_ir0_to_ir1.update_target",
+                    "update expression operand must be an identifier",
+                    None,
+                ));
+            };
+
+            let binding_id = if let Some(existing) = binding_lookup.get(name.as_str()) {
+                *existing
+            } else {
+                let id = *binding_index;
+                *binding_index = binding_index.saturating_add(1);
+                bindings.push(ResolvedBinding {
+                    name: name.clone(),
+                    binding_id: id,
+                    scope: root_scope_id,
+                    kind: BindingKind::Let,
+                });
+                binding_lookup.insert(name.clone(), id);
+                id
+            };
+
+            let step_operator = match operator {
+                UpdateOperator::Increment => BinaryOperator::Add,
+                UpdateOperator::Decrement => BinaryOperator::Subtract,
+            };
+
+            // Read the operand and ToNumber-coerce it (unary `+`): ES `++`/`--`
+            // always operate numerically, unlike `x += 1` which would
+            // string-concatenate a string operand.
+            ops.push(Ir1Op::LoadBinding { binding_id });
+            ops.push(Ir1Op::UnaryOp {
+                operator: UnaryOperator::UnaryPlus,
+            });
+
+            // A postfix update yields the PRIOR numeric value, so stash it before
+            // the write (there is no stack-dup op; use an internal binding).
+            let prior_binding = if *prefix {
+                None
+            } else {
+                let tmp = alloc_internal_binding(
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    "update_prior_value",
+                )?;
+                ops.push(Ir1Op::StoreBinding { binding_id: tmp });
+                Some(tmp)
+            };
+
+            // new = prior ± 1, written back through `AssignOp` (scope/capture
+            // aware). The store leaves the new value on the stack.
+            ops.push(Ir1Op::LoadLiteral {
+                value: Ir1Literal::Integer(1),
+            });
+            ops.push(Ir1Op::BinaryOp {
+                operator: step_operator,
+            });
+            ops.push(Ir1Op::AssignOp {
+                binding_id,
+                operator: AssignmentOperator::Assign,
+            });
+
+            // Prefix: keep the new value. Postfix: drop it and reload the stashed
+            // prior value as the expression result.
+            if let Some(tmp) = prior_binding {
+                ops.push(Ir1Op::Pop);
+                ops.push(Ir1Op::LoadBinding { binding_id: tmp });
+            }
         }
         Expression::Assignment {
             operator,

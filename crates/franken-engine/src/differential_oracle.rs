@@ -2749,14 +2749,13 @@ mod tests {
     }
 
     #[test]
-    fn consumed_postfix_update_is_a_genuine_structured_value_divergence() {
-        // Guard the honesty of the normalization above: a REAL value divergence
-        // must still be surfaced, not smoothed away. `var x = i++` yields i's
-        // prior value (engine: 5) but franken-core desugars postfix to a compound
-        // assignment and yields the incremented value (6) — the open bd-xi3bk gap.
-        // Both are numbers, so this is a real structured_value divergence that the
-        // canonicalizer must NOT suppress. If this ever stops diverging (bd-xi3bk
-        // fixed), update the capstone surfacing probe list accordingly.
+    fn consumed_postfix_update_now_agrees_after_bd_xi3bk() {
+        // bd-xi3bk regression guard at the oracle level. A consumed postfix update
+        // `var x = i++` must yield i's PRIOR value (5) in BOTH lanes: franken-core
+        // now lowers it through a faithful `Update` node (ToNumber + prior/new
+        // result value) rather than desugaring to `i += 1` (which yielded the
+        // incremented value). The internal twin must therefore AGREE. If this ever
+        // regresses to a divergence, bd-xi3bk has broken.
         let input = DifferentialOracleInput::new(
             "consumed_postfix",
             "(function () { var i = 5; var x = i++; return x; })();",
@@ -2768,8 +2767,30 @@ mod tests {
         let report = run_differential_oracle(&input);
         let signature = DivergenceSignature::from_report(&report);
         assert!(
+            !signature.has_classified_divergence(),
+            "consumed-postfix update must agree across the twin after bd-xi3bk: {report:?}"
+        );
+    }
+
+    #[test]
+    fn canonicalizer_surfaces_a_genuine_engine_core_divergence() {
+        // Honesty guard: the canonicalizer must SURFACE a real structured-value
+        // difference, not smooth it away. `typeof console` is a stable
+        // architectural divergence — franken-core intentionally injects no runtime
+        // globals (so `typeof console` is "undefined") while the engine injects
+        // them (so it is "object"). This is the load-bearing genuine divergence for
+        // the surfacing / minimizer / clustering tests now that the array/object
+        // (bd-rkmpj) and consumed-postfix (bd-xi3bk) cases have reached parity.
+        let input = DifferentialOracleInput::new("typeof_console", "typeof console;")
+            .with_selected_backends([
+                DifferentialBackend::FrankenEngine,
+                DifferentialBackend::FrankenCore,
+            ]);
+        let report = run_differential_oracle(&input);
+        let signature = DivergenceSignature::from_report(&report);
+        assert!(
             signature.has_classified_divergence(),
-            "consumed-postfix update must remain a real divergence (bd-xi3bk): {report:?}"
+            "a genuine engine<->core divergence must be surfaced: {report:?}"
         );
         assert_eq!(signature.verdict, DifferentialComparisonVerdict::Divergence);
     }
@@ -3384,17 +3405,16 @@ mod tests {
     #[test]
     fn engine_core_harness_reports_divergence_with_minimized_repro() {
         // A consensus case, a multi-line divergent case wrapped in inert filler,
-        // and another consensus case. The divergent case is a consumed postfix
-        // update: `var x = i++` must yield i's prior value (engine: 5) but
-        // franken-core desugars postfix to a compound assignment and yields the
-        // incremented value (6) — the open bd-xi3bk gap. (The array literal that
-        // previously seeded this test agrees now: its former divergence was benign
-        // heap-identity noise, eliminated by bd-rkmpj.)
+        // and another consensus case. The divergent case is `typeof console`: a
+        // stable architectural divergence — franken-core injects no runtime globals
+        // ("undefined") while the engine injects them ("object"). (The consumed
+        // postfix `i++` and array-literal cases that previously seeded this test
+        // agree now — bd-xi3bk and bd-rkmpj respectively.)
         let corpus = vec![
             EngineCoreCorpusCase::new("ok_add", "1 + 1;"),
             EngineCoreCorpusCase::new(
-                "divergent_postfix",
-                "var a = 1;\nvar b = 2;\n(function () { var i = 5; var x = i++; return x; })();",
+                "divergent_typeof_global",
+                "var a = 1;\nvar b = 2;\ntypeof console;",
             ),
             EngineCoreCorpusCase::new("ok_mul", "2 * 3;"),
         ];
@@ -3407,7 +3427,7 @@ mod tests {
         assert_eq!(report.defects.len(), 1);
 
         let defect = &report.defects[0];
-        assert_eq!(defect.case_id, "divergent_postfix");
+        assert_eq!(defect.case_id, "divergent_typeof_global");
         assert!(defect.signature.has_classified_divergence());
         // The inert `var` filler is stripped down toward the divergent expression.
         assert!(

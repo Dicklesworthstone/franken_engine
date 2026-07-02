@@ -20,8 +20,8 @@ use crate::ast::{
     FunctionDeclaration, FunctionParam, IfStatement, ImportClause, ImportDeclaration,
     ImportSpecifier, MethodDefinition, MethodKind, ObjectPatternProperty, ObjectProperty,
     ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement, SyntaxTree,
-    ThrowStatement, TryCatchStatement, UnaryOperator, VariableDeclaration, VariableDeclarationKind,
-    VariableDeclarator, WhileStatement,
+    ThrowStatement, TryCatchStatement, UnaryOperator, UpdateOperator, VariableDeclaration,
+    VariableDeclarationKind, VariableDeclarator, WhileStatement,
 };
 use crate::deterministic_serde::{self, CanonicalValue};
 
@@ -5055,14 +5055,18 @@ fn match_binary_operator_at(bytes: &[u8], i: usize) -> Option<(BinaryOperator, u
 /// loop-accumulate completion-value divergence (`for (var i…; i++)` never advanced
 /// `i`).
 ///
-/// Both forms desugar to the equivalent compound assignment (`i += 1` / `i -= 1`),
-/// reusing the existing `AssignmentOperator::AddAssign` / `SubtractAssign`
-/// lowering. In statement and `for`-update position — where the expression value
-/// is discarded — and for the prefix form generally, this is exact ES semantics.
-/// The only residual gap is the *value* of a postfix update whose result is
-/// consumed (`x = i++` yields the incremented value rather than the prior one);
-/// that narrower case is tracked as a follow-up and is strictly better than the
-/// prior fully-broken parse.
+/// bd-xi3bk: identifier operands now become a faithful
+/// `Expression::Update { operator, argument, prefix }` node whose lowering reads
+/// the operand, `ToNumber`-coerces it, writes back operand ± 1, and yields the
+/// prior value for a postfix update or the new value for a prefix update. This
+/// fixes both the *value* of a consumed postfix update (`x = i++` now yields i's
+/// prior value) and the coercion of a non-numeric operand (`++`/`--` operate
+/// numerically, unlike `+= 1` which would string-concatenate).
+///
+/// Member operands (`obj.x++`) still desugar to the equivalent compound
+/// assignment (`obj.x += 1` / `obj.x -= 1`): the fix is scoped to identifier
+/// targets, and a string-based member desugar would double-evaluate a
+/// side-effecting object reference.
 fn try_parse_update(
     expr: &str,
     span: &SourceSpan,
@@ -5081,17 +5085,34 @@ fn try_parse_update(
         )
     }
 
-    let build = |arg: Expression, op: AssignmentOperator| -> Expression {
-        Expression::Assignment {
-            operator: op,
-            left: Box::new(arg),
-            right: Box::new(Expression::NumericLiteral(1)),
+    // Identifier operands become a faithful `Update` node carrying ToNumber +
+    // prefix/postfix result-value semantics (bd-xi3bk). Member operands keep the
+    // pre-existing compound-assignment desugar — the fix is scoped to identifier
+    // targets, and a member desugar avoids the reference-double-evaluation a
+    // string-based `obj.x = +obj.x + 1` rewrite would introduce.
+    fn build_update(arg: Expression, op: UpdateOperator, prefix: bool) -> Expression {
+        if matches!(arg, Expression::Identifier(_)) {
+            Expression::Update {
+                operator: op,
+                argument: Box::new(arg),
+                prefix,
+            }
+        } else {
+            let assign = match op {
+                UpdateOperator::Increment => AssignmentOperator::AddAssign,
+                UpdateOperator::Decrement => AssignmentOperator::SubtractAssign,
+            };
+            Expression::Assignment {
+                operator: assign,
+                left: Box::new(arg),
+                right: Box::new(Expression::NumericLiteral(1)),
+            }
         }
-    };
+    }
 
     for (token, op) in [
-        ("++", AssignmentOperator::AddAssign),
-        ("--", AssignmentOperator::SubtractAssign),
+        ("++", UpdateOperator::Increment),
+        ("--", UpdateOperator::Decrement),
     ] {
         let sym = token.as_bytes()[0];
         // Prefix: `++x` / `--x`.
@@ -5104,7 +5125,7 @@ fn try_parse_update(
                 && let Ok(arg) = parse_expression(rest, span, context, recursion_depth + 1)
                 && is_update_target(&arg)
             {
-                return Some(Ok(build(arg, op)));
+                return Some(Ok(build_update(arg, op, true)));
             }
         }
         // Postfix: `x++` / `x--`.
@@ -5117,7 +5138,7 @@ fn try_parse_update(
                 && let Ok(arg) = parse_expression(head, span, context, recursion_depth + 1)
                 && is_update_target(&arg)
             {
-                return Some(Ok(build(arg, op)));
+                return Some(Ok(build_update(arg, op, false)));
             }
         }
     }
@@ -5400,6 +5421,7 @@ fn contains_optional_chain(expression: &Expression) -> bool {
             contains_optional_chain(left) || contains_optional_chain(right)
         }
         Expression::Unary { argument, .. } => contains_optional_chain(argument),
+        Expression::Update { argument, .. } => contains_optional_chain(argument),
         Expression::Conditional {
             test,
             consequent,

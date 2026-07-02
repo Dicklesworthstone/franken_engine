@@ -1,0 +1,62 @@
+{
+  "schema_version": "franken-engine.reconstruction-receipt.v1",
+  "bead_id": "bd-cixqu.35.2",
+  "component": "erasure_reconstruction_receipts",
+  "purpose": "Tamper-evident, signed proof that a fleet node reconstructed an original payload from a k-of-n erasure shard set. Binds the contributing shard commitments, the coding parameters actually used, and the reconstructing node identity under a keyed-authenticity signature, so any party can detect silent corruption or false reconstruction claims (Byzantine-blame assignment) without access to the original data.",
+  "implementation_module": "crates/franken-engine/src/erasure_reconstruction_receipts.rs",
+  "integration_point": "crates/franken-engine/src/fleet_immune_protocol.rs::FleetProtocolState::reconstruct_gossip_payload_with_receipt",
+  "coding_scheme": {
+    "id": "xor-single-parity-v1",
+    "description": "The gossip erasure lane is a systematic XOR single-parity code: one parity shard recovers at most one missing data shard. This is NOT Reed-Solomon over GF(2^8); the receipt records the real scheme identifier and (k, n) plan and never fabricates Reed-Solomon polynomial coefficients the implementation does not compute. A wider code would introduce a new scheme id and a new receipt schema version.",
+    "honest_labeling": true
+  },
+  "determinism": "receipt_commitment is a SHA-256 content hash over a length-prefixed canonical preimage. Every variable-length field (schema_id, shard_set_id, coding_scheme, per-shard origin_node, reconstructing_node, extension keys/values) is prefixed with its u64 big-endian byte length before its bytes; fixed-width scalars are big-endian; the ErasureShardRole is a single tag byte (Data=0, Parity=1); the Option<u16> recovery slot carries an explicit tag byte (0 => None, 1 => Some) so None cannot collide with Some(0). Contributing shards are emitted in strictly-increasing shard_index order. Two honest implementations agree byte-for-byte on the commitment, mirroring compute_erasure_shard_hash in the fleet protocol.",
+  "receipt_fields": {
+    "schema_id": "string; must equal franken-engine.reconstruction-receipt.v1",
+    "shard_set_id": "string; stable identifier shared by all shards of the reconstructed set",
+    "payload_hash": "ContentHash (32-byte SHA-256); content hash of the reconstructed original payload",
+    "payload_len": "u64; byte length of the reconstructed original payload",
+    "coding_scheme": "string; must equal xor-single-parity-v1",
+    "plan": "ErasureCodingPlan { data_shards: u16 (k), total_shards: u16 (n) }",
+    "contributing_shards": "array of shard_commitment; the shards that materially fed reconstruction (present data shards, plus the parity shard iff a data shard was recovered), in strictly-increasing shard_index order",
+    "recovered_shard_index": "Option<u16>; the data-shard index recovered from parity, or null when every data shard was directly present",
+    "reconstructing_node": "NodeId; identity of the node that performed the reconstruction",
+    "reconstruction_timestamp_ns": "u64; reconstruction timestamp in nanoseconds",
+    "receipt_commitment": "ContentHash (32-byte SHA-256) over the length-prefixed canonical preimage of all fields above",
+    "signature": "MessageSignature { signer: NodeId, hash: AuthenticityHash }; keyed-authenticity (HMAC-SHA256) signature over receipt_commitment, keyed by the reconstructing node's identity. Same signing primitive as every other fleet gossip message.",
+    "protocol_version": "ProtocolVersion { major: u32, minor: u32 }",
+    "extensions": "map<string,string>; forward-compatible extension fields, sorted and length-prefixed into the commitment"
+  },
+  "shard_commitment_fields": {
+    "shard_index": "u16; index of the shard within its set",
+    "role": "ErasureShardRole; Data or Parity",
+    "shard_hash": "ContentHash (32-byte SHA-256); the shard's canonical content hash as recorded on the ErasureShard",
+    "origin_node": "NodeId; node that originally encoded the shard",
+    "sequence": "u64; per-origin sequence number of the shard"
+  },
+  "verification": {
+    "verify": "ReconstructionReceipt::verify() — validates schema id, coding scheme, structural invariants (well-formed plan; canonical shard ordering; role-vs-index consistency; recovery consistency: a recovered index is a real data slot that is not directly present and requires exactly one missing data shard plus a parity shard), signer == reconstructing_node, recomputed commitment == receipt_commitment (constant-time), and signature authenticates the commitment (constant-time). Requires NEITHER the original payload NOR the shards. This is the path other fleet nodes use to validate a receipt without performing reconstruction themselves.",
+    "verify_against_shards": "ReconstructionReceipt::verify_against_shards(shards, reconstruct) — first runs verify(), then cross-checks every committed shard hash against the supplied shard set (recomputing each shard's hash and checking role/origin/sequence/set-id/plan/payload_hash agreement). When reconstruct=true it re-runs reconstruct_erasure_payload over the contributing shards and confirms the reproduced payload hashes to payload_hash. This is the stronger check a party runs when it holds the shards but not necessarily the original payload."
+  },
+  "audit_ledger": {
+    "type": "ReconstructionReceiptLedger",
+    "semantics": "Append-only, dedup-keyed on receipt_commitment. record() verifies a receipt before admission (a failing receipt is never stored), returns Ok(true) for a newly-recorded receipt and Ok(false) for an idempotent duplicate. summary_hash() is a deterministic digest over all recorded commitments in insertion order (length-prefixed). The dedup index is #[serde(skip)]; call reindex() once after deserialization to restore dedup semantics."
+  },
+  "error_variants": [
+    "EmptyShardSet",
+    "ReconstructionFailed { shard_set_id, reason }",
+    "UnknownSchema { found }",
+    "UnknownScheme { found }",
+    "InconsistentStructure { reason }",
+    "CommitmentMismatch",
+    "SignerMismatch",
+    "InvalidSignature",
+    "MissingShardForVerification { shard_index }",
+    "ShardCommitmentMismatch { shard_index }"
+  ],
+  "performance": "Receipt generation cost is O(contributing_shards) hash mixes plus one SHA-256 over the commitment preimage and one HMAC-SHA256 signature — bounded well under the 5ms per-reconstruction overhead budget for realistic fleet shard counts. Generation adds no reconstruction work beyond the single reconstruct_erasure_payload call the payload already requires.",
+  "tests": {
+    "unit": "crates/franken-engine/src/erasure_reconstruction_receipts.rs #[cfg(test)] mod tests (>=20 cases: generation happy path, parity recovery, canonical ordering, verify without data, verify against shards, tamper detection for commitment/field/signature/signer, unknown schema/scheme, serde round-trip, determinism, ledger record/dedup/reindex/summary, boundary k=1 and k=n, structural rejections, empty payload, extensions binding)",
+    "integration": "crates/franken-engine/tests/erasure_reconstruction_receipts_integration.rs (>=30 cases: fleet-state reconstruction, cross-node verification without shards, multi-set ledger accumulation, partition recovery, end-to-end tamper detection, serde persistence)"
+  }
+}

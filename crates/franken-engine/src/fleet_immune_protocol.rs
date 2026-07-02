@@ -1628,6 +1628,33 @@ impl FleetProtocolState {
         .map(|shards| shards.into_iter().map(FleetMessage::ErasureShard).collect())
     }
 
+    /// Reconstruct an erasure-coded gossip payload and emit a signed
+    /// reconstruction-proof receipt attributed to this node (`bd-cixqu.35.2`).
+    ///
+    /// The returned [`ReconstructionReceipt`] is a tamper-evident proof of
+    /// which shards fed the reconstruction and that the reconstructing node
+    /// performed it. Callers persist it into a
+    /// [`crate::erasure_reconstruction_receipts::ReconstructionReceiptLedger`]
+    /// (the audit ledger) for later independent verification. This method is
+    /// read-only: it does not mutate protocol state.
+    pub fn reconstruct_gossip_payload_with_receipt(
+        &self,
+        shards: &[ErasureShard],
+        current_time_ns: u64,
+    ) -> Result<
+        (
+            Vec<u8>,
+            crate::erasure_reconstruction_receipts::ReconstructionReceipt,
+        ),
+        crate::erasure_reconstruction_receipts::ReceiptError,
+    > {
+        crate::erasure_reconstruction_receipts::reconstruct_with_receipt(
+            shards,
+            self.local_node_id.clone(),
+            current_time_ns,
+        )
+    }
+
     /// Project the live protocol state into an explicit self-stabilizing model.
     pub fn self_stabilization_snapshot(&self, current_time_ns: u64) -> SelfStabilizationSnapshot {
         let partitioned_nodes = self.partitioned_nodes(current_time_ns);

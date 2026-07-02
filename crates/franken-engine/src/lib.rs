@@ -176,6 +176,7 @@ pub mod entropy_evidence_compressor;
 pub mod epoch_barrier;
 pub mod epoch_invalidation;
 pub mod eprocess_guardrail;
+pub mod erasure_reconstruction_receipts;
 pub mod error_code;
 pub mod escape_analysis_certificate;
 pub mod esm_cjs_interop_parity;

@@ -5063,10 +5063,12 @@ fn match_binary_operator_at(bytes: &[u8], i: usize) -> Option<(BinaryOperator, u
 /// prior value) and the coercion of a non-numeric operand (`++`/`--` operate
 /// numerically, unlike `+= 1` which would string-concatenate).
 ///
-/// Member operands (`obj.x++`) still desugar to the equivalent compound
-/// assignment (`obj.x += 1` / `obj.x -= 1`): the fix is scoped to identifier
-/// targets, and a string-based member desugar would double-evaluate a
-/// side-effecting object reference.
+/// bd-rmxao: member operands (`obj.x++`, `a[i]--`) now also become an
+/// `Expression::Update`, whose lowering stashes the object and computed key in
+/// internal bindings so the reference is evaluated exactly once and reused for
+/// the load and the store (a string-based `obj.x = +obj.x + 1` desugar would
+/// double-evaluate a side-effecting object/key). Only `OptionalMember` operands
+/// keep the compound-assignment desugar.
 fn try_parse_update(
     expr: &str,
     span: &SourceSpan,
@@ -5085,13 +5087,14 @@ fn try_parse_update(
         )
     }
 
-    // Identifier operands become a faithful `Update` node carrying ToNumber +
-    // prefix/postfix result-value semantics (bd-xi3bk). Member operands keep the
-    // pre-existing compound-assignment desugar — the fix is scoped to identifier
-    // targets, and a member desugar avoids the reference-double-evaluation a
-    // string-based `obj.x = +obj.x + 1` rewrite would introduce.
+    // Identifier and member operands become a faithful `Update` node carrying
+    // ToNumber + prefix/postfix result-value semantics; its lowering evaluates a
+    // member reference's object and computed key exactly once (bd-xi3bk,
+    // bd-rmxao). Only an `OptionalMember` operand keeps the compound-assignment
+    // desugar — an optional-chain lvalue (`obj?.x++`) is not a valid assignment
+    // target, and that desugar's lowering fails closed on it.
     fn build_update(arg: Expression, op: UpdateOperator, prefix: bool) -> Expression {
-        if matches!(arg, Expression::Identifier(_)) {
+        if matches!(arg, Expression::Identifier(_) | Expression::Member { .. }) {
             Expression::Update {
                 operator: op,
                 argument: Box::new(arg),

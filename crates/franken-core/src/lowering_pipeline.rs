@@ -2734,6 +2734,34 @@ fn lower_assign_op_to_ir3(
     }
 }
 
+/// The binary operation a *non-logical* compound assignment applies to the
+/// current value and the right-hand side (`a += b` -> `a = a + b`). Returns
+/// `None` for a plain `Assign` (no combine) and for the short-circuiting logical
+/// compound operators (`&&=`, `||=`, `??=`), which must be lowered through their
+/// dedicated jump form before reaching a load-op-store site. This is the member-
+/// target analogue of `lower_assign_op_to_ir3`'s per-operator dispatch, used to
+/// combine a property's loaded current value with the RHS (bd-rmxao).
+fn compound_assignment_binary_operator(operator: AssignmentOperator) -> Option<BinaryOperator> {
+    match operator {
+        AssignmentOperator::AddAssign => Some(BinaryOperator::Add),
+        AssignmentOperator::SubtractAssign => Some(BinaryOperator::Subtract),
+        AssignmentOperator::MultiplyAssign => Some(BinaryOperator::Multiply),
+        AssignmentOperator::DivideAssign => Some(BinaryOperator::Divide),
+        AssignmentOperator::RemainderAssign => Some(BinaryOperator::Remainder),
+        AssignmentOperator::ExponentiateAssign => Some(BinaryOperator::Exponentiate),
+        AssignmentOperator::LeftShiftAssign => Some(BinaryOperator::LeftShift),
+        AssignmentOperator::RightShiftAssign => Some(BinaryOperator::RightShift),
+        AssignmentOperator::UnsignedRightShiftAssign => Some(BinaryOperator::UnsignedRightShift),
+        AssignmentOperator::BitwiseAndAssign => Some(BinaryOperator::BitwiseAnd),
+        AssignmentOperator::BitwiseOrAssign => Some(BinaryOperator::BitwiseOr),
+        AssignmentOperator::BitwiseXorAssign => Some(BinaryOperator::BitwiseXor),
+        AssignmentOperator::Assign
+        | AssignmentOperator::LogicalAndAssign
+        | AssignmentOperator::LogicalOrAssign
+        | AssignmentOperator::NullishCoalescingAssign => None,
+    }
+}
+
 pub fn lower_ir2_to_ir3(
     ir2: &Ir2Module,
 ) -> Result<LoweringPassResult<Ir3Module>, LoweringPipelineError> {
@@ -5669,80 +5697,224 @@ fn lower_expression_to_ir1(
             argument,
             prefix,
         } => {
-            // The parser only emits `Update` for identifier operands (member
-            // operands still desugar to a compound assignment — bd-xi3bk).
-            let Expression::Identifier(name) = argument.as_ref() else {
-                return Err(unsupported_frontier_expression_error(
-                    "update_target",
-                    "FE-LOWER-UPDATE-0001",
-                    "lower_ir0_to_ir1.update_target",
-                    "update expression operand must be an identifier",
-                    None,
-                ));
-            };
-
-            let binding_id = if let Some(existing) = binding_lookup.get(name.as_str()) {
-                *existing
-            } else {
-                let id = *binding_index;
-                *binding_index = binding_index.saturating_add(1);
-                bindings.push(ResolvedBinding {
-                    name: name.clone(),
-                    binding_id: id,
-                    scope: root_scope_id,
-                    kind: BindingKind::Let,
-                });
-                binding_lookup.insert(name.clone(), id);
-                id
-            };
-
+            // ES `++`/`--` operate numerically (ToNumber), writing the operand
+            // back as operand ± 1 and yielding the PRIOR value for a postfix
+            // update or the NEW value for a prefix update. The parser emits
+            // `Update` for identifier and member targets (bd-xi3bk, bd-rmxao);
+            // any other operand is not a valid reference.
             let step_operator = match operator {
                 UpdateOperator::Increment => BinaryOperator::Add,
                 UpdateOperator::Decrement => BinaryOperator::Subtract,
             };
 
-            // Read the operand and ToNumber-coerce it (unary `+`): ES `++`/`--`
-            // always operate numerically, unlike `x += 1` which would
-            // string-concatenate a string operand.
-            ops.push(Ir1Op::LoadBinding { binding_id });
-            ops.push(Ir1Op::UnaryOp {
-                operator: UnaryOperator::UnaryPlus,
-            });
+            match argument.as_ref() {
+                Expression::Identifier(name) => {
+                    let binding_id = if let Some(existing) = binding_lookup.get(name.as_str()) {
+                        *existing
+                    } else {
+                        let id = *binding_index;
+                        *binding_index = binding_index.saturating_add(1);
+                        bindings.push(ResolvedBinding {
+                            name: name.clone(),
+                            binding_id: id,
+                            scope: root_scope_id,
+                            kind: BindingKind::Let,
+                        });
+                        binding_lookup.insert(name.clone(), id);
+                        id
+                    };
 
-            // A postfix update yields the PRIOR numeric value, so stash it before
-            // the write (there is no stack-dup op; use an internal binding).
-            let prior_binding = if *prefix {
-                None
-            } else {
-                let tmp = alloc_internal_binding(
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    root_scope_id,
-                    "update_prior_value",
-                )?;
-                ops.push(Ir1Op::StoreBinding { binding_id: tmp });
-                Some(tmp)
-            };
+                    // Read the operand and ToNumber-coerce it (unary `+`): ES
+                    // `++`/`--` always operate numerically, unlike `x += 1` which
+                    // would string-concatenate a string operand.
+                    ops.push(Ir1Op::LoadBinding { binding_id });
+                    ops.push(Ir1Op::UnaryOp {
+                        operator: UnaryOperator::UnaryPlus,
+                    });
 
-            // new = prior ± 1, written back through `AssignOp` (scope/capture
-            // aware). The store leaves the new value on the stack.
-            ops.push(Ir1Op::LoadLiteral {
-                value: Ir1Literal::Integer(1),
-            });
-            ops.push(Ir1Op::BinaryOp {
-                operator: step_operator,
-            });
-            ops.push(Ir1Op::AssignOp {
-                binding_id,
-                operator: AssignmentOperator::Assign,
-            });
+                    // A postfix update yields the PRIOR numeric value, so stash it
+                    // before the write (there is no stack-dup op; use a binding).
+                    let prior_binding = if *prefix {
+                        None
+                    } else {
+                        let tmp = alloc_internal_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            "update_prior_value",
+                        )?;
+                        ops.push(Ir1Op::StoreBinding { binding_id: tmp });
+                        Some(tmp)
+                    };
 
-            // Prefix: keep the new value. Postfix: drop it and reload the stashed
-            // prior value as the expression result.
-            if let Some(tmp) = prior_binding {
-                ops.push(Ir1Op::Pop);
-                ops.push(Ir1Op::LoadBinding { binding_id: tmp });
+                    // new = prior ± 1, written back through `AssignOp` (scope/
+                    // capture aware). The store leaves the new value on the stack.
+                    ops.push(Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Integer(1),
+                    });
+                    ops.push(Ir1Op::BinaryOp {
+                        operator: step_operator,
+                    });
+                    ops.push(Ir1Op::AssignOp {
+                        binding_id,
+                        operator: AssignmentOperator::Assign,
+                    });
+
+                    // Prefix: keep the new value. Postfix: drop it and reload the
+                    // stashed prior value as the expression result.
+                    if let Some(tmp) = prior_binding {
+                        ops.push(Ir1Op::Pop);
+                        ops.push(Ir1Op::LoadBinding { binding_id: tmp });
+                    }
+                }
+                Expression::Member {
+                    object,
+                    property,
+                    computed,
+                } => {
+                    // A consumed member-target update (`obj.x++`, `a[i]--`) needs
+                    // the same ToNumber + prior/new result semantics as an
+                    // identifier target, but the object and computed key must be
+                    // evaluated ONCE and reused for both the load and the store
+                    // (single-eval — bd-rmxao). Stash them in internal bindings.
+                    let object_binding = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        "update_object",
+                    )?;
+                    lower_expression_to_ir1(
+                        object,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: object_binding,
+                    });
+                    ops.push(Ir1Op::Pop);
+
+                    let (key, dynamic_key_binding) = if *computed {
+                        let key_binding = alloc_internal_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            "update_key",
+                        )?;
+                        lower_expression_to_ir1(
+                            property,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                        )?;
+                        ops.push(Ir1Op::StoreBinding {
+                            binding_id: key_binding,
+                        });
+                        ops.push(Ir1Op::Pop);
+                        (Ir1PropertyKey::Dynamic, Some(key_binding))
+                    } else {
+                        (
+                            lower_member_property_key_to_ir1(
+                                property,
+                                false,
+                                ops,
+                                bindings,
+                                binding_lookup,
+                                binding_index,
+                                root_scope_id,
+                                label_counter,
+                            )?,
+                            None,
+                        )
+                    };
+
+                    // prior = ToNumber(obj[key])
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: object_binding,
+                    });
+                    if let Some(key_binding) = dynamic_key_binding {
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: key_binding,
+                        });
+                    }
+                    ops.push(Ir1Op::GetProperty { key: key.clone() });
+                    ops.push(Ir1Op::UnaryOp {
+                        operator: UnaryOperator::UnaryPlus,
+                    });
+
+                    let prior_binding = if *prefix {
+                        None
+                    } else {
+                        let tmp = alloc_internal_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            "update_prior_value",
+                        )?;
+                        ops.push(Ir1Op::StoreBinding { binding_id: tmp });
+                        Some(tmp)
+                    };
+
+                    // new = prior ± 1
+                    ops.push(Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Integer(1),
+                    });
+                    ops.push(Ir1Op::BinaryOp {
+                        operator: step_operator,
+                    });
+
+                    // Write `new` back through the stashed reference. SetProperty
+                    // needs the object (and key) beneath the value, so stash the
+                    // new value and reload the reference before it.
+                    let result_binding = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        "update_result",
+                    )?;
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: result_binding,
+                    });
+                    ops.push(Ir1Op::Pop);
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: object_binding,
+                    });
+                    if let Some(key_binding) = dynamic_key_binding {
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: key_binding,
+                        });
+                    }
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: result_binding,
+                    });
+                    // SetProperty leaves the new value on the stack (the prefix
+                    // result). For a postfix update, drop it and reload the prior.
+                    ops.push(Ir1Op::SetProperty { key });
+                    if let Some(tmp) = prior_binding {
+                        ops.push(Ir1Op::Pop);
+                        ops.push(Ir1Op::LoadBinding { binding_id: tmp });
+                    }
+                }
+                _ => {
+                    return Err(unsupported_frontier_expression_error(
+                        "update_target",
+                        "FE-LOWER-UPDATE-0001",
+                        "lower_ir0_to_ir1.update_target",
+                        "update expression operand must be an identifier or member expression",
+                        None,
+                    ));
+                }
             }
         }
         Expression::Assignment {
@@ -5996,6 +6168,131 @@ fn lower_expression_to_ir1(
                     });
                     ops.push(Ir1Op::SetProperty { key });
                     ops.push(Ir1Op::Label { id: end_label });
+                    return Ok(());
+                }
+
+                if let Some(binary_operator) = compound_assignment_binary_operator(*operator) {
+                    // Non-logical compound member assignment (`obj.x += rhs`,
+                    // `a[i] *= rhs`, …): the operand and key must be evaluated
+                    // ONCE, the current property value loaded and combined with the
+                    // RHS, then written back. The prior bare `SetProperty` path
+                    // ignored `operator` and stored the RHS alone, so `obj.x += 1`
+                    // set `obj.x = 1` rather than `obj.x + 1` (bd-rmxao). Stash the
+                    // object (and computed key) in internal bindings so the same
+                    // reference feeds both the load and the store without re-
+                    // evaluating a side-effecting object/key expression.
+                    let object_binding = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        "member_compound_object",
+                    )?;
+                    lower_expression_to_ir1(
+                        object,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: object_binding,
+                    });
+                    ops.push(Ir1Op::Pop);
+
+                    let (key, dynamic_key_binding) = if *computed {
+                        let key_binding = alloc_internal_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            "member_compound_key",
+                        )?;
+                        lower_expression_to_ir1(
+                            property,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                        )?;
+                        ops.push(Ir1Op::StoreBinding {
+                            binding_id: key_binding,
+                        });
+                        ops.push(Ir1Op::Pop);
+                        (Ir1PropertyKey::Dynamic, Some(key_binding))
+                    } else {
+                        (
+                            lower_member_property_key_to_ir1(
+                                property,
+                                false,
+                                ops,
+                                bindings,
+                                binding_lookup,
+                                binding_index,
+                                root_scope_id,
+                                label_counter,
+                            )?,
+                            None,
+                        )
+                    };
+
+                    // current = obj[key]
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: object_binding,
+                    });
+                    if let Some(key_binding) = dynamic_key_binding {
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: key_binding,
+                        });
+                    }
+                    ops.push(Ir1Op::GetProperty { key: key.clone() });
+
+                    // combined = current <op> rhs (current is the deeper stack
+                    // slot / lhs; BinaryOp pops rhs then lhs).
+                    lower_expression_to_ir1(
+                        right,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    ops.push(Ir1Op::BinaryOp {
+                        operator: binary_operator,
+                    });
+
+                    // SetProperty needs the object (and key) beneath the value, so
+                    // stash the combined value and reload the reference before it.
+                    let result_binding = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        "member_compound_result",
+                    )?;
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: result_binding,
+                    });
+                    ops.push(Ir1Op::Pop);
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: object_binding,
+                    });
+                    if let Some(key_binding) = dynamic_key_binding {
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: key_binding,
+                        });
+                    }
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: result_binding,
+                    });
+                    // SetProperty leaves the assigned value on the stack, so the
+                    // compound assignment yields the combined value (as ES requires).
+                    ops.push(Ir1Op::SetProperty { key });
                     return Ok(());
                 }
 

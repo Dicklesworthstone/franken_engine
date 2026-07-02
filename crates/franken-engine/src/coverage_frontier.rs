@@ -622,12 +622,24 @@ mod tests {
     #[test]
     fn engine_core_adapter_clusters_by_divergence_class() {
         use crate::differential_oracle::{
-            default_engine_core_corpus, run_engine_core_differential_oracle,
+            EngineCoreCorpusCase, run_engine_core_differential_oracle,
         };
-        let report = run_engine_core_differential_oracle(&default_engine_core_corpus(), 64);
+        // A corpus carrying at least one genuine divergence so the adapter and
+        // clustering are exercised on a real defect (not vacuously). The default
+        // corpus is now at full parity (bd-rkmpj), so we use the consumed-postfix
+        // case (`var x = i++`, the open bd-xi3bk gap) to seed a real defect.
+        let corpus = vec![
+            EngineCoreCorpusCase::new("ok_add", "1 + 1;"),
+            EngineCoreCorpusCase::new(
+                "divergent_postfix",
+                "(function () { var i = 5; var x = i++; return x; })();",
+            ),
+        ];
+        let report = run_engine_core_differential_oracle(&corpus, 64);
         let observations = observations_from_engine_core_report(&report);
         // Each defect becomes exactly one observation.
         assert_eq!(observations.len(), report.defects.len());
+        assert!(!report.defects.is_empty(), "corpus must seed a real defect");
         assert!(
             observations
                 .iter()

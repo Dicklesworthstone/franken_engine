@@ -1522,9 +1522,45 @@ fn canonicalize_js_value(value: &str) -> String {
         return number.to_string();
     }
 
+    // An opaque heap/table identity handle (`[object#6]`, `[function#3]`, ...) is
+    // normalized to its kind-only form so the interpreter-internal index — which
+    // is not comparable across two independent lanes — does not read as a value
+    // divergence (bd-rkmpj). The kind is preserved, so a genuine kind mismatch
+    // still surfaces.
+    if let Some(normalized) = normalize_heap_identity_handle(trimmed) {
+        return normalized;
+    }
+
     strip_matching_quotes(trimmed)
         .map(str::to_string)
         .unwrap_or_else(|| trimmed.to_string())
+}
+
+/// Normalize an opaque heap/table identity handle of the form `[<kind>#<index>]`
+/// (e.g. `[object#6]`, `[function#3]`, `[generator#12]`) to its kind-only form
+/// `[<kind>]`, or return `None` for any string that is not such a handle.
+///
+/// The `#<index>` suffix is the interpreter-internal heap/table position of the
+/// value. It is *not* comparable across two independent interpreters: the
+/// franken-engine lane preallocates its runtime-global objects (argv, env,
+/// process, console, ...) before user code runs, so a user array/object lands at
+/// a higher index, while the franken-core lane starts from an empty heap and
+/// assigns index 0. Comparing those indices produced spurious `structured_value`
+/// divergences for bare array/object completion values (`[1,2,3];`,
+/// `({a:1,b:2});`) even though both lanes agree structurally — the residual
+/// defects tracked by bd-rkmpj.
+///
+/// The *kind* token (`object`, `function`, `promise`, ...) is comparable and is
+/// preserved, so a genuine kind divergence (e.g. one lane returns an object, the
+/// other a function) still surfaces. Handles that carry a semantic name rather
+/// than an index (`[builtin:Array]`, `[accessor]`) have no `#<digits>` suffix and
+/// are deliberately left untouched.
+fn normalize_heap_identity_handle(value: &str) -> Option<String> {
+    let inner = value.strip_prefix('[')?.strip_suffix(']')?;
+    let (kind, index) = inner.split_once('#')?;
+    let kind_ok = !kind.is_empty() && kind.bytes().all(|b| b.is_ascii_lowercase());
+    let index_ok = !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit());
+    (kind_ok && index_ok).then(|| format!("[{kind}]"))
 }
 
 fn strip_matching_quotes(value: &str) -> Option<&str> {
@@ -2584,6 +2620,160 @@ mod tests {
         assert_eq!(structured.groups.len(), 2);
     }
 
+    // ---- bd-rkmpj: heap-identity handle normalization -------------------
+    //
+    // A bare array/object completion value renders as an opaque `[object#N]`
+    // handle in both lanes; the `#N` heap index differs only because the engine
+    // lane preallocates runtime globals before user code. Normalizing the index
+    // (while preserving the kind) removes the spurious divergence.
+
+    #[test]
+    fn heap_identity_handle_normalization_strips_index_preserves_kind() {
+        // Index-bearing handles collapse to their kind.
+        assert_eq!(
+            normalize_heap_identity_handle("[object#6]").as_deref(),
+            Some("[object]")
+        );
+        assert_eq!(
+            normalize_heap_identity_handle("[object#0]").as_deref(),
+            Some("[object]")
+        );
+        assert_eq!(
+            normalize_heap_identity_handle("[function#3]").as_deref(),
+            Some("[function]")
+        );
+        assert_eq!(
+            normalize_heap_identity_handle("[generatorfunction#12]").as_deref(),
+            Some("[generatorfunction]")
+        );
+
+        // Non-handles and name-carrying handles are left alone.
+        assert_eq!(normalize_heap_identity_handle("[builtin:Array]"), None);
+        assert_eq!(normalize_heap_identity_handle("[accessor]"), None);
+        assert_eq!(normalize_heap_identity_handle("42"), None);
+        assert_eq!(normalize_heap_identity_handle("hello"), None);
+        assert_eq!(normalize_heap_identity_handle("[object#]"), None); // empty index
+        assert_eq!(normalize_heap_identity_handle("[#6]"), None); // empty kind
+        assert_eq!(normalize_heap_identity_handle("[Object#6]"), None); // Display is lowercase
+        assert_eq!(normalize_heap_identity_handle("[object#6"), None); // unterminated
+    }
+
+    #[test]
+    fn canonicalization_matches_heap_object_completion_identity() {
+        // The two in-process lanes complete `[1,2,3];` / `({a:1,b:2});` with an
+        // object whose only rendered difference is the heap index — engine
+        // preallocates 6 runtime globals (index 6), core starts empty (index 0).
+        // After normalization these must be consensus, not a divergence.
+        let report = canonicalize_backend_receipts(&[
+            receipt(
+                DifferentialBackend::FrankenEngine,
+                DifferentialBackendStatus::Completed,
+                Some("[object#6]"),
+                "",
+                "",
+                &[],
+            ),
+            receipt(
+                DifferentialBackend::FrankenCore,
+                DifferentialBackendStatus::Completed,
+                Some("[object#0]"),
+                "",
+                "",
+                &[],
+            ),
+        ]);
+
+        assert_eq!(
+            report.semantic_verdict,
+            DifferentialComparisonVerdict::Consensus
+        );
+        let structured = comparison(&report, DifferentialComparisonMode::StructuredValue);
+        assert_eq!(structured.verdict, DifferentialComparisonVerdict::Consensus);
+        assert_eq!(structured.groups.len(), 1);
+    }
+
+    #[test]
+    fn canonicalization_detects_heap_object_vs_function_kind_divergence() {
+        // Normalization preserves the KIND, so a genuine kind mismatch (object in
+        // one lane, function in the other) still surfaces as a divergence.
+        let report = canonicalize_backend_receipts(&[
+            receipt(
+                DifferentialBackend::FrankenEngine,
+                DifferentialBackendStatus::Completed,
+                Some("[object#6]"),
+                "",
+                "",
+                &[],
+            ),
+            receipt(
+                DifferentialBackend::FrankenCore,
+                DifferentialBackendStatus::Completed,
+                Some("[function#0]"),
+                "",
+                "",
+                &[],
+            ),
+        ]);
+
+        assert_eq!(
+            report.semantic_verdict,
+            DifferentialComparisonVerdict::Divergence
+        );
+        let structured = comparison(&report, DifferentialComparisonMode::StructuredValue);
+        assert_eq!(
+            structured.verdict,
+            DifferentialComparisonVerdict::Divergence
+        );
+        assert_eq!(structured.groups.len(), 2);
+    }
+
+    #[test]
+    fn default_engine_core_corpus_has_no_residual_defects() {
+        // bd-rkmpj closes the last two residual defects (array_literal,
+        // object_literal) of the internal engine<->core differential oracle. The
+        // default corpus must now be at full parity: every case agrees, zero
+        // defects. This is the standing regression guard for the closure.
+        let corpus = default_engine_core_corpus();
+        let report = run_engine_core_differential_oracle(&corpus, 256);
+        assert!(
+            !report.has_defects(),
+            "default engine<->core corpus must be at full parity: {:?}",
+            report.defects
+        );
+        assert_eq!(
+            report.agreements,
+            corpus.len(),
+            "every default-corpus case must agree"
+        );
+        assert!(report.accounting_is_consistent());
+    }
+
+    #[test]
+    fn consumed_postfix_update_is_a_genuine_structured_value_divergence() {
+        // Guard the honesty of the normalization above: a REAL value divergence
+        // must still be surfaced, not smoothed away. `var x = i++` yields i's
+        // prior value (engine: 5) but franken-core desugars postfix to a compound
+        // assignment and yields the incremented value (6) — the open bd-xi3bk gap.
+        // Both are numbers, so this is a real structured_value divergence that the
+        // canonicalizer must NOT suppress. If this ever stops diverging (bd-xi3bk
+        // fixed), update the capstone surfacing probe list accordingly.
+        let input = DifferentialOracleInput::new(
+            "consumed_postfix",
+            "(function () { var i = 5; var x = i++; return x; })();",
+        )
+        .with_selected_backends([
+            DifferentialBackend::FrankenEngine,
+            DifferentialBackend::FrankenCore,
+        ]);
+        let report = run_differential_oracle(&input);
+        let signature = DivergenceSignature::from_report(&report);
+        assert!(
+            signature.has_classified_divergence(),
+            "consumed-postfix update must remain a real divergence (bd-xi3bk): {report:?}"
+        );
+        assert_eq!(signature.verdict, DifferentialComparisonVerdict::Divergence);
+    }
+
     #[test]
     fn canonicalization_matches_equivalent_exception_shapes() {
         let report = canonicalize_backend_receipts(&[
@@ -3193,12 +3383,19 @@ mod tests {
 
     #[test]
     fn engine_core_harness_reports_divergence_with_minimized_repro() {
-        // A consensus case, a multi-line divergent case (the array completion
-        // value formats differently across the twins) wrapped in inert filler,
-        // and another consensus case.
+        // A consensus case, a multi-line divergent case wrapped in inert filler,
+        // and another consensus case. The divergent case is a consumed postfix
+        // update: `var x = i++` must yield i's prior value (engine: 5) but
+        // franken-core desugars postfix to a compound assignment and yields the
+        // incremented value (6) — the open bd-xi3bk gap. (The array literal that
+        // previously seeded this test agrees now: its former divergence was benign
+        // heap-identity noise, eliminated by bd-rkmpj.)
         let corpus = vec![
             EngineCoreCorpusCase::new("ok_add", "1 + 1;"),
-            EngineCoreCorpusCase::new("divergent_array", "var a = 1;\nvar b = 2;\n[1, 2, 3];"),
+            EngineCoreCorpusCase::new(
+                "divergent_postfix",
+                "var a = 1;\nvar b = 2;\n(function () { var i = 5; var x = i++; return x; })();",
+            ),
             EngineCoreCorpusCase::new("ok_mul", "2 * 3;"),
         ];
 
@@ -3210,9 +3407,9 @@ mod tests {
         assert_eq!(report.defects.len(), 1);
 
         let defect = &report.defects[0];
-        assert_eq!(defect.case_id, "divergent_array");
+        assert_eq!(defect.case_id, "divergent_postfix");
         assert!(defect.signature.has_classified_divergence());
-        // The inert `var` filler is stripped down toward the array literal.
+        // The inert `var` filler is stripped down toward the divergent expression.
         assert!(
             defect.minimized_line_count < defect.original_line_count,
             "expected reduction: {} -> {} lines",

@@ -304,6 +304,14 @@ fn capstone_canonicalization_surfaces_a_real_structured_value_difference() {
     // oracle classifies at least one as a divergence (rather than hard-coding which
     // construct currently diverges, which would be brittle against parity fixes).
     let probes = [
+        // A consumed postfix update: `var x = i++` must yield i's prior value (5),
+        // but franken-core desugars postfix to a compound assignment and yields the
+        // incremented value (6) — the open bd-xi3bk gap. This is a genuine
+        // structured_value divergence and the load-bearing probe for this test now
+        // that the array/object cases below have reached parity (bd-rkmpj: their
+        // former divergence was benign heap-identity noise, not a value difference).
+        // If bd-xi3bk is fixed, this probe stops diverging — extend the list.
+        "(function () { var i = 5; var x = i++; return x; })();",
         "(function () { var s = 0; for (var i = 0; i < 5; i++) { s += i; } return s; })();",
         "(function () { return [1, 2, 3]; })();",
         "(function () { return {x: 1}; })();",

@@ -73,6 +73,12 @@ fn minimizes_a_real_engine_core_divergence_preserving_classification() {
     // areas). We do NOT assume which one currently diverges; we pick the first the
     // *real* oracle classifies as a divergence and minimize THAT one.
     let candidates = [
+        // A consumed postfix update genuinely diverges: `var x = i++` yields i's
+        // prior value (engine: 5) but franken-core desugars postfix to a compound
+        // assignment and yields the incremented value (6) — the open bd-xi3bk gap.
+        // This leads the list because the array/object candidates below reached
+        // parity once bd-rkmpj removed their benign heap-identity formatting noise.
+        "(function () { var i = 5; var x = i++; return x; })();",
         "[1, 2, 3];",
         "({a: 1, b: 2});",
         "(function () { return [1, 2, 3]; })();",

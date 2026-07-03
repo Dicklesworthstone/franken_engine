@@ -835,7 +835,13 @@ mod tests {
     #[test]
     fn seed_contract_shipped_commands() {
         let contract = build_seed_contract();
-        assert!(contract.shipped_commands().is_empty()); // None shipped yet
+        // `ReactCompile` shipped in 77e117735 (`frankenctl react compile` for
+        // JSX/TSX classic & automatic rows); it is the only currently-shipped
+        // command (`ReactOperatorCommand::is_shipped`). bd-bu6dt: the prior
+        // "None shipped yet" expectation was stale after that ship.
+        let shipped = contract.shipped_commands();
+        assert_eq!(shipped.len(), 1);
+        assert_eq!(shipped[0].command, ReactOperatorCommand::ReactCompile);
     }
 
     #[test]

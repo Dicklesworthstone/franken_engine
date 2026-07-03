@@ -741,10 +741,22 @@ mod tests {
         let diff = diff_package_behavior("before", &before, "after", &after);
 
         assert_eq!(diff.severity, BehavioralDiffSeverity::Critical);
-        assert_eq!(diff.capability_delta.added.len(), 1);
-        assert_eq!(
-            diff.capability_delta.added[0].capability,
-            Some(RuntimeCapability::NetworkEgress)
+        // The typed `hostcall<"network_egress">` surfaces TWO required
+        // capabilities: `network_egress` (the declared effect, via the
+        // ts-normalization capability intent) and `hostcall.invoke` (the generic
+        // privilege to make any hostcall, from the lowered invoke op). Both are
+        // legitimate deltas for a supply-chain behavioral diff, so assert that
+        // NetworkEgress is present among the added set rather than pinning a
+        // single-capability count (bd-bu6dt: the prior `len()==1`/`added[0]`
+        // expectation predated the `hostcall.invoke` companion capability).
+        assert_eq!(diff.capability_delta.added.len(), 2);
+        assert!(
+            diff.capability_delta
+                .added
+                .iter()
+                .any(|c| c.capability == Some(RuntimeCapability::NetworkEgress)),
+            "expected NetworkEgress among added capabilities, got {:?}",
+            diff.capability_delta.added
         );
         assert_eq!(diff.outcome(), BehavioralDiffOutcome::DeltasPresent);
         assert_eq!(diff.outcome().exit_code(), 1);

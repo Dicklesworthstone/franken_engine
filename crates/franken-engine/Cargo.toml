@@ -80,6 +80,11 @@ name = "sme_vs_propagation"
 path = "benches/sme_vs_propagation.rs"
 harness = false
 
+[[bench]]
+name = "erasure_vs_replication"
+path = "benches/erasure_vs_replication.rs"
+harness = false
+
 [[test]]
 name = "cancellation_lifecycle_integration"
 path = "tests/cancellation_lifecycle_integration.rs"
@@ -109,6 +114,10 @@ required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
 name = "cx_threading_integration"
 path = "tests/cx_threading_integration.rs"
 required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "erasure_bandwidth_accounting_integration"
+path = "tests/erasure_bandwidth_accounting_integration.rs"
 
 [[test]]
 name = "evidence_emission_enrichment_integration"

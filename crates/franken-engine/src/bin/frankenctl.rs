@@ -613,6 +613,10 @@ enum GatesMode {
         out_dir: PathBuf,
         config: Option<PathBuf>,
     },
+    ErasureBandwidth {
+        out_dir: PathBuf,
+        config: Option<PathBuf>,
+    },
     AdversarialCampaign {
         out_dir: PathBuf,
     },
@@ -3263,6 +3267,30 @@ fn parse_gates_command(args: &[String]) -> Result<CommandSpec, String> {
                 .ok_or_else(|| "gates compounding-red-team requires --out-dir <dir>".to_string())?;
             Ok(CommandSpec::Gates(GatesArgs {
                 mode: GatesMode::CompoundingRedTeam { out_dir, config },
+            }))
+        }
+        "erasure-bandwidth" => {
+            let mut out_dir: Option<PathBuf> = None;
+            let mut config: Option<PathBuf> = None;
+
+            let mut index = 1; // Skip "erasure-bandwidth"
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--out-dir" => {
+                        out_dir = Some(PathBuf::from(next_arg(args, &mut index, "--out-dir")?))
+                    }
+                    "--config" => {
+                        config = Some(PathBuf::from(next_arg(args, &mut index, "--config")?))
+                    }
+                    flag => return Err(format!("unknown erasure-bandwidth flag `{flag}`")),
+                }
+                index += 1;
+            }
+
+            let out_dir = out_dir
+                .ok_or_else(|| "gates erasure-bandwidth requires --out-dir <dir>".to_string())?;
+            Ok(CommandSpec::Gates(GatesArgs {
+                mode: GatesMode::ErasureBandwidth { out_dir, config },
             }))
         }
         other => Err(format!("unknown gates subcommand `{other}`")),
@@ -8992,6 +9020,103 @@ fn execute_gates(args: GatesArgs) -> Result<i32, String> {
             );
             Ok(0)
         }
+        GatesMode::ErasureBandwidth { out_dir, config } => {
+            use frankenengine_engine::erasure_bandwidth_accounting::{
+                BandwidthComparisonConfig, build_signed_report,
+            };
+
+            let comparison_config = match &config {
+                Some(path) => {
+                    let text = std::fs::read_to_string(path).map_err(|e| {
+                        format!("failed to read bandwidth config {}: {e}", path.display())
+                    })?;
+                    let parsed: BandwidthComparisonConfig = serde_json::from_str(&text)
+                        .map_err(|e| format!("invalid bandwidth config (expected JSON): {e}"))?;
+                    parsed.validate().map_err(|e| e.to_string())?;
+                    parsed
+                }
+                None => BandwidthComparisonConfig::default(),
+            };
+
+            let signed = build_signed_report(&comparison_config)
+                .map_err(|e| format!("bandwidth report failed: {e}"))?;
+
+            std::fs::create_dir_all(&out_dir)
+                .map_err(|e| format!("failed to create output directory: {e}"))?;
+
+            let report_json = serde_json::to_string_pretty(&signed)
+                .map_err(|e| format!("failed to serialize bandwidth report: {e}"))?;
+            std::fs::write(
+                out_dir.join("bandwidth_efficiency_report.json"),
+                &report_json,
+            )
+            .map_err(|e| format!("failed to write bandwidth report: {e}"))?;
+
+            let cell_count = signed.report.cells.len();
+            let overhead_dominated = signed
+                .report
+                .cells
+                .iter()
+                .filter(|c| c.overhead_exceeds_savings)
+                .count();
+
+            let run_manifest = serde_json::json!({
+                "schema_version": "franken-engine.erasure-bandwidth-gate.v1",
+                "bead": "bd-cixqu.35.3",
+                "outcome": "pass",
+                "coding_scheme": signed.report.coding_scheme,
+                "scheme_fault_tolerance_erasures": signed.report.scheme_fault_tolerance_erasures,
+                "report_hash": signed.report_hash,
+                "cells": cell_count,
+                "overhead_dominated_cells": overhead_dominated,
+            });
+            std::fs::write(
+                out_dir.join("run_manifest.json"),
+                serde_json::to_string_pretty(&run_manifest)
+                    .map_err(|e| format!("failed to serialize run manifest: {e}"))?,
+            )
+            .map_err(|e| format!("failed to write run manifest: {e}"))?;
+
+            let mut summary = String::new();
+            summary.push_str("# Erasure vs Full-Replication Bandwidth Gate\n\n");
+            summary.push_str(&format!(
+                "- coding scheme: `{}` (fault tolerance: {} erasure)\n",
+                signed.report.coding_scheme, signed.report.scheme_fault_tolerance_erasures
+            ));
+            summary.push_str(&format!("- report hash: `{}`\n", signed.report_hash));
+            summary.push_str(&format!("- cells: `{cell_count}`\n"));
+            summary.push_str(&format!(
+                "- overhead-dominated cells: `{overhead_dominated}`\n\n"
+            ));
+            summary.push_str(
+                "Honest note: the shipped scheme is XOR single-parity; the \
+                 fault-tolerance-normalized savings ceiling is (k-1)/(2k) (~50%), \
+                 not the 60-70% attributed to tunable Reed-Solomon.\n\n",
+            );
+            summary.push_str("| fleet | payload | k | savings (millionths) | overhead>savings |\n");
+            summary.push_str("| --- | --- | --- | --- | --- |\n");
+            for cell in &signed.report.cells {
+                summary.push_str(&format!(
+                    "| {} | {} | {} | {} | {} |\n",
+                    cell.fleet_size,
+                    cell.payload_bytes,
+                    cell.data_shards,
+                    cell.savings_ratio_millionths,
+                    cell.overhead_exceeds_savings,
+                ));
+            }
+            std::fs::write(out_dir.join("summary.md"), summary)
+                .map_err(|e| format!("failed to write summary: {e}"))?;
+
+            println!("✅ Erasure-bandwidth report completed");
+            println!("📁 Bundle directory: {}", out_dir.display());
+            println!("🔖 Report hash: {}", signed.report_hash);
+            println!(
+                "📊 {cell_count} cells / {overhead_dominated} overhead-dominated (scheme: {})",
+                signed.report.coding_scheme
+            );
+            Ok(0)
+        }
         _ => Err(
             "Unsupported gates subcommand. Use 'frankenctl help gates' to see available commands."
                 .to_string(),
@@ -10759,6 +10884,7 @@ fn gates_usage() -> String {
         "  frankenctl gates zero-placeholder --out-dir <dir> [--waivers <file>]",
         "  frankenctl gates signature-drift --out-dir <dir> [--config <file>]",
         "  frankenctl gates compounding-red-team --out-dir <dir> [--config <file>]",
+        "  frankenctl gates erasure-bandwidth --out-dir <dir> [--config <file>]",
         "  frankenctl gates adversarial-campaign --out-dir <dir>",
         "  frankenctl gates ambient-mock-guard --out-dir <dir>",
         "  frankenctl gates ifc-conformance --out-dir <dir>",

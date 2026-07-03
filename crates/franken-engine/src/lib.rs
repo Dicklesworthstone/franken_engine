@@ -630,7 +630,9 @@ use crate::baseline_interpreter::{
 use crate::capability::RuntimeCapability;
 use crate::hash_tiers::ContentHash;
 use crate::ir_contract::{Ir0Module, Ir3Instruction, Ir3Module};
-use crate::lowering_pipeline::{LoweringContext, LoweringPipelineError, lower_ir0_to_ir3};
+use crate::lowering_pipeline::{
+    AmbientAuthorityGrant, LoweringContext, LoweringPipelineError, lower_ir0_to_ir3,
+};
 use crate::parser::{CanonicalEs2020Parser, ParseError, ParseErrorCode, ParserOptions};
 use crate::ts_normalization::{
     SourceIngestionSummary, classify_source_language, prepare_source_entry_for_public_entrypoints,
@@ -1942,11 +1944,18 @@ fn eval_via_native_pipeline(
         ));
     }
 
+    // bd-xewby: a direct `QuickJsInspiredNativeEngine::eval` is a TRUSTED
+    // top-level eval context, so it is granted the benign process-shape ambient
+    // profile (`process.argv` / bare-`process` shape reads lower; env values and
+    // every other ambient surface stay denied). Untrusted extension execution
+    // goes through `ExecutionOrchestrator`, which builds its own deny-all
+    // `LoweringContext`, so this grant never widens the extension lowering path.
     let lowering_context = LoweringContext::new(
         prepared.trace_id.as_str(),
         prepared.decision_id.as_str(),
         prepared.policy_id.as_str(),
-    );
+    )
+    .with_ambient_authority_grant(AmbientAuthorityGrant::TrustedProcessShape);
     let ir0 = Ir0Module::from_syntax_tree(syntax_tree, "<eval>");
     let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_context)
         .map_err(map_lowering_error)

@@ -31,18 +31,23 @@ fn test_process_global_minimal_shape_regression() {
     assert_eq!(eval_value("typeof process"), "object");
     assert_eq!(eval_value("typeof process.env"), "object");
 
-    // A REAL read of the `process` shape (`process.argv`, `process.env.X`, …) IS
-    // an ambient-authority exercise and stays gated under the deny-all lowering
-    // posture — the SAME gate the red-team `process` scenarios rely on to reject
-    // bare `process` / `process.exit` / `process[computed]` access. So
-    // `process.argv.length` is rejected rather than returning "0"; the
-    // minimal-process-global feature is reduced to typeof-shape (a benign
-    // trusted-context shape read is tracked separately, see bd-846vj).
+    // bd-xewby: a direct engine `eval` is a TRUSTED top-level eval context, so
+    // benign `process`-SHAPE reads are granted (`ProcessShapeRead`). `process.argv`
+    // resolves to the injected empty argv array, so `process.argv.length` is "0".
+    // (Untrusted extension lowering — via `lower_ir0_to_ir1` / the orchestrator —
+    // still rejects the SAME read; see `ambient_authority_lowering_rejection_integration`.)
+    assert_eq!(eval_value("process.argv.length"), "0");
+
+    // The trusted grant is NARROW: it confers only `ProcessShapeRead`, never
+    // `EnvRead`. An environment VARIABLE VALUE read (`process.env.X`) stays denied
+    // at lowering even in a trusted eval — the SAME gate the red-team `process.env`
+    // scenarios rely on — so `process.env.PATH` is rejected rather than returning a
+    // value.
     let mut engine = QuickJsInspiredNativeEngine;
-    match engine.eval("process.argv.length") {
+    match engine.eval("process.env.PATH") {
         Ok(outcome) => panic!(
-            "expected `process.argv.length` to be denied by the ambient-authority gate, \
-             got value {:?}",
+            "expected `process.env.PATH` (an env VALUE read) to stay denied by the \
+             ambient-authority gate even in trusted eval, got value {:?}",
             outcome.value
         ),
         Err(error) => {
@@ -51,7 +56,7 @@ fn test_process_global_minimal_shape_regression() {
                 rendered.contains("ambient")
                     || rendered.contains("env.read")
                     || rendered.contains("env_read"),
-                "expected an ambient-authority denial for `process.argv.length`, got: {error:?}"
+                "expected an ambient-authority denial for `process.env.PATH`, got: {error:?}"
             );
         }
     }

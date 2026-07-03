@@ -80,11 +80,60 @@ const MAX_PREALLOC_OPS: usize = 1_000_000; // 1M ops max
 /// Maximum number of bindings to preallocate based on AST size (prevents pathological growth).
 const MAX_PREALLOC_BINDINGS: usize = 250_000; // 250K bindings max
 
+/// Ambient-authority grant applied to a whole lowering unit at its root scope.
+///
+/// The lowering-time ambient-authority gate is deny-by-default: a raw ambient
+/// identifier (`eval`, `require`, `fetch`, `process`, …) is rejected unless the
+/// unit's grant permits the [`EffectKind`] that access requires. Untrusted
+/// extension / red-team lowering runs under [`Self::DenyAll`] (the fail-closed
+/// default), so no ambient authority is reachable and every red-team scenario
+/// is rejected at lowering. A *trusted* top-level eval context
+/// (`QuickJsInspiredNativeEngine::eval`) runs under [`Self::TrustedProcessShape`],
+/// which grants only the benign [`EffectKind::ProcessShapeRead`] effect —
+/// `process.argv` and a bare `process` shape load — while env *values*
+/// (`process.env.X` → [`EffectKind::EnvRead`]), `eval`, fs, network, and spawn
+/// stay denied.
+///
+/// This is the seam bd-xewby threads so BOTH the minimal-`process`-global
+/// feature and every red-team rejection hold at once: trusted eval sees the
+/// process shape; untrusted extension lowering sees nothing. It is
+/// unit-uniform (applied at the root scope); per-scope grants are a future
+/// extension of the same seam.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AmbientAuthorityGrant {
+    /// No ambient authority reachable through raw ambient identifiers. The
+    /// fail-closed default for untrusted extension / red-team lowering.
+    #[default]
+    DenyAll,
+    /// Benign `process`-shape reads (`process.argv`, bare `process`) permitted;
+    /// env values / `eval` / fs / net / spawn remain denied. For trusted
+    /// top-level eval only.
+    TrustedProcessShape,
+}
+
+impl AmbientAuthorityGrant {
+    /// The ambient-authority [`EffectSet`] this grant confers on a unit's root
+    /// scope. `DenyAll` confers the empty (deny-by-default) set.
+    fn root_effect_set(self) -> EffectSet {
+        match self {
+            Self::DenyAll => EffectSet::new(),
+            Self::TrustedProcessShape => EffectSet::from_iter_of([EffectKind::ProcessShapeRead]),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoweringContext {
     pub trace_id: String,
     pub decision_id: String,
     pub policy_id: String,
+    /// Ambient-authority grant for this lowering unit. Defaults to
+    /// [`AmbientAuthorityGrant::DenyAll`]; only a trusted top-level eval sets
+    /// [`AmbientAuthorityGrant::TrustedProcessShape`]. `#[serde(default)]` keeps
+    /// older serialized contexts (no field) deserializing as deny-all.
+    #[serde(default)]
+    pub ambient_authority_grant: AmbientAuthorityGrant,
 }
 
 impl LoweringContext {
@@ -97,7 +146,16 @@ impl LoweringContext {
             trace_id: trace_id.into(),
             decision_id: decision_id.into(),
             policy_id: policy_id.into(),
+            ambient_authority_grant: AmbientAuthorityGrant::DenyAll,
         }
+    }
+
+    /// Builder: set the ambient-authority grant for this lowering unit. Used by
+    /// the trusted top-level eval path to grant the benign process-shape
+    /// profile; all other callers keep the deny-all default.
+    pub fn with_ambient_authority_grant(mut self, grant: AmbientAuthorityGrant) -> Self {
+        self.ambient_authority_grant = grant;
+        self
     }
 }
 
@@ -348,7 +406,8 @@ pub fn lower_ir0_to_ir3(
 ) -> Result<LoweringPipelineOutput, LoweringPipelineError> {
     let mut events = Vec::<LoweringEvent>::new();
 
-    let ir1_result = match lower_ir0_to_ir1(ir0) {
+    let ir1_result = match lower_ir0_to_ir1_with_ambient_grant(ir0, context.ambient_authority_grant)
+    {
         Ok(result) => {
             events.push(success_event(context, "ir0_to_ir1_lowered"));
             result
@@ -532,8 +591,32 @@ pub fn validate_ir0_static_semantics(ir0: &Ir0Module) -> SemanticValidationResul
     result
 }
 
+/// Lower IR0 → IR1 for an UNTRUSTED unit (deny-all ambient authority).
+///
+/// This is the fail-closed public entry used by extension / red-team lowering
+/// and by `lower_ir0_to_ir3` for any [`AmbientAuthorityGrant::DenyAll`] context.
+/// A trusted top-level eval reaches the shared body via
+/// [`lower_ir0_to_ir1_with_ambient_grant`] with
+/// [`AmbientAuthorityGrant::TrustedProcessShape`].
 pub fn lower_ir0_to_ir1(
     ir0: &Ir0Module,
+) -> Result<LoweringPassResult<Ir1Module>, LoweringPipelineError> {
+    lower_ir0_to_ir1_with_ambient_grant(ir0, AmbientAuthorityGrant::DenyAll)
+}
+
+/// Lower IR0 → IR1 under an explicit ambient-authority `ambient_grant`
+/// (bd-xewby).
+///
+/// `ambient_grant` is applied at the unit root: [`AmbientAuthorityGrant::DenyAll`]
+/// keeps the deny-all baseline (untrusted default), while
+/// [`AmbientAuthorityGrant::TrustedProcessShape`] records the trusted
+/// process-shape grant as a `binding_lookup` sentinel
+/// ([`TRUSTED_PROCESS_SHAPE_GRANT_SENTINEL`]) that the ambient-authority gate
+/// consults so `process.argv` / bare-`process` shape reads lower in a trusted
+/// top-level eval while env values and every other ambient surface stay denied.
+fn lower_ir0_to_ir1_with_ambient_grant(
+    ir0: &Ir0Module,
+    ambient_grant: AmbientAuthorityGrant,
 ) -> Result<LoweringPassResult<Ir1Module>, LoweringPipelineError> {
     if ir0.tree.body.is_empty() {
         return Err(LoweringPipelineError::EmptyIr0Body);
@@ -573,6 +656,15 @@ pub fn lower_ir0_to_ir1(
     }
     let mut bindings = Vec::<ResolvedBinding>::with_capacity(estimated_bindings);
     let mut binding_lookup = BTreeMap::<String, BindingId>::new();
+    // bd-xewby: record the trusted-eval process-shape grant as a NUL-sentinel so
+    // the ambient-authority gate (`ambient_authority_profile_for_scope`) can widen
+    // the root profile to `ProcessShapeRead` for a trusted top-level eval. Absent
+    // for untrusted extension lowering (deny-all). The value is unused — presence
+    // is the signal; the NUL-prefixed key never collides with a real binding name
+    // and is never pushed into `bindings`, so it never reaches emitted IR.
+    if ambient_grant == AmbientAuthorityGrant::TrustedProcessShape {
+        binding_lookup.insert(TRUSTED_PROCESS_SHAPE_GRANT_SENTINEL.to_string(), 0);
+    }
     let declared_root_bindings =
         reserve_root_scope_bindings(&ir0.tree.body, &mut binding_lookup, &mut binding_index);
     // bd-1xl17.a: record fs-module binding aliases (`const fs = require('fs')`
@@ -7742,10 +7834,59 @@ fn required_effect_for_ambient_authority(
         }
         "require" => Some(EffectKind::FsRead), // Node.js require
         "fetch" => Some(EffectKind::NetConnect), // Fetch API
-        "process" => Some(EffectKind::EnvRead), // Process object access
+        "process" => match member_property {
+            // Environment VARIABLE VALUE reads (`process.env`, then `.SECRET`).
+            // These stay `EnvRead` so they are denied even under the trusted
+            // process-shape grant: a trusted eval may read the process shape,
+            // never env values (bd-xewby).
+            Some("env") => Some(EffectKind::EnvRead),
+            // Benign, side-effect-free process-SHAPE descriptors. Mapped to the
+            // dedicated `ProcessShapeRead` effect so a trusted top-level eval
+            // can read them (`process.argv.length`) while untrusted extension
+            // lowering (empty profile) still rejects them.
+            Some(prop) if is_benign_process_shape_member(prop) => {
+                Some(EffectKind::ProcessShapeRead)
+            }
+            // Bare `process` object load. The object half of a benign
+            // `process.argv` read recurses through the checked identifier arm,
+            // so bare `process` must share the shape effect for the read to
+            // lower under the trusted grant. Untrusted lowering still rejects it
+            // (empty profile denies `ProcessShapeRead`), so the red-team
+            // bare-`process` / `process[computed]` scenarios stay contained.
+            None => Some(EffectKind::ProcessShapeRead),
+            // Every other `process` member (`exit`, `kill`, `abort`, `chdir`,
+            // `binding`, `dlopen`, `stdout`, …) is a non-benign authority
+            // surface: keep `EnvRead` so it stays denied even under the trusted
+            // shape grant.
+            Some(_) => Some(EffectKind::EnvRead),
+        },
         "crypto" => Some(EffectKind::RandomRead), // Crypto API
         _ => None,
     }
+}
+
+/// Whether `member` names a benign, side-effect-free descriptor of the ambient
+/// `process` object's *shape* (as opposed to an env-value read like `env` or an
+/// authority-exercising surface like `exit`/`kill`/`chdir`).
+///
+/// These are the only `process` members a trusted top-level eval may read
+/// through the [`AmbientAuthorityGrant::TrustedProcessShape`] profile; anything
+/// not listed here keeps its `EnvRead` classification and stays denied even in
+/// a trusted context. The set is intentionally small and read-only.
+fn is_benign_process_shape_member(member: &str) -> bool {
+    matches!(
+        member,
+        "argv"
+            | "argv0"
+            | "arch"
+            | "platform"
+            | "version"
+            | "versions"
+            | "pid"
+            | "ppid"
+            | "execPath"
+            | "title"
+    )
 }
 
 /// Lower a `typeof` operand while suppressing the ambient-authority gate on the
@@ -7852,40 +7993,65 @@ fn lower_typeof_operand_suppressing_ambient(
     }
 }
 
+/// `binding_lookup` sentinel marking that the current lowering unit is a
+/// TRUSTED top-level eval context granted the benign process-shape ambient
+/// profile ([`AmbientAuthorityGrant::TrustedProcessShape`]).
+///
+/// NUL-delimited so it can never collide with a real JS identifier — the same
+/// technique the fs/http module-alias sentinels use (`fs_module_alias_sentinel`
+/// etc.) to thread a unit-wide lowering fact through the already-threaded
+/// `binding_lookup` map without touching 100+ call sites. Presence = trusted;
+/// absence = untrusted deny-all (the fail-closed default for extension
+/// lowering). It is inserted once at the unit's root in
+/// [`lower_ir0_to_ir1_with_ambient_grant`] and never bound to a real
+/// [`ResolvedBinding`], so it never reaches emitted IR.
+const TRUSTED_PROCESS_SHAPE_GRANT_SENTINEL: &str = "\0ambient_grant\0trusted_process_shape";
+
 /// The ambient-authority [`EffectSet`] lowering enforces for `scope_id`.
 ///
-/// Lowering applies a fixed deny-by-default baseline — the empty effect set,
-/// i.e. [`EffectPolicy::Empty`] — to every scope. No ambient-authority effect
-/// (eval, fs, network, env, CSPRNG, or generic global access) may be exercised
-/// through a raw ambient identifier in lowered IR. This is the intended
-/// security posture, not an unfinished lookup: it forces any code that reaches
-/// for ambient authority to be rejected at the lowering boundary, so red-team
-/// scenarios cannot smuggle authority past it. Legitimate authority is granted
-/// downstream by the capability/IFC runtime layer through explicit capability
-/// objects — never by widening this lowering-time profile.
+/// Deny-by-default is the baseline: no ambient-authority effect (eval, fs,
+/// network, env, CSPRNG, generic global) may be exercised through a raw ambient
+/// identifier, so red-team scenarios cannot smuggle authority past the lowering
+/// boundary. Legitimate authority is granted downstream by the capability/IFC
+/// runtime layer through explicit capability objects — never by widening this
+/// lowering-time profile.
 ///
-/// The baseline is scope-uniform by design: there is no per-scope effect
-/// manifest at the lowering layer (effect annotations on functions/closures are
-/// resolved later, against [`EffectPolicy::Inherited`]/[`EffectPolicy::Declared`]).
-/// `scope_id` is therefore threaded through but selects the same empty baseline
-/// for every scope; it is the single seam a future per-scope lowering manifest
-/// would consult here.
-fn ambient_authority_profile_for_scope(scope_id: ScopeId) -> EffectSet {
-    let _ = scope_id; // scope-uniform empty baseline today (see doc above)
-    EffectSet::new()
+/// The one exception is the context-sensitive grant threaded by bd-xewby: when
+/// the unit's `binding_lookup` carries [`TRUSTED_PROCESS_SHAPE_GRANT_SENTINEL`]
+/// (set only for a trusted top-level eval), the root profile is widened to the
+/// single benign [`EffectKind::ProcessShapeRead`] effect. That lets a trusted
+/// eval read `process.argv` / the bare `process` shape while env values, eval,
+/// fs, net, and spawn stay denied — and leaves untrusted extension lowering
+/// (no sentinel) at the empty deny-all baseline.
+///
+/// `scope_id` is threaded through but the grant is unit-uniform (root scope)
+/// today; per-scope grants are a future extension of the same seam.
+fn ambient_authority_profile_for_scope(
+    scope_id: ScopeId,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> EffectSet {
+    let _ = scope_id; // unit-uniform grant today (see doc above)
+    if binding_lookup.contains_key(TRUSTED_PROCESS_SHAPE_GRANT_SENTINEL) {
+        AmbientAuthorityGrant::TrustedProcessShape.root_effect_set()
+    } else {
+        AmbientAuthorityGrant::DenyAll.root_effect_set()
+    }
 }
 
 /// Check whether the lowering-time ambient-authority profile for `scope_id`
 /// permits `required_effect`.
 ///
 /// Returns `Ok(())` when the effect is within the scope's profile, otherwise
-/// `Err(profile)` carrying the (deny-by-default, empty) profile so the caller
-/// can surface it in a [`LoweringPipelineError::AmbientAuthorityViolation`].
+/// `Err(profile)` carrying the profile so the caller can surface it in a
+/// [`LoweringPipelineError::AmbientAuthorityViolation`]. `binding_lookup` is
+/// consulted for the unit's trust grant (see
+/// [`ambient_authority_profile_for_scope`]).
 fn check_ambient_authority_allowed(
     required_effect: EffectKind,
     scope_id: ScopeId,
+    binding_lookup: &BTreeMap<String, BindingId>,
 ) -> Result<(), EffectSet> {
-    let profile = ambient_authority_profile_for_scope(scope_id);
+    let profile = ambient_authority_profile_for_scope(scope_id, binding_lookup);
     if profile.contains(required_effect) {
         Ok(())
     } else {
@@ -8182,7 +8348,7 @@ fn lower_expression_to_ir1_inner(
             // Check for ambient authority violation on direct identifier access
             if let Some(required_effect) = required_effect_for_ambient_authority(name, None)
                 && let Err(caller_profile) =
-                    check_ambient_authority_allowed(required_effect, root_scope_id)
+                    check_ambient_authority_allowed(required_effect, root_scope_id, binding_lookup)
             {
                 return Err(LoweringPipelineError::AmbientAuthorityViolation {
                     required_effect,
@@ -10139,8 +10305,11 @@ fn lower_expression_to_ir1_inner(
                 // the same check here, before the special-case, so an unsanctioned
                 // caller is fail-closed-rejected instead of silently allowed.
                 if let Some(required_effect) = required_effect_for_ambient_authority(name, None)
-                    && let Err(caller_profile) =
-                        check_ambient_authority_allowed(required_effect, root_scope_id)
+                    && let Err(caller_profile) = check_ambient_authority_allowed(
+                        required_effect,
+                        root_scope_id,
+                        binding_lookup,
+                    )
                 {
                     return Err(LoweringPipelineError::AmbientAuthorityViolation {
                         required_effect,
@@ -10527,7 +10696,7 @@ fn lower_expression_to_ir1_inner(
                 && let Some(required_effect) =
                     required_effect_for_ambient_authority(object_name, Some(prop_name))
                 && let Err(caller_profile) =
-                    check_ambient_authority_allowed(required_effect, root_scope_id)
+                    check_ambient_authority_allowed(required_effect, root_scope_id, binding_lookup)
             {
                 return Err(LoweringPipelineError::AmbientAuthorityViolation {
                     required_effect,
@@ -22005,5 +22174,144 @@ mod tests {
         // Control: plain `=` must still overwrite (the compound branch must not
         // intercept the Assign operator).
         assert_eq!(cwfiv_eval("let o = { c: 9 }; o.c = 1; o.c;"), "1");
+    }
+
+    // ================================================================
+    // bd-xewby: context-sensitive ambient-authority profile
+    // (benign process shape in trusted eval, deny-all for untrusted)
+    // ================================================================
+
+    fn lower_script_with_grant_bd_xewby(
+        source: &str,
+        grant: AmbientAuthorityGrant,
+    ) -> Result<LoweringPassResult<Ir1Module>, LoweringPipelineError> {
+        let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_xewby_fixture.js");
+        lower_ir0_to_ir1_with_ambient_grant(&ir0, grant)
+    }
+
+    #[test]
+    fn bd_xewby_process_ambient_effect_mapping_is_member_aware() {
+        // Env VALUE reads stay `EnvRead` (denied even under the trusted grant).
+        assert_eq!(
+            required_effect_for_ambient_authority("process", Some("env")),
+            Some(EffectKind::EnvRead)
+        );
+        // Benign shape descriptors map to the dedicated `ProcessShapeRead`.
+        assert_eq!(
+            required_effect_for_ambient_authority("process", Some("argv")),
+            Some(EffectKind::ProcessShapeRead)
+        );
+        assert_eq!(
+            required_effect_for_ambient_authority("process", Some("platform")),
+            Some(EffectKind::ProcessShapeRead)
+        );
+        // A bare `process` object load shares the shape effect (the object half of
+        // a benign `process.argv` read recurses through the identifier arm).
+        assert_eq!(
+            required_effect_for_ambient_authority("process", None),
+            Some(EffectKind::ProcessShapeRead)
+        );
+        // Non-benign authority surfaces keep `EnvRead` (denied under the shape grant).
+        assert_eq!(
+            required_effect_for_ambient_authority("process", Some("exit")),
+            Some(EffectKind::EnvRead)
+        );
+        // `globalThis.process` is intentionally left `EnvRead` (conservative: not
+        // widened by the trusted grant, so the red-team globalThis path stays denied).
+        assert_eq!(
+            required_effect_for_ambient_authority("globalThis", Some("process")),
+            Some(EffectKind::EnvRead)
+        );
+    }
+
+    #[test]
+    fn bd_xewby_grant_root_effect_sets() {
+        assert!(AmbientAuthorityGrant::DenyAll.root_effect_set().is_empty());
+        let trusted = AmbientAuthorityGrant::TrustedProcessShape.root_effect_set();
+        assert!(trusted.contains(EffectKind::ProcessShapeRead));
+        // The trusted grant is NARROW: it confers exactly one effect and never
+        // env-value / eval / fs / net authority.
+        assert_eq!(trusted.len(), 1);
+        assert!(!trusted.contains(EffectKind::EnvRead));
+        assert!(!trusted.contains(EffectKind::Eval));
+        assert!(!trusted.contains(EffectKind::FsRead));
+    }
+
+    #[test]
+    fn bd_xewby_is_benign_process_shape_member_allowlist() {
+        for benign in ["argv", "argv0", "arch", "platform", "version", "pid"] {
+            assert!(
+                is_benign_process_shape_member(benign),
+                "{benign} should be a benign process-shape member"
+            );
+        }
+        for authority in ["env", "exit", "kill", "chdir", "binding", "stdout"] {
+            assert!(
+                !is_benign_process_shape_member(authority),
+                "{authority} must NOT be a benign process-shape member"
+            );
+        }
+    }
+
+    #[test]
+    fn bd_xewby_trusted_eval_lowers_process_argv_shape_read() {
+        // A trusted top-level eval may lower `process.argv` (and the bare `process`
+        // object-load it recurses through) under the process-shape grant.
+        lower_script_with_grant_bd_xewby(
+            "process.argv.length;\n",
+            AmbientAuthorityGrant::TrustedProcessShape,
+        )
+        .expect("trusted eval should lower a benign process.argv shape read");
+    }
+
+    #[test]
+    fn bd_xewby_untrusted_lowering_rejects_process_argv() {
+        // The SAME read is rejected under the deny-all default (untrusted
+        // extension / red-team lowering), carrying the `ProcessShapeRead` effect.
+        let error = lower_script_with_grant_bd_xewby(
+            "process.argv.length;\n",
+            AmbientAuthorityGrant::DenyAll,
+        )
+        .expect_err("untrusted lowering must reject process.argv");
+        assert!(
+            matches!(
+                error,
+                LoweringPipelineError::AmbientAuthorityViolation {
+                    required_effect: EffectKind::ProcessShapeRead,
+                    ..
+                }
+            ),
+            "expected ProcessShapeRead ambient-authority violation, got {error:?}"
+        );
+        // The public deny-all entry point agrees.
+        assert!(matches!(
+            lower_ir0_to_ir1(&Ir0Module::from_syntax_tree(
+                crate::parser_api_stability::parse_script("process.argv.length;\n").expect("parse"),
+                "bd_xewby_public.js",
+            )),
+            Err(LoweringPipelineError::AmbientAuthorityViolation { .. })
+        ));
+    }
+
+    #[test]
+    fn bd_xewby_trusted_eval_still_denies_process_env_value_read() {
+        // Defense in depth: even a trusted eval may not read env VALUES; the
+        // `process.env` member carries `EnvRead`, which the shape grant excludes.
+        let error = lower_script_with_grant_bd_xewby(
+            "process.env.PATH;\n",
+            AmbientAuthorityGrant::TrustedProcessShape,
+        )
+        .expect_err("trusted eval must still reject an env value read");
+        assert!(
+            matches!(
+                error,
+                LoweringPipelineError::AmbientAuthorityViolation {
+                    required_effect: EffectKind::EnvRead,
+                    ..
+                }
+            ),
+            "expected EnvRead ambient-authority violation, got {error:?}"
+        );
     }
 }

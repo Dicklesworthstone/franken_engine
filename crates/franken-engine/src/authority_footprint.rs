@@ -352,9 +352,10 @@ impl AuthorityFootprintReport {
 // ---------------------------------------------------------------------------
 
 /// Map the lowering-time ambient effect to the typed capability a grant would
-/// have to include to mediate it. `EnvWrite` and `RandomRead`/`Global` have no
-/// dedicated capability today and map to the closest enforced one; this is the
-/// implied-grant surface, documented so the mapping is auditable.
+/// have to include to mediate it. `EnvWrite`, `RandomRead`/`Global`, and
+/// `ProcessShapeRead` have no dedicated capability today and map to the closest
+/// enforced one; this is the implied-grant surface, documented so the mapping
+/// is auditable.
 pub fn capability_for_effect(effect: EffectKind) -> RuntimeCapability {
     match effect {
         EffectKind::FsRead => RuntimeCapability::FsRead,
@@ -362,6 +363,11 @@ pub fn capability_for_effect(effect: EffectKind) -> RuntimeCapability {
         EffectKind::NetConnect | EffectKind::NetListen => RuntimeCapability::NetworkEgress,
         EffectKind::ProcSpawn => RuntimeCapability::ProcessSpawn,
         EffectKind::EnvRead | EffectKind::EnvWrite => RuntimeCapability::EnvRead,
+        // A benign `process`-shape read (argv / platform / version / pid) has no
+        // dedicated capability today; it is env-adjacent ambient authority, so it
+        // maps to the closest enforced one (`EnvRead`). This is the implied-grant
+        // surface, documented above so the mapping stays auditable.
+        EffectKind::ProcessShapeRead => RuntimeCapability::EnvRead,
         EffectKind::PolicyRequest => RuntimeCapability::PolicyRead,
         EffectKind::Eval => RuntimeCapability::VmDispatch,
         EffectKind::Global => RuntimeCapability::Builtin,

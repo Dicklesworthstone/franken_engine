@@ -23,9 +23,11 @@ and the debugger is the authoritative semantic model by construction.
 ## Normal use
 
 ```bash
-# 1) Run with the flight recorder on: report + linked explain index.
+# 1) Run with the flight recorder on: report + linked explain index +
+#    the recorded nondeterminism trace (debugger input).
 frankenctl run --input ./ext.js --extension-id my-ext \
-  --out ./artifacts/run.json --explain --explain-out ./artifacts/explain.json
+  --out ./artifacts/run.json --explain --explain-out ./artifacts/explain.json \
+  --emit-trace ./artifacts/trace.json
 
 # 2) Human summary of the index (what happened, which artifacts, which links):
 frankenctl explain ./artifacts/explain.json
@@ -90,10 +92,9 @@ Honesty guarantees:
 
 - The re-execution's nondeterminism trace must match the loaded `--trace`
   event-for-event, or the inspect fails closed — a module that does not
-  correspond to the trace cannot serve state. (CLI gap: `frankenctl run` does
-  not yet emit its recorded trace, so an end-to-end CLI inspect round-trip
-  needs `--emit-trace` — tracked as `bd-9mr8o`; in-process reconstruction
-  fidelity is pinned by `tests/flight_recorder_capstone.rs`.)
+  correspond to the trace cannot serve state. Capture the matching trace with
+  `frankenctl run --emit-trace <trace.json>` (bd-9mr8o); reconstruction
+  fidelity is pinned by `tests/flight_recorder_capstone.rs`.
 - Only an instruction boundary landing exactly on the tick produces state;
   otherwise the response is a fail-closed protocol error, never invented state.
 - Heap-object labels are the join of the labels of every register from which

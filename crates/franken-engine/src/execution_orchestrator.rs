@@ -265,6 +265,12 @@ pub struct OrchestratorResult {
     // signed effect ledger in `franken-node run`.
     pub host_effect_transcript: Vec<(HostIoRequest, HostIoOutcome)>,
 
+    // Replay (bd-9mr8o): the finalised nondeterminism trace the interpreter
+    // recorded during this run. Surfaced so `frankenctl run --emit-trace`
+    // can hand operators the exact trace `frankenctl replay debug --input`
+    // needs for end-to-end interpreter-state inspection.
+    pub nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace,
+
     // Epoch
     pub epoch: SecurityEpoch,
 }
@@ -835,6 +841,7 @@ impl ExecutionOrchestrator {
                 .as_ref()
                 .map(|recorder| recorder.recorded_entries())
                 .unwrap_or_default(),
+            nondeterminism_trace: exec_result.nondeterminism_trace.clone(),
             epoch: self.config.epoch,
         })
     }

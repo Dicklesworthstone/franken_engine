@@ -119,6 +119,24 @@ run_live_e2e() {
   dw_run_step "assert explain artifacts present" \
     bash -c 'for f in run.json explain.json explain_report.json; do [ -s "$1/$f" ] || { echo "missing or empty $f in $1" >&2; exit 1; }; done' _ "$e2e_root"
 
+  # bd-9mr8o: the end-to-end CLI inspection loop. `run --emit-trace` captures
+  # the run's recorded nondeterminism trace; the debugger re-executes the same
+  # source against it and serves reconstructed interpreter state. The trace
+  # itself must also be byte-identical across fixed-input runs.
+  dw_run_step "frankenctl run --emit-trace (frozen input, pass a)" \
+    "$bin" run --input "$frozen" --extension-id dw-flight-recorder \
+      --emit-trace "$e2e_root/trace.json"
+  cp "$e2e_root/trace.json" "$e2e_root/trace_pass_a.json"
+  dw_run_step "frankenctl run --emit-trace (frozen input, pass b)" \
+    "$bin" run --input "$frozen" --extension-id dw-flight-recorder \
+      --emit-trace "$e2e_root/trace.json"
+  dw_run_step "emitted trace byte-identity across passes (fixed input)" \
+    diff "$e2e_root/trace_pass_a.json" "$e2e_root/trace.json"
+  printf '%s\n' '{"cmd":"inspect","tick":0}' > "$e2e_root/inspect.jsonl"
+  dw_run_step "replay debug --input live inspection round-trip (registers/heap/IFC labels)" \
+    bash -c '"$1" replay debug --trace "$2/trace.json" --input "$3" --script "$2/inspect.jsonl" --out "$2/inspect_transcript.jsonl" && grep -q "\"kind\":\"inspection\"" "$2/inspect_transcript.jsonl"' \
+      _ "$bin" "$e2e_root" "$frozen"
+
   dw_log_event "live_e2e" "pass" '{"bundle_root":"flight_recorder_e2e/"}'
 }
 

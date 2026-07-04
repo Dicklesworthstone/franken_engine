@@ -330,6 +330,9 @@ struct RunArgs {
     out: Option<PathBuf>,
     explain: bool,
     explain_out: Option<PathBuf>,
+    /// Write the run's recorded nondeterminism trace here (bd-9mr8o), the
+    /// exact input `frankenctl replay debug --trace` consumes.
+    emit_trace: Option<PathBuf>,
     data_contract: Option<PathBuf>,
     data_contract_purpose: String,
 }
@@ -2046,6 +2049,7 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut out: Option<PathBuf> = None;
     let mut explain = false;
     let mut explain_out: Option<PathBuf> = None;
+    let mut emit_trace: Option<PathBuf> = None;
     let mut data_contract: Option<PathBuf> = None;
     let mut data_contract_purpose = DEFAULT_DATA_CONTRACT_PURPOSE.to_string();
 
@@ -2079,6 +2083,9 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
                 explain = true;
                 explain_out = Some(PathBuf::from(next_arg(args, &mut index, "--explain-out")?));
             }
+            "--emit-trace" => {
+                emit_trace = Some(PathBuf::from(next_arg(args, &mut index, "--emit-trace")?));
+            }
             flag => return Err(format!("unknown run flag `{flag}`")),
         }
         index += 1;
@@ -2095,6 +2102,7 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
         out,
         explain,
         explain_out,
+        emit_trace,
         data_contract,
         data_contract_purpose,
     }))
@@ -4009,6 +4017,11 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     let result = orchestrator
         .execute(&package)
         .map_err(|error| format_run_error(&args.input, &error))?;
+    // bd-9mr8o: hand operators the exact trace `frankenctl replay debug
+    // --trace` consumes, enabling the end-to-end --input inspection loop.
+    if let Some(path) = args.emit_trace.as_ref() {
+        write_json_file(path, &result.nondeterminism_trace)?;
+    }
     let explain_bundle_path = resolve_run_explain_path(&args);
 
     let explain_bundle_path_string = explain_bundle_path
@@ -10555,6 +10568,11 @@ fn run_usage() -> String {
         "  frankenctl run --input <source.js> --extension-id <id> [--goal script|module] [--out <report.json>]",
         "      [--data-contract <contract.json>] [--purpose <purpose>]",
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
+        "      [--emit-trace <trace.json>]",
+        "",
+        "  --emit-trace writes the run's recorded nondeterminism trace — the",
+        "  exact input `frankenctl replay debug --trace` consumes, enabling",
+        "  end-to-end interpreter-state inspection with `--input <source>`.",
     ]
     .join("\n")
 }

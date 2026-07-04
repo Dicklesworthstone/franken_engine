@@ -72,10 +72,7 @@ step "4a) time-travel debugger: fail-closed state inspection (honesty demo)"
 # interpreter and compares the produced nondeterminism trace event-for-event.
 # Handing it a deliberately wrong (empty) trace demonstrates the refusal —
 # the response is a fail-closed protocol error naming the divergence, never
-# invented state. (In-process reconstruction fidelity — reconstructed ==
-# originally-observed — is pinned by tests/flight_recorder_capstone.rs, which
-# records the trace in-process; CLI-side trace capture from `frankenctl run`
-# is tracked as follow-up work.)
+# invented state.
 cat > "$out/wrong_trace.json" <<'JSON'
 {
   "session_id": "flight-demo",
@@ -106,6 +103,24 @@ JSONL
   --script "$out/nav_commands.jsonl" --out "$out/nav_transcript.jsonl"
 echo
 echo "transcripts preserved under: $out/"
+
+step "4c) time-travel debugger: WORKING live state inspection (bd-9mr8o)"
+# `run --emit-trace` hands us the run's real recorded nondeterminism trace;
+# handing THAT trace + the same source to the debugger lets inspect serve
+# registers, heap values, and IFC labels reconstructed by re-executing the
+# real interpreter.
+"$bin" run --input "$out/demo.js" --extension-id flight-demo \
+  --emit-trace "$out/real_trace.json" >/dev/null
+cat > "$out/live_commands.jsonl" <<'JSONL'
+{"cmd":"state"}
+{"cmd":"inspect","tick":0}
+JSONL
+"$bin" replay debug --trace "$out/real_trace.json" --input "$out/demo.js" \
+  --script "$out/live_commands.jsonl" --out "$out/live_transcript.jsonl" \
+  | tail -1 | head -c 400
+echo
+grep -q '"kind":"inspection"' "$out/live_transcript.jsonl" \
+  && echo "live inspection confirmed: registers + heap + IFC labels served from real re-execution"
 
 step "done"
 echo "Runbook: runbooks/dw_flight_recorder.md"

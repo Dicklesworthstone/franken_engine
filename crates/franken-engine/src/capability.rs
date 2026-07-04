@@ -65,6 +65,15 @@ pub enum RuntimeCapability {
     Timer,
     /// Built-in JavaScript operations (Array.prototype.*, Object.*, etc.).
     Builtin,
+    /// IFC declassification hostcalls (`declassify.*` / `declassify:*` routes).
+    ///
+    /// This is the *interpreter-gate* authority only: it lets a package invoke
+    /// a declassification-routed hostcall at all. The per-route semantics
+    /// (obligation linkage, signed receipts, source/sink label checks) are
+    /// enforced separately by the orchestrator's runtime flow guards; holding
+    /// this capability without a valid staged receipt still fails closed there
+    /// (bd-lduxz).
+    Declassify,
 }
 
 impl fmt::Display for RuntimeCapability {
@@ -90,6 +99,7 @@ impl fmt::Display for RuntimeCapability {
             Self::Console => "console",
             Self::Timer => "timer",
             Self::Builtin => "builtin",
+            Self::Declassify => "declassify",
         };
         f.write_str(name)
     }
@@ -97,7 +107,7 @@ impl fmt::Display for RuntimeCapability {
 
 impl RuntimeCapability {
     /// Every runtime capability variant in canonical declaration order.
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::VmDispatch,
         Self::GcInvoke,
         Self::IrLowering,
@@ -118,6 +128,7 @@ impl RuntimeCapability {
         Self::Console,
         Self::Timer,
         Self::Builtin,
+        Self::Declassify,
     ];
 
     /// Map a capability-tag string (as used in [`CapabilityTag`] / hostcall
@@ -148,6 +159,7 @@ impl RuntimeCapability {
             "console" => Some(Self::Console),
             "timer" => Some(Self::Timer),
             "builtin" => Some(Self::Builtin),
+            "declassify" => Some(Self::Declassify),
 
             // Short aliases used in IR / tests
             // bd-656a2: `net:request` is the tag emitted by the JS http.get/
@@ -181,6 +193,16 @@ impl RuntimeCapability {
 
             // Map number hostcalls to Builtin capability (number operations are built-ins)
             tag if tag.starts_with("number:") => Some(Self::Builtin),
+
+            // Map declassification-routed hostcalls (`declassify.audit`,
+            // `declassify:route-x`, …) to the Declassify capability. The route
+            // suffix is obligation routing, not a distinct capability; per-route
+            // receipt semantics are enforced by the orchestrator's runtime flow
+            // guards (bd-lduxz). Before the typed-capability migration these
+            // tags were granted as raw strings from the package manifest.
+            tag if tag.starts_with("declassify.") || tag.starts_with("declassify:") => {
+                Some(Self::Declassify)
+            }
 
             // Unknown / internal tags — not mapped
             _ => None,
@@ -328,6 +350,7 @@ impl CapabilityProfile {
                 Console,
                 Timer,
                 Builtin,
+                Declassify,
             ]),
         }
     }

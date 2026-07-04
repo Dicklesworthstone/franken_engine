@@ -8051,9 +8051,15 @@ fn build_replay_debug_state_producer(
 
     let expected_trace = load_json_file::<NondeterminismTrace>(trace_path)?;
     let mut config = InterpreterConfig::quickjs_defaults();
+    // Console mirrors the orchestrated run path (`frankenctl run` grants the
+    // engine-core profile, and the orchestrator default-grants Console): a
+    // trace recorded from a console-logging program must not diverge at
+    // replay-debug time with a CapabilityDenied the original run never hit
+    // (bd-lduxz).
     config.granted_capabilities = BTreeSet::from([
         RuntimeCapability::VmDispatch,
         RuntimeCapability::HeapAllocate,
+        RuntimeCapability::Console,
     ]);
     Ok(ReplayStateProducer::new(
         lowering.ir3,

@@ -974,9 +974,15 @@ impl ExecutionOrchestrator {
     }
 
     fn lane_router_for_execution(package: &ExtensionPackage) -> LaneRouter {
+        // Console is granted by default because orchestrated console output is
+        // capture-only: it lands in `OrchestratorResult::console_output` and the
+        // evidence stream, never an ambient host sink. Requiring packages to
+        // declare `console` would deny `console.log` in every CLI-shaped run
+        // (bd-lduxz); the raw interpreter without this grant still fails closed.
         let mut granted_capabilities = BTreeSet::from([
             RuntimeCapability::VmDispatch,
             RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Console,
         ]);
         granted_capabilities.extend(
             package

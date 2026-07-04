@@ -123,9 +123,15 @@ fn test_ambient_authority_rejection() {
     assert!(!compute_only.has(RuntimeCapability::NetworkEgress));
     assert!(!compute_only.has(RuntimeCapability::ProcessSpawn));
 
-    // But does include pure computation capabilities
-    assert!(compute_only.has(RuntimeCapability::VmDispatch));
-    assert!(compute_only.has(RuntimeCapability::Builtin));
+    // ComputeOnly is the canonical EMPTY bottom profile ("ComputeOnlyCaps[0]",
+    // FE-CAPS-§C.3): it grants nothing, not even VM dispatch — execution
+    // authority must be granted explicitly by whoever runs the extension. The
+    // earlier expectation that it carried VmDispatch/Builtin contradicted the
+    // lattice conformance suite and rotted unnoticed in this non-default
+    // target (bd-lduxz).
+    assert!(!compute_only.has(RuntimeCapability::VmDispatch));
+    assert!(!compute_only.has(RuntimeCapability::Builtin));
+    assert!(compute_only.is_empty());
 }
 
 #[test]

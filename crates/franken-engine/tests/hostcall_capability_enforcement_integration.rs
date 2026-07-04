@@ -702,7 +702,7 @@ fn capability_profile_display_includes_kind_and_count() {
     assert_eq!(ec.to_string(), "EngineCoreCaps[7]");
 
     let full = CapabilityProfile::full();
-    assert_eq!(full.to_string(), "FullCaps[20]");
+    assert_eq!(full.to_string(), "FullCaps[21]");
 
     let co = CapabilityProfile::compute_only();
     assert_eq!(co.to_string(), "ComputeOnlyCaps[0]");
@@ -791,6 +791,7 @@ fn runtime_capability_display_all_variants() {
         (RuntimeCapability::Console, "console"),
         (RuntimeCapability::Timer, "timer"),
         (RuntimeCapability::Builtin, "builtin"),
+        (RuntimeCapability::Declassify, "declassify"),
     ];
     for (cap, label) in &expected {
         assert_eq!(cap.to_string(), *label, "Display mismatch for {:?}", cap);

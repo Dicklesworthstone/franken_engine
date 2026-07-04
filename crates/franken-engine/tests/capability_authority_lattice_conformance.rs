@@ -36,7 +36,7 @@ fn inventory_all_runtime_capability_variants_appear_in_all() {
         "duplicate variant in RuntimeCapability::ALL"
     );
     // Pin the count so adding a variant without updating ALL fails this test.
-    assert_eq!(all.len(), 20, "RuntimeCapability variant count drift");
+    assert_eq!(all.len(), 21, "RuntimeCapability variant count drift");
 }
 
 #[test]
@@ -128,6 +128,8 @@ fn tag_parsing_hostcall_prefixes_route_to_grouped_capability() {
         ("builtin:Object.keys", RuntimeCapability::Builtin),
         ("number:parseInt", RuntimeCapability::Builtin),
         ("number:isFinite", RuntimeCapability::Builtin),
+        ("declassify.audit", RuntimeCapability::Declassify),
+        ("declassify:route-x", RuntimeCapability::Declassify),
     ];
     for (tag, expected) in cases {
         assert_eq!(
@@ -493,7 +495,7 @@ const LATTICE_CONFORMANCE_RULES: &[(&str, &str)] = &[
     ),
     (
         "FE-CAPS-§B.3-PrefixesRoute",
-        "console:/timer:/builtin:/number: prefixes route to bucket capability",
+        "console:/timer:/builtin:/number:/declassify prefixes route to bucket capability",
     ),
     (
         "FE-CAPS-§B.4-UnknownNone",

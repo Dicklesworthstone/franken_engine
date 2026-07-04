@@ -4475,6 +4475,11 @@ struct PendingStreamEmission {
 pub struct InterpreterCore {
     config: InterpreterConfig,
     hook: Option<Arc<dyn InterpreterHook>>,
+    /// True only while `prepare_execution` runs engine-internal setup
+    /// (module-namespace record, runtime globals). Containment hooks are
+    /// suppressed during this window: no extension instruction has executed
+    /// yet, so there is nothing for a policy to attribute (bd-gug3l).
+    preparing_execution: bool,
     /// Optional sandboxed host-I/O provider (bd-f5b04.2.7). When set, authorized
     /// `fs:` hostcalls dispatch to real host effects through the algebraic-effects
     /// handler stack instead of returning `undefined`. `None` preserves the
@@ -4695,6 +4700,7 @@ impl InterpreterCore {
         Self {
             config,
             hook: None,
+            preparing_execution: false,
             host_io: None,
             host_io_recorder: None,
             registers: SeedTrackedField::new(vec![Value::Undefined; max_regs]),
@@ -5976,6 +5982,19 @@ impl InterpreterCore {
     }
 
     fn prepare_execution(&mut self, module: &Ir3Module) -> Result<String, InterpreterError> {
+        // Containment hooks observe EXTENSION behavior; nothing the extension
+        // wrote has run yet during preparation, so engine-internal setup
+        // allocations (module-namespace record, runtime globals) must not
+        // trigger them. Otherwise a deny-allocation policy terminates every
+        // program at instruction 0 before its first real instruction
+        // (bd-gug3l). The flag is cleared on every exit path below.
+        self.preparing_execution = true;
+        let result = self.prepare_execution_inner(module);
+        self.preparing_execution = false;
+        result
+    }
+
+    fn prepare_execution_inner(&mut self, module: &Ir3Module) -> Result<String, InterpreterError> {
         let current_seed = self.capture_execution_seed();
         let seed = match (&self.last_pre_run_seed, &self.last_post_run_seed) {
             (Some(previous_pre_run), Some(previous_post_run))
@@ -9905,6 +9924,14 @@ impl InterpreterCore {
         kind: AllocKind,
         size_hint: usize,
     ) -> Result<(), InterpreterError> {
+        // Engine-internal prepare-phase allocations are exempt: no extension
+        // instruction has executed yet, so there is nothing for a containment
+        // policy to attribute (bd-gug3l). Mid-execution module allocations
+        // (dynamic import / require) still run the hook — this flag is only
+        // set inside prepare_execution.
+        if self.preparing_execution {
+            return Ok(());
+        }
         let Some(hook) = self.hook.as_ref() else {
             return Ok(());
         };
@@ -40642,7 +40669,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "bd-gug3l: Terminate hook fires during prepare_execution module-namespace allocation (instructions_executed=0); core created inside the lane cannot be primed"]
     fn lane_execute_with_hook_preserves_requested_containment_in_result() {
         let hook = Arc::new(RecordingHook::with_allocation_action(
             HookAction::Terminate("policy denied object allocation".to_string()),

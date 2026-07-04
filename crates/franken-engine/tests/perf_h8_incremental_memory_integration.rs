@@ -110,6 +110,41 @@ fn representative_programs() -> Vec<(&'static str, &'static str)> {
             "nested_scopes_and_string_growth",
             "let s = ''; { let inner = 'abc'; { let deeper = inner + 'def'; s = deeper + deeper; } } s.length;",
         ),
+        // bd-s8u37 corpus extension: builtin surfaces whose direct
+        // properties.insert/remove sites previously bypassed the incremental
+        // accounting chokepoints.
+        (
+            "map_set_overwrite_delete",
+            "const m = new Map(); m.set('alpha', 1); m.set('beta', 'two'); m.set('alpha', 'replaced-longer-value'); m.delete('beta'); m.size;",
+        ),
+        (
+            "set_add_duplicate_delete",
+            "const s = new Set(); s.add('one'); s.add(2); s.add('one'); s.delete(2); s.size;",
+        ),
+        (
+            "set_seed_from_iterable_and_clear",
+            "const s = new Set(['a', 'b', 'c', 'a']); const before = s.size; s.clear(); before + s.size;",
+        ),
+        (
+            "map_seed_clear",
+            "const m = new Map(); m.set('k1', 'v1'); m.set('k2', 'v2'); m.clear(); m.size;",
+        ),
+        (
+            "array_reverse_including_sparse",
+            "const dense = [1, 2, 3, 4]; dense.reverse(); const sparse = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]; delete sparse[3]; sparse.reverse(); dense[0] + sparse.length;",
+        ),
+        (
+            "array_sort_with_holes",
+            "const a = ['pear', 'apple', 'fig']; a.sort(); const holed = []; holed[0] = 'z'; holed[3] = 'a'; holed.sort(); a[0] + holed.length;",
+        ),
+        (
+            "array_splice_remove_insert",
+            "const a = ['a', 'b', 'c', 'd', 'e']; const removed = a.splice(1, 2, 'X'); a.length + removed.length;",
+        ),
+        (
+            "object_define_property",
+            "const o = { existing: 1 }; Object.defineProperty(o, 'added', { value: 'defined-value' }); Object.defineProperty(o, 'existing', { value: 'overwritten' }); o.added;",
+        ),
     ]
 }
 

@@ -15507,13 +15507,25 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         if let Some(entries_id) = self.collection_storage_id(map_id, "Map", "__entries") {
             let repr = Self::collection_key_repr(&key);
-            let is_new = self
-                .heap
-                .get(entries_id.0 as usize)
-                .map(|e| !e.properties.contains_key(&repr))
-                .unwrap_or(false);
             let entries_index = entries_id.0 as usize;
             let map_index = map_id.0 as usize;
+            // Incremental memory accounting (bd-s8u37): delta vs any existing
+            // entry, checked+applied before the mutation. The size bump is
+            // Int -> Int (zero delta).
+            let previous_bytes = self
+                .heap
+                .get(entries_index)
+                .and_then(|e| e.properties.get(&repr))
+                .map_or(0, |existing| {
+                    Self::estimate_property_entry_bytes(&repr, existing)
+                });
+            let is_new = self
+                .heap
+                .get(entries_index)
+                .map(|e| !e.properties.contains_key(&repr))
+                .unwrap_or(false);
+            let new_bytes = Self::estimate_property_entry_bytes(&repr, &value);
+            self.apply_memory_component_delta(previous_bytes, new_bytes)?;
             self.mutate_heap(|heap| {
                 if let Some(entries) = heap.get_mut(entries_index) {
                     entries.properties.insert(repr, value);
@@ -15536,13 +15548,24 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         if let Some(values_id) = self.collection_storage_id(set_id, "Set", "__values") {
             let repr = Self::collection_key_repr(&value);
-            let is_new = self
-                .heap
-                .get(values_id.0 as usize)
-                .map(|v| !v.properties.contains_key(&repr))
-                .unwrap_or(false);
             let values_index = values_id.0 as usize;
             let set_index = set_id.0 as usize;
+            // Incremental memory accounting (bd-s8u37): delta vs any existing
+            // entry, checked+applied before the mutation.
+            let previous_bytes = self
+                .heap
+                .get(values_index)
+                .and_then(|v| v.properties.get(&repr))
+                .map_or(0, |existing| {
+                    Self::estimate_property_entry_bytes(&repr, existing)
+                });
+            let is_new = self
+                .heap
+                .get(values_index)
+                .map(|v| !v.properties.contains_key(&repr))
+                .unwrap_or(false);
+            let new_bytes = Self::estimate_property_entry_bytes(&repr, &value);
+            self.apply_memory_component_delta(previous_bytes, new_bytes)?;
             self.mutate_heap(|heap| {
                 if let Some(values) = heap.get_mut(values_index) {
                     values.properties.insert(repr, value);
@@ -15610,6 +15633,13 @@ impl InterpreterCore {
         if existed {
             let storage_index = storage_id.0 as usize;
             let obj_index = obj_id.0 as usize;
+            // Incremental memory accounting (bd-s8u37): release the removed
+            // entry's bytes (removal only shrinks; no budget check needed).
+            let removed_bytes = self
+                .heap
+                .get(storage_index)
+                .and_then(|s| s.properties.get(&repr))
+                .map_or(0, |value| Self::estimate_property_entry_bytes(&repr, value));
             self.mutate_heap(|heap| {
                 if let Some(storage) = heap.get_mut(storage_index) {
                     storage.properties.remove(&repr);
@@ -15620,6 +15650,7 @@ impl InterpreterCore {
                     *size = size.saturating_sub(1);
                 }
             });
+            self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(removed_bytes);
         }
         existed
     }
@@ -15632,6 +15663,15 @@ impl InterpreterCore {
         if let Some(storage_id) = self.collection_storage_id(obj_id, type_tag, storage_prop) {
             let storage_index = storage_id.0 as usize;
             let obj_index = obj_id.0 as usize;
+            // Incremental memory accounting (bd-s8u37): release every cleared
+            // entry's bytes (removal only shrinks; no budget check needed).
+            let removed_bytes = self.heap.get(storage_index).map_or(0, |storage| {
+                storage
+                    .properties
+                    .iter()
+                    .map(|(k, v)| Self::estimate_property_entry_bytes(k, v))
+                    .sum::<u64>()
+            });
             self.mutate_heap(|heap| {
                 if let Some(storage) = heap.get_mut(storage_index) {
                     storage.properties.clear();
@@ -15642,6 +15682,7 @@ impl InterpreterCore {
                     *size = 0;
                 }
             });
+            self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(removed_bytes);
         }
         Value::Undefined
     }
@@ -21250,6 +21291,21 @@ impl InterpreterCore {
                 let count = args.count;
                 let array_index = array_id.0 as usize;
 
+                // Incremental memory accounting (bd-s8u37): the array was just
+                // allocated empty (alloc accounts only the base object), so
+                // every element entry plus the length entry is net-new.
+                let added_bytes = elements
+                    .iter()
+                    .map(|(index_str, element)| {
+                        Self::estimate_property_entry_bytes(index_str, element)
+                    })
+                    .sum::<u64>()
+                    .saturating_add(Self::estimate_property_entry_bytes(
+                        "length",
+                        &Value::Int(count as i64),
+                    ));
+                self.apply_memory_component_delta(0, added_bytes)?;
+
                 // Add each argument as an array element and set length property
                 self.mutate_heap(|heap| {
                     if let Some(obj) = heap.get_mut(array_index) {
@@ -22794,6 +22850,27 @@ impl InterpreterCore {
                         }
                     }
 
+                    // Incremental memory accounting (bd-s8u37): values are
+                    // preserved but key strings change (`0` <-> `length-1-0`),
+                    // which shifts byte sizes for sparse arrays whose index
+                    // set is not symmetric (e.g. key "0" -> "10").
+                    let removed_bytes = indexed_props
+                        .iter()
+                        .map(|(old_index, value)| {
+                            Self::estimate_property_entry_bytes(&old_index.to_string(), value)
+                        })
+                        .sum::<u64>();
+                    let added_bytes = indexed_props
+                        .iter()
+                        .map(|(old_index, value)| {
+                            Self::estimate_property_entry_bytes(
+                                &(length - 1 - old_index).to_string(),
+                                value,
+                            )
+                        })
+                        .sum::<u64>();
+                    self.apply_memory_component_delta(removed_bytes, added_bytes)?;
+
                     // Mutate heap to reverse the array
                     self.mutate_heap(|heap| {
                         if let Some(array_obj) = heap.get_mut(heap_index) {
@@ -23361,8 +23438,30 @@ impl InterpreterCore {
                     a_str.cmp(&b_str)
                 });
 
-                // Clear existing indexed properties and set sorted elements
+                // Incremental memory accounting (bd-s8u37): sparse arrays gain
+                // entries here (holes are materialised as Undefined), so the
+                // removed/added entry bytes are not symmetric in general.
                 let heap_index = array_id.0 as usize;
+                let removed_bytes = self.heap.get(heap_index).map_or(0, |obj| {
+                    (0..length)
+                        .filter_map(|i| {
+                            let key = i.to_string();
+                            obj.properties
+                                .get(&key)
+                                .map(|value| Self::estimate_property_entry_bytes(&key, value))
+                        })
+                        .sum::<u64>()
+                });
+                let added_bytes = elements
+                    .iter()
+                    .enumerate()
+                    .map(|(i, element)| {
+                        Self::estimate_property_entry_bytes(&i.to_string(), element)
+                    })
+                    .sum::<u64>();
+                self.apply_memory_component_delta(removed_bytes, added_bytes)?;
+
+                // Clear existing indexed properties and set sorted elements
                 self.mutate_heap(|heap| {
                     if let Some(obj_mut) = heap.get_mut(heap_index) {
                         // Remove old indexed properties
@@ -23584,6 +23683,31 @@ impl InterpreterCore {
                     if let Some(item) = insert_item {
                         elements.insert(actual_start, item);
                     }
+
+                    // Incremental memory accounting (bd-s8u37): the rewrite
+                    // below removes every numeric-keyed entry plus the old
+                    // `length` entry, re-inserts the post-splice elements and
+                    // new `length`, and pushes a brand-new result-array heap
+                    // object that would otherwise never enter the estimate.
+                    let removed_bytes = array_obj
+                        .properties
+                        .iter()
+                        .filter(|(k, _)| k.parse::<usize>().is_ok() || k.as_str() == "length")
+                        .map(|(k, v)| Self::estimate_property_entry_bytes(k, v))
+                        .sum::<u64>();
+                    let added_bytes = elements
+                        .iter()
+                        .enumerate()
+                        .map(|(i, value)| {
+                            Self::estimate_property_entry_bytes(&i.to_string(), value)
+                        })
+                        .sum::<u64>()
+                        .saturating_add(Self::estimate_property_entry_bytes(
+                            "length",
+                            &Value::Int(elements.len() as i64),
+                        ))
+                        .saturating_add(Self::estimate_heap_object_bytes(&result_obj));
+                    self.apply_memory_component_delta(removed_bytes, added_bytes)?;
 
                     // Update heap with both mutations
                     self.mutate_heap(|heap| {
@@ -24035,6 +24159,17 @@ impl InterpreterCore {
                     other => other,
                 };
                 let heap_index = obj_id.0 as usize;
+                // Incremental memory accounting (bd-s8u37): delta vs any
+                // existing entry under the defined name.
+                let previous_bytes = self
+                    .heap
+                    .get(heap_index)
+                    .and_then(|obj| obj.properties.get(&prop_name))
+                    .map_or(0, |existing| {
+                        Self::estimate_property_entry_bytes(&prop_name, existing)
+                    });
+                let new_bytes = Self::estimate_property_entry_bytes(&prop_name, &effective_value);
+                self.apply_memory_component_delta(previous_bytes, new_bytes)?;
                 self.mutate_heap(|heap| {
                     if let Some(obj) = heap.get_mut(heap_index) {
                         obj.properties.insert(prop_name, effective_value);
@@ -24298,6 +24433,17 @@ impl InterpreterCore {
 
                     let entries_index = entries_id.0 as usize;
                     let map_index = map_id.0 as usize;
+                    // Incremental memory accounting (bd-s8u37): delta vs any
+                    // existing entry under this key representation.
+                    let previous_bytes = self
+                        .heap
+                        .get(entries_index)
+                        .and_then(|e| e.properties.get(&key_str))
+                        .map_or(0, |existing| {
+                            Self::estimate_property_entry_bytes(&key_str, existing)
+                        });
+                    let new_bytes = Self::estimate_property_entry_bytes(&key_str, &value);
+                    self.apply_memory_component_delta(previous_bytes, new_bytes)?;
                     self.mutate_heap(|heap| {
                         // Insert into entries
                         if let Some(entries_obj) = heap.get_mut(entries_index) {
@@ -24413,6 +24559,19 @@ impl InterpreterCore {
 
                     let values_index = values_id.0 as usize;
                     let set_index = set_id.0 as usize;
+
+                    // Incremental memory accounting (bd-s8u37): the value is
+                    // inserted only when absent, so account exactly then.
+                    let will_insert = self
+                        .heap
+                        .get(values_index)
+                        .map(|v| !v.properties.contains_key(&value_str))
+                        .unwrap_or(false);
+                    if will_insert {
+                        let new_bytes =
+                            Self::estimate_property_entry_bytes(&value_str, &Value::Bool(true));
+                        self.apply_memory_component_delta(0, new_bytes)?;
+                    }
                     let mut inserted = false;
 
                     self.mutate_heap(|heap| {
@@ -24587,6 +24746,16 @@ impl InterpreterCore {
                     let map_index = map_id.0 as usize;
                     let mut removed = false;
 
+                    // Incremental memory accounting (bd-s8u37): release the
+                    // removed entry's bytes (removal only shrinks).
+                    let removed_bytes = self
+                        .heap
+                        .get(entries_index)
+                        .and_then(|e| e.properties.get(&key_str))
+                        .map_or(0, |value| {
+                            Self::estimate_property_entry_bytes(&key_str, value)
+                        });
+
                     self.mutate_heap(|heap| {
                         // Remove from entries
                         if let Some(entries_obj) = heap.get_mut(entries_index) {
@@ -24607,6 +24776,8 @@ impl InterpreterCore {
                     });
 
                     if removed {
+                        self.estimated_memory_bytes =
+                            self.estimated_memory_bytes.saturating_sub(removed_bytes);
                         return Ok(Value::Bool(true));
                     }
                 }
@@ -24666,6 +24837,16 @@ impl InterpreterCore {
                     let set_index = set_id.0 as usize;
                     let mut removed = false;
 
+                    // Incremental memory accounting (bd-s8u37): release the
+                    // removed entry's bytes (removal only shrinks).
+                    let removed_bytes = self
+                        .heap
+                        .get(values_index)
+                        .and_then(|v| v.properties.get(&value_str))
+                        .map_or(0, |value| {
+                            Self::estimate_property_entry_bytes(&value_str, value)
+                        });
+
                     self.mutate_heap(|heap| {
                         // Remove from values
                         if let Some(values_obj) = heap.get_mut(values_index) {
@@ -24686,6 +24867,8 @@ impl InterpreterCore {
                     });
 
                     if removed {
+                        self.estimated_memory_bytes =
+                            self.estimated_memory_bytes.saturating_sub(removed_bytes);
                         return Ok(Value::Bool(true));
                     }
                 }
@@ -24724,6 +24907,32 @@ impl InterpreterCore {
                     });
 
                 let set_index = set_id.0 as usize;
+
+                // Incremental memory accounting (bd-s8u37): clearing the
+                // backing storage releases every entry's bytes (the estimate
+                // would otherwise stay permanently inflated). The size reset
+                // overwrites Int -> Int (zero delta) or creates a new entry.
+                let removed_bytes = values_id_opt
+                    .and_then(|values_id| self.heap.get(values_id.0 as usize))
+                    .map_or(0, |values_obj| {
+                        values_obj
+                            .properties
+                            .iter()
+                            .map(|(k, v)| Self::estimate_property_entry_bytes(k, v))
+                            .sum::<u64>()
+                    });
+                let previous_size_bytes = self
+                    .heap
+                    .get(set_index)
+                    .and_then(|s| s.properties.get("size"))
+                    .map_or(0, |existing| {
+                        Self::estimate_property_entry_bytes("size", existing)
+                    });
+                let new_size_bytes = Self::estimate_property_entry_bytes("size", &Value::Int(0));
+                self.apply_memory_component_delta(
+                    removed_bytes.saturating_add(previous_size_bytes),
+                    new_size_bytes,
+                )?;
                 self.mutate_heap(|heap| {
                     // Clear values if exists
                     if let Some(values_id) = values_id_opt {
@@ -28668,6 +28877,18 @@ impl InterpreterCore {
             };
 
             let values_index = values_id.0 as usize;
+
+            // Incremental memory accounting (bd-s8u37): the value is inserted
+            // only when absent, so account exactly then.
+            let will_insert = self
+                .heap
+                .get(values_index)
+                .map(|v| !v.properties.contains_key(&value_str))
+                .unwrap_or(false);
+            if will_insert {
+                let new_bytes = Self::estimate_property_entry_bytes(&value_str, &Value::Bool(true));
+                self.apply_memory_component_delta(0, new_bytes)?;
+            }
             let mut inserted = false;
 
             self.mutate_heap(|heap| {

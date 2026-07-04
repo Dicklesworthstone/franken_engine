@@ -7160,6 +7160,46 @@ fn parse_quoted_string(input: &str) -> Option<String> {
 /// ES2020 early SyntaxError for bad escapes. Raw line terminators are rejected
 /// by the caller before this runs, so `\n`/`\t`/… here are always the
 /// two-character backslash forms, never literal control characters.
+/// Decode the body of a `\u` escape (the part after the `u`): either
+/// `{H...}` with one or more hex digits denoting a code point `<= 0x10FFFF`,
+/// or exactly four hex digits denoting a UTF-16 code unit. Returns the
+/// numeric value WITHOUT converting to `char`, so the caller can combine an
+/// adjacent high+low surrogate escape pair into one supplementary code point
+/// (bd-k9jb0). Returns `None` for malformed content (non-hex digit, empty or
+/// unterminated braces, out-of-range code point).
+fn decode_unicode_escape_value(
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+) -> Option<u32> {
+    if chars.peek() == Some(&'{') {
+        chars.next();
+        let mut code: u32 = 0;
+        let mut digits = 0u32;
+        loop {
+            match chars.next()? {
+                '}' => break,
+                c => {
+                    let d = c.to_digit(16)?;
+                    code = code.checked_mul(16)?.checked_add(d)?;
+                    if code > 0x0010_FFFF {
+                        return None;
+                    }
+                    digits += 1;
+                }
+            }
+        }
+        if digits == 0 {
+            return None;
+        }
+        Some(code)
+    } else {
+        let mut code: u32 = 0;
+        for _ in 0..4 {
+            code = code * 16 + chars.next()?.to_digit(16)?;
+        }
+        Some(code)
+    }
+}
+
 fn unescape_string_literal(inner: &str) -> Option<String> {
     if !inner.contains('\\') {
         // Fast path: nothing to unescape.
@@ -7195,36 +7235,35 @@ fn unescape_string_literal(inner: &str) -> Option<String> {
                 out.push(char::from_u32(hi * 16 + lo)?);
             }
             'u' => {
-                if chars.peek() == Some(&'{') {
-                    // `\u{H...}`: one or more hex digits, code point <= 0x10FFFF.
-                    chars.next();
-                    let mut code: u32 = 0;
-                    let mut digits = 0u32;
-                    loop {
-                        match chars.next()? {
-                            '}' => break,
-                            c => {
-                                let d = c.to_digit(16)?;
-                                code = code.checked_mul(16)?.checked_add(d)?;
-                                if code > 0x0010_FFFF {
-                                    return None;
-                                }
-                                digits += 1;
-                            }
-                        }
-                    }
-                    if digits == 0 {
+                let first = decode_unicode_escape_value(&mut chars)?;
+                let ch = if (0xD800..=0xDBFF).contains(&first) {
+                    // High surrogate. JS strings are UTF-16 code-unit
+                    // sequences, so an adjacent high+low surrogate escape
+                    // pair denotes one supplementary code point
+                    // (`"\uD83D\uDE00" === "😀"`), in any escape spelling
+                    // (bd-k9jb0). A lone surrogate VALUE is unrepresentable
+                    // in the engine's UTF-8 string model, so a high
+                    // surrogate not followed by a low-surrogate escape
+                    // stays a fail-closed decode error (bd-neika).
+                    if chars.peek() != Some(&'\\') {
                         return None;
                     }
-                    out.push(char::from_u32(code)?);
-                } else {
-                    // `\uHHHH`: exactly four hex digits.
-                    let mut code: u32 = 0;
-                    for _ in 0..4 {
-                        code = code * 16 + chars.next()?.to_digit(16)?;
+                    chars.next();
+                    if chars.next()? != 'u' {
+                        return None;
                     }
-                    out.push(char::from_u32(code)?);
-                }
+                    let low = decode_unicode_escape_value(&mut chars)?;
+                    if !(0xDC00..=0xDFFF).contains(&low) {
+                        return None;
+                    }
+                    let code_point = 0x10000 + ((first - 0xD800) << 10) + (low - 0xDC00);
+                    char::from_u32(code_point)?
+                } else {
+                    // Lone low surrogates (0xDC00..=0xDFFF) fail here via
+                    // from_u32, matching the fail-closed posture (bd-neika).
+                    char::from_u32(first)?
+                };
+                out.push(ch);
             }
             // Any other escaped character is the identity of that character
             // (ES2020 non-strict `NonEscapeCharacter`), e.g. `\q` -> `q`.
@@ -9760,6 +9799,69 @@ mod tests {
     use std::io::Cursor;
 
     use super::*;
+
+    #[test]
+    fn unescape_combines_surrogate_pair_escapes_into_code_point() {
+        // `"\uD83D\uDE00"` is the standard pre-ES6 spelling of U+1F600;
+        // adjacent high+low surrogate escapes cook to one code point
+        // (bd-k9jb0), in any escape spelling.
+        assert_eq!(
+            unescape_string_literal(r"\uD83D\uDE00").as_deref(),
+            Some("\u{1F600}")
+        );
+        // Mixed 4-hex and braced spellings combine identically.
+        assert_eq!(
+            unescape_string_literal(r"\uD83D\u{DE00}").as_deref(),
+            Some("\u{1F600}")
+        );
+        assert_eq!(
+            unescape_string_literal(r"\u{D83D}\uDE00").as_deref(),
+            Some("\u{1F600}")
+        );
+        assert_eq!(
+            unescape_string_literal(r"\u{D83D}\u{DE00}").as_deref(),
+            Some("\u{1F600}")
+        );
+        // Direct supplementary code point still decodes without pairing.
+        assert_eq!(
+            unescape_string_literal(r"\u{1F600}").as_deref(),
+            Some("\u{1F600}")
+        );
+        // Surrounding content is preserved across the combined pair.
+        assert_eq!(
+            unescape_string_literal(r"a\uD83D\uDE00b").as_deref(),
+            Some("a\u{1F600}b")
+        );
+    }
+
+    #[test]
+    fn unescape_lone_surrogate_escapes_fail_closed() {
+        // Lone surrogate VALUES are unrepresentable in the UTF-8 string
+        // model (bd-neika); decoding stays a fail-closed parse error.
+        assert_eq!(unescape_string_literal(r"\uD83D"), None);
+        assert_eq!(unescape_string_literal(r"\uDE00"), None);
+        assert_eq!(unescape_string_literal(r"\u{D83D}"), None);
+        // High surrogate followed by anything but a low-surrogate escape.
+        assert_eq!(unescape_string_literal(r"\uD83Dx"), None);
+        assert_eq!(unescape_string_literal(r"\uD83D\n"), None);
+        assert_eq!(unescape_string_literal(r"\uD83DA"), None);
+        // Reversed order (low then high) is not a valid pair.
+        assert_eq!(unescape_string_literal(r"\uDE00\uD83D"), None);
+    }
+
+    #[test]
+    fn parsed_string_literal_cooks_surrogate_pair_escapes() {
+        // End-to-end through the parser: the literal's cooked value is U+1F600.
+        let parser = CanonicalEs2020Parser;
+        let tree = parser
+            .parse(r#"const s = "\uD83D\uDE00";"#, ParseGoal::Script)
+            .expect("surrogate-pair string literal should parse");
+        let rendered = format!("{tree:?}");
+        assert!(
+            rendered.contains('\u{1F600}'),
+            "cooked literal should contain U+1F600, got: {rendered}"
+        );
+    }
 
     #[test]
     fn script_goal_rejects_import_declaration() {

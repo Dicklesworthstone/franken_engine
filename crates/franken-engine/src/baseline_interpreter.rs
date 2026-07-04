@@ -47798,65 +47798,41 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "bd-uala1: engine uses a UTF-8/codepoint string model; charCodeAt cannot yield UTF-16 surrogate code units (0xDE00)"]
     fn string_prototype_char_code_at_utf16_surrogate_pairs() {
-        // Test charCodeAt with UTF-16 surrogate pairs (characters outside BMP)
-        let mut core = InterpreterCore::new(test_quickjs_config(), "test");
-
-        // U+1F600 (😀) is encoded as surrogate pair: 0xD83D 0xDE00
-        // SAFETY: Register 0 is valid in a fresh interpreter and owns the test string.
-        core.set_register(0, Value::str("😀"))
+        // Test charCodeAt with UTF-16 surrogate pairs (characters outside BMP).
+        // charCodeAt indexes UTF-16 code units over the UTF-8 storage
+        // (string_prototype_char_code_at_value uses encode_utf16), so both
+        // surrogate halves of U+1F600 (😀 = 0xD83D 0xDE00) are observable.
+        // A fresh core per index: seed-tracked re-execution restores prior
+        // register state when the same core re-runs (bd-n0sap port note).
+        for (index, expected, label) in [
+            (0, 0xD83D, "First UTF-16 code unit should be high surrogate"),
+            (1, 0xDE00, "Second UTF-16 code unit should be low surrogate"),
+        ] {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "test");
+            // SAFETY: Register 0 is valid in a fresh interpreter and owns the test string.
+            core.set_register(0, Value::str("😀"))
+                .expect("operation should succeed for valid inputs");
+            // SAFETY: Register 1 is valid in a fresh interpreter and the index is immediate.
+            core.set_register(1, Value::Int(index))
+                .expect("operation should succeed for valid inputs");
+            // SAFETY: The inline module uses initialized registers and a registered builtin id.
+            core.execute_module(&test_module(vec![
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("builtin:StringPrototypeCharCodeAt".to_string()),
+                    args: RegRange { start: 0, count: 2 },
+                    dst: 2,
+                },
+                Ir3Instruction::Halt,
+            ]))
             .expect("operation should succeed for valid inputs");
 
-        // Get first surrogate (high surrogate)
-        // SAFETY: Register 1 is valid in a fresh interpreter and the index is immediate.
-        core.set_register(1, Value::Int(0))
-            .expect("operation should succeed for valid inputs");
-        // SAFETY: The inline module uses initialized registers and a registered builtin id.
-        core.execute_module(&test_module(vec![
-            Ir3Instruction::HostCall {
-                capability: CapabilityTag("builtin:StringPrototypeCharCodeAt".to_string()),
-                args: RegRange { start: 0, count: 2 },
-                dst: 2,
-            },
-            Ir3Instruction::Halt,
-        ]))
-        .expect("operation should succeed for valid inputs");
-
-        // SAFETY: StringPrototypeCharCodeAt writes destination register 2 before halt.
-        let result1 = core
-            .read_register(2)
-            .expect("operation should succeed for valid inputs");
-        assert_eq!(
-            result1,
-            Value::Int(0xD83D),
-            "First UTF-16 code unit should be high surrogate 0xD83D"
-        );
-
-        // Get second surrogate (low surrogate)
-        // SAFETY: Register 1 remains valid and is overwritten with the second index.
-        core.set_register(1, Value::Int(1))
-            .expect("operation should succeed for valid inputs");
-        // SAFETY: The inline module uses initialized registers and a registered builtin id.
-        core.execute_module(&test_module(vec![
-            Ir3Instruction::HostCall {
-                capability: CapabilityTag("builtin:StringPrototypeCharCodeAt".to_string()),
-                args: RegRange { start: 0, count: 2 },
-                dst: 3,
-            },
-            Ir3Instruction::Halt,
-        ]))
-        .expect("operation should succeed for valid inputs");
-
-        // SAFETY: StringPrototypeCharCodeAt writes destination register 3 before halt.
-        let result2 = core
-            .read_register(3)
-            .expect("operation should succeed for valid inputs");
-        assert_eq!(
-            result2,
-            Value::Int(0xDE00),
-            "Second UTF-16 code unit should be low surrogate 0xDE00"
-        );
+            // SAFETY: StringPrototypeCharCodeAt writes destination register 2 before halt.
+            let result = core
+                .read_register(2)
+                .expect("operation should succeed for valid inputs");
+            assert_eq!(result, Value::Int(expected), "{label}");
+        }
     }
 
     #[test]
@@ -48015,69 +47991,43 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "bd-uala1: engine uses a UTF-8/codepoint string model; charAt cannot yield UTF-16 surrogate halves (0xD83D)"]
+    #[ignore = "bd-neika: Value::Str(Arc<str>) is UTF-8-only and cannot hold a lone surrogate; charAt on a surrogate half yields the U+FFFD lossy projection until a WTF-8/UTF-16 string backing lands. charAt INDEXING is already UTF-16-code-unit-correct (bd-uala1)"]
     fn string_prototype_char_at_utf16_surrogate_pairs() {
-        // Test charAt with UTF-16 surrogate pairs (characters outside BMP)
-        let mut core = InterpreterCore::new(test_quickjs_config(), "test");
-
-        // U+1F600 (😀) is encoded as surrogate pair: 0xD83D 0xDE00
-        core.set_register(0, Value::str("😀"))
+        // Test charAt with UTF-16 surrogate pairs (characters outside BMP).
+        // A fresh core per index: seed-tracked re-execution restores prior
+        // register state when the same core re-runs (bd-n0sap port note).
+        for (index, expected, label) in [
+            (0, 0xD83D, "First character should be high surrogate"),
+            (1, 0xDE00, "Second character should be low surrogate"),
+        ] {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "test");
+            // U+1F600 (😀) is encoded as surrogate pair: 0xD83D 0xDE00
+            core.set_register(0, Value::str("😀"))
+                .expect("operation should succeed for valid inputs");
+            core.set_register(1, Value::Int(index))
+                .expect("operation should succeed for valid inputs");
+            core.execute_module(&test_module(vec![
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("builtin:StringPrototypeCharAt".to_string()),
+                    args: RegRange { start: 0, count: 2 },
+                    dst: 2,
+                },
+                Ir3Instruction::Halt,
+            ]))
             .expect("operation should succeed for valid inputs");
 
-        // Get first surrogate character (high surrogate)
-        core.set_register(1, Value::Int(0))
-            .expect("operation should succeed for valid inputs");
-        core.execute_module(&test_module(vec![
-            Ir3Instruction::HostCall {
-                capability: CapabilityTag("builtin:StringPrototypeCharAt".to_string()),
-                args: RegRange { start: 0, count: 2 },
-                dst: 2,
-            },
-            Ir3Instruction::Halt,
-        ]))
-        .expect("operation should succeed for valid inputs");
-
-        let result1 = core
-            .read_register(2)
-            .expect("operation should succeed for valid inputs");
-        if let Value::Str(s) = result1 {
-            // Should be the high surrogate character represented as a string
-            assert_eq!(s.len(), 3, "High surrogate should be 3 bytes in UTF-8"); // UTF-8 encoding of high surrogate
-            let utf16_units: Vec<u16> = s.encode_utf16().collect();
-            assert_eq!(
-                utf16_units[0], 0xD83D,
-                "First character should be high surrogate 0xD83D"
-            );
-        } else {
-            panic!("Expected Str, got {:?}", result1);
-        }
-
-        // Get second surrogate character (low surrogate)
-        core.set_register(1, Value::Int(1))
-            .expect("operation should succeed for valid inputs");
-        core.execute_module(&test_module(vec![
-            Ir3Instruction::HostCall {
-                capability: CapabilityTag("builtin:StringPrototypeCharAt".to_string()),
-                args: RegRange { start: 0, count: 2 },
-                dst: 3,
-            },
-            Ir3Instruction::Halt,
-        ]))
-        .expect("operation should succeed for valid inputs");
-
-        let result2 = core
-            .read_register(3)
-            .expect("operation should succeed for valid inputs");
-        if let Value::Str(s) = result2 {
-            // Should be the low surrogate character represented as a string
-            assert_eq!(s.len(), 3, "Low surrogate should be 3 bytes in UTF-8"); // UTF-8 encoding of low surrogate
-            let utf16_units: Vec<u16> = s.encode_utf16().collect();
-            assert_eq!(
-                utf16_units[0], 0xDE00,
-                "Second character should be low surrogate 0xDE00"
-            );
-        } else {
-            panic!("Expected Str, got {:?}", result2);
+            let result = core
+                .read_register(2)
+                .expect("operation should succeed for valid inputs");
+            if let Value::Str(s) = result {
+                // A lone surrogate is one UTF-16 code unit (3 bytes in UTF-8
+                // under a WTF-8-style encoding).
+                assert_eq!(s.len(), 3, "surrogate half should be 3 bytes");
+                let utf16_units: Vec<u16> = s.encode_utf16().collect();
+                assert_eq!(utf16_units[0], expected, "{label}");
+            } else {
+                panic!("Expected Str, got {result:?}");
+            }
         }
     }
 

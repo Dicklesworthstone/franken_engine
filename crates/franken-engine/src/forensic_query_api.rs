@@ -1319,13 +1319,28 @@ impl ForensicQueryEngine {
                 continue;
             }
 
-            let strongest_incoming = subgraph
+            // The probability of an alternative path is the causal influence
+            // the alternative decision EXERTS (strongest outgoing edge, e.g.
+            // its link toward the target decision) — not the influence it
+            // receives. Using incoming edges yielded probability 0 for any
+            // alternative with no in-edges even when it directly influenced
+            // the target (bd-ou0ne). Alternatives with no outgoing edges fall
+            // back to their strongest incoming influence.
+            let strongest_outgoing = subgraph
                 .edges
                 .values()
-                .filter(|edge| edge.target == *node_id)
+                .filter(|edge| edge.source == *node_id)
                 .map(|edge| edge.weight)
-                .max_by_key(|weight| weight.millionths)
-                .unwrap_or(InfluenceWeight::ZERO);
+                .max_by_key(|weight| weight.millionths);
+            let probability = strongest_outgoing.unwrap_or_else(|| {
+                subgraph
+                    .edges
+                    .values()
+                    .filter(|edge| edge.target == *node_id)
+                    .map(|edge| edge.weight)
+                    .max_by_key(|weight| weight.millionths)
+                    .unwrap_or(InfluenceWeight::ZERO)
+            });
 
             alternatives.push(AlternativePath {
                 scenario: format!(
@@ -1333,7 +1348,7 @@ impl ForensicQueryEngine {
                 ),
                 required_modifications: Vec::new(),
                 alternative_outcome: *outcome,
-                probability: strongest_incoming,
+                probability,
             });
         }
 
@@ -1583,7 +1598,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "bd-ou0ne: generate_alternative_paths derives probability from INCOMING edges (target==node), so an alternative decision's OUTGOING influence edge yields probability 0 instead of the edge weight; genuine forensic-domain semantics decision, not a stale expectation"]
     fn test_causal_explanation_reports_observed_alternative_decision_paths() {
         let mut graph = create_test_graph();
         let alternative_decision_node = CausationNode {

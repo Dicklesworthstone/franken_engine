@@ -11782,7 +11782,7 @@ impl InterpreterCore {
                                 // trusts. A no-op for non-arrays / proxies (the
                                 // helper guards on `is_array`, and the proxy
                                 // object itself is not an array).
-                                self.maintain_array_index_assignment(oid, index);
+                                self.maintain_array_index_assignment(oid, index)?;
                             }
                         }
                         _ => {
@@ -19032,12 +19032,21 @@ impl InterpreterCore {
     ///    on an in-bounds overwrite (`index < dense`). `set_object_property`
     ///    has already invalidated on the gap case before this runs, so the
     ///    `Some` branch here only needs the dense-append growth.
-    fn maintain_array_index_assignment(&mut self, array_id: ObjectId, index: u32) {
+    fn maintain_array_index_assignment(
+        &mut self,
+        array_id: ObjectId,
+        index: u32,
+    ) -> Result<(), InterpreterError> {
         let arr_index = array_id.0 as usize;
-        self.mutate_heap(|heap| {
-            if let Some(object) = heap.get_mut(arr_index)
-                && object.is_array
-            {
+
+        // Compute the length-entry accounting delta BEFORE mutating the heap,
+        // mirroring `set_object_property`: the first index assignment on an
+        // array without a `length` entry creates one here, and skipping the
+        // incremental update leaves `estimated_memory_bytes` under-counting
+        // by exactly that entry (found by the H8.4 integration test,
+        // bd-o4cbn.13.4).
+        let grown_length = match self.heap.get(arr_index) {
+            Some(object) if object.is_array => {
                 let current_len = match object.properties.get("length") {
                     Some(Value::Int(n)) if *n >= 0 => *n as u64,
                     _ => 0,
@@ -19045,19 +19054,50 @@ impl InterpreterCore {
                 if u64::from(index) >= current_len {
                     let grown =
                         i64::try_from(u64::from(index).saturating_add(1)).unwrap_or(i64::MAX);
+                    let previous_bytes = object.properties.get("length").map_or(0, |value| {
+                        Self::estimate_property_entry_bytes("length", value)
+                    });
+                    let new_bytes =
+                        Self::estimate_property_entry_bytes("length", &Value::Int(grown));
+                    Some((grown, previous_bytes, new_bytes))
+                } else {
+                    None
+                }
+            }
+            _ => return Ok(()),
+        };
+
+        if let Some((grown, previous_bytes, new_bytes)) = grown_length {
+            let requested_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(previous_bytes)
+                .saturating_add(new_bytes);
+            if requested_bytes > self.config.max_total_memory_bytes {
+                return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+            }
+            self.mutate_heap(|heap| {
+                if let Some(object) = heap.get_mut(arr_index) {
                     object
                         .properties
                         .insert("length".to_string(), Value::Int(grown));
                 }
-                if let Some(dense_len) = object.cached_dense_length {
-                    if index == dense_len {
-                        object.cached_dense_length = Some(dense_len.saturating_add(1));
-                    } else if index > dense_len {
-                        object.cached_dense_length = None;
-                    }
+            });
+            self.estimated_memory_bytes = requested_bytes;
+        }
+
+        self.mutate_heap(|heap| {
+            if let Some(object) = heap.get_mut(arr_index)
+                && object.is_array
+                && let Some(dense_len) = object.cached_dense_length
+            {
+                if index == dense_len {
+                    object.cached_dense_length = Some(dense_len.saturating_add(1));
+                } else if index > dense_len {
+                    object.cached_dense_length = None;
                 }
             }
         });
+        Ok(())
     }
 
     /// Read the `index`th positional argument of a builtin call, or `None` when
@@ -29787,9 +29827,14 @@ impl InterpreterCore {
         }
     }
 
-    #[cfg(test)]
-    #[allow(dead_code)]
-    fn recompute_estimated_memory_bytes(&self) -> u64 {
+    /// Eager reference for the incremental `estimated_memory_bytes` telemetry:
+    /// walks the full register/heap/scope/closure/call-stack/iterator/generator
+    /// state and re-derives the estimate from scratch with the same algebra the
+    /// incremental accounting applies per write (PERF-H8). O(state size), so it
+    /// is a validation surface, not a hot-path API: integration tests compare
+    /// it against `estimated_memory_bytes()` to prove the incremental
+    /// accumulator has not drifted (bd-o4cbn.13.4).
+    pub fn recompute_estimated_memory_bytes(&self) -> u64 {
         self.heap
             .iter()
             .map(Self::estimate_heap_object_bytes)

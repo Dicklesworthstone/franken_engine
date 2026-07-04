@@ -15,7 +15,9 @@ use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::authority_footprint::{
     AuthorityFootprintReport, analyze_authority_footprint,
 };
-use frankenengine_engine::baseline_interpreter::{ConsoleEntry, InterpreterError};
+use frankenengine_engine::baseline_interpreter::{
+    ConsoleEntry, InterpreterConfig, InterpreterError,
+};
 use frankenengine_engine::behavioral_diff::{BehavioralDiffReport, diff_package_behavior};
 use frankenengine_engine::benchmark_denominator::{
     PublicationContext, PublicationGateInput, evaluate_publication_gate,
@@ -103,7 +105,7 @@ use frankenengine_engine::third_party_verifier::{
     render_report_summary, verify_benchmark_claim,
 };
 use frankenengine_engine::time_travel_debugger::{
-    DebuggerEvent, InterpreterStateSnapshot, RobotSession, TimeTravelDebugger,
+    DebuggerEvent, InterpreterStateSnapshot, ReplayStateProducer, RobotSession, TimeTravelDebugger,
 };
 use frankenengine_engine::ts_normalization::{
     SourceIngestionSummary, prepare_source_entry_for_public_entrypoints,
@@ -461,6 +463,12 @@ struct ReplayDebugArgs {
     script: Option<PathBuf>,
     events: Option<PathBuf>,
     state_snapshots: Option<PathBuf>,
+    /// Source file to re-execute for on-demand interpreter-state inspection
+    /// (bd-fqlfw.3.5.5 / E3.T5d). When set, `inspect` requests for ticks
+    /// without a pre-supplied snapshot replay the real interpreter.
+    input: Option<PathBuf>,
+    /// Parse goal for `--input` (default `script`).
+    input_goal: ParseGoal,
     checkpoint_interval: u64,
     mode: ReplayMode,
     out: Option<PathBuf>,
@@ -2602,6 +2610,8 @@ fn parse_replay_debug_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut script: Option<PathBuf> = None;
     let mut events: Option<PathBuf> = None;
     let mut state_snapshots: Option<PathBuf> = None;
+    let mut input: Option<PathBuf> = None;
+    let mut input_goal = ParseGoal::Script;
     let mut checkpoint_interval: u64 = 64;
     let mut mode = ReplayMode::Strict;
     let mut out: Option<PathBuf> = None;
@@ -2618,6 +2628,10 @@ fn parse_replay_debug_command(args: &[String]) -> Result<CommandSpec, String> {
                     &mut index,
                     "--state-snapshots",
                 )?))
+            }
+            "--input" => input = Some(PathBuf::from(next_arg(args, &mut index, "--input")?)),
+            "--input-goal" => {
+                input_goal = parse_goal(&next_arg(args, &mut index, "--input-goal")?)?
             }
             "--checkpoint-interval" => {
                 let raw = next_arg(args, &mut index, "--checkpoint-interval")?;
@@ -2637,6 +2651,8 @@ fn parse_replay_debug_command(args: &[String]) -> Result<CommandSpec, String> {
         script,
         events,
         state_snapshots,
+        input,
+        input_goal,
         checkpoint_interval,
         mode,
         out,
@@ -7978,6 +7994,61 @@ fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
 /// trace + script input produces a byte-identical transcript. Protocol-level
 /// failures (malformed lines, out-of-range ticks) are fail-closed
 /// `{"ok":false,...}` RESPONSES, not process errors.
+/// Compile `--input` through the real lowering pipeline and pair it with the
+/// loaded trace as an on-demand interpreter-state producer for `inspect`
+/// (bd-fqlfw.3.5.5 / E3.T5d). The interpreter config mirrors the direct
+/// `InterpreterCore` execution surface (quickjs defaults + VmDispatch +
+/// HeapAllocate); when the module/config does not correspond to the trace,
+/// the producer's re-execution consistency check fails closed at inspect
+/// time rather than serving state from the wrong program.
+fn build_replay_debug_state_producer(
+    input: &Path,
+    goal: ParseGoal,
+    trace_path: &Path,
+) -> Result<ReplayStateProducer, String> {
+    let source = fs::read_to_string(input)
+        .map_err(|error| format!("failed to read --input `{}`: {error}", input.display()))?;
+    let source_label = input.display().to_string();
+    let prepared = prepare_source_entry_for_public_entrypoints(
+        source.as_str(),
+        source_label.as_str(),
+        "replay-debug",
+        "replay-debug",
+        "replay-debug",
+    )
+    .map_err(|error| format!("source ingestion failed for `{source_label}`: {error}"))?;
+    let parser = CanonicalEs2020Parser;
+    let syntax_tree = parser
+        .parse_with_options(
+            prepared.prepared_source.as_str(),
+            goal,
+            &ParserOptions::default(),
+        )
+        .map_err(|error| format!("parse failed for `{source_label}`: {error}"))?;
+    let ir0 = Ir0Module::from_syntax_tree(syntax_tree, &source_label);
+    let lowering = lower_ir0_to_ir3(
+        &ir0,
+        &LoweringContext::new(
+            "replay-debug".to_string(),
+            "replay-debug".to_string(),
+            "replay-debug".to_string(),
+        ),
+    )
+    .map_err(|error| format!("lowering failed for `{source_label}`: {error}"))?;
+
+    let expected_trace = load_json_file::<NondeterminismTrace>(trace_path)?;
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.granted_capabilities = BTreeSet::from([
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+    ]);
+    Ok(ReplayStateProducer::new(
+        lowering.ir3,
+        config,
+        expected_trace,
+    ))
+}
+
 fn execute_replay_debug(args: ReplayDebugArgs) -> Result<i32, String> {
     let trace = load_json_file::<NondeterminismTrace>(&args.trace)?;
     let cursor = TimeTravelCursor::new(
@@ -7999,7 +8070,13 @@ fn execute_replay_debug(args: ReplayDebugArgs) -> Result<i32, String> {
     };
     let debugger =
         TimeTravelDebugger::new_with_state_snapshots(cursor, debugger_events, state_snapshots);
-    let mut session = RobotSession::new(debugger);
+    let mut session = match args.input.as_ref() {
+        Some(input) => {
+            let producer = build_replay_debug_state_producer(input, args.input_goal, &args.trace)?;
+            RobotSession::new_with_producer(debugger, producer)
+        }
+        None => RobotSession::new(debugger),
+    };
 
     let command_lines: Vec<String> = match args.script.as_ref() {
         Some(path) => fs::read_to_string(path)
@@ -10633,6 +10710,7 @@ fn replay_debug_usage() -> String {
         "  frankenctl replay debug --trace <trace.json>",
         "      [--script <commands.jsonl>] [--events <debugger_events.json>]",
         "      [--state-snapshots <interpreter_state_snapshots.json>]",
+        "      [--input <source.js>] [--input-goal script|module]",
         "      [--checkpoint-interval <ticks>] [--mode strict|best-effort|validate]",
         "      [--out <transcript.jsonl>]",
         "",
@@ -10658,6 +10736,14 @@ fn replay_debug_usage() -> String {
         "  --state-snapshots supplies InterpreterStateSnapshot JSON captured",
         "  by the real interpreter replay path; inspect fails closed when the",
         "  selected tick has no supplied snapshot.",
+        "  --input supplies the program source itself: inspect requests for",
+        "  ticks without a supplied snapshot then re-execute the REAL",
+        "  interpreter (deterministically, with a state capture armed at the",
+        "  tick) and serve registers, heap values, and IFC labels from that",
+        "  run. The re-execution's nondeterminism trace must match the loaded",
+        "  --trace event-for-event or the inspect fails closed (the module",
+        "  does not correspond to the trace). --input-goal sets its parse",
+        "  goal (default script).",
     ]
     .join("\n")
 }
@@ -12021,6 +12107,10 @@ mod tests {
             "events.json".to_string(),
             "--state-snapshots".to_string(),
             "state.json".to_string(),
+            "--input".to_string(),
+            "program.js".to_string(),
+            "--input-goal".to_string(),
+            "module".to_string(),
             "--checkpoint-interval".to_string(),
             "8".to_string(),
             "--mode".to_string(),
@@ -12036,6 +12126,8 @@ mod tests {
                 script: Some(PathBuf::from("commands.jsonl")),
                 events: Some(PathBuf::from("events.json")),
                 state_snapshots: Some(PathBuf::from("state.json")),
+                input: Some(PathBuf::from("program.js")),
+                input_goal: ParseGoal::Module,
                 checkpoint_interval: 8,
                 mode: ReplayMode::BestEffort,
                 out: Some(PathBuf::from("transcript.jsonl")),
@@ -12059,6 +12151,8 @@ mod tests {
                 script: None,
                 events: None,
                 state_snapshots: None,
+                input: None,
+                input_goal: ParseGoal::Script,
                 checkpoint_interval: 64,
                 mode: ReplayMode::Strict,
                 out: None,
@@ -12175,6 +12269,8 @@ mod tests {
                 script: Some(script_path.clone()),
                 events: None,
                 state_snapshots: Some(state_snapshot_path.clone()),
+                input: None,
+                input_goal: ParseGoal::Script,
                 checkpoint_interval: 2,
                 mode: ReplayMode::Strict,
                 out: Some(out_path.clone()),

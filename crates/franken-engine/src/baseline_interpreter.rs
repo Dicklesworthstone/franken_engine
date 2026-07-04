@@ -4472,6 +4472,43 @@ struct PendingStreamEmission {
 }
 
 /// The core interpreter loop shared between both lanes.
+/// One register's value and IFC label as observed at a capture tick
+/// (bd-fqlfw.3.5.5 / E3.T5d). Only registers holding a non-`Undefined`
+/// value are recorded — a fresh register file is all-`Undefined` and
+/// recording it would bury the signal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CapturedRegisterState {
+    pub register: u32,
+    pub value: Value,
+    pub label: Label,
+}
+
+/// One live heap object and its derived IFC label as observed at a capture
+/// tick (bd-fqlfw.3.5.5 / E3.T5d). The engine's IFC model tracks labels at
+/// REGISTER granularity, so a heap object's label here is the join of the
+/// labels of every register from whose value the object is transitively
+/// reachable (property values and prototype links), defaulting to `Public`
+/// when unreachable from any register. This is a projection of the real
+/// register-label state, not an independent model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CapturedHeapState {
+    pub object_id: ObjectId,
+    pub object: HeapObject,
+    pub label: Label,
+}
+
+/// Deterministic interpreter-state observation captured at a nondeterminism
+/// tick boundary for the time-travel debugger (bd-fqlfw.3.5.5 / E3.T5d).
+/// Identical module + config + requested tick yields an identical
+/// observation, because execution itself is deterministic.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CapturedInterpreterState {
+    /// The nondeterminism tick (trace event count) the capture landed on.
+    pub tick: u64,
+    pub registers: Vec<CapturedRegisterState>,
+    pub heap: Vec<CapturedHeapState>,
+}
+
 pub struct InterpreterCore {
     config: InterpreterConfig,
     hook: Option<Arc<dyn InterpreterHook>>,
@@ -4480,6 +4517,17 @@ pub struct InterpreterCore {
     /// suppressed during this window: no extension instruction has executed
     /// yet, so there is nothing for a policy to attribute (bd-gug3l).
     preparing_execution: bool,
+    /// Nondeterminism tick at which to capture a deterministic
+    /// interpreter-state observation for the time-travel debugger
+    /// (bd-fqlfw.3.5.5 / E3.T5d). Checked at instruction boundaries; the
+    /// capture fires when the trace's event count first reaches the
+    /// requested tick, and only an exact count match produces a snapshot
+    /// (fail-closed when a single instruction emitted several events and
+    /// no boundary landed on the tick). `None` disarms the check entirely.
+    state_capture_tick: Option<u64>,
+    /// The observation produced by the armed capture, taken via
+    /// [`InterpreterCore::take_captured_state`].
+    state_capture_result: Option<CapturedInterpreterState>,
     /// Optional sandboxed host-I/O provider (bd-f5b04.2.7). When set, authorized
     /// `fs:` hostcalls dispatch to real host effects through the algebraic-effects
     /// handler stack instead of returning `undefined`. `None` preserves the
@@ -4701,6 +4749,8 @@ impl InterpreterCore {
             config,
             hook: None,
             preparing_execution: false,
+            state_capture_tick: None,
+            state_capture_result: None,
             host_io: None,
             host_io_recorder: None,
             registers: SeedTrackedField::new(vec![Value::Undefined; max_regs]),
@@ -5955,9 +6005,140 @@ impl InterpreterCore {
         self.ensure_vm_dispatch_capability()?;
         let entry_specifier = self.prepare_execution(module)?;
         let result = self.run_top_level_execution(module);
+        // Final capture opportunity: a request equal to the trace's final
+        // event count observes end-of-execution state (bd-fqlfw.3.5.5).
+        self.check_state_capture_boundary();
         self.record_execution_outcome(&entry_specifier, &result);
         self.last_post_run_seed = Some(self.capture_execution_seed());
         self.finish_execution_result(result)
+    }
+
+    /// Arm a deterministic interpreter-state capture at the given
+    /// nondeterminism tick (trace event count) for the next `execute` run
+    /// (bd-fqlfw.3.5.5 / E3.T5d). The capture fires at the first
+    /// instruction boundary (or end of execution) where the trace's event
+    /// count reaches the tick; only an exact count match produces an
+    /// observation — when a single instruction emitted several events and
+    /// no boundary landed on the tick, the request disarms uncaptured and
+    /// the caller fails closed.
+    pub fn arm_state_capture_at_tick(&mut self, tick: u64) {
+        self.state_capture_tick = Some(tick);
+        self.state_capture_result = None;
+    }
+
+    /// Take the observation produced by an armed state capture, if the
+    /// boundary landed exactly on the requested tick.
+    pub fn take_captured_state(&mut self) -> Option<CapturedInterpreterState> {
+        self.state_capture_result.take()
+    }
+
+    /// Number of nondeterminism events captured so far (the debugger's
+    /// tick domain).
+    pub fn nondeterminism_event_count(&self) -> u64 {
+        self.nondeterminism_trace.event_count() as u64
+    }
+
+    /// Read-only view of the nondeterminism trace captured so far. The
+    /// time-travel debugger's state producer compares a re-execution's
+    /// trace against the loaded trace to fail closed when the supplied
+    /// module does not correspond to the trace (bd-fqlfw.3.5.5).
+    pub fn nondeterminism_trace_ref(&self) -> &NondeterminismTrace {
+        &self.nondeterminism_trace
+    }
+
+    /// Instruction-boundary check for an armed state capture. O(1) when
+    /// disarmed or already captured.
+    fn check_state_capture_boundary(&mut self) {
+        let Some(requested) = self.state_capture_tick else {
+            return;
+        };
+        let seen = self.nondeterminism_event_count();
+        if seen < requested {
+            return;
+        }
+        if seen == requested {
+            self.state_capture_result = Some(self.capture_interpreter_state(seen));
+        }
+        // seen > requested: no boundary landed exactly on the tick — stay
+        // uncaptured (fail-closed). Either way the request is satisfied.
+        self.state_capture_tick = None;
+    }
+
+    /// Snapshot registers (value + label) and live heap objects (with
+    /// labels derived by joining, onto each object, the label of every
+    /// register from whose value it is transitively reachable via property
+    /// values and prototype links). See [`CapturedHeapState`] for why this
+    /// is a projection of the register-granularity IFC state.
+    fn capture_interpreter_state(&self, tick: u64) -> CapturedInterpreterState {
+        let registers: Vec<CapturedRegisterState> = self
+            .registers
+            .iter()
+            .enumerate()
+            .filter(|(_, value)| !matches!(value, Value::Undefined))
+            .map(|(index, value)| CapturedRegisterState {
+                register: index as u32,
+                value: value.clone(),
+                label: self
+                    .register_labels
+                    .get(index)
+                    .cloned()
+                    .unwrap_or(Label::Public),
+            })
+            .collect();
+
+        // Reachability join: propagate each register's label to every heap
+        // object reachable from its value.
+        let mut heap_labels: BTreeMap<u32, Label> = BTreeMap::new();
+        for entry in &registers {
+            let mut frontier: Vec<u32> = Vec::new();
+            Self::collect_object_ids_from_value(&entry.value, &mut frontier);
+            let mut visited: BTreeSet<u32> = BTreeSet::new();
+            while let Some(object_index) = frontier.pop() {
+                if !visited.insert(object_index) {
+                    continue;
+                }
+                let joined = match heap_labels.get(&object_index) {
+                    Some(existing) => existing.join(&entry.label),
+                    None => entry.label.clone(),
+                };
+                heap_labels.insert(object_index, joined);
+                if let Some(object) = self.heap.get(object_index as usize) {
+                    for value in object.properties.values() {
+                        Self::collect_object_ids_from_value(value, &mut frontier);
+                    }
+                    if let Some(prototype) = object.prototype {
+                        frontier.push(prototype.0);
+                    }
+                }
+            }
+        }
+
+        let heap: Vec<CapturedHeapState> = self
+            .heap
+            .iter()
+            .enumerate()
+            .map(|(index, object)| CapturedHeapState {
+                object_id: ObjectId(index as u32),
+                object: object.clone(),
+                label: heap_labels
+                    .get(&(index as u32))
+                    .cloned()
+                    .unwrap_or(Label::Public),
+            })
+            .collect();
+
+        CapturedInterpreterState {
+            tick,
+            registers,
+            heap,
+        }
+    }
+
+    /// Append the heap object ids directly referenced by a value.
+    fn collect_object_ids_from_value(value: &Value, out: &mut Vec<u32>) {
+        if let Value::Object(object_id) = value {
+            out.push(object_id.0);
+        }
     }
 
     fn ensure_vm_dispatch_capability(&mut self) -> Result<(), InterpreterError> {
@@ -10395,6 +10576,10 @@ impl InterpreterCore {
         };
 
         loop {
+            // Time-travel debugger state capture at the instruction boundary
+            // (bd-fqlfw.3.5.5). O(1) branch when disarmed.
+            self.check_state_capture_boundary();
+
             if self.ip >= module.instructions.len() {
                 // Fell off the end of the instruction stream.
                 if !self.call_stack.is_empty() {
@@ -37618,6 +37803,119 @@ mod async_runtime_tests_current {
                 Value::Object(_)
             ),
             "unknown encoding falls back to Buffer"
+        );
+    }
+
+    /// bd-fqlfw.3.5.5 (E3.T5d): an armed state capture at tick 0 observes
+    /// pre-set register values and labels at the first instruction boundary.
+    #[test]
+    fn state_capture_at_tick_zero_observes_registers_and_labels() {
+        let mut module = test_module_with_functions(vec![Ir3Instruction::Halt], vec![]);
+        module.header.source_label = "capture-t0".to_string();
+
+        let mut core = test_interpreter();
+        core.mutate_registers(|r| {
+            r[0] = Value::Int(41);
+        });
+        core.set_register_label(0, crate::ifc_artifacts::Label::Secret)
+            .expect("register label should be settable");
+        core.arm_state_capture_at_tick(0);
+        core.execute(&module)
+            .expect("trivial module should execute");
+
+        let captured = core
+            .take_captured_state()
+            .expect("tick-0 capture should land on the first boundary");
+        assert_eq!(captured.tick, 0);
+        let reg0 = captured
+            .registers
+            .iter()
+            .find(|entry| entry.register == 0)
+            .expect("register 0 should be captured (non-Undefined)");
+        assert_eq!(reg0.value, Value::Int(41));
+        assert_eq!(reg0.label, crate::ifc_artifacts::Label::Secret);
+    }
+
+    /// bd-fqlfw.3.5.5: a capture armed beyond the final nondeterminism tick
+    /// never fires; the caller fails closed on the missing observation.
+    #[test]
+    fn state_capture_beyond_final_tick_stays_uncaptured() {
+        let module = test_module_with_functions(vec![Ir3Instruction::Halt], vec![]);
+        let mut core = test_interpreter();
+        core.arm_state_capture_at_tick(1_000_000);
+        core.execute(&module)
+            .expect("trivial module should execute");
+        assert!(
+            core.take_captured_state().is_none(),
+            "capture beyond the trace range must stay uncaptured"
+        );
+    }
+
+    /// bd-fqlfw.3.5.5: identical module + config + tick produce identical
+    /// observations across fresh cores (the debugger's determinism contract).
+    #[test]
+    fn state_capture_is_deterministic_across_fresh_cores() {
+        let capture = || {
+            let mut module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::LoadInt { dst: 1, value: 7 },
+                    Ir3Instruction::Halt,
+                ],
+                vec![],
+            );
+            module.header.source_label = "capture-det".to_string();
+            let mut core = test_interpreter();
+            core.mutate_registers(|r| {
+                r[0] = Value::Int(3);
+            });
+            core.arm_state_capture_at_tick(0);
+            core.execute(&module).expect("module should execute");
+            core.take_captured_state()
+                .expect("tick-0 capture should land")
+        };
+        assert_eq!(capture(), capture(), "captures must be byte-identical");
+    }
+
+    /// bd-fqlfw.3.5.5: heap-object labels in a capture are the join of the
+    /// labels of registers from which the object is transitively reachable;
+    /// unreferenced objects stay Public.
+    #[test]
+    fn state_capture_projects_register_labels_onto_reachable_heap() {
+        let module = test_module_with_functions(vec![Ir3Instruction::Halt], vec![]);
+        let mut core = test_interpreter();
+        let secret_obj = core
+            .alloc_object_with_properties(&[("data", Value::Int(9))])
+            .expect("allocation should succeed");
+        let public_obj = core
+            .alloc_object_with_properties(&[("data", Value::Int(1))])
+            .expect("allocation should succeed");
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(secret_obj);
+        });
+        core.set_register_label(0, crate::ifc_artifacts::Label::Secret)
+            .expect("register label should be settable");
+        core.arm_state_capture_at_tick(0);
+        core.execute(&module).expect("module should execute");
+
+        let captured = core
+            .take_captured_state()
+            .expect("tick-0 capture should land");
+        let find = |id: ObjectId| {
+            captured
+                .heap
+                .iter()
+                .find(|entry| entry.object_id == id)
+                .expect("captured heap should include the object")
+        };
+        assert_eq!(
+            find(secret_obj).label,
+            crate::ifc_artifacts::Label::Secret,
+            "object referenced from a Secret register must project Secret"
+        );
+        assert_eq!(
+            find(public_obj).label,
+            crate::ifc_artifacts::Label::Public,
+            "object unreachable from any register stays Public"
         );
     }
 

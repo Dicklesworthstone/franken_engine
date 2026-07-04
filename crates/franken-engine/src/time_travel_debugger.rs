@@ -25,10 +25,13 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::baseline_interpreter::{HeapObject, ObjectId, Value};
+use crate::baseline_interpreter::{
+    CapturedInterpreterState, HeapObject, InterpreterConfig, InterpreterCore, ObjectId, Value,
+};
+use crate::deterministic_replay::NondeterminismTrace;
 use crate::forensic_causation_operator::{ForensicOperator, InvestigationReport, OperatorError};
 use crate::ifc_artifacts::Label;
-use crate::ir_contract::{WitnessEvent, WitnessEventKind};
+use crate::ir_contract::{Ir3Module, WitnessEvent, WitnessEventKind};
 use crate::replay_time_travel::{CursorState, TimeTravelCursor, TimeTravelError};
 
 /// Fixed-point scale for probabilities: 1_000_000 = 1.0.
@@ -253,6 +256,108 @@ impl InterpreterStateSnapshot {
             heap,
         }
     }
+
+    /// Convert a real-interpreter capture into the debugger's snapshot shape.
+    pub fn from_captured(captured: CapturedInterpreterState) -> Self {
+        Self::new(
+            captured.tick,
+            captured
+                .registers
+                .into_iter()
+                .map(|entry| InterpreterRegisterSnapshot {
+                    register: entry.register,
+                    value: entry.value,
+                    label: entry.label,
+                })
+                .collect(),
+            captured
+                .heap
+                .into_iter()
+                .map(|entry| InterpreterHeapSnapshot {
+                    object_id: entry.object_id,
+                    object: entry.object,
+                    label: entry.label,
+                })
+                .collect(),
+        )
+    }
+}
+
+/// Produces interpreter-state snapshots on demand by re-executing the REAL
+/// interpreter with a state capture armed at the requested tick
+/// (bd-fqlfw.3.5.5 / E3.T5d).
+///
+/// Design contract (from the E3.T5 key insight): nothing records per-tick
+/// state and the hot loop is not instrumented — each `snapshot_at` runs a
+/// fresh deterministic execution of the supplied module and captures exactly
+/// one boundary observation, so storage is O(requested snapshots) and the
+/// debugger IS the authoritative semantic model by construction.
+///
+/// Fail-closed consistency: after re-execution the produced nondeterminism
+/// trace must match the loaded trace event-for-event (source + payload).
+/// A mismatch means the supplied module/config does not correspond to the
+/// trace under debug, and the producer refuses to serve state from it.
+#[derive(Debug, Clone)]
+pub struct ReplayStateProducer {
+    module: Ir3Module,
+    config: InterpreterConfig,
+    expected_trace: NondeterminismTrace,
+}
+
+impl ReplayStateProducer {
+    pub fn new(
+        module: Ir3Module,
+        config: InterpreterConfig,
+        expected_trace: NondeterminismTrace,
+    ) -> Self {
+        Self {
+            module,
+            config,
+            expected_trace,
+        }
+    }
+
+    /// Re-execute the module and capture the interpreter state at `tick`.
+    /// Errors are protocol-level strings (the robot session forwards them
+    /// as fail-closed `{"ok":false,...}` responses).
+    pub fn snapshot_at(&self, tick: u64) -> Result<InterpreterStateSnapshot, String> {
+        let mut core =
+            InterpreterCore::new(self.config.clone(), self.expected_trace.session_id.as_str());
+        core.arm_state_capture_at_tick(tick);
+        // The execution outcome (including a thrown/contained result) does
+        // not invalidate the capture: the run is deterministic either way.
+        let execution = core.execute(&self.module);
+
+        let produced = core.nondeterminism_trace_ref();
+        let expected_events = &self.expected_trace.events;
+        let produced_events = &produced.events;
+        let mismatch = produced_events.len() != expected_events.len()
+            || produced_events
+                .iter()
+                .zip(expected_events.iter())
+                .any(|(a, b)| a.source != b.source || a.value != b.value);
+        if mismatch {
+            return Err(format!(
+                "re-execution trace diverged from the loaded trace \
+                 (produced {} events, loaded {}): the supplied module/config \
+                 does not correspond to the trace under debug",
+                produced_events.len(),
+                expected_events.len()
+            ));
+        }
+
+        match core.take_captured_state() {
+            Some(captured) => Ok(InterpreterStateSnapshot::from_captured(captured)),
+            None => Err(format!(
+                "interpreter state unavailable at tick {tick}: no instruction \
+                 boundary landed exactly on that nondeterminism tick{}",
+                match execution {
+                    Ok(_) => "",
+                    Err(_) => " (execution ended abruptly)",
+                }
+            )),
+        }
+    }
 }
 
 fn causal_role_for(event: &DebuggerEvent) -> CausalRole {
@@ -385,6 +490,13 @@ impl TimeTravelDebugger {
     /// pipeline supplied one.
     pub fn interpreter_state_at_tick(&self, tick: u64) -> Option<&InterpreterStateSnapshot> {
         self.state_snapshots.get(&tick)
+    }
+
+    /// Cache a lazily produced interpreter-state snapshot (keyed by its
+    /// tick). Used by the robot session's on-demand re-execution path
+    /// (bd-fqlfw.3.5.5); a duplicate tick keeps the latest observation.
+    pub fn insert_state_snapshot(&mut self, snapshot: InterpreterStateSnapshot) {
+        self.state_snapshots.insert(snapshot.tick, snapshot);
     }
 
     /// Register a breakpoint; returns its id.
@@ -633,11 +745,28 @@ impl RobotResponse {
 #[derive(Debug, Clone)]
 pub struct RobotSession {
     debugger: TimeTravelDebugger,
+    /// On-demand real-interpreter state producer (bd-fqlfw.3.5.5). When
+    /// present, `inspect` requests for ticks without a pre-supplied snapshot
+    /// re-execute the module and cache the observation; when absent, such
+    /// requests fail closed exactly as before.
+    producer: Option<ReplayStateProducer>,
 }
 
 impl RobotSession {
     pub fn new(debugger: TimeTravelDebugger) -> Self {
-        Self { debugger }
+        Self {
+            debugger,
+            producer: None,
+        }
+    }
+
+    /// Build a session that can lazily derive interpreter-state snapshots by
+    /// re-executing the real interpreter (bd-fqlfw.3.5.5 / E3.T5d).
+    pub fn new_with_producer(debugger: TimeTravelDebugger, producer: ReplayStateProducer) -> Self {
+        Self {
+            debugger,
+            producer: Some(producer),
+        }
     }
 
     pub fn debugger(&self) -> &TimeTravelDebugger {
@@ -686,11 +815,26 @@ impl RobotSession {
                         self.debugger.cursor().total_ticks()
                     ));
                 }
-                match self.debugger.interpreter_state_at_tick(tick) {
-                    Some(snapshot) => RobotResponse::success(RobotResponsePayload::Inspection {
+                if let Some(snapshot) = self.debugger.interpreter_state_at_tick(tick) {
+                    return RobotResponse::success(RobotResponsePayload::Inspection {
                         tick,
                         snapshot: Box::new(snapshot.clone()),
-                    }),
+                    });
+                }
+                // No pre-supplied snapshot: derive one by re-executing the
+                // real interpreter when a producer is wired (bd-fqlfw.3.5.5),
+                // caching it so repeated inspects are stable and cheap.
+                match self.producer.as_ref() {
+                    Some(producer) => match producer.snapshot_at(tick) {
+                        Ok(snapshot) => {
+                            self.debugger.insert_state_snapshot(snapshot.clone());
+                            RobotResponse::success(RobotResponsePayload::Inspection {
+                                tick,
+                                snapshot: Box::new(snapshot),
+                            })
+                        }
+                        Err(error) => RobotResponse::failure(error),
+                    },
                     None => RobotResponse::failure(format!(
                         "interpreter state snapshot unavailable at tick {tick}"
                     )),
@@ -1247,6 +1391,122 @@ mod tests {
         let json = serde_json::to_string(&report).expect("serialize should succeed");
         let decoded: WhyReport = serde_json::from_str(&json).expect("deserialize should succeed");
         assert_eq!(decoded, report);
+    }
+
+    // -- bd-fqlfw.3.5.5 (E3.T5d): on-demand real-interpreter state producer --
+
+    fn lowered_module(source: &str, label: &str) -> crate::ir_contract::Ir3Module {
+        use crate::ast::ParseGoal;
+        use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+        use crate::parser::{CanonicalEs2020Parser, ParserOptions};
+        let parser = CanonicalEs2020Parser;
+        let tree = parser
+            .parse_with_options(source, ParseGoal::Script, &ParserOptions::default())
+            .expect("test source should parse");
+        let ir0 = crate::ir_contract::Ir0Module::from_syntax_tree(tree, label);
+        lower_ir0_to_ir3(
+            &ir0,
+            &LoweringContext::new(
+                "ttd-producer".to_string(),
+                "ttd-producer".to_string(),
+                "ttd-producer".to_string(),
+            ),
+        )
+        .expect("test source should lower")
+        .ir3
+    }
+
+    fn producer_config() -> InterpreterConfig {
+        use crate::capability::RuntimeCapability;
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = std::collections::BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
+        config
+    }
+
+    fn recorded_trace(module: &crate::ir_contract::Ir3Module) -> NondeterminismTrace {
+        let mut core = InterpreterCore::new(producer_config(), "ttd-producer");
+        let result = core
+            .execute(module)
+            .expect("recording execution should succeed");
+        result.nondeterminism_trace
+    }
+
+    #[test]
+    fn producer_snapshot_is_deterministic_and_serves_register_state() {
+        let module = lowered_module("const x = 41;", "producer-det");
+        let trace = recorded_trace(&module);
+        let producer = ReplayStateProducer::new(module, producer_config(), trace);
+
+        let first = producer
+            .snapshot_at(0)
+            .expect("tick-0 snapshot should be producible");
+        let second = producer
+            .snapshot_at(0)
+            .expect("repeat snapshot should be producible");
+        assert_eq!(first, second, "re-executions must observe identical state");
+        assert_eq!(first.tick, 0);
+    }
+
+    #[test]
+    fn producer_fails_closed_when_module_does_not_match_trace() {
+        let module = lowered_module("const x = 41;", "producer-mismatch");
+        // A synthetic trace with events the module never produces.
+        let mut foreign = NondeterminismTrace::new("foreign");
+        foreign.capture(
+            crate::deterministic_replay::NondeterminismSource::TimerRead,
+            vec![1, 2, 3],
+            1,
+            "elsewhere",
+        );
+        foreign.finalise(1);
+        let producer = ReplayStateProducer::new(module, producer_config(), foreign);
+        let error = producer
+            .snapshot_at(0)
+            .expect_err("mismatched trace must fail closed");
+        assert!(
+            error.contains("diverged"),
+            "error should name the divergence, got: {error}"
+        );
+    }
+
+    #[test]
+    fn robot_inspect_lazily_produces_state_via_real_reexecution() {
+        let module = lowered_module("const x = 41;", "producer-robot");
+        let trace = recorded_trace(&module);
+        let producer = ReplayStateProducer::new(module, producer_config(), trace.clone());
+
+        let cursor = TimeTravelCursor::new(
+            trace,
+            crate::deterministic_replay::ReplayMode::Strict,
+            crate::replay_time_travel::TimeTravelConfig::default(),
+        )
+        .expect("cursor should open over the recorded trace");
+        let debugger = TimeTravelDebugger::new(cursor, Vec::new());
+        let mut session = RobotSession::new_with_producer(debugger, producer);
+
+        let first = session.handle_line("{\"cmd\":\"inspect\",\"tick\":0}");
+        assert!(
+            first.contains("\"ok\":true") && first.contains("\"kind\":\"inspection\""),
+            "lazy inspect should serve real re-executed state, got: {first}"
+        );
+        // Second inspect hits the cache and must be byte-identical.
+        let second = session.handle_line("{\"cmd\":\"inspect\",\"tick\":0}");
+        assert_eq!(first, second, "cached inspect must be byte-identical");
+    }
+
+    #[test]
+    fn robot_inspect_without_producer_still_fails_closed() {
+        let cursor = make_cursor(4);
+        let debugger = TimeTravelDebugger::new(cursor, Vec::new());
+        let mut session = RobotSession::new(debugger);
+        let response = session.handle_line("{\"cmd\":\"inspect\",\"tick\":1}");
+        assert!(
+            response.contains("\"ok\":false") && response.contains("unavailable"),
+            "no-producer inspect must stay fail-closed, got: {response}"
+        );
     }
 
     #[test]

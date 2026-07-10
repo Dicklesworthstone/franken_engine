@@ -59,6 +59,9 @@ use crate::slot_registry::SlotId;
 pub const TRANSLATION_VALIDATION_WITNESS_SCHEMA_VERSION: &str =
     "franken-engine.translation-validation-witness.v1";
 
+/// Claim ID backed by translation-validation witnesses (bd-fqlfw.6.3/6.5).
+pub const FE_CLAIM_017_CLAIM_ID: &str = "FE-CLAIM-017";
+
 // ---------------------------------------------------------------------------
 // Translation Validation Proof Types
 // ---------------------------------------------------------------------------
@@ -446,6 +449,90 @@ impl TranslationValidationWitnessArtifact {
         append_str(&mut preimage, &self.zone);
         append_str_vec(&mut preimage, &self.validation_logs);
         sha256_hex(&preimage)
+    }
+
+    /// Bridge this witness into the strict E6.T1 proof.json producer contract
+    /// (bd-fqlfw.6.5) so the proof-spine claim gate can classify it alongside
+    /// other producer artifacts under FE-CLAIM-017.
+    ///
+    /// Verdict mapping: `Proven` → `Passed`, `Counterexample` → `Failed`
+    /// (with the counterexample hash bound into `counterexample_artifacts`),
+    /// `Unavailable` → `Unavailable`. The artifact is committed with a
+    /// recomputed content hash, so downstream tamper detection holds.
+    pub fn to_proof_producer_artifact(&self) -> crate::proof_schema::ProofProducerArtifact {
+        use crate::hash_tiers::ContentHash;
+        use crate::proof_schema::{
+            ProofCheckerResult, ProofProducerArtifact, ProofSignatureOrContentHash,
+            ProofToolIdentity, proof_schema_version_current,
+        };
+
+        let mut input_artifact_hashes = std::collections::BTreeMap::new();
+        input_artifact_hashes.insert(
+            format!("source:{}", self.source_slot_id),
+            ContentHash::compute(self.source_code_digest.as_bytes()),
+        );
+        input_artifact_hashes.insert(
+            format!("target:{}", self.target_slot_id),
+            ContentHash::compute(self.target_code_digest.as_bytes()),
+        );
+        let mut output_artifact_hashes = std::collections::BTreeMap::new();
+        output_artifact_hashes.insert(
+            "translation_validation_witness.proof.json".to_string(),
+            ContentHash::compute(self.content_hash.as_bytes()),
+        );
+
+        let mut counterexample_artifacts = std::collections::BTreeMap::new();
+        let checker_result = match self.verdict {
+            TranslationValidationWitnessVerdict::Proven => ProofCheckerResult::Passed,
+            TranslationValidationWitnessVerdict::Counterexample => {
+                let reason = self
+                    .counterexample
+                    .as_ref()
+                    .map(|ce| ce.failure_reasons.join("; "))
+                    .unwrap_or_else(|| self.validation_summary.clone());
+                if let Some(ce) = &self.counterexample {
+                    counterexample_artifacts.insert(
+                        "counterexample".to_string(),
+                        ContentHash::compute(ce.counterexample_hash.as_bytes()),
+                    );
+                }
+                ProofCheckerResult::Failed { reason }
+            }
+            TranslationValidationWitnessVerdict::Unavailable => {
+                let reason = self
+                    .unavailable_reason
+                    .clone()
+                    .unwrap_or_else(|| self.validation_summary.clone());
+                ProofCheckerResult::Unavailable { reason }
+            }
+        };
+
+        let mut artifact = ProofProducerArtifact {
+            schema_version: proof_schema_version_current(),
+            claim_ids: vec![FE_CLAIM_017_CLAIM_ID.to_string()],
+            theorem_or_validator_id: self.validator_id.clone(),
+            input_artifact_hashes,
+            output_artifact_hashes,
+            command: format!(
+                "translation-validate {} -> {}",
+                self.source_slot_id, self.target_slot_id
+            ),
+            tool_identity: ProofToolIdentity {
+                tool_name: "translation-validator".to_string(),
+                tool_version: self.schema_version.clone(),
+                tool_invocation_id: self.proof_id.clone(),
+            },
+            checker_result,
+            counterexample_artifacts,
+            timestamp_ticks: self.validation_timestamp_ns,
+            logical_epoch: self.security_epoch,
+            signature_or_content_hash: ProofSignatureOrContentHash::ContentHash(
+                ContentHash::from_bytes([0u8; 32]),
+            ),
+        };
+        artifact.signature_or_content_hash =
+            ProofSignatureOrContentHash::ContentHash(artifact.content_hash());
+        artifact
     }
 }
 
@@ -1690,6 +1777,82 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn proven_witness_bridges_to_strict_artifact_and_promotes_fe_claim_017() {
+        use crate::proof_spine_claim_gate::{
+            ClaimSpineAction, ProofArtifactClass, classify_proof_artifact, decide_claim_state,
+        };
+
+        let witness = TranslationValidationWitnessArtifact::from_proof(
+            "full-ir-validator",
+            &proof_with_result(ValidationResult::Success {
+                test_cases_passed: 32,
+                test_cases_total: 32,
+                success_rate_percent: 100,
+            }),
+        );
+        let artifact = witness.to_proof_producer_artifact();
+
+        assert_eq!(artifact.claim_ids, vec![FE_CLAIM_017_CLAIM_ID]);
+        assert_eq!(artifact.theorem_or_validator_id, "full-ir-validator");
+        assert_eq!(artifact.tool_identity.tool_name, "translation-validator");
+        crate::proof_schema::validate_proof_producer_artifact(&artifact)
+            .expect("bridged proven witness must satisfy the strict contract");
+        assert_eq!(
+            classify_proof_artifact(&artifact),
+            ProofArtifactClass::Proven
+        );
+        let verdict = decide_claim_state(FE_CLAIM_017_CLAIM_ID, false, &[artifact]);
+        assert_eq!(verdict.action, ClaimSpineAction::PromoteObserved);
+    }
+
+    #[test]
+    fn counterexample_witness_bridges_to_failed_artifact_and_demotes() {
+        use crate::proof_spine_claim_gate::{
+            ClaimSpineAction, ProofArtifactClass, classify_proof_artifact, decide_claim_state,
+        };
+
+        let witness = TranslationValidationWitnessArtifact::from_proof(
+            "exception-validator",
+            &proof_with_result(ValidationResult::Failed {
+                test_cases_passed: 30,
+                test_cases_total: 32,
+                success_rate_percent: 93,
+                failure_reasons: vec!["finally ordering diverged".to_string()],
+            }),
+        );
+        let artifact = witness.to_proof_producer_artifact();
+
+        assert!(matches!(
+            classify_proof_artifact(&artifact),
+            ProofArtifactClass::Counterexample { ref reason }
+                if reason.contains("finally ordering diverged")
+        ));
+        assert!(!artifact.counterexample_artifacts.is_empty());
+        let verdict = decide_claim_state(FE_CLAIM_017_CLAIM_ID, true, &[artifact]);
+        assert_eq!(verdict.action, ClaimSpineAction::Demote);
+    }
+
+    #[test]
+    fn unavailable_witness_bridges_to_unavailable_artifact() {
+        use crate::proof_spine_claim_gate::{ProofArtifactClass, classify_proof_artifact};
+
+        let witness = TranslationValidationWitnessArtifact::from_proof(
+            "ifc-label-validator",
+            &proof_with_result(ValidationResult::Error {
+                error_message: "validator pipeline not wired".to_string(),
+                error_code: ValidationErrorCode::InternalError,
+            }),
+        );
+        let artifact = witness.to_proof_producer_artifact();
+
+        assert!(matches!(
+            classify_proof_artifact(&artifact),
+            ProofArtifactClass::Unavailable { ref reason }
+                if reason.contains("validator pipeline not wired")
+        ));
     }
 
     #[test]

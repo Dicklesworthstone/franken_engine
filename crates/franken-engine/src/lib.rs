@@ -405,6 +405,7 @@ pub mod proof_release_gate;
 pub mod proof_schema;
 pub mod proof_specialization_linkage;
 pub mod proof_specialization_receipt;
+pub mod proof_spine_claim_gate;
 pub mod quarantine_deescalation;
 pub mod quarantine_mesh_gate;
 pub mod quarantine_propagation;

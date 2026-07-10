@@ -329,6 +329,7 @@ pub mod native_addon_cohort_gate;
 pub mod native_addon_membrane;
 pub mod native_addon_parity_gate;
 pub mod nitrosketch_telemetry;
+pub mod non_use_certificate;
 pub mod northstar_scorecard;
 pub mod novelty_scoring_contract;
 pub mod novelty_synthesis_engine;

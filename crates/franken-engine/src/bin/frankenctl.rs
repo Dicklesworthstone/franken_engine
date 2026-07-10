@@ -55,6 +55,9 @@ use frankenengine_engine::lowering_pipeline::{
     LoweringContext, LoweringPipelineOutput, lower_ir0_to_ir3,
 };
 use frankenengine_engine::module_compatibility_matrix::CompatibilityScenarioReport;
+use frankenengine_engine::non_use_certificate::{
+    CertificateStatus, CertifierInputs, emit_certificate_bundle,
+};
 use frankenengine_engine::package_intake::{PackageIntakeReport, onboard_package};
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParseEventIr, ParserOptions};
 use frankenengine_engine::react_compilation_pipeline::{
@@ -335,6 +338,9 @@ struct RunArgs {
     emit_trace: Option<PathBuf>,
     data_contract: Option<PathBuf>,
     data_contract_purpose: String,
+    /// Directory for the E8 certificate bundle (bd-fqlfw.8.3); requires
+    /// `--data-contract`.
+    certificate_out: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -889,6 +895,8 @@ struct RunCommandOutput {
     data_contract: Option<DataContractRunBinding>,
     #[serde(skip_serializing_if = "Option::is_none")]
     e8_preflight_receipt: Option<E8RefusalLedgerReceipt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    certificate_bundle: Option<CertificateBundleSummary>,
     source_ingestion: SourceIngestionSummary,
     lane: String,
     lane_reason: String,
@@ -899,6 +907,22 @@ struct RunCommandOutput {
     evidence_entries: usize,
     console_output: Vec<ConsoleEntry>,
     observability_mode: ObservabilityModeOutput,
+}
+
+/// Summary of an emitted E8 certificate bundle (bd-fqlfw.8.3) in the run
+/// report: where it landed, its status, and per-file digests.
+#[derive(Debug, Clone, Serialize)]
+struct CertificateBundleSummary {
+    path: String,
+    certificate_status: CertificateStatus,
+    bundle_content_hash_hex: String,
+    files: Vec<CertificateBundleFileSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CertificateBundleFileSummary {
+    name: String,
+    sha256_hex: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2052,6 +2076,7 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut emit_trace: Option<PathBuf> = None;
     let mut data_contract: Option<PathBuf> = None;
     let mut data_contract_purpose = DEFAULT_DATA_CONTRACT_PURPOSE.to_string();
+    let mut certificate_out: Option<PathBuf> = None;
 
     let mut index = 0usize;
     while index < args.len() {
@@ -2069,6 +2094,13 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
             }
             "--purpose" => {
                 data_contract_purpose = next_arg(args, &mut index, "--purpose")?;
+            }
+            "--certificate-out" => {
+                certificate_out = Some(PathBuf::from(next_arg(
+                    args,
+                    &mut index,
+                    "--certificate-out",
+                )?));
             }
             "--explain" => {
                 explain = true;
@@ -2094,6 +2126,11 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let input = input.ok_or_else(|| "run requires --input <path>".to_string())?;
     let extension_id =
         extension_id.ok_or_else(|| "run requires --extension-id <id>".to_string())?;
+    // Fail closed: a certificate bundle is meaningless without the data
+    // contract that declares the claims it certifies.
+    if certificate_out.is_some() && data_contract.is_none() {
+        return Err("--certificate-out requires --data-contract <contract.json>".to_string());
+    }
 
     Ok(CommandSpec::Run(RunArgs {
         input,
@@ -2105,6 +2142,7 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
         emit_trace,
         data_contract,
         data_contract_purpose,
+        certificate_out,
     }))
 }
 
@@ -4041,6 +4079,31 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
             .uncertified_preflight_receipt(&result.trace_id, explain_bundle_path_string.as_deref())
     });
 
+    // bd-fqlfw.8.3: assemble, sign, and write the E8 certificate bundle from
+    // the run's recorded evidence (flow edges, host-effect transcript, refusal
+    // receipt) before the report is built, so the report can bind its digests.
+    let certificate_bundle = match (args.certificate_out.as_ref(), bound_contract.as_ref()) {
+        (Some(dir), Some((contract, binding))) => {
+            let receipt = e8_preflight_receipt
+                .as_ref()
+                .expect("data-contract runs always build a preflight receipt");
+            Some(write_certificate_bundle(
+                dir,
+                contract,
+                binding,
+                receipt,
+                &orchestrator,
+                &result,
+                &policy_id,
+                args.parse_goal,
+            )?)
+        }
+        (Some(_), None) => {
+            return Err("--certificate-out requires --data-contract <contract.json>".to_string());
+        }
+        _ => None,
+    };
+
     let output = RunCommandOutput {
         schema_version: FRANKENCTL_SCHEMA_VERSION.to_string(),
         extension_id: result.extension_id.clone(),
@@ -4052,6 +4115,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         explain_bundle_path: explain_bundle_path_string,
         data_contract,
         e8_preflight_receipt,
+        certificate_bundle,
         source_ingestion: result.source_ingestion.clone(),
         lane: result.lane.to_string(),
         lane_reason: result.lane_reason.to_string(),
@@ -4096,6 +4160,65 @@ fn load_and_bind_data_contract(
         )
         .map_err(|error| format!("failed to bind data contract `{}`: {error}", path.display()))?;
     Ok(Some((contract, binding)))
+}
+
+/// Assemble, sign, and write the E8 certificate bundle (bd-fqlfw.8.3) for a
+/// completed data-contract run, returning the report summary.
+#[allow(clippy::too_many_arguments)]
+fn write_certificate_bundle(
+    dir: &Path,
+    contract: &DataContract,
+    binding: &DataContractRunBinding,
+    refusal_receipt: &E8RefusalLedgerReceipt,
+    orchestrator: &ExecutionOrchestrator,
+    result: &OrchestratorResult,
+    policy_id: &str,
+    parse_goal: ParseGoal,
+) -> Result<CertificateBundleSummary, String> {
+    let granted = run_cli_capability_set(parse_goal);
+    let replay_trace_hash =
+        content_hash_for_json(&result.nondeterminism_trace, "nondeterminism trace")?.to_hex();
+    let containment_action = result.containment_action.to_string();
+    let inputs = CertifierInputs {
+        contract,
+        binding,
+        flow_events: orchestrator.data_contract_flow_events(),
+        host_effects: &result.host_effect_transcript,
+        // v1: `frankenctl run` has no receipt-staging surface, so no
+        // declassification receipts can have been consumed by the run.
+        declassification_receipts: &[],
+        refusal_receipt,
+        runtime_granted_capabilities: &granted,
+        policy_id,
+        policy_epoch: result.epoch.as_u64(),
+        parse_goal: parse_goal.as_str(),
+        trace_id: &result.trace_id,
+        decision_id: &result.decision_id,
+        engine_version: env!("CARGO_PKG_VERSION"),
+        containment_action: &containment_action,
+        instructions_executed: result.instructions_executed,
+        console_entry_count: result.console_output.len() as u64,
+        execution_value: &result.execution_value,
+        replay_trace_content_hash_hex: &replay_trace_hash,
+    };
+    let bundle = emit_certificate_bundle(&inputs)
+        .map_err(|error| format!("failed to emit E8 certificate bundle: {error}"))?;
+    for file in &bundle.files {
+        write_bytes_file(&dir.join(&file.name), &file.bytes)?;
+    }
+    Ok(CertificateBundleSummary {
+        path: dir.display().to_string(),
+        certificate_status: bundle.non_use_certificate.certificate_status,
+        bundle_content_hash_hex: bundle.bundle_content_hash_hex.clone(),
+        files: bundle
+            .files
+            .iter()
+            .map(|file| CertificateBundleFileSummary {
+                name: file.name.clone(),
+                sha256_hex: ContentHash::compute(&file.bytes).to_hex(),
+            })
+            .collect(),
+    })
 }
 
 fn resolve_run_explain_path(args: &RunArgs) -> Option<PathBuf> {
@@ -5804,12 +5927,18 @@ fn classify_run_error(error: &OrchestratorError) -> Option<&'static str> {
     }
 }
 
-fn run_cli_capabilities(parse_goal: ParseGoal) -> Vec<String> {
+/// The typed capability profile a `frankenctl run` grants (the certifier's
+/// runtime-granted set; bd-fqlfw.8.3).
+fn run_cli_capability_set(parse_goal: ParseGoal) -> BTreeSet<RuntimeCapability> {
     let mut capabilities = CapabilityProfile::engine_core().capabilities().clone();
     if parse_goal == ParseGoal::Module {
         capabilities.insert(RuntimeCapability::ModuleLoad);
     }
     capabilities
+}
+
+fn run_cli_capabilities(parse_goal: ParseGoal) -> Vec<String> {
+    run_cli_capability_set(parse_goal)
         .into_iter()
         .map(|capability| capability.to_string())
         .collect()
@@ -10383,7 +10512,7 @@ fn usage() -> String {
         "  frankenctl diff-behavior <before-pkg|entry.js> <after-pkg|entry.js> [--format human|json] [--out <bundle-dir>]",
         "      # supply-chain behavioral delta over package authority/IFC intake reports",
         "  frankenctl run --input <source.js> --extension-id <id> [--goal script|module] [--out <report.json>]",
-        "      [--data-contract <contract.json>] [--purpose <purpose>]",
+        "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>]",
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
         "  frankenctl explain <bundle.json> [--format summary|json] [--out <path>] [--emit-bundle <dir>]",
         "      # --emit-bundle: explain.md + evidence_graph/replay/counterfactuals.json + commands.txt + repro.lock",
@@ -10581,13 +10710,21 @@ fn run_usage() -> String {
     [
         "run usage:",
         "  frankenctl run --input <source.js> --extension-id <id> [--goal script|module] [--out <report.json>]",
-        "      [--data-contract <contract.json>] [--purpose <purpose>]",
+        "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>]",
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
         "      [--emit-trace <trace.json>]",
         "",
         "  --emit-trace writes the run's recorded nondeterminism trace — the",
         "  exact input `frankenctl replay debug --trace` consumes, enabling",
         "  end-to-end interpreter-state inspection with `--input <source>`.",
+        "",
+        "  --certificate-out <bundle-dir> (requires --data-contract) writes the",
+        "  signed E8 certificate bundle assembled from the run's recorded",
+        "  evidence: non_use_certificate.json, use_certificate.json,",
+        "  declassification_receipts.jsonl, capability_trace.jsonl, repro.lock,",
+        "  and audit.md. Negative claims are evaluated fail-closed within the",
+        "  explicit-flow analyzed scope; the certificate status stays",
+        "  `uncertified` while the E8 refusal ledger blocks certification.",
     ]
     .join("\n")
 }
@@ -11219,9 +11356,48 @@ mod tests {
             CommandSpec::Run(spec) => {
                 assert_eq!(spec.data_contract, Some(PathBuf::from("contract.json")));
                 assert_eq!(spec.data_contract_purpose, "agent_sandbox");
+                assert_eq!(spec.certificate_out, None);
             }
             other => panic!("expected run command, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_run_command_accepts_certificate_out_with_data_contract() {
+        let args = vec![
+            "run".to_string(),
+            "--input".to_string(),
+            "agent.js".to_string(),
+            "--extension-id".to_string(),
+            "ext-e8".to_string(),
+            "--data-contract".to_string(),
+            "contract.json".to_string(),
+            "--certificate-out".to_string(),
+            "cert-bundle".to_string(),
+        ];
+        let parsed = parse_command(&args).expect("run with certificate out should parse");
+        match parsed {
+            CommandSpec::Run(spec) => {
+                assert_eq!(spec.certificate_out, Some(PathBuf::from("cert-bundle")));
+            }
+            other => panic!("expected run command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_run_command_rejects_certificate_out_without_data_contract() {
+        let args = vec![
+            "run".to_string(),
+            "--input".to_string(),
+            "agent.js".to_string(),
+            "--extension-id".to_string(),
+            "ext-e8".to_string(),
+            "--certificate-out".to_string(),
+            "cert-bundle".to_string(),
+        ];
+        let error = parse_command(&args)
+            .expect_err("certificate out without data contract must fail closed");
+        assert!(error.contains("--certificate-out requires --data-contract"));
     }
 
     #[test]

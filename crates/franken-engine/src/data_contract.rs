@@ -419,11 +419,25 @@ pub enum DataContractError {
         expected: String,
         actual: String,
     },
+    BindingContractMismatch {
+        expected_hash_hex: String,
+        actual_hash_hex: String,
+    },
 }
 
 impl fmt::Display for DataContractError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::BindingContractMismatch {
+                expected_hash_hex,
+                actual_hash_hex,
+            } => {
+                write!(
+                    f,
+                    "run binding was produced by contract `{actual_hash_hex}`, not this \
+                     contract `{expected_hash_hex}`"
+                )
+            }
             Self::UnsupportedSchema { expected, actual } => {
                 write!(
                     f,
@@ -708,6 +722,74 @@ impl DataContract {
         let bytes = serde_json::to_vec(self).expect("data contract serialization should succeed");
         ContentHash::compute(&bytes)
     }
+
+    /// Derive the runtime IFC ingress binding for a bound run (bd-fqlfw.8.2).
+    ///
+    /// Carries the resolved run-input `Label`, the bound purpose, the
+    /// contract's sink bindings, and its declassification routes so the
+    /// orchestrator can gate declared sinks against the ingress label and
+    /// record flow edges into the IFC provenance index. Fails closed when the
+    /// binding was produced by a different contract or its input binding no
+    /// longer resolves.
+    pub fn ifc_ingress(
+        &self,
+        binding: &DataContractRunBinding,
+    ) -> Result<DataContractIfcIngress, DataContractError> {
+        let expected_hash_hex = self.content_hash().to_hex();
+        if !binding
+            .contract_hash_hex
+            .eq_ignore_ascii_case(&expected_hash_hex)
+        {
+            return Err(DataContractError::BindingContractMismatch {
+                expected_hash_hex,
+                actual_hash_hex: binding.contract_hash_hex.clone(),
+            });
+        }
+        let input = self
+            .input_bindings
+            .iter()
+            .find(|candidate| candidate.binding_id == binding.run_input_binding_id)
+            .ok_or_else(|| DataContractError::MissingRunInputBinding {
+                input_path: binding.run_input_path.clone(),
+            })?;
+        Ok(DataContractIfcIngress {
+            contract_id: self.contract_id.clone(),
+            contract_hash_hex: expected_hash_hex,
+            extension_id: self.extension_id.clone(),
+            run_input_binding_id: input.binding_id.clone(),
+            source_label: input.label.clone(),
+            purpose: binding.purpose.clone(),
+            sinks: self.allowed_sinks.clone(),
+            declassification_routes: self
+                .required_declassification_routes
+                .iter()
+                .map(|required| required.route.clone())
+                .collect(),
+        })
+    }
+}
+
+/// Runtime IFC ingress binding derived from a bound data contract
+/// (bd-fqlfw.8.2): the labeled run input plus the declared sink and
+/// declassification surface the orchestrator enforces fail-closed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DataContractIfcIngress {
+    /// Contract that produced this ingress binding.
+    pub contract_id: String,
+    /// Content hash of the producing contract.
+    pub contract_hash_hex: String,
+    /// Extension bound by the contract.
+    pub extension_id: String,
+    /// Input binding the run resolved to.
+    pub run_input_binding_id: String,
+    /// IFC label the run input carries at ingress.
+    pub source_label: Label,
+    /// Purpose the run was bound to (already validated by `bind_to_run`).
+    pub purpose: String,
+    /// Declared sinks (with clearances + allowed labels) for this run.
+    pub sinks: Vec<SinkBinding>,
+    /// Declassification routes the contract requires for cross-label flows.
+    pub declassification_routes: Vec<DeclassificationRoute>,
 }
 
 fn require_non_empty(field: &'static str, value: &str) -> Result<(), DataContractError> {
@@ -1005,6 +1087,46 @@ mod tests {
                 field: "required_declassification_routes[].route.route_id",
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn ifc_ingress_carries_label_purpose_sinks_and_routes() {
+        let c = contract();
+        let binding = c
+            .bind_to_run("ext-e8", "agent.js", DEFAULT_DATA_CONTRACT_PURPOSE, None)
+            .expect("binds");
+        let ingress = c.ifc_ingress(&binding).expect("ingress derives");
+        assert_eq!(ingress.contract_id, c.contract_id);
+        assert_eq!(ingress.extension_id, c.extension_id);
+        assert_eq!(ingress.run_input_binding_id, binding.run_input_binding_id);
+        assert_eq!(ingress.purpose, DEFAULT_DATA_CONTRACT_PURPOSE);
+        assert_eq!(
+            ingress.source_label,
+            c.input_bindings
+                .iter()
+                .find(|b| b.binding_id == binding.run_input_binding_id)
+                .expect("input binding")
+                .label
+        );
+        assert_eq!(ingress.sinks, c.allowed_sinks);
+        assert_eq!(
+            ingress.declassification_routes.len(),
+            c.required_declassification_routes.len()
+        );
+    }
+
+    #[test]
+    fn ifc_ingress_rejects_binding_from_a_different_contract() {
+        let c = contract();
+        let binding = c
+            .bind_to_run("ext-e8", "agent.js", DEFAULT_DATA_CONTRACT_PURPOSE, None)
+            .expect("binds");
+        let mut other = contract();
+        other.contract_id = "contract-other".to_string();
+        assert!(matches!(
+            other.ifc_ingress(&binding),
+            Err(DataContractError::BindingContractMismatch { .. })
         ));
     }
 }

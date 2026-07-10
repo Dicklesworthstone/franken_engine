@@ -31,6 +31,7 @@ use crate::containment_executor::{
     ContainmentContext, ContainmentError, ContainmentExecutor, ContainmentReceipt, SandboxPolicy,
 };
 use crate::control_plane::{Budget, Cx, KernelContext, NoCaps, TraceId};
+use crate::data_contract::DataContractIfcIngress;
 use crate::entropy_evidence_compressor::{
     ArithmeticCoder, CompressionCertificate, EntropyError, EntropyEstimator,
 };
@@ -48,7 +49,8 @@ use crate::guardplane_adapter::{
     GuardplaneExtensionContext, GuardplaneOperation,
 };
 use crate::hash_tiers::ContentHash;
-use crate::ifc_artifacts::{DeclassificationReceipt, Label};
+use crate::ifc_artifacts::{ClearanceClass, DeclassificationReceipt, Label};
+use crate::ifc_provenance_index::{FlowDecision, FlowEventRecord, IfcProvenanceIndex};
 use crate::ir_contract::{Ir0Module, Ir3Module};
 use crate::lowering_pipeline::{
     Ir2FlowProofArtifact, LoweringContext, LoweringEvent, LoweringPipelineError,
@@ -73,6 +75,7 @@ use crate::saga_orchestrator::{
 };
 use crate::security_epoch::SecurityEpoch;
 use crate::signature_preimage::VerificationKey;
+use crate::storage_adapter::{EventContext, InMemoryStorageAdapter};
 use crate::tropical_semiring::{
     InstructionCostGraph, InstructionNode, ScheduleOptimizer, TropicalError, TropicalWeight,
 };
@@ -471,6 +474,18 @@ impl From<TsNormalizationError> for OrchestratorError {
 // ---------------------------------------------------------------------------
 
 /// Integration seam that wires together the full FrankenEngine pipeline.
+/// Ceiling label a sink clearance can receive, for provenance-edge recording
+/// (mirrors `ClearanceClass::max_receivable_label_level`).
+fn clearance_ceiling_label(clearance: &ClearanceClass) -> Label {
+    match clearance {
+        ClearanceClass::OpenSink => Label::TopSecret,
+        ClearanceClass::RestrictedSink => Label::Internal,
+        ClearanceClass::AuditedSink => Label::Confidential,
+        ClearanceClass::SealedSink => Label::Secret,
+        ClearanceClass::NeverSink => Label::Public,
+    }
+}
+
 pub struct ExecutionOrchestrator {
     config: OrchestratorConfig,
     /// Centralized runtime configuration for all engine subsystems.
@@ -494,6 +509,14 @@ pub struct ExecutionOrchestrator {
     /// (bd-f5b04.2.7). `None` keeps the fail-closed baseline (no host effects).
     host_io: Option<Arc<dyn HostIoProvider>>,
     host_io_recorder: Option<Arc<dyn HostIoRecorder>>,
+    /// Optional data-contract IFC ingress binding (bd-fqlfw.8.2): the labeled
+    /// run input plus declared sinks/routes. When set, `execute` gates every
+    /// declared sink against the ingress label fail-closed and records flow
+    /// edges into the run's IFC provenance index.
+    data_contract_ingress: Option<DataContractIfcIngress>,
+    /// Flow edges recorded by the data-contract ingress guard for the most
+    /// recent `execute` (mirrors what was inserted into the provenance index).
+    data_contract_flow_events: Vec<FlowEventRecord>,
 }
 
 impl ExecutionOrchestrator {
@@ -558,9 +581,25 @@ impl ExecutionOrchestrator {
             execution_counter: 0,
             host_io: None,
             host_io_recorder: None,
+            data_contract_ingress: None,
+            data_contract_flow_events: Vec::new(),
             config,
             runtime_config,
         })
+    }
+
+    /// Install a data-contract IFC ingress binding (bd-fqlfw.8.2). The next
+    /// `execute` gates the contract's declared sinks against the run input's
+    /// ingress label fail-closed and records a flow edge per declared sink.
+    pub fn set_data_contract_ingress(&mut self, ingress: DataContractIfcIngress) {
+        self.data_contract_ingress = Some(ingress);
+    }
+
+    /// Flow edges recorded by the data-contract ingress guard during the most
+    /// recent `execute` (the same records inserted into the run's IFC
+    /// provenance index), for certificates and operator surfaces.
+    pub fn data_contract_flow_events(&self) -> &[FlowEventRecord] {
+        &self.data_contract_flow_events
     }
 
     /// Create an orchestrator with default configuration.
@@ -727,6 +766,7 @@ impl ExecutionOrchestrator {
         let lowering_events = lowering_output.events.clone();
         let lowering_witnesses = lowering_output.witnesses.clone();
         self.phase_enforce_runtime_flow_guards(&lowering_output.ir2_flow_proof_artifact)?;
+        self.phase_enforce_data_contract_ingress(&trace_id, &decision_id)?;
         let ir3_schedule_cost = Self::estimate_ir3_schedule_cost(&lowering_output.ir3)?;
 
         // Step 6: Execute IR3.
@@ -1064,6 +1104,107 @@ impl ExecutionOrchestrator {
             &self.runtime_config,
             self.config.epoch,
         )))
+    }
+
+    /// Data-contract ingress guard (bd-fqlfw.8.2, E8.T2).
+    ///
+    /// The run input enters carrying the contract's IFC label + purpose. v1
+    /// explicit-flow posture is a conservative over-approximation: label
+    /// propagation through the program is not yet proven per-flow, so every
+    /// sink the contract declares is treated as a potential destination of
+    /// the ingress label. A sink that cannot lattice-legally receive the
+    /// label (clearance + contract allowed_labels) and has no verified
+    /// declassification receipt fails the run closed BEFORE execution —
+    /// and every checked flow is recorded as a flow edge in the run's IFC
+    /// provenance index (Blocked edges included; denial without evidence
+    /// would be indistinguishable from misconfiguration).
+    fn phase_enforce_data_contract_ingress(
+        &mut self,
+        trace_id: &str,
+        decision_id: &str,
+    ) -> Result<(), OrchestratorError> {
+        self.data_contract_flow_events.clear();
+        let Some(ingress) = self.data_contract_ingress.clone() else {
+            return Ok(());
+        };
+        let ctx = EventContext::new(trace_id, decision_id, self.config.policy_id.clone()).map_err(
+            |err| OrchestratorError::IfcRuntimeGuardBlocked {
+                detail: format!("data-contract ingress: invalid event context: {err}"),
+            },
+        )?;
+        let mut index = IfcProvenanceIndex::new(InMemoryStorageAdapter::new());
+        let mut blocked_details = Vec::new();
+
+        for sink in &ingress.sinks {
+            let receivable = sink.clearance.can_receive(&ingress.source_label)
+                && sink.allowed_labels.contains(&ingress.source_label);
+            let matching_route = ingress.declassification_routes.iter().find(|route| {
+                route.source_label == ingress.source_label
+                    && sink.clearance.can_receive(&route.target_clearance)
+                    && sink.allowed_labels.contains(&route.target_clearance)
+            });
+            let decision = if receivable {
+                FlowDecision::Allowed
+            } else {
+                // A matching declassification route exists only as an
+                // obligation; without a verified receipt the flow stays
+                // blocked (fail-closed). Receipt-resolved Declassified
+                // edges are E8.T3 certifier scope.
+                let reason = match matching_route {
+                    Some(route) => format!(
+                        "sink `{}` requires declassification route `{}` and no verified \
+                         receipt is staged",
+                        sink.sink_id, route.route_id
+                    ),
+                    None => format!(
+                        "sink `{}` (clearance {:?}) cannot receive label {:?} and no \
+                         declassification route covers the flow",
+                        sink.sink_id, sink.clearance, ingress.source_label
+                    ),
+                };
+                blocked_details.push(reason);
+                FlowDecision::Blocked
+            };
+
+            let record = FlowEventRecord {
+                event_id: format!(
+                    "dc-ingress-{}-{}-{}",
+                    ingress.contract_id, ingress.run_input_binding_id, sink.sink_id
+                ),
+                extension_id: ingress.extension_id.clone(),
+                source_label: ingress.source_label.clone(),
+                sink_clearance: clearance_ceiling_label(&sink.clearance),
+                flow_location: format!(
+                    "data_contract:{}:sink:{}:purpose:{}",
+                    ingress.contract_id, sink.sink_id, ingress.purpose
+                ),
+                decision,
+                receipt_ref: None,
+                timestamp_ms: self.config.epoch.as_u64(),
+            };
+            index.insert_flow_event(&record, &ctx).map_err(|err| {
+                OrchestratorError::IfcRuntimeGuardBlocked {
+                    detail: format!(
+                        "data-contract ingress: recording flow edge for sink `{}` failed: {err}",
+                        sink.sink_id
+                    ),
+                }
+            })?;
+            self.data_contract_flow_events.push(record);
+        }
+
+        if !blocked_details.is_empty() {
+            return Err(OrchestratorError::IfcRuntimeGuardBlocked {
+                detail: format!(
+                    "data-contract `{}` ingress label {:?} (purpose `{}`): {}",
+                    ingress.contract_id,
+                    ingress.source_label,
+                    ingress.purpose,
+                    blocked_details.join("; ")
+                ),
+            });
+        }
+        Ok(())
     }
 
     fn phase_enforce_runtime_flow_guards(

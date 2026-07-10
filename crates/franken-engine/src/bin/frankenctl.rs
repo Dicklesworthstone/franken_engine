@@ -3996,7 +3996,8 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     let source = fs::read_to_string(&args.input)
         .map_err(|error| format!("failed to read source `{}`: {error}", args.input.display()))?;
     let source_hash = ContentHash::compute(source.as_bytes());
-    let data_contract = load_and_bind_data_contract(&args, &source_hash)?;
+    let bound_contract = load_and_bind_data_contract(&args, &source_hash)?;
+    let data_contract = bound_contract.as_ref().map(|(_, binding)| binding.clone());
 
     let source_label = args.input.display().to_string();
     let capabilities = run_cli_capabilities(args.parse_goal);
@@ -4014,6 +4015,14 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         trace_id_prefix: "frankenctl-run".to_string(),
         ..OrchestratorConfig::default()
     });
+    // bd-fqlfw.8.2: the bound contract's ingress label + sink surface gates
+    // execution fail-closed and records flow edges in the provenance index.
+    if let Some((contract, binding)) = bound_contract.as_ref() {
+        let ingress = contract.ifc_ingress(binding).map_err(|error| {
+            format!("failed to derive data-contract IFC ingress binding: {error}")
+        })?;
+        orchestrator.set_data_contract_ingress(ingress);
+    }
     let result = orchestrator
         .execute(&package)
         .map_err(|error| format_run_error(&args.input, &error))?;
@@ -4072,21 +4081,21 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
 fn load_and_bind_data_contract(
     args: &RunArgs,
     source_hash: &ContentHash,
-) -> Result<Option<DataContractRunBinding>, String> {
+) -> Result<Option<(DataContract, DataContractRunBinding)>, String> {
     let Some(path) = args.data_contract.as_ref() else {
         return Ok(None);
     };
     let contract: DataContract = load_json_file(path)?;
     let input_path = args.input.display().to_string();
-    contract
+    let binding = contract
         .bind_to_run(
             &args.extension_id,
             &input_path,
             &args.data_contract_purpose,
             Some(source_hash),
         )
-        .map(Some)
-        .map_err(|error| format!("failed to bind data contract `{}`: {error}", path.display()))
+        .map_err(|error| format!("failed to bind data contract `{}`: {error}", path.display()))?;
+    Ok(Some((contract, binding)))
 }
 
 fn resolve_run_explain_path(args: &RunArgs) -> Option<PathBuf> {

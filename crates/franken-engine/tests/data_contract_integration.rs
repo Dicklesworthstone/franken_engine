@@ -527,3 +527,170 @@ fn duplicate_declassification_route_ids_fail_closed() {
         }
     ));
 }
+
+// ---------------------------------------------------------------------------
+// bd-fqlfw.8.2 (E8.T2): runtime label-ingress + purpose-metadata binding.
+// ---------------------------------------------------------------------------
+
+use frankenengine_engine::execution_orchestrator::{
+    ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
+};
+use frankenengine_engine::ifc_provenance_index::FlowDecision;
+
+const INGRESS_SOURCE: &str = "const answer = 40 + 2;";
+
+fn ingress_contract(source_label: Label, sink: SinkBinding) -> DataContract {
+    let mut contract = sample_contract();
+    contract.contract_id = "contract-ingress-e8t2".to_string();
+    contract.input_bindings[0].label = source_label;
+    contract.input_bindings[0].content_hash_hex =
+        Some(ContentHash::compute(INGRESS_SOURCE.as_bytes()).to_hex());
+    contract.allowed_sinks = vec![sink];
+    contract
+}
+
+fn ingress_orchestrator(contract: &DataContract) -> ExecutionOrchestrator {
+    let binding = contract
+        .bind_to_run(
+            "ext-integration-e8",
+            "fixtures/agent.js",
+            DEFAULT_DATA_CONTRACT_PURPOSE,
+            Some(&ContentHash::compute(INGRESS_SOURCE.as_bytes())),
+        )
+        .expect("contract binds to run");
+    let ingress = contract
+        .ifc_ingress(&binding)
+        .expect("ingress binding derives");
+    assert_eq!(ingress.purpose, DEFAULT_DATA_CONTRACT_PURPOSE);
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_data_contract_ingress(ingress);
+    orchestrator
+}
+
+fn ingress_package() -> ExtensionPackage {
+    ExtensionPackage {
+        extension_id: "ext-integration-e8".to_string(),
+        source: INGRESS_SOURCE.to_string(),
+        source_file: Some("fixtures/agent.js".to_string()),
+        capabilities: vec![],
+        version: "1.0.0".to_string(),
+        metadata: BTreeMap::new(),
+    }
+}
+
+/// ACCEPTANCE (bd-fqlfw.8.2): a labeled secret flowing to an egress sink
+/// without a receipt is denied AND recorded as a flow edge.
+#[test]
+fn labeled_secret_to_egress_sink_without_receipt_is_denied_and_recorded() {
+    let contract = ingress_contract(
+        Label::Secret,
+        SinkBinding {
+            sink_id: "raw-network-egress".to_string(),
+            clearance: ClearanceClass::NeverSink,
+            location: "net://egress".to_string(),
+            allowed_labels: BTreeSet::from([Label::Public]),
+        },
+    );
+    let mut orchestrator = ingress_orchestrator(&contract);
+
+    let err = orchestrator
+        .execute(&ingress_package())
+        .expect_err("secret ingress to a public egress sink must fail closed");
+    match &err {
+        OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
+            assert!(detail.contains("raw-network-egress"), "detail: {detail}");
+            assert!(detail.contains("Secret"), "detail: {detail}");
+        }
+        other => panic!("expected IfcRuntimeGuardBlocked, got {other:?}"),
+    }
+
+    let events = orchestrator.data_contract_flow_events();
+    assert_eq!(events.len(), 1, "one declared sink => one flow edge");
+    assert_eq!(events[0].decision, FlowDecision::Blocked);
+    assert_eq!(events[0].source_label, Label::Secret);
+    assert_eq!(events[0].receipt_ref, None);
+    assert!(events[0].flow_location.contains("raw-network-egress"));
+    assert!(
+        events[0]
+            .flow_location
+            .contains(DEFAULT_DATA_CONTRACT_PURPOSE),
+        "purpose metadata must be bound into the flow edge: {}",
+        events[0].flow_location
+    );
+}
+
+/// A declassification route without a verified receipt still fails closed,
+/// and the denial names the route so the operator knows what is missing.
+#[test]
+fn secret_with_unreceipted_declassification_route_is_denied_naming_the_route() {
+    let mut contract = ingress_contract(
+        Label::Secret,
+        SinkBinding {
+            sink_id: "public-report".to_string(),
+            clearance: ClearanceClass::OpenSink,
+            location: "report://public".to_string(),
+            allowed_labels: BTreeSet::from([Label::Public]),
+        },
+    );
+    contract.required_declassification_routes = vec![RequiredDeclassificationRoute {
+        route: DeclassificationRoute {
+            route_id: "route-secret-public".to_string(),
+            source_label: Label::Secret,
+            target_clearance: Label::Public,
+            conditions: vec!["receipt_required".to_string()],
+        },
+        required_for_claims: BTreeSet::from(["no-secret-open-sink".to_string()]),
+    }];
+    let mut orchestrator = ingress_orchestrator(&contract);
+
+    let err = orchestrator
+        .execute(&ingress_package())
+        .expect_err("route without receipt must fail closed");
+    match &err {
+        OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
+            assert!(detail.contains("route-secret-public"), "detail: {detail}");
+        }
+        other => panic!("expected IfcRuntimeGuardBlocked, got {other:?}"),
+    }
+    assert_eq!(
+        orchestrator.data_contract_flow_events()[0].decision,
+        FlowDecision::Blocked
+    );
+}
+
+/// A lattice-legal flow (public input to an audited sink that allows Public)
+/// executes and records an Allowed edge — denial-only recording would make
+/// the provenance index useless for use-certificates.
+#[test]
+fn public_input_to_audited_sink_executes_and_records_allowed_edge() {
+    let contract = ingress_contract(
+        Label::Public,
+        SinkBinding {
+            sink_id: "audit-log".to_string(),
+            clearance: ClearanceClass::AuditedSink,
+            location: "ledger://audit".to_string(),
+            allowed_labels: BTreeSet::from([Label::Public, Label::Internal]),
+        },
+    );
+    let mut orchestrator = ingress_orchestrator(&contract);
+
+    let result = orchestrator
+        .execute(&ingress_package())
+        .expect("lattice-legal ingress must execute");
+    assert_eq!(result.extension_id, "ext-integration-e8");
+
+    let events = orchestrator.data_contract_flow_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].decision, FlowDecision::Allowed);
+    assert_eq!(events[0].source_label, Label::Public);
+}
+
+/// Runs without a data contract record no ingress edges (no phantom flows).
+#[test]
+fn run_without_contract_records_no_ingress_edges() {
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator
+        .execute(&ingress_package())
+        .expect("uncontracted run executes");
+    assert!(orchestrator.data_contract_flow_events().is_empty());
+}

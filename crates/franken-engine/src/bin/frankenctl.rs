@@ -27,6 +27,11 @@ use frankenengine_engine::benchmark_e2e::{
     run_benchmark_comparison_suite, run_benchmark_suite, write_benchmark_comparison_artifacts,
     write_evidence_artifacts,
 };
+use std::sync::Arc;
+
+use frankenengine_engine::agent_sandbox::{
+    AGENT_SANDBOX_MANIFEST_SCHEMA_VERSION, AgentSandboxManifest, AgentSandboxReport,
+};
 use frankenengine_engine::capability::{CapabilityProfile, RuntimeCapability};
 use frankenengine_engine::data_contract::{
     DEFAULT_DATA_CONTRACT_PURPOSE, DataContract, DataContractRunBinding,
@@ -113,6 +118,7 @@ use frankenengine_engine::time_travel_debugger::{
 use frankenengine_engine::ts_normalization::{
     SourceIngestionSummary, prepare_source_entry_for_public_entrypoints,
 };
+use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 
@@ -169,6 +175,7 @@ enum CommandSpec {
     Onboard(OnboardArgs),
     DiffBehavior(DiffBehaviorArgs),
     Run(RunArgs),
+    AgentSandbox(AgentSandboxArgs),
     Explain(ExplainArgs),
     Claims(ClaimsArgs),
     Doctor(Box<DoctorArgs>),
@@ -194,6 +201,7 @@ enum HelpTopic {
     Onboard,
     DiffBehavior,
     Run,
+    AgentSandbox,
     Explain,
     Claims,
     ClaimsExplain,
@@ -236,6 +244,7 @@ impl HelpTopic {
             Self::Onboard => onboard_usage(),
             Self::DiffBehavior => diff_behavior_usage(),
             Self::Run => run_usage(),
+            Self::AgentSandbox => agent_sandbox_usage(),
             Self::Explain => explain_usage(),
             Self::Claims => claims_usage(),
             Self::ClaimsExplain => claims_explain_usage(),
@@ -340,6 +349,22 @@ struct RunArgs {
     data_contract_purpose: String,
     /// Directory for the E8 certificate bundle (bd-fqlfw.8.3); requires
     /// `--data-contract`.
+    certificate_out: Option<PathBuf>,
+}
+
+/// `frankenctl agent-sandbox` (bd-fqlfw.8.5): run agent-generated code under
+/// a manifest-declared tool authority and hand back the certificate bundle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AgentSandboxArgs {
+    manifest: PathBuf,
+    input: PathBuf,
+    parse_goal: ParseGoal,
+    out: Option<PathBuf>,
+    data_contract: Option<PathBuf>,
+    /// Purpose override; falls back to the manifest purpose, then the
+    /// data-contract default purpose.
+    purpose: Option<String>,
+    /// Directory for the E8 certificate bundle; requires `--data-contract`.
     certificate_out: Option<PathBuf>,
 }
 
@@ -1591,6 +1616,7 @@ fn run(raw_args: Vec<String>) -> Result<i32, String> {
         CommandSpec::Onboard(args) => execute_onboard(args),
         CommandSpec::DiffBehavior(args) => execute_diff_behavior(args),
         CommandSpec::Run(args) => execute_run(args),
+        CommandSpec::AgentSandbox(args) => execute_agent_sandbox(args),
         CommandSpec::Explain(args) => execute_explain(args),
         CommandSpec::Claims(args) => execute_claims(args),
         CommandSpec::Doctor(args) => execute_doctor(*args),
@@ -1632,6 +1658,7 @@ fn parse_command(args: &[String]) -> Result<CommandSpec, String> {
         "onboard" => parse_onboard_command(&args[1..]),
         "diff-behavior" => parse_diff_behavior_command(&args[1..]),
         "run" => parse_run_command(&args[1..]),
+        "agent-sandbox" => parse_agent_sandbox_command(&args[1..]),
         "explain" => parse_explain_command(&args[1..]),
         "claims" => parse_claims_command(&args[1..]),
         "doctor" => parse_doctor_command(&args[1..]),
@@ -1664,6 +1691,9 @@ fn parse_help_command(args: &[String]) -> Result<CommandSpec, String> {
             parse_leaf_help_topic("diff-behavior", HelpTopic::DiffBehavior, &args[1..])
         }
         "run" => parse_leaf_help_topic("run", HelpTopic::Run, &args[1..]),
+        "agent-sandbox" => {
+            parse_leaf_help_topic("agent-sandbox", HelpTopic::AgentSandbox, &args[1..])
+        }
         "explain" => parse_leaf_help_topic("explain", HelpTopic::Explain, &args[1..]),
         "claims" => parse_claims_help_command(&args[1..]),
         "doctor" => parse_leaf_help_topic("doctor", HelpTopic::Doctor, &args[1..]),
@@ -1679,7 +1709,7 @@ fn parse_help_command(args: &[String]) -> Result<CommandSpec, String> {
         "orchestrate" => parse_leaf_help_topic("orchestrate", HelpTopic::Orchestrate, &args[1..]),
         "runtime" => parse_leaf_help_topic("runtime", HelpTopic::Runtime, &args[1..]),
         other => Err(format!(
-            "unknown help topic `{other}` (expected compile|check|onboard|diff-behavior|run|explain|doctor|verify|benchmark|replay|differential-oracle|react|gates|reports|test|synth|orchestrate|runtime)"
+            "unknown help topic `{other}` (expected compile|check|onboard|diff-behavior|run|agent-sandbox|explain|doctor|verify|benchmark|replay|differential-oracle|react|gates|reports|test|synth|orchestrate|runtime)"
         )),
     }
 }
@@ -2142,6 +2172,66 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
         emit_trace,
         data_contract,
         data_contract_purpose,
+        certificate_out,
+    }))
+}
+
+fn parse_agent_sandbox_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::AgentSandbox));
+    }
+
+    let mut manifest: Option<PathBuf> = None;
+    let mut input: Option<PathBuf> = None;
+    let mut goal = ParseGoal::Script;
+    let mut out: Option<PathBuf> = None;
+    let mut data_contract: Option<PathBuf> = None;
+    let mut purpose: Option<String> = None;
+    let mut certificate_out: Option<PathBuf> = None;
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--manifest" => {
+                manifest = Some(PathBuf::from(next_arg(args, &mut index, "--manifest")?));
+            }
+            "--input" => input = Some(PathBuf::from(next_arg(args, &mut index, "--input")?)),
+            "--goal" => goal = parse_goal(&next_arg(args, &mut index, "--goal")?)?,
+            "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            "--data-contract" => {
+                data_contract = Some(PathBuf::from(next_arg(
+                    args,
+                    &mut index,
+                    "--data-contract",
+                )?));
+            }
+            "--purpose" => purpose = Some(next_arg(args, &mut index, "--purpose")?),
+            "--certificate-out" => {
+                certificate_out = Some(PathBuf::from(next_arg(
+                    args,
+                    &mut index,
+                    "--certificate-out",
+                )?));
+            }
+            flag => return Err(format!("unknown agent-sandbox flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    let manifest =
+        manifest.ok_or_else(|| "agent-sandbox requires --manifest <manifest.json>".to_string())?;
+    let input = input.ok_or_else(|| "agent-sandbox requires --input <generated.js>".to_string())?;
+    if certificate_out.is_some() && data_contract.is_none() {
+        return Err("--certificate-out requires --data-contract <contract.json>".to_string());
+    }
+
+    Ok(CommandSpec::AgentSandbox(AgentSandboxArgs {
+        manifest,
+        input,
+        parse_goal: goal,
+        out,
+        data_contract,
+        purpose,
         certificate_out,
     }))
 }
@@ -4096,6 +4186,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
                 &result,
                 &policy_id,
                 args.parse_goal,
+                run_cli_capability_set(args.parse_goal),
             )?)
         }
         (Some(_), None) => {
@@ -4174,8 +4265,8 @@ fn write_certificate_bundle(
     result: &OrchestratorResult,
     policy_id: &str,
     parse_goal: ParseGoal,
+    granted: BTreeSet<RuntimeCapability>,
 ) -> Result<CertificateBundleSummary, String> {
-    let granted = run_cli_capability_set(parse_goal);
     let replay_trace_hash =
         content_hash_for_json(&result.nondeterminism_trace, "nondeterminism trace")?.to_hex();
     let containment_action = result.containment_action.to_string();
@@ -4219,6 +4310,157 @@ fn write_certificate_bundle(
             })
             .collect(),
     })
+}
+
+/// Report emitted by `frankenctl agent-sandbox` (bd-fqlfw.8.5): the sandbox
+/// run summary plus the E8 evidence artifacts the agent framework consumes.
+#[derive(Debug, Clone, Serialize)]
+struct AgentSandboxCommandOutput {
+    schema_version: String,
+    manifest_schema_version: String,
+    report: AgentSandboxReport,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    report_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data_contract: Option<DataContractRunBinding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    e8_preflight_receipt: Option<E8RefusalLedgerReceipt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    certificate_bundle: Option<CertificateBundleSummary>,
+    observability_mode: ObservabilityModeOutput,
+}
+
+/// `frankenctl agent-sandbox` (bd-fqlfw.8.5, E8.T5): execute agent-generated
+/// code under the manifest's tool authority, with the guardplane armed as a
+/// behavior firewall, and hand the certificate bundle back on exit.
+fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
+    let manifest: AgentSandboxManifest = load_json_file(&args.manifest)?;
+    manifest.validate().map_err(|error| {
+        format!(
+            "invalid agent-sandbox manifest `{}`: {error}",
+            args.manifest.display()
+        )
+    })?;
+
+    let source = fs::read_to_string(&args.input)
+        .map_err(|error| format!("failed to read source `{}`: {error}", args.input.display()))?;
+    let source_hash = ContentHash::compute(source.as_bytes());
+    let module_goal = args.parse_goal == ParseGoal::Module;
+
+    let purpose = args
+        .purpose
+        .clone()
+        .or_else(|| manifest.purpose.clone())
+        .unwrap_or_else(|| DEFAULT_DATA_CONTRACT_PURPOSE.to_string());
+    let bound_contract: Option<(DataContract, DataContractRunBinding)> =
+        match args.data_contract.as_ref() {
+            Some(path) => {
+                let contract: DataContract = load_json_file(path)?;
+                let binding = contract
+                    .bind_to_run(
+                        &manifest.agent_id,
+                        &args.input.display().to_string(),
+                        &purpose,
+                        Some(&source_hash),
+                    )
+                    .map_err(|error| {
+                        format!("failed to bind data contract `{}`: {error}", path.display())
+                    })?;
+                Some((contract, binding))
+            }
+            None => None,
+        };
+    if args.certificate_out.is_some() && bound_contract.is_none() {
+        return Err("--certificate-out requires --data-contract <contract.json>".to_string());
+    }
+
+    let package = manifest
+        .to_extension_package(
+            source,
+            Some(args.input.display().to_string()),
+            env!("CARGO_PKG_VERSION"),
+            module_goal,
+        )
+        .map_err(|error| format!("agent-sandbox manifest rejected: {error}"))?;
+
+    let policy_id = OrchestratorConfig::default().policy_id;
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
+        parse_goal: args.parse_goal,
+        trace_id_prefix: "frankenctl-agent-sandbox".to_string(),
+        ..OrchestratorConfig::default()
+    });
+    if let Some((contract, binding)) = bound_contract.as_ref() {
+        let ingress = contract.ifc_ingress(binding).map_err(|error| {
+            format!("failed to derive data-contract IFC ingress binding: {error}")
+        })?;
+        orchestrator.set_data_contract_ingress(ingress);
+    }
+    // Host I/O stays deny-all unless the manifest declares a sandbox root
+    // (fail-closed default); the transcript recorder feeds the certificate's
+    // capability trace.
+    if let Some(root) = manifest.host_io_root.as_ref() {
+        let provider = match manifest.host_io_max_bytes {
+            Some(limit) => SandboxedHostIo::with_root_and_limit(PathBuf::from(root), limit),
+            None => SandboxedHostIo::with_root(PathBuf::from(root)),
+        }
+        .map_err(|error| format!("failed to open agent-sandbox host I/O root `{root}`: {error}"))?;
+        orchestrator.set_host_io(
+            Arc::new(provider),
+            Some(Arc::new(InMemoryHostIoTranscript::recording())),
+        );
+    }
+
+    let result = orchestrator
+        .execute(&package)
+        .map_err(|error| format_run_error(&args.input, &error))?;
+
+    let report = AgentSandboxReport::from_run(&manifest, &result, module_goal)
+        .map_err(|error| format!("failed to build agent-sandbox report: {error}"))?;
+    let e8_preflight_receipt = bound_contract
+        .as_ref()
+        .map(|(_, binding)| binding.uncertified_preflight_receipt(&result.trace_id, None));
+
+    let certificate_bundle = match (args.certificate_out.as_ref(), bound_contract.as_ref()) {
+        (Some(dir), Some((contract, binding))) => {
+            let receipt = e8_preflight_receipt
+                .as_ref()
+                .expect("data-contract sandbox runs always build a preflight receipt");
+            // The certificate's runtime-granted set is the agent's effective
+            // tool authority, not the fixed CLI profile.
+            let granted = manifest
+                .effective_runtime_capabilities(module_goal)
+                .map_err(|error| format!("agent-sandbox manifest rejected: {error}"))?;
+            Some(write_certificate_bundle(
+                dir,
+                contract,
+                binding,
+                receipt,
+                &orchestrator,
+                &result,
+                &policy_id,
+                args.parse_goal,
+                granted,
+            )?)
+        }
+        _ => None,
+    };
+
+    let output = AgentSandboxCommandOutput {
+        schema_version: FRANKENCTL_SCHEMA_VERSION.to_string(),
+        manifest_schema_version: AGENT_SANDBOX_MANIFEST_SCHEMA_VERSION.to_string(),
+        report,
+        report_path: args.out.as_ref().map(|path| path.display().to_string()),
+        data_contract: bound_contract.map(|(_, binding)| binding),
+        e8_preflight_receipt,
+        certificate_bundle,
+        observability_mode: default_capture_observability_mode(),
+    };
+    if let Some(path) = args.out.as_ref() {
+        write_json_file(path, &output)?;
+    }
+    print_json(&output)?;
+
+    Ok(0)
 }
 
 fn resolve_run_explain_path(args: &RunArgs) -> Option<PathBuf> {
@@ -10514,6 +10756,9 @@ fn usage() -> String {
         "  frankenctl run --input <source.js> --extension-id <id> [--goal script|module] [--out <report.json>]",
         "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>]",
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
+        "  frankenctl agent-sandbox --manifest <manifest.json> --input <generated.js> [--goal script|module]",
+        "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>] [--out <report.json>]",
+        "      # run agent-generated code under manifest-declared tool authority; certificate bundle on exit",
         "  frankenctl explain <bundle.json> [--format summary|json] [--out <path>] [--emit-bundle <dir>]",
         "      # --emit-bundle: explain.md + evidence_graph/replay/counterfactuals.json + commands.txt + repro.lock",
         "  frankenctl claims explain <FE-CLAIM-NNN> [--format human|json] [--out <path>]",
@@ -10606,6 +10851,7 @@ fn command_label(command: &CommandSpec) -> &'static str {
         CommandSpec::Synth(_) => "synth",
         CommandSpec::Orchestrate(_) => "orchestrate",
         CommandSpec::Runtime(_) => "runtime",
+        CommandSpec::AgentSandbox(_) => "agent-sandbox",
     }
 }
 
@@ -10725,6 +10971,34 @@ fn run_usage() -> String {
         "  and audit.md. Negative claims are evaluated fail-closed within the",
         "  explicit-flow analyzed scope; the certificate status stays",
         "  `uncertified` while the E8 refusal ledger blocks certification.",
+    ]
+    .join("\n")
+}
+
+fn agent_sandbox_usage() -> String {
+    [
+        "agent-sandbox usage:",
+        "  frankenctl agent-sandbox --manifest <agent_sandbox_manifest.json> --input <generated.js>",
+        "      [--goal script|module] [--out <report.json>]",
+        "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>]",
+        "",
+        "  Runs AI-agent-generated code under the tool authority the manifest",
+        "  declares (franken-engine.agent-sandbox-manifest.v1): each tool grant",
+        "  maps to an engine capability tag (unknown tags are refused",
+        "  fail-closed), tool calls route through the capability-typed hostcall",
+        "  membrane, and the guardplane watches agent actions as a behavior",
+        "  firewall (allow -> challenge -> sandbox -> suspend -> terminate ->",
+        "  quarantine) that cannot be opted out of.",
+        "",
+        "  Host I/O stays deny-all unless the manifest declares host_io_root;",
+        "  network tool grants additionally require",
+        "  acknowledge_unfiltered_network: true (the engine ships the network",
+        "  mechanism without a product-layer egress policy).",
+        "",
+        "  With --data-contract and --certificate-out, the signed E8",
+        "  certificate bundle is written on exit with the agent's effective",
+        "  tool authority as its runtime-granted capability set — this is the",
+        "  tool-runner shim contract an agent framework consumes.",
     ]
     .join("\n")
 }
@@ -11398,6 +11672,90 @@ mod tests {
         let error = parse_command(&args)
             .expect_err("certificate out without data contract must fail closed");
         assert!(error.contains("--certificate-out requires --data-contract"));
+    }
+
+    #[test]
+    fn parse_agent_sandbox_command_accepts_full_flag_set() {
+        let args = vec![
+            "agent-sandbox".to_string(),
+            "--manifest".to_string(),
+            "manifest.json".to_string(),
+            "--input".to_string(),
+            "generated.js".to_string(),
+            "--goal".to_string(),
+            "module".to_string(),
+            "--data-contract".to_string(),
+            "contract.json".to_string(),
+            "--purpose".to_string(),
+            "agent_sandbox".to_string(),
+            "--certificate-out".to_string(),
+            "cert-bundle".to_string(),
+            "--out".to_string(),
+            "report.json".to_string(),
+        ];
+        let parsed = parse_command(&args).expect("agent-sandbox should parse");
+        match parsed {
+            CommandSpec::AgentSandbox(spec) => {
+                assert_eq!(spec.manifest, PathBuf::from("manifest.json"));
+                assert_eq!(spec.input, PathBuf::from("generated.js"));
+                assert_eq!(spec.parse_goal, ParseGoal::Module);
+                assert_eq!(spec.data_contract, Some(PathBuf::from("contract.json")));
+                assert_eq!(spec.purpose, Some("agent_sandbox".to_string()));
+                assert_eq!(spec.certificate_out, Some(PathBuf::from("cert-bundle")));
+                assert_eq!(spec.out, Some(PathBuf::from("report.json")));
+            }
+            other => panic!("expected agent-sandbox command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_agent_sandbox_command_requires_manifest_and_input() {
+        let missing_manifest = vec![
+            "agent-sandbox".to_string(),
+            "--input".to_string(),
+            "generated.js".to_string(),
+        ];
+        assert!(
+            parse_command(&missing_manifest)
+                .expect_err("missing manifest must fail")
+                .contains("--manifest")
+        );
+
+        let missing_input = vec![
+            "agent-sandbox".to_string(),
+            "--manifest".to_string(),
+            "manifest.json".to_string(),
+        ];
+        assert!(
+            parse_command(&missing_input)
+                .expect_err("missing input must fail")
+                .contains("--input")
+        );
+    }
+
+    #[test]
+    fn parse_agent_sandbox_command_rejects_certificate_out_without_contract() {
+        let args = vec![
+            "agent-sandbox".to_string(),
+            "--manifest".to_string(),
+            "manifest.json".to_string(),
+            "--input".to_string(),
+            "generated.js".to_string(),
+            "--certificate-out".to_string(),
+            "cert-bundle".to_string(),
+        ];
+        let error = parse_command(&args)
+            .expect_err("certificate out without data contract must fail closed");
+        assert!(error.contains("--certificate-out requires --data-contract"));
+    }
+
+    #[test]
+    fn agent_sandbox_help_topic_renders() {
+        let args = vec!["help".to_string(), "agent-sandbox".to_string()];
+        let parsed = parse_command(&args).expect("help topic parses");
+        assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::AgentSandbox));
+        assert!(agent_sandbox_usage().contains("--manifest"));
+        assert!(agent_sandbox_usage().contains("behavior"));
     }
 
     #[test]

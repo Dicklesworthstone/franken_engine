@@ -25,6 +25,7 @@ pub mod adversarial_campaign;
 pub mod adversarial_coevolution_harness;
 pub mod adversarial_supremacy_synthesis;
 pub mod adversarial_workload_synthesis;
+pub mod agent_sandbox;
 pub mod algebraic_effects;
 pub mod algebraic_effects_composition_proofs;
 pub mod alloc_domain;

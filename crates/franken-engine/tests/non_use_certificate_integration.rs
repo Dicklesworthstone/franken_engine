@@ -7,12 +7,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::capability::{CapabilityProfile, RuntimeCapability};
 use frankenengine_engine::data_contract::{
     DATA_CONTRACT_SCHEMA_VERSION, DEFAULT_DATA_CONTRACT_PURPOSE, DataBinding, DataBindingRole,
     DataContract, DataContractRunBinding, E8RefusalLedgerReceipt, RequestedOutputClaim,
     SinkBinding,
 };
+use frankenengine_engine::e8_analyzed_subset::scan_source;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorResult,
 };
@@ -409,4 +411,252 @@ fn use_certificate_records_positive_dependencies() {
         vec!["audit-log".to_string()]
     );
     assert!(bundle.use_certificate.instructions_executed > 0);
+}
+
+// ---------------------------------------------------------------------------
+// bd-fqlfw.8.4 acceptance: fail-closed soundness through real runs
+// ---------------------------------------------------------------------------
+
+/// Source containing an iterator-protocol lane, outside the v1 analyzed
+/// explicit-flow subset. It executes fine — the refusal is about *label
+/// propagation proof*, not executability.
+const UNANALYZED_SOURCE: &str =
+    "const xs = [1, 2, 3];\nlet out = 0;\nfor (const x of xs) { out = out + x; }";
+const UNANALYZED_INPUT_PATH: &str = "fixtures/exfil.js";
+
+/// Contract whose requested claims all hold on a clean run of `SOURCE`.
+fn certifiable_contract() -> DataContract {
+    let mut contract = contract();
+    contract.requested_output_claims = vec![
+        RequestedOutputClaim::NoFlow {
+            claim_id: "no-secret-open-sink".to_string(),
+            source_label: Label::Secret,
+            sink_clearance: ClearanceClass::OpenSink,
+        },
+        RequestedOutputClaim::CapabilityNotUsed {
+            claim_id: "no-process-spawn".to_string(),
+            capability: RuntimeCapability::ProcessSpawn,
+        },
+        RequestedOutputClaim::CapabilityNotUsed {
+            claim_id: "no-network-egress".to_string(),
+            capability: RuntimeCapability::NetworkEgress,
+        },
+        RequestedOutputClaim::OutputIndependentOf {
+            claim_id: "output-independent-of-pii".to_string(),
+            binding_id: "customer-pii".to_string(),
+        },
+    ];
+    contract
+}
+
+/// Execute a real orchestrated data-contract run and build the scan-backed
+/// preflight receipt, exactly as `frankenctl run --data-contract` does after
+/// bd-fqlfw.8.4.
+fn scan_backed_run(
+    contract: DataContract,
+    source: &str,
+    input_path: &str,
+    explain_bundle_path: Option<&str>,
+) -> CompletedRun {
+    let binding = contract
+        .bind_to_run(
+            &contract.extension_id,
+            input_path,
+            DEFAULT_DATA_CONTRACT_PURPOSE,
+            Some(&ContentHash::compute(source.as_bytes())),
+        )
+        .expect("contract binds to run");
+    let ingress = contract.ifc_ingress(&binding).expect("ingress derives");
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_data_contract_ingress(ingress);
+    let result = orchestrator
+        .execute(&ExtensionPackage {
+            extension_id: contract.extension_id.clone(),
+            source: source.to_string(),
+            source_file: Some(input_path.to_string()),
+            capabilities: vec![],
+            version: "1.0.0".to_string(),
+            metadata: BTreeMap::new(),
+        })
+        .expect("contracted run executes");
+    let scan = scan_source(source, input_path, ParseGoal::Script);
+    let refusal_receipt =
+        binding.preflight_receipt(&result.trace_id, explain_bundle_path, Some(&scan), &[]);
+    CompletedRun {
+        contract,
+        binding,
+        refusal_receipt,
+        result,
+        orchestrator,
+        granted: CapabilityProfile::engine_core().capabilities().clone(),
+    }
+}
+
+/// ACCEPTANCE (bd-fqlfw.8.4, positive direction): a real run whose source is
+/// fully inside the analyzed explicit-flow subset, with a hash-bound scan and
+/// linked explain bundle, certifies within the analyzed scope — and the
+/// verdicts state why each claim holds.
+#[test]
+fn fully_analyzed_run_certifies_within_analyzed_scope_end_to_end() {
+    let run = scan_backed_run(
+        certifiable_contract(),
+        SOURCE,
+        INPUT_PATH,
+        Some("agent.explain.json"),
+    );
+    assert_eq!(run.refusal_receipt.result_class, "certifiable_subset");
+    assert!(!run.refusal_receipt.must_block_certificate);
+    assert!(run.refusal_receipt.refusal_codes.is_empty());
+
+    let bundle = emit(&run);
+    assert_eq!(
+        bundle.non_use_certificate.certificate_status,
+        CertificateStatus::CertifiedWithinAnalyzedScope
+    );
+    for claim in &bundle.non_use_certificate.claims {
+        assert_eq!(
+            claim.evaluation,
+            ClaimEvaluation::HoldsWithinAnalyzedScope,
+            "claim `{}` must hold on the certifiable run: {}",
+            claim.claim_id,
+            claim.detail
+        );
+    }
+    let audit = String::from_utf8(bundle.file(AUDIT_FILE).expect("audit").bytes.clone())
+        .expect("audit is utf8");
+    assert!(audit.contains("certified_within_analyzed_scope"));
+}
+
+/// The certified path replays byte-identically across independent runs, the
+/// same guarantee the 8.3 uncertified path already carries.
+#[test]
+fn certified_bundle_replays_byte_identically_across_real_runs() {
+    let first = emit(&scan_backed_run(
+        certifiable_contract(),
+        SOURCE,
+        INPUT_PATH,
+        Some("agent.explain.json"),
+    ));
+    let second = emit(&scan_backed_run(
+        certifiable_contract(),
+        SOURCE,
+        INPUT_PATH,
+        Some("agent.explain.json"),
+    ));
+    assert_eq!(
+        first.bundle_content_hash_hex,
+        second.bundle_content_hash_hex
+    );
+}
+
+/// THE CRITICAL SOUNDNESS TEST (bd-fqlfw.8.4 acceptance, negative direction):
+/// a real run whose Secret-labeled input flows toward an open sink AND whose
+/// source contains an unanalyzed construct yields `uncertified` with an
+/// "unanalyzed flow at span X" refusal — never a silent non-use claim.
+#[test]
+fn unanalyzed_secret_to_sink_run_never_yields_a_non_use_pass() {
+    let contract = DataContract {
+        schema_version: DATA_CONTRACT_SCHEMA_VERSION.to_string(),
+        contract_id: "contract-e8t4-exfil".to_string(),
+        extension_id: "ext-e8t4-exfil".to_string(),
+        input_bindings: vec![
+            DataBinding {
+                binding_id: "run-source".to_string(),
+                object_ref: "object://run-source".to_string(),
+                path: Some(UNANALYZED_INPUT_PATH.to_string()),
+                label: Label::Secret,
+                owner: "data-owner".to_string(),
+                role: DataBindingRole::RunInput,
+                allowed_purposes: BTreeSet::from([DEFAULT_DATA_CONTRACT_PURPOSE.to_string()]),
+                content_hash_hex: Some(ContentHash::compute(UNANALYZED_SOURCE.as_bytes()).to_hex()),
+            },
+            DataBinding {
+                binding_id: "customer-pii".to_string(),
+                object_ref: "dataset://customer-pii".to_string(),
+                path: None,
+                label: Label::Secret,
+                owner: "data-owner".to_string(),
+                role: DataBindingRole::SensitiveInput,
+                allowed_purposes: BTreeSet::from([DEFAULT_DATA_CONTRACT_PURPOSE.to_string()]),
+                content_hash_hex: None,
+            },
+        ],
+        allowed_purposes: BTreeSet::from([DEFAULT_DATA_CONTRACT_PURPOSE.to_string()]),
+        allowed_capabilities: BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::Builtin,
+            RuntimeCapability::Console,
+        ]),
+        allowed_sinks: vec![SinkBinding {
+            sink_id: "exfil-endpoint".to_string(),
+            clearance: ClearanceClass::OpenSink,
+            location: "https://exfil.example".to_string(),
+            allowed_labels: BTreeSet::from([Label::Public, Label::Secret]),
+        }],
+        required_declassification_routes: vec![],
+        requested_output_claims: vec![
+            RequestedOutputClaim::NoFlow {
+                claim_id: "no-secret-exfil".to_string(),
+                source_label: Label::Secret,
+                sink_clearance: ClearanceClass::OpenSink,
+            },
+            RequestedOutputClaim::OutputIndependentOf {
+                claim_id: "output-independent-of-pii".to_string(),
+                binding_id: "customer-pii".to_string(),
+            },
+        ],
+        metadata: BTreeMap::new(),
+    };
+    let run = scan_backed_run(
+        contract,
+        UNANALYZED_SOURCE,
+        UNANALYZED_INPUT_PATH,
+        Some("agent.explain.json"),
+    );
+
+    // The refusal ledger blocks with span-bearing unproven-propagation codes.
+    let receipt = &run.refusal_receipt;
+    assert!(receipt.must_block_certificate);
+    assert!(!receipt.certifier_input_allowed);
+    assert_eq!(receipt.result_class, "uncertified");
+    let unproven: Vec<_> = receipt
+        .refusal_codes
+        .iter()
+        .filter(|code| code.code == "unproven_ifc_propagation")
+        .collect();
+    assert!(!unproven.is_empty(), "iterator lane must be refused");
+    assert!(
+        unproven
+            .iter()
+            .all(|code| code.remediation.contains("unanalyzed flow at span")),
+        "refusal must carry the uncertified-at-span wording"
+    );
+
+    // The certificate is uncertified and no verdict silently passes the
+    // Secret-to-sink claim.
+    let bundle = emit(&run);
+    assert_eq!(
+        bundle.non_use_certificate.certificate_status,
+        CertificateStatus::Uncertified
+    );
+    let verdict = |claim_id: &str| {
+        bundle
+            .non_use_certificate
+            .claims
+            .iter()
+            .find(|claim| claim.claim_id == claim_id)
+            .unwrap_or_else(|| panic!("claim `{claim_id}` present"))
+    };
+    assert_ne!(
+        verdict("no-secret-exfil").evaluation,
+        ClaimEvaluation::HoldsWithinAnalyzedScope,
+        "a Secret ingress with an allowed open-sink edge must never certify as non-use"
+    );
+    assert_eq!(
+        verdict("output-independent-of-pii").evaluation,
+        ClaimEvaluation::UnanalyzedFailClosed
+    );
+    let audit = String::from_utf8(bundle.file(AUDIT_FILE).expect("audit").bytes.clone())
+        .expect("audit is utf8");
+    assert!(audit.contains("**Certificate status: uncertified**"));
 }

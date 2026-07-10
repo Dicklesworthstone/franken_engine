@@ -169,6 +169,7 @@ pub mod docs_accuracy_gate;
 pub mod dp_budget_accountant;
 pub mod dual_backend_parser;
 pub mod e2e_harness;
+pub mod e8_analyzed_subset;
 pub mod effect_set;
 pub mod engine_object_id;
 pub mod engine_product_blocker_ledger;

@@ -23,15 +23,21 @@
 //! 6. `audit.md` — the deterministic human summary with the explicit scope
 //!    statement and threat-model boundary.
 //!
-//! Soundness posture (the honesty boundary from bd-fqlfw.8): positive "use"
-//! claims tolerate over-approximation, so the use certificate may state them
-//! plainly. Negative "non-use" claims do not — until the analyzed-subset flow
-//! proofs of E8.T4 land, the certificate status is pinned to `uncertified` by
-//! the E8 refusal ledger (`must_block_certificate`), every per-claim verdict
-//! is limited to the analyzed scope, and any claim whose evidence lane is not
-//! analyzed in v1 fails closed to `unanalyzed_fail_closed`. The threat model
-//! is EXPLICIT-FLOW ONLY (`explicit_flow_ifc_v1`); covert and timing channels
-//! are out of scope.
+//! Soundness posture (the honesty boundary from bd-fqlfw.8, fail-closed
+//! soundness from bd-fqlfw.8.4): positive "use" claims tolerate
+//! over-approximation, so the use certificate may state them plainly.
+//! Negative "non-use" claims do not — the certificate status is derived,
+//! never asserted: it reaches `certified_within_analyzed_scope` only when the
+//! E8 refusal ledger is an empty, scan-backed `certifiable_subset` receipt
+//! (every construct in the run's source classified inside the analyzed
+//! explicit-flow subset by `e8_analyzed_subset::scan_source`, evidence
+//! complete, run-input hash bound) AND every requested claim holds within
+//! that scope. Any unanalyzed construct downgrades the run to *uncertified —
+//! unanalyzed flow at span X* via the refusal ledger; any claim whose
+//! evidence lane is not analyzed fails closed to `unanalyzed_fail_closed`.
+//! The threat model is EXPLICIT-FLOW ONLY (`explicit_flow_ifc_v1`); covert
+//! channels, timing channels, and control-flow implicit channels are out of
+//! scope (see `docs/E8_NON_USE_CERTIFICATE_THREAT_MODEL_V1.md`).
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -289,15 +295,16 @@ pub struct NonUseClaimVerdict {
 }
 
 /// Top-level certificate status, derived mechanically from the E8 refusal
-/// ledger receipt — never asserted directly.
+/// ledger receipt plus every per-claim verdict — never asserted directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CertificateStatus {
-    /// The refusal ledger blocks certification (v1 posture until the
-    /// analyzed-subset flow proofs of E8.T4 land).
+    /// The refusal ledger blocks certification, or at least one requested
+    /// claim did not hold within the analyzed scope.
     Uncertified,
-    /// Certification within the analyzed scope is permitted (E8.T4+ only;
-    /// unreachable from the v1 preflight receipt).
+    /// Every construct in the run's source sits inside the analyzed
+    /// explicit-flow subset (bd-fqlfw.8.4 scan), all required evidence is
+    /// linked, and every requested claim holds within that scope.
     CertifiedWithinAnalyzedScope,
 }
 
@@ -310,14 +317,38 @@ impl fmt::Display for CertificateStatus {
     }
 }
 
-fn certificate_status_from_refusal(receipt: &E8RefusalLedgerReceipt) -> CertificateStatus {
-    if receipt.must_block_certificate
-        || !receipt.positive_non_use_claim_allowed
-        || !receipt.certifier_input_allowed
-    {
-        CertificateStatus::Uncertified
-    } else {
+/// Whether the E8 refusal ledger permits certification at all: an empty,
+/// scan-backed `certifiable_subset` receipt. Any refusal code, any unanalyzed
+/// surface, or a blocking flag fails closed.
+///
+/// `positive_non_use_claim_allowed` is deliberately NOT consulted here: the
+/// v1 ledger schema pins it `false` unconditionally
+/// (`docs/e8_refusal_ledger_schema_v1.json`) because the *receipt* is never
+/// itself quotable as a non-use claim. The signed certificate is the only
+/// artifact allowed to state non-use, and only within the analyzed scope.
+fn refusal_ledger_certifiable(receipt: &E8RefusalLedgerReceipt) -> bool {
+    !receipt.must_block_certificate
+        && receipt.certifier_input_allowed
+        && receipt.result_class == "certifiable_subset"
+        && receipt.refusal_codes.is_empty()
+        && receipt.unanalyzed_surface_count == 0
+}
+
+/// Derive the certificate status: certifiable ledger AND every requested
+/// claim holds within the analyzed scope. Any weaker verdict on any claim —
+/// contradicted, not-assertable, or unanalyzed — downgrades the whole
+/// certificate to `uncertified` (the per-claim verdicts remain visible).
+fn derive_certificate_status(
+    receipt: &E8RefusalLedgerReceipt,
+    claims: &[NonUseClaimVerdict],
+) -> CertificateStatus {
+    let every_claim_holds = claims
+        .iter()
+        .all(|claim| claim.evaluation == ClaimEvaluation::HoldsWithinAnalyzedScope);
+    if refusal_ledger_certifiable(receipt) && every_claim_holds {
         CertificateStatus::CertifiedWithinAnalyzedScope
+    } else {
+        CertificateStatus::Uncertified
     }
 }
 
@@ -797,6 +828,24 @@ fn evaluate_no_flow(
     )
 }
 
+/// Capabilities whose *use* is completely witnessed by the recorded run
+/// evidence: console entries, the instruction counter, declassified flow
+/// edges, and the capability-metered host-effect transcript. For these lanes,
+/// absence of a witness on a scan-certified run is evidence of non-use within
+/// the analyzed scope. All other capabilities stay not-assertable when
+/// granted.
+fn capability_use_is_witnessed(capability: RuntimeCapability) -> bool {
+    matches!(
+        capability,
+        RuntimeCapability::Console
+            | RuntimeCapability::VmDispatch
+            | RuntimeCapability::Declassify
+            | RuntimeCapability::FsRead
+            | RuntimeCapability::FsWrite
+            | RuntimeCapability::NetworkEgress
+    )
+}
+
 fn evaluate_capability_not_used(
     capability: RuntimeCapability,
     inputs: &CertifierInputs<'_>,
@@ -820,13 +869,87 @@ fn evaluate_capability_not_used(
             ),
         );
     }
+    if refusal_ledger_certifiable(inputs.refusal_receipt) && capability_use_is_witnessed(capability)
+    {
+        return (
+            ClaimEvaluation::HoldsWithinAnalyzedScope,
+            vec![
+                format!("grant:{capability:?}"),
+                "witness:no_recorded_use".to_string(),
+                format!(
+                    "refusal_ledger:certifiable:{}",
+                    inputs.refusal_receipt.ledger_id
+                ),
+            ],
+            format!(
+                "capability {capability:?} was granted (contract: {contract_grants}, runtime: \
+                 {runtime_grants}) but its witnessed evidence lane recorded no use, and every \
+                 construct in the run sits inside the analyzed explicit-flow subset \
+                 (bd-fqlfw.8.4 scan); non-use holds within the analyzed scope"
+            ),
+        );
+    }
     (
         ClaimEvaluation::NotAssertableConservative,
         vec![format!("grant:{capability:?}")],
         format!(
             "capability {capability:?} was granted (contract: {contract_grants}, runtime: \
-             {runtime_grants}) and v1 per-hostcall witness coverage cannot prove it went unused; \
-             non-use is not assertable until the E8.T4 analyzed-subset proofs land"
+             {runtime_grants}) and either the run is not scan-certified within the analyzed \
+             subset or this capability has no complete use-witness lane; asserting non-use \
+             would overclaim"
+        ),
+    )
+}
+
+fn evaluate_output_independent_of(
+    binding_id: &str,
+    ingress: &DataContractIfcIngress,
+    inputs: &CertifierInputs<'_>,
+) -> (ClaimEvaluation, Vec<String>, String) {
+    if !refusal_ledger_certifiable(inputs.refusal_receipt) {
+        return (
+            ClaimEvaluation::UnanalyzedFailClosed,
+            vec![format!("unanalyzed:output_independence:{binding_id}")],
+            format!(
+                "output independence from binding `{binding_id}` requires every construct in \
+                 the run to sit inside the analyzed explicit-flow subset, but the E8 refusal \
+                 ledger (`{}`, result class `{}`) blocks certification; fail-closed \
+                 (bd-fqlfw.8.4). The historical IFC holes bd-0zybl (GetProperty) and \
+                 bd-ooaka.1 (callback lanes) are closed with regression tests; remaining \
+                 unanalyzed lanes are enumerated by the analyzed-subset scan.",
+                inputs.refusal_receipt.ledger_id, inputs.refusal_receipt.result_class
+            ),
+        );
+    }
+    if binding_id == ingress.run_input_binding_id {
+        return (
+            ClaimEvaluation::NotAssertableConservative,
+            vec![format!("ingress:run_input:{binding_id}")],
+            format!(
+                "binding `{binding_id}` is the run input and demonstrably entered the run; \
+                 proving the output independent of the data that fed it requires a per-value \
+                 output-label proof, which is outside the analyzed explicit-flow subset"
+            ),
+        );
+    }
+    (
+        ClaimEvaluation::HoldsWithinAnalyzedScope,
+        vec![
+            format!(
+                "ingress_model:only_run_input_binding:{}",
+                ingress.run_input_binding_id
+            ),
+            format!(
+                "refusal_ledger:certifiable:{}",
+                inputs.refusal_receipt.ledger_id
+            ),
+        ],
+        format!(
+            "binding `{binding_id}` never entered the runtime: under the v1 ingress model \
+             exactly the run-input binding (`{}`) ingresses, every construct in the run sits \
+             inside the analyzed explicit-flow subset, and undeclared ingress paths are \
+             denied fail-closed by the membrane",
+            ingress.run_input_binding_id
         ),
     )
 }
@@ -851,16 +974,9 @@ fn evaluate_claim(
         RequestedOutputClaim::CapabilityNotUsed { capability, .. } => {
             evaluate_capability_not_used(*capability, inputs)
         }
-        RequestedOutputClaim::OutputIndependentOf { binding_id, .. } => (
-            ClaimEvaluation::UnanalyzedFailClosed,
-            vec![format!("unanalyzed:output_independence:{binding_id}")],
-            format!(
-                "output independence from binding `{binding_id}` requires per-flow label \
-                 propagation proof; that lane is unanalyzed in explicit_flow_ifc_v1 (known IFC \
-                 holes: bd-0zybl GetProperty under-tainting, bd-ooaka.1 callback lanes) and \
-                 fails closed until bd-fqlfw.8.4"
-            ),
-        ),
+        RequestedOutputClaim::OutputIndependentOf { binding_id, .. } => {
+            evaluate_output_independent_of(binding_id, ingress, inputs)
+        }
     };
     NonUseClaimVerdict {
         claim_id: claim.claim_id().to_string(),
@@ -1020,10 +1136,12 @@ fn render_audit_markdown(
         scope.replay_trace_content_hash_hex,
     ));
     out.push_str(&format!(
-        "Threat model: **EXPLICIT-FLOW ONLY** (`{}`); covert and timing channels are out of \
-         scope. Analysis posture: `{}` — every declared sink is treated as a potential \
-         destination of the ingress label until per-flow propagation proofs land \
-         (bd-fqlfw.8.4).\n\n",
+        "Threat model: **EXPLICIT-FLOW ONLY** (`{}`); covert channels, timing channels, and \
+         control-flow implicit channels are out of scope (see \
+         `docs/E8_NON_USE_CERTIFICATE_THREAT_MODEL_V1.md`). Analysis posture: `{}` — every \
+         declared sink is treated as a potential destination of the ingress label; \
+         certification additionally requires the bd-fqlfw.8.4 analyzed-subset scan to place \
+         every construct of the run inside the analyzed explicit-flow subset.\n\n",
         scope.threat_model_scope, scope.analysis_posture,
     ));
     out.push_str("### Declared host boundary\n\n");
@@ -1076,9 +1194,12 @@ fn render_audit_markdown(
         "\n## Honesty boundary\n\n\
          This bundle never asserts a negative claim beyond its analyzed scope: verdicts are \
          limited to `holds_within_analyzed_scope`, `contradicted`, \
-         `not_assertable_conservative`, and `unanalyzed_fail_closed`, and the certificate \
-         status stays `{}` while the E8 refusal ledger blocks certification. Payload bytes \
-         never appear in the trace — only lengths and content hashes.\n",
+         `not_assertable_conservative`, and `unanalyzed_fail_closed`. The certificate status \
+         (`{}`) is derived, never asserted — it requires an empty, scan-backed \
+         `certifiable_subset` refusal ledger AND every requested claim to hold within the \
+         analyzed explicit-flow subset; any unanalyzed construct keeps the run `uncertified` \
+         (bd-fqlfw.8.4). Payload bytes never appear in the trace — only lengths and content \
+         hashes.\n",
         non_use.certificate_status,
     ));
     out
@@ -1189,7 +1310,7 @@ pub fn emit_certificate_bundle(
         certificate_id: format!("e8-nuc-{certificate_seed_hash}"),
         producer_id: E8_CERTIFIER_PRODUCER_ID.to_string(),
         scope: scope.clone(),
-        certificate_status: certificate_status_from_refusal(inputs.refusal_receipt),
+        certificate_status: derive_certificate_status(inputs.refusal_receipt, &claims),
         refusal_ledger_id: inputs.refusal_receipt.ledger_id.clone(),
         refusal_ledger_result_class: inputs.refusal_receipt.result_class.clone(),
         refusal_ledger_content_hash_hex,
@@ -2159,5 +2280,351 @@ mod tests {
             bundle.non_use_certificate.scope.declassification_route_ids,
             vec!["route-a".to_string(), "route-b".to_string()]
         );
+    }
+
+    // -- bd-fqlfw.8.4: derived status + receipt-aware claim lanes ------------
+
+    use crate::ast::ParseGoal;
+    use crate::e8_analyzed_subset::scan_source;
+    use crate::hash_tiers::ContentHash as TestContentHash;
+
+    const CERTIFIABLE_SOURCE: &str = "const answer = 40 + 2;";
+
+    /// A contract whose requested claims all hold on a clean run: no OpenSink
+    /// is declared, ProcessSpawn is ungranted, NetworkEgress is witnessed and
+    /// unused, and customer-pii never ingresses.
+    fn certifiable_contract() -> DataContract {
+        let mut contract = contract();
+        contract.requested_output_claims = vec![
+            RequestedOutputClaim::NoFlow {
+                claim_id: "no-secret-open-sink".to_string(),
+                source_label: Label::Secret,
+                sink_clearance: ClearanceClass::OpenSink,
+            },
+            RequestedOutputClaim::CapabilityNotUsed {
+                claim_id: "no-process-spawn".to_string(),
+                capability: RuntimeCapability::ProcessSpawn,
+            },
+            RequestedOutputClaim::CapabilityNotUsed {
+                claim_id: "no-network-egress".to_string(),
+                capability: RuntimeCapability::NetworkEgress,
+            },
+            RequestedOutputClaim::OutputIndependentOf {
+                claim_id: "output-independent-of-pii".to_string(),
+                binding_id: "customer-pii".to_string(),
+            },
+        ];
+        contract
+    }
+
+    /// Fixture whose refusal ledger is a scan-backed `certifiable_subset`
+    /// receipt: hash-bound scan of a fully-analyzed source plus a linked
+    /// explain bundle.
+    fn certifiable_fixture() -> Fixture {
+        let contract = certifiable_contract();
+        let binding = contract
+            .bind_to_run(
+                &contract.extension_id,
+                "agent.js",
+                DEFAULT_DATA_CONTRACT_PURPOSE,
+                Some(&TestContentHash::compute(CERTIFIABLE_SOURCE.as_bytes())),
+            )
+            .expect("contract binds");
+        let ingress = contract.ifc_ingress(&binding).expect("ingress derives");
+        let flow_events = ingress
+            .sinks
+            .iter()
+            .map(|sink| {
+                let receivable = sink.clearance.can_receive(&ingress.source_label)
+                    && sink.allowed_labels.contains(&ingress.source_label);
+                FlowEventRecord {
+                    event_id: format!(
+                        "dc-ingress-{}-{}-{}",
+                        ingress.contract_id, ingress.run_input_binding_id, sink.sink_id
+                    ),
+                    extension_id: ingress.extension_id.clone(),
+                    source_label: ingress.source_label.clone(),
+                    sink_clearance: ingress.source_label.clone(),
+                    flow_location: format!(
+                        "data_contract:{}:sink:{}:purpose:{}",
+                        ingress.contract_id, sink.sink_id, ingress.purpose
+                    ),
+                    decision: if receivable {
+                        FlowDecision::Allowed
+                    } else {
+                        FlowDecision::Blocked
+                    },
+                    receipt_ref: None,
+                    timestamp_ms: 7,
+                }
+            })
+            .collect();
+        let scan = scan_source(CERTIFIABLE_SOURCE, "agent.js", ParseGoal::Script);
+        assert!(scan.is_fully_analyzed(), "fixture source must scan clean");
+        let refusal_receipt = binding.preflight_receipt(
+            "trace-e8-cert",
+            Some("agent.explain.json"),
+            Some(&scan),
+            &[],
+        );
+        Fixture {
+            contract,
+            binding,
+            flow_events,
+            refusal_receipt,
+            runtime_granted: BTreeSet::from([
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::Builtin,
+                RuntimeCapability::Console,
+                RuntimeCapability::NetworkEgress,
+            ]),
+        }
+    }
+
+    fn holds(bundle: &CertificateBundle, claim_id: &str) -> ClaimEvaluation {
+        bundle
+            .non_use_certificate
+            .claims
+            .iter()
+            .find(|claim| claim.claim_id == claim_id)
+            .unwrap_or_else(|| panic!("claim `{claim_id}` present"))
+            .evaluation
+    }
+
+    #[test]
+    fn refusal_ledger_certifiable_requires_every_gate() {
+        let fixture = certifiable_fixture();
+        let receipt = &fixture.refusal_receipt;
+        assert!(refusal_ledger_certifiable(receipt));
+
+        let mut blocked = receipt.clone();
+        blocked.must_block_certificate = true;
+        assert!(!refusal_ledger_certifiable(&blocked));
+
+        let mut no_input = receipt.clone();
+        no_input.certifier_input_allowed = false;
+        assert!(!refusal_ledger_certifiable(&no_input));
+
+        let mut wrong_class = receipt.clone();
+        wrong_class.result_class = "uncertified".to_string();
+        assert!(!refusal_ledger_certifiable(&wrong_class));
+
+        let mut with_code = receipt.clone();
+        with_code
+            .refusal_codes
+            .push(crate::data_contract::E8RefusalCode {
+                code: "unproven_ifc_propagation".to_string(),
+                class: "uncertified".to_string(),
+                source_ref_id: "r".to_string(),
+                remediation: "m".to_string(),
+            });
+        assert!(!refusal_ledger_certifiable(&with_code));
+
+        let mut unanalyzed = receipt.clone();
+        unanalyzed.unanalyzed_surface_count = 1;
+        assert!(!refusal_ledger_certifiable(&unanalyzed));
+    }
+
+    #[test]
+    fn derived_status_requires_certifiable_ledger_and_all_claims_holding() {
+        let fixture = certifiable_fixture();
+        let hold = NonUseClaimVerdict {
+            claim_id: "c".to_string(),
+            claim: RequestedOutputClaim::CapabilityNotUsed {
+                claim_id: "c".to_string(),
+                capability: RuntimeCapability::ProcessSpawn,
+            },
+            evaluation: ClaimEvaluation::HoldsWithinAnalyzedScope,
+            evidence_refs: vec![],
+            detail: String::new(),
+        };
+        let mut weaker = hold.clone();
+        weaker.evaluation = ClaimEvaluation::NotAssertableConservative;
+
+        assert_eq!(
+            derive_certificate_status(&fixture.refusal_receipt, std::slice::from_ref(&hold)),
+            CertificateStatus::CertifiedWithinAnalyzedScope
+        );
+        assert_eq!(
+            derive_certificate_status(&fixture.refusal_receipt, &[hold.clone(), weaker]),
+            CertificateStatus::Uncertified
+        );
+        let legacy = fixture
+            .binding
+            .uncertified_preflight_receipt("trace-e8-cert", None);
+        assert_eq!(
+            derive_certificate_status(&legacy, &[hold]),
+            CertificateStatus::Uncertified
+        );
+    }
+
+    /// ACCEPTANCE (bd-fqlfw.8.4, positive direction): a fully-analyzed run
+    /// with complete evidence and claims that all hold certifies within the
+    /// analyzed scope.
+    #[test]
+    fn fully_analyzed_run_certifies_within_analyzed_scope() {
+        let fixture = certifiable_fixture();
+        let bundle = emit(&fixture);
+        assert_eq!(
+            bundle.non_use_certificate.certificate_status,
+            CertificateStatus::CertifiedWithinAnalyzedScope
+        );
+        assert_eq!(
+            holds(&bundle, "no-secret-open-sink"),
+            ClaimEvaluation::HoldsWithinAnalyzedScope
+        );
+        assert_eq!(
+            holds(&bundle, "no-process-spawn"),
+            ClaimEvaluation::HoldsWithinAnalyzedScope
+        );
+        assert_eq!(
+            holds(&bundle, "no-network-egress"),
+            ClaimEvaluation::HoldsWithinAnalyzedScope
+        );
+        assert_eq!(
+            holds(&bundle, "output-independent-of-pii"),
+            ClaimEvaluation::HoldsWithinAnalyzedScope
+        );
+    }
+
+    #[test]
+    fn certified_audit_states_the_derived_status() {
+        let fixture = certifiable_fixture();
+        let bundle = emit(&fixture);
+        let audit = String::from_utf8(bundle.file(AUDIT_FILE).expect("audit").bytes.clone())
+            .expect("audit is utf8");
+        assert!(audit.contains("certified_within_analyzed_scope"));
+        assert!(audit.contains("EXPLICIT-FLOW ONLY"));
+        assert!(audit.contains("E8_NON_USE_CERTIFICATE_THREAT_MODEL_V1.md"));
+    }
+
+    #[test]
+    fn granted_unused_witnessed_capability_holds_only_under_certified_scan() {
+        // Certifiable ledger: NetworkEgress is runtime-granted, witnessed,
+        // and unused -> holds within the analyzed scope.
+        let fixture = certifiable_fixture();
+        let bundle = emit(&fixture);
+        assert_eq!(
+            holds(&bundle, "no-network-egress"),
+            ClaimEvaluation::HoldsWithinAnalyzedScope
+        );
+
+        // Same claim under the legacy (blocked) ledger stays not-assertable.
+        let mut legacy = certifiable_fixture();
+        legacy.refusal_receipt = legacy
+            .binding
+            .uncertified_preflight_receipt("trace-e8-cert", None);
+        let bundle = emit(&legacy);
+        assert_eq!(
+            holds(&bundle, "no-network-egress"),
+            ClaimEvaluation::NotAssertableConservative
+        );
+        assert_eq!(
+            bundle.non_use_certificate.certificate_status,
+            CertificateStatus::Uncertified
+        );
+    }
+
+    #[test]
+    fn granted_unwitnessed_capability_stays_not_assertable_even_when_certified() {
+        let mut contract = certifiable_contract();
+        contract
+            .requested_output_claims
+            .push(RequestedOutputClaim::CapabilityNotUsed {
+                claim_id: "no-builtin".to_string(),
+                capability: RuntimeCapability::Builtin,
+            });
+        let mut fixture = certifiable_fixture();
+        // Rebind against the modified contract so ids and hashes line up.
+        let binding = contract
+            .bind_to_run(
+                &contract.extension_id,
+                "agent.js",
+                DEFAULT_DATA_CONTRACT_PURPOSE,
+                Some(&TestContentHash::compute(CERTIFIABLE_SOURCE.as_bytes())),
+            )
+            .expect("contract binds");
+        let scan = scan_source(CERTIFIABLE_SOURCE, "agent.js", ParseGoal::Script);
+        fixture.refusal_receipt = binding.preflight_receipt(
+            "trace-e8-cert",
+            Some("agent.explain.json"),
+            Some(&scan),
+            &[],
+        );
+        fixture.binding = binding;
+        fixture.contract = contract;
+        let bundle = emit(&fixture);
+        // Builtin is granted but has no complete use-witness lane: asserting
+        // non-use would overclaim, and the weaker verdict downgrades the
+        // whole certificate.
+        assert_eq!(
+            holds(&bundle, "no-builtin"),
+            ClaimEvaluation::NotAssertableConservative
+        );
+        assert_eq!(
+            bundle.non_use_certificate.certificate_status,
+            CertificateStatus::Uncertified
+        );
+    }
+
+    #[test]
+    fn output_independence_of_the_run_input_is_not_assertable() {
+        let mut contract = certifiable_contract();
+        contract.requested_output_claims = vec![RequestedOutputClaim::OutputIndependentOf {
+            claim_id: "independent-of-run-input".to_string(),
+            binding_id: "source-js".to_string(),
+        }];
+        let binding = contract
+            .bind_to_run(
+                &contract.extension_id,
+                "agent.js",
+                DEFAULT_DATA_CONTRACT_PURPOSE,
+                Some(&TestContentHash::compute(CERTIFIABLE_SOURCE.as_bytes())),
+            )
+            .expect("contract binds");
+        let scan = scan_source(CERTIFIABLE_SOURCE, "agent.js", ParseGoal::Script);
+        let refusal_receipt = binding.preflight_receipt(
+            "trace-e8-cert",
+            Some("agent.explain.json"),
+            Some(&scan),
+            &[],
+        );
+        let mut fixture = certifiable_fixture();
+        fixture.contract = contract;
+        fixture.binding = binding;
+        fixture.refusal_receipt = refusal_receipt;
+        let bundle = emit(&fixture);
+        assert_eq!(
+            holds(&bundle, "independent-of-run-input"),
+            ClaimEvaluation::NotAssertableConservative
+        );
+    }
+
+    #[test]
+    fn certifiable_bundle_is_byte_identical_across_reemission() {
+        let fixture = certifiable_fixture();
+        let first = emit(&fixture);
+        let second = emit(&fixture);
+        assert_eq!(
+            first.bundle_content_hash_hex,
+            second.bundle_content_hash_hex
+        );
+    }
+
+    #[test]
+    fn capability_witness_lane_membership_is_pinned() {
+        for capability in [
+            RuntimeCapability::Console,
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::Declassify,
+            RuntimeCapability::FsRead,
+            RuntimeCapability::FsWrite,
+            RuntimeCapability::NetworkEgress,
+        ] {
+            assert!(capability_use_is_witnessed(capability), "{capability:?}");
+        }
+        for capability in [RuntimeCapability::Builtin, RuntimeCapability::ProcessSpawn] {
+            assert!(!capability_use_is_witnessed(capability), "{capability:?}");
+        }
     }
 }

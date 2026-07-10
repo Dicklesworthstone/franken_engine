@@ -11,6 +11,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::capability::RuntimeCapability;
+use crate::e8_analyzed_subset::E8AnalyzedSubsetScan;
 use crate::hash_tiers::ContentHash;
 use crate::ifc_artifacts::{ClearanceClass, DeclassificationRoute, Label};
 
@@ -178,16 +179,15 @@ pub struct E8AdversarialRefusalFixture {
 }
 
 impl DataContractRunBinding {
+    /// Scan-less preflight: without an analyzed-subset flow scan the receipt
+    /// is always uncertified (the flow-proof obligation is missing), which is
+    /// the fail-closed default for any caller that did not analyze the source.
     pub fn uncertified_preflight_receipt(
         &self,
         run_id: &str,
         explain_bundle_path: Option<&str>,
     ) -> E8RefusalLedgerReceipt {
-        self.uncertified_preflight_receipt_with_adversarial_fixtures(
-            run_id,
-            explain_bundle_path,
-            &[],
-        )
+        self.preflight_receipt(run_id, explain_bundle_path, None, &[])
     }
 
     pub fn uncertified_preflight_receipt_with_adversarial_fixtures(
@@ -196,48 +196,94 @@ impl DataContractRunBinding {
         explain_bundle_path: Option<&str>,
         adversarial_fixtures: &[E8AdversarialRefusalFixture],
     ) -> E8RefusalLedgerReceipt {
-        let mut refusal_codes = vec![E8RefusalCode {
-            code: "missing_flow_proof_obligation".to_string(),
-            class: "missing_evidence".to_string(),
-            source_ref_id: "flow-proof-obligation".to_string(),
-            remediation: "emit or link a FlowProofObligation before certifying non-use".to_string(),
+        self.preflight_receipt(run_id, explain_bundle_path, None, adversarial_fixtures)
+    }
+
+    /// Build the E8 preflight refusal-ledger receipt for this run
+    /// (bd-fqlfw.8.4). The receipt is derived, never asserted:
+    ///
+    /// - **No scan** ⇒ `missing_flow_proof_obligation` — uncertified.
+    /// - **Scan present** ⇒ the scan must hash-bind to the verified run
+    ///   input; every unsupported-syntax or unproven-propagation surface the
+    ///   scan recorded becomes a refusal code with span provenance; a missing
+    ///   explain/replay bundle stays a refusal.
+    /// - **Zero refusal codes** ⇒ `result_class = "certifiable_subset"`,
+    ///   `must_block_certificate = false`, `certifier_input_allowed = true`.
+    ///
+    /// `positive_non_use_claim_allowed` is pinned `false` unconditionally
+    /// (schema const in `docs/e8_refusal_ledger_schema_v1.json`): the receipt
+    /// may feed the certifier but is never itself quotable as a non-use
+    /// claim.
+    pub fn preflight_receipt(
+        &self,
+        run_id: &str,
+        explain_bundle_path: Option<&str>,
+        scan: Option<&E8AnalyzedSubsetScan>,
+        adversarial_fixtures: &[E8AdversarialRefusalFixture],
+    ) -> E8RefusalLedgerReceipt {
+        let mut refusal_codes = Vec::new();
+        let mut source_refs = vec![E8RefusalSourceRef {
+            id: "data-contract-binding".to_string(),
+            surface: "data_contract_binding".to_string(),
+            path: "crates/franken-engine/src/data_contract.rs".to_string(),
+            symbol: Some("DataContractRunBinding".to_string()),
+            span: None,
         }];
-        let mut source_refs = vec![
-            E8RefusalSourceRef {
-                id: "data-contract-binding".to_string(),
-                surface: "data_contract_binding".to_string(),
-                path: "crates/franken-engine/src/data_contract.rs".to_string(),
-                symbol: Some("DataContractRunBinding".to_string()),
-                span: None,
-            },
-            E8RefusalSourceRef {
-                id: "flow-proof-obligation".to_string(),
-                surface: "flow_envelope".to_string(),
-                path: "crates/franken-engine/src/flow_envelope.rs".to_string(),
-                symbol: Some("FlowProofObligation".to_string()),
-                span: None,
-            },
-        ];
-        let mut evidence_refs = vec![
-            E8RefusalEvidenceRef {
-                id: "data-contract-run-binding".to_string(),
-                kind: "data_contract_run_binding".to_string(),
-                status: "present".to_string(),
-                artifact_path: Some("frankenctl run output:data_contract".to_string()),
-                content_hash_hex: Some(self.contract_hash_hex.clone()),
-            },
-            E8RefusalEvidenceRef {
-                id: "flow-proof-obligation".to_string(),
-                kind: "flow_proof_obligation".to_string(),
-                status: "missing".to_string(),
-                artifact_path: None,
-                content_hash_hex: None,
-            },
-        ];
-        let mut remediation_actions = vec![
-            "emit analyzed-subset flow proof obligations before certifier promotion".to_string(),
-            "keep E8 non-use wording uncertified until proof evidence is linked".to_string(),
-        ];
+        let mut evidence_refs = vec![E8RefusalEvidenceRef {
+            id: "data-contract-run-binding".to_string(),
+            kind: "data_contract_run_binding".to_string(),
+            status: "present".to_string(),
+            artifact_path: Some("frankenctl run output:data_contract".to_string()),
+            content_hash_hex: Some(self.contract_hash_hex.clone()),
+        }];
+        let mut remediation_actions = Vec::new();
+        let mut analyzed_surface_count: u64 = 1;
+        let mut unanalyzed_surface_count: u64 = 0;
+
+        match scan {
+            None => {
+                refusal_codes.push(E8RefusalCode {
+                    code: "missing_flow_proof_obligation".to_string(),
+                    class: "missing_evidence".to_string(),
+                    source_ref_id: "flow-proof-obligation".to_string(),
+                    remediation: "emit or link a FlowProofObligation before certifying non-use"
+                        .to_string(),
+                });
+                source_refs.push(E8RefusalSourceRef {
+                    id: "flow-proof-obligation".to_string(),
+                    surface: "flow_envelope".to_string(),
+                    path: "crates/franken-engine/src/flow_envelope.rs".to_string(),
+                    symbol: Some("FlowProofObligation".to_string()),
+                    span: None,
+                });
+                evidence_refs.push(E8RefusalEvidenceRef {
+                    id: "flow-proof-obligation".to_string(),
+                    kind: "flow_proof_obligation".to_string(),
+                    status: "missing".to_string(),
+                    artifact_path: None,
+                    content_hash_hex: None,
+                });
+                remediation_actions.push(
+                    "emit analyzed-subset flow proof obligations before certifier promotion"
+                        .to_string(),
+                );
+                remediation_actions.push(
+                    "keep E8 non-use wording uncertified until proof evidence is linked"
+                        .to_string(),
+                );
+            }
+            Some(scan) => {
+                self.apply_scan_to_ledger(
+                    scan,
+                    &mut refusal_codes,
+                    &mut source_refs,
+                    &mut evidence_refs,
+                    &mut remediation_actions,
+                    &mut analyzed_surface_count,
+                    &mut unanalyzed_surface_count,
+                );
+            }
+        }
 
         match explain_bundle_path {
             Some(path) => evidence_refs.push(E8RefusalEvidenceRef {
@@ -309,6 +355,13 @@ impl DataContractRunBinding {
             "explain_bundle_path",
             explain_bundle_path.unwrap_or(""),
         );
+        if let Some(scan) = scan {
+            append_e8_ledger_seed_field(
+                &mut receipt_seed,
+                "analyzed_subset_scan_hash",
+                &scan.content_hash_hex(),
+            );
+        }
         if !adversarial_fixtures.is_empty() {
             append_e8_ledger_seed_field(
                 &mut receipt_seed,
@@ -325,6 +378,16 @@ impl DataContractRunBinding {
             .iter()
             .filter(|code| code.class == "degraded")
             .count() as u64;
+        if scan.is_none() {
+            // Legacy accounting for the scan-less path: every refusal is one
+            // unanalyzed surface over the single bound-input surface.
+            unanalyzed_surface_count = refusal_codes.len() as u64;
+        }
+        // Gates are derived from the refusal set, never asserted: an empty
+        // ledger feeds the certifier; any refusal blocks certification
+        // fail-closed. The positive-claim flag is a schema const (`false`) —
+        // the receipt itself is never a certificate (bd-fqlfw.8.4.1.2).
+        let blocked = !refusal_codes.is_empty();
 
         E8RefusalLedgerReceipt {
             schema_version: E8_REFUSAL_LEDGER_SCHEMA_VERSION.to_string(),
@@ -333,16 +396,185 @@ impl DataContractRunBinding {
             contract_id: self.contract_id.clone(),
             result_class: e8_refusal_result_class(&refusal_codes).to_string(),
             threat_model_scope: E8_REFUSAL_THREAT_MODEL_SCOPE.to_string(),
-            certifier_input_allowed: false,
+            certifier_input_allowed: !blocked,
             positive_non_use_claim_allowed: false,
-            must_block_certificate: true,
-            analyzed_surface_count: 1,
-            unanalyzed_surface_count: refusal_codes.len() as u64,
+            must_block_certificate: blocked,
+            analyzed_surface_count,
+            unanalyzed_surface_count,
             degraded_surface_count,
             refusal_codes,
             source_refs,
             evidence_refs,
             remediation_actions,
+        }
+    }
+
+    /// Project an analyzed-subset flow scan into refusal-ledger entries.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_scan_to_ledger(
+        &self,
+        scan: &E8AnalyzedSubsetScan,
+        refusal_codes: &mut Vec<E8RefusalCode>,
+        source_refs: &mut Vec<E8RefusalSourceRef>,
+        evidence_refs: &mut Vec<E8RefusalEvidenceRef>,
+        remediation_actions: &mut Vec<String>,
+        analyzed_surface_count: &mut u64,
+        unanalyzed_surface_count: &mut u64,
+    ) {
+        *analyzed_surface_count = scan.analyzed_op_count;
+        *unanalyzed_surface_count = scan
+            .unanalyzed_surface_total
+            .saturating_add(u64::from(scan.syntax_refusal.is_some()));
+
+        // The scan artifact is itself evidence, content-addressed and bound
+        // to the run input below.
+        evidence_refs.push(E8RefusalEvidenceRef {
+            id: "analyzed-subset-flow-scan".to_string(),
+            kind: "analyzed_subset_flow_scan".to_string(),
+            status: "present".to_string(),
+            artifact_path: None,
+            content_hash_hex: Some(scan.content_hash_hex()),
+        });
+        source_refs.push(E8RefusalSourceRef {
+            id: "analyzed-subset-flow-scan".to_string(),
+            surface: "baseline_interpreter_labels".to_string(),
+            path: "crates/franken-engine/src/e8_analyzed_subset.rs".to_string(),
+            symbol: Some("scan_source".to_string()),
+            span: None,
+        });
+
+        // The scan must be OF the verified run input, or it proves nothing
+        // about this run.
+        match self.run_input_content_hash_hex.as_deref() {
+            None => {
+                refusal_codes.push(E8RefusalCode {
+                    code: "missing_run_input_hash".to_string(),
+                    class: "missing_evidence".to_string(),
+                    source_ref_id: "data-contract-binding".to_string(),
+                    remediation: "declare a content hash on the run-input binding so the scan \
+                                  can bind to it"
+                        .to_string(),
+                });
+            }
+            Some(expected) if expected != scan.source_hash_hex => {
+                refusal_codes.push(E8RefusalCode {
+                    code: "run_input_hash_mismatch".to_string(),
+                    class: "fail_closed".to_string(),
+                    source_ref_id: "analyzed-subset-flow-scan".to_string(),
+                    remediation: "re-run the analyzed-subset scan against the exact run-input \
+                                  bytes the contract verified"
+                        .to_string(),
+                });
+            }
+            Some(_) => {}
+        }
+
+        if let Some(refusal) = &scan.syntax_refusal {
+            source_refs.push(E8RefusalSourceRef {
+                id: "parser-diagnostic".to_string(),
+                surface: "parser_unsupported_diagnostics".to_string(),
+                path: "crates/franken-engine/src/parser.rs".to_string(),
+                symbol: Some("ParseErrorCode::UnsupportedSyntax".to_string()),
+                span: refusal.span.clone(),
+            });
+            refusal_codes.push(E8RefusalCode {
+                code: refusal.refusal_code.clone(),
+                class: "uncertified".to_string(),
+                source_ref_id: "parser-diagnostic".to_string(),
+                remediation: "reduce the source or add analyzed parser/lowering support with \
+                              fail-closed tests"
+                    .to_string(),
+            });
+            remediation_actions.push(format!("unsupported surface: {}", refusal.detail));
+        }
+
+        for (index, surface) in scan.unanalyzed_surfaces.iter().enumerate() {
+            let source_ref_id = format!("unproven-{index}-{}", surface.op_kind);
+            source_refs.push(E8RefusalSourceRef {
+                id: source_ref_id.clone(),
+                surface: "baseline_interpreter_labels".to_string(),
+                path: "crates/franken-engine/src/baseline_interpreter.rs".to_string(),
+                symbol: Some(surface.op_kind.clone()),
+                span: surface.span.clone(),
+            });
+            refusal_codes.push(E8RefusalCode {
+                code: surface.refusal_code.clone(),
+                class: "uncertified".to_string(),
+                source_ref_id,
+                remediation: surface.detail.clone(),
+            });
+        }
+        let recorded = scan.unanalyzed_surfaces.len() as u64;
+        if scan.unanalyzed_surface_total > recorded {
+            remediation_actions.push(format!(
+                "{} unanalyzed surfaces total; {} recorded individually (cap {}), remainder \
+                 counted in unanalyzed_surface_count",
+                scan.unanalyzed_surface_total,
+                recorded,
+                crate::e8_analyzed_subset::MAX_RECORDED_UNANALYZED_SURFACES
+            ));
+        }
+
+        if scan.missing_span_count > 0 {
+            refusal_codes.push(E8RefusalCode {
+                code: "missing_source_span".to_string(),
+                class: "degraded".to_string(),
+                source_ref_id: "analyzed-subset-flow-scan".to_string(),
+                remediation: format!(
+                    "{} unanalyzed surface(s) carried no source span (statement-granular span \
+                     stamping, bd-fqlfw.1.5); provenance is degraded but refusal still holds",
+                    scan.missing_span_count
+                ),
+            });
+        }
+
+        // Flow-proof lane: the lowering pipeline's IR2 flow-proof artifact is
+        // the static discharge of the analyzed-subset flow-proof obligation.
+        match &scan.flow_proof {
+            Some(flow_proof) => {
+                evidence_refs.push(E8RefusalEvidenceRef {
+                    id: "flow-proof-obligation".to_string(),
+                    kind: "flow_proof_obligation".to_string(),
+                    status: "present".to_string(),
+                    artifact_path: Some(format!(
+                        "ir2_flow_proof_artifact:{}",
+                        flow_proof.artifact_id
+                    )),
+                    content_hash_hex: None,
+                });
+            }
+            None => {
+                evidence_refs.push(E8RefusalEvidenceRef {
+                    id: "flow-proof-obligation".to_string(),
+                    kind: "flow_proof_obligation".to_string(),
+                    status: "missing".to_string(),
+                    artifact_path: None,
+                    content_hash_hex: None,
+                });
+                if scan.syntax_refusal.is_none() && scan.unanalyzed_surface_total == 0 {
+                    // A scan with no syntax refusal and no unproven surfaces
+                    // must carry the IR2 flow-proof artifact; fail closed if
+                    // it ever arrives without one. (Ambient-violation scans
+                    // legitimately lack the artifact, but their unproven
+                    // surfaces already block above.)
+                    refusal_codes.push(E8RefusalCode {
+                        code: "missing_flow_proof_obligation".to_string(),
+                        class: "missing_evidence".to_string(),
+                        source_ref_id: "analyzed-subset-flow-scan".to_string(),
+                        remediation:
+                            "the scan lowered cleanly but produced no IR2 flow-proof artifact"
+                                .to_string(),
+                    });
+                }
+            }
+        }
+
+        if !scan.is_fully_analyzed() {
+            remediation_actions.push(
+                "keep E8 non-use wording uncertified until every construct is inside the \
+                 analyzed explicit-flow subset"
+                    .to_string(),
+            );
         }
     }
 }
@@ -355,13 +587,24 @@ fn append_e8_ledger_seed_field(seed: &mut Vec<u8>, field: &str, value: &str) {
 }
 
 fn e8_refusal_result_class(refusal_codes: &[E8RefusalCode]) -> &'static str {
-    if refusal_codes.iter().any(|code| code.class == "fail_closed") {
+    if refusal_codes.is_empty() {
+        // Every surface sat inside the analyzed explicit-flow subset and all
+        // required evidence is linked: the ledger may feed the certifier. It
+        // is still not itself a certificate (bd-fqlfw.8.4.1.1 claim-language
+        // rule).
+        "certifiable_subset"
+    } else if refusal_codes.iter().any(|code| code.class == "fail_closed") {
         "fail_closed"
     } else if refusal_codes
         .iter()
         .any(|code| code.class == "out_of_scope")
     {
         "out_of_scope"
+    } else if refusal_codes.iter().any(|code| code.class == "uncertified") {
+        // An unproven or unsupported surface refuses certification outright;
+        // a co-present degraded-provenance annotation must not soften the
+        // ledger class to "degraded" (bd-fqlfw.8.4).
+        "uncertified"
     } else if refusal_codes.iter().any(|code| code.class == "degraded") {
         "degraded"
     } else {
@@ -1128,5 +1371,353 @@ mod tests {
             other.ifc_ingress(&binding),
             Err(DataContractError::BindingContractMismatch { .. })
         ));
+    }
+
+    // -- bd-fqlfw.8.4: scan-driven preflight receipt -------------------------
+
+    use crate::ast::ParseGoal;
+    use crate::e8_analyzed_subset::{E8_SCAN_THREAT_MODEL_SCOPE, scan_source};
+
+    const ANALYZED_SOURCE: &str = "const answer = 40 + 2;";
+    const UNANALYZED_SOURCE: &str = "const xs = [1];\nfor (const x of xs) { }";
+
+    fn scan_bound(source: &str) -> (DataContractRunBinding, E8AnalyzedSubsetScan) {
+        let c = contract();
+        let binding = c
+            .bind_to_run(
+                "ext-e8",
+                "agent.js",
+                DEFAULT_DATA_CONTRACT_PURPOSE,
+                Some(&ContentHash::compute(source.as_bytes())),
+            )
+            .expect("binds");
+        let scan = scan_source(source, "agent.js", ParseGoal::Script);
+        (binding, scan)
+    }
+
+    #[test]
+    fn clean_scan_with_explain_yields_certifiable_subset() {
+        let (binding, scan) = scan_bound(ANALYZED_SOURCE);
+        let receipt =
+            binding.preflight_receipt("run-clean", Some("agent.explain.json"), Some(&scan), &[]);
+        assert_eq!(receipt.result_class, "certifiable_subset");
+        assert!(receipt.certifier_input_allowed);
+        assert!(!receipt.must_block_certificate);
+        assert!(receipt.refusal_codes.is_empty());
+        assert_eq!(receipt.unanalyzed_surface_count, 0);
+        assert!(receipt.analyzed_surface_count > 0);
+        // Schema const: the receipt is never itself a certificate.
+        assert!(!receipt.positive_non_use_claim_allowed);
+    }
+
+    #[test]
+    fn certifiable_receipt_links_scan_and_flow_proof_evidence() {
+        let (binding, scan) = scan_bound(ANALYZED_SOURCE);
+        let receipt =
+            binding.preflight_receipt("run-clean", Some("agent.explain.json"), Some(&scan), &[]);
+        let evidence = |id: &str| {
+            receipt
+                .evidence_refs
+                .iter()
+                .find(|e| e.id == id)
+                .unwrap_or_else(|| panic!("evidence `{id}` present"))
+        };
+        let scan_evidence = evidence("analyzed-subset-flow-scan");
+        assert_eq!(scan_evidence.status, "present");
+        assert_eq!(
+            scan_evidence.content_hash_hex.as_deref(),
+            Some(scan.content_hash_hex().as_str())
+        );
+        let flow_proof = evidence("flow-proof-obligation");
+        assert_eq!(flow_proof.status, "present");
+        assert!(
+            flow_proof
+                .artifact_path
+                .as_deref()
+                .is_some_and(|p| p.starts_with("ir2_flow_proof_artifact:"))
+        );
+        assert_eq!(evidence("run-explain-bundle").status, "present");
+    }
+
+    #[test]
+    fn unproven_scan_blocks_with_span_bearing_refusals() {
+        let (binding, scan) = scan_bound(UNANALYZED_SOURCE);
+        let receipt =
+            binding.preflight_receipt("run-unproven", Some("agent.explain.json"), Some(&scan), &[]);
+        assert!(receipt.must_block_certificate);
+        assert!(!receipt.certifier_input_allowed);
+        assert_eq!(receipt.result_class, "uncertified");
+        assert!(receipt.unanalyzed_surface_count > 0);
+        let unproven: Vec<_> = receipt
+            .refusal_codes
+            .iter()
+            .filter(|code| code.code == "unproven_ifc_propagation")
+            .collect();
+        assert!(!unproven.is_empty());
+        // Every unproven code resolves to a source ref, and the remediation
+        // carries the acceptance wording with the rendered span.
+        for code in &unproven {
+            assert_eq!(code.class, "uncertified");
+            assert!(
+                receipt
+                    .source_refs
+                    .iter()
+                    .any(|r| r.id == code.source_ref_id)
+            );
+            assert!(
+                code.remediation
+                    .starts_with("uncertified - unanalyzed flow at span "),
+                "{}",
+                code.remediation
+            );
+        }
+    }
+
+    #[test]
+    fn scan_hash_mismatch_fails_closed() {
+        let c = contract();
+        let binding = c
+            .bind_to_run(
+                "ext-e8",
+                "agent.js",
+                DEFAULT_DATA_CONTRACT_PURPOSE,
+                Some(&ContentHash::compute(b"the bytes the contract verified")),
+            )
+            .expect("binds");
+        let scan = scan_source(ANALYZED_SOURCE, "agent.js", ParseGoal::Script);
+        let receipt =
+            binding.preflight_receipt("run-mismatch", Some("agent.explain.json"), Some(&scan), &[]);
+        assert_eq!(receipt.result_class, "fail_closed");
+        assert!(receipt.must_block_certificate);
+        assert!(
+            receipt
+                .refusal_codes
+                .iter()
+                .any(|code| code.code == "run_input_hash_mismatch" && code.class == "fail_closed")
+        );
+    }
+
+    #[test]
+    fn scan_without_bound_run_input_hash_is_missing_evidence() {
+        let c = contract();
+        let binding = c
+            .bind_to_run("ext-e8", "agent.js", DEFAULT_DATA_CONTRACT_PURPOSE, None)
+            .expect("binds");
+        let scan = scan_source(ANALYZED_SOURCE, "agent.js", ParseGoal::Script);
+        let receipt =
+            binding.preflight_receipt("run-no-hash", Some("agent.explain.json"), Some(&scan), &[]);
+        assert!(receipt.must_block_certificate);
+        assert!(
+            receipt
+                .refusal_codes
+                .iter()
+                .any(|code| code.code == "missing_run_input_hash"
+                    && code.class == "missing_evidence")
+        );
+    }
+
+    #[test]
+    fn missing_explain_bundle_blocks_even_with_clean_scan() {
+        let (binding, scan) = scan_bound(ANALYZED_SOURCE);
+        let receipt = binding.preflight_receipt("run-no-explain", None, Some(&scan), &[]);
+        assert!(receipt.must_block_certificate);
+        assert_eq!(receipt.result_class, "uncertified");
+        assert!(
+            receipt
+                .refusal_codes
+                .iter()
+                .any(|code| code.code == "missing_explain_or_replay_bundle")
+        );
+    }
+
+    #[test]
+    fn syntax_refusal_scan_reports_unsupported_syntax_surface() {
+        let (binding, scan) = scan_bound("const = ;;;((");
+        let receipt =
+            binding.preflight_receipt("run-syntax", Some("agent.explain.json"), Some(&scan), &[]);
+        assert!(receipt.must_block_certificate);
+        assert!(
+            receipt
+                .refusal_codes
+                .iter()
+                .any(|code| code.code == "unsupported_syntax_surface"
+                    && code.source_ref_id == "parser-diagnostic")
+        );
+        assert!(
+            receipt
+                .source_refs
+                .iter()
+                .any(|r| r.id == "parser-diagnostic"
+                    && r.surface == "parser_unsupported_diagnostics")
+        );
+    }
+
+    #[test]
+    fn spanless_unproven_surfaces_add_a_degraded_missing_span_code() {
+        let (binding, mut scan) = scan_bound(ANALYZED_SOURCE);
+        scan.unanalyzed_surface_total = 1;
+        scan.missing_span_count = 1;
+        scan.unanalyzed_surfaces = vec![crate::e8_analyzed_subset::UnanalyzedSurface {
+            op_kind: "await".to_string(),
+            refusal_code: "unproven_ifc_propagation".to_string(),
+            span: None,
+            detail: "uncertified - unanalyzed flow at span <no span>: `await`".to_string(),
+        }];
+        let receipt =
+            binding.preflight_receipt("run-degraded", Some("agent.explain.json"), Some(&scan), &[]);
+        assert!(receipt.must_block_certificate);
+        assert!(
+            receipt
+                .refusal_codes
+                .iter()
+                .any(|code| code.code == "missing_source_span" && code.class == "degraded")
+        );
+        assert_eq!(receipt.degraded_surface_count, 1);
+    }
+
+    #[test]
+    fn adversarial_fixture_blocks_a_clean_scan() {
+        let (binding, scan) = scan_bound(ANALYZED_SOURCE);
+        let fixture = E8AdversarialRefusalFixture {
+            fixture_id: "fx-callback-lane".to_string(),
+            scenario: "callback lane smuggle".to_string(),
+            code: "unproven_ifc_propagation".to_string(),
+            class: "uncertified".to_string(),
+            source_ref: E8RefusalSourceRef {
+                id: "fx-callback-lane-ref".to_string(),
+                surface: "baseline_interpreter_labels".to_string(),
+                path: "crates/franken-engine/src/baseline_interpreter.rs".to_string(),
+                symbol: None,
+                span: Some("agent.js:1:1".to_string()),
+            },
+            evidence_ref: E8RefusalEvidenceRef {
+                id: "fx-callback-lane-evidence".to_string(),
+                kind: "adversarial_fixture".to_string(),
+                status: "present".to_string(),
+                artifact_path: None,
+                content_hash_hex: None,
+            },
+            remediation: "close the lane".to_string(),
+        };
+        let receipt = binding.preflight_receipt(
+            "run-adversarial",
+            Some("agent.explain.json"),
+            Some(&scan),
+            std::slice::from_ref(&fixture),
+        );
+        assert!(receipt.must_block_certificate);
+        assert_eq!(receipt.result_class, "uncertified");
+    }
+
+    #[test]
+    fn scanless_receipt_stays_uncertified_with_missing_flow_proof() {
+        let c = contract();
+        let binding = c
+            .bind_to_run("ext-e8", "agent.js", DEFAULT_DATA_CONTRACT_PURPOSE, None)
+            .expect("binds");
+        let receipt =
+            binding.uncertified_preflight_receipt("run-legacy", Some("agent.explain.json"));
+        assert!(receipt.must_block_certificate);
+        assert!(!receipt.certifier_input_allowed);
+        assert_eq!(receipt.result_class, "uncertified");
+        assert!(
+            receipt
+                .refusal_codes
+                .iter()
+                .any(|code| code.code == "missing_flow_proof_obligation")
+        );
+    }
+
+    #[test]
+    fn scan_and_ledger_threat_model_scopes_are_identical() {
+        // `e8_analyzed_subset` cannot import this module (cycle); the scope
+        // constants are pinned equal here instead.
+        assert_eq!(E8_SCAN_THREAT_MODEL_SCOPE, E8_REFUSAL_THREAT_MODEL_SCOPE);
+    }
+
+    #[test]
+    fn result_class_is_certifiable_only_for_an_empty_refusal_set() {
+        assert_eq!(e8_refusal_result_class(&[]), "certifiable_subset");
+        let code = |class: &str| E8RefusalCode {
+            code: "x".to_string(),
+            class: class.to_string(),
+            source_ref_id: "r".to_string(),
+            remediation: "m".to_string(),
+        };
+        assert_eq!(
+            e8_refusal_result_class(&[code("fail_closed")]),
+            "fail_closed"
+        );
+        assert_eq!(
+            e8_refusal_result_class(&[code("out_of_scope")]),
+            "out_of_scope"
+        );
+        assert_eq!(e8_refusal_result_class(&[code("degraded")]), "degraded");
+        assert_eq!(
+            e8_refusal_result_class(&[code("uncertified")]),
+            "uncertified"
+        );
+        assert_eq!(
+            e8_refusal_result_class(&[code("degraded"), code("fail_closed")]),
+            "fail_closed"
+        );
+        // A degraded-provenance annotation never softens an unproven-surface
+        // refusal to "degraded".
+        assert_eq!(
+            e8_refusal_result_class(&[code("uncertified"), code("degraded")]),
+            "uncertified"
+        );
+    }
+
+    #[test]
+    fn certifiable_and_blocked_receipts_have_distinct_ledger_ids() {
+        let (binding, clean_scan) = scan_bound(ANALYZED_SOURCE);
+        let certifiable = binding.preflight_receipt(
+            "same-run",
+            Some("agent.explain.json"),
+            Some(&clean_scan),
+            &[],
+        );
+        let scanless =
+            binding.uncertified_preflight_receipt("same-run", Some("agent.explain.json"));
+        assert_ne!(certifiable.ledger_id, scanless.ledger_id);
+    }
+
+    #[test]
+    fn truncated_scan_surfaces_are_recorded_in_remediation() {
+        let (binding, mut scan) = scan_bound(ANALYZED_SOURCE);
+        scan.unanalyzed_surface_total = 100;
+        scan.unanalyzed_surfaces = vec![crate::e8_analyzed_subset::UnanalyzedSurface {
+            op_kind: "for_of_init".to_string(),
+            refusal_code: "unproven_ifc_propagation".to_string(),
+            span: Some("agent.js:1:1".to_string()),
+            detail: "uncertified - unanalyzed flow at span agent.js:1:1: `for_of_init`".to_string(),
+        }];
+        let receipt = binding.preflight_receipt(
+            "run-truncated",
+            Some("agent.explain.json"),
+            Some(&scan),
+            &[],
+        );
+        // The exact total survives even though only one surface is recorded.
+        assert_eq!(receipt.unanalyzed_surface_count, 100);
+        assert!(
+            receipt
+                .remediation_actions
+                .iter()
+                .any(|action| action.contains("100 unanalyzed surfaces total"))
+        );
+    }
+
+    #[test]
+    fn analyzed_surface_count_reflects_the_scan_denominator() {
+        let (binding, scan) = scan_bound(ANALYZED_SOURCE);
+        let receipt = binding.preflight_receipt(
+            "run-denominator",
+            Some("agent.explain.json"),
+            Some(&scan),
+            &[],
+        );
+        assert_eq!(receipt.analyzed_surface_count, scan.analyzed_op_count);
     }
 }

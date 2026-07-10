@@ -46,6 +46,7 @@ use frankenengine_engine::differential_oracle::{
 use frankenengine_engine::differential_oracle_perf::{
     PerfArmConfig, load_runtime_comparison_corpus, run_differential_perf,
 };
+use frankenengine_engine::e8_analyzed_subset::{E8AnalyzedSubsetScan, scan_source};
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
     OrchestratorResult,
@@ -4128,6 +4129,13 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     let data_contract = bound_contract.as_ref().map(|(_, binding)| binding.clone());
 
     let source_label = args.input.display().to_string();
+    // bd-fqlfw.8.4: classify every construct of the run source against the
+    // analyzed explicit-flow subset before execution consumes it; the E8
+    // refusal ledger derives from this scan (unanalyzed construct =>
+    // uncertified with span provenance, never a silent non-use claim).
+    let e8_scan: Option<E8AnalyzedSubsetScan> = bound_contract
+        .as_ref()
+        .map(|_| scan_source(&source, &source_label, args.parse_goal));
     let capabilities = run_cli_capabilities(args.parse_goal);
     let package = ExtensionPackage {
         extension_id: args.extension_id.clone(),
@@ -4165,8 +4173,12 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         .as_ref()
         .map(|path| path.display().to_string());
     let e8_preflight_receipt = data_contract.as_ref().map(|binding| {
-        binding
-            .uncertified_preflight_receipt(&result.trace_id, explain_bundle_path_string.as_deref())
+        binding.preflight_receipt(
+            &result.trace_id,
+            explain_bundle_path_string.as_deref(),
+            e8_scan.as_ref(),
+            &[],
+        )
     });
 
     // bd-fqlfw.8.3: assemble, sign, and write the E8 certificate bundle from
@@ -4374,6 +4386,13 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
         return Err("--certificate-out requires --data-contract <contract.json>".to_string());
     }
 
+    // bd-fqlfw.8.4: scan the agent's source against the analyzed
+    // explicit-flow subset before the package consumes it. The sandbox has no
+    // explain-bundle surface yet, so its receipts stay evidence-incomplete
+    // (uncertified) even for a clean scan — honest until that surface lands.
+    let e8_scan: Option<E8AnalyzedSubsetScan> = bound_contract
+        .as_ref()
+        .map(|_| scan_source(&source, &args.input.display().to_string(), args.parse_goal));
     let package = manifest
         .to_extension_package(
             source,
@@ -4416,9 +4435,9 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
 
     let report = AgentSandboxReport::from_run(&manifest, &result, module_goal)
         .map_err(|error| format!("failed to build agent-sandbox report: {error}"))?;
-    let e8_preflight_receipt = bound_contract
-        .as_ref()
-        .map(|(_, binding)| binding.uncertified_preflight_receipt(&result.trace_id, None));
+    let e8_preflight_receipt = bound_contract.as_ref().map(|(_, binding)| {
+        binding.preflight_receipt(&result.trace_id, None, e8_scan.as_ref(), &[])
+    });
 
     let certificate_bundle = match (args.certificate_out.as_ref(), bound_contract.as_ref()) {
         (Some(dir), Some((contract, binding))) => {

@@ -2,7 +2,7 @@
 # IFC Lattice Isomorphism Proof
 
 Proves that the Rust implementation in crates/franken-engine/src/flow_lattice.rs
-is isomorphic to the formal lattice specification in ifc_lattice_specification.lean.
+is isomorphic to the formal lattice specification in IFCLatticeSpecification.lean.
 
 This establishes that:
 1. The Rust LabelClass.level() function corresponds exactly to our formal level function
@@ -15,7 +15,11 @@ The isomorphism proof guarantees that any property proven about the formal
 specification holds for the Rust implementation, providing mathematical certainty
 about the correctness of the IFC flow control.
 
-Related: bd-cixqu.7.3, ADR-0006, ADR-0007
+All carriers are finite and every operation is computable, so the proofs are
+discharged by decidable enumeration (`decide` / `native_decide`), matching the
+proof style of IFCLatticeSpecification.lean.
+
+Related: bd-cixqu.7.3, bd-fqlfw.6.2, ADR-0006, ADR-0007
 -/
 
 import Mathlib.Order.Hom.Lattice
@@ -36,32 +40,35 @@ import IFCLatticeSpecification
 structure RustLabelClass where
   /-- The discriminant value (0=Public, 1=Internal, 2=Confidential, 3=Secret, 4=TopSecret) -/
   discriminant : Fin 5
+deriving DecidableEq, Repr
 
 namespace RustLabelClass
 
 /-- Constructor for Public (discriminant 0) -/
-def public : RustLabelClass := ⟨0, by norm_num⟩
+def public : RustLabelClass := ⟨0⟩
 
 /-- Constructor for Internal (discriminant 1) -/
-def internal : RustLabelClass := ⟨1, by norm_num⟩
+def internal : RustLabelClass := ⟨1⟩
 
 /-- Constructor for Confidential (discriminant 2) -/
-def confidential : RustLabelClass := ⟨2, by norm_num⟩
+def confidential : RustLabelClass := ⟨2⟩
 
 /-- Constructor for Secret (discriminant 3) -/
-def secret : RustLabelClass := ⟨3, by norm_num⟩
+def secret : RustLabelClass := ⟨3⟩
 
 /-- Constructor for TopSecret (discriminant 4) -/
-def topSecret : RustLabelClass := ⟨4, by norm_num⟩
+def topSecret : RustLabelClass := ⟨4⟩
 
 /-- The level() method from the Rust implementation -/
 def level (r : RustLabelClass) : Nat := r.discriminant.val
 
-/-- Equality for RustLabelClass -/
-instance : DecidableEq RustLabelClass := by
-  intro a b
-  exact decidable_of_iff (a.discriminant = b.discriminant)
-    ⟨fun h => by ext; exact h, fun h => by injection h⟩
+/-- The Rust model is a finite carrier (5 discriminants). -/
+instance : Fintype RustLabelClass :=
+  Fintype.ofEquiv (Fin 5)
+    { toFun := RustLabelClass.mk
+      invFun := RustLabelClass.discriminant
+      left_inv := fun _ => rfl
+      right_inv := fun _ => rfl }
 
 /-- The join() method from Rust: returns the label with higher level -/
 def join (a b : RustLabelClass) : RustLabelClass :=
@@ -75,20 +82,24 @@ def meet (a b : RustLabelClass) : RustLabelClass :=
 instance : LE RustLabelClass where
   le := fun a b => a.level ≤ b.level
 
+instance : DecidableRel (@LE.le RustLabelClass _) :=
+  fun a b => Nat.decLe a.level b.level
+
 end RustLabelClass
 
 /-- Model of the Rust Clearance enum -/
 structure RustClearance where
   /-- The discriminant value (0=OpenSink, 1=RestrictedSink, 2=AuditedSink, 3=SealedSink, 4=NeverSink) -/
   discriminant : Fin 5
+deriving DecidableEq, Repr
 
 namespace RustClearance
 
-def openSink : RustClearance := ⟨0, by norm_num⟩
-def restrictedSink : RustClearance := ⟨1, by norm_num⟩
-def auditedSink : RustClearance := ⟨2, by norm_num⟩
-def sealedSink : RustClearance := ⟨3, by norm_num⟩
-def neverSink : RustClearance := ⟨4, by norm_num⟩
+def openSink : RustClearance := ⟨0⟩
+def restrictedSink : RustClearance := ⟨1⟩
+def auditedSink : RustClearance := ⟨2⟩
+def sealedSink : RustClearance := ⟨3⟩
+def neverSink : RustClearance := ⟨4⟩
 
 /-- The level() method from Rust implementation -/
 def level (r : RustClearance) : Nat := r.discriminant.val
@@ -102,18 +113,22 @@ def maxLabelLevel (r : RustClearance) : Nat :=
   | 3 => 3  -- SealedSink up to Secret
   | _ => 0  -- NeverSink only Public
 
-instance : DecidableEq RustClearance := by
-  intro a b
-  exact decidable_of_iff (a.discriminant = b.discriminant)
-    ⟨fun h => by ext; exact h, fun h => by injection h⟩
+/-- The Rust model is a finite carrier (5 discriminants). -/
+instance : Fintype RustClearance :=
+  Fintype.ofEquiv (Fin 5)
+    { toFun := RustClearance.mk
+      invFun := RustClearance.discriminant
+      left_inv := fun _ => rfl
+      right_inv := fun _ => rfl }
 
 /-- The can_receive_label() predicate from Rust -/
 def canReceiveLabel (clearance : RustClearance) (label : RustLabelClass) : Prop :=
   label.level ≤ clearance.maxLabelLevel
 
-instance : DecidablePred₂ canReceiveLabel := by
-  intro clearance label
-  exact Nat.decidable_le label.level clearance.maxLabelLevel
+instance (clearance : RustClearance) (label : RustLabelClass) :
+    Decidable (canReceiveLabel clearance label) := by
+  unfold canReceiveLabel
+  infer_instance
 
 end RustClearance
 
@@ -161,60 +176,57 @@ def rustToClearance : RustClearance → Clearance := fun r =>
 
 /-- The isomorphisms are inverses for LabelClass -/
 theorem labelClass_isomorphism_inverse :
-  ∀ (l : LabelClass), rustToLabelClass (labelClassToRust l) = l ∧
-  ∀ (r : RustLabelClass), labelClassToRust (rustToLabelClass r) = r := by
+    (∀ l : LabelClass, rustToLabelClass (labelClassToRust l) = l) ∧
+    (∀ r : RustLabelClass, labelClassToRust (rustToLabelClass r) = r) := by
   constructor
   · intro l
     cases l <;> rfl
   · intro r
-    simp [rustToLabelClass, labelClassToRust]
-    fin_cases r.discriminant <;> simp [RustLabelClass.public, RustLabelClass.internal,
-      RustLabelClass.confidential, RustLabelClass.secret, RustLabelClass.topSecret]
+    obtain ⟨d⟩ := r
+    fin_cases d <;> rfl
 
 /-- The isomorphisms are inverses for Clearance -/
 theorem clearance_isomorphism_inverse :
-  ∀ (c : Clearance), rustToClearance (clearanceToRust c) = c ∧
-  ∀ (r : RustClearance), clearanceToRust (rustToClearance r) = r := by
+    (∀ c : Clearance, rustToClearance (clearanceToRust c) = c) ∧
+    (∀ r : RustClearance, clearanceToRust (rustToClearance r) = r) := by
   constructor
   · intro c
     cases c <;> rfl
   · intro r
-    simp [rustToClearance, clearanceToRust]
-    fin_cases r.discriminant <;> simp [RustClearance.openSink, RustClearance.restrictedSink,
-      RustClearance.auditedSink, RustClearance.sealedSink, RustClearance.neverSink]
+    obtain ⟨d⟩ := r
+    fin_cases d <;> rfl
 
 /-- Level function correspondence for LabelClass -/
 theorem level_correspondence_label (l : LabelClass) :
-  (labelClassToRust l).level = l.level := by
+    (labelClassToRust l).level = l.level := by
   cases l <;> rfl
 
 /-- Level function correspondence for Clearance -/
 theorem level_correspondence_clearance (c : Clearance) :
-  (clearanceToRust c).level = c.level := by
+    (clearanceToRust c).level = c.level := by
   cases c <;> rfl
 
 /-- Max label level correspondence -/
 theorem maxLabelLevel_correspondence (c : Clearance) :
-  (clearanceToRust c).maxLabelLevel = c.maxLabelLevel := by
+    (clearanceToRust c).maxLabelLevel = c.maxLabelLevel := by
   cases c <;> rfl
 
-/-- Join operation correspondence for LabelClass -/
+/-- Join operation correspondence for LabelClass. `⊔` on the formal side is
+    definitionally `LabelClass.join` (the Lattice instance sets `sup := join`),
+    and both sides are computable over a 5×5 carrier. -/
 theorem join_correspondence_label (l1 l2 : LabelClass) :
-  labelClassToRust (l1 ⊔ l2) = RustLabelClass.join (labelClassToRust l1) (labelClassToRust l2) := by
-  simp [Lattice.sup, LabelClass.join, RustLabelClass.join, level_correspondence_label]
-  split_ifs <;> rfl
+    labelClassToRust (l1 ⊔ l2) = RustLabelClass.join (labelClassToRust l1) (labelClassToRust l2) := by
+  cases l1 <;> cases l2 <;> native_decide
 
 /-- Meet operation correspondence for LabelClass -/
 theorem meet_correspondence_label (l1 l2 : LabelClass) :
-  labelClassToRust (l1 ⊓ l2) = RustLabelClass.meet (labelClassToRust l1) (labelClassToRust l2) := by
-  simp [Lattice.inf, LabelClass.meet, RustLabelClass.meet, level_correspondence_label]
-  split_ifs <;> rfl
+    labelClassToRust (l1 ⊓ l2) = RustLabelClass.meet (labelClassToRust l1) (labelClassToRust l2) := by
+  cases l1 <;> cases l2 <;> native_decide
 
 /-- Flow predicate correspondence -/
 theorem flow_correspondence (l : LabelClass) (c : Clearance) :
-  Clearance.canFlowTo l c ↔ RustClearance.canReceiveLabel (clearanceToRust c) (labelClassToRust l) := by
-  simp [Clearance.canFlowTo, RustClearance.canReceiveLabel,
-        level_correspondence_label, maxLabelLevel_correspondence]
+    Clearance.canFlowTo l c ↔ RustClearance.canReceiveLabel (clearanceToRust c) (labelClassToRust l) := by
+  cases l <;> cases c <;> native_decide
 
 -- =============================================================================
 -- Main Isomorphism Theorem
@@ -223,29 +235,26 @@ theorem flow_correspondence (l : LabelClass) (c : Clearance) :
 /-- Main theorem: The Rust implementation is a faithful lattice homomorphism
     of our formal specification -/
 theorem rust_implementation_isomorphic :
-  -- Structure preservation for LabelClass
-  (∀ l1 l2 : LabelClass,
-     labelClassToRust (l1 ⊔ l2) = RustLabelClass.join (labelClassToRust l1) (labelClassToRust l2) ∧
-     labelClassToRust (l1 ⊓ l2) = RustLabelClass.meet (labelClassToRust l1) (labelClassToRust l2)) ∧
-  -- Ordering preservation for LabelClass
-  (∀ l1 l2 : LabelClass,
-     l1 ≤ l2 ↔ labelClassToRust l1 ≤ labelClassToRust l2) ∧
-  -- Flow predicate preservation
-  (∀ l : LabelClass, ∀ c : Clearance,
-     Clearance.canFlowTo l c ↔
-     RustClearance.canReceiveLabel (clearanceToRust c) (labelClassToRust l)) ∧
-  -- Bijective correspondence
-  (∀ l : LabelClass, rustToLabelClass (labelClassToRust l) = l) ∧
-  (∀ c : Clearance, rustToClearance (clearanceToRust c) = c) := by
-  constructor
+    -- Structure preservation for LabelClass
+    (∀ l1 l2 : LabelClass,
+       labelClassToRust (l1 ⊔ l2) = RustLabelClass.join (labelClassToRust l1) (labelClassToRust l2) ∧
+       labelClassToRust (l1 ⊓ l2) = RustLabelClass.meet (labelClassToRust l1) (labelClassToRust l2)) ∧
+    -- Ordering preservation for LabelClass
+    (∀ l1 l2 : LabelClass,
+       l1 ≤ l2 ↔ labelClassToRust l1 ≤ labelClassToRust l2) ∧
+    -- Flow predicate preservation
+    (∀ l : LabelClass, ∀ c : Clearance,
+       Clearance.canFlowTo l c ↔
+       RustClearance.canReceiveLabel (clearanceToRust c) (labelClassToRust l)) ∧
+    -- Bijective correspondence
+    (∀ l : LabelClass, rustToLabelClass (labelClassToRust l) = l) ∧
+    (∀ c : Clearance, rustToClearance (clearanceToRust c) = c) := by
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩
   · intro l1 l2
     exact ⟨join_correspondence_label l1 l2, meet_correspondence_label l1 l2⟩
-  constructor
   · intro l1 l2
-    simp [LE.le, level_correspondence_label]
-  constructor
+    cases l1 <;> cases l2 <;> native_decide
   · exact flow_correspondence
-  constructor
   · exact labelClass_isomorphism_inverse.1
   · exact clearance_isomorphism_inverse.1
 
@@ -256,98 +265,32 @@ theorem rust_implementation_isomorphic :
 /-- Corollary: All lattice axioms proven for the formal specification
     also hold for the Rust implementation -/
 theorem rust_satisfies_lattice_axioms :
-  ∀ (r1 r2 r3 : RustLabelClass),
-    -- Idempotence
-    (RustLabelClass.join r1 r1 = r1) ∧ (RustLabelClass.meet r1 r1 = r1) ∧
-    -- Commutativity
-    (RustLabelClass.join r1 r2 = RustLabelClass.join r2 r1) ∧
-    (RustLabelClass.meet r1 r2 = RustLabelClass.meet r2 r1) ∧
-    -- Associativity
-    (RustLabelClass.join (RustLabelClass.join r1 r2) r3 =
-     RustLabelClass.join r1 (RustLabelClass.join r2 r3)) ∧
-    (RustLabelClass.meet (RustLabelClass.meet r1 r2) r3 =
-     RustLabelClass.meet r1 (RustLabelClass.meet r2 r3)) ∧
-    -- Absorption
-    (RustLabelClass.join r1 (RustLabelClass.meet r1 r2) = r1) ∧
-    (RustLabelClass.meet r1 (RustLabelClass.join r1 r2) = r1) := by
-  intro r1 r2 r3
-
-  -- Convert Rust values to formal specification
-  let l1 := rustToLabelClass r1
-  let l2 := rustToLabelClass r2
-  let l3 := rustToLabelClass r3
-
-  -- Use the isomorphism and formal lattice properties
-  have h_iso := rust_implementation_isomorphic
-  have h_lattice := labelClass_is_lattice l1 l2 l3
-
-  -- Apply isomorphism preservation in both directions
-  constructor
-  · simp [RustLabelClass.join]
-    rw [←labelClass_isomorphism_inverse.2 r1] at *
-    simp [join_correspondence_label]
-    exact LabelClass.join_idempotent l1
-  constructor
-  · simp [RustLabelClass.meet]
-    rw [←labelClass_isomorphism_inverse.2 r1] at *
-    simp [meet_correspondence_label]
-    exact LabelClass.meet_idempotent l1
-  constructor
-  · rw [←labelClass_isomorphism_inverse.2 r1, ←labelClass_isomorphism_inverse.2 r2] at *
-    simp [join_correspondence_label]
-    exact LabelClass.join_commutative l1 l2
-  constructor
-  · rw [←labelClass_isomorphism_inverse.2 r1, ←labelClass_isomorphism_inverse.2 r2] at *
-    simp [meet_correspondence_label]
-    exact LabelClass.meet_commutative l1 l2
-  constructor
-  · rw [←labelClass_isomorphism_inverse.2 r1, ←labelClass_isomorphism_inverse.2 r2, ←labelClass_isomorphism_inverse.2 r3] at *
-    simp [join_correspondence_label]
-    exact LabelClass.join_associative l1 l2 l3
-  constructor
-  · rw [←labelClass_isomorphism_inverse.2 r1, ←labelClass_isomorphism_inverse.2 r2, ←labelClass_isomorphism_inverse.2 r3] at *
-    simp [meet_correspondence_label]
-    exact LabelClass.meet_associative l1 l2 l3
-  constructor
-  · rw [←labelClass_isomorphism_inverse.2 r1, ←labelClass_isomorphism_inverse.2 r2] at *
-    simp [join_correspondence_label, meet_correspondence_label]
-    exact LabelClass.join_absorption l1 l2
-  · rw [←labelClass_isomorphism_inverse.2 r1, ←labelClass_isomorphism_inverse.2 r2] at *
-    simp [join_correspondence_label, meet_correspondence_label]
-    exact LabelClass.meet_absorption l1 l2
+    ∀ r1 r2 r3 : RustLabelClass,
+      -- Idempotence
+      (RustLabelClass.join r1 r1 = r1) ∧ (RustLabelClass.meet r1 r1 = r1) ∧
+      -- Commutativity
+      (RustLabelClass.join r1 r2 = RustLabelClass.join r2 r1) ∧
+      (RustLabelClass.meet r1 r2 = RustLabelClass.meet r2 r1) ∧
+      -- Associativity
+      (RustLabelClass.join (RustLabelClass.join r1 r2) r3 =
+       RustLabelClass.join r1 (RustLabelClass.join r2 r3)) ∧
+      (RustLabelClass.meet (RustLabelClass.meet r1 r2) r3 =
+       RustLabelClass.meet r1 (RustLabelClass.meet r2 r3)) ∧
+      -- Absorption
+      (RustLabelClass.join r1 (RustLabelClass.meet r1 r2) = r1) ∧
+      (RustLabelClass.meet r1 (RustLabelClass.join r1 r2) = r1) := by
+  native_decide
 
 /-- Corollary: Flow control properties from formal spec hold in Rust -/
 theorem rust_flow_properties :
-  -- Public flows everywhere
-  (∀ c : RustClearance,
-     RustClearance.canReceiveLabel c RustLabelClass.public) ∧
-  -- TopSecret only to OpenSink
-  (∀ c : RustClearance,
-     RustClearance.canReceiveLabel c RustLabelClass.topSecret ↔
-     c = RustClearance.openSink) := by
-  constructor
-  · intro c
-    let formal_c := rustToClearance c
-    have h := public_flows_everywhere formal_c
-    rw [←flow_correspondence] at h
-    rw [clearance_isomorphism_inverse.1, labelClass_isomorphism_inverse.1] at h
-    exact h
-  · intro c
-    let formal_c := rustToClearance c
-    have h := topSecret_only_to_openSink formal_c
-    rw [←flow_correspondence] at h
-    rw [clearance_isomorphism_inverse.1, labelClass_isomorphism_inverse.1] at h
-    simp at h
-    constructor
-    · intro h_flow
-      have h_formal : formal_c = Clearance.OpenSink := h.mp h_flow
-      rw [←clearance_isomorphism_inverse.1 c] at h_formal
-      injection h_formal
-    · intro h_eq
-      have h_formal : formal_c = Clearance.OpenSink := by
-        rw [←clearance_isomorphism_inverse.1 c, h_eq]
-        rfl
-      exact h.mpr h_formal
+    -- Public flows everywhere
+    (∀ c : RustClearance,
+       RustClearance.canReceiveLabel c RustLabelClass.public) ∧
+    -- TopSecret only to OpenSink
+    (∀ c : RustClearance,
+       RustClearance.canReceiveLabel c RustLabelClass.topSecret ↔
+       c = RustClearance.openSink) := by
+  native_decide
 
 -- =============================================================================
 -- Documentation and Verification Summary
@@ -355,9 +298,9 @@ theorem rust_flow_properties :
 
 /-- Summary theorem documenting the complete isomorphism verification -/
 theorem ifc_lattice_implementation_verified :
-  -- The Rust flow_lattice.rs implementation correctly implements
-  -- the formal IFC lattice specification with mathematical guarantees
-  True := trivial
+    -- The Rust flow_lattice.rs implementation correctly implements
+    -- the formal IFC lattice specification with mathematical guarantees
+    True := trivial
 
 #check rust_implementation_isomorphic
 #check rust_satisfies_lattice_axioms

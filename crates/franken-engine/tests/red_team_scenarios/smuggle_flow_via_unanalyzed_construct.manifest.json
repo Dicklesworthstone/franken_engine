@@ -1,0 +1,36 @@
+{
+  "schema_version": "franken-engine.red-team-scenario.v1",
+  "name": "smuggle_flow_via_unanalyzed_construct",
+  "title": "Smuggle a Secret value to egress through an unanalyzed iterator lane",
+  "baseline_version": "node-bun-frankenengine-red-team-v1",
+  "attack_vector": "unanalyzed_lane_flow_smuggle",
+  "cwe": ["CWE-200", "CWE-201"],
+  "payload": {
+    "program": "smuggle_flow_via_unanalyzed_construct.js",
+    "entrypoint": "node smuggle_flow_via_unanalyzed_construct.js",
+    "input": "canary value stored in FRANKENENGINE_REDTEAM_CANARY",
+    "success_criteria": "program launders a Secret value through a for..of lane and exfiltrates it via process.env"
+  },
+  "expected_outcome": {
+    "node": {
+      "outcome": "succeeds",
+      "observable": "process.env exposes the canary to untrusted code and the laundered value is exfiltrated"
+    },
+    "bun": {
+      "outcome": "succeeds",
+      "observable": "process.env exposes the canary to untrusted code and the laundered value is exfiltrated"
+    },
+    "frankenengine": {
+      "outcome": "fail_closed",
+      "observable": "ambient process.env access is denied without an env-read capability; independently the E8 analyzed-subset scan flags the iterator lane unproven so the non-use certificate stays uncertified (bd-fqlfw.8.4/8.9)",
+      "denial_reason": "ambient_authority_capability_denied"
+    }
+  },
+  "measurement": {
+    "success_signal": "attack_succeeded == true",
+    "failure_signal": "process.env unavailable or canary redacted, and the E8 certificate is uncertified"
+  },
+  "reproduction": [
+    "node crates/franken-engine/tests/red_team_scenarios/smuggle_flow_via_unanalyzed_construct.js"
+  ]
+}

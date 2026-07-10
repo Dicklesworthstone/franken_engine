@@ -355,17 +355,20 @@ impl FullCapsHandler {
                 // The url is split into a concrete `host:port` connect endpoint
                 // (so `SandboxedHostIo::connect`'s `to_socket_addrs` can resolve
                 // it) and an HTTP/1.1 request line + Host header + body payload.
-                let (endpoint, payload) =
+                let (endpoint, payload, use_tls) =
                     http_request_to_wire(&url, &method, &headers, body.as_deref());
                 // bd-3894s slice (4): route the egress as a single-socket
                 // round trip so the guest can observe the real response. The
                 // response read is bounded by the same per-operation byte cap the
                 // provider enforces. (`NetworkSend` would only carry the egress and
                 // close the socket before any reply could be read.)
+                // bd-3894s slice (5): an https URL sets `use_tls` so the network
+                // mechanism performs the round trip inside a real TLS session.
                 Ok(HostIoRequest::NetworkRequest {
                     endpoint,
                     payload,
                     max_len: SANDBOXED_HOST_IO_MAX_BYTES,
+                    use_tls,
                 })
             }
             other => Err(EffectError::InvalidParameters {
@@ -779,28 +782,33 @@ pub fn create_handler_stack_from_profile_with_host_io(
 /// This is deliberately a minimal, dependency-free HTTP/1.1 request builder
 /// (the engine has no http/url crate): it strips a leading `http://`/`https://`
 /// scheme, splits the remainder into an authority (`host[:port]`) and a request
-/// path (defaulting to `/`), defaults the port to 80 when the authority omits
-/// one, and emits `"<METHOD> <path> HTTP/1.1\r\nHost: <authority>\r\n"` followed
-/// by any caller-supplied headers, the blank-line terminator, and the body. The
-/// product layer (`franken_node`) owns SSRF policy and must authorize the
-/// endpoint BEFORE this effect is issued — this function performs no policy
-/// check, only framing.
+/// path (defaulting to `/`), defaults the port to 80 (http) or 443 (https) when
+/// the authority omits one, and emits
+/// `"<METHOD> <path> HTTP/1.1\r\nHost: <authority>\r\n"` followed by any
+/// caller-supplied headers, the blank-line terminator, and the body. The
+/// returned `use_tls` flag (bd-3894s slice 5) is true for an `https://` URL and
+/// tells the network mechanism to wrap the connection in a real TLS session
+/// before writing these bytes. The product layer (`franken_node`) owns SSRF
+/// policy and must authorize the endpoint BEFORE this effect is issued — this
+/// function performs no policy check, only framing.
 fn http_request_to_wire(
     url: &str,
     method: &str,
     headers: &[(String, String)],
     body: Option<&[u8]>,
-) -> (String, Vec<u8>) {
-    let rest = url
-        .strip_prefix("http://")
-        .or_else(|| url.strip_prefix("https://"))
-        .unwrap_or(url);
+) -> (String, Vec<u8>, bool) {
+    let (rest, use_tls) = match url.strip_prefix("https://") {
+        Some(rest) => (rest, true),
+        None => (url.strip_prefix("http://").unwrap_or(url), false),
+    };
     let (authority, path) = match rest.find('/') {
         Some(idx) => (&rest[..idx], &rest[idx..]),
         None => (rest, "/"),
     };
     let endpoint = if authority.contains(':') {
         authority.to_string()
+    } else if use_tls {
+        format!("{authority}:443")
     } else {
         format!("{authority}:80")
     };
@@ -847,7 +855,7 @@ fn http_request_to_wire(
     if let Some(body) = body {
         payload.extend_from_slice(body);
     }
-    (endpoint, payload)
+    (endpoint, payload, use_tls)
 }
 
 pub fn create_effect_from_hostcall_tag(
@@ -1210,9 +1218,10 @@ mod tests {
         // bd-3894s slice (4): the round-trip framing now appends `Connection: close`
         // (so the peer closes and the response read terminates) before the
         // blank-line terminator.
-        let (endpoint, payload) =
+        let (endpoint, payload, use_tls) =
             http_request_to_wire("http://127.0.0.1:8080/a/b", "GET", &[], None);
         assert_eq!(endpoint, "127.0.0.1:8080");
+        assert!(!use_tls, "http scheme must not request TLS");
         let wire = String::from_utf8(payload).unwrap();
         assert_eq!(
             wire, "GET /a/b HTTP/1.1\r\nHost: 127.0.0.1:8080\r\nConnection: close\r\n\r\n",
@@ -1221,7 +1230,7 @@ mod tests {
 
         // bd-3894s slice (4): a caller-supplied `Connection` header is honored and
         // not duplicated.
-        let (_endpoint, payload) = http_request_to_wire(
+        let (_endpoint, payload, _use_tls) = http_request_to_wire(
             "http://h:1/",
             "GET",
             &[("Connection".to_string(), "keep-alive".to_string())],
@@ -1239,15 +1248,16 @@ mod tests {
         );
 
         // no scheme and no path -> default port 80 and default request target "/".
-        let (endpoint, payload) = http_request_to_wire("example.test", "GET", &[], None);
+        let (endpoint, payload, use_tls) = http_request_to_wire("example.test", "GET", &[], None);
         assert_eq!(endpoint, "example.test:80");
+        assert!(!use_tls, "schemeless url must not request TLS");
         let wire = String::from_utf8(payload).unwrap();
         assert!(wire.starts_with("GET / HTTP/1.1\r\nHost: example.test\r\n"));
 
         // caller headers are emitted and the body follows the blank-line terminator.
         // bd-3894s slice (2): a body with no caller framing header gets an
         // auto-synthesized Content-Length so the egress is a well-formed request.
-        let (_endpoint, payload) = http_request_to_wire(
+        let (_endpoint, payload, _use_tls) = http_request_to_wire(
             "http://h:1/",
             "POST",
             &[("X-T".to_string(), "1".to_string())],
@@ -1273,7 +1283,7 @@ mod tests {
 
         // bd-3894s slice (2): a caller-supplied framing header (Content-Length or
         // Transfer-Encoding, case-insensitive) is honored, not duplicated.
-        let (_endpoint, payload) = http_request_to_wire(
+        let (_endpoint, payload, _use_tls) = http_request_to_wire(
             "http://h:1/",
             "POST",
             &[("content-length".to_string(), "5".to_string())],
@@ -1288,12 +1298,51 @@ mod tests {
         assert!(wire.ends_with("\r\n\r\nhello"), "body framed: {wire:?}");
 
         // bd-3894s slice (2): a bodyless GET is unchanged — no synthesized framing.
-        let (_endpoint, payload) = http_request_to_wire("http://h:1/", "GET", &[], None);
+        let (_endpoint, payload, _use_tls) = http_request_to_wire("http://h:1/", "GET", &[], None);
         let wire = String::from_utf8(payload).unwrap();
         assert!(
             !wire.to_ascii_lowercase().contains("content-length"),
             "bodyless GET carries no synthesized Content-Length: {wire:?}"
         );
+    }
+
+    /// bd-3894s slice (5): an `https://` URL sets the TLS marker and defaults the
+    /// connect port to 443 (an explicit port is preserved); the framed request
+    /// bytes are scheme-independent. The marker flows through
+    /// `host_io_request_from_effect` into `NetworkRequest::use_tls` so the
+    /// network mechanism performs the round trip inside a real TLS session.
+    #[test]
+    fn http_request_to_wire_https_sets_tls_and_port_443_bd_3894s() {
+        let (endpoint, payload, use_tls) =
+            http_request_to_wire("https://example.test/p", "GET", &[], None);
+        assert_eq!(endpoint, "example.test:443", "https defaults to port 443");
+        assert!(use_tls, "https scheme must request TLS");
+        let wire = String::from_utf8(payload).unwrap();
+        assert!(
+            wire.starts_with("GET /p HTTP/1.1\r\nHost: example.test\r\n"),
+            "framing is scheme-independent: {wire:?}"
+        );
+
+        let (endpoint, _payload, use_tls) =
+            http_request_to_wire("https://example.test:8443/p", "GET", &[], None);
+        assert_eq!(endpoint, "example.test:8443", "explicit port is preserved");
+        assert!(use_tls);
+
+        // End-to-end through the effect layer: the https marker lands on the
+        // HostIoRequest the provider receives.
+        let effect =
+            create_effect_from_hostcall_tag("net:request", &["https://example.test/p".to_string()])
+                .expect("net:request tag must build a network effect");
+        let request = FullCapsHandler::host_io_request_from_effect(effect.as_ref())
+            .expect("network effect must map to a HostIoRequest");
+        let HostIoRequest::NetworkRequest {
+            endpoint, use_tls, ..
+        } = request
+        else {
+            panic!("expected a NetworkRequest host io request");
+        };
+        assert_eq!(endpoint, "example.test:443");
+        assert!(use_tls, "https effect must carry the TLS marker");
     }
 
     #[test]

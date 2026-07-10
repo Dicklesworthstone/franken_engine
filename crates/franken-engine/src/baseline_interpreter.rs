@@ -5113,6 +5113,20 @@ impl InterpreterCore {
             Err(EffectError::CapabilityDenied { .. }) => {
                 return Ok(Value::Undefined);
             }
+            // bd-3894s slice (5): an I/O failure inside the network mechanism
+            // (TLS handshake/certificate rejection, connect refused, timeout)
+            // surfaces as the provider's `HostIoError::Io` -> `HandlerError`.
+            // Exactly like the policy-deny arm above, the failed outcome was
+            // ALREADY recorded in the host-effect transcript by `route_host_io`,
+            // so aborting the run here would discard the signed fail-closed
+            // evidence. Node parity is an 'error' event, not a process abort:
+            // the call evaluates to `undefined`, no response value is fabricated,
+            // and the run completes so the recorded failure is surfaced. This arm
+            // is net-only (this fn dispatches only net effects); fs keeps its
+            // fatal-on-error semantics.
+            Err(EffectError::HandlerError { .. }) => {
+                return Ok(Value::Undefined);
+            }
             Err(err) => {
                 return Err(InterpreterError::InternalError {
                     details: format!("host effect dispatch failed for net:request: {err}"),
@@ -37210,7 +37224,8 @@ mod async_runtime_tests_current {
     /// fail-closed denial in the transcript (the run --json denied receipt) and
     /// evaluates the call to `undefined`, so the program completes and the signed
     /// denial is surfaced. fs effects keep their prior fatal-on-error semantics;
-    /// only the guest-triggerable network policy-deny path is made non-fatal.
+    /// only the guest-triggerable network paths (policy-deny, and — bd-3894s
+    /// slice 5 — mechanism I/O failure) are made non-fatal.
     #[test]
     fn hostcall_net_request_denied_records_and_continues_bd_656a2() {
         use frankenengine_extension_host::host_io::{
@@ -37284,6 +37299,86 @@ mod async_runtime_tests_current {
         assert!(
             entries[0].1.is_err(),
             "the recorded outcome must be the fail-closed denial"
+        );
+    }
+
+    /// bd-3894s slice (5): a network-mechanism I/O failure (TLS handshake or
+    /// certificate rejection, connect refused, timeout) surfaces as the
+    /// provider's `HostIoError::Io`. Like the policy-deny path above, it must
+    /// NOT abort the run — the failed outcome is already recorded in the
+    /// transcript (the source of the ledger's fail-closed receipt), the call
+    /// evaluates to `undefined` (no fabricated response), and the run completes
+    /// so the evidence is surfaced instead of discarded.
+    #[test]
+    fn hostcall_net_request_io_failure_records_and_continues_bd_3894s() {
+        use frankenengine_extension_host::host_io::{
+            HostIoCapability, HostIoError, HostIoOutcome, HostIoProvider, HostIoRequest,
+            HostIoResponse, InMemoryHostIoTranscript,
+        };
+
+        /// A provider whose network mechanism fails with an I/O error (mirrors a
+        /// TLS certificate-verification failure) and no-ops fs.
+        #[derive(Debug)]
+        struct IoFailNetworkHostIo;
+        impl HostIoProvider for IoFailNetworkHostIo {
+            fn name(&self) -> &str {
+                "io-fail-network"
+            }
+            fn perform(
+                &self,
+                request: &HostIoRequest,
+                _granted: &[HostIoCapability],
+            ) -> HostIoOutcome {
+                match request {
+                    HostIoRequest::NetworkSend { .. }
+                    | HostIoRequest::NetworkRecv { .. }
+                    | HostIoRequest::NetworkRequest { .. } => Err(HostIoError::Io {
+                        detail: "TLS send to 127.0.0.1:443: invalid peer certificate".to_string(),
+                    }),
+                    HostIoRequest::FsRead { .. } => {
+                        Ok(HostIoResponse::FsRead { bytes: Vec::new() })
+                    }
+                    HostIoRequest::FsWrite { .. } => {
+                        Ok(HostIoResponse::FsWrite { bytes_written: 0 })
+                    }
+                }
+            }
+        }
+
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        let mut core = test_interpreter();
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        core.set_host_io(Arc::new(IoFailNetworkHostIo), Some(recorder_dyn));
+
+        core.mutate_registers(|r| {
+            r[0] = Value::Str(Arc::from("https://127.0.0.1/"));
+        });
+
+        let result = core
+            .dispatch_host_io_hostcall("net:request", RegRange { start: 0, count: 1 })
+            .expect("a failed net:request egress must not abort the run");
+        assert_eq!(
+            result,
+            Value::Undefined,
+            "a failed egress evaluates to undefined (no fabricated response)"
+        );
+
+        let entries = recorder.recorded_entries();
+        assert_eq!(
+            entries.len(),
+            1,
+            "the failed egress must still be recorded for the ledger"
+        );
+        assert!(
+            matches!(
+                entries[0].0,
+                HostIoRequest::NetworkRequest { use_tls: true, .. }
+            ),
+            "the recorded request is the attempted TLS egress"
+        );
+        assert!(
+            entries[0].1.is_err(),
+            "the recorded outcome must be the fail-closed I/O failure"
         );
     }
 

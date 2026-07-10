@@ -60,10 +60,18 @@ pub enum HostIoRequest {
     /// guest can observe the real response (status/headers/body). The egress is
     /// the security-relevant action, so it carries `HostIoCapability::NetworkSend`
     /// and is gated by the product-layer SSRF policy exactly like `NetworkSend`.
+    ///
+    /// bd-3894s slice (5): `use_tls` marks a round trip whose guest URL carried an
+    /// `https://` scheme — the mechanism wraps the TCP stream in a real TLS
+    /// session (SNI from the endpoint host, roots = webpki + any operator-supplied
+    /// extras) before writing the framed request. `#[serde(default)]` keeps
+    /// previously-recorded plaintext transcripts deserializable (`false`).
     NetworkRequest {
         endpoint: String,
         payload: Vec<u8>,
         max_len: u64,
+        #[serde(default)]
+        use_tls: bool,
     },
 }
 
@@ -234,6 +242,11 @@ pub const SANDBOXED_HOST_IO_NETWORK_TIMEOUT: Duration = Duration::from_secs(10);
 pub struct SandboxedHostIo {
     root: PathBuf,
     max_bytes: u64,
+    /// Trust anchors for `use_tls` round trips: the compiled-in webpki (Mozilla)
+    /// roots by default, plus any operator-supplied extras added via
+    /// [`Self::with_extra_tls_roots_pem`] (private CAs, test anchors). Shared via
+    /// `Arc` so cloning the provider does not copy the root set.
+    tls_roots: std::sync::Arc<rustls::RootCertStore>,
 }
 
 impl SandboxedHostIo {
@@ -258,7 +271,59 @@ impl SandboxedHostIo {
         std::fs::create_dir_all(&root)?;
         // Canonicalize once so symlink-escape checks compare real paths.
         let root = root.canonicalize()?;
-        Ok(Self { root, max_bytes })
+        // bd-3894s slice (5): TLS round trips verify the peer against the
+        // compiled-in webpki (Mozilla) roots by default; operators extend the
+        // set via `with_extra_tls_roots_pem` (private CAs, test anchors).
+        let mut tls_roots = rustls::RootCertStore::empty();
+        tls_roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        Ok(Self {
+            root,
+            max_bytes,
+            tls_roots: std::sync::Arc::new(tls_roots),
+        })
+    }
+
+    /// Append PEM-encoded certificates to the TLS trust anchors used for
+    /// `use_tls` round trips (in addition to the default webpki roots). This is
+    /// the seam for operator-configured private CAs and for mock-free tests
+    /// that stand up a local TLS listener with a self-signed anchor.
+    ///
+    /// Fail-closed: an unparseable PEM or a bundle containing no valid
+    /// certificate is an error — it never silently degrades to "webpki roots
+    /// only" (an operator who configured a private CA must not discover at
+    /// request time that it was dropped).
+    ///
+    /// # Errors
+    /// Returns `InvalidData` if the PEM cannot be parsed, a certificate is
+    /// rejected by the verifier, or no certificate was added.
+    pub fn with_extra_tls_roots_pem(mut self, pem: &[u8]) -> std::io::Result<Self> {
+        use rustls_pki_types::CertificateDer;
+        use rustls_pki_types::pem::PemObject;
+        let mut roots = rustls::RootCertStore::clone(&self.tls_roots);
+        let mut added = 0usize;
+        for cert in CertificateDer::pem_slice_iter(pem) {
+            let cert = cert.map_err(|err| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("invalid PEM certificate in extra TLS roots: {err:?}"),
+                )
+            })?;
+            roots.add(cert).map_err(|err| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("rejected extra TLS root certificate: {err}"),
+                )
+            })?;
+            added += 1;
+        }
+        if added == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "extra TLS roots PEM contained no certificates",
+            ));
+        }
+        self.tls_roots = std::sync::Arc::new(roots);
+        Ok(self)
     }
 
     /// The canonical sandbox root all effects are confined to.
@@ -528,7 +593,13 @@ impl SandboxedHostIo {
     /// JS response object. Read termination relies on the peer closing the
     /// connection after responding (the engine frames `Connection: close`), so
     /// `read_to_end` returns at EOF rather than blocking until the read timeout.
-    fn network_request(&self, endpoint: &str, payload: &[u8], max_len: u64) -> HostIoOutcome {
+    fn network_request(
+        &self,
+        endpoint: &str,
+        payload: &[u8],
+        max_len: u64,
+        use_tls: bool,
+    ) -> HostIoOutcome {
         if u64::try_from(payload.len()).unwrap_or(u64::MAX) > self.max_bytes {
             return Err(HostIoError::Io {
                 detail: format!(
@@ -541,6 +612,9 @@ impl SandboxedHostIo {
         // Bound the response read by the smaller of the caller-requested length
         // and the provider's per-operation cap.
         let cap = max_len.min(self.max_bytes);
+        if use_tls {
+            return self.network_request_tls(endpoint, payload, cap);
+        }
         let mut stream = self.connect(endpoint)?;
         stream.write_all(payload).map_err(|err| HostIoError::Io {
             detail: format!("send to {endpoint}: {err}"),
@@ -563,6 +637,83 @@ impl SandboxedHostIo {
             .map_err(|err| HostIoError::Io {
                 detail: format!("recv from {endpoint}: {err}"),
             })?;
+        if u64::try_from(response.len()).unwrap_or(u64::MAX) > cap {
+            return Err(HostIoError::Io {
+                detail: format!("network response from {endpoint} exceeds the {cap}-byte cap"),
+            });
+        }
+        Ok(HostIoResponse::NetworkRequest { response })
+    }
+
+    /// bd-3894s slice (5): the TLS variant of the single-socket round trip. The
+    /// TCP stream (already connect/read/write time-bounded by `connect`) is
+    /// wrapped in a real rustls client session before the framed request is
+    /// written; the server certificate is verified against `tls_roots` (webpki
+    /// defaults plus operator extras) with SNI/verification identity taken from
+    /// the endpoint's host part (DNS name or IP address). Handshake, write, and
+    /// read failures all fail closed — there is no silent plaintext fallback.
+    ///
+    /// Unlike the plaintext path, no TCP write-half-close precedes the read: a
+    /// TCP FIN inside a TLS session is a truncation signal, not end-of-request.
+    /// Request termination is carried by the HTTP framing itself
+    /// (`Content-Length` + `Connection: close` synthesized by the engine's wire
+    /// builder), and the read tolerates a peer that closes without a TLS
+    /// `close_notify` after responding (common for one-shot HTTP servers).
+    fn network_request_tls(&self, endpoint: &str, payload: &[u8], cap: u64) -> HostIoOutcome {
+        // Verification identity: the host part of `host:port`. (IPv6 endpoints
+        // in bracket form are not produced by the engine's wire builder.)
+        let host = endpoint.rsplit_once(':').map_or(endpoint, |(h, _)| h);
+        let server_name =
+            rustls_pki_types::ServerName::try_from(host.to_string()).map_err(|err| {
+                HostIoError::Io {
+                    detail: format!("invalid TLS server name {host}: {err}"),
+                }
+            })?;
+        let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+        let config = rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .map_err(|err| HostIoError::Io {
+                detail: format!("TLS protocol setup for {endpoint}: {err}"),
+            })?
+            .with_root_certificates(rustls::RootCertStore::clone(&self.tls_roots))
+            .with_no_client_auth();
+        let conn = rustls::ClientConnection::new(std::sync::Arc::new(config), server_name)
+            .map_err(|err| HostIoError::Io {
+                detail: format!("TLS client setup for {endpoint}: {err}"),
+            })?;
+        let stream = self.connect(endpoint)?;
+        let mut tls = rustls::StreamOwned::new(conn, stream);
+        tls.write_all(payload).map_err(|err| HostIoError::Io {
+            detail: format!("TLS send to {endpoint}: {err}"),
+        })?;
+        tls.flush().map_err(|err| HostIoError::Io {
+            detail: format!("TLS flush to {endpoint}: {err}"),
+        })?;
+        // Bounded read of the reply on the same TLS session. cap+1 semantics as
+        // the plaintext path: a peer that streams more than the cap fails closed
+        // rather than being silently truncated. `UnexpectedEof` after the
+        // response is a peer that TCP-closed without `close_notify`; the HTTP
+        // framing (`Connection: close`) already delimits the response, so treat
+        // it as end-of-stream rather than an error.
+        let mut response = Vec::new();
+        let mut buf = [0u8; 8192];
+        loop {
+            if u64::try_from(response.len()).unwrap_or(u64::MAX) > cap {
+                return Err(HostIoError::Io {
+                    detail: format!("network response from {endpoint} exceeds the {cap}-byte cap"),
+                });
+            }
+            match tls.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => response.extend_from_slice(&buf[..n]),
+                Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(err) => {
+                    return Err(HostIoError::Io {
+                        detail: format!("TLS recv from {endpoint}: {err}"),
+                    });
+                }
+            }
+        }
         if u64::try_from(response.len()).unwrap_or(u64::MAX) > cap {
             return Err(HostIoError::Io {
                 detail: format!("network response from {endpoint} exceeds the {cap}-byte cap"),
@@ -597,7 +748,8 @@ impl HostIoProvider for SandboxedHostIo {
                 endpoint,
                 payload,
                 max_len,
-            } => self.network_request(endpoint, payload, *max_len),
+                use_tls,
+            } => self.network_request(endpoint, payload, *max_len, *use_tls),
         }
     }
 }
@@ -1184,6 +1336,7 @@ mod tests {
                     endpoint: addr.to_string(),
                     payload: b"GET /x HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n".to_vec(),
                     max_len: 4096,
+                    use_tls: false,
                 },
                 // The round trip is authorized by the egress (send) capability.
                 &[HostIoCapability::NetworkSend],
@@ -1203,6 +1356,185 @@ mod tests {
         );
     }
 
+    /// Stand up a one-shot HTTPS (rustls) server on a loopback port with a fresh
+    /// self-signed certificate for `127.0.0.1`. Returns the listener address, the
+    /// certificate PEM (the trust anchor a client must install), and a join
+    /// handle yielding the decrypted request bytes the server observed (empty if
+    /// the handshake never completed).
+    fn spawn_tls_http_server(
+        response: &'static [u8],
+    ) -> (
+        std::net::SocketAddr,
+        String,
+        std::thread::JoinHandle<Vec<u8>>,
+    ) {
+        use std::net::TcpListener;
+        let certified = rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()])
+            .expect("generate self-signed certificate");
+        let cert_pem = certified.cert.pem();
+        let cert_der = certified.cert.der().clone();
+        let key_der =
+            rustls_pki_types::PrivateKeyDer::Pkcs8(certified.key_pair.serialize_der().into());
+        let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+        let config = rustls::ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .expect("server protocol versions")
+            .with_no_client_auth()
+            .with_single_cert(vec![cert_der], key_der)
+            .expect("server certificate");
+        let config = std::sync::Arc::new(config);
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind TLS listener");
+        let addr = listener.local_addr().expect("local addr");
+        let server = std::thread::spawn(move || {
+            let (tcp, _) = listener.accept().expect("accept");
+            let conn = match rustls::ServerConnection::new(config) {
+                Ok(conn) => conn,
+                Err(_) => return Vec::new(),
+            };
+            let mut tls = rustls::StreamOwned::new(conn, tcp);
+            // Read the request up to the header terminator (the test requests
+            // are bodyless GETs). A client that aborts the handshake (untrusted
+            // anchor) surfaces here as a read error: report an empty request.
+            let mut request = Vec::new();
+            let mut buf = [0u8; 1024];
+            loop {
+                match tls.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        request.extend_from_slice(&buf[..n]);
+                        if request.windows(4).any(|w| w == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                    Err(_) => return Vec::new(),
+                }
+            }
+            let _ = tls.write_all(response);
+            let _ = tls.flush();
+            tls.conn.send_close_notify();
+            let _ = tls.flush();
+            request
+        });
+        (addr, cert_pem, server)
+    }
+
+    /// bd-3894s slice (5): a `use_tls` round trip performs a REAL TLS handshake
+    /// against a real rustls server (self-signed anchor installed via
+    /// `with_extra_tls_roots_pem`), the framed request crosses the encrypted
+    /// channel, and the peer's response comes back on the same session.
+    #[test]
+    fn sandboxed_tls_network_request_round_trips_bd_3894s() {
+        let scratch = ScratchDir::new();
+        let (addr, cert_pem, server) =
+            spawn_tls_http_server(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nbody");
+        let provider = SandboxedHostIo::with_root(&scratch.path)
+            .expect("provider")
+            .with_extra_tls_roots_pem(cert_pem.as_bytes())
+            .expect("install test trust anchor");
+        let out = provider
+            .perform(
+                &HostIoRequest::NetworkRequest {
+                    endpoint: addr.to_string(),
+                    payload: b"GET /x HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n".to_vec(),
+                    max_len: 4096,
+                    use_tls: true,
+                },
+                &[HostIoCapability::NetworkSend],
+            )
+            .expect("TLS network request");
+        assert_eq!(
+            out,
+            HostIoResponse::NetworkRequest {
+                response: b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nbody".to_vec()
+            },
+            "the TLS round trip returns the peer's full response"
+        );
+        let request = server.join().expect("server thread");
+        assert_eq!(
+            request, b"GET /x HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n",
+            "the decrypted request really reached the TLS server"
+        );
+    }
+
+    /// bd-3894s slice (5): without the server's anchor in the trust roots the
+    /// handshake MUST fail closed — no response, and critically no silent
+    /// plaintext fallback.
+    #[test]
+    fn sandboxed_tls_untrusted_anchor_fails_closed_bd_3894s() {
+        let scratch = ScratchDir::new();
+        let (addr, _cert_pem, server) =
+            spawn_tls_http_server(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nbody");
+        // Deliberately NOT installing the server's self-signed anchor.
+        let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
+        let out = provider.perform(
+            &HostIoRequest::NetworkRequest {
+                endpoint: addr.to_string(),
+                payload: b"GET /x HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n".to_vec(),
+                max_len: 4096,
+                use_tls: true,
+            },
+            &[HostIoCapability::NetworkSend],
+        );
+        assert!(
+            matches!(out, Err(HostIoError::Io { .. })),
+            "untrusted TLS anchor must fail closed, got {out:?}"
+        );
+        let request = server.join().expect("server thread");
+        assert!(
+            request.is_empty(),
+            "no request bytes may reach the peer when certificate verification fails"
+        );
+    }
+
+    /// bd-3894s slice (5): a `use_tls` request against a plaintext peer fails
+    /// closed at the handshake (the peer answers the ClientHello with garbage) —
+    /// it never degrades to sending the request in the clear.
+    #[test]
+    fn sandboxed_tls_to_plaintext_peer_fails_closed_bd_3894s() {
+        use std::net::TcpListener;
+        let scratch = ScratchDir::new();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let addr = listener.local_addr().expect("local addr");
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            // A plaintext HTTP server: reply immediately without a handshake.
+            let _ = sock.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n");
+        });
+        let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
+        let out = provider.perform(
+            &HostIoRequest::NetworkRequest {
+                endpoint: addr.to_string(),
+                payload: b"GET / HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n".to_vec(),
+                max_len: 4096,
+                use_tls: true,
+            },
+            &[HostIoCapability::NetworkSend],
+        );
+        assert!(
+            matches!(out, Err(HostIoError::Io { .. })),
+            "TLS to a plaintext peer must fail closed, got {out:?}"
+        );
+        server.join().expect("server thread");
+    }
+
+    /// bd-3894s slice (5): the extra-roots seam is fail-closed — garbage PEM and
+    /// certificate-free PEM are errors, never a silent no-op that would leave an
+    /// operator's private CA unexpectedly untrusted.
+    #[test]
+    fn extra_tls_roots_pem_rejects_invalid_input_bd_3894s() {
+        let scratch = ScratchDir::new();
+        let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
+        let err = provider
+            .clone()
+            .with_extra_tls_roots_pem(b"this is not a pem bundle")
+            .expect_err("garbage PEM must be rejected");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        let err = provider
+            .with_extra_tls_roots_pem(b"")
+            .expect_err("empty PEM must be rejected");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
     /// bd-3894s slice (4): `NetworkRequest` requires the `NetworkSend` capability
     /// (the egress is the gated action); without it the round trip fails closed
     /// before any socket opens.
@@ -1215,6 +1547,7 @@ mod tests {
                 endpoint: "127.0.0.1:9".to_string(),
                 payload: b"GET / HTTP/1.1\r\n\r\n".to_vec(),
                 max_len: 4096,
+                use_tls: false,
             },
             &[HostIoCapability::FsRead],
         );

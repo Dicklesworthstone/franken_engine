@@ -12,7 +12,20 @@ serde_json = "1.0"
 serde_bytes = "0.11"
 sha2 = "0.10"
 ed25519-dalek = "2.1"
+# bd-3894s slice (5): client-side TLS for the sandboxed network mechanism
+# (`SandboxedHostIo`), so a guest `https.*`/`fetch(https://...)` egress performs
+# a real TLS handshake instead of writing plaintext HTTP to port 443. The `ring`
+# provider is selected explicitly (no aws-lc-rs/cmake build dependency).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# NOTE: the `pem` module (PemObject / pem_slice_iter) ships under the default
+# `std` feature; rustls-pki-types has no `pem` cargo feature (declaring one
+# breaks resolution for the whole workspace).
+rustls-pki-types = "1"
+webpki-roots = "1"
 
 [dev-dependencies]
 insta = { version = "1.39", features = ["filters"] }
 toml = "0.8"
+# bd-3894s slice (5): self-signed certificate generation for the mock-free TLS
+# loopback tests (real rustls server on 127.0.0.1, no external network).
+rcgen = { version = "0.13", default-features = false, features = ["crypto", "pem", "ring"] }

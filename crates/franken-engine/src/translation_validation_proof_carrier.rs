@@ -1638,6 +1638,61 @@ mod tests {
     }
 
     #[test]
+    fn every_validator_class_emits_a_witness_artifact() {
+        // The E6.T3 validator inventory (bd-fqlfw.6.3): each differential
+        // translation validator emits a machine-readable witness (proof or
+        // counterexample), not just pass/fail. The emitter is generic over
+        // the validator id; this pins the six-class inventory end-to-end
+        // through sanitized proof.json emission and round-trip.
+        let validator_ids = [
+            "exception-validator",
+            "iterator-validator",
+            "hostcall-validator",
+            "async-generator-validator",
+            "ifc-label-validator",
+            "full-ir-validator",
+        ];
+        let tmp = tempfile::tempdir().expect("tempdir");
+        for (index, validator_id) in validator_ids.iter().enumerate() {
+            let proof = if index.is_multiple_of(2) {
+                proof_with_result(ValidationResult::Success {
+                    test_cases_passed: 8,
+                    test_cases_total: 8,
+                    success_rate_percent: 100,
+                })
+            } else {
+                proof_with_result(ValidationResult::Failed {
+                    test_cases_passed: 7,
+                    test_cases_total: 8,
+                    success_rate_percent: 87,
+                    failure_reasons: vec![format!("{validator_id} divergence")],
+                })
+            };
+
+            let emitted =
+                emit_translation_validation_witness_artifact(&proof, tmp.path(), validator_id)
+                    .unwrap_or_else(|err| panic!("{validator_id} emission failed: {err:?}"));
+
+            let json = std::fs::read_to_string(&emitted.path).expect("read witness");
+            let parsed: TranslationValidationWitnessArtifact =
+                serde_json::from_str(&json).expect("valid witness json");
+            assert_eq!(parsed.validator_id, *validator_id);
+            assert!(parsed.verify_content_hash(), "{validator_id} hash binding");
+            match parsed.verdict {
+                TranslationValidationWitnessVerdict::Proven => {
+                    assert!(parsed.counterexample.is_none());
+                }
+                TranslationValidationWitnessVerdict::Counterexample => {
+                    assert!(parsed.counterexample.is_some());
+                }
+                TranslationValidationWitnessVerdict::Unavailable => {
+                    panic!("{validator_id}: unexpected Unavailable verdict")
+                }
+            }
+        }
+    }
+
+    #[test]
     fn emit_translation_validation_witness_artifact_writes_sanitized_proof_json() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let proof = proof_with_result(ValidationResult::Failed {

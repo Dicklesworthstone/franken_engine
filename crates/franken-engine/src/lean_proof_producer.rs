@@ -458,9 +458,18 @@ fn collect_lean_files_inner(
                 path: path.clone(),
                 source,
             })?;
+        // Hidden directories (`.lake/`, `.git/`, …) hold the package cache and
+        // tooling state, not the proof corpus; binding them into the artifact
+        // would hash all of mathlib and drift with the cache.
+        let hidden = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with('.'));
         if file_type.is_dir() {
-            collect_lean_files_inner(&path, files)?;
-        } else if path.extension().is_some_and(|ext| ext == "lean") {
+            if !hidden {
+                collect_lean_files_inner(&path, files)?;
+            }
+        } else if !hidden && path.extension().is_some_and(|ext| ext == "lean") {
             files.push(path);
         }
     }
@@ -707,6 +716,37 @@ mod tests {
                 .contains_key("lake-build.stdout")
         );
         assert!(validate_proof_producer_artifact(&report.artifact).is_ok());
+    }
+
+    #[test]
+    fn produce_lean_proof_artifact_skips_hidden_directories() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_fixture_proofs(
+            temp.path(),
+            "theorem join_idempotent (a : Nat) : a = a := by rfl\n",
+        );
+        // Simulate the lake package cache: theorems under `.lake/` must not
+        // leak into the artifact's theorem inventory or content binding.
+        let cache = temp.path().join(".lake/packages/mathlib");
+        fs::create_dir_all(&cache).expect("mkdir .lake");
+        fs::write(
+            cache.join("Cached.lean"),
+            "theorem mathlib_cached_theorem : True := by trivial\n",
+        )
+        .expect("write cached theorem");
+
+        let report = produce_lean_proof_artifact(&success_config(temp.path())).expect("artifact");
+
+        assert_eq!(report.theorem_ids, vec!["join_idempotent"]);
+        assert!(
+            report
+                .artifact
+                .input_artifact_hashes
+                .keys()
+                .all(|key| !key.starts_with(".lake")),
+            "package-cache files leaked into input hashes: {:?}",
+            report.artifact.input_artifact_hashes.keys()
+        );
     }
 
     #[test]

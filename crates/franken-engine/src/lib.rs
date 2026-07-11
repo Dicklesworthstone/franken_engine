@@ -170,6 +170,7 @@ pub mod dp_budget_accountant;
 pub mod dual_backend_parser;
 pub mod e2e_harness;
 pub mod e8_analyzed_subset;
+pub mod e9_equivalence_receipts;
 pub mod e9_shadow_candidate_discovery;
 pub mod effect_set;
 pub mod engine_object_id;

@@ -1935,7 +1935,10 @@ impl ExecutionOrchestrator {
         }
     }
 
-    fn instruction_mnemonic(instr: &crate::ir_contract::Ir3Instruction) -> &'static str {
+    /// Canonical IR3 mnemonic, shared with the shadow-mode specialization
+    /// discovery lane (bd-fqlfw.9.1) so op-family attribution cannot drift
+    /// from the schedule-cost model.
+    pub(crate) fn instruction_mnemonic(instr: &crate::ir_contract::Ir3Instruction) -> &'static str {
         match instr {
             crate::ir_contract::Ir3Instruction::LoadInt { .. } => "load_int",
             crate::ir_contract::Ir3Instruction::LoadBigInt { .. } => "load_bigint",
@@ -2034,7 +2037,9 @@ impl ExecutionOrchestrator {
         }
     }
 
-    fn instruction_cost(instr: &crate::ir_contract::Ir3Instruction) -> i64 {
+    /// Deterministic per-op cost weights behind `ir3_schedule_cost`, shared
+    /// with the shadow-mode specialization discovery lane (bd-fqlfw.9.1).
+    pub(crate) fn instruction_cost(instr: &crate::ir_contract::Ir3Instruction) -> i64 {
         match instr {
             crate::ir_contract::Ir3Instruction::HostCall { .. } => 4,
             crate::ir_contract::Ir3Instruction::Call { .. } => 3,

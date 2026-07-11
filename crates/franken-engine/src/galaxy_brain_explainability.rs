@@ -1508,6 +1508,73 @@ fn render_recommended_action(explanation: &DecisionExplanation) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Narration replay check — byte-identical narration or a diff (Track X.3)
+// ---------------------------------------------------------------------------
+
+/// Verdict of replaying a decision's narration against its original receipt.
+///
+/// Byte-for-byte identity is the load-bearing contract: anything else means
+/// the narration is storytelling, not reproducible evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "verdict", rename_all = "snake_case")]
+pub enum NarrationReplayVerdict {
+    /// The replayed narration is byte-identical to the original.
+    Identical {
+        /// The shared narrative content hash.
+        narrative_content_hash: String,
+    },
+    /// The replayed narration diverged from the original.
+    Divergent {
+        /// Narrative content hash recorded on the original receipt.
+        original_hash: String,
+        /// Narrative content hash of the replayed narration.
+        replayed_hash: String,
+        /// Byte index of the first divergence (== common prefix length).
+        first_divergence_index: u64,
+        /// Original narration length in bytes.
+        original_len: u64,
+        /// Replayed narration length in bytes.
+        replayed_len: u64,
+    },
+}
+
+impl NarrationReplayVerdict {
+    /// Whether the replay reproduced the narration byte-for-byte.
+    pub fn is_identical(&self) -> bool {
+        matches!(self, Self::Identical { .. })
+    }
+}
+
+/// Compare an original narration receipt against a replayed constrained
+/// narrative. Identity requires both byte-identical text and a matching
+/// narrative content hash; any difference yields a diff-bearing verdict.
+pub fn narration_replay_check(
+    original: &NarrationReceipt,
+    replayed: &ConstrainedNarrative,
+) -> NarrationReplayVerdict {
+    let original_bytes = original.narrative_text_canonical.as_bytes();
+    let replayed_bytes = replayed.text.as_bytes();
+    if original_bytes == replayed_bytes && original.narrative_content_hash == replayed.content_hash
+    {
+        return NarrationReplayVerdict::Identical {
+            narrative_content_hash: replayed.content_hash.clone(),
+        };
+    }
+    let first_divergence_index = original_bytes
+        .iter()
+        .zip(replayed_bytes.iter())
+        .take_while(|(a, b)| a == b)
+        .count() as u64;
+    NarrationReplayVerdict::Divergent {
+        original_hash: original.narrative_content_hash.clone(),
+        replayed_hash: replayed.content_hash.clone(),
+        first_divergence_index,
+        original_len: original_bytes.len() as u64,
+        replayed_len: replayed_bytes.len() as u64,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -3644,5 +3711,81 @@ mod tests {
                 .recommended_action_text
                 .contains("rationale=contain_the_exfiltration_pattern")
         );
+    }
+
+    // ── Narration replay check (Track X.3) ───────────────────────
+
+    #[test]
+    fn narration_replay_identical_when_regenerated_from_same_inputs() {
+        let key = receipt_signing_key(61);
+        let receipt = build_receipt(&key);
+        let replayed =
+            receipt_explanation().constrained_narrative(NarrativeGrammarPolicy::default());
+        let verdict = narration_replay_check(&receipt, &replayed);
+        assert!(verdict.is_identical());
+        assert_eq!(
+            verdict,
+            NarrationReplayVerdict::Identical {
+                narrative_content_hash: receipt.narrative_content_hash.clone(),
+            }
+        );
+    }
+
+    #[test]
+    fn narration_replay_divergence_reports_first_byte_and_hashes() {
+        let key = receipt_signing_key(61);
+        let receipt = build_receipt(&key);
+        // Perturb the decision input: a different chosen loss changes the
+        // rendered narration.
+        let mut perturbed = receipt_explanation();
+        perturbed.chosen_loss_millionths += 1;
+        let replayed = perturbed.constrained_narrative(NarrativeGrammarPolicy::default());
+        match narration_replay_check(&receipt, &replayed) {
+            NarrationReplayVerdict::Divergent {
+                original_hash,
+                replayed_hash,
+                first_divergence_index,
+                original_len,
+                replayed_len,
+            } => {
+                assert_eq!(original_hash, receipt.narrative_content_hash);
+                assert_eq!(replayed_hash, replayed.content_hash);
+                assert_ne!(original_hash, replayed_hash);
+                assert!(first_divergence_index < original_len.max(replayed_len));
+                let common = receipt
+                    .narrative_text_canonical
+                    .as_bytes()
+                    .iter()
+                    .zip(replayed.text.as_bytes())
+                    .take_while(|(a, b)| a == b)
+                    .count() as u64;
+                assert_eq!(first_divergence_index, common);
+            }
+            other => panic!("expected divergence, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn narration_replay_hash_mismatch_alone_is_divergent() {
+        // Same text but a receipt whose recorded narrative hash was forged:
+        // identity requires BOTH byte equality and hash agreement.
+        let key = receipt_signing_key(61);
+        let mut receipt = build_receipt(&key);
+        receipt.narrative_content_hash = "00000000000000000000000000000000".to_string();
+        let replayed =
+            receipt_explanation().constrained_narrative(NarrativeGrammarPolicy::default());
+        let verdict = narration_replay_check(&receipt, &replayed);
+        assert!(!verdict.is_identical());
+    }
+
+    #[test]
+    fn narration_replay_verdict_serializes_for_gate_report() {
+        let verdict = NarrationReplayVerdict::Identical {
+            narrative_content_hash: "abcd".to_string(),
+        };
+        let json = serde_json::to_string(&verdict).expect("serializes");
+        assert!(json.contains("\"verdict\":\"identical\""));
+        let back: NarrationReplayVerdict = serde_json::from_str(&json).expect("deserializes");
+        assert_eq!(back, verdict);
     }
 }

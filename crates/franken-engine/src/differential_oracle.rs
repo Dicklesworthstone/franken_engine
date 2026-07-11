@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use wait_timeout::ChildExt;
 
 use frankenengine_core::baseline_interpreter::{
-    InterpreterConfig as CoreInterpreterConfig, QuickJsLane as CoreQuickJsLane,
+    InterpreterConfig as CoreInterpreterConfig, QuickJsLane as CoreQuickJsLane, Value as CoreValue,
 };
 use frankenengine_core::capability::RuntimeCapability as CoreRuntimeCapability;
 use frankenengine_core::ir_contract::{
@@ -242,6 +242,15 @@ pub struct DifferentialBackendReceipt {
     pub duration_micros: u128,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
+    /// Exact UTF-16 code units of the completion value, present iff it is a
+    /// string containing lone surrogates (bd-2vzgi). `value` then carries the
+    /// lossy U+FFFD projection, which collapses distinct lone surrogates (and
+    /// a lone surrogate vs a literal U+FFFD) into identical strings; the
+    /// canonical comparison keys on the (projection, units) pair so those
+    /// stay distinct. Absent for every well-formed observable, keeping the
+    /// serialized receipt byte-identical for them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_wtf16: Option<Vec<u16>>,
     pub stdout: String,
     pub stderr: String,
     pub stdout_sha256: String,
@@ -304,6 +313,11 @@ pub struct DifferentialCanonicalObservation {
     pub canonical_stderr: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structured_value: Option<String>,
+    /// Exact UTF-16 code units backing `structured_value` when the structured
+    /// value is the completion value and that value contains lone surrogates
+    /// (bd-2vzgi). Participates in the `StructuredValue` comparison key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_value_wtf16: Option<Vec<u16>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exception_kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -466,6 +480,7 @@ fn run_external_backend(
                 exit_code: None,
                 duration_micros: 0,
                 value: None,
+                value_wtf16: None,
                 stdout: String::new(),
                 stderr: String::new(),
                 stdout_sha256: sha256_hex(b""),
@@ -509,6 +524,7 @@ fn run_external_backend(
                 exit_code: output.status.code(),
                 duration_micros: output.duration_micros,
                 value: None,
+                value_wtf16: None,
                 stdout,
                 stderr,
                 stdout_sha256: sha256_hex(&output.stdout),
@@ -524,6 +540,7 @@ fn run_external_backend(
             exit_code: None,
             duration_micros: 0,
             value: None,
+            value_wtf16: None,
             stdout: String::new(),
             stderr: String::new(),
             stdout_sha256: sha256_hex(b""),
@@ -541,6 +558,7 @@ fn run_external_backend(
             exit_code: None,
             duration_micros: 0,
             value: None,
+            value_wtf16: None,
             stdout: String::new(),
             stderr: error.to_string(),
             stdout_sha256: sha256_hex(b""),
@@ -633,6 +651,7 @@ fn run_franken_engine_backend(
                 exit_code: Some(0),
                 duration_micros: started.elapsed().as_micros(),
                 value: Some(outcome.value),
+                value_wtf16: outcome.value_wtf16,
                 stdout_sha256: sha256_hex(stdout.as_bytes()),
                 stderr_sha256: sha256_hex(stderr.as_bytes()),
                 stdout,
@@ -652,6 +671,7 @@ fn run_franken_engine_backend(
                 exit_code: Some(1),
                 duration_micros: started.elapsed().as_micros(),
                 value: None,
+                value_wtf16: None,
                 stdout: String::new(),
                 stderr,
                 stdout_sha256: sha256_hex(b""),
@@ -683,7 +703,7 @@ fn run_franken_core_backend(
         ));
     }
     match eval_with_franken_core(source, instruction_budget, memory_budget_override) {
-        Ok(value) => {
+        Ok((value, value_wtf16)) => {
             let stdout = value.clone();
             let mut diagnostics = vec![
                 "frankenengine-core path dependency executed in-process through parser/lowering/QuickJsLane".to_string(),
@@ -705,6 +725,7 @@ fn run_franken_core_backend(
                 exit_code: Some(0),
                 duration_micros: started.elapsed().as_micros(),
                 value: Some(value),
+                value_wtf16,
                 stdout_sha256: sha256_hex(stdout.as_bytes()),
                 stderr_sha256: sha256_hex(b""),
                 stdout,
@@ -736,6 +757,7 @@ fn run_franken_core_backend(
                 exit_code: Some(1),
                 duration_micros: started.elapsed().as_micros(),
                 value: None,
+                value_wtf16: None,
                 stdout: String::new(),
                 stderr,
                 stdout_sha256: sha256_hex(b""),
@@ -761,11 +783,15 @@ impl FrankenCoreBackendError {
     }
 }
 
+/// Evaluate `source` on the franken-core lane, returning the rendered
+/// completion value plus its exact UTF-16 code units when (and only when)
+/// the completion value is a lone-surrogate string that the rendered
+/// projection cannot represent (bd-2vzgi).
 fn eval_with_franken_core(
     source: &str,
     instruction_budget: Option<u64>,
     memory_budget_override: Option<EngineMemoryBudget>,
-) -> Result<String, FrankenCoreBackendError> {
+) -> Result<(String, Option<Vec<u16>>), FrankenCoreBackendError> {
     let normalized = source.trim();
     if normalized.is_empty() {
         return Err(FrankenCoreBackendError {
@@ -821,7 +847,11 @@ fn eval_with_franken_core(
     let result = CoreQuickJsLane::with_config(config)
         .execute(&lowering_output.ir3, "trace-differential-franken-core")
         .map_err(|error| FrankenCoreBackendError::new("execute", error))?;
-    Ok(result.value.to_string())
+    let value_wtf16 = match &result.value {
+        CoreValue::Str(s) if !s.is_well_formed() => Some(s.code_units_vec()),
+        _ => None,
+    };
+    Ok((result.value.to_string(), value_wtf16))
 }
 
 fn core_parse_goal(source: &str) -> CoreParseGoal {
@@ -1277,7 +1307,8 @@ fn canonicalize_backend_receipt(
 ) -> DifferentialCanonicalObservation {
     let canonical_stdout = canonicalize_stream(receipt.stdout.as_str());
     let canonical_stderr = canonicalize_stream(receipt.stderr.as_str());
-    let structured_value = canonical_structured_value(receipt, canonical_stdout.as_str());
+    let (structured_value, structured_value_wtf16) =
+        canonical_structured_value(receipt, canonical_stdout.as_str());
     let (exception_kind, exception_message_class) = canonical_exception(receipt);
 
     DifferentialCanonicalObservation {
@@ -1286,6 +1317,7 @@ fn canonicalize_backend_receipt(
         canonical_stdout,
         canonical_stderr,
         structured_value,
+        structured_value_wtf16,
         exception_kind,
         exception_message_class,
         timing_envelope: timing_envelope(receipt.duration_micros),
@@ -1347,7 +1379,15 @@ fn comparison_entry(
         DifferentialComparisonMode::StructuredValue => {
             observation.structured_value.as_ref().map(|value| {
                 let sample = abbreviate(value);
-                (format!("structured_value:{value}"), sample)
+                // The comparison key is the (projection, exact-units) pair:
+                // the projection alone would collapse distinct lone
+                // surrogates — and a lone surrogate vs a literal U+FFFD —
+                // into false consensus (bd-2vzgi).
+                let key = match &observation.structured_value_wtf16 {
+                    Some(units) => format!("structured_value:{value}|wtf16:{units:?}"),
+                    None => format!("structured_value:{value}"),
+                };
+                (key, sample)
             })
         }
         DifferentialComparisonMode::ExactStdout => {
@@ -1432,17 +1472,27 @@ fn summarize_semantic_verdict(
 fn canonical_structured_value(
     receipt: &DifferentialBackendReceipt,
     canonical_stdout: &str,
-) -> Option<String> {
+) -> (Option<String>, Option<Vec<u16>>) {
     if receipt.status != DifferentialBackendStatus::Completed {
-        return None;
+        return (None, None);
     }
     // Prefer the program's observable console output (matching the `node -e` /
     // `bun -e` subprocess model the external backends use); fall back to an
     // explicit completion value only when nothing was printed (e.g. a bare
     // expression that the in-process lanes can still report a value for).
-    infer_single_stdout_value(canonical_stdout)
-        .or(receipt.value.as_deref())
-        .map(canonicalize_js_value)
+    let Some(source) = infer_single_stdout_value(canonical_stdout).or(receipt.value.as_deref())
+    else {
+        return (None, None);
+    };
+    // Exact code units ride along only when the structured value IS the
+    // completion value — taken directly, or via a stdout line that mirrors it
+    // (the franken-core lane surfaces the completion value as its stdout) —
+    // never attached to unrelated console output (bd-2vzgi).
+    let wtf16 = match (&receipt.value_wtf16, &receipt.value) {
+        (Some(units), Some(value)) if source == value => Some(units.clone()),
+        _ => None,
+    };
+    (Some(canonicalize_js_value(source)), wtf16)
 }
 
 fn infer_single_stdout_value(canonical_stdout: &str) -> Option<&str> {
@@ -2322,6 +2372,31 @@ pub fn default_engine_core_corpus() -> Vec<EngineCoreCorpusCase> {
             "array_index",
             "(function () { var a = [10, 20, 30]; return a[1]; })();",
         ),
+        // Lone-surrogate string semantics (bd-2vzgi): both lanes carry exact
+        // UTF-16 code units through `value_wtf16`, so a surrogate half is
+        // compared exactly rather than through its lossy U+FFFD projection.
+        ("string_length_utf16", "\"a\u{1F600}b\".length;"),
+        (
+            "string_char_at_surrogate_half",
+            "\"a\u{1F600}b\".charAt(1);",
+        ),
+        (
+            "string_char_at_healing",
+            "\"a\u{1F600}b\".charAt(1) + \"a\u{1F600}b\".charAt(2);",
+        ),
+        (
+            "string_char_code_at_exact_unit",
+            "\"a\u{1F600}b\".charCodeAt(1);",
+        ),
+        ("string_from_char_code_lone", "String.fromCharCode(55357);"),
+        (
+            "string_from_char_code_healing",
+            "String.fromCharCode(55357, 56832);",
+        ),
+        (
+            "string_distinct_lone_surrogates_not_equal",
+            "String.fromCharCode(55296) === String.fromCharCode(55297);",
+        ),
     ]
     .into_iter()
     .map(|(case_id, source)| EngineCoreCorpusCase::new(case_id, source))
@@ -2407,6 +2482,135 @@ mod tests {
                 .backends
                 .contains(&DifferentialBackend::NodeLts)
         );
+    }
+
+    // --- bd-2vzgi: lone-surrogate observables compare exactly ----------------
+
+    #[test]
+    fn franken_core_backend_reports_exact_units_for_lone_surrogate_value() {
+        let receipt = run_franken_core_backend("\"a\u{1F600}b\".charAt(1);", None, None);
+        assert_eq!(receipt.status, DifferentialBackendStatus::Completed);
+        // The String channel carries the lossy projection; the exact code
+        // units ride alongside.
+        assert_eq!(receipt.value.as_deref(), Some("\u{FFFD}"));
+        assert_eq!(receipt.value_wtf16, Some(vec![0xD83D]));
+    }
+
+    #[test]
+    fn franken_engine_backend_reports_exact_units_for_lone_surrogate_value() {
+        let receipt = run_franken_engine_backend("\"a\u{1F600}b\".charAt(1);", None, None);
+        assert_eq!(receipt.status, DifferentialBackendStatus::Completed);
+        assert_eq!(receipt.value.as_deref(), Some("\u{FFFD}"));
+        assert_eq!(receipt.value_wtf16, Some(vec![0xD83D]));
+    }
+
+    #[test]
+    fn healed_surrogate_concat_has_no_wtf16_channel() {
+        // A healed pair is well-formed, so the exact-units channel must stay
+        // absent and the wire format unchanged.
+        let receipt = run_franken_core_backend(
+            "\"a\u{1F600}b\".charAt(1) + \"a\u{1F600}b\".charAt(2);",
+            None,
+            None,
+        );
+        assert_eq!(receipt.status, DifferentialBackendStatus::Completed);
+        assert_eq!(receipt.value.as_deref(), Some("\u{1F600}"));
+        assert_eq!(receipt.value_wtf16, None);
+    }
+
+    #[test]
+    fn lone_surrogate_vs_literal_replacement_char_diverges_not_consensus() {
+        // Same U+FFFD projection, but one lane's value is a real lone
+        // surrogate: the (projection, units) comparison key must classify a
+        // divergence rather than declare false consensus.
+        let mut lone = receipt(
+            DifferentialBackend::FrankenEngine,
+            DifferentialBackendStatus::Completed,
+            Some("\u{FFFD}"),
+            "\u{FFFD}",
+            "",
+            &[],
+        );
+        lone.value_wtf16 = Some(vec![0xD800]);
+        let literal = receipt(
+            DifferentialBackend::FrankenCore,
+            DifferentialBackendStatus::Completed,
+            Some("\u{FFFD}"),
+            "\u{FFFD}",
+            "",
+            &[],
+        );
+        let report = canonicalize_backend_receipts(&[lone, literal]);
+        let structured = comparison(&report, DifferentialComparisonMode::StructuredValue);
+        assert_eq!(
+            structured.verdict,
+            DifferentialComparisonVerdict::Divergence
+        );
+        assert_eq!(structured.groups.len(), 2);
+    }
+
+    #[test]
+    fn distinct_lone_surrogates_diverge_while_equal_units_reach_consensus() {
+        let mut d800 = receipt(
+            DifferentialBackend::FrankenEngine,
+            DifferentialBackendStatus::Completed,
+            Some("\u{FFFD}"),
+            "\u{FFFD}",
+            "",
+            &[],
+        );
+        d800.value_wtf16 = Some(vec![0xD800]);
+        let mut d801 = receipt(
+            DifferentialBackend::FrankenCore,
+            DifferentialBackendStatus::Completed,
+            Some("\u{FFFD}"),
+            "\u{FFFD}",
+            "",
+            &[],
+        );
+        d801.value_wtf16 = Some(vec![0xD801]);
+        let report = canonicalize_backend_receipts(&[d800.clone(), d801]);
+        let structured = comparison(&report, DifferentialComparisonMode::StructuredValue);
+        assert_eq!(
+            structured.verdict,
+            DifferentialComparisonVerdict::Divergence
+        );
+
+        let mut d800_twin = d800.clone();
+        d800_twin.backend = DifferentialBackend::FrankenCore;
+        let report = canonicalize_backend_receipts(&[d800, d800_twin]);
+        let structured = comparison(&report, DifferentialComparisonMode::StructuredValue);
+        assert_eq!(structured.verdict, DifferentialComparisonVerdict::Consensus);
+    }
+
+    #[test]
+    fn engine_core_surrogate_corpus_reaches_consensus() {
+        // The bd-2vzgi acceptance criterion: the lone-surrogate seed corpus
+        // cases agree between the two in-process lanes (no external runtime).
+        let corpus: Vec<EngineCoreCorpusCase> = default_engine_core_corpus()
+            .into_iter()
+            .filter(|case| {
+                matches!(
+                    case.case_id.as_str(),
+                    "string_length_utf16"
+                        | "string_char_at_surrogate_half"
+                        | "string_char_at_healing"
+                        | "string_char_code_at_exact_unit"
+                        | "string_from_char_code_lone"
+                        | "string_from_char_code_healing"
+                        | "string_distinct_lone_surrogates_not_equal"
+                )
+            })
+            .collect();
+        assert_eq!(corpus.len(), 7, "all surrogate corpus cases present");
+        let report = run_engine_core_differential_oracle(&corpus, 8);
+        assert!(
+            report.defects.is_empty(),
+            "surrogate corpus defects: {:?}",
+            report.defects
+        );
+        assert_eq!(report.agreements, corpus.len());
+        assert!(report.accounting_is_consistent());
     }
 
     #[test]
@@ -3103,6 +3307,7 @@ mod tests {
             }),
             duration_micros: 2_500,
             value: value.map(str::to_string),
+            value_wtf16: None,
             stdout: stdout.to_string(),
             stderr: stderr.to_string(),
             stdout_sha256: sha256_hex(stdout.as_bytes()),

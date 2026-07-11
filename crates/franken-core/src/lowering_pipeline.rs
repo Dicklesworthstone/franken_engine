@@ -6479,6 +6479,39 @@ fn lower_expression_to_ir1(
                 });
                 return Ok(());
             }
+            // `String.fromCharCode(...)` on the unbound `String` global
+            // lowers to a builtin hostcall (bd-2vzgi), following the
+            // `require` precedent above: core has no global-object registry,
+            // so the static String method resolves at lowering time when the
+            // identifier is not shadowed by a user binding.
+            if let Expression::Member {
+                object,
+                property,
+                computed: false,
+            } = callee.as_ref()
+                && let Expression::Identifier(obj_name) = object.as_ref()
+                && obj_name == "String"
+                && !binding_lookup.contains_key(obj_name.as_str())
+                && let Expression::Identifier(method_name) = property.as_ref()
+                && method_name == "fromCharCode"
+            {
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: "builtin:StringFromCharCode".to_string(),
+                    arg_count: arguments.len() as u32,
+                });
+                return Ok(());
+            }
             // Detect method calls: obj.method(args) → CallMethod with receiver
             let is_method = matches!(
                 callee.as_ref(),

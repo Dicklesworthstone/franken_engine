@@ -1373,7 +1373,7 @@ mod tests {
     }
 
     fn js_str(s: &str) -> JsValue {
-        JsValue::Str(s.to_string())
+        JsValue::str(s)
     }
 
     // ----- Promise state machine -----

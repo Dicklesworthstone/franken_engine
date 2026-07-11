@@ -24,7 +24,7 @@ fn arbitrary_value() -> impl Strategy<Value = Value> {
         Just(Value::Null),
         any::<bool>().prop_map(Value::Bool),
         any::<i32>().prop_map(|n| Value::Int(n as i64)),
-        ".*".prop_map(Value::Str),
+        ".*".prop_map(|s: String| Value::str(s)),
     ]
 }
 

@@ -82,6 +82,19 @@ A bundle directory contains:
 > change the semantic verdict. Always read `semantic_verdict` / `exit_code`, not
 > the raw finding count.
 
+### Lone-surrogate observables (`value_wtf16`)
+
+A completion value that is a string containing lone UTF-16 surrogates cannot be
+represented in the receipt's UTF-8 `value` / `stdout` channels: those carry the
+lossy U+FFFD projection, which collapses distinct lone surrogates (and a lone
+surrogate vs a literal U+FFFD) into identical strings. Since bd-2vzgi both
+in-process lanes attach the exact code units as an optional `value_wtf16` field
+on the backend receipt (`structured_value_wtf16` on the canonical observation),
+and the `structured_value` comparison keys on the (projection, exact-units)
+pair. The field is absent for every well-formed observable, so existing
+receipts and their hashes are unchanged; external Node/Bun subprocess lanes
+never populate it (their observable is a UTF-8 byte stream).
+
 ## The divergence taxonomy
 
 Every classified divergence is tagged with exactly one class. The seven classes

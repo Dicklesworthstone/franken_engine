@@ -1293,6 +1293,13 @@ impl<'de> Deserialize<'de> for RouteReason {
 pub struct EvalOutcome {
     pub engine: EngineKind,
     pub value: String,
+    /// Exact UTF-16 code units of the completion value, present iff it is a
+    /// string containing lone surrogates (bd-2vzgi). `value` then carries the
+    /// U+FFFD projection; exact-semantics consumers (the differential oracle)
+    /// compare the (projection, units) pair. `None` for every well-formed
+    /// completion value, so the serialized form is unchanged for them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_wtf16: Option<Vec<u16>>,
     pub route_reason: RouteReason,
     #[serde(default)]
     pub console_output: Vec<baseline_interpreter::ConsoleEntry>,
@@ -1874,6 +1881,7 @@ fn eval_with_lane(
     Ok(EvalOutcome {
         engine: engine_kind_for_lane(lane),
         value: output.value,
+        value_wtf16: output.value_wtf16,
         route_reason,
         console_output: output.console_output,
         source_ingestion: prepared.source_ingestion,
@@ -1891,6 +1899,7 @@ fn engine_kind_for_lane(lane: LaneChoice) -> EngineKind {
 
 struct NativeEvalOutput {
     value: String,
+    value_wtf16: Option<Vec<u16>>,
     console_output: Vec<baseline_interpreter::ConsoleEntry>,
     generated_code_audit: Vec<baseline_interpreter::GeneratedCodeAuditEntry>,
     instructions_executed: u64,
@@ -1997,8 +2006,15 @@ fn eval_via_native_pipeline(
             )
         })?;
 
+    // A lone-surrogate string completion value cannot survive the Display
+    // projection below; carry its exact code units alongside (bd-2vzgi).
+    let value_wtf16 = match &routed.result.value {
+        baseline_interpreter::Value::Str(s) if !s.is_well_formed() => Some(s.code_units_vec()),
+        _ => None,
+    };
     Ok(NativeEvalOutput {
         value: routed.result.value.to_string(),
+        value_wtf16,
         console_output: routed.result.console_output,
         generated_code_audit: routed.result.generated_code_audit,
         instructions_executed: routed.result.instructions_executed,
@@ -2714,6 +2730,7 @@ mod tests {
         let outcome = EvalOutcome {
             engine: EngineKind::V8InspiredNative,
             value: "42".to_string(),
+            value_wtf16: None,
             route_reason: RouteReason::ContainsAwaitKeyword,
             console_output: Vec::new(),
             source_ingestion: SourceIngestionSummary::default(),

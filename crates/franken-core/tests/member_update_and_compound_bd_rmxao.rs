@@ -98,7 +98,7 @@ fn member_add_assign_yields_the_combined_value() {
 fn member_add_assign_concatenates_strings() {
     // `+=` follows `+` semantics: two strings concatenate.
     let src = "(function () { var o = {s: \"a\"}; o.s += \"b\"; return o.s; })();";
-    assert_eq!(completion(src), Value::Str("ab".to_string()));
+    assert_eq!(completion(src), Value::str("ab"));
 }
 
 #[test]

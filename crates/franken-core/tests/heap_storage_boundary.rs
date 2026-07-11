@@ -13,7 +13,7 @@ fn int_value(value: i64) -> JsValue {
 }
 
 fn str_value(value: &str) -> JsValue {
-    JsValue::Str(value.to_string())
+    JsValue::str(value)
 }
 
 fn data_descriptor(

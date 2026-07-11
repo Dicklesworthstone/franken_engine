@@ -19,7 +19,7 @@ fn int_val(n: i64) -> JsValue {
 }
 
 fn str_val(s: &str) -> JsValue {
-    JsValue::Str(s.to_string())
+    JsValue::str(s)
 }
 
 // ---------------------------------------------------------------------------

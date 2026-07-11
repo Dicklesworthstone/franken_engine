@@ -20,6 +20,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::js_string::JsString;
+
 /// Serialize/deserialize `BTreeMap<PropertyKey, PropertyDescriptor>` as a
 /// sorted sequence of `[key, descriptor]` pairs.  serde_json requires string
 /// keys for JSON maps but `PropertyKey` is an enum, so we use a vec-of-pairs
@@ -161,13 +163,22 @@ pub enum JsValue {
     /// IEEE 754 floating-point, stored as bits for Eq/Ord derivation.
     /// Use `f64::from_bits()` to recover the value.
     Float(u64),
-    Str(String),
+    /// String. [`JsString`]-backed for lone-surrogate exactness (bd-2vzgi);
+    /// property keys intentionally remain `String` (lossy projection), the
+    /// same documented boundary as the engine.
+    Str(JsString),
     Symbol(SymbolId),
     Object(ObjectHandle),
     Function(u32),
 }
 
 impl JsValue {
+    /// Convenience constructor funneling any string-ish payload into the
+    /// canonical [`JsString`] backing (mirrors `Value::str`).
+    pub fn str(value: impl Into<JsString>) -> Self {
+        Self::Str(value.into())
+    }
+
     pub fn is_object(&self) -> bool {
         matches!(self, Self::Object(_))
     }
@@ -2213,7 +2224,7 @@ mod tests {
     }
 
     fn str_val(s: &str) -> JsValue {
-        JsValue::Str(s.to_string())
+        JsValue::str(s)
     }
 
     // -----------------------------------------------------------------------

@@ -46,6 +46,7 @@ use crate::ir_contract::{
     IR_SUPER_CONSTRUCTOR_PROPERTY, IR_SUPER_PROTOTYPE_PROPERTY, Ir0Module, Ir3Instruction,
     Ir3Module, IteratorCloseReason, RegRange, WitnessEvent, WitnessEventKind,
 };
+use crate::js_string::JsString;
 use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 use crate::runtime_config::ExecutionConfig;
@@ -252,8 +253,10 @@ pub enum Value {
     /// IEEE 754 floating-point (f64). Used for fractional values, NaN,
     /// Infinity, and -0. Wrapped in Float64 for deterministic ordering.
     Float(Float64),
-    /// String.
-    Str(String),
+    /// String. Backed by [`JsString`] so lone UTF-16 surrogates are exact
+    /// (bd-2vzgi parity with the engine's bd-neika string model); well-formed
+    /// strings keep the prior plain-string serde wire format.
+    Str(JsString),
     /// Object reference (heap index).
     Object(ObjectId),
     /// Function reference (function table index).
@@ -287,6 +290,13 @@ pub enum Value {
 #[serde(rename_all = "snake_case")]
 pub enum BuiltinFunctionKind {
     Require,
+    // NOTE: variants must be appended at the tail only — `kind as u64` feeds
+    // the register content hash, so mid-enum insertion silently shifts every
+    // downstream ordinal (same rule as the engine's BuiltinFunctionKind).
+    StringPrototypeCharAt,
+    StringPrototypeCharCodeAt,
+    StringPrototypeCodePointAt,
+    StringPrototypeAt,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -306,14 +316,33 @@ impl BuiltinFunction {
         }
     }
 
+    /// A receiver-bound String.prototype method surfaced by `GetProperty` on
+    /// a string value (bd-2vzgi). Carries no module provenance.
+    fn string_method(kind: BuiltinFunctionKind) -> Self {
+        Self {
+            kind,
+            module_specifier: String::new(),
+        }
+    }
+
     fn display_name(&self) -> &'static str {
         match self.kind {
             BuiltinFunctionKind::Require => "require",
+            BuiltinFunctionKind::StringPrototypeCharAt => "charAt",
+            BuiltinFunctionKind::StringPrototypeCharCodeAt => "charCodeAt",
+            BuiltinFunctionKind::StringPrototypeCodePointAt => "codePointAt",
+            BuiltinFunctionKind::StringPrototypeAt => "at",
         }
     }
 }
 
 impl Value {
+    /// Convenience constructor funneling any string-ish payload into the
+    /// canonical [`JsString`] backing (mirrors the engine's `Value::str`).
+    pub fn str(value: impl Into<JsString>) -> Self {
+        Self::Str(value.into())
+    }
+
     /// Truthiness: Undefined, Null, Bool(false), Int(0), Float(0.0/-0.0/NaN), Str("") are falsy.
     pub fn is_truthy(&self) -> bool {
         match self {
@@ -2238,7 +2267,7 @@ impl InterpreterCore {
             .map(|path| path.display().to_string())
             .or_else(|| self.config.module_root.clone())
             .unwrap_or_default();
-        (Value::Str(specifier.to_string()), Value::Str(dirname))
+        (Value::str(specifier), Value::str(dirname))
     }
 
     fn inject_active_cjs_bindings(&mut self) -> Result<(), InterpreterError> {
@@ -2624,6 +2653,7 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         builtin: &BuiltinFunction,
+        receiver: Option<&Value>,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         match builtin.kind {
@@ -2649,6 +2679,165 @@ impl InterpreterCore {
                 self.current_module_specifier = previous_module_specifier;
                 result
             }
+            BuiltinFunctionKind::StringPrototypeCharAt
+            | BuiltinFunctionKind::StringPrototypeCharCodeAt
+            | BuiltinFunctionKind::StringPrototypeCodePointAt
+            | BuiltinFunctionKind::StringPrototypeAt => {
+                let receiver = receiver.ok_or_else(|| InterpreterError::TypeError {
+                    expected: "string receiver".to_string(),
+                    got: format!("detached String.prototype.{}", builtin.display_name()),
+                })?;
+                let text = self.string_receiver_to_js_string(receiver)?;
+                let index = if args.count > 0 {
+                    Some(self.read_reg(args.start)?)
+                } else {
+                    None
+                };
+                Ok(match builtin.kind {
+                    BuiltinFunctionKind::StringPrototypeCharAt => {
+                        Self::string_char_at_value(&text, index.as_ref())
+                    }
+                    BuiltinFunctionKind::StringPrototypeCharCodeAt => {
+                        Self::string_char_code_at_value(&text, index.as_ref())
+                    }
+                    BuiltinFunctionKind::StringPrototypeCodePointAt => {
+                        Self::string_code_point_at_value(&text, index.as_ref())
+                    }
+                    BuiltinFunctionKind::StringPrototypeAt => {
+                        Self::string_at_value(&text, index.as_ref())
+                    }
+                    BuiltinFunctionKind::Require => unreachable!("handled above"),
+                })
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // String.prototype method impls (bd-2vzgi) — exact UTF-16 semantics
+    // mirroring the engine's bd-neika string model. Each method has ONE impl
+    // fn shared by the hostcall dispatch ("builtin:StringPrototype*") and the
+    // first-class `BuiltinFunction` method-call path, so the two seams cannot
+    // drift (the engine's dual-seam divergence was the hard lesson of
+    // bd-neika).
+    // -----------------------------------------------------------------------
+
+    /// Receiver coercion for String.prototype methods: exact for string
+    /// values (no lossy projection), `TypeError` for undefined/null (ES
+    /// "object coercible" requirement, engine parity), display coercion for
+    /// the remaining primitives.
+    fn string_receiver_to_js_string(&self, receiver: &Value) -> Result<JsString, InterpreterError> {
+        match receiver {
+            Value::Str(s) => Ok(s.clone()),
+            Value::Undefined | Value::Null => Err(InterpreterError::TypeError {
+                expected: "object-coercible string receiver".to_string(),
+                got: receiver.type_name().to_string(),
+            }),
+            other => Ok(JsString::from(self.value_to_string(other))),
+        }
+    }
+
+    /// `ToIntegerOrInfinity`-style coercion for index arguments (engine
+    /// `value_as_integer` parity): numbers and numeric strings truncate
+    /// toward zero, `NaN` contributes 0, everything else falls back to 0.
+    fn string_index_as_integer(value: &Value) -> i64 {
+        match value {
+            Value::Int(n) => *n,
+            Value::Float(f) => {
+                let v = f.inner();
+                if v.is_nan() { 0 } else { v.trunc() as i64 }
+            }
+            Value::Bool(true) => 1,
+            Value::Str(s) => {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    0
+                } else {
+                    trimmed
+                        .parse::<f64>()
+                        .map(|v| if v.is_nan() { 0 } else { v.trunc() as i64 })
+                        .unwrap_or(0)
+                }
+            }
+            _ => 0,
+        }
+    }
+
+    /// `String.prototype.charAt`: the single UTF-16 code unit at `index`. A
+    /// surrogate half stays a real lone-surrogate string value; out-of-range
+    /// or negative indices yield the empty string.
+    fn string_char_at_value(text: &JsString, index: Option<&Value>) -> Value {
+        let index = index.map(Self::string_index_as_integer).unwrap_or(0);
+        if index < 0 {
+            return Value::str("");
+        }
+        match text.encode_utf16().nth(index as usize) {
+            Some(unit) => Value::Str(JsString::from_code_units(&[unit])),
+            None => Value::str(""),
+        }
+    }
+
+    /// `String.prototype.charCodeAt`: the exact code unit as an integer, or
+    /// `NaN` when out of range.
+    fn string_char_code_at_value(text: &JsString, index: Option<&Value>) -> Value {
+        let index = index.map(Self::string_index_as_integer).unwrap_or(0);
+        if index < 0 {
+            return Value::Float(Float64::new(f64::NAN));
+        }
+        match text.encode_utf16().nth(index as usize) {
+            Some(unit) => Value::Int(i64::from(unit)),
+            None => Value::Float(Float64::new(f64::NAN)),
+        }
+    }
+
+    /// `String.prototype.codePointAt`: scalar-indexed over the projection,
+    /// mirroring the engine's current behaviour (bd-rdnhc residual) so the
+    /// differential oracle agrees; out-of-range / negative yields undefined.
+    fn string_code_point_at_value(text: &JsString, index: Option<&Value>) -> Value {
+        let index = index.map(Self::string_index_as_integer).unwrap_or(0);
+        if index < 0 {
+            return Value::Undefined;
+        }
+        match text.chars().nth(index as usize) {
+            Some(ch) => Value::Int(ch as i64),
+            None => Value::Undefined,
+        }
+    }
+
+    /// `String.prototype.at`: relative code-unit indexing (negative counts
+    /// from the end); out-of-range yields undefined.
+    fn string_at_value(text: &JsString, index: Option<&Value>) -> Value {
+        let units: Vec<u16> = text.code_units_vec();
+        let len = units.len() as i64;
+        let raw = index.map(Self::string_index_as_integer).unwrap_or(0);
+        let idx = if raw < 0 { raw + len } else { raw };
+        if idx < 0 || idx >= len {
+            return Value::Undefined;
+        }
+        Value::Str(JsString::from_code_units(&[units[idx as usize]]))
+    }
+
+    /// Property access on a string receiver (`GetProperty` with a
+    /// `Value::Str` object): `length` is the ES UTF-16 code-unit count and
+    /// the known String.prototype methods surface as first-class
+    /// [`BuiltinFunction`] values the `CallMethod` seam dispatches with the
+    /// receiver. Unknown keys return `None` (caller keeps its pre-existing
+    /// fail-closed behaviour).
+    fn string_property_value(text: &JsString, key: &str) -> Option<Value> {
+        match key {
+            "length" => Some(Value::Int(text.utf16_len() as i64)),
+            "charAt" => Some(Value::BuiltinFunction(BuiltinFunction::string_method(
+                BuiltinFunctionKind::StringPrototypeCharAt,
+            ))),
+            "charCodeAt" => Some(Value::BuiltinFunction(BuiltinFunction::string_method(
+                BuiltinFunctionKind::StringPrototypeCharCodeAt,
+            ))),
+            "codePointAt" => Some(Value::BuiltinFunction(BuiltinFunction::string_method(
+                BuiltinFunctionKind::StringPrototypeCodePointAt,
+            ))),
+            "at" => Some(Value::BuiltinFunction(BuiltinFunction::string_method(
+                BuiltinFunctionKind::StringPrototypeAt,
+            ))),
+            _ => None,
         }
     }
 
@@ -3590,7 +3779,7 @@ impl InterpreterCore {
                 self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
 
                 // Reject the promise with the error
-                let js_val = crate::object_model::JsValue::Str(format!("{err:?}"));
+                let js_val = crate::object_model::JsValue::Str(JsString::from(format!("{err:?}")));
                 let label = crate::ifc_artifacts::Label::Public;
                 self.promise_store
                     .reject(
@@ -3703,7 +3892,7 @@ impl InterpreterCore {
                 async_gen.phase = AsyncGeneratorPhase::Completed;
 
                 // Reject the promise with the error
-                let js_val = crate::object_model::JsValue::Str(format!("{err:?}"));
+                let js_val = crate::object_model::JsValue::Str(JsString::from(format!("{err:?}")));
                 let label = crate::ifc_artifacts::Label::Public;
                 self.promise_store.reject(
                     crate::promise_model::PromiseHandle(result_promise),
@@ -3833,7 +4022,7 @@ impl InterpreterCore {
                             pool_size: module.constant_pool.len() as u32,
                         })?
                         .clone();
-                    self.write_reg(dst, Value::Str(s))?;
+                    self.write_reg(dst, Value::str(s))?;
                     self.ip += 1;
                 }
                 Ir3Instruction::LoadBool { dst, value } => {
@@ -3953,7 +4142,7 @@ impl InterpreterCore {
                     }
 
                     if let Value::BuiltinFunction(builtin) = &callee_val {
-                        let result = self.dispatch_builtin_function(module, builtin, args)?;
+                        let result = self.dispatch_builtin_function(module, builtin, None, args)?;
                         self.write_reg(dst, result)?;
                         self.ip += 1;
                         continue;
@@ -4304,7 +4493,12 @@ impl InterpreterCore {
                     let callee_val = self.read_reg(callee)?;
 
                     if let Value::BuiltinFunction(builtin) = &callee_val {
-                        let result = self.dispatch_builtin_function(module, builtin, args)?;
+                        let result = self.dispatch_builtin_function(
+                            module,
+                            builtin,
+                            Some(&receiver_val),
+                            args,
+                        )?;
                         self.write_reg(dst, result)?;
                         self.ip += 1;
                         continue;
@@ -4552,6 +4746,22 @@ impl InterpreterCore {
                             &key_str,
                             dst,
                         )?,
+                        // String receivers expose `length` (UTF-16 code-unit
+                        // count) and the String.prototype methods wired for
+                        // bd-2vzgi; unknown keys keep the pre-existing
+                        // fail-closed TypeError below.
+                        Value::Str(text) => match Self::string_property_value(text, &key_str) {
+                            Some(value) => {
+                                self.write_reg(dst, value)?;
+                                false
+                            }
+                            None => {
+                                return Err(InterpreterError::TypeError {
+                                    expected: "object".to_string(),
+                                    got: obj_val.type_name().to_string(),
+                                });
+                            }
+                        },
                         _ if Self::function_object_key(&obj_val).is_some() => self
                             .load_function_like_property_or_call_accessor(
                                 module,
@@ -4847,7 +5057,7 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::TypeOf { dst, src } => {
                     let val = self.read_reg(src)?;
-                    self.write_reg(dst, Value::Str(val.typeof_name().to_string()))?;
+                    self.write_reg(dst, Value::str(val.typeof_name()))?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Void { dst, src } => {
@@ -5078,7 +5288,9 @@ impl InterpreterCore {
                     }
                 }
                 Ir3Instruction::TemplateLiteral { parts, dst } => {
-                    let mut result = String::new();
+                    // Exact-unit concatenation so split surrogate halves heal
+                    // across template parts, matching engine semantics.
+                    let mut result = JsString::empty();
                     for i in 0..parts.count {
                         let reg = parts.start.checked_add(i).ok_or(
                             InterpreterError::RegisterOutOfBounds {
@@ -5089,15 +5301,15 @@ impl InterpreterCore {
                         let val = self.read_reg(reg)?;
                         let part_str = match val {
                             Value::Str(s) => s,
-                            Value::Int(n) => n.to_string(),
-                            Value::Float(f) => f.to_string(),
-                            Value::Bool(b) => (if b { "true" } else { "false" }).to_string(),
-                            Value::Null => "null".to_string(),
-                            Value::Undefined => "undefined".to_string(),
+                            Value::Int(n) => JsString::from(n.to_string()),
+                            Value::Float(f) => JsString::from(f.to_string()),
+                            Value::Bool(b) => JsString::from(if b { "true" } else { "false" }),
+                            Value::Null => JsString::from("null"),
+                            Value::Undefined => JsString::from("undefined"),
                             Value::Object(_) | Value::Iterator(_) | Value::Generator(_) => {
-                                "[object Object]".to_string()
+                                JsString::from("[object Object]")
                             }
-                            Value::Promise(_) => "[object Promise]".to_string(),
+                            Value::Promise(_) => JsString::from("[object Promise]"),
                             Value::Function(_)
                             | Value::Closure(_)
                             | Value::GeneratorFunction(_)
@@ -5105,10 +5317,10 @@ impl InterpreterCore {
                             | Value::AsyncFunction(_)
                             | Value::AsyncFunctionObject(_)
                             | Value::AsyncGeneratorFunction(_)
-                            | Value::AsyncGeneratorObject(_) => "function".to_string(),
+                            | Value::AsyncGeneratorObject(_) => JsString::from("function"),
                         };
                         self.check_string_limit(result.len().saturating_add(part_str.len()))?;
-                        result.push_str(&part_str);
+                        result = result.concat(&part_str);
                     }
                     self.write_reg(dst, Value::Str(result))?;
                     self.ip += 1;
@@ -5174,7 +5386,7 @@ impl InterpreterCore {
                         // No catch handler found — uncaught exception.
                         self.suspended_abrupt_completions.clear();
                         let desc = match &thrown {
-                            Value::Str(s) => s.clone(),
+                            Value::Str(s) => s.to_string(),
                             Value::Int(n) => n.to_string(),
                             Value::Bool(b) => b.to_string(),
                             Value::Undefined => "undefined".to_string(),
@@ -5210,7 +5422,7 @@ impl InterpreterCore {
                             // Re-throw the pending exception after finally completes.
                             if let Some(thrown) = self.pending_exception.clone() {
                                 let desc = match &thrown {
-                                    Value::Str(s) => s.clone(),
+                                    Value::Str(s) => s.to_string(),
                                     Value::Int(n) => n.to_string(),
                                     Value::Bool(b) => b.to_string(),
                                     Value::Undefined => "undefined".to_string(),
@@ -5811,10 +6023,12 @@ impl InterpreterCore {
             (Value::Float(x), Value::Int(y)) => {
                 Ok(Value::Float(Float64::new(x.inner() + *y as f64)))
             }
-            // String concatenation
+            // String concatenation over exact code units: a trailing high
+            // surrogate heals against a leading low surrogate (bd-2vzgi),
+            // e.g. s.charAt(1) + s.charAt(2) === "😀" for s = "a😀b".
             (Value::Str(x), Value::Str(y)) => {
                 self.check_string_limit(x.len().saturating_add(y.len()))?;
-                Ok(Value::Str(format!("{x}{y}")))
+                Ok(Value::Str(x.concat(y)))
             }
             (Value::Str(x), other) => {
                 let other_str = match other {
@@ -5829,7 +6043,7 @@ impl InterpreterCore {
                     _ => other.to_string(),
                 };
                 self.check_string_limit(x.len().saturating_add(other_str.len()))?;
-                Ok(Value::Str(format!("{x}{other_str}")))
+                Ok(Value::Str(x.concat(&JsString::from(other_str))))
             }
             (other, Value::Str(y)) => {
                 let other_str = match other {
@@ -5844,7 +6058,7 @@ impl InterpreterCore {
                     _ => other.to_string(),
                 };
                 self.check_string_limit(other_str.len().saturating_add(y.len()))?;
-                Ok(Value::Str(format!("{other_str}{y}")))
+                Ok(Value::Str(JsString::from(other_str).concat(y)))
             }
             _ => {
                 // JS coercion: non-string primitives coerce to number for +.
@@ -6308,7 +6522,7 @@ impl InterpreterCore {
                     let key = state.keys[state.next_index].clone();
                     state.next_index += 1;
                     if !state.deleted_keys.contains(&key) {
-                        return Ok(Some(Value::Str(key)));
+                        return Ok(Some(Value::str(key)));
                     }
                 }
                 state.done = true;
@@ -6656,7 +6870,7 @@ impl InterpreterCore {
                 crate::object_model::JsValue::Object(crate::object_model::ObjectHandle(id.0))
             }
             Value::Function(idx) => crate::object_model::JsValue::Function(*idx),
-            _ => crate::object_model::JsValue::Str(val.to_string()),
+            _ => crate::object_model::JsValue::Str(JsString::from(val.to_string())),
         }
     }
 
@@ -6674,7 +6888,7 @@ impl InterpreterCore {
             }
             crate::object_model::JsValue::Object(handle) => Value::Object(ObjectId(handle.0)),
             crate::object_model::JsValue::Function(idx) => Value::Function(*idx),
-            crate::object_model::JsValue::Symbol(sym) => Value::Str(format!("Symbol({})", sym.0)),
+            crate::object_model::JsValue::Symbol(sym) => Value::str(format!("Symbol({})", sym.0)),
         }
     }
 
@@ -6795,7 +7009,7 @@ impl InterpreterCore {
                         value: crate::object_model::JsValue::Undefined,
                     });
             let value = Self::js_value_to_value(&outcome.value);
-            let mut props = vec![("status", Value::Str(outcome.status.clone()))];
+            let mut props = vec![("status", Value::str(outcome.status.clone()))];
             if outcome.status == "fulfilled" {
                 props.push(("value", value));
             } else {
@@ -7599,7 +7813,9 @@ impl InterpreterCore {
 
     fn property_key(value: &Value) -> String {
         match value {
-            Value::Str(s) => s.clone(),
+            // Property keys remain UTF-8 `String`: a lone-surrogate key routes
+            // through the lossy projection (documented engine-parity boundary).
+            Value::Str(s) => s.to_string(),
             Value::Int(n) => n.to_string(),
             _ => value.to_string(),
         }
@@ -8079,7 +8295,7 @@ impl InterpreterCore {
                 let this = self.required_arg(args, 0, "object")?;
                 let object_id = self.expect_object(this, "object")?;
                 let keys = self.own_enumerable_keys(object_id)?;
-                let values = keys.into_iter().map(Value::Str).collect::<Vec<_>>();
+                let values = keys.into_iter().map(Value::str).collect::<Vec<_>>();
                 Ok(Value::Object(self.alloc_array_from_values(&values)?))
             }
             "builtin:ObjectValues" => {
@@ -8098,31 +8314,74 @@ impl InterpreterCore {
                 Ok(Value::Object(self.alloc_array_from_values(&values)?))
             }
 
-            // String methods
+            // String methods (hostcall convention: receiver in args[0],
+            // index in args[1]; shared impls with the BuiltinFunction
+            // method-call seam so the two paths cannot drift).
             "builtin:StringPrototypeCharAt" => {
                 let receiver = self.required_arg(args, 0, "string")?;
-                let text = match receiver {
-                    Value::Str(text) => text,
-                    other => self.value_to_string(&other),
+                let text = match &receiver {
+                    Value::Str(text) => text.clone(),
+                    other => JsString::from(self.value_to_string(other)),
                 };
-                let index = match self.optional_arg(args, 1)? {
-                    Some(Value::Int(index)) if index >= 0 => usize::try_from(index).ok(),
-                    Some(Value::Float(index)) => {
-                        let index = index.inner();
-                        if index.is_finite() && index >= 0.0 {
-                            Some(index.trunc() as usize)
-                        } else {
-                            Some(0)
+                let index = self.optional_arg(args, 1)?;
+                Ok(Self::string_char_at_value(&text, index.as_ref()))
+            }
+            "builtin:StringPrototypeCharCodeAt" => {
+                let receiver = self.required_arg(args, 0, "string")?;
+                let text = match &receiver {
+                    Value::Str(text) => text.clone(),
+                    other => JsString::from(self.value_to_string(other)),
+                };
+                let index = self.optional_arg(args, 1)?;
+                Ok(Self::string_char_code_at_value(&text, index.as_ref()))
+            }
+            "builtin:StringPrototypeCodePointAt" => {
+                let receiver = self.required_arg(args, 0, "string")?;
+                let text = match &receiver {
+                    Value::Str(text) => text.clone(),
+                    other => JsString::from(self.value_to_string(other)),
+                };
+                let index = self.optional_arg(args, 1)?;
+                Ok(Self::string_code_point_at_value(&text, index.as_ref()))
+            }
+            "builtin:StringPrototypeAt" => {
+                let receiver = self.required_arg(args, 0, "string")?;
+                let text = match &receiver {
+                    Value::Str(text) => text.clone(),
+                    other => JsString::from(self.value_to_string(other)),
+                };
+                let index = self.optional_arg(args, 1)?;
+                Ok(Self::string_at_value(&text, index.as_ref()))
+            }
+            "builtin:StringFromCharCode" => {
+                // String.fromCharCode(...codeUnits): ToUint16 per argument;
+                // a surrogate unit stays a real lone surrogate, and adjacent
+                // high+low units heal into the supplementary code point when
+                // from_code_units normalizes (engine bd-neika parity).
+                let mut units: Vec<u16> = Vec::with_capacity(args.count as usize);
+                for i in 0..args.count {
+                    let reg =
+                        args.start
+                            .checked_add(i)
+                            .ok_or(InterpreterError::RegisterOutOfBounds {
+                                register: args.start,
+                                max: self.config.max_registers,
+                            })?;
+                    let unit = match self.read_reg(reg)? {
+                        Value::Int(n) => n as u32,
+                        Value::Float(f) => {
+                            let v = f.inner();
+                            if v.is_finite() {
+                                v.trunc().rem_euclid(4_294_967_296.0) as u32
+                            } else {
+                                0
+                            }
                         }
-                    }
-                    Some(Value::Undefined | Value::Null) | None => Some(0),
-                    _ => Some(0),
-                };
-                let ch = index
-                    .and_then(|index| text.chars().nth(index))
-                    .map(|ch| ch.to_string())
-                    .unwrap_or_default();
-                Ok(Value::Str(ch))
+                        _ => 0,
+                    };
+                    units.push((unit & 0xFFFF) as u16);
+                }
+                Ok(Value::Str(JsString::from_code_units(&units)))
             }
 
             // Math methods
@@ -8144,7 +8403,7 @@ impl InterpreterCore {
             "builtin:JsonStringify" => {
                 // JSON.stringify implementation - converts value to JSON string
                 if args.count == 0 {
-                    return Ok(Value::Str("undefined".to_string()));
+                    return Ok(Value::str("undefined"));
                 }
 
                 let value = self.read_reg(args.start)?;
@@ -8168,7 +8427,25 @@ impl InterpreterCore {
                         }
                     }
                     Value::Str(s) => {
-                        format!("\"{}\"", s.replace('"', "\\\"").replace('\\', "\\\\"))
+                        // Escape per code unit: backslash/quote escapes cannot
+                        // double-process each other (the old replace-chain
+                        // escaped quotes first and then doubled the inserted
+                        // backslashes), and a lone surrogate is emitted as a
+                        // \uXXXX escape (engine bd-neika parity).
+                        let mut out = String::with_capacity(s.len().saturating_add(2));
+                        out.push('"');
+                        for decoded in char::decode_utf16(s.encode_utf16()) {
+                            match decoded {
+                                Ok('"') => out.push_str("\\\""),
+                                Ok('\\') => out.push_str("\\\\"),
+                                Ok(ch) => out.push(ch),
+                                Err(err) => {
+                                    out.push_str(&format!("\\u{:04x}", err.unpaired_surrogate()));
+                                }
+                            }
+                        }
+                        out.push('"');
+                        out
                     }
                     Value::Object(_) => "{}".to_string(), // Basic object stringification
                     Value::Function(_) => "undefined".to_string(),
@@ -8183,7 +8460,7 @@ impl InterpreterCore {
                     Value::AsyncGeneratorObject(_) => "{}".to_string(),
                     Value::BuiltinFunction(_) => "undefined".to_string(),
                 };
-                Ok(Value::Str(json_str))
+                Ok(Value::str(json_str))
             }
 
             _ => {
@@ -8314,7 +8591,7 @@ impl InterpreterCore {
                     format!("{v}")
                 }
             }
-            Value::Str(s) => s.clone(),
+            Value::Str(s) => s.to_string(),
             Value::Object(id) => {
                 // Try to get a simple string representation
                 if let Some(_obj) = self.heap.get(id.0 as usize) {
@@ -8861,7 +9138,7 @@ impl InterpreterCore {
 
     fn collect_for_of_values(&self, iterable: &Value) -> Result<Vec<Value>, InterpreterError> {
         match iterable {
-            Value::Str(text) => Ok(text.chars().map(|ch| Value::Str(ch.to_string())).collect()),
+            Value::Str(text) => Ok(text.chars().map(Value::str).collect()),
             Value::Object(object_id) => {
                 let object = self
                     .heap
@@ -9969,7 +10246,7 @@ mod tests {
             .properties
             .insert("secret".to_string(), Value::Int(99));
         core.registers[1] = Value::Object(oid);
-        core.registers[2] = Value::Str("secret".to_string());
+        core.registers[2] = Value::str("secret");
 
         let result = core
             .execute(&test_module(vec![
@@ -10188,7 +10465,7 @@ mod tests {
 
         let oid = core.alloc_object_with_prototype(None).unwrap();
         core.registers[1] = Value::Object(oid);
-        core.registers[2] = Value::Str("key".to_string());
+        core.registers[2] = Value::str("key");
         core.registers[3] = Value::Int(7);
 
         let result = core
@@ -10266,7 +10543,7 @@ mod tests {
             .properties
             .insert("stable".to_string(), Value::Int(12));
         core.registers[1] = Value::Object(oid);
-        core.registers[2] = Value::Str("stable".to_string());
+        core.registers[2] = Value::str("stable");
 
         let result = core
             .execute(&test_module(vec![
@@ -10365,7 +10642,7 @@ mod tests {
             vec!["hello".to_string()],
         );
         let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Str("hello".to_string()));
+        assert_eq!(result.value, Value::str("hello"));
     }
 
     #[test]
@@ -10443,7 +10720,7 @@ mod tests {
             vec!["hello".to_string(), " world".to_string()],
         );
         let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Str("hello world".to_string()));
+        assert_eq!(result.value, Value::str("hello world"));
     }
 
     #[test]
@@ -10914,7 +11191,7 @@ mod tests {
         let array_id = core.alloc_array_with_prototype(None).unwrap();
         core.registers[0] = Value::Object(array_id);
         core.registers[1] = Value::Int(7);
-        core.registers[2] = Value::Str("x".to_string());
+        core.registers[2] = Value::str("x");
 
         let pushed = core
             .dispatch_builtin_hostcall(
@@ -10929,7 +11206,7 @@ mod tests {
         );
         assert_eq!(
             core.heap[array_id.0 as usize].properties.get("1"),
-            Some(&Value::Str("x".to_string()))
+            Some(&Value::str("x"))
         );
         assert_eq!(
             core.heap[array_id.0 as usize].properties.get("length"),
@@ -10939,7 +11216,7 @@ mod tests {
         let popped = core
             .dispatch_builtin_hostcall("builtin:ArrayPrototypePop", RegRange { start: 0, count: 1 })
             .unwrap();
-        assert_eq!(popped, Value::Str("x".to_string()));
+        assert_eq!(popped, Value::str("x"));
         assert_eq!(
             core.heap[array_id.0 as usize].properties.get("length"),
             Some(&Value::Int(1))
@@ -10967,7 +11244,7 @@ mod tests {
         assert!(core.heap[keys_id.0 as usize].is_array);
         assert_eq!(
             core.read_array_like_values(keys_id),
-            vec![Value::Str("a".to_string()), Value::Str("b".to_string())]
+            vec![Value::str("a"), Value::str("b")]
         );
 
         let values = core
@@ -10987,7 +11264,7 @@ mod tests {
     #[test]
     fn builtin_string_char_at_uses_receiver_and_optional_index() {
         let mut core = quickjs_test_core();
-        core.registers[4] = Value::Str("hello".to_string());
+        core.registers[4] = Value::str("hello");
         core.registers[5] = Value::Int(1);
 
         let explicit = core
@@ -10996,7 +11273,7 @@ mod tests {
                 RegRange { start: 4, count: 2 },
             )
             .unwrap();
-        assert_eq!(explicit, Value::Str("e".to_string()));
+        assert_eq!(explicit, Value::str("e"));
 
         core.registers[4] = Value::Int(42);
         let default_index = core
@@ -11005,7 +11282,7 @@ mod tests {
                 RegRange { start: 4, count: 1 },
             )
             .unwrap();
-        assert_eq!(default_index, Value::Str("4".to_string()));
+        assert_eq!(default_index, Value::str("4"));
 
         core.registers[5] = Value::Int(99);
         let out_of_range = core
@@ -11014,7 +11291,7 @@ mod tests {
                 RegRange { start: 4, count: 2 },
             )
             .unwrap();
-        assert_eq!(out_of_range, Value::Str(String::new()));
+        assert_eq!(out_of_range, Value::Str(JsString::empty()));
     }
 
     // -----------------------------------------------------------------------
@@ -11184,12 +11461,12 @@ mod tests {
         assert!(!Value::Null.is_truthy());
         assert!(!Value::Bool(false).is_truthy());
         assert!(!Value::Int(0).is_truthy());
-        assert!(!Value::Str(String::new()).is_truthy());
+        assert!(!Value::Str(JsString::empty()).is_truthy());
 
         assert!(Value::Bool(true).is_truthy());
         assert!(Value::Int(1).is_truthy());
         assert!(Value::Int(-1).is_truthy());
-        assert!(Value::Str("x".to_string()).is_truthy());
+        assert!(Value::str("x").is_truthy());
         assert!(Value::Object(ObjectId(0)).is_truthy());
         assert!(Value::Function(0).is_truthy());
     }
@@ -11204,7 +11481,7 @@ mod tests {
         assert_eq!(Value::Null.to_string(), "null");
         assert_eq!(Value::Bool(true).to_string(), "true");
         assert_eq!(Value::Int(42).to_string(), "42");
-        assert_eq!(Value::Str("hi".to_string()).to_string(), "hi");
+        assert_eq!(Value::str("hi").to_string(), "hi");
     }
 
     // -----------------------------------------------------------------------
@@ -11277,7 +11554,7 @@ mod tests {
             Value::Null,
             Value::Bool(true),
             Value::Int(42),
-            Value::Str("hello".to_string()),
+            Value::str("hello"),
             Value::Object(ObjectId(7)),
             Value::Function(3),
         ] {
@@ -11423,7 +11700,7 @@ mod tests {
             vec!["answer: ".to_string()],
         );
         let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Str("answer: 42".to_string()));
+        assert_eq!(result.value, Value::str("answer: 42"));
     }
 
     #[test]
@@ -11432,8 +11709,8 @@ mod tests {
         assert!(Value::Null < Value::Bool(false));
         assert!(Value::Bool(false) < Value::Bool(true));
         assert!(Value::Bool(true) < Value::Int(0));
-        assert!(Value::Int(0) < Value::Str(String::new()));
-        assert!(Value::Str(String::new()) < Value::Object(ObjectId(0)));
+        assert!(Value::Int(0) < Value::Str(JsString::empty()));
+        assert!(Value::Str(JsString::empty()) < Value::Object(ObjectId(0)));
         assert!(Value::Object(ObjectId(0)) < Value::Function(0));
     }
 
@@ -11519,7 +11796,7 @@ mod tests {
             Value::Bool(false),
             Value::Int(0),
             Value::Int(-1),
-            Value::Str("hello".to_string()),
+            Value::str("hello"),
             Value::Object(ObjectId(0)),
             Value::Function(0),
         ];
@@ -11617,7 +11894,7 @@ mod tests {
         assert_eq!(Value::Null.type_name(), "null");
         assert_eq!(Value::Bool(true).type_name(), "boolean");
         assert_eq!(Value::Int(0).type_name(), "number");
-        assert_eq!(Value::Str(String::new()).type_name(), "string");
+        assert_eq!(Value::Str(JsString::empty()).type_name(), "string");
         assert_eq!(Value::Object(ObjectId(0)).type_name(), "object");
         assert_eq!(Value::Function(0).type_name(), "function");
         assert_eq!(
@@ -11635,8 +11912,8 @@ mod tests {
         assert!(!Value::Int(0).is_truthy());
         assert!(Value::Int(1).is_truthy());
         assert!(Value::Int(-1).is_truthy());
-        assert!(!Value::Str(String::new()).is_truthy());
-        assert!(Value::Str("x".to_string()).is_truthy());
+        assert!(!Value::Str(JsString::empty()).is_truthy());
+        assert!(Value::str("x").is_truthy());
         assert!(Value::Object(ObjectId(0)).is_truthy());
         assert!(Value::Function(0).is_truthy());
         assert!(Value::BuiltinFunction(BuiltinFunction::require("/tmp/entry.cjs")).is_truthy());
@@ -11862,7 +12139,7 @@ mod tests {
         let before = core.estimated_memory_bytes();
         core.heap[oid.0 as usize]
             .properties
-            .insert("payload".to_string(), Value::Str("hello world".to_string()));
+            .insert("payload".to_string(), Value::str("hello world"));
         core.sync_estimated_memory_bytes().unwrap();
         assert!(core.estimated_memory_bytes() > before);
     }
@@ -11974,7 +12251,7 @@ mod tests {
         core.scope_chain.current_mut().bindings.insert(
             "payload".to_string(),
             ScopeBinding {
-                value: Value::Str("x".repeat(128)),
+                value: Value::str("x".repeat(128)),
                 kind: BindingKind::Var,
                 initialized: true,
             },
@@ -11996,7 +12273,7 @@ mod tests {
         core.scope_chain.current_mut().bindings.insert(
             "payload".to_string(),
             ScopeBinding {
-                value: Value::Str("x".repeat(128)),
+                value: Value::str("x".repeat(128)),
                 kind: BindingKind::Var,
                 initialized: true,
             },
@@ -12101,7 +12378,7 @@ mod tests {
         );
         assert_eq!(
             result_object.properties.get("value"),
-            Some(&Value::Str(payload))
+            Some(&Value::str(payload))
         );
     }
 
@@ -12206,7 +12483,7 @@ mod tests {
             core.scope_chain.current_mut().bindings.insert(
                 binding_name.clone(),
                 ScopeBinding {
-                    value: Value::Str(binding_value.clone()),
+                    value: Value::str(binding_value.clone()),
                     kind: BindingKind::Var,
                     initialized: true,
                 },
@@ -12224,7 +12501,7 @@ mod tests {
             let binding_name = format!("var{}", level);
             let expected_value = format!("value{}", level);
             if let Some(binding) = frame.bindings.get(&binding_name) {
-                assert_eq!(binding.value, Value::Str(expected_value));
+                assert_eq!(binding.value, Value::str(expected_value));
             } else {
                 panic!("Missing binding {} at scope level {}", binding_name, level);
             }
@@ -13261,7 +13538,7 @@ mod tests {
             .execute(&output.ir3)
             .expect("new.target should execute through constructor frames");
 
-        assert_eq!(result.value, Value::Str("function".to_string()));
+        assert_eq!(result.value, Value::str("function"));
     }
 
     #[test]
@@ -14339,8 +14616,8 @@ mod tests {
                     crate::object_model::JsValue::Float(3.25f64.to_bits()),
                 ),
                 (
-                    Value::Str("hello".to_string()),
-                    crate::object_model::JsValue::Str("hello".to_string()),
+                    Value::str("hello"),
+                    crate::object_model::JsValue::str("hello"),
                 ),
                 (
                     Value::Object(ObjectId(100)),

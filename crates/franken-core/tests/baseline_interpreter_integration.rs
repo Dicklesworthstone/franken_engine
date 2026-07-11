@@ -43,7 +43,7 @@ fn test_decision_receipt_extension_id_propagation() {
         200,
         "allow".to_string(),
         0x2000,
-        &[Value::Str("test".to_string())],
+        &[Value::str("test")],
     );
 
     assert_eq!(

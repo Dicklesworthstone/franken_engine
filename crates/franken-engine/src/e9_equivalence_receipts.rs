@@ -42,6 +42,7 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
+use crate::deterministic_replay::SpecializationLaneRecord;
 use crate::e9_shadow_candidate_discovery::{
     E9_ACTIVATION_ALLOWED, E9_SHADOW_MODE, ShadowDiscoveryReport,
 };
@@ -297,6 +298,16 @@ pub struct E9EquivalenceReport {
 /// this predicate.
 pub fn activation_eligible(receipt: &E9EquivalenceReceipt) -> bool {
     receipt.activation_allowed && receipt.verdict == VERDICT_PROVEN && !receipt.quarantined
+}
+
+/// The execution-lane record for a shadow-mode run (bd-fqlfw.9.3 seam).
+///
+/// ALWAYS the baseline lane in v1: activation is pinned off, so no
+/// specialization can have executed regardless of how many candidates are
+/// proven. E9.T4's activation gate replaces this with a specialized lane
+/// carrying the activated chain-receipt hashes.
+pub fn shadow_lane_record(report: &E9EquivalenceReport) -> SpecializationLaneRecord {
+    SpecializationLaneRecord::baseline(report.ir3_content_hash_hex.clone(), report.policy_epoch)
 }
 
 // ---------------------------------------------------------------------------
@@ -1578,5 +1589,19 @@ mod tests {
         let a = length_prefixed_hash(&["ab", "c"]);
         let b = length_prefixed_hash(&["a", "bc"]);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn shadow_lane_record_is_always_baseline() {
+        let report = validate_default();
+        assert_eq!(report.proven_count, 2, "all candidates proven");
+        let lane = shadow_lane_record(&report);
+        assert!(
+            lane.is_baseline(),
+            "shadow v1 lane is baseline even when every candidate is proven"
+        );
+        assert!(lane.specialization_receipt_hashes.is_empty());
+        assert_eq!(lane.executed_ir3_hash_hex, IR3_HASH_HEX);
+        assert_eq!(lane.policy_epoch, 7);
     }
 }

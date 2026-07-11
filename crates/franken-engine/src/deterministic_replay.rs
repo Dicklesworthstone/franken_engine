@@ -985,6 +985,423 @@ fn compute_simple_hash(data: &[u8]) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Specialization-aware replay identity + safe-mode kill switch (bd-fqlfw.9.3)
+// ---------------------------------------------------------------------------
+//
+// E9.T3: determinism is an ACTIVATION GATE, not a casualty. Replay identity
+// binds the nondeterminism trace to the execution lane the run took
+// (baseline, or specialized with specific chain-receipt hashes from the
+// E9.T2 equivalence lane), so a replay either reproduces the exact same
+// specialization or is forced onto the baseline lane with an explicit,
+// typed reason — never silently a different path. A safe-mode kill switch
+// disables ALL specializations regardless of proof state.
+//
+// Shadow-first: nothing here is wired into the live orchestrator capture
+// path in v1 (traces of existing runs remain byte-identical). The lane
+// record is captured via the existing `LaneSelectionRandom` source with a
+// dedicated component tag, so a lane change in a lane-aware trace is a
+// Critical divergence under the existing strict-replay rules.
+
+/// Component tag for specialization-lane trace events.
+pub const E9_SPECIALIZATION_LANE_COMPONENT: &str = "e9.specialization_lane";
+
+/// Schema version for the specialization lane record.
+pub const SPECIALIZATION_LANE_SCHEMA_VERSION: &str = "franken-engine.specialization-lane.v1";
+
+/// Schema version for the specialization-aware replay identity.
+pub const SPECIALIZATION_REPLAY_IDENTITY_SCHEMA_VERSION: &str =
+    "franken-engine.specialization-replay-identity.v1";
+
+/// Canonical lane names.
+pub const SPECIALIZATION_LANE_BASELINE: &str = "baseline";
+pub const SPECIALIZATION_LANE_SPECIALIZED: &str = "specialized";
+
+/// Length-prefixed (big-endian) content hash over a list of string fields,
+/// matching the E9 lane discipline. This module's legacy identity strings
+/// are not length-prefixed; every new specialization-identity hash is.
+fn length_prefixed_hash_hex(fields: &[&str]) -> String {
+    let mut seed = Vec::new();
+    for field in fields {
+        seed.extend_from_slice(&(field.len() as u64).to_be_bytes());
+        seed.extend_from_slice(field.as_bytes());
+    }
+    compute_simple_hash(&seed)
+}
+
+/// Which execution lane a run took, plus the specialization chain-receipt
+/// hashes (E9.T2 `ChainPersistenceOutcome::chain_receipt_id_hex`) that
+/// justify it. An empty receipt set is only legal on the baseline lane.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpecializationLaneRecord {
+    /// Schema version pin.
+    pub schema_version: String,
+    /// `baseline` or `specialized`.
+    pub lane: String,
+    /// Content hash (hex) of the executed IR3 program.
+    pub executed_ir3_hash_hex: String,
+    /// Security epoch the run executed under.
+    pub policy_epoch: u64,
+    /// Sorted, deduplicated chain-receipt hashes (hex) of every active
+    /// specialization. Empty on the baseline lane.
+    pub specialization_receipt_hashes: Vec<String>,
+}
+
+impl SpecializationLaneRecord {
+    /// Baseline lane: no specializations active.
+    pub fn baseline(executed_ir3_hash_hex: impl Into<String>, policy_epoch: u64) -> Self {
+        Self {
+            schema_version: SPECIALIZATION_LANE_SCHEMA_VERSION.to_string(),
+            lane: SPECIALIZATION_LANE_BASELINE.to_string(),
+            executed_ir3_hash_hex: executed_ir3_hash_hex.into(),
+            policy_epoch,
+            specialization_receipt_hashes: Vec::new(),
+        }
+    }
+
+    /// Specialized lane with the given chain-receipt hashes (sorted and
+    /// deduplicated for a canonical identity).
+    pub fn specialized(
+        executed_ir3_hash_hex: impl Into<String>,
+        policy_epoch: u64,
+        mut receipt_hashes: Vec<String>,
+    ) -> Self {
+        receipt_hashes.sort();
+        receipt_hashes.dedup();
+        Self {
+            schema_version: SPECIALIZATION_LANE_SCHEMA_VERSION.to_string(),
+            lane: SPECIALIZATION_LANE_SPECIALIZED.to_string(),
+            executed_ir3_hash_hex: executed_ir3_hash_hex.into(),
+            policy_epoch,
+            specialization_receipt_hashes: receipt_hashes,
+        }
+    }
+
+    /// Whether this record is the baseline lane.
+    pub fn is_baseline(&self) -> bool {
+        self.lane == SPECIALIZATION_LANE_BASELINE
+    }
+
+    /// Deterministic identity hash (hex) over every field, length-prefixed.
+    pub fn identity_hash_hex(&self) -> String {
+        let epoch = self.policy_epoch.to_string();
+        let mut fields: Vec<&str> = vec![
+            &self.schema_version,
+            &self.lane,
+            &self.executed_ir3_hash_hex,
+            &epoch,
+        ];
+        for hash in &self.specialization_receipt_hashes {
+            fields.push(hash);
+        }
+        length_prefixed_hash_hex(&fields)
+    }
+
+    /// Canonical bytes for trace capture.
+    pub fn encode(&self) -> Vec<u8> {
+        serde_json::to_vec(self).unwrap_or_default()
+    }
+
+    /// Decode a lane record from trace-event bytes.
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        serde_json::from_slice(bytes).ok()
+    }
+}
+
+impl NondeterminismTrace {
+    /// Record which execution lane this run took. Captured through the
+    /// existing `LaneSelectionRandom` source (a lane choice IS lane
+    /// nondeterminism) with the dedicated specialization component tag, so
+    /// strict replay treats a lane change as a Critical divergence.
+    pub fn capture_specialization_lane(
+        &mut self,
+        lane: &SpecializationLaneRecord,
+        virtual_ts: u64,
+    ) -> u64 {
+        self.capture(
+            NondeterminismSource::LaneSelectionRandom,
+            lane.encode(),
+            virtual_ts,
+            E9_SPECIALIZATION_LANE_COMPONENT,
+        )
+    }
+
+    /// The lane record captured in this trace, if any. `None` means the
+    /// trace predates lane-aware capture (a legacy baseline-only run).
+    pub fn recorded_specialization_lane(&self) -> Option<SpecializationLaneRecord> {
+        self.events
+            .iter()
+            .find(|event| {
+                event.source == NondeterminismSource::LaneSelectionRandom
+                    && event.component == E9_SPECIALIZATION_LANE_COMPONENT
+            })
+            .and_then(|event| SpecializationLaneRecord::decode(&event.value))
+    }
+}
+
+/// Specialization-aware replay identity: binds the full trace content (not
+/// just its length) to the execution lane and its receipt hashes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpecializationReplayIdentity {
+    /// Schema version pin.
+    pub schema_version: String,
+    /// Session id of the underlying trace.
+    pub trace_session_id: String,
+    /// Number of events in the trace.
+    pub trace_event_count: u64,
+    /// Length-prefixed content hash (hex) over every trace event.
+    pub trace_content_hash_hex: String,
+    /// Identity hash (hex) of the lane record.
+    pub lane_identity_hash_hex: String,
+    /// Combined replay-identity hash (hex).
+    pub identity_hash_hex: String,
+}
+
+/// Compute the specialization-aware replay identity for a finalised trace
+/// and the lane it ran on.
+///
+/// Pure read-only: consumes the trace by shared reference and never mutates
+/// it, so it can be computed for existing baseline runs without touching
+/// replay byte-identity.
+pub fn compute_replay_identity(
+    trace: &NondeterminismTrace,
+    lane: &SpecializationLaneRecord,
+) -> Result<SpecializationReplayIdentity, ReplayError> {
+    if !trace.is_finalised() {
+        return Err(ReplayError::TraceNotFinalised);
+    }
+    let mut seed = Vec::new();
+    for event in &trace.events {
+        let value_hex = hex::encode(&event.value);
+        for field in [
+            event.sequence.to_string().as_str(),
+            event.source.as_str(),
+            value_hex.as_str(),
+            event.virtual_ts.to_string().as_str(),
+            event.component.as_str(),
+        ] {
+            seed.extend_from_slice(&(field.len() as u64).to_be_bytes());
+            seed.extend_from_slice(field.as_bytes());
+        }
+    }
+    let trace_content_hash_hex = compute_simple_hash(&seed);
+    let lane_identity_hash_hex = lane.identity_hash_hex();
+    let event_count = trace.events.len() as u64;
+    let identity_hash_hex = length_prefixed_hash_hex(&[
+        SPECIALIZATION_REPLAY_IDENTITY_SCHEMA_VERSION,
+        &trace.session_id,
+        &event_count.to_string(),
+        &trace_content_hash_hex,
+        &lane_identity_hash_hex,
+    ]);
+    Ok(SpecializationReplayIdentity {
+        schema_version: SPECIALIZATION_REPLAY_IDENTITY_SCHEMA_VERSION.to_string(),
+        trace_session_id: trace.session_id.clone(),
+        trace_event_count: event_count,
+        trace_content_hash_hex,
+        lane_identity_hash_hex,
+        identity_hash_hex,
+    })
+}
+
+/// Safe-mode kill switch: while engaged, EVERY specialization is disabled
+/// and execution is forced onto the baseline lane regardless of proof state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpecializationKillSwitch {
+    /// Whether safe mode is engaged.
+    pub safe_mode: bool,
+    /// Operator-auditable reason, when engaged.
+    pub reason: Option<String>,
+}
+
+impl SpecializationKillSwitch {
+    /// Safe mode engaged with a reason.
+    pub fn engaged(reason: impl Into<String>) -> Self {
+        Self {
+            safe_mode: true,
+            reason: Some(reason.into()),
+        }
+    }
+
+    /// Safe mode not engaged: lane resolution falls through to proof checks.
+    pub fn disengaged() -> Self {
+        Self {
+            safe_mode: false,
+            reason: None,
+        }
+    }
+}
+
+/// Why a run was forced onto the baseline lane (fail-closed).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BaselineForcedReason {
+    /// The kill switch is engaged: all specializations disabled.
+    SafeMode,
+    /// A requested receipt hash has no verified proof for the current epoch.
+    MissingReceipt { receipt_hash_hex: String },
+    /// The lane's proof epoch does not match the current epoch.
+    StaleProofEpoch { lane_epoch: u64, current_epoch: u64 },
+    /// The live lane does not match the recorded lane identity.
+    ReceiptMismatch {
+        expected_identity_hash_hex: String,
+        actual_identity_hash_hex: String,
+    },
+    /// The lane record is internally inconsistent or unverifiable.
+    UnknownProofState { detail: String },
+    /// The trace carries no lane record but a specialized lane was requested.
+    NoRecordedLane,
+}
+
+/// Resolve the effective execution lane, fail-closed.
+///
+/// Baseline requests pass through. Specialized requests are allowed only
+/// when the kill switch is disengaged, the lane epoch matches the current
+/// epoch, the receipt set is non-empty, and every receipt hash appears in
+/// `verified_receipt_hashes`. Anything else forces the baseline lane with a
+/// typed reason.
+pub fn resolve_execution_lane(
+    kill_switch: &SpecializationKillSwitch,
+    requested: &SpecializationLaneRecord,
+    current_epoch: u64,
+    verified_receipt_hashes: &[String],
+) -> (SpecializationLaneRecord, Option<BaselineForcedReason>) {
+    let forced_baseline =
+        SpecializationLaneRecord::baseline(requested.executed_ir3_hash_hex.clone(), current_epoch);
+    if kill_switch.safe_mode {
+        return (forced_baseline, Some(BaselineForcedReason::SafeMode));
+    }
+    if requested.is_baseline() {
+        return (requested.clone(), None);
+    }
+    if requested.lane != SPECIALIZATION_LANE_SPECIALIZED {
+        return (
+            forced_baseline,
+            Some(BaselineForcedReason::UnknownProofState {
+                detail: format!("unknown lane kind: {}", requested.lane),
+            }),
+        );
+    }
+    if requested.specialization_receipt_hashes.is_empty() {
+        return (
+            forced_baseline,
+            Some(BaselineForcedReason::UnknownProofState {
+                detail: "specialized lane with empty receipt set".to_string(),
+            }),
+        );
+    }
+    if requested.policy_epoch != current_epoch {
+        return (
+            forced_baseline,
+            Some(BaselineForcedReason::StaleProofEpoch {
+                lane_epoch: requested.policy_epoch,
+                current_epoch,
+            }),
+        );
+    }
+    for receipt_hash in &requested.specialization_receipt_hashes {
+        if !verified_receipt_hashes.contains(receipt_hash) {
+            return (
+                forced_baseline,
+                Some(BaselineForcedReason::MissingReceipt {
+                    receipt_hash_hex: receipt_hash.clone(),
+                }),
+            );
+        }
+    }
+    (requested.clone(), None)
+}
+
+/// Outcome of the strict-replay lane rule.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReplayLaneOutcome {
+    /// The replay runs the exact lane the trace recorded.
+    SameLaneReproduced {
+        identity: SpecializationReplayIdentity,
+    },
+    /// The replay is forced onto the baseline lane. When the recorded run
+    /// was specialized, the caller MUST verify output equivalence between
+    /// the recorded run and the forced-baseline replay before trusting it.
+    ForcedBaseline {
+        reason: BaselineForcedReason,
+        requires_output_equivalence: bool,
+        identity: SpecializationReplayIdentity,
+    },
+}
+
+/// Enforce the E9.T3 strict-replay lane rule for a recorded trace: either
+/// the replay reproduces the same specialization lane (identity included in
+/// the replay-identity hash), or it is forced onto the baseline lane with a
+/// typed reason — never silently a different path.
+///
+/// A trace with no lane record is a legacy baseline run: replaying it on
+/// the baseline lane reproduces it; requesting a specialized replay of it
+/// is refused (`NoRecordedLane`).
+pub fn enforce_strict_replay_lane(
+    trace: &NondeterminismTrace,
+    live_lane: &SpecializationLaneRecord,
+    kill_switch: &SpecializationKillSwitch,
+    current_epoch: u64,
+    verified_receipt_hashes: &[String],
+) -> Result<ReplayLaneOutcome, ReplayError> {
+    let recorded = trace.recorded_specialization_lane();
+    let (effective, forced) = resolve_execution_lane(
+        kill_switch,
+        live_lane,
+        current_epoch,
+        verified_receipt_hashes,
+    );
+
+    match recorded {
+        None => {
+            if effective.is_baseline() && forced.is_none() {
+                let identity = compute_replay_identity(trace, &effective)?;
+                Ok(ReplayLaneOutcome::SameLaneReproduced { identity })
+            } else {
+                let baseline = SpecializationLaneRecord::baseline(
+                    live_lane.executed_ir3_hash_hex.clone(),
+                    current_epoch,
+                );
+                let identity = compute_replay_identity(trace, &baseline)?;
+                Ok(ReplayLaneOutcome::ForcedBaseline {
+                    reason: forced.unwrap_or(BaselineForcedReason::NoRecordedLane),
+                    // The recorded run was baseline (no lane record), so a
+                    // forced-baseline replay follows the recorded path.
+                    requires_output_equivalence: false,
+                    identity,
+                })
+            }
+        }
+        Some(recorded_lane) => {
+            if let Some(reason) = forced {
+                let identity = compute_replay_identity(trace, &effective)?;
+                return Ok(ReplayLaneOutcome::ForcedBaseline {
+                    reason,
+                    requires_output_equivalence: !recorded_lane.is_baseline(),
+                    identity,
+                });
+            }
+            if effective.identity_hash_hex() == recorded_lane.identity_hash_hex() {
+                let identity = compute_replay_identity(trace, &effective)?;
+                Ok(ReplayLaneOutcome::SameLaneReproduced { identity })
+            } else {
+                let baseline = SpecializationLaneRecord::baseline(
+                    recorded_lane.executed_ir3_hash_hex.clone(),
+                    current_epoch,
+                );
+                let identity = compute_replay_identity(trace, &baseline)?;
+                Ok(ReplayLaneOutcome::ForcedBaseline {
+                    reason: BaselineForcedReason::ReceiptMismatch {
+                        expected_identity_hash_hex: recorded_lane.identity_hash_hex(),
+                        actual_identity_hash_hex: effective.identity_hash_hex(),
+                    },
+                    requires_output_equivalence: !recorded_lane.is_baseline(),
+                    identity,
+                })
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -3387,5 +3804,456 @@ mod tests {
             vec![20]
         ); // Returns live value
         assert_eq!(engine.divergence_count(), 1);
+    }
+
+    // -- bd-fqlfw.9.3: specialization-aware replay identity + kill switch --
+
+    const IR3_HEX: &str = "abc123";
+    const RECEIPT_A: &str = "receipt-hash-a";
+    const RECEIPT_B: &str = "receipt-hash-b";
+
+    fn specialized_lane() -> SpecializationLaneRecord {
+        SpecializationLaneRecord::specialized(
+            IR3_HEX,
+            7,
+            vec![RECEIPT_A.to_string(), RECEIPT_B.to_string()],
+        )
+    }
+
+    fn verified_hashes() -> Vec<String> {
+        vec![RECEIPT_A.to_string(), RECEIPT_B.to_string()]
+    }
+
+    fn finalised_trace(session: &str) -> NondeterminismTrace {
+        let mut trace = NondeterminismTrace::new(session);
+        trace.capture(NondeterminismSource::TimerRead, vec![1], 10, "timer");
+        trace.finalise(20);
+        trace
+    }
+
+    fn lane_aware_trace(session: &str, lane: &SpecializationLaneRecord) -> NondeterminismTrace {
+        let mut trace = NondeterminismTrace::new(session);
+        trace.capture_specialization_lane(lane, 5);
+        trace.capture(NondeterminismSource::TimerRead, vec![1], 10, "timer");
+        trace.finalise(20);
+        trace
+    }
+
+    #[test]
+    fn lane_record_baseline_has_empty_receipts() {
+        let lane = SpecializationLaneRecord::baseline(IR3_HEX, 7);
+        assert!(lane.is_baseline());
+        assert!(lane.specialization_receipt_hashes.is_empty());
+        assert_eq!(lane.schema_version, SPECIALIZATION_LANE_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn lane_record_specialized_sorts_and_dedups_receipts() {
+        let lane = SpecializationLaneRecord::specialized(
+            IR3_HEX,
+            7,
+            vec![
+                RECEIPT_B.to_string(),
+                RECEIPT_A.to_string(),
+                RECEIPT_B.to_string(),
+            ],
+        );
+        assert!(!lane.is_baseline());
+        assert_eq!(
+            lane.specialization_receipt_hashes,
+            vec![RECEIPT_A.to_string(), RECEIPT_B.to_string()]
+        );
+    }
+
+    #[test]
+    fn lane_record_encode_decode_roundtrip() {
+        let lane = specialized_lane();
+        let decoded =
+            SpecializationLaneRecord::decode(&lane.encode()).expect("lane record decodes");
+        assert_eq!(lane, decoded);
+        assert!(SpecializationLaneRecord::decode(b"not-json").is_none());
+    }
+
+    #[test]
+    fn lane_identity_hash_binds_every_field() {
+        let base = specialized_lane();
+        let mut other_epoch = base.clone();
+        other_epoch.policy_epoch = 8;
+        let mut other_ir = base.clone();
+        other_ir.executed_ir3_hash_hex = "different".to_string();
+        let mut other_receipts = base.clone();
+        other_receipts.specialization_receipt_hashes.pop();
+        let baseline = SpecializationLaneRecord::baseline(IR3_HEX, 7);
+
+        let ids: std::collections::BTreeSet<String> = [
+            base.identity_hash_hex(),
+            other_epoch.identity_hash_hex(),
+            other_ir.identity_hash_hex(),
+            other_receipts.identity_hash_hex(),
+            baseline.identity_hash_hex(),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(ids.len(), 5, "every field change must change the identity");
+        assert_eq!(
+            base.identity_hash_hex(),
+            specialized_lane().identity_hash_hex()
+        );
+    }
+
+    #[test]
+    fn capture_specialization_lane_is_recoverable() {
+        let lane = specialized_lane();
+        let trace = lane_aware_trace("lane-capture", &lane);
+        let recorded = trace
+            .recorded_specialization_lane()
+            .expect("lane record present");
+        assert_eq!(recorded, lane);
+    }
+
+    #[test]
+    fn legacy_trace_has_no_recorded_lane() {
+        let trace = finalised_trace("legacy");
+        assert!(trace.recorded_specialization_lane().is_none());
+    }
+
+    #[test]
+    fn lane_event_uses_lane_selection_source_and_component() {
+        let lane = SpecializationLaneRecord::baseline(IR3_HEX, 7);
+        let trace = lane_aware_trace("lane-source", &lane);
+        let event = &trace.events[0];
+        assert_eq!(event.source, NondeterminismSource::LaneSelectionRandom);
+        assert_eq!(event.component, E9_SPECIALIZATION_LANE_COMPONENT);
+    }
+
+    #[test]
+    fn lane_change_is_critical_divergence_under_strict_replay() {
+        let recorded = specialized_lane();
+        let trace = lane_aware_trace("lane-divergence", &recorded);
+        let mut engine = ReplayEngine::new(trace, ReplayMode::Strict);
+        let live = SpecializationLaneRecord::baseline(IR3_HEX, 7);
+        let result = engine.replay_next(NondeterminismSource::LaneSelectionRandom, &live.encode());
+        assert!(matches!(
+            result,
+            Err(ReplayError::CriticalDivergence { .. })
+        ));
+    }
+
+    #[test]
+    fn replay_identity_requires_finalised_trace() {
+        let mut trace = NondeterminismTrace::new("unfinalised");
+        trace.capture(NondeterminismSource::TimerRead, vec![1], 10, "timer");
+        let lane = SpecializationLaneRecord::baseline(IR3_HEX, 7);
+        assert_eq!(
+            compute_replay_identity(&trace, &lane),
+            Err(ReplayError::TraceNotFinalised)
+        );
+    }
+
+    #[test]
+    fn replay_identity_is_deterministic_and_content_sensitive() {
+        let lane = SpecializationLaneRecord::baseline(IR3_HEX, 7);
+        let a = compute_replay_identity(&finalised_trace("s1"), &lane).expect("identity");
+        let b = compute_replay_identity(&finalised_trace("s1"), &lane).expect("identity");
+        assert_eq!(a, b);
+
+        // Same event COUNT, different event CONTENT: identity must differ
+        // (unlike the legacy derive_id which only sees the count).
+        let mut altered = NondeterminismTrace::new("s1");
+        altered.capture(NondeterminismSource::TimerRead, vec![2], 10, "timer");
+        altered.finalise(20);
+        let c = compute_replay_identity(&altered, &lane).expect("identity");
+        assert_eq!(a.trace_event_count, c.trace_event_count);
+        assert_ne!(a.trace_content_hash_hex, c.trace_content_hash_hex);
+        assert_ne!(a.identity_hash_hex, c.identity_hash_hex);
+    }
+
+    #[test]
+    fn replay_identity_includes_specialization_receipt_hashes() {
+        let trace = finalised_trace("s1");
+        let baseline = SpecializationLaneRecord::baseline(IR3_HEX, 7);
+        let specialized = specialized_lane();
+        let a = compute_replay_identity(&trace, &baseline).expect("identity");
+        let b = compute_replay_identity(&trace, &specialized).expect("identity");
+        assert_eq!(a.trace_content_hash_hex, b.trace_content_hash_hex);
+        assert_ne!(
+            a.identity_hash_hex, b.identity_hash_hex,
+            "receipt hashes are part of the replay identity"
+        );
+    }
+
+    #[test]
+    fn kill_switch_constructors() {
+        let engaged = SpecializationKillSwitch::engaged("operator drill");
+        assert!(engaged.safe_mode);
+        assert_eq!(engaged.reason.as_deref(), Some("operator drill"));
+        let disengaged = SpecializationKillSwitch::disengaged();
+        assert!(!disengaged.safe_mode);
+        assert!(disengaged.reason.is_none());
+    }
+
+    #[test]
+    fn safe_mode_disables_all_specializations_even_fully_verified() {
+        let kill = SpecializationKillSwitch::engaged("drill");
+        let (lane, reason) =
+            resolve_execution_lane(&kill, &specialized_lane(), 7, &verified_hashes());
+        assert!(lane.is_baseline());
+        assert_eq!(reason, Some(BaselineForcedReason::SafeMode));
+    }
+
+    #[test]
+    fn safe_mode_also_forces_baseline_requests_to_baseline() {
+        let kill = SpecializationKillSwitch::engaged("drill");
+        let request = SpecializationLaneRecord::baseline(IR3_HEX, 7);
+        let (lane, reason) = resolve_execution_lane(&kill, &request, 7, &[]);
+        assert!(lane.is_baseline());
+        assert_eq!(reason, Some(BaselineForcedReason::SafeMode));
+    }
+
+    #[test]
+    fn baseline_request_passes_through_untouched() {
+        let kill = SpecializationKillSwitch::disengaged();
+        let request = SpecializationLaneRecord::baseline(IR3_HEX, 7);
+        let (lane, reason) = resolve_execution_lane(&kill, &request, 7, &[]);
+        assert_eq!(lane, request);
+        assert!(reason.is_none());
+    }
+
+    #[test]
+    fn fully_verified_specialized_lane_is_allowed_when_disengaged() {
+        let kill = SpecializationKillSwitch::disengaged();
+        let request = specialized_lane();
+        let (lane, reason) = resolve_execution_lane(&kill, &request, 7, &verified_hashes());
+        assert_eq!(lane, request);
+        assert!(reason.is_none());
+    }
+
+    #[test]
+    fn missing_receipt_forces_baseline() {
+        let kill = SpecializationKillSwitch::disengaged();
+        let (lane, reason) = resolve_execution_lane(
+            &kill,
+            &specialized_lane(),
+            7,
+            &[RECEIPT_A.to_string()], // RECEIPT_B unverified
+        );
+        assert!(lane.is_baseline());
+        assert_eq!(
+            reason,
+            Some(BaselineForcedReason::MissingReceipt {
+                receipt_hash_hex: RECEIPT_B.to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn stale_epoch_forces_baseline() {
+        let kill = SpecializationKillSwitch::disengaged();
+        let (lane, reason) =
+            resolve_execution_lane(&kill, &specialized_lane(), 8, &verified_hashes());
+        assert!(lane.is_baseline());
+        assert_eq!(
+            lane.policy_epoch, 8,
+            "forced baseline runs at CURRENT epoch"
+        );
+        assert_eq!(
+            reason,
+            Some(BaselineForcedReason::StaleProofEpoch {
+                lane_epoch: 7,
+                current_epoch: 8,
+            })
+        );
+    }
+
+    #[test]
+    fn empty_receipt_specialized_lane_is_unknown_proof_state() {
+        let kill = SpecializationKillSwitch::disengaged();
+        let request = SpecializationLaneRecord::specialized(IR3_HEX, 7, Vec::new());
+        let (lane, reason) = resolve_execution_lane(&kill, &request, 7, &[]);
+        assert!(lane.is_baseline());
+        assert!(matches!(
+            reason,
+            Some(BaselineForcedReason::UnknownProofState { .. })
+        ));
+    }
+
+    #[test]
+    fn unknown_lane_kind_is_unknown_proof_state() {
+        let kill = SpecializationKillSwitch::disengaged();
+        let mut request = specialized_lane();
+        request.lane = "warp-speed".to_string();
+        let (lane, reason) = resolve_execution_lane(&kill, &request, 7, &verified_hashes());
+        assert!(lane.is_baseline());
+        assert!(matches!(
+            reason,
+            Some(BaselineForcedReason::UnknownProofState { .. })
+        ));
+    }
+
+    #[test]
+    fn strict_lane_rule_reproduces_recorded_specialized_lane() {
+        let recorded = specialized_lane();
+        let trace = lane_aware_trace("strict-same", &recorded);
+        let outcome = enforce_strict_replay_lane(
+            &trace,
+            &recorded,
+            &SpecializationKillSwitch::disengaged(),
+            7,
+            &verified_hashes(),
+        )
+        .expect("lane rule evaluates");
+        match outcome {
+            ReplayLaneOutcome::SameLaneReproduced { identity } => {
+                assert_eq!(
+                    identity.lane_identity_hash_hex,
+                    recorded.identity_hash_hex()
+                );
+            }
+            other => panic!("expected SameLaneReproduced, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn strict_lane_rule_forces_baseline_with_equivalence_on_safe_mode() {
+        let recorded = specialized_lane();
+        let trace = lane_aware_trace("strict-safe-mode", &recorded);
+        let outcome = enforce_strict_replay_lane(
+            &trace,
+            &recorded,
+            &SpecializationKillSwitch::engaged("drill"),
+            7,
+            &verified_hashes(),
+        )
+        .expect("lane rule evaluates");
+        match outcome {
+            ReplayLaneOutcome::ForcedBaseline {
+                reason,
+                requires_output_equivalence,
+                identity,
+            } => {
+                assert_eq!(reason, BaselineForcedReason::SafeMode);
+                assert!(
+                    requires_output_equivalence,
+                    "recorded specialized run forced to baseline needs equivalence proof"
+                );
+                assert!(!identity.identity_hash_hex.is_empty());
+            }
+            other => panic!("expected ForcedBaseline, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn strict_lane_rule_never_silently_swaps_lanes() {
+        // Recorded specialized on receipts {A,B}; live requests only {A}.
+        let recorded = specialized_lane();
+        let trace = lane_aware_trace("strict-mismatch", &recorded);
+        let live = SpecializationLaneRecord::specialized(IR3_HEX, 7, vec![RECEIPT_A.to_string()]);
+        let outcome = enforce_strict_replay_lane(
+            &trace,
+            &live,
+            &SpecializationKillSwitch::disengaged(),
+            7,
+            &verified_hashes(),
+        )
+        .expect("lane rule evaluates");
+        match outcome {
+            ReplayLaneOutcome::ForcedBaseline {
+                reason,
+                requires_output_equivalence,
+                ..
+            } => {
+                assert!(matches!(
+                    reason,
+                    BaselineForcedReason::ReceiptMismatch { .. }
+                ));
+                assert!(requires_output_equivalence);
+            }
+            other => panic!("expected ForcedBaseline, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn strict_lane_rule_legacy_trace_baseline_replay_is_same_lane() {
+        let trace = finalised_trace("legacy-baseline");
+        let live = SpecializationLaneRecord::baseline(IR3_HEX, 7);
+        let outcome = enforce_strict_replay_lane(
+            &trace,
+            &live,
+            &SpecializationKillSwitch::disengaged(),
+            7,
+            &[],
+        )
+        .expect("lane rule evaluates");
+        assert!(matches!(
+            outcome,
+            ReplayLaneOutcome::SameLaneReproduced { .. }
+        ));
+    }
+
+    #[test]
+    fn strict_lane_rule_refuses_specialized_replay_of_legacy_trace() {
+        let trace = finalised_trace("legacy-specialized-request");
+        let outcome = enforce_strict_replay_lane(
+            &trace,
+            &specialized_lane(),
+            &SpecializationKillSwitch::disengaged(),
+            7,
+            &verified_hashes(),
+        )
+        .expect("lane rule evaluates");
+        match outcome {
+            ReplayLaneOutcome::ForcedBaseline {
+                requires_output_equivalence,
+                ..
+            } => {
+                // Recorded run was baseline: forcing baseline follows the
+                // recorded path, no extra equivalence proof needed.
+                assert!(!requires_output_equivalence);
+            }
+            other => panic!("expected ForcedBaseline, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lane_capture_does_not_disturb_existing_traces() {
+        // Pure read-only contract: computing identity over an untouched
+        // trace leaves it byte-identical.
+        let trace = finalised_trace("untouched");
+        let before = serde_json::to_vec(&trace).expect("trace serializes");
+        let lane = SpecializationLaneRecord::baseline(IR3_HEX, 7);
+        let _ = compute_replay_identity(&trace, &lane).expect("identity");
+        let _ = trace.recorded_specialization_lane();
+        let after = serde_json::to_vec(&trace).expect("trace serializes");
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn specialization_types_serde_roundtrip() {
+        let lane = specialized_lane();
+        let lane_json = serde_json::to_string(&lane).expect("serializes");
+        let lane_back: SpecializationLaneRecord =
+            serde_json::from_str(&lane_json).expect("deserializes");
+        assert_eq!(lane, lane_back);
+
+        let identity = compute_replay_identity(&finalised_trace("serde"), &lane).expect("identity");
+        let id_json = serde_json::to_string(&identity).expect("serializes");
+        let id_back: SpecializationReplayIdentity =
+            serde_json::from_str(&id_json).expect("deserializes");
+        assert_eq!(identity, id_back);
+
+        let reason = BaselineForcedReason::StaleProofEpoch {
+            lane_epoch: 7,
+            current_epoch: 8,
+        };
+        let r_json = serde_json::to_string(&reason).expect("serializes");
+        let r_back: BaselineForcedReason = serde_json::from_str(&r_json).expect("deserializes");
+        assert_eq!(reason, r_back);
+    }
+
+    #[test]
+    fn specialization_identity_hash_is_length_prefix_sensitive() {
+        let a = length_prefixed_hash_hex(&["ab", "c"]);
+        let b = length_prefixed_hash_hex(&["a", "bc"]);
+        assert_ne!(a, b, "field boundaries must be part of the hash");
     }
 }

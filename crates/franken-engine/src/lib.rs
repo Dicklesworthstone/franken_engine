@@ -282,6 +282,7 @@ pub mod ir_contract;
 pub mod iterator_protocol;
 pub mod iterator_protocol_translation_validator;
 pub mod js_runtime_lane;
+pub mod js_string;
 pub mod json_capabilities;
 pub mod jsx_tsx_parser;
 pub mod kernel_shift_monitor;

@@ -81,6 +81,7 @@ use crate::iterator_protocol::{
     IterationTrace, IteratorResult, IteratorSymbolKind, IteratorValue, make_close_event,
     make_enumerate_event, make_get_iterator_event, make_next_event,
 };
+use crate::js_string::JsString;
 use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 use crate::runtime_config::ExecutionConfig;
@@ -677,9 +678,12 @@ pub enum Value {
     /// IEEE 754 floating-point (f64). Used for fractional values, NaN,
     /// Infinity, and -0. Wrapped in Float64 for deterministic ordering.
     Float(Float64),
-    /// Shared string payload. Cloning a `Value::Str` bumps the refcount instead
-    /// of copying the string bytes on every register read/write.
-    Str(#[serde(with = "arc_str_serde")] Arc<str>),
+    /// Shared string payload. Cloning a `Value::Str` bumps refcounts instead
+    /// of copying the string bytes on every register read/write. `JsString`
+    /// carries exact UTF-16 code units when the content contains a lone
+    /// surrogate (bd-neika) while keeping the UTF-8 fast path — and the
+    /// previous wire format — for well-formed strings.
+    Str(JsString),
     /// Object reference (heap index).
     Object(ObjectId),
     /// Function reference (function table index).
@@ -710,25 +714,6 @@ pub enum Value {
         get: Option<Box<Value>>,
         set: Option<Box<Value>>,
     },
-}
-
-mod arc_str_serde {
-    use super::*;
-
-    pub fn serialize<S>(value: &Arc<str>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(value)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Arc<str>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Ok(Arc::from(value))
-    }
 }
 
 /// Small set of builtin callable kinds the baseline interpreter exposes as
@@ -1085,6 +1070,15 @@ pub enum BuiltinFunctionKind {
     /// `Object.prototype.toString` — receiver-aware object tag string
     /// (bd-9a8cz.5).
     ObjectPrototypeToString,
+    /// `String.prototype.isWellFormed` — true iff the receiver string
+    /// contains no unpaired surrogate (ES2024 §22.1.3.10, bd-neika).
+    /// Appended at the enum tail: `kind as u64` feeds the register hash, so
+    /// existing ordinals must not shift.
+    StringIsWellFormed,
+    /// `String.prototype.toWellFormed` — each unpaired surrogate replaced
+    /// with U+FFFD (ES2024 §22.1.3.29, bd-neika). Appended at the enum tail
+    /// for the same ordinal-stability reason.
+    StringToWellFormed,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -1153,6 +1147,24 @@ impl BuiltinFunction {
     fn string_char_at() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringCharAt,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_is_well_formed() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringIsWellFormed,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_to_well_formed() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringToWellFormed,
             module_specifier: String::new(),
             iterator_handle: None,
             bound_object: None,
@@ -2300,12 +2312,14 @@ impl BuiltinFunction {
             BuiltinFunctionKind::ObjectPrototypePropertyIsEnumerable => "propertyIsEnumerable",
             BuiltinFunctionKind::ObjectPrototypeValueOf => "valueOf",
             BuiltinFunctionKind::ObjectPrototypeToString => "toString",
+            BuiltinFunctionKind::StringIsWellFormed => "isWellFormed",
+            BuiltinFunctionKind::StringToWellFormed => "toWellFormed",
         }
     }
 }
 
 impl Value {
-    pub fn str(value: impl Into<Arc<str>>) -> Self {
+    pub fn str(value: impl Into<JsString>) -> Self {
         Self::Str(value.into())
     }
 
@@ -3405,11 +3419,26 @@ impl EvidenceLog {
                     bigint_hash
                 }
                 Value::Str(s) => {
-                    let mut string_hash = 5u64;
-                    for byte in s.bytes() {
-                        string_hash = string_hash.wrapping_mul(31).wrapping_add(byte as u64);
+                    if s.is_well_formed() {
+                        // Well-formed strings keep the historical UTF-8 byte
+                        // fold, so existing register hashes are unchanged.
+                        let mut string_hash = 5u64;
+                        for byte in s.bytes() {
+                            string_hash = string_hash.wrapping_mul(31).wrapping_add(byte as u64);
+                        }
+                        string_hash
+                    } else {
+                        // Lone-surrogate content folds its exact code units
+                        // under a distinct seed: distinct lone surrogates must
+                        // not collapse to the shared U+FFFD projection hash
+                        // (bd-neika).
+                        let mut string_hash = 21u64;
+                        for unit in s.encode_utf16() {
+                            string_hash =
+                                string_hash.wrapping_mul(31).wrapping_add(u64::from(unit));
+                        }
+                        string_hash
                     }
-                    string_hash
                 }
                 Value::Object(id) => 6 + (id.0 as u64),
                 Value::Function(id) => 7 + (*id as u64),
@@ -5624,7 +5653,7 @@ impl InterpreterCore {
             _ => None,
         };
         if let Some(text) = decoded {
-            return Ok(Value::Str(Arc::from(text)));
+            return Ok(Value::str(text));
         }
         let values: Vec<Value> = bytes.iter().map(|&b| Value::Int(i64::from(b))).collect();
         let view = self.alloc_typed_array_from_values(TypedArrayKind::Uint8, &values)?;
@@ -7549,139 +7578,155 @@ impl InterpreterCore {
             // served by both this legacy seam and the intrinsic-table path
             // (`dispatch_string_intrinsic`). The receiver coercion here mirrors
             // the table rows' declared `ThisCoercion::ToString`.
+            // Receiver coercion below keeps exact UTF-16 code units
+            // (`require_object_coercible_to_js_string`), so a lone-surrogate
+            // receiver reaches charAt/charCodeAt/at without collapsing to
+            // the lossy projection (bd-neika). The intrinsic-table path
+            // applies the identical coercion; the parity tests pin the two
+            // seams against each other.
             BuiltinFunctionKind::StringCharAt => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_char_at_impl(&value, args)
             }
             BuiltinFunctionKind::StringCharCodeAt => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_char_code_at_impl(&value, args)
             }
             BuiltinFunctionKind::StringAt => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_at_impl(&value, args)
+            }
+            BuiltinFunctionKind::StringIsWellFormed => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
+                Ok(Value::Bool(value.is_well_formed()))
+            }
+            BuiltinFunctionKind::StringToWellFormed => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
+                Ok(Value::str(value.as_utf8_projection()))
             }
             BuiltinFunctionKind::StringToUpperCase => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_to_upper_case_impl(&value, args)
             }
             BuiltinFunctionKind::StringToLowerCase => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_to_lower_case_impl(&value, args)
             }
             BuiltinFunctionKind::StringTrim => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_trim_impl(&value, args)
             }
             BuiltinFunctionKind::StringTrimStart => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_trim_start_impl(&value, args)
             }
             BuiltinFunctionKind::StringTrimEnd => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_trim_end_impl(&value, args)
             }
             BuiltinFunctionKind::StringReplaceAll => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_replace_all_impl(&value, args)
             }
             BuiltinFunctionKind::StringCodePointAt => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_code_point_at_impl(&value, args)
             }
             BuiltinFunctionKind::StringLocaleCompare => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_locale_compare_impl(&value, args)
             }
             BuiltinFunctionKind::StringNormalize => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_normalize_impl(&value, args)
             }
             BuiltinFunctionKind::StringIncludes => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_includes_impl(&value, args)
             }
             BuiltinFunctionKind::StringStartsWith => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_starts_with_impl(&value, args)
             }
             BuiltinFunctionKind::StringEndsWith => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_ends_with_impl(&value, args)
             }
             BuiltinFunctionKind::StringSplit => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_split_impl(&value, args)
             }
             BuiltinFunctionKind::StringIndexOf => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_index_of_impl(&value, args)
             }
             BuiltinFunctionKind::StringLastIndexOf => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_last_index_of_impl(&value, args)
             }
             BuiltinFunctionKind::StringSlice => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_slice_impl(&value, args)
             }
             BuiltinFunctionKind::StringSubstring => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_substring_impl(&value, args)
             }
             BuiltinFunctionKind::StringSubstr => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_substr_impl(&value, args)
             }
             BuiltinFunctionKind::StringReplace => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_replace_impl(&value, args)
             }
             BuiltinFunctionKind::StringMatch => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_match_impl(&value, args)
             }
             BuiltinFunctionKind::StringSearch => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_search_impl(&value, args)
             }
             BuiltinFunctionKind::StringRepeat => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_repeat_impl(&value, args)
             }
             BuiltinFunctionKind::StringPadStart => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_pad_start_impl(&value, args)
             }
             BuiltinFunctionKind::StringPadEnd => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_pad_end_impl(&value, args)
             }
             BuiltinFunctionKind::NumberToFixed => {
@@ -8952,7 +8997,7 @@ impl InterpreterCore {
                         if let Some(req) = heap.get_mut(req_index)
                             && let Some(Value::Str(buf)) = req.properties.get_mut("__body")
                         {
-                            *buf = Arc::from(format!("{buf}{chunk_str}"));
+                            *buf = JsString::from(format!("{buf}{chunk_str}"));
                         }
                     });
                 }
@@ -9004,7 +9049,7 @@ impl InterpreterCore {
                             if let Some(req) = heap.get_mut(req_index)
                                 && let Some(Value::Str(buf)) = req.properties.get_mut("__body")
                             {
-                                *buf = Arc::from(format!("{buf}{chunk_str}"));
+                                *buf = JsString::from(format!("{buf}{chunk_str}"));
                             }
                         });
                     }
@@ -12773,7 +12818,11 @@ impl InterpreterCore {
                     }
                 }
                 Ir3Instruction::TemplateLiteral { parts, dst } => {
-                    let mut result = String::new();
+                    // Concatenate over exact code units so string parts
+                    // holding lone surrogates keep them (and heal across
+                    // part boundaries) instead of collapsing to the lossy
+                    // projection (bd-neika).
+                    let mut result = JsString::empty();
                     for i in 0..parts.count {
                         let reg = parts.start.checked_add(i).ok_or(
                             InterpreterError::RegisterOutOfBounds {
@@ -12783,18 +12832,18 @@ impl InterpreterCore {
                         )?;
                         let val = self.read_reg(reg)?;
                         let part_str = match val {
-                            Value::Str(s) => s.to_string(),
-                            Value::Int(n) => n.to_string(),
-                            Value::BigInt(n) => n,
-                            Value::Float(f) => f.to_string(),
-                            Value::Bool(b) => (if b { "true" } else { "false" }).to_string(),
-                            Value::Null => "null".to_string(),
-                            Value::Undefined => "undefined".to_string(),
-                            Value::Object(id) => self.object_to_coerced_string(id),
+                            Value::Str(s) => s,
+                            Value::Int(n) => JsString::from(n.to_string()),
+                            Value::BigInt(n) => JsString::from(n),
+                            Value::Float(f) => JsString::from(f.to_string()),
+                            Value::Bool(b) => JsString::from(if b { "true" } else { "false" }),
+                            Value::Null => JsString::from("null"),
+                            Value::Undefined => JsString::from("undefined"),
+                            Value::Object(id) => JsString::from(self.object_to_coerced_string(id)),
                             Value::Iterator(_) | Value::Generator(_) | Value::Accessor { .. } => {
-                                "[object Object]".to_string()
+                                JsString::from("[object Object]")
                             }
-                            Value::Promise(_) => "[object Promise]".to_string(),
+                            Value::Promise(_) => JsString::from("[object Promise]"),
                             Value::Function(_)
                             | Value::Closure(_)
                             | Value::GeneratorFunction(_)
@@ -12802,12 +12851,12 @@ impl InterpreterCore {
                             | Value::AsyncFunction(_)
                             | Value::AsyncFunctionObject(_)
                             | Value::AsyncGeneratorFunction(_)
-                            | Value::AsyncGeneratorObject(_) => "function".to_string(),
+                            | Value::AsyncGeneratorObject(_) => JsString::from("function"),
                         };
                         self.check_string_limit(result.len().saturating_add(part_str.len()))?;
-                        result.push_str(&part_str);
+                        result = result.concat(&part_str);
                     }
-                    self.write_reg(dst, Value::str(result))?;
+                    self.write_reg(dst, Value::Str(result))?;
                     // IFC: the concatenated string is derived from every part —
                     // `` `${secret}` `` must carry the secret's label, not the
                     // dst register's stale prior label (the bd-0zybl / bd-n2mjy
@@ -13430,10 +13479,13 @@ impl InterpreterCore {
             (Value::Float(x), Value::Int(y)) => {
                 Ok(Value::Float(Float64::new(x.inner() + *y as f64)))
             }
-            // String concatenation
+            // String concatenation. `JsString::concat` joins exact UTF-16
+            // code units, so a trailing high surrogate heals against a
+            // leading low surrogate into the supplementary code point
+            // (bd-neika); well-formed operands keep the UTF-8 fast path.
             (Value::Str(x), Value::Str(y)) => {
                 self.check_string_limit(x.len().saturating_add(y.len()))?;
-                Ok(Value::str(format!("{x}{y}")))
+                Ok(Value::Str(x.concat(y)))
             }
             (Value::Str(x), other) => {
                 let other_str = match other {
@@ -13447,7 +13499,7 @@ impl InterpreterCore {
                     _ => other.to_string(),
                 };
                 self.check_string_limit(x.len().saturating_add(other_str.len()))?;
-                Ok(Value::str(format!("{x}{other_str}")))
+                Ok(Value::Str(x.concat(&JsString::from(other_str))))
             }
             (other, Value::Str(y)) => {
                 let other_str = match other {
@@ -13461,7 +13513,7 @@ impl InterpreterCore {
                     _ => other.to_string(),
                 };
                 self.check_string_limit(other_str.len().saturating_add(y.len()))?;
-                Ok(Value::str(format!("{other_str}{y}")))
+                Ok(Value::Str(JsString::from(other_str).concat(y)))
             }
             _ => {
                 // JS coercion: non-string primitives coerce to number for +.
@@ -14523,7 +14575,7 @@ impl InterpreterCore {
     #[allow(clippy::type_complexity)]
     fn string_intrinsic_impl_binding(
         impl_fn: &str,
-    ) -> Option<fn(&mut Self, &str, RegRange) -> Result<Value, InterpreterError>> {
+    ) -> Option<fn(&mut Self, &JsString, RegRange) -> Result<Value, InterpreterError>> {
         Some(match impl_fn {
             "string_char_at_impl" => Self::string_char_at_impl,
             "string_char_code_at_impl" => Self::string_char_code_at_impl,
@@ -14580,10 +14632,16 @@ impl InterpreterCore {
             ImplBinding::Manual { .. } => return None,
         };
         let coerced = match row.this_coercion {
-            ThisCoercion::ToString => match Self::require_object_coercible_to_string(&receiver) {
-                Ok(value) => value,
-                Err(error) => return Some(Err(error)),
-            },
+            // Coercion keeps exact UTF-16 code units for string receivers so
+            // lone surrogates survive table dispatch identically to the
+            // legacy seam (bd-neika); non-string receivers coerce through
+            // the (always well-formed) primitive-string path as before.
+            ThisCoercion::ToString => {
+                match Self::require_object_coercible_to_js_string(&receiver) {
+                    Ok(value) => value,
+                    Err(error) => return Some(Err(error)),
+                }
+            }
             // String-family rows declare ToString; any other coercion is not
             // generated by this seam.
             _ => return None,
@@ -14683,40 +14741,40 @@ impl InterpreterCore {
 
     // ---- String.prototype semantic impl fns (single source of truth) ----
     // Signature contract (required by the fn-pointer binding above):
-    //   fn(&mut Self, this_str: &str, args: RegRange) -> Result<Value, InterpreterError>
+    //   fn(&mut Self, this_str: &JsString, args: RegRange) -> Result<Value, InterpreterError>
     // `this_str` is the already-coerced receiver (ToString applied by the
     // dispatching seam, legacy or generated).
 
     fn string_char_at_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let index = self.builtin_arg(args, 0)?;
-        Self::string_prototype_char_at_value(Value::str(this_str), index)
+        Self::string_prototype_char_at_value(Value::Str(this_str.clone()), index)
     }
 
     fn string_char_code_at_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let index = self.builtin_arg(args, 0)?;
-        Self::string_prototype_char_code_at_value(Value::str(this_str), index)
+        Self::string_prototype_char_code_at_value(Value::Str(this_str.clone()), index)
     }
 
     fn string_at_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let index = self.builtin_arg(args, 0)?;
-        Self::string_prototype_at_value(Value::str(this_str), index)
+        Self::string_prototype_at_value(Value::Str(this_str.clone()), index)
     }
 
     fn string_to_upper_case_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         _args: RegRange,
     ) -> Result<Value, InterpreterError> {
         Ok(Value::str(this_str.to_uppercase()))
@@ -14724,7 +14782,7 @@ impl InterpreterCore {
 
     fn string_to_lower_case_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         _args: RegRange,
     ) -> Result<Value, InterpreterError> {
         Ok(Value::str(this_str.to_lowercase()))
@@ -14732,7 +14790,7 @@ impl InterpreterCore {
 
     fn string_trim_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         _args: RegRange,
     ) -> Result<Value, InterpreterError> {
         Ok(Value::str(this_str.trim()))
@@ -14740,7 +14798,7 @@ impl InterpreterCore {
 
     fn string_trim_start_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         _args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2019 21.1.3.27: trim leading whitespace only.
@@ -14749,7 +14807,7 @@ impl InterpreterCore {
 
     fn string_trim_end_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         _args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2019 21.1.3.26: trim trailing whitespace only.
@@ -14758,7 +14816,7 @@ impl InterpreterCore {
 
     fn string_replace_all_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2021 21.1.3.18: replace EVERY occurrence of a string search
@@ -14780,7 +14838,7 @@ impl InterpreterCore {
 
     fn string_code_point_at_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2015 21.1.3.3: the Unicode code point at a (scalar) index;
@@ -14802,14 +14860,14 @@ impl InterpreterCore {
 
     fn string_locale_compare_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let that_string = match self.builtin_arg(args, 0)? {
             Some(value) => self.value_to_string(&value),
             None => "undefined".to_string(),
         };
-        let comparison = match this_str.cmp(that_string.as_str()) {
+        let comparison = match this_str.as_utf8_projection().cmp(that_string.as_str()) {
             std::cmp::Ordering::Less => -1,
             std::cmp::Ordering::Equal => 0,
             std::cmp::Ordering::Greater => 1,
@@ -14819,7 +14877,7 @@ impl InterpreterCore {
 
     fn string_normalize_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let form = match self.builtin_arg(args, 0)? {
@@ -14833,7 +14891,7 @@ impl InterpreterCore {
 
     fn string_split_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2020 21.1.3.19: split into an array of substrings. An
@@ -14868,7 +14926,7 @@ impl InterpreterCore {
 
     fn string_includes_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2020 21.1.3.7: substring containment from an optional start
@@ -14889,7 +14947,7 @@ impl InterpreterCore {
 
     fn string_starts_with_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2020 21.1.3.20: prefix test at an optional position (bd-9a8cz.1).
@@ -14908,7 +14966,7 @@ impl InterpreterCore {
 
     fn string_ends_with_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2020 21.1.3.6: suffix test against the prefix of length
@@ -14928,7 +14986,7 @@ impl InterpreterCore {
 
     fn string_index_of_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2020 21.1.3.8: first index of `search` at/after an optional
@@ -14966,7 +15024,7 @@ impl InterpreterCore {
 
     fn string_last_index_of_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2020 21.1.3.9: highest start index of `search` at/before an
@@ -15005,7 +15063,7 @@ impl InterpreterCore {
 
     fn string_slice_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2020 21.1.3.18: negative indices count from the end; an
@@ -15037,7 +15095,7 @@ impl InterpreterCore {
 
     fn string_substring_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2020 21.1.3.21: clamp both indices to [0, len], then swap so
@@ -15064,7 +15122,7 @@ impl InterpreterCore {
 
     fn string_substr_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2020 Annex B B.2.3.1 (String.prototype.substr): `substr(start, length)`.
@@ -15100,7 +15158,7 @@ impl InterpreterCore {
 
     fn string_replace_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let search = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
@@ -15113,7 +15171,7 @@ impl InterpreterCore {
 
     fn string_match_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let pattern = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
@@ -15122,7 +15180,7 @@ impl InterpreterCore {
 
     fn string_search_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let pattern = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
@@ -15131,7 +15189,7 @@ impl InterpreterCore {
 
     fn string_repeat_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2020 21.1.3.16 step 4: `ToIntegerOrInfinity(count)`; a count that is
@@ -15162,7 +15220,7 @@ impl InterpreterCore {
 
     fn string_pad_start_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2020 21.1.3.14: left-pad to `targetLength` (Unicode scalar
@@ -15172,7 +15230,7 @@ impl InterpreterCore {
 
     fn string_pad_end_impl(
         &mut self,
-        this_str: &str,
+        this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2020 21.1.3.13: right-pad to `targetLength` (Unicode scalar
@@ -15212,6 +15270,8 @@ impl InterpreterCore {
             "repeat" => Value::BuiltinFunction(BuiltinFunction::string_repeat()),
             "padStart" => Value::BuiltinFunction(BuiltinFunction::string_pad_start()),
             "padEnd" => Value::BuiltinFunction(BuiltinFunction::string_pad_end()),
+            "isWellFormed" => Value::BuiltinFunction(BuiltinFunction::string_is_well_formed()),
+            "toWellFormed" => Value::BuiltinFunction(BuiltinFunction::string_to_well_formed()),
             _ => Value::Undefined,
         }
     }
@@ -18961,11 +19021,30 @@ impl InterpreterCore {
         }
     }
 
+    /// Exact-code-unit variant of [`Self::require_object_coercible_to_string`].
+    /// String receivers keep their real UTF-16 code units (including lone
+    /// surrogates, bd-neika); non-string receivers coerce through the
+    /// primitive-string path, which is always well-formed.
+    fn require_object_coercible_to_js_string(value: &Value) -> Result<JsString, InterpreterError> {
+        match value {
+            Value::Null => Err(InterpreterError::TypeError {
+                expected: "object-coercible String.prototype receiver".to_string(),
+                got: "null".to_string(),
+            }),
+            Value::Undefined => Err(InterpreterError::TypeError {
+                expected: "object-coercible String.prototype receiver".to_string(),
+                got: "undefined".to_string(),
+            }),
+            Value::Str(s) => Ok(s.clone()),
+            _ => Ok(JsString::from(Self::value_to_primitive_string(value))),
+        }
+    }
+
     fn string_prototype_char_at_value(
         receiver: Value,
         index: Option<Value>,
     ) -> Result<Value, InterpreterError> {
-        let string_val = Self::require_object_coercible_to_string(&receiver)?;
+        let string_val = Self::require_object_coercible_to_js_string(&receiver)?;
         let index = index.as_ref().map(Self::value_as_integer).unwrap_or(0);
         if index < 0 {
             return Ok(Value::str(""));
@@ -18974,14 +19053,16 @@ impl InterpreterCore {
         let Some(unit) = string_val.encode_utf16().nth(index as usize) else {
             return Ok(Value::str(""));
         };
-        Ok(Value::str(String::from_utf16_lossy(&[unit])))
+        // A surrogate half stays a real lone-surrogate string value
+        // (bd-neika); a BMP unit normalizes to the well-formed fast path.
+        Ok(Value::Str(JsString::from_code_units(&[unit])))
     }
 
     fn string_prototype_char_code_at_value(
         receiver: Value,
         index: Option<Value>,
     ) -> Result<Value, InterpreterError> {
-        let string_val = Self::require_object_coercible_to_string(&receiver)?;
+        let string_val = Self::require_object_coercible_to_js_string(&receiver)?;
         let index = index.as_ref().map(Self::value_as_integer).unwrap_or(0);
         if index < 0 {
             return Ok(Value::Float(Float64::new(f64::NAN)));
@@ -18997,15 +19078,17 @@ impl InterpreterCore {
         receiver: Value,
         index: Option<Value>,
     ) -> Result<Value, InterpreterError> {
-        let string_val = Self::require_object_coercible_to_string(&receiver)?;
-        let units: Vec<u16> = string_val.encode_utf16().collect();
+        let string_val = Self::require_object_coercible_to_js_string(&receiver)?;
+        let units: Vec<u16> = string_val.code_units_vec();
         let len = units.len() as i64;
         let raw = index.as_ref().map(Self::value_as_integer).unwrap_or(0);
         let idx = if raw < 0 { raw + len } else { raw };
         if idx < 0 || idx >= len {
             return Ok(Value::Undefined);
         }
-        Ok(Value::str(String::from_utf16_lossy(&[units[idx as usize]])))
+        Ok(Value::Str(JsString::from_code_units(
+            &[units[idx as usize]],
+        )))
     }
 
     /// Validates Array method callback arguments for fail-closed implementations.
@@ -20619,17 +20702,22 @@ impl InterpreterCore {
             ))),
             (Value::Str(left_string), Value::Str(right_string)) => {
                 self.check_string_limit(left_string.len().saturating_add(right_string.len()))?;
-                Ok(Value::str(format!("{left_string}{right_string}")))
+                // Exact-code-unit concat heals split surrogate pairs (bd-neika).
+                Ok(Value::Str(left_string.concat(right_string)))
             }
             (Value::Str(left_string), other) => {
                 let other_string = Self::value_to_primitive_string(other);
                 self.check_string_limit(left_string.len().saturating_add(other_string.len()))?;
-                Ok(Value::str(format!("{left_string}{other_string}")))
+                Ok(Value::Str(
+                    left_string.concat(&JsString::from(other_string)),
+                ))
             }
             (other, Value::Str(right_string)) => {
                 let other_string = Self::value_to_primitive_string(other);
                 self.check_string_limit(other_string.len().saturating_add(right_string.len()))?;
-                Ok(Value::str(format!("{other_string}{right_string}")))
+                Ok(Value::Str(
+                    JsString::from(other_string).concat(right_string),
+                ))
             }
             _ => {
                 let left_number =
@@ -21263,6 +21351,30 @@ impl InterpreterCore {
     /// string-keyed properties (skipping engine-internal `__`-prefixed metadata
     /// such as Symbol fields); arrays serialize their dense `0..length` slots.
     /// (bd-9a8cz.3 — was a `"{}"` stub for every object.)
+    /// Quote a string value as a JSON string token. Lone surrogates are
+    /// emitted as `\uXXXX` escapes per ES2019 well-formed JSON.stringify
+    /// (bd-neika), so `JSON.parse(JSON.stringify(v))` round-trips exactly.
+    /// The backslash is escaped before the quote: the reverse order
+    /// re-escaped the backslash inserted for `"` and emitted invalid JSON.
+    fn json_quote_js_string(s: &JsString) -> String {
+        if let Some(text) = s.as_str() {
+            return format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""));
+        }
+        let mut out = String::from("\"");
+        for decoded in char::decode_utf16(s.encode_utf16()) {
+            match decoded {
+                Ok('"') => out.push_str("\\\""),
+                Ok('\\') => out.push_str("\\\\"),
+                Ok(c) => out.push(c),
+                Err(err) => {
+                    out.push_str(&format!("\\u{:04x}", err.unpaired_surrogate()));
+                }
+            }
+        }
+        out.push('"');
+        out
+    }
+
     fn json_stringify_value(&self, value: &Value, visited: &mut Vec<ObjectId>) -> Option<String> {
         let rendered = match value {
             Value::Undefined => return None,
@@ -21284,9 +21396,7 @@ impl InterpreterCore {
                     val.to_string()
                 }
             }
-            Value::Str(s) => {
-                format!("\"{}\"", s.replace('"', "\\\"").replace('\\', "\\\\"))
-            }
+            Value::Str(s) => Self::json_quote_js_string(s),
             Value::Object(id) => {
                 if visited.contains(id) {
                     // Cyclic reference: ES throws TypeError; omit to stay safe
@@ -21324,7 +21434,10 @@ impl InterpreterCore {
                             continue;
                         }
                         if let Some(rendered_val) = self.json_stringify_value(val, visited) {
-                            let escaped_key = key.replace('"', "\\\"").replace('\\', "\\\\");
+                            // Escape the backslash FIRST: the reverse order
+                            // re-escaped the backslash inserted for `"` and
+                            // emitted invalid JSON for quote-bearing keys.
+                            let escaped_key = key.replace('\\', "\\\\").replace('"', "\\\"");
                             members.push(format!("\"{escaped_key}\":{rendered_val}"));
                         }
                     }
@@ -25378,7 +25491,7 @@ impl InterpreterCore {
 
             "builtin:StringFromCharCode" => {
                 // String.fromCharCode(...charCodes) implementation
-                let mut result = String::new();
+                let mut units: Vec<u16> = Vec::with_capacity(args.count as usize);
 
                 // Iterate through all provided character codes
                 for i in 0..args.count {
@@ -25394,16 +25507,14 @@ impl InterpreterCore {
                         _ => 0, // Invalid character codes become null char
                     };
 
-                    // Convert to character (modulo 65536 for 16-bit values)
-                    let char_code_16bit = char_code & 0xFFFF;
-                    if let Some(ch) = std::char::from_u32(char_code_16bit) {
-                        result.push(ch);
-                    } else {
-                        result.push('\u{0000}'); // Null character for invalid codes
-                    }
+                    // ToUint16: keep the raw code unit. A surrogate unit stays
+                    // a real lone surrogate (bd-neika); adjacent high+low
+                    // units heal into the supplementary code point when the
+                    // sequence normalizes below.
+                    units.push((char_code & 0xFFFF) as u16);
                 }
 
-                Ok(Value::str(result))
+                Ok(Value::Str(JsString::from_code_units(&units)))
             }
 
             "builtin:StringRaw" => {
@@ -26105,7 +26216,7 @@ impl InterpreterCore {
 
             "builtin:StringFromCodePoint" => {
                 // String.fromCodePoint(...codePoints) implementation
-                let mut result = String::new();
+                let mut units: Vec<u16> = Vec::with_capacity(args.count as usize);
 
                 // Iterate through all provided code points
                 for i in 0..args.count {
@@ -26142,19 +26253,21 @@ impl InterpreterCore {
                     }
 
                     let code_point = code_point_number as u32;
-                    // Convert to character
-                    if let Some(ch) = std::char::from_u32(code_point) {
-                        result.push(ch);
+                    // ES 21.1.2.2 accepts every integral code point in
+                    // 0..=0x10FFFF, *including* surrogate code points: a
+                    // surrogate argument yields a lone-surrogate code unit
+                    // (bd-neika) rather than a RangeError. Supplementary
+                    // code points encode as their UTF-16 surrogate pair.
+                    if code_point < 0x10000 {
+                        units.push(code_point as u16);
                     } else {
-                        return Err(InterpreterError::RangeError {
-                            message: format!(
-                                "String.fromCodePoint invalid code point: {code_point}"
-                            ),
-                        });
+                        let offset = code_point - 0x10000;
+                        units.push(0xD800 + (offset >> 10) as u16);
+                        units.push(0xDC00 + (offset & 0x3FF) as u16);
                     }
                 }
 
-                Ok(Value::str(result))
+                Ok(Value::Str(JsString::from_code_units(&units)))
             }
 
             "builtin:MathImul" => {
@@ -26959,10 +27072,15 @@ impl InterpreterCore {
 
             // Removed duplicate ObjectGetPrototypeOf - implementation at line ~10941 uses correct prototype field
             "builtin:StringPrototypeToWellFormed" => {
-                // String.prototype.toWellFormed() implementation (ES2024)
+                // String.prototype.toWellFormed() (ES2024 §22.1.3.29): each
+                // unpaired surrogate is replaced with U+FFFD; every other
+                // code unit is preserved. The lossy UTF-8 projection carried
+                // by `JsString` is exactly that mapping (bd-neika replaced
+                // the earlier control-char stub, which was not spec
+                // behavior).
                 let this_val = self.read_reg(args.start)?;
-                let str_text = match this_val {
-                    Value::Str(s) => s.to_string(),
+                let well_formed = match this_val {
+                    Value::Str(s) => s.as_utf8_projection().to_string(),
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -26970,20 +27088,6 @@ impl InterpreterCore {
                     Value::Undefined => "undefined".to_string(),
                     _ => "[object Object]".to_string(),
                 };
-
-                // Simplified implementation: replace invalid Unicode sequences
-                // In a full implementation, this would replace lone surrogates with replacement chars
-                let well_formed = str_text
-                    .chars()
-                    .map(|c| {
-                        // Replace any problematic Unicode characters (simplified)
-                        if c.is_control() && c != '\n' && c != '\r' && c != '\t' {
-                            '\u{FFFD}' // Unicode replacement character
-                        } else {
-                            c
-                        }
-                    })
-                    .collect::<String>();
 
                 Ok(Value::str(well_formed))
             }
@@ -27116,23 +27220,16 @@ impl InterpreterCore {
             }
 
             "builtin:StringPrototypeIsWellFormed" => {
-                // String.prototype.isWellFormed() implementation (ES2024)
+                // String.prototype.isWellFormed() (ES2024 §22.1.3.10): true
+                // iff the string contains no unpaired surrogate. Non-string
+                // receivers coerce through primitive strings, which are
+                // always well-formed. (bd-neika replaced the earlier
+                // control-char stub, which was not spec behavior.)
                 let this_val = self.read_reg(args.start)?;
-                let str_text = match this_val {
-                    Value::Str(s) => s.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => "[object Object]".to_string(),
+                let is_well_formed = match this_val {
+                    Value::Str(s) => s.is_well_formed(),
+                    _ => true,
                 };
-
-                // Simplified implementation: check for well-formed Unicode
-                // In a full implementation, this would detect lone surrogates
-                let is_well_formed = str_text
-                    .chars()
-                    .all(|c| !c.is_control() || c == '\n' || c == '\r' || c == '\t');
 
                 Ok(Value::Bool(is_well_formed))
             }
@@ -31549,28 +31646,37 @@ impl InterpreterCore {
     }
 
     /// Parse a JSON string token (the cursor must be at the opening `"`).
-    fn json_parse_string(chars: &[char], pos: &mut usize) -> Option<String> {
+    /// Parse a JSON string token into exact UTF-16 code units. A `\uXXXX`
+    /// escape contributes its raw code unit, so paired surrogate escapes heal
+    /// into the supplementary code point and a lone-surrogate escape yields a
+    /// real lone-surrogate string value when the units normalize (bd-neika;
+    /// ES2020 24.5.1 accepts lone-surrogate escapes in JSON text).
+    fn json_parse_string(chars: &[char], pos: &mut usize) -> Option<JsString> {
         if chars.get(*pos) != Some(&'"') {
             return None;
         }
         *pos += 1;
-        let mut out = String::new();
+        let mut units: Vec<u16> = Vec::new();
+        let push_char = |units: &mut Vec<u16>, c: char| {
+            let mut buf = [0u16; 2];
+            units.extend_from_slice(c.encode_utf16(&mut buf));
+        };
         while let Some(&c) = chars.get(*pos) {
             *pos += 1;
             match c {
-                '"' => return Some(out),
+                '"' => return Some(JsString::from_code_units(&units)),
                 '\\' => {
                     let &esc = chars.get(*pos)?;
                     *pos += 1;
                     match esc {
-                        '"' => out.push('"'),
-                        '\\' => out.push('\\'),
-                        '/' => out.push('/'),
-                        'n' => out.push('\n'),
-                        't' => out.push('\t'),
-                        'r' => out.push('\r'),
-                        'b' => out.push('\u{08}'),
-                        'f' => out.push('\u{0C}'),
+                        '"' => push_char(&mut units, '"'),
+                        '\\' => push_char(&mut units, '\\'),
+                        '/' => push_char(&mut units, '/'),
+                        'n' => push_char(&mut units, '\n'),
+                        't' => push_char(&mut units, '\t'),
+                        'r' => push_char(&mut units, '\r'),
+                        'b' => push_char(&mut units, '\u{08}'),
+                        'f' => push_char(&mut units, '\u{0C}'),
                         'u' => {
                             if *pos + 4 > chars.len() {
                                 return None;
@@ -31578,12 +31684,12 @@ impl InterpreterCore {
                             let hex: String = chars[*pos..*pos + 4].iter().collect();
                             *pos += 4;
                             let code = u32::from_str_radix(&hex, 16).ok()?;
-                            out.push(char::from_u32(code)?);
+                            units.push(u16::try_from(code).ok()?);
                         }
                         _ => return None,
                     }
                 }
-                _ => out.push(c),
+                _ => push_char(&mut units, c),
             }
         }
         None // unterminated string
@@ -31703,7 +31809,10 @@ impl InterpreterCore {
             let Some(value) = self.json_parse_value(chars, pos, depth + 1)? else {
                 return Ok(None);
             };
-            self.set_object_property(id, key, value)?;
+            // Property keys remain UTF-8 `String`s: a lone-surrogate key
+            // routes through the lossy projection (documented bd-neika
+            // boundary); string VALUES keep exact code units.
+            self.set_object_property(id, key.to_string(), value)?;
             Self::json_skip_ws(chars, pos);
             match chars.get(*pos) {
                 Some(&',') => *pos += 1,
@@ -36307,8 +36416,8 @@ mod async_runtime_tests_current {
         core.set_host_io(provider, Some(recorder_dyn));
         // reg0 = relative path, reg1 = content (string operands).
         core.mutate_registers(|r| {
-            r[0] = Value::Str(Arc::from("report.txt"));
-            r[1] = Value::Str(Arc::from("real effect bytes"));
+            r[0] = Value::Str(JsString::from("report.txt"));
+            r[1] = Value::Str(JsString::from("real effect bytes"));
         });
 
         // fs:write through the interpreter dispatch performs a real write and —
@@ -36354,14 +36463,14 @@ mod async_runtime_tests_current {
         // bd-1xl17.d: fs:read WITH a recognized encoding ('utf8' in arg[1]) yields
         // the decoded JS string, matching `readFileSync(path, 'utf8')`.
         core.mutate_registers(|r| {
-            r[1] = Value::Str(Arc::from("utf8"));
+            r[1] = Value::Str(JsString::from("utf8"));
         });
         let read_string = core
             .dispatch_host_io_hostcall("fs:read", RegRange { start: 0, count: 2 })
             .expect("fs:read (utf8) dispatch");
         assert_eq!(
             read_string,
-            Value::Str(Arc::from("real effect bytes")),
+            Value::Str(JsString::from("real effect bytes")),
             "the utf8 read must surface the real file contents as a string"
         );
 
@@ -36386,7 +36495,7 @@ mod async_runtime_tests_current {
             .expect("fs:read (options-object) dispatch");
         assert_eq!(
             read_via_options,
-            Value::Str(Arc::from("real effect bytes")),
+            Value::Str(JsString::from("real effect bytes")),
             "the options-object encoding form must decode like the bare-string form"
         );
 
@@ -36428,8 +36537,8 @@ mod async_runtime_tests_current {
         // TypeError BEFORE the read runs — Node parity — so NO spurious read effect
         // is recorded (the transcript count stays at 5).
         core.mutate_registers(|r| {
-            r[0] = Value::Str(Arc::from("real.txt"));
-            r[1] = Value::Str(Arc::from("bogus-encoding"));
+            r[0] = Value::Str(JsString::from("real.txt"));
+            r[1] = Value::Str(JsString::from("bogus-encoding"));
         });
         let bad_encoding =
             core.dispatch_host_io_hostcall("fs:read", RegRange { start: 0, count: 2 });
@@ -36446,7 +36555,7 @@ mod async_runtime_tests_current {
         // With no provider installed, fs hostcalls stay fail-closed (undefined).
         let mut bare = test_interpreter();
         bare.mutate_registers(|r| {
-            r[0] = Value::Str(Arc::from("nope.txt"));
+            r[0] = Value::Str(JsString::from("nope.txt"));
         });
         let bare_result = bare
             .dispatch_host_io_hostcall("fs:read", RegRange { start: 0, count: 1 })
@@ -36512,7 +36621,7 @@ mod async_runtime_tests_current {
         // reg0 = the URL operand, exactly as the http.get(url) lowering forwards it.
         let url = format!("http://{addr}/");
         core.mutate_registers(|r| {
-            r[0] = Value::Str(Arc::from(url.as_str()));
+            r[0] = Value::Str(JsString::from(url.as_str()));
         });
 
         // bd-3894s slice (4): the dispatch now returns the PARSED response object
@@ -36668,7 +36777,7 @@ mod async_runtime_tests_current {
             if r.len() < 2 {
                 r.resize(2, Value::Undefined);
             }
-            r[0] = Value::Str(Arc::from(url.as_str()));
+            r[0] = Value::Str(JsString::from(url.as_str()));
             r[1] = Value::Object(options_id);
         });
 
@@ -36913,7 +37022,7 @@ mod async_runtime_tests_current {
             if r.len() < 2 {
                 r.resize(2, Value::Undefined);
             }
-            r[0] = Value::Str(Arc::from(url.as_str()));
+            r[0] = Value::Str(JsString::from(url.as_str()));
             r[1] = Value::Object(options_id);
         });
 
@@ -37102,7 +37211,7 @@ mod async_runtime_tests_current {
             if r.len() < 2 {
                 r.resize(2, Value::Undefined);
             }
-            r[0] = Value::Str(Arc::from(url.as_str()));
+            r[0] = Value::Str(JsString::from(url.as_str()));
             r[1] = Value::Closure(0);
         });
 
@@ -37225,7 +37334,7 @@ mod async_runtime_tests_current {
             if r.len() < 3 {
                 r.resize(3, Value::Undefined);
             }
-            r[0] = Value::Str(Arc::from(url.as_str()));
+            r[0] = Value::Str(JsString::from(url.as_str()));
             r[1] = Value::Object(options_id);
             r[2] = Value::Closure(0);
         });
@@ -37362,7 +37471,7 @@ mod async_runtime_tests_current {
         // reg0 = a blocked endpoint (cloud metadata), as the http.get(url) lowering
         // forwards it.
         core.mutate_registers(|r| {
-            r[0] = Value::Str(Arc::from("http://169.254.169.254/latest/meta-data/"));
+            r[0] = Value::Str(JsString::from("http://169.254.169.254/latest/meta-data/"));
         });
 
         // The denied egress must NOT fault the interpreter: the dispatch returns
@@ -37443,7 +37552,7 @@ mod async_runtime_tests_current {
         core.set_host_io(Arc::new(IoFailNetworkHostIo), Some(recorder_dyn));
 
         core.mutate_registers(|r| {
-            r[0] = Value::Str(Arc::from("https://127.0.0.1/"));
+            r[0] = Value::Str(JsString::from("https://127.0.0.1/"));
         });
 
         let result = core
@@ -37777,7 +37886,7 @@ mod async_runtime_tests_current {
             if r.is_empty() {
                 r.resize(1, Value::Undefined);
             }
-            r[0] = Value::Str(Arc::from(url.as_str()));
+            r[0] = Value::Str(JsString::from(url.as_str()));
         });
         let req = core
             .dispatch_client_request_create(RegRange { start: 0, count: 1 })
@@ -37920,24 +38029,24 @@ mod async_runtime_tests_current {
         // Recognized character encodings -> decoded JS strings.
         assert_eq!(
             core.decode_fs_read_result(bytes, Some("utf8")).unwrap(),
-            Value::Str(Arc::from("real effect bytes"))
+            Value::Str(JsString::from("real effect bytes"))
         );
         assert_eq!(
             core.decode_fs_read_result(bytes, Some("UTF-8")).unwrap(),
-            Value::Str(Arc::from("real effect bytes")),
+            Value::Str(JsString::from("real effect bytes")),
             "encoding match is case-insensitive"
         );
         assert_eq!(
             core.decode_fs_read_result(bytes, Some("latin1")).unwrap(),
-            Value::Str(Arc::from("real effect bytes"))
+            Value::Str(JsString::from("real effect bytes"))
         );
         assert_eq!(
             core.decode_fs_read_result(bytes, Some("ascii")).unwrap(),
-            Value::Str(Arc::from("real effect bytes"))
+            Value::Str(JsString::from("real effect bytes"))
         );
         assert_eq!(
             core.decode_fs_read_result(bytes, Some("hex")).unwrap(),
-            Value::Str(Arc::from(hex::encode(bytes)))
+            Value::Str(JsString::from(hex::encode(bytes)))
         );
 
         // utf16le round-trips an even-length little-endian u16 byte stream.
@@ -37945,7 +38054,7 @@ mod async_runtime_tests_current {
         assert_eq!(
             core.decode_fs_read_result(&utf16_bytes, Some("utf16le"))
                 .unwrap(),
-            Value::Str(Arc::from("hi"))
+            Value::Str(JsString::from("hi"))
         );
 
         // base64/base64url ENCODE the raw bytes (like hex), not decode. The two
@@ -37957,24 +38066,24 @@ mod async_runtime_tests_current {
         assert_eq!(
             core.decode_fs_read_result(&b64_bytes, Some("base64"))
                 .unwrap(),
-            Value::Str(Arc::from("+/+/")),
+            Value::Str(JsString::from("+/+/")),
             "base64: standard alphabet with padding"
         );
         assert_eq!(
             core.decode_fs_read_result(&b64_bytes, Some("base64url"))
                 .unwrap(),
-            Value::Str(Arc::from("-_-_")),
+            Value::Str(JsString::from("-_-_")),
             "base64url: URL-safe alphabet, no padding"
         );
         // A single byte forces padding under standard base64; base64url omits it.
         assert_eq!(
             core.decode_fs_read_result(b"f", Some("base64")).unwrap(),
-            Value::Str(Arc::from("Zg==")),
+            Value::Str(JsString::from("Zg==")),
             "base64 pads to a 4-char quantum"
         );
         assert_eq!(
             core.decode_fs_read_result(b"f", Some("BASE64URL")).unwrap(),
-            Value::Str(Arc::from("Zg")),
+            Value::Str(JsString::from("Zg")),
             "base64url match is case-insensitive and unpadded"
         );
 
@@ -48476,9 +48585,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "bd-neika: Value::Str(Arc<str>) is UTF-8-only and cannot hold a lone surrogate; charAt on a surrogate half yields the U+FFFD lossy projection until a WTF-8/UTF-16 string backing lands. charAt INDEXING is already UTF-16-code-unit-correct (bd-uala1)"]
     fn string_prototype_char_at_utf16_surrogate_pairs() {
         // Test charAt with UTF-16 surrogate pairs (characters outside BMP).
+        // Un-ignored by bd-neika: `JsString` carries exact code units, so
+        // charAt on a surrogate half returns a real lone-surrogate string
+        // (its `encode_utf16` yields the surrogate; its UTF-8 projection is
+        // the 3-byte U+FFFD).
         // A fresh core per index: seed-tracked re-execution restores prior
         // register state when the same core re-runs (bd-n0sap port note).
         for (index, expected, label) in [
@@ -48510,10 +48622,228 @@ mod tests {
                 assert_eq!(s.len(), 3, "surrogate half should be 3 bytes");
                 let utf16_units: Vec<u16> = s.encode_utf16().collect();
                 assert_eq!(utf16_units[0], expected, "{label}");
+                assert!(
+                    !s.is_well_formed(),
+                    "a surrogate half must be a real lone-surrogate value, \
+                     not the U+FFFD projection"
+                );
             } else {
                 panic!("Expected Str, got {result:?}");
             }
         }
+    }
+
+    #[test]
+    fn string_char_at_surrogate_halves_heal_on_concatenation() {
+        // bd-neika AC: "😀".charAt(0) + "😀".charAt(1) === "😀". The two
+        // lone-surrogate halves must survive charAt and re-heal into the
+        // supplementary code point through the `+` concatenation path.
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test");
+        core.set_register(0, Value::str("😀"))
+            .expect("operation should succeed for valid inputs");
+        core.set_register(1, Value::Int(0))
+            .expect("operation should succeed for valid inputs");
+        core.set_register(2, Value::str("😀"))
+            .expect("operation should succeed for valid inputs");
+        core.set_register(3, Value::Int(1))
+            .expect("operation should succeed for valid inputs");
+        core.execute_module(&test_module(vec![
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("builtin:StringPrototypeCharAt".to_string()),
+                args: RegRange { start: 0, count: 2 },
+                dst: 4,
+            },
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("builtin:StringPrototypeCharAt".to_string()),
+                args: RegRange { start: 2, count: 2 },
+                dst: 5,
+            },
+            Ir3Instruction::Add {
+                dst: 6,
+                lhs: 4,
+                rhs: 5,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .expect("operation should succeed for valid inputs");
+
+        let healed = core
+            .read_register(6)
+            .expect("operation should succeed for valid inputs");
+        assert_eq!(
+            healed,
+            Value::str("😀"),
+            "charAt(0) + charAt(1) must heal back to the original string"
+        );
+        if let Value::Str(s) = healed {
+            assert!(s.is_well_formed(), "healed pair must be well-formed");
+            assert_eq!(s.code_units_vec(), vec![0xD83D, 0xDE00]);
+        }
+    }
+
+    #[test]
+    fn string_from_char_code_lone_surrogate_and_pair_healing() {
+        // bd-neika AC: String.fromCharCode(0xD83D) is a real lone-surrogate
+        // string (previously NUL); fromCharCode(0xD83D, 0xDE00) heals into
+        // U+1F600 exactly as concatenation would.
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test");
+        core.set_register(0, Value::Int(0xD83D))
+            .expect("operation should succeed for valid inputs");
+        core.execute_module(&test_module(vec![
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("builtin:StringFromCharCode".to_string()),
+                args: RegRange { start: 0, count: 1 },
+                dst: 1,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .expect("operation should succeed for valid inputs");
+        let lone = core
+            .read_register(1)
+            .expect("operation should succeed for valid inputs");
+        if let Value::Str(s) = &lone {
+            assert!(!s.is_well_formed(), "0xD83D must stay a lone surrogate");
+            assert_eq!(s.code_units_vec(), vec![0xD83D]);
+            assert_eq!(s.as_utf8_projection(), "\u{FFFD}");
+        } else {
+            panic!("Expected Str, got {lone:?}");
+        }
+
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test");
+        core.set_register(0, Value::Int(0xD83D))
+            .expect("operation should succeed for valid inputs");
+        core.set_register(1, Value::Int(0xDE00))
+            .expect("operation should succeed for valid inputs");
+        core.execute_module(&test_module(vec![
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("builtin:StringFromCharCode".to_string()),
+                args: RegRange { start: 0, count: 2 },
+                dst: 2,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .expect("operation should succeed for valid inputs");
+        let healed = core
+            .read_register(2)
+            .expect("operation should succeed for valid inputs");
+        assert_eq!(healed, Value::str("😀"), "surrogate pair must heal");
+    }
+
+    #[test]
+    fn string_from_code_point_accepts_surrogate_code_points() {
+        // ES 21.1.2.2: surrogate code points are valid fromCodePoint
+        // arguments and yield lone-surrogate code units (bd-neika replaced
+        // the earlier non-spec RangeError).
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test");
+        core.set_register(0, Value::Int(0xD800))
+            .expect("operation should succeed for valid inputs");
+        core.execute_module(&test_module(vec![
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("builtin:StringFromCodePoint".to_string()),
+                args: RegRange { start: 0, count: 1 },
+                dst: 1,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .expect("operation should succeed for valid inputs");
+        let result = core
+            .read_register(1)
+            .expect("operation should succeed for valid inputs");
+        if let Value::Str(s) = &result {
+            assert_eq!(s.code_units_vec(), vec![0xD800]);
+            assert!(!s.is_well_formed());
+        } else {
+            panic!("Expected Str, got {result:?}");
+        }
+    }
+
+    #[test]
+    fn json_parse_lone_surrogate_escape_and_stringify_round_trip() {
+        // bd-neika AC: JSON round-trip of lone surrogates. The JSON text
+        // "\uD800" (a lone-surrogate escape, valid JSON per ES 24.5.1)
+        // parses to a lone-surrogate string value, and JSON.stringify emits
+        // it back as a \uXXXX escape so parse(stringify(v)) == v.
+        let json_text = "\"\\uD800\"";
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test");
+        core.set_register(0, Value::str(json_text))
+            .expect("operation should succeed for valid inputs");
+        core.execute_module(&test_module(vec![
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("builtin:JsonParse".to_string()),
+                args: RegRange { start: 0, count: 1 },
+                dst: 1,
+            },
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("builtin:JsonStringify".to_string()),
+                args: RegRange { start: 1, count: 1 },
+                dst: 2,
+            },
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("builtin:JsonParse".to_string()),
+                args: RegRange { start: 2, count: 1 },
+                dst: 3,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .expect("operation should succeed for valid inputs");
+
+        let parsed = core
+            .read_register(1)
+            .expect("operation should succeed for valid inputs");
+        if let Value::Str(s) = &parsed {
+            assert_eq!(s.code_units_vec(), vec![0xD800]);
+            assert!(
+                !s.is_well_formed(),
+                "parsed value must be a real lone surrogate"
+            );
+        } else {
+            panic!("Expected Str from JSON.parse, got {parsed:?}");
+        }
+
+        let stringified = core
+            .read_register(2)
+            .expect("operation should succeed for valid inputs");
+        if let Value::Str(s) = &stringified {
+            assert_eq!(
+                s.as_str(),
+                Some("\"\\ud800\""),
+                "stringify must escape the lone surrogate (lowercase hex per UnicodeEscape)"
+            );
+        } else {
+            panic!("Expected Str from JSON.stringify, got {stringified:?}");
+        }
+
+        let round_tripped = core
+            .read_register(3)
+            .expect("operation should succeed for valid inputs");
+        assert_eq!(
+            round_tripped, parsed,
+            "JSON.parse(JSON.stringify(v)) must round-trip the lone surrogate exactly"
+        );
+    }
+
+    #[test]
+    fn json_parse_combines_paired_surrogate_escapes() {
+        // "😀" in JSON text is the standard escape spelling of
+        // U+1F600; the parser must combine the pair (previously the whole
+        // parse returned undefined because each escape was converted to
+        // char independently).
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test");
+        core.set_register(0, Value::str("\"\\uD83D\\uDE00\""))
+            .expect("operation should succeed for valid inputs");
+        core.execute_module(&test_module(vec![
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("builtin:JsonParse".to_string()),
+                args: RegRange { start: 0, count: 1 },
+                dst: 1,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .expect("operation should succeed for valid inputs");
+        let parsed = core
+            .read_register(1)
+            .expect("operation should succeed for valid inputs");
+        assert_eq!(parsed, Value::str("😀"));
     }
 
     #[test]

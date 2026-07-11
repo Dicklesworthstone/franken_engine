@@ -297,6 +297,69 @@ fn classify_hostcall_capability(tag: &str) -> HostcallCapabilityClass {
     }
 }
 
+/// Precomputed hostcall-dispatch decisions: the E9.T4 first activation
+/// (bd-fqlfw.9.4), capability-pruned dispatch metadata.
+///
+/// Maps a constant hostcall capability tag to its allow/deny decision,
+/// resolved once per run from the same live decision path the gate uses
+/// ([`live_hostcall_decision`]), so the precomputed table and the live gate
+/// cannot drift. The hot path consults the table first and falls through to
+/// live classification on any miss (fail-closed per-call fallback). Witness
+/// and decision-record emission is untouched, so execution values,
+/// instruction counts, hostcall decision logs, and replay identity stay
+/// byte-identical with and without the table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrunedHostcallDispatch {
+    /// Schema version pin.
+    pub schema_version: String,
+    /// Deterministically ordered map: capability tag -> allowed decision.
+    pub decisions: BTreeMap<String, bool>,
+}
+
+/// Schema version for [`PrunedHostcallDispatch`].
+pub const PRUNED_HOSTCALL_DISPATCH_SCHEMA_VERSION: &str =
+    "franken-engine.pruned-hostcall-dispatch.v1";
+
+impl PrunedHostcallDispatch {
+    /// Build a table from precomputed decisions.
+    pub fn from_decisions(decisions: BTreeMap<String, bool>) -> Self {
+        Self {
+            schema_version: PRUNED_HOSTCALL_DISPATCH_SCHEMA_VERSION.to_string(),
+            decisions,
+        }
+    }
+
+    /// Precomputed decision for a tag, if resolved. `Some(true)` = allowed.
+    pub fn lookup(&self, tag: &str) -> Option<bool> {
+        self.decisions.get(tag).copied()
+    }
+
+    /// Number of resolved dispatch sites (distinct tags).
+    pub fn resolved_count(&self) -> usize {
+        self.decisions.len()
+    }
+
+    /// Canonical bytes for content-addressing the specialized artifact.
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        serde_json::to_vec(self).unwrap_or_default()
+    }
+}
+
+/// The live hostcall capability decision: `true` = allowed.
+///
+/// Shared `pub(crate)` with the E9.T4 activation builder
+/// (`e9_first_activation`) so precomputed dispatch decisions are derived
+/// from exactly this function and cannot drift from the gate — the same
+/// discipline as the `instruction_cost` sharing with the E9.T1 discovery
+/// lane.
+pub(crate) fn live_hostcall_decision(tag: &str, granted: &BTreeSet<RuntimeCapability>) -> bool {
+    match classify_hostcall_capability(tag) {
+        HostcallCapabilityClass::Runtime(required) => granted.contains(&required),
+        HostcallCapabilityClass::InternalAllowed => true,
+        HostcallCapabilityClass::Unknown => false, // fail-closed on unknown tags
+    }
+}
+
 fn builtin_prototype_capability_name(tag: &str) -> Option<&'static str> {
     tag.strip_prefix("builtin:proto:")
         .and_then(canonical_builtin_prototype_name)
@@ -400,13 +463,18 @@ fn check_hostcall_capability_gate(
     capability_tag: &str,
     instruction_index: u32,
 ) -> Result<(), InterpreterError> {
-    let capability_denied = match classify_hostcall_capability(capability_tag) {
-        HostcallCapabilityClass::Runtime(required_cap) => !interpreter
-            .config
-            .granted_capabilities
-            .contains(&required_cap),
-        HostcallCapabilityClass::InternalAllowed => false,
-        HostcallCapabilityClass::Unknown => true, // fail-closed on unknown tags
+    // E9.T4 (bd-fqlfw.9.4): consult the capability-pruned dispatch table
+    // first when one is installed; any miss falls through to the live
+    // classification (fail-closed per-call fallback). Only the allow/deny
+    // bit is precomputed — every witness and decision-record emission below
+    // is identical on both paths.
+    let capability_denied = match interpreter
+        .pruned_hostcall_dispatch
+        .as_ref()
+        .and_then(|table| table.lookup(capability_tag))
+    {
+        Some(allowed) => !allowed,
+        None => !live_hostcall_decision(capability_tag, &interpreter.config.granted_capabilities),
     };
 
     // bd-hxukn: cap the tag length at the recording sites so an attacker
@@ -4512,6 +4580,10 @@ pub struct CapturedInterpreterState {
 pub struct InterpreterCore {
     config: InterpreterConfig,
     hook: Option<Arc<dyn InterpreterHook>>,
+    /// Precomputed capability-pruned hostcall dispatch metadata (E9.T4,
+    /// bd-fqlfw.9.4). `None` = live classification on every call; installed
+    /// only by the E9 activation gate after receipt/epoch/replay approval.
+    pruned_hostcall_dispatch: Option<PrunedHostcallDispatch>,
     /// True only while `prepare_execution` runs engine-internal setup
     /// (module-namespace record, runtime globals). Containment hooks are
     /// suppressed during this window: no extension instruction has executed
@@ -4748,6 +4820,7 @@ impl InterpreterCore {
         Self {
             config,
             hook: None,
+            pruned_hostcall_dispatch: None,
             preparing_execution: false,
             state_capture_tick: None,
             state_capture_result: None,
@@ -4830,6 +4903,25 @@ impl InterpreterCore {
 
     pub fn clear_hook(&mut self) {
         self.hook = None;
+    }
+
+    /// Install capability-pruned hostcall dispatch metadata (E9.T4,
+    /// bd-fqlfw.9.4). Only the E9 activation gate should call this, after
+    /// its receipt/epoch/replay gates approve. The table decides only the
+    /// allow/deny bit; witness and decision-record emission is unchanged.
+    pub fn set_pruned_hostcall_dispatch(&mut self, table: PrunedHostcallDispatch) {
+        self.pruned_hostcall_dispatch = Some(table);
+    }
+
+    /// Remove the pruned-dispatch table: every subsequent hostcall uses the
+    /// live classification path (the safe-mode fallback surface).
+    pub fn clear_pruned_hostcall_dispatch(&mut self) {
+        self.pruned_hostcall_dispatch = None;
+    }
+
+    /// Whether a pruned-dispatch table is currently installed.
+    pub fn has_pruned_hostcall_dispatch(&self) -> bool {
+        self.pruned_hostcall_dispatch.is_some()
     }
 
     /// Install a sandboxed host-I/O provider (and an optional replay recorder) so

@@ -14912,26 +14912,49 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2020 21.1.3.19: split into an array of substrings. An
-        // `undefined` separator yields the whole string as one element;
-        // an empty separator splits per character. (limit arg not yet
+        // `undefined` separator yields the whole string as one element; an
+        // empty separator splits per UTF-16 code unit (surrogate pairs
+        // split into their halves, matching donor runtimes); a non-empty
+        // separator matches exact code units, so lone-surrogate content in
+        // either operand survives losslessly (bd-3kvat; previously
+        // per-scalar over the lossy projection). (limit arg not yet
         // honored — see bd-9a8cz follow-up.)
-        let pieces: Vec<String> = match self.builtin_arg(args, 0)? {
-            None | Some(Value::Undefined) => vec![this_str.to_string()],
+        let pieces: Vec<JsString> = match self.builtin_arg(args, 0)? {
+            None | Some(Value::Undefined) => vec![this_str.clone()],
             Some(separator_value) => {
-                let separator = self.value_to_string(&separator_value);
-                if separator.is_empty() {
-                    this_str.chars().map(|ch| ch.to_string()).collect()
-                } else {
-                    this_str
-                        .split(separator.as_str())
-                        .map(|piece| piece.to_string())
+                let separator = match separator_value {
+                    Value::Str(s) => s,
+                    other => JsString::from(self.value_to_string(&other)),
+                };
+                let units = this_str.code_units_vec();
+                let needle = separator.code_units_vec();
+                if needle.is_empty() {
+                    units
+                        .iter()
+                        .map(|unit| JsString::from_code_units(std::slice::from_ref(unit)))
                         .collect()
+                } else {
+                    let mut split_pieces = Vec::new();
+                    let mut piece_start = 0usize;
+                    let mut cursor = 0usize;
+                    while cursor + needle.len() <= units.len() {
+                        if units[cursor..cursor + needle.len()] == needle[..] {
+                            split_pieces
+                                .push(JsString::from_code_units(&units[piece_start..cursor]));
+                            cursor += needle.len();
+                            piece_start = cursor;
+                        } else {
+                            cursor += 1;
+                        }
+                    }
+                    split_pieces.push(JsString::from_code_units(&units[piece_start..]));
+                    split_pieces
                 }
             }
         };
         let result = self.alloc_array_with_prototype(None)?;
         for (index, piece) in pieces.iter().enumerate() {
-            self.set_object_property(result, index.to_string(), Value::str(piece.clone()))?;
+            self.set_object_property(result, index.to_string(), Value::Str(piece.clone()))?;
         }
         self.set_object_property(
             result,
@@ -15046,9 +15069,12 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2020 21.1.3.18: negative indices count from the end; an
-        // empty/inverted range yields "". (bd-9a8cz.1)
-        let chars: Vec<char> = this_str.chars().collect();
-        let len = chars.len() as i64;
+        // empty/inverted range yields "". Indices are UTF-16 code-unit
+        // offsets over exact units, composing with the unit-indexed search
+        // family; a boundary inside a surrogate pair yields the lone half
+        // losslessly (bd-9a8cz.1, bd-3kvat; previously scalar-indexed).
+        let units = this_str.code_units_vec();
+        let len = units.len() as i64;
         let normalize = |n: i64| -> i64 {
             if n < 0 {
                 len.saturating_add(n).max(0)
@@ -15064,12 +15090,12 @@ impl InterpreterCore {
             Some(Value::Undefined) | None => len,
             Some(arg) => normalize(Self::value_as_integer(&arg)),
         };
-        let result: String = if start < end {
-            chars[start as usize..end as usize].iter().collect()
-        } else {
-            String::new()
-        };
-        Ok(Value::str(result))
+        if start >= end {
+            return Ok(Value::str(String::new()));
+        }
+        Ok(Value::Str(JsString::from_code_units(
+            &units[start as usize..end as usize],
+        )))
     }
 
     fn string_substring_impl(
@@ -15078,9 +15104,11 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2020 21.1.3.21: clamp both indices to [0, len], then swap so
-        // start <= end. (bd-9a8cz.1)
-        let chars: Vec<char> = this_str.chars().collect();
-        let len = chars.len() as i64;
+        // start <= end. Indices are UTF-16 code-unit offsets over exact
+        // units; split-pair boundaries are lossless (bd-9a8cz.1, bd-3kvat;
+        // previously scalar-indexed).
+        let units = this_str.code_units_vec();
+        let len = units.len() as i64;
         let clamp_idx = |n: i64| -> i64 { n.clamp(0, len) };
         let start = match self.builtin_arg(args, 0)? {
             Some(Value::Undefined) | None => 0,
@@ -15095,8 +15123,9 @@ impl InterpreterCore {
         } else {
             (end, start)
         };
-        let result: String = chars[lo as usize..hi as usize].iter().collect();
-        Ok(Value::str(result))
+        Ok(Value::Str(JsString::from_code_units(
+            &units[lo as usize..hi as usize],
+        )))
     }
 
     fn string_substr_impl(
@@ -15110,9 +15139,10 @@ impl InterpreterCore {
         // An omitted `length` takes the rest of the string; the result length is
         // `max(min(length, size - start), 0)`, so a non-positive length yields "".
         // This is deliberately NOT `substring`, which clamps both args to [0, len]
-        // and swaps them. (bd-fqlfw.2.11.2)
-        let chars: Vec<char> = this_str.chars().collect();
-        let size = chars.len() as i64;
+        // and swaps them. `size` and both offsets are UTF-16 code-unit counts
+        // over exact units (bd-fqlfw.2.11.2, bd-3kvat; previously scalar).
+        let units = this_str.code_units_vec();
+        let size = units.len() as i64;
         let int_start = match self.builtin_arg(args, 0)? {
             Some(Value::Undefined) | None => 0,
             Some(arg) => Self::value_as_integer(&arg),
@@ -15131,8 +15161,9 @@ impl InterpreterCore {
             return Ok(Value::str(String::new()));
         }
         let end = start + result_length;
-        let result: String = chars[start as usize..end as usize].iter().collect();
-        Ok(Value::str(result))
+        Ok(Value::Str(JsString::from_code_units(
+            &units[start as usize..end as usize],
+        )))
     }
 
     fn string_replace_impl(
@@ -15202,9 +15233,9 @@ impl InterpreterCore {
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        // ES2020 21.1.3.14: left-pad to `targetLength` (Unicode scalar
-        // count) with `padString` (default " "). (bd-9a8cz.1)
-        Ok(Value::str(self.string_pad_value(this_str, args, true)?))
+        // ES2020 21.1.3.14: left-pad to `targetLength` (UTF-16 code-unit
+        // count) with `padString` (default " "). (bd-9a8cz.1, bd-3kvat)
+        Ok(Value::Str(self.string_pad_value(this_str, args, true)?))
     }
 
     fn string_pad_end_impl(
@@ -15212,9 +15243,9 @@ impl InterpreterCore {
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        // ES2020 21.1.3.13: right-pad to `targetLength` (Unicode scalar
-        // count) with `padString` (default " "). (bd-9a8cz.1)
-        Ok(Value::str(self.string_pad_value(this_str, args, false)?))
+        // ES2020 21.1.3.13: right-pad to `targetLength` (UTF-16 code-unit
+        // count) with `padString` (default " "). (bd-9a8cz.1, bd-3kvat)
+        Ok(Value::Str(self.string_pad_value(this_str, args, false)?))
     }
 
     fn string_property_value(receiver: &str, key: &str) -> Value {
@@ -18938,52 +18969,52 @@ impl InterpreterCore {
     /// String.prototype receiver coercion with RequireObjectCoercible semantics.
     /// Throws TypeError for null/undefined as per ECMAScript specification.
     /// All String.prototype methods should use this for consistent behavior.
-    /// Shared padStart/padEnd core (bd-9a8cz.1). Pads `value` to `target_length`
-    /// Unicode scalar values using the optional pad string (default `" "`),
-    /// prepending when `pad_start` else appending. Returns `value` unchanged
-    /// when it is already at least `target_length` long or the pad string is
-    /// empty (per ES2020 21.1.3.13/21.1.3.14).
+    /// Shared padStart/padEnd core (bd-9a8cz.1, bd-3kvat). Pads `value` to
+    /// `target_length` UTF-16 code units using the optional pad string
+    /// (default `" "`), prepending when `pad_start` else appending. Returns
+    /// `value` unchanged when it is already at least `target_length` long or
+    /// the pad string is empty (per ES2020 21.1.3.13/21.1.3.14).
     fn string_pad_value(
         &self,
-        value: &str,
+        value: &JsString,
         args: RegRange,
         pad_start: bool,
-    ) -> Result<String, InterpreterError> {
-        let cur_len = value.chars().count();
+    ) -> Result<JsString, InterpreterError> {
+        // ES2020 21.1.3.13/14: `targetLength` and the fill are measured in
+        // UTF-16 code units over exact units; a fill truncated inside a
+        // surrogate pair keeps the lone half losslessly (bd-3kvat;
+        // previously scalar-counted over the projection).
+        let units = value.code_units_vec();
+        let cur_len = units.len();
         let target = match self.builtin_arg(args, 0)? {
             Some(arg) => Self::value_as_integer(&arg).max(0) as usize,
             None => 0,
         };
         let pad = match self.builtin_arg(args, 1)? {
-            Some(Value::Undefined) | None => " ".to_string(),
-            Some(arg) => self.value_to_string(&arg),
+            Some(Value::Undefined) | None => JsString::from(" "),
+            Some(Value::Str(s)) => s,
+            Some(arg) => JsString::from(self.value_to_string(&arg)),
         };
-        if target <= cur_len || pad.is_empty() {
-            return Ok(value.to_string());
+        let pad_units = pad.code_units_vec();
+        if target <= cur_len || pad_units.is_empty() {
+            return Ok(value.clone());
         }
+        // Guard before allocating the filler: a code unit re-encodes to at
+        // most 3 UTF-8 bytes, so this bounds the projected byte length.
+        self.check_string_limit(target.saturating_mul(3))?;
         let fill_needed = target - cur_len;
-        let pad_chars: Vec<char> = pad.chars().collect();
-        let cycle_bytes: usize = pad_chars.iter().map(|ch| ch.len_utf8()).sum();
-        let full_cycles = fill_needed / pad_chars.len();
-        let remainder = fill_needed % pad_chars.len();
-        let remainder_bytes: usize = pad_chars
-            .iter()
-            .take(remainder)
-            .map(|ch| ch.len_utf8())
-            .sum();
-        let projected_len = value
-            .len()
-            .saturating_add(full_cycles.saturating_mul(cycle_bytes))
-            .saturating_add(remainder_bytes);
-        self.check_string_limit(projected_len)?;
-        let filler: String = (0..fill_needed)
-            .map(|i| pad_chars[i % pad_chars.len()])
+        let filler_units: Vec<u16> = (0..fill_needed)
+            .map(|i| pad_units[i % pad_units.len()])
             .collect();
-        Ok(if pad_start {
-            format!("{filler}{value}")
+        let mut result_units = Vec::with_capacity(target);
+        if pad_start {
+            result_units.extend_from_slice(&filler_units);
+            result_units.extend_from_slice(&units);
         } else {
-            format!("{value}{filler}")
-        })
+            result_units.extend_from_slice(&units);
+            result_units.extend_from_slice(&filler_units);
+        }
+        Ok(JsString::from_code_units(&result_units))
     }
 
     fn require_object_coercible_to_string(value: &Value) -> Result<String, InterpreterError> {

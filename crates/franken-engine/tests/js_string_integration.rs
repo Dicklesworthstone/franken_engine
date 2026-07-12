@@ -314,3 +314,120 @@ fn search_positions_inside_a_surrogate_pair_are_legal_offsets() {
         "'😀z'.endsWith(String.fromCharCode(0xD83D), 1) && '😀z'.endsWith('z');",
     );
 }
+
+// -- bd-3kvat: extraction family (slice/substring/substr), split, and pads
+//    are UTF-16 code-unit grained over exact units --------------------------
+
+#[test]
+fn slice_composes_with_code_unit_search_offsets() {
+    // The motivating bd-3kvat defect: indexOf returns a unit offset that the
+    // scalar-indexed slice used to consume as a scalar offset, so
+    // `s.slice(s.indexOf('b'))` returned "" for astral content.
+    expect_true(
+        "slice-index-of-composition",
+        "var s = 'a😀b'; s.slice(s.indexOf('b')) === 'b';",
+    );
+    expect_true(
+        "slice-units-and-negatives",
+        "var s = 'a😀b'; \
+         s.slice(1, 3).codePointAt(0) === 128512 && \
+         s.slice(-1) === 'b' && s.slice(3, 1) === '' && s.slice(4) === '';",
+    );
+}
+
+#[test]
+fn slice_boundary_inside_a_surrogate_pair_is_lossless_and_heals() {
+    expect_true(
+        "slice-split-pair-halves",
+        "var s = '😀'; \
+         s.slice(0, 1).length === 1 && s.slice(0, 1).charCodeAt(0) === 0xD83D && \
+         s.slice(1).length === 1 && s.slice(1).charCodeAt(0) === 0xDE00;",
+    );
+    expect_true(
+        "slice-split-pair-concat-heals",
+        "var s = '😀'; var healed = s.slice(0, 1) + s.slice(1); \
+         healed === s && healed.codePointAt(0) === 128512;",
+    );
+}
+
+#[test]
+fn substring_swaps_and_clamps_in_code_units() {
+    expect_true(
+        "substring-swap-units",
+        "var s = 'a😀b'; \
+         s.substring(3, 1).codePointAt(0) === 128512 && \
+         s.substring(3, 1) === s.substring(1, 3) && \
+         s.substring(99) === '' && s.substring(-5, 1) === 'a';",
+    );
+    expect_true(
+        "substring-split-pair-half",
+        "'😀b'.substring(1).charCodeAt(0) === 0xDE00 && '😀b'.substring(1).length === 2;",
+    );
+}
+
+#[test]
+fn substr_annex_b_takes_code_unit_start_and_length() {
+    expect_true(
+        "substr-units",
+        "var s = 'a😀b'; \
+         s.substr(1, 2).codePointAt(0) === 128512 && \
+         s.substr(-3, 2) === s.substr(1, 2) && \
+         s.substr(3) === 'b' && s.substr(4) === '' && s.substr(1, 0) === '';",
+    );
+    expect_true(
+        "substr-split-pair-half",
+        "'a😀'.substr(2).charCodeAt(0) === 0xDE00 && 'a😀'.substr(2).length === 1;",
+    );
+}
+
+#[test]
+fn split_empty_separator_yields_code_units() {
+    // ES2020 21.1.3.20 SplitMatch operates on code units: an empty separator
+    // splits a surrogate pair into its halves (donor-runtime parity).
+    expect_true(
+        "split-empty-separator-units",
+        "var halves = '😀'.split(''); \
+         halves.length === 2 && \
+         halves[0].charCodeAt(0) === 0xD83D && halves[1].charCodeAt(0) === 0xDE00;",
+    );
+    expect_true(
+        "split-empty-separator-heals",
+        "var halves = 'a😀'.split(''); \
+         halves.length === 3 && halves[0] === 'a' && (halves[1] + halves[2]) === '😀';",
+    );
+    expect_true("split-empty-on-empty", "''.split('').length === 0;");
+}
+
+#[test]
+fn split_separator_matches_exact_code_units() {
+    expect_true(
+        "split-lone-surrogate-separator",
+        "var lead = String.fromCharCode(0xD83D); \
+         var parts = ('x' + lead + 'y').split(lead); \
+         parts.length === 2 && parts[0] === 'x' && parts[1] === 'y';",
+    );
+    expect_true(
+        "split-astral-separator",
+        "var parts = 'a😀b'.split('😀'); \
+         parts.length === 2 && parts[0] === 'a' && parts[1] === 'b';",
+    );
+    expect_true(
+        "split-preserves-lone-surrogate-pieces",
+        "var lead = String.fromCharCode(0xD83D); \
+         var parts = (lead + ',z').split(','); \
+         parts.length === 2 && parts[0].charCodeAt(0) === 0xD83D && parts[1] === 'z';",
+    );
+}
+
+#[test]
+fn pads_measure_target_length_in_code_units() {
+    expect_true(
+        "pad-start-units",
+        "'😀'.padStart(3, 'x') === 'x😀' && '😀'.padStart(2, 'x') === '😀';",
+    );
+    expect_true(
+        "pad-end-truncates-astral-pad-to-lone-half",
+        "var padded = 'a'.padEnd(2, '😀'); \
+         padded.length === 2 && padded.charCodeAt(1) === 0xD83D;",
+    );
+}

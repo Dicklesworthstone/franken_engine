@@ -412,6 +412,494 @@ fn recordable_capability_tag(tag: &str) -> std::borrow::Cow<'_, str> {
     Cow::Owned(out)
 }
 
+// ---------------------------------------------------------------------------
+// Node `path` builtin semantics (bd-tu0c3)
+//
+// Pure-compute string algorithms backing the `builtin:Path*` hostcalls emitted
+// by the lowering pipeline's path-module interception. Posix semantics follow
+// Node's `path.posix` implementation (the default `path` on linux IS posix);
+// the win32 helpers cover the small separator-sensitive subset the lowering
+// recognizes (join/basename/isAbsolute). Mirrored in
+// `franken-core/src/baseline_interpreter.rs` (twin-lane convention, like the
+// Math builtins) — keep the two copies in lockstep.
+// ---------------------------------------------------------------------------
+
+/// Resolve `.`/`..` segments of `path`: splits on `separators`, drops empty
+/// and `.` segments, pops a stack entry for `..` (keeping leading `..`s only
+/// when `allow_above_root`, i.e. for relative paths), then joins with `sep`.
+/// Shared by normalize/join/resolve for both separator families.
+fn node_path_normalize_segments(
+    path: &str,
+    allow_above_root: bool,
+    sep: char,
+    separators: &[char],
+) -> String {
+    let mut stack: Vec<&str> = Vec::new();
+    for segment in path.split(|c: char| separators.contains(&c)) {
+        if segment.is_empty() || segment == "." {
+            continue;
+        }
+        if segment == ".." {
+            match stack.last() {
+                Some(&last) if last != ".." => {
+                    stack.pop();
+                }
+                _ => {
+                    if allow_above_root {
+                        stack.push("..");
+                    }
+                }
+            }
+        } else {
+            stack.push(segment);
+        }
+    }
+    let mut out = String::new();
+    for (index, segment) in stack.iter().enumerate() {
+        if index > 0 {
+            out.push(sep);
+        }
+        out.push_str(segment);
+    }
+    out
+}
+
+/// Node `path.posix.normalize`: dot-segment resolution, `//` collapse,
+/// trailing-slash preservation; `''` -> `'.'`; leading `..` preserved for
+/// relative paths and dropped above an absolute root.
+fn node_path_posix_normalize(path: &str) -> String {
+    if path.is_empty() {
+        return ".".to_string();
+    }
+    let is_absolute = path.starts_with('/');
+    let trailing_separator = path.ends_with('/');
+    let mut normalized = node_path_normalize_segments(path, !is_absolute, '/', &['/']);
+    if normalized.is_empty() {
+        if is_absolute {
+            return "/".to_string();
+        }
+        return if trailing_separator {
+            "./".to_string()
+        } else {
+            ".".to_string()
+        };
+    }
+    if trailing_separator {
+        normalized.push('/');
+    }
+    if is_absolute {
+        format!("/{normalized}")
+    } else {
+        normalized
+    }
+}
+
+/// Node `path.posix.join`: empty segments dropped, joined with `/`, then
+/// normalized; no segments (or all empty) -> `'.'`.
+fn node_path_posix_join(parts: &[String]) -> String {
+    let mut joined = String::new();
+    for part in parts {
+        if part.is_empty() {
+            continue;
+        }
+        if !joined.is_empty() {
+            joined.push('/');
+        }
+        joined.push_str(part);
+    }
+    if joined.is_empty() {
+        return ".".to_string();
+    }
+    node_path_posix_normalize(&joined)
+}
+
+/// Node `path.posix.resolve` over pre-validated string segments: right-to-left
+/// until an absolute segment wins, then normalize. The engine has NO ambient
+/// cwd, so a FIXED synthetic cwd `"/"` is prefixed when no segment is absolute
+/// — any consistent absolute base is behaviorally correct for pure-compute
+/// resolution (the compat corpus asserts predicates over resolve()'s output,
+/// never a host cwd value). The result never has a trailing slash unless it is
+/// the root itself.
+fn node_path_posix_resolve(parts: &[String]) -> String {
+    let mut resolved = String::new();
+    let mut resolved_absolute = false;
+    let mut index = parts.len() as i64 - 1;
+    while index >= -1 && !resolved_absolute {
+        let segment: &str = if index >= 0 {
+            parts[index as usize].as_str()
+        } else {
+            // Synthetic cwd (see doc comment above).
+            "/"
+        };
+        index -= 1;
+        if segment.is_empty() {
+            continue;
+        }
+        resolved = format!("{segment}/{resolved}");
+        resolved_absolute = segment.starts_with('/');
+    }
+    let normalized = node_path_normalize_segments(&resolved, !resolved_absolute, '/', &['/']);
+    if resolved_absolute {
+        format!("/{normalized}")
+    } else if normalized.is_empty() {
+        ".".to_string()
+    } else {
+        normalized
+    }
+}
+
+/// Node `basename` shared across separator families: trailing separators
+/// trimmed, last component returned, and `ext` stripped only when it is a
+/// proper suffix strictly shorter than the basename (Node keeps `basename ==
+/// ext` intact). `skip_win32_drive` skips a leading `X:` drive prefix (win32).
+fn node_path_basename_impl(
+    path: &str,
+    ext: Option<&str>,
+    separators: &[char],
+    skip_win32_drive: bool,
+) -> String {
+    let mut p = path;
+    if skip_win32_drive && p.len() >= 2 {
+        let bytes = p.as_bytes();
+        if bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+            p = &p[2..];
+        }
+    }
+    let trimmed = p.trim_end_matches(|c: char| separators.contains(&c));
+    let base = match trimmed.rfind(|c: char| separators.contains(&c)) {
+        Some(index) => &trimmed[index + 1..],
+        None => trimmed,
+    };
+    if let Some(ext) = ext
+        && !ext.is_empty()
+        && base.len() > ext.len()
+        && base.ends_with(ext)
+    {
+        return base[..base.len() - ext.len()].to_string();
+    }
+    base.to_string()
+}
+
+/// Node `path.posix.dirname`: no trailing slash in the result, `'/'` -> `'/'`,
+/// bare name -> `'.'`. Direct port of Node's end-scan (byte comparisons are
+/// against ASCII `/`, so scanning UTF-8 bytes is boundary-safe).
+fn node_path_posix_dirname(path: &str) -> String {
+    if path.is_empty() {
+        return ".".to_string();
+    }
+    let bytes = path.as_bytes();
+    let has_root = bytes[0] == b'/';
+    let mut end: i64 = -1;
+    let mut matched_slash = true;
+    let mut index = bytes.len() as i64 - 1;
+    while index >= 1 {
+        if bytes[index as usize] == b'/' {
+            if !matched_slash {
+                end = index;
+                break;
+            }
+        } else {
+            matched_slash = false;
+        }
+        index -= 1;
+    }
+    if end == -1 {
+        return if has_root {
+            "/".to_string()
+        } else {
+            ".".to_string()
+        };
+    }
+    if has_root && end == 1 {
+        return "//".to_string();
+    }
+    path[..end as usize].to_string()
+}
+
+/// Node `path.posix.extname`: the last `.`-suffix of the final component, with
+/// Node's exact dotfile rules (`.bashrc` -> `''`, `file.` -> `'.'`, `..` ->
+/// `''`). Direct port of Node's single-pass backward scan.
+fn node_path_posix_extname(path: &str) -> String {
+    let bytes = path.as_bytes();
+    let mut start_dot: i64 = -1;
+    let mut start_part: i64 = 0;
+    let mut end: i64 = -1;
+    let mut matched_slash = true;
+    // Track the state of characters (if any) we see before our first dot and
+    // after any path separator we find (Node's `preDotState`).
+    let mut pre_dot_state: i64 = 0;
+    let mut index = bytes.len() as i64 - 1;
+    while index >= 0 {
+        let code = bytes[index as usize];
+        if code == b'/' {
+            // Reached a path separator that was not part of a set of trailing
+            // separators at the end of the string: stop.
+            if !matched_slash {
+                start_part = index + 1;
+                break;
+            }
+            index -= 1;
+            continue;
+        }
+        if end == -1 {
+            // First non-separator from the end marks the end of the extension.
+            matched_slash = false;
+            end = index + 1;
+        }
+        if code == b'.' {
+            if start_dot == -1 {
+                start_dot = index;
+            } else if pre_dot_state != 1 {
+                pre_dot_state = 1;
+            }
+        } else if start_dot != -1 {
+            // A non-dot character before the dot marks a real name part.
+            pre_dot_state = -1;
+        }
+        index -= 1;
+    }
+    if start_dot == -1
+        || end == -1
+        // The dot(s) were the first character(s) of the component (dotfile) …
+        || pre_dot_state == 0
+        // … or the component is exactly `..`.
+        || (pre_dot_state == 1 && start_dot == end - 1 && start_dot == start_part + 1)
+    {
+        return String::new();
+    }
+    path[start_dot as usize..end as usize].to_string()
+}
+
+/// Node `path.posix.relative` over resolved paths (same synthetic cwd as
+/// [`node_path_posix_resolve`]): common-prefix segments dropped, `..` per
+/// remaining `from` segment, then the remaining `to` segments.
+fn node_path_posix_relative(from: &str, to: &str) -> String {
+    let from_resolved = node_path_posix_resolve(std::slice::from_ref(&from.to_string()));
+    let to_resolved = node_path_posix_resolve(std::slice::from_ref(&to.to_string()));
+    if from_resolved == to_resolved {
+        return String::new();
+    }
+    let from_segments: Vec<&str> = from_resolved.split('/').filter(|s| !s.is_empty()).collect();
+    let to_segments: Vec<&str> = to_resolved.split('/').filter(|s| !s.is_empty()).collect();
+    let mut common = 0usize;
+    while common < from_segments.len()
+        && common < to_segments.len()
+        && from_segments[common] == to_segments[common]
+    {
+        common += 1;
+    }
+    let mut out_segments: Vec<&str> =
+        std::iter::repeat_n("..", from_segments.len() - common).collect();
+    out_segments.extend_from_slice(&to_segments[common..]);
+    out_segments.join("/")
+}
+
+/// The `{ root, dir, base, ext, name }` decomposition of
+/// [`node_path_posix_parse`].
+struct NodePathParsed {
+    root: String,
+    dir: String,
+    base: String,
+    ext: String,
+    name: String,
+}
+
+/// Node `path.posix.parse`: root/dir/base/ext/name decomposition. `base` uses
+/// the basename rules (trailing slashes trimmed), `ext`/`name` use the extname
+/// dotfile rules over `base`, `dir` is everything before the final component
+/// (root for a root-only path, `''` for a bare name).
+fn node_path_posix_parse(path: &str) -> NodePathParsed {
+    if path.is_empty() {
+        return NodePathParsed {
+            root: String::new(),
+            dir: String::new(),
+            base: String::new(),
+            ext: String::new(),
+            name: String::new(),
+        };
+    }
+    let root = if path.starts_with('/') { "/" } else { "" };
+    let base = node_path_basename_impl(path, None, &['/'], false);
+    let ext = node_path_posix_extname(&base);
+    let name = base[..base.len() - ext.len()].to_string();
+    let trimmed = path.trim_end_matches('/');
+    let dir = match trimmed.rfind('/') {
+        Some(0) => "/".to_string(),
+        Some(index) => trimmed[..index].to_string(),
+        None => root.to_string(),
+    };
+    NodePathParsed {
+        root: root.to_string(),
+        dir,
+        base,
+        ext,
+        name,
+    }
+}
+
+/// Node `path.posix.format`: `dir`+`base` win over `root`+`name`+`ext`
+/// (`base` wins over `name`+`ext`; an extension without a leading dot gets
+/// one). Empty-string properties count as absent, matching JS truthiness in
+/// Node's `_format`.
+fn node_path_posix_format(root: &str, dir: &str, base: &str, name: &str, ext: &str) -> String {
+    let dir_part = if dir.is_empty() { root } else { dir };
+    let formatted_ext = if ext.is_empty() {
+        String::new()
+    } else if ext.starts_with('.') {
+        ext.to_string()
+    } else {
+        format!(".{ext}")
+    };
+    let base_part = if base.is_empty() {
+        format!("{name}{formatted_ext}")
+    } else {
+        base.to_string()
+    };
+    if dir_part.is_empty() {
+        return base_part;
+    }
+    if dir_part == root {
+        format!("{dir_part}{base_part}")
+    } else {
+        format!("{dir_part}/{base_part}")
+    }
+}
+
+/// Node `path.win32.isAbsolute`: a leading separator (either kind, incl. UNC)
+/// or a drive letter followed by `:` and a separator.
+fn node_path_win32_is_absolute(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    if bytes.is_empty() {
+        return false;
+    }
+    if bytes[0] == b'/' || bytes[0] == b'\\' {
+        return true;
+    }
+    bytes.len() > 2
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'/' || bytes[2] == b'\\')
+}
+
+/// Node `path.win32.normalize`: both separators accepted, output uses `\`.
+/// Handles drive-letter roots (`C:\`, drive-relative `C:x`), UNC roots
+/// (`\\server\share`), and bare separator roots; `\\?\`-style device
+/// namespaces are not modeled (outside the recognized corpus surface).
+fn node_path_win32_normalize(path: &str) -> String {
+    if path.is_empty() {
+        return ".".to_string();
+    }
+    let bytes = path.as_bytes();
+    let is_sep = |b: u8| b == b'/' || b == b'\\';
+    let mut device = String::new();
+    let mut is_absolute = false;
+    let mut root_len = 0usize;
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        device.push(bytes[0] as char);
+        device.push(':');
+        root_len = 2;
+        if bytes.len() > 2 && is_sep(bytes[2]) {
+            is_absolute = true;
+            root_len = 3;
+        }
+    } else if is_sep(bytes[0]) {
+        is_absolute = true;
+        root_len = 1;
+        if bytes.len() > 1 && is_sep(bytes[1]) {
+            // Candidate UNC root: `\\server\share`.
+            let mut cursor = 2usize;
+            let server_start = cursor;
+            while cursor < bytes.len() && !is_sep(bytes[cursor]) {
+                cursor += 1;
+            }
+            if cursor > server_start && cursor < bytes.len() {
+                let server_end = cursor;
+                while cursor < bytes.len() && is_sep(bytes[cursor]) {
+                    cursor += 1;
+                }
+                let share_start = cursor;
+                while cursor < bytes.len() && !is_sep(bytes[cursor]) {
+                    cursor += 1;
+                }
+                if cursor > share_start {
+                    device = format!(
+                        "\\\\{}\\{}",
+                        &path[server_start..server_end],
+                        &path[share_start..cursor]
+                    );
+                    root_len = cursor;
+                }
+            }
+        }
+    }
+    let tail = &path[root_len..];
+    let trailing_separator = tail.ends_with(['/', '\\']);
+    let mut normalized = node_path_normalize_segments(tail, !is_absolute, '\\', &['/', '\\']);
+    if normalized.is_empty() && !is_absolute {
+        normalized.push('.');
+    }
+    if trailing_separator {
+        normalized.push('\\');
+    }
+    if is_absolute {
+        format!("{device}\\{normalized}")
+    } else {
+        format!("{device}{normalized}")
+    }
+}
+
+/// Node `path.win32.join`: empty segments dropped, joined with `\`, Node's
+/// UNC-safety heuristic applied (a joined result must not ACCIDENTALLY read as
+/// UNC unless the first part already matched a UNC root), then win32
+/// normalization.
+fn node_path_win32_join(parts: &[String]) -> String {
+    let mut joined = String::new();
+    let mut first_part: Option<&str> = None;
+    for part in parts {
+        if part.is_empty() {
+            continue;
+        }
+        if joined.is_empty() {
+            first_part = Some(part.as_str());
+            joined.push_str(part);
+        } else {
+            joined.push('\\');
+            joined.push_str(part);
+        }
+    }
+    if joined.is_empty() {
+        return ".".to_string();
+    }
+    let is_sep = |b: u8| b == b'/' || b == b'\\';
+    let first_bytes = first_part.unwrap_or("").as_bytes();
+    let mut needs_replace = true;
+    let mut slash_count = 0usize;
+    if !first_bytes.is_empty() && is_sep(first_bytes[0]) {
+        slash_count += 1;
+        if first_bytes.len() > 1 && is_sep(first_bytes[1]) {
+            slash_count += 1;
+            if first_bytes.len() > 2 {
+                if is_sep(first_bytes[2]) {
+                    slash_count += 1;
+                } else {
+                    // The first part matched a UNC root (`\\server`); keep it.
+                    needs_replace = false;
+                }
+            }
+        }
+    }
+    if needs_replace {
+        let joined_bytes = joined.as_bytes();
+        while slash_count < joined_bytes.len() && is_sep(joined_bytes[slash_count]) {
+            slash_count += 1;
+        }
+        if slash_count >= 2 {
+            joined = format!("\\{}", &joined[slash_count..]);
+        }
+    }
+    node_path_win32_normalize(&joined)
+}
+
 /// Map an [`InterpreterError`] to a small stable `u32` for the telemetry
 /// schema's `HostcallResult::Error { code }` field. Codes are an internal
 /// taxonomy (not user-visible) and are intentionally narrow so a new error
@@ -21639,6 +22127,197 @@ impl InterpreterCore {
         outcome
     }
 
+    /// bd-tu0c3: build and ARM a JS-catchable `TypeError` carrying Node's
+    /// `ERR_INVALID_ARG_TYPE` code for a path-builtin argument-validation
+    /// failure, returning the `UncaughtException` the `builtin:` HostCall arm
+    /// routes into the enclosing catch frame via
+    /// [`Self::route_isolated_explicit_throw`] (same mechanism as an explicit
+    /// user `throw` escaping a builtin mini-lane). The thrown value has the
+    /// TypeError prototype (so `e instanceof TypeError` holds) plus a `code`
+    /// own property, matching what the compat corpus asserts. If constructing
+    /// the error object itself fails (allocation), that fault propagates
+    /// unchanged.
+    fn throw_path_arg_type_error(
+        &mut self,
+        arg_name: &str,
+        expected: &str,
+        got: &Value,
+    ) -> InterpreterError {
+        let message = format!(
+            "The \"{arg_name}\" argument must be of type {expected}. Received type {}",
+            got.type_name()
+        );
+        let thrown = match self.construct_node_invalid_arg_type_error(&message) {
+            Ok(value) => value,
+            Err(err) => return err,
+        };
+        self.pending_exception = Some(thrown.clone());
+        // Engine-constructed argument-validation errors carry no data-flow
+        // taint; the HostCall dispatch site re-joins the arg labels onto the
+        // exception label (bd-8enww.4.8 throw-path mirror).
+        self.pending_exception_label = Label::Public;
+        InterpreterError::UncaughtException {
+            value: Self::uncaught_exception_description(&thrown),
+        }
+    }
+
+    /// bd-tu0c3: TypeError object with `code: "ERR_INVALID_ARG_TYPE"` (Node's
+    /// argument-validation error shape).
+    fn construct_node_invalid_arg_type_error(
+        &mut self,
+        message: &str,
+    ) -> Result<Value, InterpreterError> {
+        let prototype = self.ensure_builtin_prototype("TypeError")?;
+        let error_id = self.alloc_object_with_prototype(Some(prototype))?;
+        self.initialize_error_like_object(error_id, "TypeError", message.to_string())?;
+        self.set_object_property(
+            error_id,
+            "code".to_string(),
+            Value::str("ERR_INVALID_ARG_TYPE"),
+        )?;
+        Ok(Value::Object(error_id))
+    }
+
+    /// bd-tu0c3: read ALL hostcall args as strings for a variadic path builtin
+    /// (join), throwing Node's ERR_INVALID_ARG_TYPE TypeError on the first
+    /// non-string (Node validates every join argument, including `undefined`).
+    fn path_string_args(
+        &mut self,
+        args: RegRange,
+        arg_name: &str,
+    ) -> Result<Vec<String>, InterpreterError> {
+        let mut parts = Vec::with_capacity(args.count as usize);
+        for offset in 0..args.count {
+            let reg =
+                args.start
+                    .checked_add(offset)
+                    .ok_or(InterpreterError::RegisterOutOfBounds {
+                        register: args.start,
+                        max: self.config.max_registers,
+                    })?;
+            let value = self.read_reg(reg)?;
+            match value {
+                Value::Str(s) => parts.push(s.to_string()),
+                other => {
+                    return Err(self.throw_path_arg_type_error(
+                        &format!("{arg_name}[{offset}]"),
+                        "string",
+                        &other,
+                    ));
+                }
+            }
+        }
+        Ok(parts)
+    }
+
+    /// bd-tu0c3: collect `path.resolve` arguments with Node's LAZY right-to-
+    /// left validation: segments are validated (string-required) from the last
+    /// argument backwards and collection STOPS at the first absolute segment —
+    /// arguments to its left are never inspected (Node: `resolve(7, '/a')` is
+    /// `'/a'`, not a TypeError). Returned in left-to-right order for
+    /// [`node_path_posix_resolve`].
+    fn path_resolve_args(&mut self, args: RegRange) -> Result<Vec<String>, InterpreterError> {
+        let mut collected: Vec<String> = Vec::with_capacity(args.count as usize);
+        let mut offset = args.count;
+        while offset > 0 {
+            offset -= 1;
+            let reg =
+                args.start
+                    .checked_add(offset)
+                    .ok_or(InterpreterError::RegisterOutOfBounds {
+                        register: args.start,
+                        max: self.config.max_registers,
+                    })?;
+            let value = self.read_reg(reg)?;
+            let Value::Str(s) = value else {
+                return Err(self.throw_path_arg_type_error(
+                    &format!("paths[{offset}]"),
+                    "string",
+                    &value,
+                ));
+            };
+            let segment = s.to_string();
+            let is_absolute = segment.starts_with('/');
+            collected.push(segment);
+            if is_absolute {
+                break;
+            }
+        }
+        collected.reverse();
+        Ok(collected)
+    }
+
+    /// bd-tu0c3: required string argument of a path builtin at `offset`
+    /// (missing arguments read as `undefined`, which fails validation exactly
+    /// like Node).
+    fn path_string_arg(
+        &mut self,
+        args: RegRange,
+        offset: u32,
+        arg_name: &str,
+    ) -> Result<String, InterpreterError> {
+        let value = if offset < args.count {
+            let reg =
+                args.start
+                    .checked_add(offset)
+                    .ok_or(InterpreterError::RegisterOutOfBounds {
+                        register: args.start,
+                        max: self.config.max_registers,
+                    })?;
+            self.read_reg(reg)?
+        } else {
+            Value::Undefined
+        };
+        match value {
+            Value::Str(s) => Ok(s.to_string()),
+            other => Err(self.throw_path_arg_type_error(arg_name, "string", &other)),
+        }
+    }
+
+    /// bd-tu0c3: optional string argument of a path builtin at `offset`
+    /// (`basename`'s `ext`): absent or `undefined` is accepted as `None`,
+    /// any other non-string throws (Node validates `ext` only when it is not
+    /// `undefined`).
+    fn path_optional_string_arg(
+        &mut self,
+        args: RegRange,
+        offset: u32,
+        arg_name: &str,
+    ) -> Result<Option<String>, InterpreterError> {
+        if offset >= args.count {
+            return Ok(None);
+        }
+        let reg = args
+            .start
+            .checked_add(offset)
+            .ok_or(InterpreterError::RegisterOutOfBounds {
+                register: args.start,
+                max: self.config.max_registers,
+            })?;
+        match self.read_reg(reg)? {
+            Value::Str(s) => Ok(Some(s.to_string())),
+            Value::Undefined => Ok(None),
+            other => Err(self.throw_path_arg_type_error(arg_name, "string", &other)),
+        }
+    }
+
+    /// bd-tu0c3: read an own string-ish property of the `path.format` path
+    /// object; absent/`undefined` reads as `''`, other values are coerced with
+    /// the engine's standard stringification (Node coerces via template
+    /// literals). Own-property only (no prototype walk), mirroring
+    /// [`Self::resolve_fs_read_encoding`]'s options-bag handling.
+    fn path_format_object_property(&self, object_id: ObjectId, key: &str) -> String {
+        match self
+            .heap
+            .get(object_id.0 as usize)
+            .and_then(|object| object.properties.get(key).cloned())
+        {
+            None | Some(Value::Undefined) => String::new(),
+            Some(Value::Str(s)) => s.to_string(),
+            Some(other) => self.value_to_string(&other),
+        }
+    }
+
     fn dispatch_builtin_hostcall_inner(
         &mut self,
         cap: &str,
@@ -22686,6 +23365,99 @@ impl InterpreterCore {
                 // Remove whitespace from both ends using Unicode-aware trimming
                 let trimmed = string_val.trim();
                 Ok(Value::str(trimmed))
+            }
+
+            // Node `path` builtins (bd-tu0c3): pure-compute posix semantics
+            // (plus the win32 join/basename/isAbsolute subset), dispatched from
+            // the lowering's path-module member-call interception. No host
+            // effect; argument-validation failures throw Node's
+            // ERR_INVALID_ARG_TYPE TypeError (JS-catchable, `.code` set).
+            "builtin:PathJoin" => {
+                let parts = self.path_string_args(args, "paths")?;
+                Ok(Value::str(node_path_posix_join(&parts)))
+            }
+            "builtin:PathResolve" => {
+                let parts = self.path_resolve_args(args)?;
+                Ok(Value::str(node_path_posix_resolve(&parts)))
+            }
+            "builtin:PathNormalize" => {
+                let path = self.path_string_arg(args, 0, "path")?;
+                Ok(Value::str(node_path_posix_normalize(&path)))
+            }
+            "builtin:PathBasename" => {
+                let path = self.path_string_arg(args, 0, "path")?;
+                let ext = self.path_optional_string_arg(args, 1, "ext")?;
+                Ok(Value::str(node_path_basename_impl(
+                    &path,
+                    ext.as_deref(),
+                    &['/'],
+                    false,
+                )))
+            }
+            "builtin:PathDirname" => {
+                let path = self.path_string_arg(args, 0, "path")?;
+                Ok(Value::str(node_path_posix_dirname(&path)))
+            }
+            "builtin:PathExtname" => {
+                let path = self.path_string_arg(args, 0, "path")?;
+                Ok(Value::str(node_path_posix_extname(&path)))
+            }
+            "builtin:PathIsAbsolute" => {
+                let path = self.path_string_arg(args, 0, "path")?;
+                Ok(Value::Bool(path.starts_with('/')))
+            }
+            "builtin:PathRelative" => {
+                let from = self.path_string_arg(args, 0, "from")?;
+                let to = self.path_string_arg(args, 1, "to")?;
+                Ok(Value::str(node_path_posix_relative(&from, &to)))
+            }
+            "builtin:PathParse" => {
+                let path = self.path_string_arg(args, 0, "path")?;
+                let parsed = node_path_posix_parse(&path);
+                let object_id = self.alloc_object_with_properties(&[
+                    ("root", Value::str(&parsed.root)),
+                    ("dir", Value::str(&parsed.dir)),
+                    ("base", Value::str(&parsed.base)),
+                    ("ext", Value::str(&parsed.ext)),
+                    ("name", Value::str(&parsed.name)),
+                ])?;
+                Ok(Value::Object(object_id))
+            }
+            "builtin:PathFormat" => {
+                let value = if args.count > 0 {
+                    self.read_reg(args.start)?
+                } else {
+                    Value::Undefined
+                };
+                let Value::Object(object_id) = value else {
+                    return Err(self.throw_path_arg_type_error("pathObject", "object", &value));
+                };
+                let root = self.path_format_object_property(object_id, "root");
+                let dir = self.path_format_object_property(object_id, "dir");
+                let base = self.path_format_object_property(object_id, "base");
+                let name = self.path_format_object_property(object_id, "name");
+                let ext = self.path_format_object_property(object_id, "ext");
+                Ok(Value::str(node_path_posix_format(
+                    &root, &dir, &base, &name, &ext,
+                )))
+            }
+            "builtin:PathWin32Join" => {
+                let parts = self.path_string_args(args, "paths")?;
+                Ok(Value::str(node_path_win32_join(&parts)))
+            }
+            "builtin:PathWin32Basename" => {
+                let path = self.path_string_arg(args, 0, "path")?;
+                let ext = self.path_optional_string_arg(args, 1, "ext")?;
+                Ok(Value::str(node_path_basename_impl(
+                    &path,
+                    ext.as_deref(),
+                    &['/', '\\'],
+                    true,
+                )))
+            }
+            "builtin:PathWin32IsAbsolute" => {
+                let path = self.path_string_arg(args, 0, "path")?;
+                Ok(Value::Bool(node_path_win32_is_absolute(&path)))
             }
 
             // Math methods

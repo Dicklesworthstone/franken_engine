@@ -767,6 +767,20 @@ fn lower_ir0_to_ir1_with_ambient_grant(
     for alias in confirmed_fs_promises_namespace_import_aliases(&ir0.tree.body) {
         binding_lookup.insert(fs_promises_module_alias_sentinel(&alias), 0);
     }
+    // bd-tu0c3: record path-module binding aliases (`const path = require('path')`
+    // that are actually used as a recognized pure-compute `path` builtin — a
+    // member call like `path.join(...)` / `path.posix.join(...)` /
+    // `path.win32.join(...)` or a property read like `path.sep` /
+    // `path.win32.delimiter`) as NUL-sentinels in binding_lookup, so the binding
+    // form lowers to `builtin:Path*` HostCalls and lowering-time string constants.
+    // Usage-gated exactly like the fs/http aliases: a bare/unused
+    // `const path = require('path')` still hits the ambient-authority denial.
+    // Unlike fs, `path` is pure compute (no host effect), so the usage scan also
+    // recurses through top-level control-flow statements (try/if/loops) while
+    // keeping function/class bodies opaque (fail-closed).
+    for alias in confirmed_path_module_aliases(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(path_module_alias_sentinel(&alias), 0);
+    }
     let mut synthetic_export_index = 0u32;
     let mut synthetic_import_index = 0u32;
     let mut label_counter = 0u32;
@@ -2490,6 +2504,15 @@ fn lower_statement_to_ir1_with_flow(
                     // sites (lowered to a `net:request` hostcall). A bare/unused
                     // `const http = require('http')` is not recorded, so it keeps the
                     // ambient-authority contract.
+                    // bd-tu0c3 extends the same elision to the path require-binding
+                    // (`const path = require('path')`): when the alias was confirmed
+                    // at pre-scan (used as a recognized `path.*` builtin; the path
+                    // NUL-sentinel is present), bind it to `undefined` and skip the
+                    // ambient-denied `require('path')`. The pure-compute operations
+                    // are recognized at the member call/read sites (lowered to
+                    // `builtin:Path*` hostcalls / string constants). A bare/unused
+                    // `const path = require('path')` is not recorded, so it keeps
+                    // the ambient-authority contract.
                     if let BindingPattern::Identifier(alias) = &d.pattern
                         && ((is_require_fs_module_initializer(init, binding_lookup)
                             && binding_lookup.contains_key(&fs_module_alias_sentinel(alias)))
@@ -2498,7 +2521,9 @@ fn lower_statement_to_ir1_with_flow(
                                 && binding_lookup
                                     .contains_key(&fs_promises_module_alias_sentinel(alias)))
                             || (is_require_http_module_initializer(init, binding_lookup)
-                                && binding_lookup.contains_key(&http_module_alias_sentinel(alias))))
+                                && binding_lookup.contains_key(&http_module_alias_sentinel(alias)))
+                            || (is_require_path_module_initializer(init, binding_lookup)
+                                && binding_lookup.contains_key(&path_module_alias_sentinel(alias))))
                     {
                         ops.push(Ir1Op::LoadLiteral {
                             value: Ir1Literal::Undefined,
@@ -9356,6 +9381,24 @@ fn lower_expression_to_ir1_inner(
                     )?;
                     return Ok(());
                 }
+                // bd-tu0c3: `path.join(...xs)` / `path.resolve(...xs)` spread
+                // forms route through ReflectApply exactly like Math.* so the
+                // variadic path builtins receive unpacked positional args.
+                if let Some(capability) = path_builtin_call_capability(callee, binding_lookup) {
+                    lower_spread_apply_hostcall_to_ir1(
+                        capability,
+                        &[],
+                        arguments,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                    return Ok(());
+                }
                 if let Some(capability) = date_builtin_call_capability(callee, binding_lookup) {
                     lower_spread_apply_hostcall_to_ir1(
                         capability,
@@ -9593,6 +9636,42 @@ fn lower_expression_to_ir1_inner(
                 return Ok(());
             }
             if let Some(capability) = math_builtin_call_capability(callee, binding_lookup) {
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
+            if let Some(capability) = path_builtin_call_capability(callee, binding_lookup) {
+                // bd-tu0c3: pure-compute Node `path` builtins. Recognized member
+                // calls on a confirmed path-module alias (`const path =
+                // require('path')`), on its `.posix`/`.win32` namespaces, or on an
+                // inline `require('path')` receiver lower to `builtin:Path*`
+                // HostCalls, exactly like the static `Math.*` interception above.
+                // The receiver is deliberately NOT lowered — there is no real
+                // path module object (the recognized require declaration is
+                // elided) and recognition is purely syntactic. Arity is validated
+                // at dispatch (Node semantics: variadic join/resolve, optional
+                // basename ext), so all argument counts lower uniformly here.
                 let arg_count = arguments.len();
                 if arg_count > u32::MAX as usize {
                     return Err(LoweringPipelineError::TooManyArguments {
@@ -10713,6 +10792,18 @@ fn lower_expression_to_ir1_inner(
                 ops.push(Ir1Op::HostCall {
                     capability: "builtin:MathPI".to_string(),
                     arg_count: 0,
+                });
+                return Ok(());
+            }
+            // bd-tu0c3: `path.sep` / `path.delimiter` (and the `.posix`/`.win32`
+            // namespace forms) on a confirmed path-module alias are deterministic
+            // platform constants; lower them directly to string literals. The
+            // receiver is deliberately NOT lowered (no real path module object).
+            if let Some(constant) =
+                path_member_constant(object, property, *computed, binding_lookup)
+            {
+                ops.push(Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String(constant.to_string()),
                 });
                 return Ok(());
             }
@@ -12663,6 +12754,455 @@ fn fs_builtin_call_capability(
         "writeFileSync" => Some("fs:write"),
         _ => None,
     }
+}
+
+/// bd-tu0c3: true when `specifier` names the Node path module — `path` or
+/// `node:path`. Shared by the path require-initializer recognizer and the
+/// inline-receiver recognizer so the accepted specifier set stays identical
+/// across both idiomatic shapes.
+fn is_path_module_specifier(specifier: &str) -> bool {
+    specifier == "path" || specifier == "node:path"
+}
+
+/// bd-tu0c3: sentinel key recording that `name` is bound to the `path`/
+/// `node:path` module via `const <name> = require('path')` AND used as a
+/// recognized `path` builtin. Mirror of [`fs_module_alias_sentinel`]: stored in
+/// the lowering `binding_lookup`; the leading NUL cannot occur in a JS
+/// identifier so the sentinel never collides with or shadows a real binding.
+fn path_module_alias_sentinel(name: &str) -> String {
+    format!("\0pathmod\0{name}")
+}
+
+/// bd-tu0c3: true when `expr` is exactly `require('path')` /
+/// `require('node:path')` with an unshadowed `require` — the initializer shape
+/// that aliases the path module in `const path = require('path')`. Mirror of
+/// [`is_require_fs_module_initializer`].
+fn is_require_path_module_initializer(
+    expr: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    let Expression::Call {
+        callee, arguments, ..
+    } = expr
+    else {
+        return false;
+    };
+    if !matches!(callee.as_ref(), Expression::Identifier(name)
+        if name == "require" && !binding_lookup.contains_key(name.as_str()))
+    {
+        return false;
+    }
+    matches!(
+        arguments.as_slice(),
+        [Expression::StringLiteral(spec)] if is_path_module_specifier(spec)
+    )
+}
+
+/// Which Node `path` namespace a recognized receiver selects (bd-tu0c3). The
+/// default `path` object on linux IS the posix implementation, so both the bare
+/// module receiver and `.posix` map to [`PathModuleNamespace::Posix`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PathModuleNamespace {
+    Posix,
+    Win32,
+}
+
+/// bd-tu0c3: capability tag for a recognized `path` method in `namespace`.
+/// Single source of truth shared by the usage-lookahead scan and the call-site
+/// recognizer, so the confirmed-alias gate can never diverge from what the
+/// lowering actually rewrites (an alias is confirmed only by a usage the call
+/// arm will really intercept). The win32 surface is deliberately the small
+/// separator-sensitive subset (join/basename/isAbsolute); everything else on
+/// `path.win32` is unrecognized and falls through fail-closed.
+fn path_method_capability(namespace: PathModuleNamespace, method: &str) -> Option<&'static str> {
+    match namespace {
+        PathModuleNamespace::Posix => match method {
+            "join" => Some("builtin:PathJoin"),
+            "basename" => Some("builtin:PathBasename"),
+            "dirname" => Some("builtin:PathDirname"),
+            "extname" => Some("builtin:PathExtname"),
+            "normalize" => Some("builtin:PathNormalize"),
+            "resolve" => Some("builtin:PathResolve"),
+            "relative" => Some("builtin:PathRelative"),
+            "isAbsolute" => Some("builtin:PathIsAbsolute"),
+            "parse" => Some("builtin:PathParse"),
+            "format" => Some("builtin:PathFormat"),
+            _ => None,
+        },
+        PathModuleNamespace::Win32 => match method {
+            "join" => Some("builtin:PathWin32Join"),
+            "basename" => Some("builtin:PathWin32Basename"),
+            "isAbsolute" => Some("builtin:PathWin32IsAbsolute"),
+            _ => None,
+        },
+    }
+}
+
+/// bd-tu0c3: the constant value of a recognized `path` namespace property read
+/// (`sep` / `delimiter`), per Node.
+fn path_namespace_property_constant(
+    namespace: PathModuleNamespace,
+    property: &str,
+) -> Option<&'static str> {
+    match (namespace, property) {
+        (PathModuleNamespace::Posix, "sep") => Some("/"),
+        (PathModuleNamespace::Posix, "delimiter") => Some(":"),
+        (PathModuleNamespace::Win32, "sep") => Some("\\"),
+        (PathModuleNamespace::Win32, "delimiter") => Some(";"),
+        _ => None,
+    }
+}
+
+/// bd-tu0c3: resolve a member-expression receiver to a path-module namespace,
+/// parameterized over the module-object predicate so the pre-scan (candidate
+/// alias names) and the lowering (recorded sentinels) share one shape:
+///   * `<module>`         -> Posix (linux default `path` IS posix)
+///   * `<module>.posix`   -> Posix
+///   * `<module>.win32`   -> Win32
+fn path_receiver_namespace_with<F: Fn(&Expression) -> bool>(
+    object: &Expression,
+    is_module_object: &F,
+) -> Option<PathModuleNamespace> {
+    if is_module_object(object) {
+        return Some(PathModuleNamespace::Posix);
+    }
+    if let Expression::Member {
+        object: inner,
+        property,
+        computed: false,
+        ..
+    } = object
+        && is_module_object(inner)
+        && let Expression::Identifier(ns) | Expression::StringLiteral(ns) = property.as_ref()
+    {
+        return match ns.as_str() {
+            "posix" => Some(PathModuleNamespace::Posix),
+            "win32" => Some(PathModuleNamespace::Win32),
+            _ => None,
+        };
+    }
+    None
+}
+
+/// bd-tu0c3: true when `expr` IS the path module object at lowering time — a
+/// sentinel-recorded require-binding alias or the inline `require('path')`
+/// call. Mirror of the receiver check in [`fs_builtin_call_capability`].
+fn is_path_module_object(expr: &Expression, binding_lookup: &BTreeMap<String, BindingId>) -> bool {
+    match expr {
+        Expression::Identifier(alias) => {
+            binding_lookup.contains_key(&path_module_alias_sentinel(alias))
+        }
+        Expression::Call {
+            callee, arguments, ..
+        } => {
+            matches!(callee.as_ref(), Expression::Identifier(name)
+                if name == "require" && !binding_lookup.contains_key(name.as_str()))
+                && matches!(
+                    arguments.as_slice(),
+                    [Expression::StringLiteral(spec)] if is_path_module_specifier(spec)
+                )
+        }
+        _ => false,
+    }
+}
+
+/// bd-tu0c3: recognize a `path` builtin member call and return its
+/// `builtin:Path*` capability. Purely syntactic (there is no real path module
+/// heap object): the receiver must be a recognized path-module object or one of
+/// its `.posix`/`.win32` namespaces, and the method must be in the recognized
+/// pure-compute set for that namespace.
+fn path_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee
+    else {
+        return None;
+    };
+    let namespace =
+        path_receiver_namespace_with(object, &|expr| is_path_module_object(expr, binding_lookup))?;
+    let method = match property.as_ref() {
+        Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
+        _ => return None,
+    };
+    path_method_capability(namespace, method)
+}
+
+/// bd-tu0c3: recognize a `path` constant property READ (`path.sep`,
+/// `path.delimiter`, `path.posix.sep`, `path.win32.delimiter`, …) and return
+/// the string constant it lowers to. Accepts the same static/quoted property
+/// shapes as [`math_object_property_name`].
+fn path_member_constant(
+    object: &Expression,
+    property: &Expression,
+    computed: bool,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let namespace =
+        path_receiver_namespace_with(object, &|expr| is_path_module_object(expr, binding_lookup))?;
+    let prop = match (computed, property) {
+        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
+        (true, Expression::StringLiteral(name)) => name.as_str(),
+        _ => return None,
+    };
+    path_namespace_property_constant(namespace, prop)
+}
+
+/// bd-tu0c3: scan-time twin of [`path_builtin_call_capability`]'s receiver
+/// check — during the pre-scan the sentinels are not recorded yet, so the
+/// module-object predicate is membership in the candidate alias-name set.
+fn is_path_alias_method_callee(callee: &Expression, alias_names: &BTreeSet<String>) -> bool {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee
+    else {
+        return false;
+    };
+    let Some(namespace) = path_receiver_namespace_with(
+        object,
+        &|expr| matches!(expr, Expression::Identifier(name) if alias_names.contains(name)),
+    ) else {
+        return false;
+    };
+    matches!(property.as_ref(),
+        Expression::Identifier(m) | Expression::StringLiteral(m)
+            if path_method_capability(namespace, m).is_some())
+}
+
+/// bd-tu0c3: scan-time twin of [`path_member_constant`]: true when `expr` is a
+/// recognized constant property read (`<alias>.sep`, `<alias>.posix.delimiter`,
+/// …) on one of the candidate alias names.
+fn is_path_alias_property_read(expr: &Expression, alias_names: &BTreeSet<String>) -> bool {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = expr
+    else {
+        return false;
+    };
+    let Some(namespace) = path_receiver_namespace_with(
+        object,
+        &|inner| matches!(inner, Expression::Identifier(name) if alias_names.contains(name)),
+    ) else {
+        return false;
+    };
+    matches!(property.as_ref(),
+        Expression::Identifier(p) | Expression::StringLiteral(p)
+            if path_namespace_property_constant(namespace, p).is_some())
+}
+
+/// bd-tu0c3: recursively scan `expr` for a member READ satisfying `is_target` —
+/// the property-read sibling of [`expr_contains_matching_call`], with the same
+/// traversal and the same fail-closed opacity: function/arrow/class bodies and
+/// object literals are NOT entered, so a usage buried inside one is
+/// conservatively not detected (the alias then keeps the ambient-authority
+/// denial — recognition is never widened, only declined).
+fn expr_contains_matching_member<F: Fn(&Expression) -> bool>(
+    expr: &Expression,
+    is_target: &F,
+) -> bool {
+    match expr {
+        Expression::Member {
+            object, property, ..
+        }
+        | Expression::OptionalMember {
+            object, property, ..
+        } => {
+            is_target(expr)
+                || expr_contains_matching_member(object, is_target)
+                || expr_contains_matching_member(property, is_target)
+        }
+        Expression::Call {
+            callee, arguments, ..
+        }
+        | Expression::OptionalCall {
+            callee, arguments, ..
+        } => {
+            expr_contains_matching_member(callee, is_target)
+                || arguments
+                    .iter()
+                    .any(|a| expr_contains_matching_member(a, is_target))
+        }
+        Expression::New { callee, arguments } => {
+            expr_contains_matching_member(callee, is_target)
+                || arguments
+                    .iter()
+                    .any(|a| expr_contains_matching_member(a, is_target))
+        }
+        Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
+            expr_contains_matching_member(left, is_target)
+                || expr_contains_matching_member(right, is_target)
+        }
+        Expression::Unary { argument, .. }
+        | Expression::Await(argument)
+        | Expression::SpreadElement(argument) => expr_contains_matching_member(argument, is_target),
+        Expression::Conditional {
+            test,
+            consequent,
+            alternate,
+        } => {
+            expr_contains_matching_member(test, is_target)
+                || expr_contains_matching_member(consequent, is_target)
+                || expr_contains_matching_member(alternate, is_target)
+        }
+        Expression::Yield {
+            argument: Some(argument),
+            ..
+        } => expr_contains_matching_member(argument, is_target),
+        Expression::ArrayLiteral(elements) => elements
+            .iter()
+            .flatten()
+            .any(|e| expr_contains_matching_member(e, is_target)),
+        Expression::TemplateLiteral { expressions, .. } => expressions
+            .iter()
+            .any(|e| expr_contains_matching_member(e, is_target)),
+        _ => false,
+    }
+}
+
+/// bd-tu0c3: true when `expr` contains a recognized path usage on one of
+/// `alias_names` — either a recognized method CALL (`<alias>.join(...)`) or a
+/// recognized constant property READ (`<alias>.sep`).
+fn expr_contains_path_alias_usage(expr: &Expression, alias_names: &BTreeSet<String>) -> bool {
+    expr_contains_matching_call(expr, &|callee| {
+        is_path_alias_method_callee(callee, alias_names)
+    }) || expr_contains_matching_member(expr, &|member| {
+        is_path_alias_property_read(member, alias_names)
+    })
+}
+
+/// bd-tu0c3: statement-level usage scan for the path alias gate. Unlike the fs
+/// scan (`body_top_level_expr_matches`, expression statements + variable
+/// initializers only), this recurses through CONTROL-FLOW statements (blocks,
+/// if/else, loops, switch, try/catch/finally, return/throw) so idiomatic shapes
+/// like `try { path.join('a', 1) } catch (e) {}` confirm the alias. Function
+/// and class bodies remain opaque — a usage only inside one is conservatively
+/// not detected, preserving the fail-closed ambient-denial default.
+fn path_statement_contains_usage<F: Fn(&Expression) -> bool>(stmt: &Statement, uses: &F) -> bool {
+    match stmt {
+        Statement::Expression(es) => uses(&es.expression),
+        Statement::VariableDeclaration(vd) => vd
+            .declarations
+            .iter()
+            .any(|d| d.initializer.as_ref().is_some_and(uses)),
+        Statement::Block(block) => block
+            .body
+            .iter()
+            .any(|inner| path_statement_contains_usage(inner, uses)),
+        Statement::If(if_stmt) => {
+            uses(&if_stmt.condition)
+                || path_statement_contains_usage(&if_stmt.consequent, uses)
+                || if_stmt
+                    .alternate
+                    .as_deref()
+                    .is_some_and(|alt| path_statement_contains_usage(alt, uses))
+        }
+        Statement::For(for_stmt) => {
+            for_stmt
+                .init
+                .as_deref()
+                .is_some_and(|init| path_statement_contains_usage(init, uses))
+                || for_stmt.condition.as_ref().is_some_and(uses)
+                || for_stmt.update.as_ref().is_some_and(uses)
+                || path_statement_contains_usage(&for_stmt.body, uses)
+        }
+        Statement::ForIn(for_in) => {
+            uses(&for_in.object) || path_statement_contains_usage(&for_in.body, uses)
+        }
+        Statement::ForOf(for_of) => {
+            uses(&for_of.iterable) || path_statement_contains_usage(&for_of.body, uses)
+        }
+        Statement::While(while_stmt) => {
+            uses(&while_stmt.condition) || path_statement_contains_usage(&while_stmt.body, uses)
+        }
+        Statement::DoWhile(do_while) => {
+            uses(&do_while.condition) || path_statement_contains_usage(&do_while.body, uses)
+        }
+        Statement::Return(ret) => ret.argument.as_ref().is_some_and(uses),
+        Statement::Throw(throw_stmt) => uses(&throw_stmt.argument),
+        Statement::TryCatch(try_stmt) => {
+            try_stmt
+                .block
+                .body
+                .iter()
+                .any(|inner| path_statement_contains_usage(inner, uses))
+                || try_stmt.handler.as_ref().is_some_and(|handler| {
+                    handler
+                        .body
+                        .body
+                        .iter()
+                        .any(|inner| path_statement_contains_usage(inner, uses))
+                })
+                || try_stmt.finalizer.as_ref().is_some_and(|finalizer| {
+                    finalizer
+                        .body
+                        .iter()
+                        .any(|inner| path_statement_contains_usage(inner, uses))
+                })
+        }
+        Statement::Switch(switch_stmt) => {
+            uses(&switch_stmt.discriminant)
+                || switch_stmt.cases.iter().any(|case| {
+                    case.test.as_ref().is_some_and(uses)
+                        || case
+                            .consequent
+                            .iter()
+                            .any(|inner| path_statement_contains_usage(inner, uses))
+                })
+        }
+        // Function/class declarations stay opaque (fail-closed); imports,
+        // exports, break and continue carry no scannable expression.
+        _ => false,
+    }
+}
+
+/// bd-tu0c3: compute the set of identifier names that are BOTH bound via
+/// `const/let/var <name> = require('path')` / `require('node:path')` at the
+/// unit root AND used as a recognized `path` builtin (method call or constant
+/// property read) somewhere reachable by the fail-closed statement scan.
+/// Mirror of [`confirmed_fs_module_aliases`]: only such names are aliased, so
+/// a bare/unused `const path = require('path')` deliberately keeps the
+/// existing ambient-authority denial.
+fn confirmed_path_module_aliases(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for stmt in body {
+        if let Statement::VariableDeclaration(vd) = stmt {
+            for d in &vd.declarations {
+                if let (BindingPattern::Identifier(name), Some(init)) = (&d.pattern, &d.initializer)
+                    && is_require_path_module_initializer(init, binding_lookup)
+                {
+                    candidates.insert(name.clone());
+                }
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return candidates;
+    }
+
+    let mut used = BTreeSet::new();
+    for name in &candidates {
+        let single: BTreeSet<String> = std::iter::once(name.clone()).collect();
+        if body.iter().any(|stmt| {
+            path_statement_contains_usage(stmt, &|e| expr_contains_path_alias_usage(e, &single))
+        }) {
+            used.insert(name.clone());
+        }
+    }
+    used
 }
 
 /// bd-656a2 (http leg): true when `specifier` names the Node http/https client

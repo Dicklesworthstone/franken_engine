@@ -374,3 +374,32 @@ fn spread_of_string_produces_code_point_elements() {
         Value::Int(55296)
     );
 }
+
+#[test]
+fn for_of_inside_a_function_body_terminates_and_counts_code_points() {
+    // bd-ddloz: ForOf*/ForIn* ops previously lowered to NOPs inside
+    // function bodies, leaving the loop's jumps intact — the loop never
+    // advanced and spun to instruction-budget exhaustion.
+    assert_eq!(
+        completion(
+            "(function () { var n = 0; for (var c of \"a\u{1F600}b\") { n = n + 1; } return n; })();"
+        ),
+        Value::Int(3)
+    );
+    assert_eq!(
+        completion(
+            "(function () { var out = \"\"; for (var c of \"xyz\") { out = out + c; } return out; })();"
+        ),
+        Value::str("xyz")
+    );
+}
+
+#[test]
+fn for_in_inside_a_function_body_terminates() {
+    assert_eq!(
+        completion(
+            "(function () { var n = 0; var o = {a: 1, b: 2}; for (var k in o) { n = n + 1; } return n; })();"
+        ),
+        Value::Int(2)
+    );
+}

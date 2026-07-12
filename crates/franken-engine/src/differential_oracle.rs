@@ -2431,11 +2431,15 @@ pub fn default_engine_core_corpus() -> Vec<EngineCoreCorpusCase> {
             "string_relational_code_unit_order",
             "String.fromCharCode(55296) < String.fromCharCode(57344);",
         ),
-        // Top-level form: for..of inside a FUNCTION BODY exhausts the
-        // instruction budget in the core lane (bd-ddloz residual).
         (
             "string_for_of_code_point_count",
             "var n = 0; for (var c of \"a\u{1F600}b\") { n = n + 1; } n;",
+        ),
+        // Function-body twin: core's function-body lowering used to drop
+        // iterator ops to nops and spin to budget exhaustion (bd-ddloz).
+        (
+            "string_for_of_in_function_body",
+            "(function () { var n = 0; for (var c of \"a\u{1F600}b\") { n = n + 1; } return n; })();",
         ),
         ("string_unknown_property_undefined", "\"abc\".nope;"),
     ]
@@ -2648,10 +2652,11 @@ mod tests {
                         | "string_to_well_formed_projection"
                         | "string_relational_code_unit_order"
                         | "string_for_of_code_point_count"
+                        | "string_for_of_in_function_body"
                 )
             })
             .collect();
-        assert_eq!(corpus.len(), 15, "all surrogate corpus cases present");
+        assert_eq!(corpus.len(), 16, "all surrogate corpus cases present");
         let report = run_engine_core_differential_oracle(&corpus, 8);
         assert!(
             report.defects.is_empty(),

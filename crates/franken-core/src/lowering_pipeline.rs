@@ -4065,6 +4065,9 @@ pub fn lower_ir2_to_ir3(
         let mut fn_last_popped: Option<Reg> = None;
         let mut fn_label_targets = BTreeMap::<u32, u32>::new();
         let mut fn_pending_jumps = Vec::<PendingJump>::new();
+        // Iterator registers to drop from the value stack when their loop's
+        // done-label lands (bd-ddloz; mirrors the top-level pass).
+        let mut fn_iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
 
         // Allocate parameter registers r0..rN-1.
         for (i, _pname) in param_names.iter().enumerate() {
@@ -4318,6 +4321,16 @@ pub fn lower_ir2_to_ir3(
                 Ir1Op::Label { id } => {
                     let target = ir3.instructions.len() as u32;
                     fn_label_targets.insert(*id, target);
+                    // A for..in/of done-label lands with the iterator
+                    // register still on the value stack; drop it so the
+                    // stack stays balanced (bd-ddloz; mirrors the
+                    // top-level pass).
+                    if fn_iterator_cleanup_labels
+                        .get(id)
+                        .is_some_and(|expected| fn_value_stack.last() == Some(expected))
+                    {
+                        fn_value_stack.pop();
+                    }
                 }
                 Ir1Op::Jump { label_id } => {
                     let idx = ir3.instructions.len();
@@ -4652,6 +4665,91 @@ pub fn lower_ir2_to_ir3(
                         .push(Ir3Instruction::Move { dst, src: current });
                     fn_value_stack.push(dst);
                 }
+                // Iterator-protocol ops (bd-ddloz): mirror the top-level
+                // pass. Previously these fell through to the nop arm below,
+                // so a for..of/for..in inside a function body kept its loop
+                // jumps but lost its iterator init/advance and spun to
+                // instruction-budget exhaustion.
+                Ir1Op::ForInInit => {
+                    let src = fn_value_stack.pop().ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail: "ForInInit requires an iterable register on the value stack",
+                        },
+                    )?;
+                    let dst = alloc_register(&mut fn_reg);
+                    ir3.instructions
+                        .push(Ir3Instruction::ForInInit { src, dst });
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::ForOfInit => {
+                    let src = fn_value_stack.pop().ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail: "ForOfInit requires an iterable register on the value stack",
+                        },
+                    )?;
+                    let dst = alloc_register(&mut fn_reg);
+                    ir3.instructions
+                        .push(Ir3Instruction::ForOfInit { src, dst });
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::ForInNext { done_label } => {
+                    let iterator = fn_value_stack.last().copied().ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail:
+                                "ForInNext requires an active iterator register on the value stack",
+                        },
+                    )?;
+                    let value_dst = alloc_register(&mut fn_reg);
+                    let instruction_index = ir3.instructions.len();
+                    ir3.instructions.push(Ir3Instruction::ForInNext {
+                        iterator,
+                        value_dst,
+                        done_target: 0,
+                    });
+                    fn_pending_jumps.push(PendingJump::IteratorDoneTarget {
+                        instruction_index,
+                        label_id: *done_label,
+                    });
+                    fn_iterator_cleanup_labels
+                        .entry(*done_label)
+                        .or_insert(iterator);
+                    fn_value_stack.push(value_dst);
+                }
+                Ir1Op::ForOfNext { done_label } => {
+                    let iterator = fn_value_stack.last().copied().ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail:
+                                "ForOfNext requires an active iterator register on the value stack",
+                        },
+                    )?;
+                    let value_dst = alloc_register(&mut fn_reg);
+                    let instruction_index = ir3.instructions.len();
+                    ir3.instructions.push(Ir3Instruction::ForOfNext {
+                        iterator,
+                        value_dst,
+                        done_target: 0,
+                    });
+                    fn_pending_jumps.push(PendingJump::IteratorDoneTarget {
+                        instruction_index,
+                        label_id: *done_label,
+                    });
+                    fn_iterator_cleanup_labels
+                        .entry(*done_label)
+                        .or_insert(iterator);
+                    fn_value_stack.push(value_dst);
+                }
+                Ir1Op::IteratorClose { reason } => {
+                    let iterator = fn_value_stack.pop().ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail:
+                                "IteratorClose requires an active iterator register on the value stack",
+                        },
+                    )?;
+                    ir3.instructions.push(Ir3Instruction::IteratorClose {
+                        iterator,
+                        reason: *reason,
+                    });
+                }
                 // Fallthrough: unhandled ops in function bodies become nops.
                 _ => {}
             }
@@ -4724,6 +4822,30 @@ pub fn lower_ir2_to_ir3(
                             ir3.instructions[falsy_jump_index] = Ir3Instruction::Jump {
                                 target: falsy_target,
                             };
+                        }
+                    }
+                }
+                PendingJump::IteratorDoneTarget {
+                    instruction_index,
+                    label_id,
+                } => {
+                    // Fail closed on a missing done-label: a ForIn/ForOfNext
+                    // whose done_target stays 0 would jump into unrelated
+                    // code instead of exiting the loop (bd-ddloz).
+                    let target = *fn_label_targets.get(&label_id).ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail: "iterator lowering references missing label",
+                        },
+                    )?;
+                    match &mut ir3.instructions[instruction_index] {
+                        Ir3Instruction::ForInNext { done_target, .. }
+                        | Ir3Instruction::ForOfNext { done_target, .. } => {
+                            *done_target = target;
+                        }
+                        _ => {
+                            return Err(LoweringPipelineError::InvariantViolation {
+                                detail: "iterator lowering emitted unexpected instruction shape",
+                            });
                         }
                     }
                 }

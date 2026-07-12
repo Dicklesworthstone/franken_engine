@@ -2408,6 +2408,36 @@ pub fn default_engine_core_corpus() -> Vec<EngineCoreCorpusCase> {
             "string_code_point_at_low_unit",
             "\"a\u{1F600}b\".codePointAt(2);",
         ),
+        // bd-7zwar: core string-surface residual upgrades, kept in lockstep
+        // with the engine — String.fromCodePoint, ES2024 well-formedness
+        // probes, code-unit relational order, and code-point-grain for..of.
+        (
+            "string_from_code_point_lone",
+            "String.fromCodePoint(55296);",
+        ),
+        (
+            "string_from_code_point_supplementary",
+            "String.fromCodePoint(128512);",
+        ),
+        (
+            "string_is_well_formed_lone",
+            "String.fromCharCode(55296).isWellFormed();",
+        ),
+        (
+            "string_to_well_formed_projection",
+            "String.fromCharCode(55296).toWellFormed();",
+        ),
+        (
+            "string_relational_code_unit_order",
+            "String.fromCharCode(55296) < String.fromCharCode(57344);",
+        ),
+        // Top-level form: for..of inside a FUNCTION BODY exhausts the
+        // instruction budget in the core lane (bd-ddloz residual).
+        (
+            "string_for_of_code_point_count",
+            "var n = 0; for (var c of \"a\u{1F600}b\") { n = n + 1; } n;",
+        ),
+        ("string_unknown_property_undefined", "\"abc\".nope;"),
     ]
     .into_iter()
     .map(|(case_id, source)| EngineCoreCorpusCase::new(case_id, source))
@@ -2612,10 +2642,16 @@ mod tests {
                         | "string_distinct_lone_surrogates_not_equal"
                         | "string_code_point_at_pair_combines"
                         | "string_code_point_at_low_unit"
+                        | "string_from_code_point_lone"
+                        | "string_from_code_point_supplementary"
+                        | "string_is_well_formed_lone"
+                        | "string_to_well_formed_projection"
+                        | "string_relational_code_unit_order"
+                        | "string_for_of_code_point_count"
                 )
             })
             .collect();
-        assert_eq!(corpus.len(), 9, "all surrogate corpus cases present");
+        assert_eq!(corpus.len(), 15, "all surrogate corpus cases present");
         let report = run_engine_core_differential_oracle(&corpus, 8);
         assert!(
             report.defects.is_empty(),

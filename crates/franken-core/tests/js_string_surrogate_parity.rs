@@ -12,7 +12,7 @@
 
 use frankenengine_core::ast::ParseGoal;
 use frankenengine_core::baseline_interpreter::{
-    ExecutionResult, InterpreterConfig, QuickJsLane, Value,
+    ExecutionResult, InterpreterConfig, InterpreterError, QuickJsLane, Value,
 };
 use frankenengine_core::capability::RuntimeCapability;
 use frankenengine_core::ir_contract::Ir0Module;
@@ -49,6 +49,26 @@ fn run(source: &str) -> ExecutionResult {
 /// Completion value of a script whose final statement is an expression.
 fn completion(source: &str) -> Value {
     run(source).value
+}
+
+/// Execute source that must FAIL at runtime, returning the interpreter error.
+fn completion_err(source: &str) -> InterpreterError {
+    let tree = CanonicalEs2020Parser
+        .parse(source, ParseGoal::Script)
+        .expect("source should parse");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "bd_7zwar");
+    let context = LoweringContext::new("bd-7zwar-trace", "bd-7zwar-decision", "bd-7zwar-policy");
+    let module = lower_ir0_to_ir3(&ir0, &context)
+        .expect("source should lower")
+        .ir3;
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.granted_capabilities = BTreeSet::from([
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+    ]);
+    QuickJsLane::with_config(config)
+        .execute(&module, "bd-7zwar-trace")
+        .expect_err("execution should fail")
 }
 
 fn lone(units: &[u16]) -> Value {
@@ -230,5 +250,127 @@ fn healed_concat_has_supplementary_length_two() {
     assert_eq!(
         completion("String.fromCharCode(55357).length;"),
         Value::Int(1)
+    );
+}
+
+// --- bd-7zwar: core string-surface residual upgrades ---------------------------
+//
+// String.fromCodePoint, ES2024 isWellFormed/toWellFormed, JSON.stringify
+// reachability from source, unknown-property-yields-undefined, code-unit
+// relational order, and code-point-grain for..of / spread — all engine
+// parity with bd-rdnhc.
+
+#[test]
+fn from_code_point_lone_surrogate_and_supplementary() {
+    let result = completion("String.fromCodePoint(55296);");
+    assert_eq!(result, lone(&[0xD800]));
+    assert_eq!(
+        completion("String.fromCodePoint(128512);"),
+        Value::str("\u{1F600}")
+    );
+    assert_eq!(
+        completion("String.fromCodePoint(97, 128512, 98);"),
+        Value::str("a\u{1F600}b")
+    );
+}
+
+#[test]
+fn from_code_point_out_of_range_is_a_range_error() {
+    let err = completion_err("String.fromCodePoint(1114112);"); // 0x110000
+    assert!(
+        matches!(err, InterpreterError::RangeError { .. }),
+        "out-of-range code point must be a RangeError, got {err:?}"
+    );
+    let err = completion_err("String.fromCodePoint(1.5);");
+    assert!(
+        matches!(err, InterpreterError::RangeError { .. }),
+        "non-integral code point must be a RangeError, got {err:?}"
+    );
+}
+
+#[test]
+fn is_well_formed_and_to_well_formed_report_real_surrogate_state() {
+    assert_eq!(
+        completion("\"a\u{1F600}b\".isWellFormed();"),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        completion("String.fromCharCode(55296).isWellFormed();"),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        completion("String.fromCharCode(55296).toWellFormed();"),
+        Value::str("\u{FFFD}")
+    );
+    assert_eq!(completion("\"ok\".toWellFormed();"), Value::str("ok"));
+}
+
+#[test]
+fn json_stringify_is_reachable_from_source_and_escapes_lone_surrogates() {
+    let result = completion("JSON.stringify(String.fromCharCode(55296));");
+    let Value::Str(s) = result else {
+        panic!("JSON.stringify must return a string value");
+    };
+    assert_eq!(s.as_str(), Some("\"\\ud800\""));
+    assert_eq!(completion("JSON.stringify(\"hi\");"), Value::str("\"hi\""));
+}
+
+#[test]
+fn unknown_property_on_string_receiver_yields_undefined() {
+    assert_eq!(completion("\"abc\".nope;"), Value::Undefined);
+    assert_eq!(
+        completion("\"abc\".nope === \"abc\".alsoNope;"),
+        Value::Bool(true)
+    );
+}
+
+#[test]
+fn string_relational_order_uses_utf16_code_units() {
+    // Lone surrogates order by exact unit (0xD800 < 0xE000), not by the
+    // U+FFFD projection (which would sort above U+E000).
+    assert_eq!(
+        completion("String.fromCharCode(55296) < String.fromCharCode(57344);"),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        completion("String.fromCharCode(55296) < String.fromCharCode(55297);"),
+        Value::Bool(true)
+    );
+    // Astral sorts below high-BMP under code-unit order.
+    assert_eq!(
+        completion("\"\u{1F600}\" < \"\u{FF5A}\";"),
+        Value::Bool(true)
+    );
+    // Well-formed BMP ordering is unchanged.
+    assert_eq!(completion("\"a\" < \"b\";"), Value::Bool(true));
+    assert_eq!(completion("\"b\" <= \"a\";"), Value::Bool(false));
+}
+
+#[test]
+fn for_of_iterates_code_points_and_preserves_lone_surrogates() {
+    assert_eq!(
+        completion("var n = 0; for (var c of \"a\u{1F600}b\") { n = n + 1; } n;"),
+        Value::Int(3)
+    );
+    assert_eq!(
+        completion(
+            "var s = \"a\" + String.fromCharCode(55357) + \"b\"; \
+             var codes = \"\"; \
+             for (var c of s) { codes = codes + c.charCodeAt(0) + \",\"; } \
+             codes;"
+        ),
+        Value::str("97,55357,98,")
+    );
+}
+
+#[test]
+fn spread_of_string_produces_code_point_elements() {
+    assert_eq!(
+        completion("var a = [...\"a\u{1F600}b\"]; a.length;"),
+        Value::Int(3)
+    );
+    assert_eq!(
+        completion("var a = [...String.fromCharCode(55296)]; a[0].charCodeAt(0);"),
+        Value::Int(55296)
     );
 }

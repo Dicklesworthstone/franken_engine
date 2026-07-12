@@ -297,6 +297,8 @@ pub enum BuiltinFunctionKind {
     StringPrototypeCharCodeAt,
     StringPrototypeCodePointAt,
     StringPrototypeAt,
+    StringPrototypeIsWellFormed,
+    StringPrototypeToWellFormed,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -332,6 +334,8 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StringPrototypeCharCodeAt => "charCodeAt",
             BuiltinFunctionKind::StringPrototypeCodePointAt => "codePointAt",
             BuiltinFunctionKind::StringPrototypeAt => "at",
+            BuiltinFunctionKind::StringPrototypeIsWellFormed => "isWellFormed",
+            BuiltinFunctionKind::StringPrototypeToWellFormed => "toWellFormed",
         }
     }
 }
@@ -1321,6 +1325,9 @@ pub enum InterpreterError {
     Terminated { reason: String },
     /// Execution cancelled by CheckpointGuard.
     Cancelled,
+    /// Range error (e.g. an out-of-range code point argument). Mirrors the
+    /// engine's variant and Display wording for oracle parity (bd-7zwar).
+    RangeError { message: String },
 }
 
 impl fmt::Display for InterpreterError {
@@ -1441,6 +1448,7 @@ impl fmt::Display for InterpreterError {
             Self::Terminated { reason } => {
                 write!(f, "execution terminated by containment action: {reason}")
             }
+            Self::RangeError { message } => write!(f, "range error: {message}"),
         }
     }
 }
@@ -2682,7 +2690,9 @@ impl InterpreterCore {
             BuiltinFunctionKind::StringPrototypeCharAt
             | BuiltinFunctionKind::StringPrototypeCharCodeAt
             | BuiltinFunctionKind::StringPrototypeCodePointAt
-            | BuiltinFunctionKind::StringPrototypeAt => {
+            | BuiltinFunctionKind::StringPrototypeAt
+            | BuiltinFunctionKind::StringPrototypeIsWellFormed
+            | BuiltinFunctionKind::StringPrototypeToWellFormed => {
                 let receiver = receiver.ok_or_else(|| InterpreterError::TypeError {
                     expected: "string receiver".to_string(),
                     got: format!("detached String.prototype.{}", builtin.display_name()),
@@ -2705,6 +2715,12 @@ impl InterpreterCore {
                     }
                     BuiltinFunctionKind::StringPrototypeAt => {
                         Self::string_at_value(&text, index.as_ref())
+                    }
+                    BuiltinFunctionKind::StringPrototypeIsWellFormed => {
+                        Self::string_is_well_formed_value(&text)
+                    }
+                    BuiltinFunctionKind::StringPrototypeToWellFormed => {
+                        Self::string_to_well_formed_value(&text)
                     }
                     BuiltinFunctionKind::Require => unreachable!("handled above"),
                 })
@@ -2818,12 +2834,24 @@ impl InterpreterCore {
         Value::Str(JsString::from_code_units(&[units[idx as usize]]))
     }
 
+    /// `String.prototype.isWellFormed` (ES2024): `true` iff the string
+    /// contains no unpaired surrogate (engine parity; bd-7zwar).
+    fn string_is_well_formed_value(text: &JsString) -> Value {
+        Value::Bool(text.is_well_formed())
+    }
+
+    /// `String.prototype.toWellFormed` (ES2024): the U+FFFD projection —
+    /// exact content when already well-formed (engine parity; bd-7zwar).
+    fn string_to_well_formed_value(text: &JsString) -> Value {
+        Value::str(text.as_utf8_projection())
+    }
+
     /// Property access on a string receiver (`GetProperty` with a
     /// `Value::Str` object): `length` is the ES UTF-16 code-unit count and
     /// the known String.prototype methods surface as first-class
     /// [`BuiltinFunction`] values the `CallMethod` seam dispatches with the
-    /// receiver. Unknown keys return `None` (caller keeps its pre-existing
-    /// fail-closed behaviour).
+    /// receiver. Unknown keys return `None` (the `GetProperty` caller yields
+    /// `undefined` per ES GetV semantics — bd-7zwar).
     fn string_property_value(text: &JsString, key: &str) -> Option<Value> {
         match key {
             "length" => Some(Value::Int(text.utf16_len() as i64)),
@@ -2838,6 +2866,12 @@ impl InterpreterCore {
             ))),
             "at" => Some(Value::BuiltinFunction(BuiltinFunction::string_method(
                 BuiltinFunctionKind::StringPrototypeAt,
+            ))),
+            "isWellFormed" => Some(Value::BuiltinFunction(BuiltinFunction::string_method(
+                BuiltinFunctionKind::StringPrototypeIsWellFormed,
+            ))),
+            "toWellFormed" => Some(Value::BuiltinFunction(BuiltinFunction::string_method(
+                BuiltinFunctionKind::StringPrototypeToWellFormed,
             ))),
             _ => None,
         }
@@ -4750,18 +4784,17 @@ impl InterpreterCore {
                         )?,
                         // String receivers expose `length` (UTF-16 code-unit
                         // count) and the String.prototype methods wired for
-                        // bd-2vzgi; unknown keys keep the pre-existing
-                        // fail-closed TypeError below.
+                        // bd-2vzgi; unknown keys yield `undefined` per ES
+                        // GetV semantics, matching the engine (bd-7zwar —
+                        // previously a fail-closed TypeError).
                         Value::Str(text) => match Self::string_property_value(text, &key_str) {
                             Some(value) => {
                                 self.write_reg(dst, value)?;
                                 false
                             }
                             None => {
-                                return Err(InterpreterError::TypeError {
-                                    expected: "object".to_string(),
-                                    got: obj_val.type_name().to_string(),
-                                });
+                                self.write_reg(dst, Value::Undefined)?;
+                                false
                             }
                         },
                         _ if Self::function_object_key(&obj_val).is_some() => self
@@ -4950,20 +4983,32 @@ impl InterpreterCore {
                     // Spread iterable elements into an array
                     let arr_val = self.read_reg(array)?;
                     let iter_val = self.read_reg(iterable)?;
-                    if let (Value::Object(arr_id), Value::Object(iter_id)) = (arr_val, iter_val) {
-                        // Get elements from iterable (assume it's array-like)
-                        let elements: Vec<Value> = {
-                            if let Some(obj) = self.heap.get(iter_id.0 as usize) {
-                                let mut elems = Vec::new();
-                                let mut idx = 0u32;
-                                while let Some(val) = obj.properties.get(&idx.to_string()) {
-                                    elems.push(val.clone());
-                                    idx += 1;
+                    if let Value::Object(arr_id) = arr_val {
+                        // Get elements from the iterable: an array-like
+                        // object, or a string spread per code point with
+                        // lone surrogates preserved exactly (ES string
+                        // iteration; bd-7zwar, engine parity with bd-rdnhc —
+                        // previously a string iterable was silently skipped).
+                        let elements: Vec<Value> = match &iter_val {
+                            Value::Object(iter_id) => {
+                                if let Some(obj) = self.heap.get(iter_id.0 as usize) {
+                                    let mut elems = Vec::new();
+                                    let mut idx = 0u32;
+                                    while let Some(val) = obj.properties.get(&idx.to_string()) {
+                                        elems.push(val.clone());
+                                        idx += 1;
+                                    }
+                                    elems
+                                } else {
+                                    Vec::new()
                                 }
-                                elems
-                            } else {
-                                Vec::new()
                             }
+                            Value::Str(text) => text
+                                .code_point_elements()
+                                .into_iter()
+                                .map(Value::Str)
+                                .collect(),
+                            _ => Vec::new(),
                         };
                         // Push elements to target array
                         if self.heap.get(arr_id.0 as usize).is_some() {
@@ -4981,6 +5026,7 @@ impl InterpreterCore {
                                     })
                                 })
                                 .unwrap_or(0);
+                            let mut end_idx = next_idx;
                             for (offset, elem) in elements.into_iter().enumerate() {
                                 let offset = u32::try_from(offset).map_err(|_| {
                                     InterpreterError::TypeError {
@@ -4995,7 +5041,16 @@ impl InterpreterCore {
                                     }
                                 })?;
                                 self.set_object_property(arr_id, idx.to_string(), elem)?;
+                                end_idx = idx.saturating_add(1);
                             }
+                            // Maintain `length` like ArrayPush does (engine
+                            // parity; bd-7zwar — spread results previously
+                            // had no length property in this lane).
+                            self.set_object_property(
+                                arr_id,
+                                "length".to_string(),
+                                Value::Int(i64::from(end_idx)),
+                            )?;
                         }
                     }
                     self.ip += 1;
@@ -6323,9 +6378,12 @@ impl InterpreterCore {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
 
-        // String comparison
+        // String comparison: lexicographic over exact UTF-16 code units per
+        // ES2020 7.2.13 IsLessThan, matching the engine seam upgraded by
+        // bd-rdnhc (bd-7zwar; previously the derived code-point/byte order,
+        // which disagrees for astral content and projects lone surrogates).
         if let (Value::Str(x), Value::Str(y)) = (&a, &b) {
-            let ordering = x.cmp(y);
+            let ordering = x.utf16_cmp(y);
             let result = match op {
                 "<" => ordering == Ordering::Less,
                 "<=" => matches!(ordering, Ordering::Less | Ordering::Equal),
@@ -8355,6 +8413,22 @@ impl InterpreterCore {
                 let index = self.optional_arg(args, 1)?;
                 Ok(Self::string_at_value(&text, index.as_ref()))
             }
+            "builtin:StringPrototypeIsWellFormed" => {
+                let receiver = self.required_arg(args, 0, "string")?;
+                let text = match &receiver {
+                    Value::Str(text) => text.clone(),
+                    other => JsString::from(self.value_to_string(other)),
+                };
+                Ok(Self::string_is_well_formed_value(&text))
+            }
+            "builtin:StringPrototypeToWellFormed" => {
+                let receiver = self.required_arg(args, 0, "string")?;
+                let text = match &receiver {
+                    Value::Str(text) => text.clone(),
+                    other => JsString::from(self.value_to_string(other)),
+                };
+                Ok(Self::string_to_well_formed_value(&text))
+            }
             "builtin:StringFromCharCode" => {
                 // String.fromCharCode(...codeUnits): ToUint16 per argument;
                 // a surrogate unit stays a real lone surrogate, and adjacent
@@ -8382,6 +8456,58 @@ impl InterpreterCore {
                         _ => 0,
                     };
                     units.push((unit & 0xFFFF) as u16);
+                }
+                Ok(Value::Str(JsString::from_code_units(&units)))
+            }
+            "builtin:StringFromCodePoint" => {
+                // String.fromCodePoint(...codePoints): each argument must be
+                // an integral code point in 0..=0x10FFFF (RangeError
+                // otherwise); surrogate code points are accepted and yield a
+                // real lone-surrogate unit, supplementary code points encode
+                // as their UTF-16 pair. Mirrors the engine arm exactly for
+                // oracle parity (bd-7zwar).
+                let mut units: Vec<u16> = Vec::with_capacity(args.count as usize);
+                for i in 0..args.count {
+                    let reg =
+                        args.start
+                            .checked_add(i)
+                            .ok_or(InterpreterError::RegisterOutOfBounds {
+                                register: args.start,
+                                max: self.config.max_registers,
+                            })?;
+                    let code_point_number = match self.read_reg(reg)? {
+                        Value::Int(n) => n as f64,
+                        Value::Float(f) => f.inner(),
+                        Value::Bool(true) => 1.0,
+                        Value::Bool(false) | Value::Null => 0.0,
+                        Value::Str(s) => {
+                            let trimmed = s.trim();
+                            if trimmed.is_empty() {
+                                0.0
+                            } else {
+                                trimmed.parse::<f64>().unwrap_or(f64::NAN)
+                            }
+                        }
+                        _ => f64::NAN,
+                    };
+                    if !code_point_number.is_finite()
+                        || code_point_number.fract() != 0.0
+                        || !(0.0..=0x10FFFF as f64).contains(&code_point_number)
+                    {
+                        return Err(InterpreterError::RangeError {
+                            message: format!(
+                                "String.fromCodePoint invalid code point: {code_point_number}"
+                            ),
+                        });
+                    }
+                    let code_point = code_point_number as u32;
+                    if code_point < 0x10000 {
+                        units.push(code_point as u16);
+                    } else {
+                        let offset = code_point - 0x10000;
+                        units.push(0xD800 + (offset >> 10) as u16);
+                        units.push(0xDC00 + (offset & 0x3FF) as u16);
+                    }
                 }
                 Ok(Value::Str(JsString::from_code_units(&units)))
             }
@@ -9140,7 +9266,15 @@ impl InterpreterCore {
 
     fn collect_for_of_values(&self, iterable: &Value) -> Result<Vec<Value>, InterpreterError> {
         match iterable {
-            Value::Str(text) => Ok(text.chars().map(Value::str).collect()),
+            // ES string iteration yields one element per code point, with an
+            // unpaired surrogate preserved as its own single-unit element
+            // (bd-7zwar, engine parity with bd-rdnhc; previously iterated the
+            // U+FFFD projection).
+            Value::Str(text) => Ok(text
+                .code_point_elements()
+                .into_iter()
+                .map(Value::Str)
+                .collect()),
             Value::Object(object_id) => {
                 let object = self
                     .heap

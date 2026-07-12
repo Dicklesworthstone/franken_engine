@@ -14006,6 +14006,7 @@ fn object_json_builtin_call_capability(
         ("Array", "from") => Some("builtin:ArrayFrom"),
         ("Array", "of") => Some("builtin:ArrayOf"),
         ("String", "fromCharCode") => Some("builtin:StringFromCharCode"),
+        ("String", "fromCodePoint") => Some("builtin:StringFromCodePoint"),
         // `String.raw` (bd-bl591): used almost exclusively as a template tag
         // (`String.raw`x${y}z``). The tagged-template desugar (parser.rs) rewrites
         // that into `String.raw(<strings-with-.raw>, ...substitutions)`, a normal

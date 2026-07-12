@@ -6479,10 +6479,11 @@ fn lower_expression_to_ir1(
                 });
                 return Ok(());
             }
-            // `String.fromCharCode(...)` on the unbound `String` global
-            // lowers to a builtin hostcall (bd-2vzgi), following the
+            // Static methods on unbound globals (`String.fromCharCode`,
+            // `String.fromCodePoint`, `JSON.stringify`) lower to builtin
+            // hostcalls (bd-2vzgi, extended by bd-7zwar), following the
             // `require` precedent above: core has no global-object registry,
-            // so the static String method resolves at lowering time when the
+            // so the static method resolves at lowering time when the global
             // identifier is not shadowed by a user binding.
             if let Expression::Member {
                 object,
@@ -6490,10 +6491,14 @@ fn lower_expression_to_ir1(
                 computed: false,
             } = callee.as_ref()
                 && let Expression::Identifier(obj_name) = object.as_ref()
-                && obj_name == "String"
                 && !binding_lookup.contains_key(obj_name.as_str())
                 && let Expression::Identifier(method_name) = property.as_ref()
-                && method_name == "fromCharCode"
+                && let Some(capability) = match (obj_name.as_str(), method_name.as_str()) {
+                    ("String", "fromCharCode") => Some("builtin:StringFromCharCode"),
+                    ("String", "fromCodePoint") => Some("builtin:StringFromCodePoint"),
+                    ("JSON", "stringify") => Some("builtin:JsonStringify"),
+                    _ => None,
+                }
             {
                 for arg in arguments {
                     lower_expression_to_ir1(
@@ -6507,7 +6512,7 @@ fn lower_expression_to_ir1(
                     )?;
                 }
                 ops.push(Ir1Op::HostCall {
-                    capability: "builtin:StringFromCharCode".to_string(),
+                    capability: capability.to_string(),
                     arg_count: arguments.len() as u32,
                 });
                 return Ok(());

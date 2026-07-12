@@ -5,8 +5,9 @@
 //! Bead: bd-9hw6q (found via JadeOx eval-probe sweep). FIX: add each via the
 //! 5-part string seam (enum variant + ctor + name + execution arm +
 //! string_property_value dispatch). replaceAll handles string search values
-//! (the common case); codePointAt uses Unicode scalar offsets, consistent with
-//! this engine's other string methods.
+//! (the common case); codePointAt is UTF-16 code-unit indexed per ES2015
+//! (bd-rdnhc upgraded it from Unicode scalar offsets), consistent with the
+//! code-unit-indexed charAt/charCodeAt/at.
 
 use frankenengine_engine::HybridRouter;
 

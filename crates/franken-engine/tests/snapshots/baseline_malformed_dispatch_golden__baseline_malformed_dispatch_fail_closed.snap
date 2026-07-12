@@ -9,10 +9,9 @@ expression: actual
     "expected": "binding kind 0..=4",
     "got": "kind 99"
   },
-  "invalid_utf16_index_of": {
-    "kind": "type_error",
-    "expected": "valid UTF-16 boundary for indexOf",
-    "got": "invalid UTF-16 unit slice at position 1"
+  "split_pair_index_of": {
+    "kind": "int",
+    "value": 2
   },
   "valid_utf16_includes": {
     "kind": "bool",

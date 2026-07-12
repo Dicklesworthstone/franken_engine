@@ -795,7 +795,8 @@ pub enum BuiltinFunctionKind {
     /// of a string search value (ES2021) (bd-9hw6q).
     StringReplaceAll,
     /// `String.prototype.codePointAt` — receiver-aware; the Unicode code point at
-    /// a (scalar) index, else `undefined` (ES2015) (bd-9hw6q).
+    /// a UTF-16 code-unit index (pairs combine, unpaired surrogates yield their
+    /// own unit value), else `undefined` (ES2015) (bd-9hw6q, bd-rdnhc).
     StringCodePointAt,
     /// `String.prototype.localeCompare` — receiver-aware lexicographic compare
     /// using the existing simplified localeCompare builtin (bd-n9oxa).
@@ -12361,20 +12362,32 @@ impl InterpreterCore {
                     // Spread iterable elements into an array
                     let arr_val = self.read_reg(array)?;
                     let iter_val = self.read_reg(iterable)?;
-                    if let (Value::Object(arr_id), Value::Object(iter_id)) = (arr_val, iter_val) {
-                        // Get elements from iterable (assume it's array-like)
-                        let elements: Vec<Value> = {
-                            if let Some(obj) = self.heap.get(iter_id.0 as usize) {
-                                let mut elems = Vec::new();
-                                let mut idx = 0u32;
-                                while let Some(val) = obj.properties.get(&idx.to_string()) {
-                                    elems.push(val.clone());
-                                    idx += 1;
+                    if let Value::Object(arr_id) = arr_val {
+                        // Get elements from the iterable: an array-like
+                        // object, or a string spread per code point with
+                        // lone surrogates preserved exactly (ES string
+                        // iteration; bd-rdnhc — previously a string iterable
+                        // was silently skipped and spread as no elements).
+                        let elements: Vec<Value> = match &iter_val {
+                            Value::Object(iter_id) => {
+                                if let Some(obj) = self.heap.get(iter_id.0 as usize) {
+                                    let mut elems = Vec::new();
+                                    let mut idx = 0u32;
+                                    while let Some(val) = obj.properties.get(&idx.to_string()) {
+                                        elems.push(val.clone());
+                                        idx += 1;
+                                    }
+                                    elems
+                                } else {
+                                    Vec::new()
                                 }
-                                elems
-                            } else {
-                                Vec::new()
                             }
+                            Value::Str(text) => text
+                                .code_point_elements()
+                                .into_iter()
+                                .map(Value::Str)
+                                .collect(),
+                            _ => Vec::new(),
                         };
                         // Push elements to target array
                         if self.heap.get(arr_id.0 as usize).is_some() {
@@ -13787,9 +13800,12 @@ impl InterpreterCore {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
 
-        // String comparison
+        // String comparison: lexicographic over exact UTF-16 code units per
+        // ES2020 7.2.13 IsLessThan (bd-rdnhc; previously the derived
+        // code-point/byte order, which disagrees for astral content and
+        // projects lone surrogates to U+FFFD).
         if let (Value::Str(x), Value::Str(y)) = (&a, &b) {
-            let ordering = x.cmp(y);
+            let ordering = x.utf16_cmp(y);
             let result = match op {
                 "<" => ordering == Ordering::Less,
                 "<=" => matches!(ordering, Ordering::Less | Ordering::Equal),
@@ -14841,10 +14857,11 @@ impl InterpreterCore {
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        // ES2015 21.1.3.3: the Unicode code point at a (scalar) index;
-        // out-of-range / negative => `undefined`. Indices are Unicode
-        // scalar offsets, consistent with this engine's other string
-        // methods (charCodeAt/at/includes).
+        // ES2015 21.1.3.3 CodePointAt: UTF-16 code-unit indexed, consistent
+        // with charAt/charCodeAt/at. A valid high+low pair combines into its
+        // supplementary code point, an unpaired surrogate yields its own
+        // unit value, and out-of-range / negative => `undefined`.
+        // (bd-rdnhc; previously Unicode-scalar indexed.)
         let index = match self.builtin_arg(args, 0)? {
             Some(arg) => Self::value_as_integer(&arg),
             None => 0,
@@ -14852,8 +14869,8 @@ impl InterpreterCore {
         if index < 0 {
             return Ok(Value::Undefined);
         }
-        Ok(match this_str.chars().nth(index as usize) {
-            Some(ch) => Value::Int(ch as i64),
+        Ok(match this_str.code_point_at(index as usize) {
+            Some(code_point) => Value::Int(i64::from(code_point)),
             None => Value::Undefined,
         })
     }
@@ -14930,19 +14947,19 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2020 21.1.3.7: substring containment from an optional start
-        // position (bd-9a8cz.1). Positions are Unicode scalar offsets,
-        // consistent with the slice/substring impls below.
-        let search = match self.builtin_arg(args, 0)? {
-            Some(arg) => self.value_to_string(&arg),
-            None => "undefined".to_string(),
-        };
-        let char_len = this_str.chars().count();
+        // position (bd-9a8cz.1). Positions are UTF-16 code-unit offsets and
+        // the search runs over exact code units, so lone surrogates match
+        // exactly and a position inside a surrogate pair is a legal offset
+        // (bd-rdnhc; previously scalar-indexed over the projection).
+        let search = self.builtin_search_js_string(args, 0)?;
+        let unit_len = this_str.utf16_len();
         let from = match self.builtin_arg(args, 1)? {
-            Some(arg) => Self::value_as_integer(&arg).clamp(0, char_len as i64) as usize,
+            Some(arg) => Self::value_as_integer(&arg).clamp(0, unit_len as i64) as usize,
             None => 0,
         };
-        let haystack: String = this_str.chars().skip(from).collect();
-        Ok(Value::Bool(haystack.contains(&search)))
+        Ok(Value::Bool(
+            this_str.utf16_index_of(&search, from).is_some(),
+        ))
     }
 
     fn string_starts_with_impl(
@@ -14950,18 +14967,16 @@ impl InterpreterCore {
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        // ES2020 21.1.3.20: prefix test at an optional position (bd-9a8cz.1).
-        let search = match self.builtin_arg(args, 0)? {
-            Some(arg) => self.value_to_string(&arg),
-            None => "undefined".to_string(),
-        };
-        let char_len = this_str.chars().count();
+        // ES2020 21.1.3.20: prefix test at an optional position, over exact
+        // UTF-16 code units (bd-9a8cz.1, bd-rdnhc).
+        let search = self.builtin_search_js_string(args, 0)?;
+        let units = this_str.code_units_vec();
+        let needle = search.code_units_vec();
         let from = match self.builtin_arg(args, 1)? {
-            Some(arg) => Self::value_as_integer(&arg).clamp(0, char_len as i64) as usize,
+            Some(arg) => Self::value_as_integer(&arg).clamp(0, units.len() as i64) as usize,
             None => 0,
         };
-        let tail: String = this_str.chars().skip(from).collect();
-        Ok(Value::Bool(tail.starts_with(&search)))
+        Ok(Value::Bool(units[from..].starts_with(&needle)))
     }
 
     fn string_ends_with_impl(
@@ -14969,19 +14984,17 @@ impl InterpreterCore {
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        // ES2020 21.1.3.6: suffix test against the prefix of length
-        // `endPosition` (default = full length) (bd-9a8cz.1).
-        let search = match self.builtin_arg(args, 0)? {
-            Some(arg) => self.value_to_string(&arg),
-            None => "undefined".to_string(),
-        };
-        let char_len = this_str.chars().count();
+        // ES2020 21.1.3.6: suffix test against the prefix of code-unit
+        // length `endPosition` (default = full length) (bd-9a8cz.1,
+        // bd-rdnhc).
+        let search = self.builtin_search_js_string(args, 0)?;
+        let units = this_str.code_units_vec();
+        let needle = search.code_units_vec();
         let end = match self.builtin_arg(args, 1)? {
-            Some(Value::Undefined) | None => char_len,
-            Some(arg) => Self::value_as_integer(&arg).clamp(0, char_len as i64) as usize,
+            Some(Value::Undefined) | None => units.len(),
+            Some(arg) => Self::value_as_integer(&arg).clamp(0, units.len() as i64) as usize,
         };
-        let head: String = this_str.chars().take(end).collect();
-        Ok(Value::Bool(head.ends_with(&search)))
+        Ok(Value::Bool(units[..end].ends_with(&needle)))
     }
 
     fn string_index_of_impl(
@@ -14989,37 +15002,21 @@ impl InterpreterCore {
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        // ES2020 21.1.3.8: first index of `search` at/after an optional
-        // start position, else -1. Indices are Unicode scalar offsets
-        // (consistent with the slice/substring impls here). (bd-9a8cz.1)
-        let search = match self.builtin_arg(args, 0)? {
-            Some(arg) => self.value_to_string(&arg),
-            None => "undefined".to_string(),
-        };
-        let chars: Vec<char> = this_str.chars().collect();
-        let needle: Vec<char> = search.chars().collect();
+        // ES2020 21.1.3.8: first UTF-16 code-unit index of `search` at/after
+        // an optional start position, else -1 (bd-9a8cz.1, bd-rdnhc; the
+        // returned index now composes with the code-unit-indexed
+        // charAt/charCodeAt/at rather than scalar offsets).
+        let search = self.builtin_search_js_string(args, 0)?;
+        let unit_len = this_str.utf16_len();
         let from = match self.builtin_arg(args, 1)? {
-            Some(arg) => Self::value_as_integer(&arg).clamp(0, chars.len() as i64) as usize,
+            Some(arg) => Self::value_as_integer(&arg).clamp(0, unit_len as i64) as usize,
             None => 0,
         };
-        let result = if needle.is_empty() {
-            from.min(chars.len()) as i64
-        } else if needle.len() > chars.len() {
-            -1
-        } else {
-            let last = chars.len() - needle.len();
-            let mut found = -1i64;
-            let mut i = from;
-            while i <= last {
-                if chars[i..i + needle.len()] == needle[..] {
-                    found = i as i64;
-                    break;
-                }
-                i += 1;
-            }
-            found
-        };
-        Ok(Value::Int(result))
+        Ok(Value::Int(
+            this_str
+                .utf16_index_of(&search, from)
+                .map_or(-1, |index| index as i64),
+        ))
     }
 
     fn string_last_index_of_impl(
@@ -15027,38 +15024,20 @@ impl InterpreterCore {
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        // ES2020 21.1.3.9: highest start index of `search` at/before an
-        // optional position (default = end of string), else -1. (bd-9a8cz.1)
-        let search = match self.builtin_arg(args, 0)? {
-            Some(arg) => self.value_to_string(&arg),
-            None => "undefined".to_string(),
-        };
-        let chars: Vec<char> = this_str.chars().collect();
-        let needle: Vec<char> = search.chars().collect();
+        // ES2020 21.1.3.9: highest UTF-16 code-unit start index of `search`
+        // at/before an optional position (default = end of string), else -1
+        // (bd-9a8cz.1, bd-rdnhc).
+        let search = self.builtin_search_js_string(args, 0)?;
+        let unit_len = this_str.utf16_len();
         let from = match self.builtin_arg(args, 1)? {
-            Some(Value::Undefined) | None => chars.len(),
-            Some(arg) => Self::value_as_integer(&arg).clamp(0, chars.len() as i64) as usize,
+            Some(Value::Undefined) | None => unit_len,
+            Some(arg) => Self::value_as_integer(&arg).clamp(0, unit_len as i64) as usize,
         };
-        let result = if needle.is_empty() {
-            from.min(chars.len()) as i64
-        } else if needle.len() > chars.len() {
-            -1
-        } else {
-            let last = chars.len() - needle.len();
-            let start = from.min(last);
-            let mut found = -1i64;
-            let mut i = start as i64;
-            while i >= 0 {
-                let idx = i as usize;
-                if chars[idx..idx + needle.len()] == needle[..] {
-                    found = i;
-                    break;
-                }
-                i -= 1;
-            }
-            found
-        };
-        Ok(Value::Int(result))
+        Ok(Value::Int(
+            this_str
+                .utf16_last_index_of(&search, from)
+                .map_or(-1, |index| index as i64),
+        ))
     }
 
     fn string_slice_impl(
@@ -21874,8 +21853,12 @@ impl InterpreterCore {
                 let mut elements = match first_arg {
                     Value::Object(obj_id) => self.array_like_values(obj_id)?,
                     Value::Str(s) => {
-                        // Convert string to array of characters
-                        s.chars().map(|ch| Value::str(ch.to_string())).collect()
+                        // One element per code point, lone surrogates
+                        // preserved exactly (ES string iteration; bd-rdnhc).
+                        s.code_point_elements()
+                            .into_iter()
+                            .map(Value::Str)
+                            .collect()
                     }
                     _ => {
                         // Non-iterable value, create empty array
@@ -22527,21 +22510,15 @@ impl InterpreterCore {
                             0
                         };
 
-                        // Find the substring starting from the specified UTF-16 position.
-                        let max_utf16_len = haystack.encode_utf16().count();
-                        if start_pos >= max_utf16_len {
-                            Ok(Value::Int(-1))
-                        } else {
-                            let search_slice =
-                                Self::utf16_suffix_from(&haystack, start_pos, "indexOf")?;
-                            match search_slice.find(needle.as_ref()) {
-                                Some(pos) => {
-                                    let matched_units = search_slice[..pos].encode_utf16().count();
-                                    Ok(Value::Int((start_pos + matched_units) as i64))
-                                }
-                                None => Ok(Value::Int(-1)),
-                            }
-                        }
+                        // Exact code-unit search from the UTF-16 position; a
+                        // position inside a surrogate pair is a legal offset
+                        // (bd-rdnhc; previously failed closed with a
+                        // TypeError on split-pair boundaries).
+                        Ok(Value::Int(
+                            haystack
+                                .utf16_index_of(&needle, start_pos)
+                                .map_or(-1, |index| index as i64),
+                        ))
                     }
                     _ => {
                         // Non-string arguments - return -1 per JavaScript behavior
@@ -23199,26 +23176,14 @@ impl InterpreterCore {
 
                 // Get the this value (should be a string)
                 let this_val = self.read_reg(args.start)?;
-                let this_str = match this_val {
-                    Value::Str(s) => s.to_string(),
-                    Value::Int(i) => i.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => return Ok(Value::Bool(false)),
+                let Some(this_str) = Self::legacy_string_arm_operand(&this_val) else {
+                    return Ok(Value::Bool(false));
                 };
 
                 // Get search string
                 let search_val = self.read_reg(args.start + 1)?;
-                let search_str = match search_val {
-                    Value::Str(s) => s.to_string(),
-                    Value::Int(i) => i.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => return Ok(Value::Bool(false)),
+                let Some(search_str) = Self::legacy_string_arm_operand(&search_val) else {
+                    return Ok(Value::Bool(false));
                 };
 
                 // Get optional position parameter
@@ -23233,15 +23198,12 @@ impl InterpreterCore {
                     0
                 };
 
-                // Check if search string exists starting from the UTF-16 position.
-                let max_utf16_len = this_str.encode_utf16().count();
-                let result = if position >= max_utf16_len {
-                    false
-                } else {
-                    Self::utf16_suffix_from(&this_str, position, "includes")?.contains(&search_str)
-                };
-
-                Ok(Value::Bool(result))
+                // Exact code-unit containment from the UTF-16 position; a
+                // position inside a surrogate pair is a legal offset
+                // (bd-rdnhc; previously failed closed with a TypeError).
+                Ok(Value::Bool(
+                    this_str.utf16_index_of(&search_str, position).is_some(),
+                ))
             }
             "builtin:ArrayPrototypeReverse" => {
                 // Array.prototype.reverse() implementation - reverses array in place
@@ -23361,26 +23323,14 @@ impl InterpreterCore {
 
                 // Get the this value (should be a string)
                 let this_val = self.read_reg(args.start)?;
-                let this_str = match this_val {
-                    Value::Str(s) => s.to_string(),
-                    Value::Int(i) => i.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => return Ok(Value::Bool(false)),
+                let Some(this_str) = Self::legacy_string_arm_operand(&this_val) else {
+                    return Ok(Value::Bool(false));
                 };
 
                 // Get search string
                 let search_val = self.read_reg(args.start + 1)?;
-                let search_str = match search_val {
-                    Value::Str(s) => s.to_string(),
-                    Value::Int(i) => i.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => return Ok(Value::Bool(false)),
+                let Some(search_str) = Self::legacy_string_arm_operand(&search_val) else {
+                    return Ok(Value::Bool(false));
                 };
 
                 // Get optional position parameter
@@ -23395,16 +23345,13 @@ impl InterpreterCore {
                     0
                 };
 
-                // Check if string starts with search string at the UTF-16 position.
-                let max_utf16_len = this_str.encode_utf16().count();
-                let result = if position >= max_utf16_len {
-                    search_str.is_empty()
-                } else {
-                    Self::utf16_suffix_from(&this_str, position, "startsWith")?
-                        .starts_with(&search_str)
-                };
-
-                Ok(Value::Bool(result))
+                // Exact code-unit prefix test at the UTF-16 position; a
+                // position inside a surrogate pair is a legal offset
+                // (bd-rdnhc; previously failed closed with a TypeError).
+                let units = this_str.code_units_vec();
+                let needle = search_str.code_units_vec();
+                let position = position.min(units.len());
+                Ok(Value::Bool(units[position..].starts_with(&needle)))
             }
             "builtin:StringPrototypeEndsWith" => {
                 // String.prototype.endsWith(searchString[, length]) implementation
@@ -23414,30 +23361,19 @@ impl InterpreterCore {
 
                 // Get the this value (should be a string)
                 let this_val = self.read_reg(args.start)?;
-                let this_str = match this_val {
-                    Value::Str(s) => s.to_string(),
-                    Value::Int(i) => i.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => return Ok(Value::Bool(false)),
+                let Some(this_str) = Self::legacy_string_arm_operand(&this_val) else {
+                    return Ok(Value::Bool(false));
                 };
 
                 // Get search string
                 let search_val = self.read_reg(args.start + 1)?;
-                let search_str = match search_val {
-                    Value::Str(s) => s.to_string(),
-                    Value::Int(i) => i.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => return Ok(Value::Bool(false)),
+                let Some(search_str) = Self::legacy_string_arm_operand(&search_val) else {
+                    return Ok(Value::Bool(false));
                 };
 
                 // Get optional length parameter
-                let max_utf16_len = this_str.encode_utf16().count();
+                let units = this_str.code_units_vec();
+                let max_utf16_len = units.len();
                 let end_pos = if args.count > 2 {
                     let len_val = self.read_reg(args.start + 2)?;
                     match len_val {
@@ -23449,21 +23385,12 @@ impl InterpreterCore {
                     max_utf16_len
                 };
 
-                // Check if string ends with search string at the given end position
-                let check_str = if search_str.is_empty() {
-                    this_str.clone()
-                } else if end_pos == 0 {
-                    String::new()
-                } else {
-                    String::from_utf16(&this_str.encode_utf16().take(end_pos).collect::<Vec<_>>())
-                        .map_err(|_| InterpreterError::TypeError {
-                        expected: "valid UTF-16 boundary for endsWith".to_string(),
-                        got: "invalid UTF-16 unit slice for String.prototype.endsWith".to_string(),
-                    })?
-                };
-                let result = check_str.ends_with(&search_str);
-
-                Ok(Value::Bool(result))
+                // Exact code-unit suffix test against the prefix of length
+                // `end_pos`; an end position inside a surrogate pair is a
+                // legal offset (bd-rdnhc; previously failed closed with a
+                // TypeError).
+                let needle = search_str.code_units_vec();
+                Ok(Value::Bool(units[..end_pos].ends_with(&needle)))
             }
             "builtin:ArrayPrototypeForEach" => {
                 let (array_id, callback, this_arg, length) =
@@ -26177,21 +26104,13 @@ impl InterpreterCore {
             }
 
             "builtin:StringPrototypeCodePointAt" => {
-                // String.prototype.codePointAt(index) implementation
+                // String.prototype.codePointAt(index): UTF-16 code-unit
+                // indexed over exact units, matching the receiver-aware
+                // string_code_point_at_impl seam (bd-rdnhc; previously
+                // scalar-indexed over the projection).
                 let this_val = self.read_reg(args.start)?;
-                let string_val = match this_val {
-                    Value::Str(s) => s.to_string(),
-                    _ => {
-                        // Try to convert to string
-                        match this_val {
-                            Value::Int(n) => n.to_string(),
-                            Value::Float(f) => f.inner().to_string(),
-                            Value::Bool(b) => b.to_string(),
-                            Value::Null => "null".to_string(),
-                            Value::Undefined => "undefined".to_string(),
-                            _ => return Ok(Value::Undefined),
-                        }
-                    }
+                let Some(string_val) = Self::legacy_string_arm_operand(&this_val) else {
+                    return Ok(Value::Undefined);
                 };
 
                 let index = if args.count >= 2 {
@@ -26204,14 +26123,10 @@ impl InterpreterCore {
                     0
                 };
 
-                // Get Unicode code point at index
-                let chars: Vec<char> = string_val.chars().collect();
-                if index < chars.len() {
-                    let code_point = chars[index] as u32;
-                    Ok(Value::Int(code_point as i64))
-                } else {
-                    Ok(Value::Undefined)
-                }
+                Ok(match string_val.code_point_at(index) {
+                    Some(code_point) => Value::Int(i64::from(code_point)),
+                    None => Value::Undefined,
+                })
             }
 
             "builtin:StringFromCodePoint" => {
@@ -28995,17 +28910,36 @@ impl InterpreterCore {
         }
     }
 
-    fn utf16_suffix_from(
-        text: &str,
-        start_units: usize,
-        builtin: &str,
-    ) -> Result<String, InterpreterError> {
-        String::from_utf16(&text.encode_utf16().skip(start_units).collect::<Vec<_>>()).map_err(
-            |_| InterpreterError::TypeError {
-                expected: format!("valid UTF-16 boundary for {builtin}"),
-                got: format!("invalid UTF-16 unit slice at position {start_units}"),
-            },
-        )
+    /// Coerce a primitive to its exact [`JsString`] for the legacy string
+    /// dispatch arms: a string value keeps its exact code units (lone
+    /// surrogates included) instead of routing through the lossy projection;
+    /// other primitives use their canonical spelling. `None` for the values
+    /// those arms treat as non-coercible (objects, functions). (bd-rdnhc)
+    fn legacy_string_arm_operand(value: &Value) -> Option<JsString> {
+        match value {
+            Value::Str(s) => Some(s.clone()),
+            Value::Int(i) => Some(JsString::from(i.to_string())),
+            Value::Float(f) => Some(JsString::from(f.inner().to_string())),
+            Value::Bool(b) => Some(JsString::from(b.to_string())),
+            Value::Null => Some(JsString::from("null")),
+            Value::Undefined => Some(JsString::from("undefined")),
+            _ => None,
+        }
+    }
+
+    /// Coerce a search-string builtin argument to its exact [`JsString`]
+    /// (preserving lone surrogates); a missing argument is the literal
+    /// `"undefined"` per ToString(undefined). (bd-rdnhc)
+    fn builtin_search_js_string(
+        &mut self,
+        args: RegRange,
+        index: u32,
+    ) -> Result<JsString, InterpreterError> {
+        Ok(match self.builtin_arg(args, index)? {
+            Some(Value::Str(s)) => s,
+            Some(other) => JsString::from(self.value_to_string(&other)),
+            None => JsString::from("undefined"),
+        })
     }
 
     /// Parse integers with shared parseInt sign and radix handling.
@@ -31232,7 +31166,14 @@ impl InterpreterCore {
 
     fn collect_for_of_values(&self, iterable: &Value) -> Result<Vec<Value>, InterpreterError> {
         match iterable {
-            Value::Str(text) => Ok(text.chars().map(|ch| Value::str(ch.to_string())).collect()),
+            // ES string iteration yields one element per code point, with an
+            // unpaired surrogate preserved as its own single-unit element
+            // (bd-rdnhc; previously iterated the U+FFFD projection).
+            Value::Str(text) => Ok(text
+                .code_point_elements()
+                .into_iter()
+                .map(Value::Str)
+                .collect()),
             Value::Object(object_id) => {
                 let object = self
                     .heap
@@ -50054,7 +49995,12 @@ mod tests {
     }
 
     #[test]
-    fn string_prototype_ends_with_utf16_boundary_fails_closed() {
+    fn string_prototype_ends_with_split_pair_boundary_is_lossless() {
+        // bd-rdnhc: an end position inside a surrogate pair is a legal
+        // code-unit offset (previously failed closed with a TypeError).
+        // "A😀B" is [0x41, 0xD83D, 0xDE00, 0x42]; the prefix of length 2 is
+        // [0x41, 0xD83D], which does not end with the full pair but does end
+        // with the lone high surrogate.
         let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
 
         for builtin_id in [40_u32, 230_u32, 336_u32] {
@@ -50062,11 +50008,19 @@ mod tests {
             interpreter.set_reg(1, Value::str("😀"));
             interpreter.set_reg(2, Value::Int(2));
 
-            let result =
-                interpreter.call_builtin_by_id(builtin_id, RegRange { start: 0, count: 3 });
-            assert!(
-                matches!(result, Err(InterpreterError::TypeError { .. })),
-                "String.prototype.endsWith should reject non-materializable UTF-16 boundary"
+            let result = interpreter
+                .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 3 })
+                .expect("split-pair end position is a legal code-unit offset");
+            assert_eq!(result, Value::Bool(false));
+
+            interpreter.set_reg(1, Value::Str(JsString::from_code_units(&[0xD83D])));
+            let result = interpreter
+                .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 3 })
+                .expect("split-pair end position is a legal code-unit offset");
+            assert_eq!(
+                result,
+                Value::Bool(true),
+                "prefix of length 2 ends with the lone high surrogate"
             );
         }
     }

@@ -140,12 +140,26 @@ fn char_code_at_out_of_range_is_nan() {
 }
 
 #[test]
-fn code_point_at_matches_engine_scalar_indexing() {
-    // Scalar-indexed over the projection — the engine's current behaviour
-    // (bd-rdnhc residual); parity is with the engine, not the spec.
+fn code_point_at_is_utf16_unit_indexed() {
+    // UTF-16 code-unit indexed per ES2015 CodePointAt, matching the engine
+    // seams upgraded by bd-rdnhc: index 1 lands on the high surrogate of the
+    // pair (combines to U+1F600), index 2 lands on the unpaired view of the
+    // low surrogate (yields its own unit value), index 3 is 'b'.
     assert_eq!(
         completion("\"a\u{1F600}b\".codePointAt(1);"),
         Value::Int(0x1F600)
+    );
+    assert_eq!(
+        completion("\"a\u{1F600}b\".codePointAt(2);"),
+        Value::Int(i64::from(LOW))
+    );
+    assert_eq!(
+        completion("\"a\u{1F600}b\".codePointAt(3);"),
+        Value::Int(98)
+    );
+    assert_eq!(
+        completion("\"a\u{1F600}b\".codePointAt(4);"),
+        Value::Undefined
     );
     assert_eq!(completion("\"ab\".codePointAt(9);"), Value::Undefined);
 }

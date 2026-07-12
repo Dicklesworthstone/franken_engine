@@ -61,9 +61,11 @@
 //!   string as a property key routes through the lossy projection.
 //! - Source-literal lone-surrogate escapes (`"\uD800"`) remain fail-closed in
 //!   the parser; paired escapes already heal (bd-k9jb0).
-//! - Relational ordering for strings remains code-point/byte order (the
-//!   pre-existing, documented divergence from ES UTF-16 code-unit order for
-//!   astral content is unchanged by this module).
+//! - Relational ordering: the derived [`Ord`] remains projection-first (with
+//!   exact units as tiebreak) for deterministic collections and wire/hash
+//!   stability. ES relational semantics — lexicographic over exact UTF-16
+//!   code units — are provided separately by [`JsString::utf16_cmp`], which
+//!   the engine's relational operators use (bd-rdnhc).
 
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -186,6 +188,107 @@ impl JsString {
         units.extend(other.encode_utf16());
         Self::from_code_units(&units)
     }
+
+    /// ES2020 `CodePointAt`: the Unicode code point at UTF-16 code-unit
+    /// index `unit_index`. A valid high+low surrogate pair combines into its
+    /// supplementary code point; an unpaired surrogate yields its own code
+    /// unit value; out of range yields `None`. (bd-rdnhc)
+    pub fn code_point_at(&self, unit_index: usize) -> Option<u32> {
+        let mut units = self.encode_utf16().skip(unit_index);
+        let first = units.next()?;
+        if is_high_surrogate(first)
+            && let Some(second) = units.next()
+            && is_low_surrogate(second)
+        {
+            let high = u32::from(first) - 0xD800;
+            let low = u32::from(second) - 0xDC00;
+            return Some(0x10000 + (high << 10) + low);
+        }
+        Some(u32::from(first))
+    }
+
+    /// ES string-iteration elements (the `String.prototype[@@iterator]`
+    /// grain used by `for..of`, spread, and `Array.from`): one element per
+    /// Unicode code point, with each unpaired surrogate preserved as its own
+    /// single-unit element rather than the U+FFFD projection. For well-formed
+    /// content this is exactly the per-`char` split. (bd-rdnhc)
+    pub fn code_point_elements(&self) -> Vec<JsString> {
+        let units = self.code_units_vec();
+        let mut elements = Vec::new();
+        let mut index = 0;
+        while index < units.len() {
+            let step = if is_high_surrogate(units[index])
+                && index + 1 < units.len()
+                && is_low_surrogate(units[index + 1])
+            {
+                2
+            } else {
+                1
+            };
+            elements.push(Self::from_code_units(&units[index..index + step]));
+            index += step;
+        }
+        elements
+    }
+
+    /// ES relational order for strings: lexicographic over exact UTF-16 code
+    /// units (the string branch of IsLessThan, ES2020 7.2.13). This differs
+    /// from the derived [`Ord`] — projection-first with exact units as
+    /// tiebreak — which is kept unchanged for deterministic collections and
+    /// wire/hash stability. Astral content orders differently under the two:
+    /// U+1F600 sorts *below* U+FF5A here (0xD83D < 0xFF5A) but above it under
+    /// code-point order. (bd-rdnhc)
+    pub fn utf16_cmp(&self, other: &JsString) -> std::cmp::Ordering {
+        self.encode_utf16().cmp(other.encode_utf16())
+    }
+
+    /// First UTF-16 code-unit index at or after `from` where `needle`'s
+    /// exact unit sequence occurs (ES `StringIndexOf`). `from` past the end
+    /// clamps to the length; an empty needle matches at the clamped `from`.
+    /// A position that splits a surrogate pair is a legal starting offset —
+    /// never an error — per ES code-unit semantics. (bd-rdnhc)
+    pub fn utf16_index_of(&self, needle: &JsString, from: usize) -> Option<usize> {
+        let haystack = self.code_units_vec();
+        let needle_units = needle.code_units_vec();
+        let from = from.min(haystack.len());
+        if needle_units.is_empty() {
+            return Some(from);
+        }
+        if needle_units.len() > haystack.len() {
+            return None;
+        }
+        (from..=haystack.len() - needle_units.len())
+            .find(|&index| haystack[index..index + needle_units.len()] == needle_units[..])
+    }
+
+    /// Highest UTF-16 code-unit start index at or before `from` where
+    /// `needle`'s exact unit sequence occurs (ES `String.prototype.lastIndexOf`
+    /// grain). An empty needle matches at `min(from, length)`. (bd-rdnhc)
+    pub fn utf16_last_index_of(&self, needle: &JsString, from: usize) -> Option<usize> {
+        let haystack = self.code_units_vec();
+        let needle_units = needle.code_units_vec();
+        if needle_units.is_empty() {
+            return Some(from.min(haystack.len()));
+        }
+        if needle_units.len() > haystack.len() {
+            return None;
+        }
+        let last_start = haystack.len() - needle_units.len();
+        let start = from.min(last_start);
+        (0..=start)
+            .rev()
+            .find(|&index| haystack[index..index + needle_units.len()] == needle_units[..])
+    }
+}
+
+/// UTF-16 high (leading) surrogate range check.
+fn is_high_surrogate(unit: u16) -> bool {
+    (0xD800..=0xDBFF).contains(&unit)
+}
+
+/// UTF-16 low (trailing) surrogate range check.
+fn is_low_surrogate(unit: u16) -> bool {
+    (0xDC00..=0xDFFF).contains(&unit)
 }
 
 impl Default for JsString {
@@ -666,5 +769,115 @@ mod tests {
         assert!(!s.is_well_formed());
         assert_eq!(s.code_units_vec(), vec![HIGH, LOW, HIGH]);
         assert_eq!(s.as_utf8_projection(), "\u{1F600}\u{FFFD}");
+    }
+
+    // --- ES-semantics helpers (bd-rdnhc) ----------------------------------
+
+    #[test]
+    fn code_point_at_is_unit_indexed_and_combines_pairs() {
+        let s = JsString::from("a\u{1F600}b"); // units [61, D83D, DE00, 62]
+        assert_eq!(s.code_point_at(0), Some(0x61));
+        assert_eq!(s.code_point_at(1), Some(0x1F600));
+        assert_eq!(s.code_point_at(2), Some(u32::from(LOW)));
+        assert_eq!(s.code_point_at(3), Some(0x62));
+        assert_eq!(s.code_point_at(4), None);
+    }
+
+    #[test]
+    fn code_point_at_lone_surrogate_yields_its_own_unit_value() {
+        let s = JsString::from_code_units(&[0x61, HIGH]);
+        assert_eq!(s.code_point_at(1), Some(u32::from(HIGH)));
+        let t = JsString::from_code_units(&[LOW, 0x62]);
+        assert_eq!(t.code_point_at(0), Some(u32::from(LOW)));
+    }
+
+    #[test]
+    fn code_point_elements_split_well_formed_content_per_char() {
+        let s = JsString::from("a\u{1F600}b");
+        let elements = s.code_point_elements();
+        assert_eq!(
+            elements,
+            vec![
+                JsString::from("a"),
+                JsString::from("\u{1F600}"),
+                JsString::from("b")
+            ]
+        );
+    }
+
+    #[test]
+    fn code_point_elements_preserve_lone_surrogates_exactly() {
+        // [HIGH, HIGH, LOW]: first HIGH is unpaired, second pair heals.
+        let s = JsString::from_code_units(&[HIGH, HIGH, LOW]);
+        let elements = s.code_point_elements();
+        assert_eq!(elements.len(), 2);
+        assert_eq!(elements[0].code_units_vec(), vec![HIGH]);
+        assert!(!elements[0].is_well_formed());
+        assert_eq!(elements[1], JsString::from("\u{1F600}"));
+    }
+
+    #[test]
+    fn utf16_cmp_orders_astral_below_high_bmp() {
+        // ES code-unit order: U+1F600 starts with 0xD83D which sorts below
+        // U+FF5A; code-point (derived Ord) order says the opposite.
+        let astral = JsString::from("\u{1F600}");
+        let high_bmp = JsString::from("\u{FF5A}");
+        assert_eq!(astral.utf16_cmp(&high_bmp), std::cmp::Ordering::Less);
+        assert_eq!(high_bmp.utf16_cmp(&astral), std::cmp::Ordering::Greater);
+        assert!(astral.cmp(&high_bmp) == std::cmp::Ordering::Greater);
+    }
+
+    #[test]
+    fn utf16_cmp_orders_lone_surrogates_by_exact_unit() {
+        // Under the projection both sides render U+FFFD; the exact units
+        // must decide. 0xD800 < 0xE000 in code-unit space even though the
+        // projection of the lone surrogate (U+FFFD) sorts above U+E000.
+        let lone = JsString::from_code_units(&[0xD800]);
+        let private_use = JsString::from("\u{E000}");
+        assert_eq!(lone.utf16_cmp(&private_use), std::cmp::Ordering::Less);
+        assert_eq!(
+            JsString::from_code_units(&[0xD800]).utf16_cmp(&JsString::from_code_units(&[0xD801])),
+            std::cmp::Ordering::Less
+        );
+    }
+
+    #[test]
+    fn utf16_index_of_uses_code_unit_offsets() {
+        let s = JsString::from("a\u{1F600}b"); // units [61, D83D, DE00, 62]
+        assert_eq!(s.utf16_index_of(&JsString::from("b"), 0), Some(3));
+        assert_eq!(s.utf16_index_of(&JsString::from("a"), 1), None);
+        // A `from` that splits the surrogate pair is a legal offset.
+        assert_eq!(s.utf16_index_of(&JsString::from("b"), 2), Some(3));
+        // A lone-surrogate needle matches the exact unit, not the projection.
+        assert_eq!(
+            s.utf16_index_of(&JsString::from_code_units(&[HIGH]), 0),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn utf16_index_of_empty_needle_matches_at_clamped_from() {
+        let s = JsString::from("abc");
+        assert_eq!(s.utf16_index_of(&JsString::empty(), 0), Some(0));
+        assert_eq!(s.utf16_index_of(&JsString::empty(), 99), Some(3));
+        assert_eq!(
+            JsString::empty().utf16_index_of(&JsString::from("x"), 0),
+            None
+        );
+    }
+
+    #[test]
+    fn utf16_last_index_of_finds_highest_start_at_or_before_from() {
+        let s = JsString::from("abab");
+        let needle = JsString::from("ab");
+        assert_eq!(s.utf16_last_index_of(&needle, 99), Some(2));
+        assert_eq!(s.utf16_last_index_of(&needle, 1), Some(0));
+        assert_eq!(s.utf16_last_index_of(&JsString::from("z"), 99), None);
+        assert_eq!(s.utf16_last_index_of(&JsString::empty(), 99), Some(4));
+        let astral = JsString::from("\u{1F600}\u{1F600}");
+        assert_eq!(
+            astral.utf16_last_index_of(&JsString::from_code_units(&[LOW]), 99),
+            Some(3)
+        );
     }
 }

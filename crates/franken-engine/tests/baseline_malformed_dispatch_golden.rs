@@ -25,10 +25,16 @@ struct ValueSnapshot {
 }
 
 #[derive(Debug, Serialize)]
+struct IntSnapshot {
+    kind: &'static str,
+    value: i64,
+}
+
+#[derive(Debug, Serialize)]
 struct BaselineMalformedDispatchSnapshot {
     coverage_gap: &'static str,
     binding_kind_error: ErrorSnapshot,
-    invalid_utf16_index_of: ErrorSnapshot,
+    split_pair_index_of: IntSnapshot,
     valid_utf16_includes: ValueSnapshot,
     valid_utf16_starts_with: ValueSnapshot,
 }
@@ -90,6 +96,13 @@ fn bool_snapshot(value: Value) -> ValueSnapshot {
     }
 }
 
+fn int_snapshot(value: Value) -> IntSnapshot {
+    match value {
+        Value::Int(value) => IntSnapshot { kind: "int", value },
+        other => panic!("expected int, got {other:?}"),
+    }
+}
+
 fn binding_kind_error() -> ErrorSnapshot {
     let err = execute_module(
         vec![
@@ -141,9 +154,12 @@ fn baseline_malformed_dispatch_fail_closed_matches_golden() {
     let snapshot = BaselineMalformedDispatchSnapshot {
         coverage_gap: "baseline_interpreter malformed dispatch inputs",
         binding_kind_error: binding_kind_error(),
-        invalid_utf16_index_of: type_error_snapshot(
+        // A fromIndex that splits the surrogate pair is a legal code-unit
+        // offset (bd-rdnhc): "😀z" is [D83D, DE00, 7A], so indexOf("z", 1)
+        // finds the match at unit index 2 instead of failing closed.
+        split_pair_index_of: int_snapshot(
             string_builtin("builtin:StringPrototypeIndexOf", "😀z", "z", 1)
-                .expect_err("unpaired UTF-16 suffix must fail closed"),
+                .expect("split-pair fromIndex is a legal code-unit offset"),
         ),
         valid_utf16_includes: bool_snapshot(
             string_builtin("builtin:StringPrototypeIncludes", "😀z", "z", 2)

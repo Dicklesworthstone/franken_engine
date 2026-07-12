@@ -2397,6 +2397,17 @@ pub fn default_engine_core_corpus() -> Vec<EngineCoreCorpusCase> {
             "string_distinct_lone_surrogates_not_equal",
             "String.fromCharCode(55296) === String.fromCharCode(55297);",
         ),
+        // codePointAt is UTF-16 code-unit indexed in both lanes (bd-rdnhc):
+        // index 1 lands on the high surrogate and combines the pair; index 2
+        // lands on the unpaired view of the low surrogate.
+        (
+            "string_code_point_at_pair_combines",
+            "\"a\u{1F600}b\".codePointAt(1);",
+        ),
+        (
+            "string_code_point_at_low_unit",
+            "\"a\u{1F600}b\".codePointAt(2);",
+        ),
     ]
     .into_iter()
     .map(|(case_id, source)| EngineCoreCorpusCase::new(case_id, source))
@@ -2599,10 +2610,12 @@ mod tests {
                         | "string_from_char_code_lone"
                         | "string_from_char_code_healing"
                         | "string_distinct_lone_surrogates_not_equal"
+                        | "string_code_point_at_pair_combines"
+                        | "string_code_point_at_low_unit"
                 )
             })
             .collect();
-        assert_eq!(corpus.len(), 7, "all surrogate corpus cases present");
+        assert_eq!(corpus.len(), 9, "all surrogate corpus cases present");
         let report = run_engine_core_differential_oracle(&corpus, 8);
         assert!(
             report.defects.is_empty(),

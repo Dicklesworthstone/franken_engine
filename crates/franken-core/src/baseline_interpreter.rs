@@ -2789,16 +2789,18 @@ impl InterpreterCore {
         }
     }
 
-    /// `String.prototype.codePointAt`: scalar-indexed over the projection,
-    /// mirroring the engine's current behaviour (bd-rdnhc residual) so the
-    /// differential oracle agrees; out-of-range / negative yields undefined.
+    /// `String.prototype.codePointAt`: UTF-16 code-unit indexed per ES2015
+    /// CodePointAt (a valid pair combines, an unpaired surrogate yields its
+    /// own unit value), matching the engine seams upgraded by bd-rdnhc so
+    /// the differential oracle agrees; out-of-range / negative yields
+    /// undefined.
     fn string_code_point_at_value(text: &JsString, index: Option<&Value>) -> Value {
         let index = index.map(Self::string_index_as_integer).unwrap_or(0);
         if index < 0 {
             return Value::Undefined;
         }
-        match text.chars().nth(index as usize) {
-            Some(ch) => Value::Int(ch as i64),
+        match text.code_point_at(index as usize) {
+            Some(code_point) => Value::Int(i64::from(code_point)),
             None => Value::Undefined,
         }
     }

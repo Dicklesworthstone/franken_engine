@@ -489,6 +489,18 @@ pub enum Ir1Op {
         /// declares or shadows them (bd-ylpdp).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         runtime_global_loads: Vec<(String, BindingId)>,
+        /// Body-local bindings (name + body binding-id) that CHILD closures
+        /// capture, computed at emission time where the body lookup is still
+        /// available. The deferred IR3 pass mirrors stores of exactly these
+        /// bindings onto the scope chain (DeclareBinding + StoreScoped) so
+        /// child captures resolve. Replaces the former positional
+        /// `nth(binding_id - param_count)` heuristic, which could mirror an
+        /// internal temp (e.g. a method-call receiver) under a captured
+        /// variable's name — shadowing the real captured binding with
+        /// garbage (bd-suwvw). Excluded from the canonical encoding like
+        /// `free_var_ids`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        child_captured_locals: Vec<(String, BindingId)>,
         /// True when the source function is a generator (`function*`).
         is_generator: bool,
         /// True when the source function is async (`async function`).
@@ -514,6 +526,10 @@ pub enum Ir1Op {
         /// (see DeclareFunction; bd-ylpdp).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         runtime_global_loads: Vec<(String, BindingId)>,
+        /// Body-local bindings that CHILD closures capture (see
+        /// DeclareFunction; bd-suwvw).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        child_captured_locals: Vec<(String, BindingId)>,
         /// True when the source function is a generator (`function*`).
         is_generator: bool,
         /// True when the source function is async (`async function` or `async () =>`).
@@ -713,6 +729,7 @@ impl Ir1Op {
                 free_vars,
                 free_var_ids: _,
                 runtime_global_loads: _,
+                child_captured_locals: _,
                 is_generator,
                 is_async,
                 rest_param_index: _,
@@ -752,6 +769,7 @@ impl Ir1Op {
                 free_vars,
                 free_var_ids: _,
                 runtime_global_loads: _,
+                child_captured_locals: _,
                 is_generator,
                 is_async,
                 rest_param_index: _,

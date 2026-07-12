@@ -194,6 +194,13 @@ pub enum Microtask {
 pub enum MacrotaskSource {
     /// Cross-lane message channel receives (highest priority).
     MessageChannel,
+    /// `setImmediate` callbacks (bd-suwvw). Scheduled at the CURRENT virtual
+    /// time and drained before timer tasks that are due at the same moment,
+    /// matching Node's check-phase ordering (an immediate scheduled inside a
+    /// timer callback runs before a `setTimeout(fn, 0)` scheduled alongside
+    /// it). FIFO within the queue by registration order, so a nested
+    /// immediate runs after every already-queued immediate.
+    Immediate,
     /// Timer callbacks (setTimeout/setInterval) ordered by virtual clock.
     Timer,
     /// I/O completion callbacks.
@@ -692,6 +699,10 @@ impl MicrotaskQueue {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MacrotaskQueue {
     message_channel_tasks: BinaryHeap<MacrotaskHeapEntry>,
+    /// `setImmediate` tasks (bd-suwvw). Defaulted on deserialization so
+    /// pre-existing serialized queues (which had no immediate lane) load.
+    #[serde(default)]
+    immediate_tasks: BinaryHeap<MacrotaskHeapEntry>,
     timer_tasks: BinaryHeap<MacrotaskHeapEntry>,
     io_completion_tasks: BinaryHeap<MacrotaskHeapEntry>,
     next_registration_seq: u64,
@@ -725,6 +736,7 @@ impl MacrotaskQueue {
     pub fn new() -> Self {
         Self {
             message_channel_tasks: BinaryHeap::new(),
+            immediate_tasks: BinaryHeap::new(),
             timer_tasks: BinaryHeap::new(),
             io_completion_tasks: BinaryHeap::new(),
             next_registration_seq: 0,
@@ -759,6 +771,7 @@ impl MacrotaskQueue {
     /// then earliest `scheduled_at`, then lowest `registration_seq`.
     pub fn dequeue_ready(&mut self, current_time_ms: u64) -> Option<Macrotask> {
         Self::pop_ready_from(&mut self.message_channel_tasks, current_time_ms)
+            .or_else(|| Self::pop_ready_from(&mut self.immediate_tasks, current_time_ms))
             .or_else(|| Self::pop_ready_from(&mut self.timer_tasks, current_time_ms))
             .or_else(|| Self::pop_ready_from(&mut self.io_completion_tasks, current_time_ms))
     }
@@ -767,6 +780,7 @@ impl MacrotaskQueue {
     pub fn next_scheduled_time(&self) -> Option<u64> {
         [
             self.message_channel_tasks.peek(),
+            self.immediate_tasks.peek(),
             self.timer_tasks.peek(),
             self.io_completion_tasks.peek(),
         ]
@@ -779,13 +793,29 @@ impl MacrotaskQueue {
     /// Check if there are pending macrotasks.
     pub fn is_empty(&self) -> bool {
         self.message_channel_tasks.is_empty()
+            && self.immediate_tasks.is_empty()
             && self.timer_tasks.is_empty()
             && self.io_completion_tasks.is_empty()
     }
 
     /// Number of pending macrotasks.
     pub fn len(&self) -> usize {
-        self.message_channel_tasks.len() + self.timer_tasks.len() + self.io_completion_tasks.len()
+        self.message_channel_tasks.len()
+            + self.immediate_tasks.len()
+            + self.timer_tasks.len()
+            + self.io_completion_tasks.len()
+    }
+
+    /// Iterate every pending macrotask across all source lanes (bd-suwvw).
+    /// Order is unspecified (heap order); used by the event-loop idle drain
+    /// to decide whether only unref'd/cancelled timers remain.
+    pub fn iter_pending(&self) -> impl Iterator<Item = &Macrotask> {
+        self.message_channel_tasks
+            .iter()
+            .chain(self.immediate_tasks.iter())
+            .chain(self.timer_tasks.iter())
+            .chain(self.io_completion_tasks.iter())
+            .map(|entry| &entry.task)
     }
 
     fn tasks_for_source_mut(
@@ -794,6 +824,7 @@ impl MacrotaskQueue {
     ) -> &mut BinaryHeap<MacrotaskHeapEntry> {
         match source {
             MacrotaskSource::MessageChannel => &mut self.message_channel_tasks,
+            MacrotaskSource::Immediate => &mut self.immediate_tasks,
             MacrotaskSource::Timer => &mut self.timer_tasks,
             MacrotaskSource::IoCompletion => &mut self.io_completion_tasks,
         }
@@ -934,6 +965,16 @@ impl EventLoop {
         let fire_at = self.clock.now_ms();
         self.macrotasks
             .schedule(MacrotaskSource::IoCompletion, handler, fire_at, label)
+    }
+
+    /// Schedule a `setImmediate` macrotask (bd-suwvw). Fires at the CURRENT
+    /// virtual time (no delay) in the dedicated immediate lane, which drains
+    /// before timer tasks due at the same moment. Returns the registration
+    /// sequence.
+    pub fn set_immediate(&mut self, handler: ClosureHandle, label: Label) -> u64 {
+        let fire_at = self.clock.now_ms();
+        self.macrotasks
+            .schedule(MacrotaskSource::Immediate, handler, fire_at, label)
     }
 
     /// Whether the event loop has any pending work.

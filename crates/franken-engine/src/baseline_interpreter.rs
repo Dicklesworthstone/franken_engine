@@ -1311,6 +1311,50 @@ pub struct ActiveTimer {
     pub repeating: bool,
 }
 
+/// bd-suwvw: `__type` marker for setTimeout/setInterval handle objects.
+const TIMER_HANDLE_TIMEOUT_TYPE: &str = "Timeout";
+/// bd-suwvw: `__type` marker for setImmediate handle objects.
+const TIMER_HANDLE_IMMEDIATE_TYPE: &str = "Immediate";
+/// bd-suwvw: `__type` marker for the timers/promises setInterval iterable.
+const TIMERS_PROMISES_INTERVAL_TYPE: &str = "TimersPromisesInterval";
+
+/// bd-suwvw: what a scheduled timer/immediate macrotask does when it fires,
+/// keyed by the macrotask's registration sequence (side table on the
+/// interpreter, mirroring `pending_io_callbacks`). Carries the cancellation
+/// link (`timer_id` — the macrotask is skipped if the id is no longer in
+/// `active_timers`), the stashed extra callback arguments
+/// (`setTimeout(cb, ms, ...args)`), and the interval re-scheduling recipe.
+#[derive(Debug, Clone)]
+struct PendingTimerTask {
+    /// The user-visible timer id this macrotask belongs to; the entry in
+    /// `active_timers` under this id is the cancellation authority.
+    timer_id: u32,
+    kind: PendingTimerTaskKind,
+}
+
+#[derive(Debug, Clone)]
+enum PendingTimerTaskKind {
+    /// A JS callback timer (`setTimeout`/`setInterval`/`setImmediate`).
+    Callback {
+        closure_id: u32,
+        /// Extra trailing arguments forwarded to the callback on every fire.
+        args: Vec<Value>,
+        /// `setInterval` timers re-schedule themselves after each fire while
+        /// still active.
+        repeating: bool,
+        /// The (already clamped) per-fire delay used for re-scheduling.
+        delay_ms: u64,
+    },
+    /// A `require('timers/promises')` timer: fulfills `promise` with `value`
+    /// when it fires (no JS callback; the macrotask's `ClosureHandle` is an
+    /// unused sentinel, dispatched before the closure path exactly like
+    /// `pending_stream_emissions`).
+    PromiseResolve {
+        promise: crate::promise_model::PromiseHandle,
+        value: crate::object_model::JsValue,
+    },
+}
+
 /// Wrapper around f64 that provides Eq/Ord using total_cmp for determinism.
 /// NaN values are equal to each other and greater than all other values.
 /// -0.0 is less than +0.0 in the total ordering.
@@ -1842,6 +1886,32 @@ pub enum BuiltinFunctionKind {
     /// with U+FFFD (ES2024 §22.1.3.29, bd-neika). Appended at the enum tail
     /// for the same ordinal-stability reason.
     StringToWellFormed,
+    /// Global `setTimeout` as a first-class value (bd-suwvw). Injected into
+    /// the realm global frame so bare references (`typeof setTimeout`,
+    /// `require('timers').setTimeout === setTimeout`) resolve; calls dispatch
+    /// to the same deterministic timer machinery as the lowering-recognized
+    /// `builtin:SetTimeout` hostcall. Appended at the enum tail (ordinal
+    /// stability).
+    SetTimeout,
+    /// Global `clearTimeout` as a first-class value (bd-suwvw).
+    ClearTimeout,
+    /// Global `setInterval` as a first-class value (bd-suwvw).
+    SetInterval,
+    /// Global `clearInterval` as a first-class value (bd-suwvw).
+    ClearInterval,
+    /// Global `setImmediate` as a first-class value (bd-suwvw).
+    SetImmediate,
+    /// Global `clearImmediate` as a first-class value (bd-suwvw).
+    ClearImmediate,
+    /// Global `queueMicrotask` as a first-class value (bd-suwvw).
+    QueueMicrotask,
+    /// `Timeout.prototype.hasRef` — bound to a specific timer-handle object
+    /// via `bound_object` (bd-suwvw).
+    TimerHasRef,
+    /// `Timeout.prototype.ref` — bound timer-handle method (bd-suwvw).
+    TimerRef,
+    /// `Timeout.prototype.unref` — bound timer-handle method (bd-suwvw).
+    TimerUnref,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -1931,6 +2001,24 @@ impl BuiltinFunction {
             module_specifier: String::new(),
             iterator_handle: None,
             bound_object: None,
+        }
+    }
+
+    /// bd-suwvw: a global timer builtin as a first-class value. Structural
+    /// equality on `BuiltinFunction` makes every reference to the same global
+    /// (`setTimeout`, `require('timers').setTimeout`) compare `===` equal.
+    fn timer_global(kind: BuiltinFunctionKind) -> Self {
+        Self::new_kind(kind)
+    }
+
+    /// bd-suwvw: a `hasRef`/`ref`/`unref` method bound to one timer-handle
+    /// object (mirrors `proxy_revoke`'s `bound_object` pattern).
+    fn timer_handle_method(kind: BuiltinFunctionKind, handle_object: ObjectId) -> Self {
+        Self {
+            kind,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: Some(handle_object.0),
         }
     }
 
@@ -3077,6 +3165,16 @@ impl BuiltinFunction {
             BuiltinFunctionKind::ObjectPrototypeToString => "toString",
             BuiltinFunctionKind::StringIsWellFormed => "isWellFormed",
             BuiltinFunctionKind::StringToWellFormed => "toWellFormed",
+            BuiltinFunctionKind::SetTimeout => "setTimeout",
+            BuiltinFunctionKind::ClearTimeout => "clearTimeout",
+            BuiltinFunctionKind::SetInterval => "setInterval",
+            BuiltinFunctionKind::ClearInterval => "clearInterval",
+            BuiltinFunctionKind::SetImmediate => "setImmediate",
+            BuiltinFunctionKind::ClearImmediate => "clearImmediate",
+            BuiltinFunctionKind::QueueMicrotask => "queueMicrotask",
+            BuiltinFunctionKind::TimerHasRef => "hasRef",
+            BuiltinFunctionKind::TimerRef => "ref",
+            BuiltinFunctionKind::TimerUnref => "unref",
         }
     }
 }
@@ -3372,6 +3470,11 @@ struct RuntimeForOfState {
     next_index: usize,
     iterator_object: Option<ObjectId>,
     next_method: Option<Value>,
+    /// bd-suwvw: a `require('timers/promises').setInterval` iterable —
+    /// `(delay_ms, yielded value)`. Each advance ticks the deterministic
+    /// virtual clock by `delay_ms` and yields the value; the iterator never
+    /// completes on its own (the loop body `break`s out).
+    timers_interval: Option<(u64, Value)>,
     done: bool,
     closed: bool,
     return_called: bool,
@@ -3383,6 +3486,7 @@ struct RuntimeForOfInit {
     values: Vec<Value>,
     iterator_object: Option<ObjectId>,
     next_method: Option<Value>,
+    timers_interval: Option<(u64, Value)>,
 }
 
 impl RuntimeForOfInit {
@@ -3391,6 +3495,7 @@ impl RuntimeForOfInit {
             values,
             iterator_object: None,
             next_method: None,
+            timers_interval: None,
         }
     }
 
@@ -3399,6 +3504,17 @@ impl RuntimeForOfInit {
             values: Vec::new(),
             iterator_object: Some(iterator_object),
             next_method: Some(next_method),
+            timers_interval: None,
+        }
+    }
+
+    /// bd-suwvw: see [`RuntimeForOfState::timers_interval`].
+    fn from_timers_interval(delay_ms: u64, value: Value) -> Self {
+        Self {
+            values: Vec::new(),
+            iterator_object: None,
+            next_method: None,
+            timers_interval: Some((delay_ms, value)),
         }
     }
 }
@@ -5553,6 +5669,15 @@ pub struct InterpreterCore {
     next_timer_id: u32,
     /// Active timers for clearTimeout/clearInterval tracking.
     active_timers: std::collections::BTreeMap<u32, ActiveTimer>,
+    /// bd-suwvw: per-macrotask timer actions keyed by registration sequence
+    /// (see [`PendingTimerTask`]). Entries are drained when their macrotask
+    /// fires, so the map only holds in-flight timers.
+    pending_timer_tasks: BTreeMap<u64, PendingTimerTask>,
+    /// bd-suwvw: timer ids whose handles were `unref()`'d. The idle event
+    /// loop drain exits when every pending macrotask is an unref'd (or
+    /// cancelled) timer, matching Node's "unref'd timers don't keep the
+    /// process alive" semantics.
+    unref_timer_ids: BTreeSet<u32>,
     /// Containment state: whether execution is suspended due to guardplane action.
     #[allow(dead_code)]
     suspended: bool,
@@ -5671,6 +5796,8 @@ impl InterpreterCore {
             profiling_data: None,
             next_timer_id: 0,
             active_timers: BTreeMap::new(),
+            pending_timer_tasks: BTreeMap::new(),
+            unref_timer_ids: BTreeSet::new(),
             suspended: false,
             sandboxed: false,
             quarantined: false,
@@ -7304,6 +7431,26 @@ impl InterpreterCore {
             "Function",
             Value::BuiltinFunction(BuiltinFunction::function_constructor()),
         )?;
+        // bd-suwvw: timer globals as first-class values. Direct calls are
+        // still intercepted at lowering (`timer_builtin_call_capability`);
+        // these injected bindings make bare references work — `typeof
+        // setTimeout` is "function", a stored alias is callable, and
+        // `require('timers').setTimeout === setTimeout` holds via structural
+        // `BuiltinFunction` equality.
+        for (name, kind) in [
+            ("setTimeout", BuiltinFunctionKind::SetTimeout),
+            ("clearTimeout", BuiltinFunctionKind::ClearTimeout),
+            ("setInterval", BuiltinFunctionKind::SetInterval),
+            ("clearInterval", BuiltinFunctionKind::ClearInterval),
+            ("setImmediate", BuiltinFunctionKind::SetImmediate),
+            ("clearImmediate", BuiltinFunctionKind::ClearImmediate),
+            ("queueMicrotask", BuiltinFunctionKind::QueueMicrotask),
+        ] {
+            self.inject_runtime_global_binding(
+                name,
+                Value::BuiltinFunction(BuiltinFunction::timer_global(kind)),
+            )?;
+        }
 
         Ok(())
     }
@@ -10102,6 +10249,87 @@ impl InterpreterCore {
                 })?;
                 self.revoke_proxy_object(proxy_id)?;
                 Ok(Value::Undefined)
+            }
+            BuiltinFunctionKind::SetTimeout
+            | BuiltinFunctionKind::SetInterval
+            | BuiltinFunctionKind::SetImmediate => {
+                // bd-suwvw: first-class timer globals stored in variables /
+                // passed as values dispatch to the same scheduling core as
+                // the lowering-recognized hostcalls. Args here follow the
+                // builtin-call convention (real args from index 0).
+                let is_interval = matches!(builtin.kind, BuiltinFunctionKind::SetInterval);
+                let is_immediate = matches!(builtin.kind, BuiltinFunctionKind::SetImmediate);
+                let callback = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let delay = if is_immediate {
+                    None
+                } else {
+                    self.builtin_arg(args, 1)?
+                };
+                let extra_start: u32 = if is_immediate { 1 } else { 2 };
+                let mut extra_args = Vec::new();
+                let mut index = extra_start;
+                while index < args.count {
+                    extra_args.push(self.builtin_arg(args, index)?.unwrap_or(Value::Undefined));
+                    index += 1;
+                }
+                self.timer_schedule_from_values(callback, delay, extra_args, is_interval, is_immediate)
+            }
+            BuiltinFunctionKind::ClearTimeout
+            | BuiltinFunctionKind::ClearInterval
+            | BuiltinFunctionKind::ClearImmediate => {
+                let witness_tag = match builtin.kind {
+                    BuiltinFunctionKind::ClearTimeout => "builtin:clearTimeout",
+                    BuiltinFunctionKind::ClearInterval => "builtin:clearInterval",
+                    _ => "builtin:clearImmediate",
+                };
+                let handle = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                self.timer_clear_from_value(&handle, witness_tag)
+            }
+            BuiltinFunctionKind::QueueMicrotask => {
+                let callback = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                self.queue_microtask_from_value(&callback)
+            }
+            BuiltinFunctionKind::TimerHasRef
+            | BuiltinFunctionKind::TimerRef
+            | BuiltinFunctionKind::TimerUnref => {
+                // bd-suwvw: handle-bound Timeout/Immediate methods. The bound
+                // object carries `__timerId`; `unref`/`ref` toggle exit
+                // permission and return the handle (chaining, like Node).
+                let handle_id = builtin.bound_object.map(ObjectId).ok_or_else(|| {
+                    InterpreterError::TypeError {
+                        expected: "timer handle bound object".to_string(),
+                        got: "missing timer handle".to_string(),
+                    }
+                })?;
+                let timer_id = match self
+                    .heap
+                    .get(handle_id.0 as usize)
+                    .and_then(|object| object.properties.get("__timerId"))
+                {
+                    Some(Value::Int(id)) => *id as u32,
+                    _ => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "timer handle with __timerId".to_string(),
+                            got: "malformed timer handle".to_string(),
+                        });
+                    }
+                };
+                match builtin.kind {
+                    BuiltinFunctionKind::TimerHasRef => Ok(Value::Bool(
+                        self.active_timers.contains_key(&timer_id)
+                            && !self.unref_timer_ids.contains(&timer_id),
+                    )),
+                    BuiltinFunctionKind::TimerUnref => {
+                        if self.active_timers.contains_key(&timer_id) {
+                            self.unref_timer_ids.insert(timer_id);
+                        }
+                        Ok(Value::Object(handle_id))
+                    }
+                    _ => {
+                        self.unref_timer_ids.remove(&timer_id);
+                        Ok(Value::Object(handle_id))
+                    }
+                }
             }
         }
     }
@@ -14939,6 +15167,30 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         iterable: &Value,
     ) -> Result<RuntimeForOfInit, InterpreterError> {
+        // bd-suwvw: the timers/promises setInterval iterable is an
+        // engine-vended deterministic async iterable — `for await` drives it
+        // through the shared for-of machinery, advancing the virtual clock
+        // per step (checked before the custom @@iterator probe; the object
+        // has no user-visible iterator protocol).
+        if let Value::Object(object_id) = iterable
+            && let Some(object) = self.heap.get(object_id.0 as usize)
+            && matches!(
+                object.properties.get("__type"),
+                Some(Value::Str(kind)) if kind.as_ref() == TIMERS_PROMISES_INTERVAL_TYPE
+            )
+        {
+            let delay_ms = match object.properties.get("__delayMs") {
+                Some(Value::Int(ms)) => (*ms).max(1) as u64,
+                _ => 1,
+            };
+            let value = object
+                .properties
+                .get("__value")
+                .cloned()
+                .unwrap_or(Value::Undefined);
+            return Ok(RuntimeForOfInit::from_timers_interval(delay_ms, value));
+        }
+
         if let Some(module) = module
             && let Some(init) = self.prepare_custom_for_of_state(module, iterable)?
         {
@@ -15142,6 +15394,7 @@ impl InterpreterCore {
             next_index: 0,
             iterator_object: init.iterator_object,
             next_method: init.next_method,
+            timers_interval: init.timers_interval,
             done: false,
             closed: false,
             return_called: false,
@@ -15158,7 +15411,16 @@ impl InterpreterCore {
         enum ForOfStep {
             Done,
             Value(Value),
-            Custom { receiver: Value, next_method: Value },
+            /// bd-suwvw: timers/promises interval tick — advance the virtual
+            /// clock by the delay, then yield the value.
+            IntervalTick {
+                delay_ms: u64,
+                value: Value,
+            },
+            Custom {
+                receiver: Value,
+                next_method: Value,
+            },
         }
 
         let handle = self.expect_iterator_handle(iterator)?;
@@ -15167,6 +15429,11 @@ impl InterpreterCore {
                 if state.closed || state.done {
                     state.done = true;
                     (state.trace_index, ForOfStep::Done)
+                } else if let Some((delay_ms, value)) = state.timers_interval.clone() {
+                    (
+                        state.trace_index,
+                        ForOfStep::IntervalTick { delay_ms, value },
+                    )
                 } else if let Some(next_method) = state.next_method.clone() {
                     let iterator_object =
                         state
@@ -15204,6 +15471,16 @@ impl InterpreterCore {
                 return Ok(None);
             }
             ForOfStep::Value(value) => {
+                self.record_iteration_next_result(trace_index, Some(value.clone()));
+                return Ok(Some(value));
+            }
+            ForOfStep::IntervalTick { delay_ms, value } => {
+                // bd-suwvw: one deterministic interval tick — the "await"
+                // between iterations is modeled as a virtual-clock advance.
+                let now = self.event_loop.clock.now_ms();
+                self.event_loop
+                    .clock
+                    .advance_to(now.saturating_add(delay_ms));
                 self.record_iteration_next_result(trace_index, Some(value.clone()));
                 return Ok(Some(value));
             }
@@ -18272,6 +18549,16 @@ impl InterpreterCore {
         let mut turns = 0;
 
         while self.event_loop.has_pending_work() && turns < MAX_TURNS {
+            // bd-suwvw: unref'd timers do not keep the loop alive. When every
+            // remaining macrotask is an unref'd (or cancelled) timer and no
+            // microtasks are queued, the program is done — exactly Node's
+            // process-exit rule (an unref'd timer may simply never fire).
+            if self.event_loop.microtasks.is_empty()
+                && self.only_unref_or_cancelled_timers_pending()
+            {
+                break;
+            }
+
             turns += 1;
 
             // Phase 1: Execute one macrotask (if ready)
@@ -18454,7 +18741,21 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
     ) -> Result<(), InterpreterError> {
         match macrotask.source {
-            crate::promise_model::MacrotaskSource::Timer => {
+            crate::promise_model::MacrotaskSource::Timer
+            | crate::promise_model::MacrotaskSource::Immediate => {
+                // bd-suwvw: a builtin-scheduled timer/immediate carries its
+                // action in `pending_timer_tasks` (keyed by registration
+                // seq) — cancellation, extra callback args, interval
+                // re-scheduling, and timers/promises fulfillment all live
+                // there. Dispatched BEFORE the raw-closure path so the
+                // sentinel handler of a promise timer is never invoked.
+                if let Some(task) = self.pending_timer_tasks.remove(&macrotask.registration_seq) {
+                    return self.execute_pending_timer_task(task, module);
+                }
+
+                // Legacy path: a closure scheduled directly on the event loop
+                // (`event_loop.set_timeout(...)` in tests) with no side-table
+                // entry. Preserve the original behavior.
                 let closure_id = macrotask.handler.0;
                 // Validate the handler refers to a live closure before running
                 // (preserves the clear diagnostic; the invocation path would
@@ -18467,9 +18768,8 @@ impl InterpreterCore {
                 }
 
                 // Execute the timer callback body (no arguments, undefined this).
-                let result = self.execute_timer_closure(closure_id, module);
+                let result = self.execute_timer_closure(closure_id, module, Vec::new());
 
-                // Handle setInterval re-scheduling
                 if let Err(ref err) = result {
                     eprintln!("Timer callback execution error: {err:?}");
                 }
@@ -18538,10 +18838,13 @@ impl InterpreterCore {
     /// Execute a timer closure callback.
     ///
     /// This creates a minimal execution context to run the timer callback function.
+    /// `args` carries the extra trailing `setTimeout(cb, ms, ...args)` arguments
+    /// (empty for the legacy direct-scheduled path) (bd-suwvw).
     fn execute_timer_closure(
         &mut self,
         closure_id: u32,
         module: Option<&Ir3Module>,
+        args: Vec<Value>,
     ) -> Result<Value, InterpreterError> {
         use crate::ir_contract::WitnessEventKind;
 
@@ -18553,17 +18856,17 @@ impl InterpreterCore {
 
         // Run the callback body for real (bd-zqb1x): `setTimeout(() => { ... })`
         // must execute its closure, not merely emit a witness. Timer callbacks
-        // receive no arguments and an undefined `this`. Reuse the audited
-        // synchronous closure-invocation path (the same one Array.prototype
-        // callbacks use), which snapshots/restores execution state around the
-        // call and runs the closure's IR3 body to completion against its
-        // captured environment.
+        // receive the stashed extra arguments and an undefined `this`. Reuse
+        // the audited synchronous closure-invocation path (the same one
+        // Array.prototype callbacks use), which snapshots/restores execution
+        // state around the call and runs the closure's IR3 body to completion
+        // against its captured environment.
         match module {
             Some(module) => self.invoke_inline_method_call(
                 Some(module),
                 Value::Closure(closure_id),
                 Value::Undefined,
-                Vec::new(),
+                args,
             ),
             None => {
                 // No module context is available only on the test-only
@@ -18574,6 +18877,357 @@ impl InterpreterCore {
                 Ok(Value::Undefined)
             }
         }
+    }
+
+    /// bd-suwvw: run one builtin-scheduled timer/immediate macrotask action.
+    /// Skips cancelled timers, forwards stashed extra callback arguments,
+    /// re-schedules still-active intervals after a successful fire, and
+    /// fulfills timers/promises timers.
+    fn execute_pending_timer_task(
+        &mut self,
+        task: PendingTimerTask,
+        module: Option<&Ir3Module>,
+    ) -> Result<(), InterpreterError> {
+        if !self.active_timers.contains_key(&task.timer_id) {
+            // Cancelled (clearTimeout/clearInterval/clearImmediate) between
+            // scheduling and firing: the macrotask is inert.
+            self.unref_timer_ids.remove(&task.timer_id);
+            return Ok(());
+        }
+        match task.kind {
+            PendingTimerTaskKind::Callback {
+                closure_id,
+                args,
+                repeating,
+                delay_ms,
+            } => {
+                if self.closures.get(closure_id as usize).is_none() {
+                    return Err(InterpreterError::TypeError {
+                        expected: "valid closure".to_string(),
+                        got: format!("closure#{closure_id} not found"),
+                    });
+                }
+                let result = self
+                    .execute_timer_closure(closure_id, module, args.clone())
+                    .map(|_| ());
+                if let Err(ref err) = result {
+                    eprintln!("Timer callback execution error: {err:?}");
+                }
+                if repeating && result.is_ok() {
+                    // Re-schedule the next tick unless the callback (or
+                    // anything it ran) cleared the interval.
+                    if self.active_timers.contains_key(&task.timer_id) {
+                        let seq = self.event_loop.set_timeout(
+                            crate::closure_model::ClosureHandle(closure_id),
+                            delay_ms,
+                            crate::ifc_artifacts::Label::Public,
+                        );
+                        self.pending_timer_tasks.insert(
+                            seq,
+                            PendingTimerTask {
+                                timer_id: task.timer_id,
+                                kind: PendingTimerTaskKind::Callback {
+                                    closure_id,
+                                    args,
+                                    repeating: true,
+                                    delay_ms,
+                                },
+                            },
+                        );
+                    } else {
+                        self.unref_timer_ids.remove(&task.timer_id);
+                    }
+                } else {
+                    // One-shot timers/immediates (and errored intervals) are
+                    // finished: drop the active entry so `hasRef()` reports
+                    // false and cancellation state stays bounded.
+                    self.active_timers.remove(&task.timer_id);
+                    self.unref_timer_ids.remove(&task.timer_id);
+                }
+                result
+            }
+            PendingTimerTaskKind::PromiseResolve { promise, value } => {
+                self.active_timers.remove(&task.timer_id);
+                self.unref_timer_ids.remove(&task.timer_id);
+                self.fulfill_promise(promise, value, crate::ifc_artifacts::Label::Public)
+            }
+        }
+    }
+
+    /// bd-suwvw: Node's timer-delay coercion + clamp. `ToNumber`-style
+    /// coercion of the delay argument; NaN, non-finite, negative, sub-1ms
+    /// and over-`TIMEOUT_MAX_MS` delays all clamp to 1ms (Node prints a
+    /// warning for the negative/NaN cases — see the corpus notes; the engine
+    /// stays silent on stderr and matches the firing behavior).
+    fn timer_delay_ms_from_value(value: &Value) -> u64 {
+        let ms = match value {
+            Value::Int(n) => *n as f64,
+            Value::Float(f) => f.inner(),
+            Value::Bool(b) => {
+                if *b {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            Value::Null => 0.0,
+            Value::Str(s) => {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    0.0
+                } else {
+                    trimmed.parse::<f64>().unwrap_or(f64::NAN)
+                }
+            }
+            _ => f64::NAN,
+        };
+        const TIMEOUT_MAX_MS: f64 = 2_147_483_647.0;
+        if !ms.is_finite() || ms < 1.0 || ms > TIMEOUT_MAX_MS {
+            1
+        } else {
+            ms as u64
+        }
+    }
+
+    /// bd-suwvw: allocate a Timeout/Immediate handle object carrying the timer
+    /// id plus bound `hasRef`/`ref`/`unref` methods. `typeof handle` is
+    /// "object" and `clearTimeout(handle)` resolves the id via `__timerId`,
+    /// matching bun's observable handle shape for the compat corpus.
+    fn alloc_timer_handle_object(
+        &mut self,
+        timer_id: u32,
+        marker: &str,
+    ) -> Result<Value, InterpreterError> {
+        let object_id = self.alloc_object_with_properties(&[
+            ("__type", Value::str(marker)),
+            ("__timerId", Value::Int(timer_id as i64)),
+        ])?;
+        for (name, kind) in [
+            ("hasRef", BuiltinFunctionKind::TimerHasRef),
+            ("ref", BuiltinFunctionKind::TimerRef),
+            ("unref", BuiltinFunctionKind::TimerUnref),
+        ] {
+            self.set_object_property(
+                object_id,
+                name.to_string(),
+                Value::BuiltinFunction(BuiltinFunction::timer_handle_method(kind, object_id)),
+            )?;
+        }
+        Ok(Value::Object(object_id))
+    }
+
+    /// bd-suwvw: shared setTimeout/setInterval/setImmediate scheduling core.
+    /// Value-based so both the lowering hostcall arms and first-class
+    /// `BuiltinFunction` dispatch reuse it.
+    fn timer_schedule_from_values(
+        &mut self,
+        callback: Value,
+        delay: Option<Value>,
+        extra_args: Vec<Value>,
+        repeating: bool,
+        immediate: bool,
+    ) -> Result<Value, InterpreterError> {
+        if !matches!(callback, Value::Function(_) | Value::Closure(_)) {
+            // Preserved lenient legacy contract: a non-callable callback
+            // yields the invalid timer id instead of throwing.
+            return Ok(Value::Int(0));
+        }
+        let delay_ms = if immediate {
+            0
+        } else {
+            match &delay {
+                Some(value) => Self::timer_delay_ms_from_value(value),
+                None => 1,
+            }
+        };
+
+        let timer_id = self.next_timer_id;
+        self.next_timer_id = self.next_timer_id.wrapping_add(1);
+
+        let handler_id = match callback {
+            Value::Closure(id) => Some(id),
+            _ => None,
+        };
+
+        self.active_timers.insert(
+            timer_id,
+            ActiveTimer {
+                handler: handler_id,
+                delay_ms,
+                repeating,
+            },
+        );
+
+        if let Some(closure_id) = handler_id {
+            let closure_handle = crate::closure_model::ClosureHandle(closure_id);
+            let label = crate::ifc_artifacts::Label::Public;
+            let seq = if immediate {
+                self.event_loop.set_immediate(closure_handle, label)
+            } else {
+                self.event_loop.set_timeout(closure_handle, delay_ms, label)
+            };
+            self.pending_timer_tasks.insert(
+                seq,
+                PendingTimerTask {
+                    timer_id,
+                    kind: PendingTimerTaskKind::Callback {
+                        closure_id,
+                        args: extra_args,
+                        repeating,
+                        delay_ms,
+                    },
+                },
+            );
+        }
+
+        let (witness_tag, marker) = if immediate {
+            ("builtin:setImmediate", TIMER_HANDLE_IMMEDIATE_TYPE)
+        } else if repeating {
+            ("builtin:setInterval", TIMER_HANDLE_TIMEOUT_TYPE)
+        } else {
+            ("builtin:setTimeout", TIMER_HANDLE_TIMEOUT_TYPE)
+        };
+        self.emit_witness(
+            WitnessEventKind::HostcallDispatched,
+            Some(&format!("{witness_tag}:{timer_id}")),
+        );
+
+        self.alloc_timer_handle_object(timer_id, marker)
+    }
+
+    /// bd-suwvw: shared clearTimeout/clearInterval/clearImmediate core.
+    /// Resolves the timer id from a handle object (`__timerId`) or a legacy
+    /// integer id; every other value is a no-op (Node semantics).
+    fn timer_clear_from_value(
+        &mut self,
+        handle: &Value,
+        witness_tag: &str,
+    ) -> Result<Value, InterpreterError> {
+        let timer_id = match handle {
+            Value::Int(id) => Some(*id as u32),
+            Value::Object(object_id) => match self
+                .heap
+                .get(object_id.0 as usize)
+                .and_then(|object| object.properties.get("__timerId"))
+            {
+                Some(Value::Int(id)) => Some(*id as u32),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some(timer_id) = timer_id else {
+            return Ok(Value::Undefined);
+        };
+
+        let was_active = self.active_timers.remove(&timer_id).is_some();
+        self.unref_timer_ids.remove(&timer_id);
+        if was_active {
+            self.emit_witness(
+                WitnessEventKind::HostcallDispatched,
+                Some(&format!("{witness_tag}:{timer_id}")),
+            );
+        }
+        Ok(Value::Undefined)
+    }
+
+    /// bd-suwvw: queueMicrotask(cb) core — enqueue a plain microtask that
+    /// invokes `cb` with no arguments at the next microtask checkpoint.
+    /// Implemented as a `PromiseReaction` against a fresh (unobservable)
+    /// promise so it reuses the audited reaction-drain path.
+    fn queue_microtask_from_value(&mut self, callback: &Value) -> Result<Value, InterpreterError> {
+        let Value::Closure(closure_id) = callback else {
+            return Err(InterpreterError::TypeError {
+                expected: "function".to_string(),
+                got: callback.type_name().to_string(),
+            });
+        };
+        let result_promise = self.promise_store.create();
+        self.event_loop
+            .microtasks
+            .enqueue(crate::promise_model::Microtask::PromiseReaction {
+                handler: Some(crate::closure_model::ClosureHandle(*closure_id)),
+                argument: crate::object_model::JsValue::Undefined,
+                result_promise,
+                label: crate::ifc_artifacts::Label::Public,
+            });
+        Ok(Value::Undefined)
+    }
+
+    /// bd-suwvw: timers/promises setTimeout/setImmediate core — a pending
+    /// promise fulfilled with `value` when the scheduled task fires. The
+    /// macrotask handler is an inert sentinel; `execute_pending_timer_task`
+    /// intercepts by registration seq before any closure dispatch.
+    fn timers_promises_schedule_from_values(
+        &mut self,
+        delay: Option<Value>,
+        value: &Value,
+        immediate: bool,
+    ) -> Result<Value, InterpreterError> {
+        let delay_ms = if immediate {
+            0
+        } else {
+            match &delay {
+                Some(value) => Self::timer_delay_ms_from_value(value),
+                None => 1,
+            }
+        };
+        let timer_id = self.next_timer_id;
+        self.next_timer_id = self.next_timer_id.wrapping_add(1);
+        self.active_timers.insert(
+            timer_id,
+            ActiveTimer {
+                handler: None,
+                delay_ms,
+                repeating: false,
+            },
+        );
+
+        let promise = self.promise_store.create();
+        let sentinel = crate::closure_model::ClosureHandle(u32::MAX);
+        let label = crate::ifc_artifacts::Label::Public;
+        let seq = if immediate {
+            self.event_loop.set_immediate(sentinel, label)
+        } else {
+            self.event_loop.set_timeout(sentinel, delay_ms, label)
+        };
+        self.pending_timer_tasks.insert(
+            seq,
+            PendingTimerTask {
+                timer_id,
+                kind: PendingTimerTaskKind::PromiseResolve {
+                    promise,
+                    value: Self::value_to_js_value(value),
+                },
+            },
+        );
+        self.emit_witness(
+            WitnessEventKind::HostcallDispatched,
+            Some(&format!("builtin:timersPromises:{timer_id}")),
+        );
+        Ok(Value::Promise(promise.0))
+    }
+
+    /// bd-suwvw: true when every pending macrotask is a timer whose handle was
+    /// unref'd (or that was already cancelled) — the idle drain exits instead
+    /// of firing them, matching Node's "unref'd timers don't keep the event
+    /// loop alive" semantics. Non-timer macrotasks (I/O completions, stream
+    /// emissions, directly-scheduled closures) always keep the loop alive.
+    fn only_unref_or_cancelled_timers_pending(&self) -> bool {
+        let mut saw_any = false;
+        for task in self.event_loop.macrotasks.iter_pending() {
+            saw_any = true;
+            match self.pending_timer_tasks.get(&task.registration_seq) {
+                Some(pending) => {
+                    let cancelled = !self.active_timers.contains_key(&pending.timer_id);
+                    let unrefd = self.unref_timer_ids.contains(&pending.timer_id);
+                    if !cancelled && !unrefd {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
+        }
+        saw_any
     }
 
     fn property_key(value: &Value) -> String {
@@ -19371,6 +20025,7 @@ impl InterpreterCore {
             next_index: 0,
             iterator_object: None,
             next_method: None,
+            timers_interval: None,
             done: false,
             closed: false,
             return_called: false,
@@ -20629,6 +21284,7 @@ impl InterpreterCore {
             next_index: 0,
             iterator_object: None,
             next_method: None,
+            timers_interval: None,
             done: false,
             closed: false,
             return_called: false,
@@ -30125,164 +30781,118 @@ impl InterpreterCore {
                 Ok(Value::str(decoded))
             }
 
-            "builtin:SetTimeout" => {
-                // setTimeout() implementation - route through deterministic timer state
+            "builtin:SetTimeout" | "builtin:SetInterval" | "builtin:SetImmediate" => {
+                // setTimeout()/setInterval()/setImmediate() — deterministic
+                // timer scheduling (bd-suwvw). Receiver-placeholder
+                // convention: real args start at `args.start + 1`.
+                // setImmediate has no delay argument; its extra callback args
+                // start right after the callback.
+                let is_interval = cap == "builtin:SetInterval";
+                let is_immediate = cap == "builtin:SetImmediate";
                 if args.count < 2 {
-                    return Ok(Value::Int(0)); // Invalid timer ID
+                    return Ok(Value::Int(0)); // Missing callback.
                 }
-
                 let callback_val = self.read_reg(args.start + 1)?;
-                if !matches!(callback_val, Value::Function(_) | Value::Closure(_)) {
-                    return Ok(Value::Int(0)); // Callback is not a function
-                }
-
-                let delay_ms = if args.count >= 3 {
-                    let delay_val = self.read_reg(args.start + 2)?;
-                    match delay_val {
-                        Value::Int(n) => n.max(0) as u64,
-                        Value::Float(f) => f.inner().max(0.0) as u64,
-                        _ => 0,
-                    }
+                let delay_val = if is_immediate || args.count < 3 {
+                    None
                 } else {
-                    0
+                    Some(self.read_reg(args.start + 2)?)
                 };
-
-                // Use deterministic timer ID allocation
-                let timer_id = self.next_timer_id;
-                self.next_timer_id = self.next_timer_id.wrapping_add(1);
-
-                let handler_id = match callback_val {
-                    Value::Closure(id) => Some(id),
-                    _ => None,
-                };
-
-                // Store active timer for cancellation support
-                self.active_timers.insert(
-                    timer_id,
-                    ActiveTimer {
-                        handler: handler_id,
-                        delay_ms,
-                        repeating: false,
-                    },
-                );
-
-                // Enqueue macrotask for timer execution
-                if let Some(closure_id) = handler_id {
-                    let closure_handle = crate::closure_model::ClosureHandle(closure_id);
-                    let label = crate::ifc_artifacts::Label::Public;
-                    self.event_loop.set_timeout(closure_handle, delay_ms, label);
+                let extra_start: u32 = if is_immediate { 2 } else { 3 };
+                let mut extra_args = Vec::new();
+                let mut index = extra_start;
+                while index < args.count {
+                    extra_args.push(self.read_reg(args.start + index)?);
+                    index += 1;
                 }
-
-                // Emit deterministic witness for replay consistency
-                self.emit_witness(
-                    WitnessEventKind::HostcallDispatched,
-                    Some(&format!("builtin:setTimeout:{}", timer_id)),
-                );
-
-                Ok(Value::Int(timer_id as i64))
+                self.timer_schedule_from_values(
+                    callback_val,
+                    delay_val,
+                    extra_args,
+                    is_interval,
+                    is_immediate,
+                )
             }
 
-            "builtin:SetInterval" => {
-                // setInterval() implementation - route through deterministic timer state
-                if args.count < 2 {
-                    return Ok(Value::Int(0)); // Invalid timer ID
-                }
-
-                let callback_val = self.read_reg(args.start + 1)?;
-                if !matches!(callback_val, Value::Function(_) | Value::Closure(_)) {
-                    return Ok(Value::Int(0)); // Callback is not a function
-                }
-
-                let delay_ms = if args.count >= 3 {
-                    let delay_val = self.read_reg(args.start + 2)?;
-                    match delay_val {
-                        Value::Int(n) => n.max(0) as u64,
-                        Value::Float(f) => f.inner().max(0.0) as u64,
-                        _ => 0,
-                    }
-                } else {
-                    0
-                };
-
-                let timer_id = self.next_timer_id;
-                self.next_timer_id = self.next_timer_id.wrapping_add(1);
-
-                let handler_id = match callback_val {
-                    Value::Closure(id) => Some(id),
-                    _ => None,
-                };
-
-                self.active_timers.insert(
-                    timer_id,
-                    ActiveTimer {
-                        handler: handler_id,
-                        delay_ms,
-                        repeating: true,
-                    },
-                );
-
-                if let Some(closure_id) = handler_id {
-                    let closure_handle = crate::closure_model::ClosureHandle(closure_id);
-                    let label = crate::ifc_artifacts::Label::Public;
-                    self.event_loop.set_timeout(closure_handle, delay_ms, label);
-                }
-
-                self.emit_witness(
-                    WitnessEventKind::HostcallDispatched,
-                    Some(&format!("builtin:setInterval:{}", timer_id)),
-                );
-
-                Ok(Value::Int(timer_id as i64))
-            }
-
-            "builtin:ClearTimeout" => {
-                // clearTimeout() implementation - cancel timer through deterministic state
+            "builtin:ClearTimeout" | "builtin:ClearInterval" | "builtin:ClearImmediate" => {
+                // clearTimeout()/clearInterval()/clearImmediate() — cancel a
+                // timer through deterministic state (bd-suwvw). Accepts the
+                // Timeout/Immediate handle object or a legacy integer id;
+                // anything else (undefined/null/garbage) is a no-op, matching
+                // Node.
                 if args.count < 2 {
                     return Ok(Value::Undefined);
                 }
-
-                let timer_id_val = self.read_reg(args.start + 1)?;
-                let timer_id = match timer_id_val {
-                    Value::Int(i) => i as u32,
-                    _ => return Ok(Value::Undefined), // Invalid timer ID type
+                let handle_val = self.read_reg(args.start + 1)?;
+                let witness_tag = match cap {
+                    "builtin:ClearTimeout" => "builtin:clearTimeout",
+                    "builtin:ClearInterval" => "builtin:clearInterval",
+                    _ => "builtin:clearImmediate",
                 };
-
-                // Remove timer from active timers for proper cancellation
-                let was_active = self.active_timers.remove(&timer_id).is_some();
-
-                // Emit witness for cancellation (only if timer was actually active)
-                if was_active {
-                    self.emit_witness(
-                        WitnessEventKind::HostcallDispatched,
-                        Some(&format!("builtin:clearTimeout:{}", timer_id)),
-                    );
-                }
-
-                Ok(Value::Undefined)
+                self.timer_clear_from_value(&handle_val, witness_tag)
             }
 
-            "builtin:ClearInterval" => {
-                // clearInterval() implementation - cancel timer through deterministic state
+            "builtin:QueueMicrotask" => {
+                // queueMicrotask(cb) — enqueue a plain microtask (bd-suwvw).
+                // Receiver-placeholder convention (real arg at start + 1).
                 if args.count < 2 {
-                    return Ok(Value::Undefined);
+                    return Err(InterpreterError::TypeError {
+                        expected: "function".to_string(),
+                        got: "undefined".to_string(),
+                    });
                 }
+                let callback_val = self.read_reg(args.start + 1)?;
+                self.queue_microtask_from_value(&callback_val)
+            }
 
-                let timer_id_val = self.read_reg(args.start + 1)?;
-                let timer_id = match timer_id_val {
-                    Value::Int(i) => i as u32,
-                    _ => return Ok(Value::Undefined), // Invalid timer ID type
+            "builtin:TimersPromisesSetTimeout" => {
+                // require('timers/promises').setTimeout(ms[, value]) —
+                // returns a promise fulfilled with `value` after `ms`
+                // (bd-suwvw). Slot-0 convention (no receiver placeholder).
+                let delay_val = if args.count > 0 {
+                    Some(self.read_reg(args.start)?)
+                } else {
+                    None
                 };
+                let value = if args.count > 1 {
+                    self.read_reg(args.start + 1)?
+                } else {
+                    Value::Undefined
+                };
+                self.timers_promises_schedule_from_values(delay_val, &value, false)
+            }
 
-                let was_active = self.active_timers.remove(&timer_id).is_some();
+            "builtin:TimersPromisesSetImmediate" => {
+                // require('timers/promises').setImmediate([value]) (bd-suwvw).
+                let value = if args.count > 0 {
+                    self.read_reg(args.start)?
+                } else {
+                    Value::Undefined
+                };
+                self.timers_promises_schedule_from_values(None, &value, true)
+            }
 
-                if was_active {
-                    self.emit_witness(
-                        WitnessEventKind::HostcallDispatched,
-                        Some(&format!("builtin:clearInterval:{}", timer_id)),
-                    );
-                }
-
-                Ok(Value::Undefined)
+            "builtin:TimersPromisesSetInterval" => {
+                // require('timers/promises').setInterval([ms[, value]]) —
+                // returns a deterministic async-iterable interval object
+                // consumed by `for await` (bd-suwvw). Each `next` advances the
+                // virtual clock by the (clamped) delay and yields `value`.
+                let delay_ms = if args.count > 0 {
+                    Self::timer_delay_ms_from_value(&self.read_reg(args.start)?)
+                } else {
+                    1
+                };
+                let value = if args.count > 1 {
+                    self.read_reg(args.start + 1)?
+                } else {
+                    Value::Undefined
+                };
+                let object_id = self.alloc_object_with_properties(&[
+                    ("__type", Value::str(TIMERS_PROMISES_INTERVAL_TYPE)),
+                    ("__delayMs", Value::Int(delay_ms as i64)),
+                    ("__value", value),
+                ])?;
+                Ok(Value::Object(object_id))
             }
 
             // Removed duplicate parseFloat - keep single canonical implementation on `builtin:parseFloat` and alias.
@@ -36165,6 +36775,7 @@ mod active_builtin_regressions {
                 next_index: 0,
                 iterator_object: Some(iterator_object),
                 next_method: None,
+                timers_interval: None,
                 done: false,
                 closed: false,
                 return_called: false,
@@ -41599,8 +42210,13 @@ mod event_loop_timer_microtask_tests {
 /// legacy tests call it on values they expect to be integral (timer ids,
 /// counter results). Returns `Some(i64)` for `Int` and integral finite `Float`,
 /// `None` otherwise.
+///
+/// bd-suwvw: the last in-tree callers (timer-substrate tests) migrated to the
+/// object timer-handle contract (`timer_handle_id`); kept for future legacy
+/// tests, allowed as dead code.
 #[cfg(test)]
 impl Value {
+    #[allow(dead_code)]
     fn as_int(&self) -> Option<i64> {
         match self {
             Value::Int(i) => Some(*i),
@@ -46840,6 +47456,23 @@ mod tests {
     // Timer substrate tests
     // -----------------------------------------------------------------------
 
+    /// bd-suwvw: setTimeout/setInterval return an object handle (like
+    /// Node/bun's Timeout); resolve the deterministic timer id from its
+    /// `__timerId` property.
+    fn timer_handle_id(core: &InterpreterCore, handle: &Value) -> u32 {
+        let Value::Object(object_id) = handle else {
+            panic!("timer builtins should return an object handle, got {handle:?}");
+        };
+        match core
+            .heap
+            .get(object_id.0 as usize)
+            .and_then(|object| object.properties.get("__timerId"))
+        {
+            Some(Value::Int(id)) => *id as u32,
+            other => panic!("timer handle should carry __timerId, got {other:?}"),
+        }
+    }
+
     #[test]
     fn set_timeout_deterministic_regression() {
         // Regression test: Verify setTimeout uses deterministic timer IDs instead of wall-clock time
@@ -46892,29 +47525,19 @@ mod tests {
             .expect("setTimeout should succeed on core2");
 
         // Timer IDs should be identical because they're deterministic, not wall-clock based
+        let id1 = timer_handle_id(&core1, &timer_id_1);
+        let id2 = timer_handle_id(&core2, &timer_id_2);
         assert_eq!(
-            timer_id_1, timer_id_2,
+            id1, id2,
             "Timer IDs should be identical across identical interpreter instances (deterministic)"
         );
-
-        // Both should be the first timer ID (starting from next_timer_id initial value)
-        match timer_id_1 {
-            Value::Int(id) => {
-                assert!(id >= 0, "Timer ID should be non-negative");
-                // The exact value depends on initial next_timer_id, but should be consistent
-            }
-            _ => panic!("setTimeout should return integer timer ID"),
-        }
 
         // Verify both interpreters have the timer in their active_timers state
         assert_eq!(core1.active_timers.len(), 1);
         assert_eq!(core2.active_timers.len(), 1);
 
-        let timer_id_val = timer_id_1
-            .as_int()
-            .expect("operation should succeed for valid inputs") as u32;
-        assert!(core1.active_timers.contains_key(&timer_id_val));
-        assert!(core2.active_timers.contains_key(&timer_id_val));
+        assert!(core1.active_timers.contains_key(&id1));
+        assert!(core2.active_timers.contains_key(&id2));
     }
 
     #[test]
@@ -46956,31 +47579,14 @@ mod tests {
             .expect("setTimeout should succeed");
 
         // Verify timer IDs are deterministic and sequential
-        match (timer_id_1.clone(), timer_id_2.clone()) {
-            (Value::Int(id1), Value::Int(id2)) => {
-                assert!(id1 >= 0, "Timer ID should be non-negative");
-                assert!(id2 >= 0, "Timer ID should be non-negative");
-                assert_eq!(id2, id1 + 1, "Timer IDs should be sequential");
-            }
-            _ => panic!("setTimeout should return integer timer IDs"),
-        }
+        let id1 = timer_handle_id(&core, &timer_id_1);
+        let id2 = timer_handle_id(&core, &timer_id_2);
+        assert_eq!(id2, id1 + 1, "Timer IDs should be sequential");
 
         // Verify timers are stored in active_timers
         assert_eq!(core.active_timers.len(), 2, "Both timers should be active");
-        assert!(
-            core.active_timers.contains_key(
-                &(timer_id_1
-                    .as_int()
-                    .expect("operation should succeed for valid inputs") as u32)
-            )
-        );
-        assert!(
-            core.active_timers.contains_key(
-                &(timer_id_2
-                    .as_int()
-                    .expect("operation should succeed for valid inputs") as u32)
-            )
-        );
+        assert!(core.active_timers.contains_key(&id1));
+        assert!(core.active_timers.contains_key(&id2));
     }
 
     #[test]
@@ -47045,18 +47651,13 @@ mod tests {
             "Only one timer should remain active"
         );
         assert!(
-            !core.active_timers.contains_key(
-                &(timer_id_1
-                    .as_int()
-                    .expect("operation should succeed for valid inputs") as u32)
-            )
+            !core
+                .active_timers
+                .contains_key(&timer_handle_id(&core, &timer_id_1))
         );
         assert!(
-            core.active_timers.contains_key(
-                &(timer_id_2
-                    .as_int()
-                    .expect("operation should succeed for valid inputs") as u32)
-            )
+            core.active_timers
+                .contains_key(&timer_handle_id(&core, &timer_id_2))
         );
 
         // Clear the second timer
@@ -47124,10 +47725,7 @@ mod tests {
             )
             .expect("setInterval should succeed");
 
-        let timer_id = match timer_id_val {
-            Value::Int(id) => id as u32,
-            _ => panic!("setInterval should return integer timer ID"),
-        };
+        let timer_id = timer_handle_id(&core, &timer_id_val);
 
         let timer = core
             .active_timers
@@ -47236,13 +47834,8 @@ mod tests {
             .expect("setTimeout should succeed");
 
         // Verify timer was created
-        match timer_id_1 {
-            Value::Int(id) => {
-                assert!(id >= 0, "Timer ID should be non-negative");
-                assert_eq!(core.active_timers.len(), 1, "One timer should be active");
-            }
-            _ => panic!("setTimeout should return integer timer ID"),
-        }
+        let _ = timer_handle_id(&core, &timer_id_1);
+        assert_eq!(core.active_timers.len(), 1, "One timer should be active");
 
         // Run the event loop - this should execute the outer timer
         core.run_event_loop_until_idle();
@@ -47284,13 +47877,8 @@ mod tests {
             .expect("setTimeout should succeed");
 
         // Verify timer was created
-        match timer_id {
-            Value::Int(id) => {
-                assert!(id >= 0, "Timer ID should be non-negative");
-                assert!(core.active_timers.contains_key(&(id as u32)));
-            }
-            _ => panic!("setTimeout should return integer timer ID"),
-        }
+        let id = timer_handle_id(&core, &timer_id);
+        assert!(core.active_timers.contains_key(&id));
 
         // Run the event loop to execute the timer
         core.run_event_loop_until_idle();
@@ -52902,6 +53490,7 @@ mod memory_accounting_tests {
                         next_index: 0,
                         iterator_object: None,
                         next_method: Some(next_method.to_runtime_value()),
+                        timers_interval: None,
                         done: false,
                         closed: false,
                         return_called: false,

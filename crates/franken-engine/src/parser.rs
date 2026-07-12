@@ -2336,12 +2336,41 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
         }
 
         if !accumulating {
-            current_text.clear();
-            current_byte_offset = byte_offset;
-            current_start_line = line_no;
-            last_significant = None;
-            trailing_identifier.clear();
-            current_text.push_str(line);
+            // bd-suwvw: a balanced previous logical line followed by a line
+            // STARTING with `.` + identifier is a method-chain continuation
+            // (`Promise.resolve()\n  .then(cb)\n  .then(cb2)` — the common
+            // formatter layout). Without this, the leading-dot line becomes
+            // its own statement and misparses. Only merge when the previous
+            // line did not end with an explicit `;` (after which a leading
+            // dot cannot continue the expression) and the dot is followed by
+            // an identifier start (so `.5` numeric literals never merge).
+            let trimmed_line = line.trim_start();
+            let dot_continues_previous = trimmed_line.starts_with('.')
+                && trimmed_line[1..]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
+                && result
+                    .last()
+                    .is_some_and(|prev: &LogicalLine| !prev.text.ends_with(';'));
+            if dot_continues_previous {
+                let prev = result.pop().expect("checked non-empty above");
+                current_text.clear();
+                current_text.push_str(&prev.text);
+                current_text.push(' ');
+                current_text.push_str(trimmed_line);
+                current_byte_offset = prev.byte_offset;
+                current_start_line = prev.start_line;
+                last_significant = None;
+                trailing_identifier.clear();
+            } else {
+                current_text.clear();
+                current_byte_offset = byte_offset;
+                current_start_line = line_no;
+                last_significant = None;
+                trailing_identifier.clear();
+                current_text.push_str(line);
+            }
         } else {
             let preserve_leading_whitespace =
                 in_quote.is_some() || in_block_comment || in_regex_literal;
@@ -8706,6 +8735,20 @@ fn parse_for_statement(
         .strip_prefix("for")
         .unwrap_or(statement)
         .trim_start();
+    // bd-suwvw: accept the `for await (const x of iterable)` header shape.
+    // The engine's iteration protocol is synchronous (there is no
+    // `@@asyncIterator` dispatch); `for await` lowers to the same for-of
+    // machinery. Deterministic async iterables the engine itself vends
+    // (`require('timers/promises').setInterval`) advance the virtual clock
+    // inside their `next` step, so the observable console output matches the
+    // async protocol for engine-supported iterables. `await` must be a whole
+    // word (`for awaitFoo(...)` is not a for-await header).
+    let after_for = match after_for.strip_prefix("await") {
+        Some(rest) if rest.starts_with(|c: char| c.is_ascii_whitespace() || c == '(') => {
+            rest.trim_start()
+        }
+        _ => after_for,
+    };
     let (header_src, rest) = extract_balanced(after_for, '(', ')').ok_or_else(|| {
         ParseError::new(
             ParseErrorCode::UnsupportedSyntax,

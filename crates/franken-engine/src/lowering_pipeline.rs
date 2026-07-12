@@ -794,6 +794,19 @@ fn lower_ir0_to_ir1_with_ambient_grant(
     for alias in confirmed_os_module_aliases(&ir0.tree.body, &binding_lookup) {
         binding_lookup.insert(os_module_alias_sentinel(&alias), 0);
     }
+    // bd-suwvw: same usage-gated sentinel recording for `require('timers')`
+    // (member calls lower to the SAME `builtin:SetTimeout`/… hostcalls as the
+    // bare globals; member reads lower to the like-named injected runtime
+    // global so `timers.setTimeout === setTimeout` holds) and
+    // `require('timers/promises')` (member calls lower to
+    // `builtin:TimersPromises*` hostcalls). Fail-closed exactly like path:
+    // a bare/unused alias still hits the ambient-authority denial.
+    for alias in confirmed_timers_module_aliases(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(timers_module_alias_sentinel(&alias), 0);
+    }
+    for alias in confirmed_timers_promises_module_aliases(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(timers_promises_module_alias_sentinel(&alias), 0);
+    }
     let mut synthetic_export_index = 0u32;
     let mut synthetic_import_index = 0u32;
     let mut label_counter = 0u32;
@@ -2548,7 +2561,18 @@ fn lower_statement_to_ir1_with_flow(
                                 && binding_lookup
                                     .contains_key(&querystring_module_alias_sentinel(alias)))
                             || (is_require_os_module_initializer(init, binding_lookup)
-                                && binding_lookup.contains_key(&os_module_alias_sentinel(alias))))
+                                && binding_lookup.contains_key(&os_module_alias_sentinel(alias)))
+                            // bd-suwvw: confirmed timers / timers-promises
+                            // aliases join the same elision (their operations
+                            // are recognized at the member call/read sites).
+                            || (is_require_timers_module_initializer(init, binding_lookup)
+                                && binding_lookup
+                                    .contains_key(&timers_module_alias_sentinel(alias)))
+                            || (is_require_timers_promises_module_initializer(
+                                init,
+                                binding_lookup,
+                            ) && binding_lookup
+                                .contains_key(&timers_promises_module_alias_sentinel(alias))))
                     {
                         ops.push(Ir1Op::LoadLiteral {
                             value: Ir1Literal::Undefined,
@@ -3668,6 +3692,10 @@ fn lower_statement_to_ir1_with_flow(
             // H6.1 audit: function body variable declarations typically 5-50, using 32 as reasonable default
             let mut body_bindings = Vec::with_capacity(32);
             let mut body_lookup = BTreeMap::new();
+            // bd-suwvw: keep timers-module alias recognition working inside
+            // this function body (sentinel keys only; see
+            // `seed_timers_module_alias_sentinels`).
+            seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -3752,6 +3780,8 @@ fn lower_statement_to_ir1_with_flow(
             // resolve them exactly (bd-g0aok).
             let (free_vars, free_var_ids) =
                 collect_free_vars(&body_lookup, &pre_lower_names, binding_lookup);
+            let child_captured_locals =
+                collect_child_captured_locals(&body_ops, &body_lookup, &free_vars, &param_names);
 
             ops.push(Ir1Op::DeclareFunction {
                 name,
@@ -3761,6 +3791,7 @@ fn lower_statement_to_ir1_with_flow(
                 free_vars,
                 free_var_ids,
                 runtime_global_loads,
+                child_captured_locals,
                 is_generator: func.is_generator,
                 is_async: func.is_async,
                 rest_param_index,
@@ -3793,6 +3824,10 @@ fn lower_statement_to_ir1_with_flow(
             // H6.1 audit: constructor body variable declarations, using 32 as reasonable default
             let mut body_bindings = Vec::with_capacity(32);
             let mut body_lookup = BTreeMap::new();
+            // bd-suwvw: keep timers-module alias recognition working inside
+            // this function body (sentinel keys only; see
+            // `seed_timers_module_alias_sentinels`).
+            seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -3864,6 +3899,8 @@ fn lower_statement_to_ir1_with_flow(
                 BindingKind::Let,
             )
             .map_err(LoweringPipelineError::SemanticViolation)?;
+            let ctor_child_captured_locals =
+                collect_child_captured_locals(&body_ops, &body_lookup, &[], &param_names);
             ops.push(Ir1Op::DeclareFunction {
                 name: class_name,
                 binding_id: bid,
@@ -3872,6 +3909,7 @@ fn lower_statement_to_ir1_with_flow(
                 free_vars: Vec::new(),
                 free_var_ids: Vec::new(),
                 runtime_global_loads: Vec::new(),
+                child_captured_locals: ctor_child_captured_locals,
                 is_generator: false,
                 is_async: false,
                 rest_param_index,
@@ -3949,6 +3987,8 @@ fn lower_statement_to_ir1_with_flow(
                 let mut m_body_ops = Vec::new();
                 let mut m_bindings = Vec::new();
                 let mut m_lookup = BTreeMap::new();
+                // bd-suwvw: see the body_lookup seeding above.
+                seed_timers_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 let mut m_binding_index: BindingId = 0;
                 let m_scope = ScopeId { depth: 0, index: 0 };
                 let mut m_label_counter: u32 = 0;
@@ -4020,6 +4060,8 @@ fn lower_statement_to_ir1_with_flow(
                 }
 
                 // Push the method function value.
+                let m_child_captured_locals =
+                    collect_child_captured_locals(&m_body_ops, &m_lookup, &[], &m_param_names);
                 ops.push(Ir1Op::CreateFunction {
                     name: Some(method_name.clone()),
                     param_names: m_param_names,
@@ -4027,6 +4069,7 @@ fn lower_statement_to_ir1_with_flow(
                     free_vars: Vec::new(),
                     free_var_ids: Vec::new(),
                     runtime_global_loads: Vec::new(),
+                    child_captured_locals: m_child_captured_locals,
                     is_generator: false,
                     is_async: false,
                     rest_param_index: m_rest_param_index,
@@ -4489,7 +4532,8 @@ pub fn lower_ir2_to_ir3(
     let mut tdz_initialized = BTreeSet::<BindingId>::new();
     // Deferred function bodies:
     // (body_ir1_ops, param_names, name, free_vars, free_var_ids,
-    //  runtime_global_loads, is_generator, is_async, rest_param_index).
+    //  runtime_global_loads, child_captured_locals, is_generator, is_async,
+    //  rest_param_index).
     // After the main code + Halt, each body is lowered into the instruction
     // stream and registered in function_table.  Index 0 is reserved for main.
     #[allow(clippy::type_complexity)]
@@ -4500,6 +4544,7 @@ pub fn lower_ir2_to_ir3(
         Vec<String>,
         Vec<BindingId>,
         Vec<(String, BindingId)>, // runtime_global_loads (bd-ylpdp)
+        Vec<(String, BindingId)>, // child_captured_locals (bd-suwvw)
         bool,
         bool,
         Option<u32>, // rest_param_index (bd-zs4d5)
@@ -5529,6 +5574,7 @@ pub fn lower_ir2_to_ir3(
                 free_vars,
                 free_var_ids,
                 runtime_global_loads,
+                child_captured_locals,
                 is_generator,
                 is_async,
                 rest_param_index,
@@ -5571,6 +5617,7 @@ pub fn lower_ir2_to_ir3(
                         free_vars.clone(),
                         free_var_ids.clone(),
                         runtime_global_loads.clone(),
+                        child_captured_locals.clone(),
                         *is_generator,
                         *is_async,
                         *rest_param_index,
@@ -5622,6 +5669,7 @@ pub fn lower_ir2_to_ir3(
                 free_vars,
                 free_var_ids,
                 runtime_global_loads,
+                child_captured_locals,
                 is_generator,
                 is_async,
                 rest_param_index,
@@ -5659,6 +5707,7 @@ pub fn lower_ir2_to_ir3(
                     free_vars.clone(),
                     free_var_ids.clone(),
                     runtime_global_loads.clone(),
+                    child_captured_locals.clone(),
                     *is_generator,
                     *is_async,
                     *rest_param_index,
@@ -6017,6 +6066,7 @@ pub fn lower_ir2_to_ir3(
             free_vars,
             free_var_ids,
             fn_runtime_global_loads,
+            fn_child_captured_locals,
             fn_is_generator,
             _fn_is_async,
             fn_rest_param_index,
@@ -6102,9 +6152,8 @@ pub fn lower_ir2_to_ir3(
             _ => false,
         });
 
-        // Collect names of variables that child closures capture from
-        // THIS function, so we can emit DeclareBinding + StoreScoped
-        // for exactly those bindings.
+        // Names of variables that child closures capture from THIS function.
+        // Used for the entry-time parameter mirror below.
         let child_captured_names: BTreeSet<String> = body_ops
             .iter()
             .flat_map(|bop| match bop {
@@ -6112,6 +6161,20 @@ pub fn lower_ir2_to_ir3(
                 | Ir1Op::DeclareFunction { free_vars: fv, .. } => fv.clone(),
                 _ => Vec::new(),
             })
+            .collect();
+
+        // bd-suwvw: exact body-binding-id → name map of the LOCALS child
+        // closures capture, threaded from the emission site (where the body
+        // lookup was available). Stores of these ids are mirrored to the
+        // scope chain below. Replaces the former positional
+        // `nth(binding_id - param_count)` heuristic, which could mirror an
+        // unrelated binding (e.g. an internal method-call receiver temp)
+        // under a captured variable's name — declaring a shadowing scope
+        // binding holding garbage that broke the child's LoadScoped (the
+        // nested-closure `arr.join is not a function on undefined` family).
+        let child_capture_id_to_name: BTreeMap<BindingId, String> = fn_child_captured_locals
+            .iter()
+            .map(|(name, id)| (*id, name.clone()))
             .collect();
 
         // If children capture our locals, push a scope frame at the
@@ -6235,29 +6298,25 @@ pub fn lower_ir2_to_ir3(
                         .or_insert_with(|| alloc_register(&mut fn_reg));
                     let src = pop_lowering_value(&mut fn_value_stack)?;
                     ir3.instructions.push(Ir3Instruction::Move { dst, src });
-                    // If this function has capturing children and this
-                    // binding is being stored for the first time (i.e.,
-                    // it's a local variable init, not a parameter
-                    // already handled above), also put it on the scope
-                    // chain so child closures can find it via LoadScoped.
-                    if has_capturing_children && *binding_id >= param_names.len() as BindingId {
-                        // Use a synthetic name: try to find the real name from
-                        // child_captured_names.  For simplicity we use the binding_id
-                        // as a counter into the captured names.
-                        let var_idx = (*binding_id as usize).saturating_sub(param_names.len());
-                        if let Some(name) = child_captured_names.iter().nth(var_idx) {
-                            let pool_idx = push_constant_optimized(&mut constant_pool, name);
-                            if is_first_store {
-                                ir3.instructions.push(Ir3Instruction::DeclareBinding {
-                                    name_pool_index: pool_idx,
-                                    kind: 0,
-                                });
-                            }
-                            ir3.instructions.push(Ir3Instruction::StoreScoped {
-                                src: dst,
+                    // If a child closure captures this binding, also put it
+                    // on the scope chain so the capture resolves via
+                    // LoadScoped. The name comes from the EXACT
+                    // emission-time map (bd-suwvw) — never from the old
+                    // positional heuristic, which could alias an internal
+                    // temp to a captured variable's name and shadow the real
+                    // binding with garbage.
+                    if let Some(name) = child_capture_id_to_name.get(binding_id) {
+                        let pool_idx = push_constant_optimized(&mut constant_pool, name);
+                        if is_first_store {
+                            ir3.instructions.push(Ir3Instruction::DeclareBinding {
                                 name_pool_index: pool_idx,
+                                kind: 0,
                             });
                         }
+                        ir3.instructions.push(Ir3Instruction::StoreScoped {
+                            src: dst,
+                            name_pool_index: pool_idx,
+                        });
                     }
                     fn_value_stack.push(dst);
                 }
@@ -6649,6 +6708,7 @@ pub fn lower_ir2_to_ir3(
                     free_vars: inner_fv,
                     free_var_ids: inner_fv_ids,
                     runtime_global_loads: inner_runtime_global_loads,
+                    child_captured_locals: inner_child_captured_locals,
                     is_generator: inner_gen,
                     is_async: inner_async,
                     rest_param_index: inner_rest,
@@ -6669,6 +6729,7 @@ pub fn lower_ir2_to_ir3(
                         inner_fv.clone(),
                         inner_fv_ids.clone(),
                         inner_runtime_global_loads.clone(),
+                        inner_child_captured_locals.clone(),
                         *inner_gen,
                         *inner_async,
                         *inner_rest,
@@ -6707,6 +6768,7 @@ pub fn lower_ir2_to_ir3(
                     free_vars: inner_fv,
                     free_var_ids: inner_fv_ids,
                     runtime_global_loads: inner_runtime_global_loads,
+                    child_captured_locals: inner_child_captured_locals,
                     is_generator: inner_gen,
                     is_async: inner_async,
                     rest_param_index: inner_rest,
@@ -6720,6 +6782,7 @@ pub fn lower_ir2_to_ir3(
                         inner_fv.clone(),
                         inner_fv_ids.clone(),
                         inner_runtime_global_loads.clone(),
+                        inner_child_captured_locals.clone(),
                         *inner_gen,
                         *inner_async,
                         *inner_rest,
@@ -7726,6 +7789,42 @@ fn collect_free_vars(
     (names, ids)
 }
 
+/// bd-suwvw: compute the `(name, body binding-id)` pairs of THIS function's
+/// body-local bindings that a DIRECT child closure captures (its `free_vars`),
+/// so the deferred IR3 body pass mirrors stores of exactly those bindings to
+/// the scope chain. Names that are this function's own free vars or params are
+/// excluded — the child resolves those through the captured outer frames /
+/// the entry param mirror, and re-mirroring them here would shadow the real
+/// binding. Grandchildren are handled at their own parent's level (child
+/// `free_vars` are transitively propagated by `collect_free_vars`).
+fn collect_child_captured_locals(
+    body_ops: &[Ir1Op],
+    body_lookup: &BTreeMap<String, BindingId>,
+    own_free_vars: &[String],
+    param_names: &[String],
+) -> Vec<(String, BindingId)> {
+    let mut child_names = BTreeSet::new();
+    for op in body_ops {
+        if let Ir1Op::CreateFunction { free_vars, .. } | Ir1Op::DeclareFunction { free_vars, .. } =
+            op
+        {
+            child_names.extend(free_vars.iter().cloned());
+        }
+    }
+    child_names
+        .into_iter()
+        .filter_map(|name| {
+            if own_free_vars.contains(&name) {
+                return None;
+            }
+            if param_names.contains(&name) {
+                return None;
+            }
+            body_lookup.get(&name).map(|id| (name, *id))
+        })
+        .collect()
+}
+
 /// Canonical names of the runtime-injected global objects that resolve through
 /// the runtime scope chain. `inject_runtime_globals` (baseline_interpreter.rs)
 /// seeds these into the realm global frame, so a bare reference must lower to a
@@ -7735,7 +7834,24 @@ fn collect_free_vars(
 /// (`rewrite_unresolved_function_body_loads`) consume this single list so the
 /// two paths cannot drift. Keep in sync with `inject_runtime_globals`.
 /// (bd-ylpdp; the YTBG/BotGuard `new Function` + `performance` spine.)
-const PREDECLARED_RUNTIME_GLOBALS: &[&str] = &["Function", "console", "performance", "process"];
+const PREDECLARED_RUNTIME_GLOBALS: &[&str] = &[
+    "Function",
+    "console",
+    "performance",
+    "process",
+    // bd-suwvw: timer globals injected as first-class `BuiltinFunction`
+    // values — bare references (`typeof setTimeout`, `const f = setTimeout`,
+    // identity comparisons) resolve through the runtime scope chain. Direct
+    // CALLS are still intercepted at lowering by
+    // `timer_builtin_call_capability` before any identifier load.
+    "setTimeout",
+    "clearTimeout",
+    "setInterval",
+    "clearInterval",
+    "setImmediate",
+    "clearImmediate",
+    "queueMicrotask",
+];
 
 fn emit_reference_error_throw(ops: &mut Vec<Ir1Op>, name: &str) {
     ops.push(Ir1Op::LoadLiteral {
@@ -9768,6 +9884,10 @@ fn lower_expression_to_ir1_inner(
             // sep/eq/options on parse/stringify, optional pid on getPriority).
             if let Some(capability) = querystring_builtin_call_capability(callee, binding_lookup)
                 .or_else(|| os_builtin_call_capability(callee, binding_lookup))
+                // bd-suwvw: `require('timers/promises')` member calls
+                // (`tp.setTimeout(ms, value)`, `tp.setInterval(ms)`) share
+                // the slot-0 no-receiver convention with querystring/os.
+                .or_else(|| timers_promises_builtin_call_capability(callee, binding_lookup))
             {
                 let arg_count = arguments.len();
                 if arg_count > u32::MAX as usize {
@@ -10930,6 +11050,28 @@ fn lower_expression_to_ir1_inner(
                 }
                 return Ok(());
             }
+            // bd-suwvw: a recognized timers-module export READ on a confirmed
+            // alias (`timers.setTimeout` in value position) lowers as a bare
+            // reference to the like-named runtime global, so the module
+            // export and the injected global are one first-class
+            // `BuiltinFunction` value (`timers.setTimeout === setTimeout` is
+            // true, matching Node/bun). The receiver is deliberately NOT
+            // lowered (no real timers module object).
+            if let Some(global_name) =
+                timers_member_global_read(object, property, *computed, binding_lookup)
+            {
+                lower_expression_to_ir1(
+                    &Expression::Identifier(global_name.to_string()),
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
+                )?;
+                return Ok(());
+            }
             if let Some(capability) =
                 promise_static_member_capability(object, property, *computed, binding_lookup)
             {
@@ -11445,6 +11587,10 @@ fn lower_expression_to_ir1_inner(
             let mut body_ops = Vec::new();
             let mut body_bindings = Vec::new();
             let mut body_lookup = BTreeMap::new();
+            // bd-suwvw: keep timers-module alias recognition working inside
+            // this function body (sentinel keys only; see
+            // `seed_timers_module_alias_sentinels`).
+            seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -11550,6 +11696,12 @@ fn lower_expression_to_ir1_inner(
             );
             let (arrow_free_vars, arrow_free_var_ids) =
                 collect_free_vars(&body_lookup, &pre_lower_names, binding_lookup);
+            let arrow_child_captured_locals = collect_child_captured_locals(
+                &body_ops,
+                &body_lookup,
+                &arrow_free_vars,
+                &param_names,
+            );
             ops.push(Ir1Op::CreateFunction {
                 name: None,
                 param_names,
@@ -11557,6 +11709,7 @@ fn lower_expression_to_ir1_inner(
                 free_vars: arrow_free_vars,
                 free_var_ids: arrow_free_var_ids,
                 runtime_global_loads: arrow_runtime_global_loads,
+                child_captured_locals: arrow_child_captured_locals,
                 is_generator: false,
                 is_async: *is_async,
                 rest_param_index,
@@ -11573,6 +11726,10 @@ fn lower_expression_to_ir1_inner(
             let mut body_ops = Vec::new();
             let mut body_bindings = Vec::new();
             let mut body_lookup = BTreeMap::new();
+            // bd-suwvw: keep timers-module alias recognition working inside
+            // this function body (sentinel keys only; see
+            // `seed_timers_module_alias_sentinels`).
+            seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -11673,6 +11830,8 @@ fn lower_expression_to_ir1_inner(
                 fn_free_vars.push(self_name.clone());
                 fn_free_var_ids.push(self_id);
             }
+            let fn_child_captured_locals =
+                collect_child_captured_locals(&body_ops, &body_lookup, &fn_free_vars, &param_names);
             ops.push(Ir1Op::CreateFunction {
                 name: name.clone(),
                 param_names,
@@ -11680,6 +11839,7 @@ fn lower_expression_to_ir1_inner(
                 free_vars: fn_free_vars,
                 free_var_ids: fn_free_var_ids,
                 runtime_global_loads: fn_runtime_global_loads,
+                child_captured_locals: fn_child_captured_locals,
                 is_generator: *is_generator,
                 is_async: *is_async,
                 rest_param_index,
@@ -12039,6 +12199,10 @@ fn lower_expression_to_ir1_inner(
             let mut body_ops = Vec::new();
             let mut body_bindings = Vec::new();
             let mut body_lookup = BTreeMap::new();
+            // bd-suwvw: keep timers-module alias recognition working inside
+            // this function body (sentinel keys only; see
+            // `seed_timers_module_alias_sentinels`).
+            seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -12102,6 +12266,8 @@ fn lower_expression_to_ir1_inner(
                 body_ops.push(Ir1Op::Return);
             }
 
+            let ctor_child_captured_locals =
+                collect_child_captured_locals(&body_ops, &body_lookup, &[], &param_names);
             ops.push(Ir1Op::DeclareFunction {
                 name: class_name,
                 binding_id: bid,
@@ -12110,6 +12276,7 @@ fn lower_expression_to_ir1_inner(
                 free_vars: Vec::new(),
                 free_var_ids: Vec::new(),
                 runtime_global_loads: Vec::new(),
+                child_captured_locals: ctor_child_captured_locals,
                 is_generator: false,
                 is_async: false,
                 rest_param_index,
@@ -12173,6 +12340,8 @@ fn lower_expression_to_ir1_inner(
                 let mut m_body_ops = Vec::new();
                 let mut m_bindings = Vec::new();
                 let mut m_lookup = BTreeMap::new();
+                // bd-suwvw: see the body_lookup seeding above.
+                seed_timers_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 let mut m_binding_index: BindingId = 0;
                 let m_scope = ScopeId { depth: 0, index: 0 };
                 let mut m_label_counter: u32 = 0;
@@ -12240,6 +12409,8 @@ fn lower_expression_to_ir1_inner(
                         key: Ir1PropertyKey::Static("prototype".to_string()),
                     });
                 }
+                let m_child_captured_locals =
+                    collect_child_captured_locals(&m_body_ops, &m_lookup, &[], &m_param_names);
                 ops.push(Ir1Op::CreateFunction {
                     name: Some(method_name.clone()),
                     param_names: m_param_names,
@@ -12247,6 +12418,7 @@ fn lower_expression_to_ir1_inner(
                     free_vars: Vec::new(),
                     free_var_ids: Vec::new(),
                     runtime_global_loads: Vec::new(),
+                    child_captured_locals: m_child_captured_locals,
                     is_generator: false,
                     is_async: false,
                     rest_param_index: m_rest_param_index,
@@ -13498,6 +13670,400 @@ fn confirmed_querystring_module_aliases(
                 expr_contains_matching_call(e, &|callee| {
                     is_querystring_alias_method_callee(callee, &single)
                 })
+            })
+        }) {
+            used.insert(name.clone());
+        }
+    }
+    used
+}
+
+/// bd-suwvw: true when `specifier` names the Node timers module — `timers`
+/// or `node:timers`.
+fn is_timers_module_specifier(specifier: &str) -> bool {
+    specifier == "timers" || specifier == "node:timers"
+}
+
+/// bd-suwvw: true when `specifier` names the Node timers/promises module.
+fn is_timers_promises_module_specifier(specifier: &str) -> bool {
+    specifier == "timers/promises" || specifier == "node:timers/promises"
+}
+
+/// bd-suwvw: sentinel key recording that `name` is bound to the timers module
+/// via `const <name> = require('timers')` AND used as a recognized timers
+/// export. Mirror of [`querystring_module_alias_sentinel`].
+fn timers_module_alias_sentinel(name: &str) -> String {
+    format!("\0timersmod\0{name}")
+}
+
+/// bd-suwvw: sentinel key for a confirmed `require('timers/promises')` alias.
+fn timers_promises_module_alias_sentinel(name: &str) -> String {
+    format!("\0timerspmod\0{name}")
+}
+
+/// bd-suwvw: true when `expr` is exactly `require('timers')` /
+/// `require('node:timers')` with an unshadowed `require`.
+fn is_require_timers_module_initializer(
+    expr: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    let Expression::Call {
+        callee, arguments, ..
+    } = expr
+    else {
+        return false;
+    };
+    if !matches!(callee.as_ref(), Expression::Identifier(name)
+        if name == "require" && !binding_lookup.contains_key(name.as_str()))
+    {
+        return false;
+    }
+    matches!(
+        arguments.as_slice(),
+        [Expression::StringLiteral(spec)] if is_timers_module_specifier(spec)
+    )
+}
+
+/// bd-suwvw: true when `expr` is exactly `require('timers/promises')` /
+/// `require('node:timers/promises')` with an unshadowed `require`.
+fn is_require_timers_promises_module_initializer(
+    expr: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    let Expression::Call {
+        callee, arguments, ..
+    } = expr
+    else {
+        return false;
+    };
+    if !matches!(callee.as_ref(), Expression::Identifier(name)
+        if name == "require" && !binding_lookup.contains_key(name.as_str()))
+    {
+        return false;
+    }
+    matches!(
+        arguments.as_slice(),
+        [Expression::StringLiteral(spec)] if is_timers_promises_module_specifier(spec)
+    )
+}
+
+/// bd-suwvw: true when `expr` IS the timers module object at lowering time —
+/// a sentinel-recorded require-binding alias or the inline
+/// `require('timers')` call.
+fn is_timers_module_object(
+    expr: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    match expr {
+        Expression::Identifier(alias) => {
+            binding_lookup.contains_key(&timers_module_alias_sentinel(alias))
+        }
+        Expression::Call { .. } => is_require_timers_module_initializer(expr, binding_lookup),
+        _ => false,
+    }
+}
+
+/// bd-suwvw: true when `expr` IS the timers/promises module object at
+/// lowering time.
+fn is_timers_promises_module_object(
+    expr: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    match expr {
+        Expression::Identifier(alias) => {
+            binding_lookup.contains_key(&timers_promises_module_alias_sentinel(alias))
+        }
+        Expression::Call { .. } => {
+            is_require_timers_promises_module_initializer(expr, binding_lookup)
+        }
+        _ => false,
+    }
+}
+
+/// bd-suwvw: capability for a recognized `timers/promises` method call.
+fn timers_promises_method_capability(method: &str) -> Option<&'static str> {
+    match method {
+        "setTimeout" => Some("builtin:TimersPromisesSetTimeout"),
+        "setInterval" => Some("builtin:TimersPromisesSetInterval"),
+        "setImmediate" => Some("builtin:TimersPromisesSetImmediate"),
+        _ => None,
+    }
+}
+
+/// bd-suwvw: recognize a `timers/promises` builtin member call
+/// (`tp.setTimeout(ms, value)`) and return its capability. Slot-0 argument
+/// convention (no receiver placeholder), like the querystring builtins.
+fn timers_promises_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee
+    else {
+        return None;
+    };
+    if !is_timers_promises_module_object(object, binding_lookup) {
+        return None;
+    }
+    let method = match property.as_ref() {
+        Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
+        _ => return None,
+    };
+    timers_promises_method_capability(method)
+}
+
+/// bd-suwvw: member READ of a recognized timers-module export on a confirmed
+/// alias / inline require receiver (`timers.setTimeout` in value position —
+/// e.g. `timers.setTimeout === setTimeout`). Returns the like-named GLOBAL to
+/// lower the read as, so the module export and the injected runtime global
+/// are the same first-class `BuiltinFunction` value and identity holds.
+fn timers_member_global_read(
+    object: &Expression,
+    property: &Expression,
+    computed: bool,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    if computed {
+        return None;
+    }
+    if !is_timers_module_object(object, binding_lookup) {
+        return None;
+    }
+    let name = match property {
+        Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
+        _ => return None,
+    };
+    timers_module_export_global(name)
+}
+
+/// bd-suwvw: scan-time twin of the timers member recognizers — during the
+/// pre-scan the sentinels are not recorded yet, so the module-object
+/// predicate is membership in the candidate alias-name set. A member READ
+/// counts as usage (identity comparisons never call), so this matches the
+/// Member node itself rather than only call callees.
+fn is_timers_alias_member(expr: &Expression, alias_names: &BTreeSet<String>) -> bool {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = expr
+    else {
+        return false;
+    };
+    if !matches!(object.as_ref(), Expression::Identifier(name) if alias_names.contains(name)) {
+        return false;
+    }
+    matches!(property.as_ref(),
+        Expression::Identifier(m) | Expression::StringLiteral(m)
+            if timers_module_export_global(m).is_some())
+}
+
+/// bd-suwvw: scan-time twin for timers/promises (member CALLS only — the
+/// promises API is consumed by calling).
+fn is_timers_promises_alias_method_callee(
+    callee: &Expression,
+    alias_names: &BTreeSet<String>,
+) -> bool {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee
+    else {
+        return false;
+    };
+    if !matches!(object.as_ref(), Expression::Identifier(name) if alias_names.contains(name)) {
+        return false;
+    }
+    matches!(property.as_ref(),
+        Expression::Identifier(m) | Expression::StringLiteral(m)
+            if timers_promises_method_capability(m).is_some())
+}
+
+/// bd-suwvw: deep usage-scan walker for the timers module families. Unlike
+/// the path/querystring/os scans (which keep function bodies opaque), the
+/// timers scans recurse INTO arrow/function bodies: timer APIs are routinely
+/// consumed inside callbacks and async IIFEs (`(async () => { for await (…
+/// of tp.setInterval(10)) … })()`), and the member-call recognizers DO
+/// intercept those sites at lowering (the sentinels are seeded into function
+/// body lookups — see `seed_timers_module_alias_sentinels`), so confirming an
+/// alias from an in-function usage is sound. Applies `base` at every visited
+/// expression node.
+fn timers_scan_expr_deep<F: Fn(&Expression) -> bool>(expr: &Expression, base: &F) -> bool {
+    if base(expr) {
+        return true;
+    }
+    match expr {
+        Expression::ArrowFunction { body, .. } => match body {
+            ArrowBody::Expression(inner) => timers_scan_expr_deep(inner, base),
+            ArrowBody::Block(block) => block
+                .body
+                .iter()
+                .any(|stmt| timers_scan_statement_deep(stmt, base)),
+        },
+        Expression::Function { body, .. } => body
+            .body
+            .iter()
+            .any(|stmt| timers_scan_statement_deep(stmt, base)),
+        Expression::Call {
+            callee, arguments, ..
+        }
+        | Expression::OptionalCall {
+            callee, arguments, ..
+        }
+        | Expression::New { callee, arguments } => {
+            timers_scan_expr_deep(callee, base)
+                || arguments.iter().any(|a| timers_scan_expr_deep(a, base))
+        }
+        Expression::Member {
+            object, property, ..
+        }
+        | Expression::OptionalMember {
+            object, property, ..
+        } => timers_scan_expr_deep(object, base) || timers_scan_expr_deep(property, base),
+        Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
+            timers_scan_expr_deep(left, base) || timers_scan_expr_deep(right, base)
+        }
+        Expression::Unary { argument, .. }
+        | Expression::Await(argument)
+        | Expression::SpreadElement(argument) => timers_scan_expr_deep(argument, base),
+        Expression::Conditional {
+            test,
+            consequent,
+            alternate,
+        } => {
+            timers_scan_expr_deep(test, base)
+                || timers_scan_expr_deep(consequent, base)
+                || timers_scan_expr_deep(alternate, base)
+        }
+        Expression::Yield {
+            argument: Some(argument),
+            ..
+        } => timers_scan_expr_deep(argument, base),
+        Expression::ArrayLiteral(elements) => elements
+            .iter()
+            .flatten()
+            .any(|e| timers_scan_expr_deep(e, base)),
+        Expression::TemplateLiteral { expressions, .. } => {
+            expressions.iter().any(|e| timers_scan_expr_deep(e, base))
+        }
+        _ => false,
+    }
+}
+
+/// bd-suwvw: statement-level twin of [`timers_scan_expr_deep`] — reuses the
+/// shared control-flow statement recursion with the deep expression walker
+/// as the predicate, and additionally enters function/class DECLARATION
+/// bodies (the shared walker keeps those opaque; the timers scan must see
+/// `function go() { tp.setTimeout(...) }`).
+fn timers_scan_statement_deep<F: Fn(&Expression) -> bool>(stmt: &Statement, base: &F) -> bool {
+    match stmt {
+        Statement::FunctionDeclaration(func) => func
+            .body
+            .body
+            .iter()
+            .any(|inner| timers_scan_statement_deep(inner, base)),
+        Statement::ClassDeclaration(cls) => cls.body.iter().any(|method| {
+            method
+                .body
+                .body
+                .iter()
+                .any(|inner| timers_scan_statement_deep(inner, base))
+        }),
+        Statement::Labeled(labeled) => timers_scan_statement_deep(&labeled.body, base),
+        _ => path_statement_contains_usage(stmt, &|e| timers_scan_expr_deep(e, base)),
+    }
+}
+
+/// bd-suwvw: copy the timers-family NUL-sentinels from the enclosing lookup
+/// into a fresh function-body lookup, so the member call/read recognizers
+/// keep working INSIDE function and arrow bodies (`(async () => {
+/// tp.setTimeout(10) })()`). Scoped to the timers sentinels only — the other
+/// module families keep their existing top-level-only recognition surface.
+fn seed_timers_module_alias_sentinels(
+    body_lookup: &mut BTreeMap<String, BindingId>,
+    outer_lookup: &BTreeMap<String, BindingId>,
+) {
+    for key in outer_lookup.keys() {
+        if key.starts_with("\0timersmod\0") || key.starts_with("\0timerspmod\0") {
+            body_lookup.insert(key.clone(), 0);
+        }
+    }
+}
+
+/// bd-suwvw: compute the identifier names BOTH bound via `const/let/var
+/// <name> = require('timers')` at the unit root AND used as a recognized
+/// timers export (member call OR member read) somewhere reachable by the
+/// deep statement scan (control flow + function/arrow bodies). Mirror of
+/// [`confirmed_querystring_module_aliases`] apart from the deep recursion —
+/// see [`timers_scan_expr_deep`].
+fn confirmed_timers_module_aliases(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for stmt in body {
+        if let Statement::VariableDeclaration(vd) = stmt {
+            for d in &vd.declarations {
+                if let (BindingPattern::Identifier(name), Some(init)) = (&d.pattern, &d.initializer)
+                    && is_require_timers_module_initializer(init, binding_lookup)
+                {
+                    candidates.insert(name.clone());
+                }
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return candidates;
+    }
+
+    let mut used = BTreeSet::new();
+    for name in &candidates {
+        let single: BTreeSet<String> = std::iter::once(name.clone()).collect();
+        if body.iter().any(|stmt| {
+            timers_scan_statement_deep(stmt, &|member| is_timers_alias_member(member, &single))
+        }) {
+            used.insert(name.clone());
+        }
+    }
+    used
+}
+
+/// bd-suwvw: like [`confirmed_timers_module_aliases`] for
+/// `require('timers/promises')` (member CALLS count as usage).
+fn confirmed_timers_promises_module_aliases(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for stmt in body {
+        if let Statement::VariableDeclaration(vd) = stmt {
+            for d in &vd.declarations {
+                if let (BindingPattern::Identifier(name), Some(init)) = (&d.pattern, &d.initializer)
+                    && is_require_timers_promises_module_initializer(init, binding_lookup)
+                {
+                    candidates.insert(name.clone());
+                }
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return candidates;
+    }
+
+    let mut used = BTreeSet::new();
+    for name in &candidates {
+        let single: BTreeSet<String> = std::iter::once(name.clone()).collect();
+        if body.iter().any(|stmt| {
+            timers_scan_statement_deep(stmt, &|e| {
+                matches!(e, Expression::Call { callee, .. } | Expression::OptionalCall { callee, .. }
+                    if is_timers_promises_alias_method_callee(callee, &single))
             })
         }) {
             used.insert(name.clone());
@@ -14906,28 +15472,79 @@ fn reflect_builtin_call_capability(
     }
 }
 
-/// Capability for a bare global timer-builtin call (`setTimeout(fn, ms)` etc.).
-///
-/// Unlike the `Math.*`/string/array builtins, these are invoked as bare
-/// identifiers rather than member access, so they are not recognized by the
-/// member-callee capability helpers. Returns `None` when the identifier is
-/// shadowed by a user binding in scope (e.g. `let setTimeout = …`), so a
-/// local `setTimeout` is never reinterpreted as the host builtin (bd-1lw7r.13).
-fn timer_builtin_call_capability(
-    callee: &Expression,
-    binding_lookup: &BTreeMap<String, BindingId>,
-) -> Option<&'static str> {
-    let Expression::Identifier(name) = callee else {
-        return None;
-    };
-    if binding_lookup.contains_key(name.as_str()) {
-        return None;
-    }
-    match name.as_str() {
+/// Capability tag for a recognized timer-global name (bd-1lw7r.13, extended
+/// for the Node-compat timers breadth under bd-suwvw). Single source of truth
+/// shared by the bare-call recognizer, the `require('timers')` member-call
+/// recognizer, and the usage-lookahead alias scan.
+fn timer_global_capability(name: &str) -> Option<&'static str> {
+    match name {
         "setTimeout" => Some("builtin:SetTimeout"),
         "setInterval" => Some("builtin:SetInterval"),
         "clearTimeout" => Some("builtin:ClearTimeout"),
         "clearInterval" => Some("builtin:ClearInterval"),
+        "setImmediate" => Some("builtin:SetImmediate"),
+        "clearImmediate" => Some("builtin:ClearImmediate"),
+        "queueMicrotask" => Some("builtin:QueueMicrotask"),
+        _ => None,
+    }
+}
+
+/// bd-suwvw: the exports of `require('timers')` (`node:timers`), each mapped
+/// to the like-named global. Note the Node timers module does NOT export
+/// `queueMicrotask` (that is only a global), so it is absent here.
+fn timers_module_export_global(name: &str) -> Option<&'static str> {
+    match name {
+        "setTimeout" => Some("setTimeout"),
+        "setInterval" => Some("setInterval"),
+        "clearTimeout" => Some("clearTimeout"),
+        "clearInterval" => Some("clearInterval"),
+        "setImmediate" => Some("setImmediate"),
+        "clearImmediate" => Some("clearImmediate"),
+        _ => None,
+    }
+}
+
+/// Capability for a bare global timer-builtin call (`setTimeout(fn, ms)` etc.)
+/// or a member call on the timers module (`require('timers').setTimeout(...)`
+/// / a confirmed `const timers = require('timers')` alias — bd-suwvw).
+///
+/// Unlike the `Math.*`/string/array builtins, the globals are invoked as bare
+/// identifiers rather than member access, so they are not recognized by the
+/// member-callee capability helpers. Returns `None` when the identifier is
+/// shadowed by a user binding in scope (e.g. `let setTimeout = …`), so a
+/// local `setTimeout` is never reinterpreted as the host builtin (bd-1lw7r.13).
+/// (A shadowed-but-injected global still works through the first-class
+/// `BuiltinFunction` value path at runtime.)
+fn timer_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    match callee {
+        Expression::Identifier(name) => {
+            if binding_lookup.contains_key(name.as_str()) {
+                return None;
+            }
+            timer_global_capability(name)
+        }
+        Expression::Member {
+            object,
+            property,
+            computed: false,
+            ..
+        } => {
+            // bd-suwvw: `timers.setTimeout(...)` on a confirmed timers-module
+            // alias (or an inline `require('timers')` receiver) lowers to the
+            // SAME builtin hostcall as the bare global, so the module and
+            // global forms share one timer machinery.
+            if !is_timers_module_object(object, binding_lookup) {
+                return None;
+            }
+            let method = match property.as_ref() {
+                Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
+                _ => return None,
+            };
+            timers_module_export_global(method).and_then(timer_global_capability)
+        }
         _ => None,
     }
 }

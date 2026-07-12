@@ -900,6 +900,280 @@ fn node_path_win32_join(parts: &[String]) -> String {
     node_path_win32_normalize(&joined)
 }
 
+// ---------------------------------------------------------------------------
+// Node `querystring` builtin semantics (bd-qmy52)
+//
+// Pure-compute string algorithms backing the `builtin:Querystring*` hostcalls
+// emitted by the lowering pipeline's querystring-module interception. Escape/
+// unescape/parse edge behaviors are pinned against bun 1.3.14 (Node-compatible
+// reference). Mirrored in `franken-core/src/baseline_interpreter.rs`
+// (twin-lane convention, like the path builtins) — keep the two copies in
+// lockstep.
+// ---------------------------------------------------------------------------
+
+/// Characters Node's `querystring.escape` leaves literal (the `noEscape`
+/// table): ASCII alphanumerics plus `- . _ ~ ! ' ( ) *`. Everything else —
+/// including space and `+` — percent-encodes.
+fn qs_is_unescaped_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~' | '!' | '\'' | '(' | ')' | '*')
+}
+
+/// Node `querystring.escape`: percent-encode every char outside the noEscape
+/// set as uppercase-hex UTF-8 bytes (bun: space -> `%20`, `+` -> `%2B`,
+/// `é` -> `%C3%A9`, `中` -> `%E4%B8%AD`).
+fn node_qs_escape(input: &str) -> String {
+    const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = String::with_capacity(input.len());
+    let mut utf8_buf = [0u8; 4];
+    for c in input.chars() {
+        if qs_is_unescaped_char(c) {
+            out.push(c);
+        } else {
+            for byte in c.encode_utf8(&mut utf8_buf).as_bytes() {
+                out.push('%');
+                out.push(char::from(HEX_UPPER[(byte >> 4) as usize]));
+                out.push(char::from(HEX_UPPER[(byte & 0x0f) as usize]));
+            }
+        }
+    }
+    out
+}
+
+/// Hex digit value of an ASCII byte (Node's `isHexTable` accepts both cases).
+fn qs_hex_digit_value(byte: u8) -> Option<u8> {
+    (byte as char).to_digit(16).map(|digit| digit as u8)
+}
+
+/// Strict percent-decode matching the `decodeURIComponent` accept set Node's
+/// `querystring.unescape` tries first: every `%` must be followed by two hex
+/// digits and the decoded byte sequence must be valid UTF-8; `+` is NOT
+/// decoded. `None` on any violation (the caller falls back to the lenient
+/// `unescapeBuffer` semantics).
+fn qs_strict_percent_decode(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let hi = qs_hex_digit_value(*bytes.get(index + 1)?)?;
+            let lo = qs_hex_digit_value(*bytes.get(index + 2)?)?;
+            out.push((hi << 4) | lo);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// Lenient fallback matching Node's `unescapeBuffer`: valid `%XX` pairs decode
+/// byte-wise, malformed `%` sequences stay literal, and the byte buffer is
+/// decoded as UTF-8 with U+FFFD replacement (bun: `qs.unescape('%FF')` is
+/// `'\u{FFFD}'`, `qs.unescape('a%2')` is `'a%2'`).
+fn qs_lenient_unescape(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && let (Some(hi), Some(lo)) = (
+                bytes.get(index + 1).copied().and_then(qs_hex_digit_value),
+                bytes.get(index + 2).copied().and_then(qs_hex_digit_value),
+            )
+        {
+            out.push((hi << 4) | lo);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Node `querystring.unescape`: try the strict `decodeURIComponent`-shaped
+/// decode first, fall back to the lenient `unescapeBuffer` semantics on any
+/// malformed input. `+` never decodes to space here — only `parse`'s component
+/// handling does that (bun: `qs.unescape('x+y')` is `'x+y'`).
+fn node_qs_unescape(input: &str) -> String {
+    match qs_strict_percent_decode(input) {
+        Some(decoded) => decoded,
+        None => qs_lenient_unescape(input),
+    }
+}
+
+/// True when `raw` contains at least one complete valid `%XX` escape — Node's
+/// parse routes a key/value through the decoder only when its scanner saw a
+/// full valid escape (`keyEncoded`/`valEncoded`), so `'a%2'` stays literal.
+fn qs_component_looks_encoded(raw: &str) -> bool {
+    raw.as_bytes().windows(3).any(|window| {
+        window[0] == b'%'
+            && qs_hex_digit_value(window[1]).is_some()
+            && qs_hex_digit_value(window[2]).is_some()
+    })
+}
+
+/// Decode one `parse` component: `+` becomes space FIRST (Node's `plusChar`
+/// substitution precedes decoding), then the unescape pass runs only when the
+/// raw component contained a complete valid `%XX` escape.
+fn qs_parse_component(raw: &str) -> String {
+    let plussed = raw.replace('+', " ");
+    if qs_component_looks_encoded(raw) {
+        node_qs_unescape(&plussed)
+    } else {
+        plussed
+    }
+}
+
+/// Node `querystring.parse` over a pre-validated input string: split on `sep`,
+/// the FIRST `eq` in a segment splits key/value (a key without `eq` maps to
+/// `''`), `max_pairs` slots (default 1000, `None` = unlimited) are consumed by
+/// stored pairs AND by empty segments between separators (bun:
+/// `parse('&a=1', null, null, { maxKeys: 1 })` is `{}` but a TRAILING empty
+/// segment is a no-op: `parse('a=1&')` is `{ a: '1' }`), and repeated keys
+/// collect into arrays. Returns entries in first-seen key order with per-key
+/// value order preserved; keys with one value are scalars at allocation.
+fn node_qs_parse(
+    input: &str,
+    sep: &str,
+    eq: &str,
+    max_pairs: Option<u64>,
+) -> Vec<(String, Vec<String>)> {
+    let mut entries: Vec<(String, Vec<String>)> = Vec::new();
+    if input.is_empty() {
+        return entries;
+    }
+    // A truthy custom separator can stringify to '' (e.g. `[]`); Node's
+    // char-code matcher then never matches, i.e. no splitting occurs. Same
+    // for an empty `eq`: the whole segment becomes the key.
+    let segments: Vec<&str> = if sep.is_empty() {
+        vec![input]
+    } else {
+        input.split(sep).collect()
+    };
+    let last_index = segments.len() - 1;
+    let mut remaining = max_pairs;
+    for (index, segment) in segments.iter().enumerate() {
+        if segment.is_empty() {
+            // Empty segment BETWEEN separators: consumes a pair slot without
+            // storing anything (Node decrements `pairs`); trailing is a no-op.
+            if index < last_index
+                && let Some(slots) = remaining.as_mut()
+            {
+                *slots -= 1;
+                if *slots == 0 {
+                    return entries;
+                }
+            }
+            continue;
+        }
+        let (raw_key, raw_value) = if eq.is_empty() {
+            (*segment, None)
+        } else {
+            match segment.find(eq) {
+                Some(pos) => (&segment[..pos], Some(&segment[pos + eq.len()..])),
+                None => (*segment, None),
+            }
+        };
+        let key = qs_parse_component(raw_key);
+        let value = raw_value.map(qs_parse_component).unwrap_or_default();
+        match entries.iter_mut().find(|(existing, _)| *existing == key) {
+            Some((_, values)) => values.push(value),
+            None => entries.push((key, vec![value])),
+        }
+        if let Some(slots) = remaining.as_mut() {
+            *slots -= 1;
+            if *slots == 0 {
+                return entries;
+            }
+        }
+    }
+    entries
+}
+
+// ---------------------------------------------------------------------------
+// Node `os` builtin fixed values (bd-qmy52)
+//
+// The engine has NO ambient authority: the `builtin:Os*` hostcalls return
+// FIXED, deterministic, linux-shaped engine-contained values (they never read
+// the real host). The compat corpus asserts types and predicates (e.g.
+// `typeof os.hostname() === 'string'`, `os.freemem() <= os.totalmem()`), not
+// host facts, so any internally-consistent value set is behaviorally correct.
+// Mirrored in `franken-core/src/baseline_interpreter.rs` — keep in lockstep.
+// ---------------------------------------------------------------------------
+
+/// `os.platform()` — also mirrored by the injected `process.platform` shape
+/// value so `os.platform() === process.platform` holds (Node/linux).
+const NODE_OS_PLATFORM: &str = "linux";
+/// `os.release()` — fixed plausible kernel release string.
+const NODE_OS_RELEASE: &str = "6.0.0-franken";
+/// `os.version()` — fixed plausible kernel version string.
+const NODE_OS_VERSION: &str = "#1 SMP PREEMPT_DYNAMIC franken";
+/// `os.totalmem()` — fixed 16 GiB.
+const NODE_OS_TOTALMEM_BYTES: i64 = 17_179_869_184;
+/// `os.freemem()` — fixed 8 GiB (strictly below [`NODE_OS_TOTALMEM_BYTES`]).
+const NODE_OS_FREEMEM_BYTES: i64 = 8_589_934_592;
+
+/// POSIX signal numbers for `os.constants.signals` (linux, x86-64 numbering).
+const NODE_OS_SIGNALS: &[(&str, i64)] = &[
+    ("SIGHUP", 1),
+    ("SIGINT", 2),
+    ("SIGQUIT", 3),
+    ("SIGILL", 4),
+    ("SIGTRAP", 5),
+    ("SIGABRT", 6),
+    ("SIGBUS", 7),
+    ("SIGFPE", 8),
+    ("SIGKILL", 9),
+    ("SIGUSR1", 10),
+    ("SIGSEGV", 11),
+    ("SIGUSR2", 12),
+    ("SIGPIPE", 13),
+    ("SIGALRM", 14),
+    ("SIGTERM", 15),
+    ("SIGCHLD", 17),
+    ("SIGCONT", 18),
+    ("SIGSTOP", 19),
+    ("SIGTSTP", 20),
+];
+
+/// POSIX errno numbers for `os.constants.errno` (linux).
+const NODE_OS_ERRNO: &[(&str, i64)] = &[
+    ("EPERM", 1),
+    ("ENOENT", 2),
+    ("ESRCH", 3),
+    ("EINTR", 4),
+    ("EIO", 5),
+    ("EBADF", 9),
+    ("EAGAIN", 11),
+    ("ENOMEM", 12),
+    ("EACCES", 13),
+    ("EFAULT", 14),
+    ("EBUSY", 16),
+    ("EEXIST", 17),
+    ("ENOTDIR", 20),
+    ("EISDIR", 21),
+    ("EINVAL", 22),
+    ("ENFILE", 23),
+    ("EMFILE", 24),
+    ("ENOSPC", 28),
+    ("ESPIPE", 29),
+    ("EROFS", 30),
+    ("EPIPE", 32),
+    ("ERANGE", 34),
+];
+
+/// `os.constants.priority` values (Node's uv priority constants).
+const NODE_OS_PRIORITY: &[(&str, i64)] = &[
+    ("PRIORITY_LOW", 19),
+    ("PRIORITY_BELOW_NORMAL", 10),
+    ("PRIORITY_NORMAL", 0),
+    ("PRIORITY_ABOVE_NORMAL", -7),
+    ("PRIORITY_HIGH", -14),
+    ("PRIORITY_HIGHEST", -20),
+];
+
 /// Map an [`InterpreterError`] to a small stable `u32` for the telemetry
 /// schema's `HostcallResult::Error { code }` field. Codes are an internal
 /// taxonomy (not user-visible) and are intentionally narrow so a new error
@@ -6961,8 +7235,18 @@ impl InterpreterCore {
     fn inject_runtime_globals(&mut self) -> Result<(), InterpreterError> {
         let argv = Value::Object(self.alloc_array_from_values(&[])?);
         let env = Value::Object(self.alloc_object_with_properties(&[])?);
-        let process =
-            Value::Object(self.alloc_object_with_properties(&[("argv", argv), ("env", env)])?);
+        // bd-qmy52: `platform` is a benign process-SHAPE descriptor (readable
+        // under the trusted `ProcessShapeRead` grant, see
+        // `is_benign_process_shape_member`). It carries the same FIXED
+        // engine-contained value as the `os.platform()` builtin
+        // (`NODE_OS_PLATFORM`) so `os.platform() === process.platform` holds,
+        // matching Node on linux. No env VALUES are exposed (env stays empty
+        // and env reads stay denied at lowering).
+        let process = Value::Object(self.alloc_object_with_properties(&[
+            ("argv", argv),
+            ("env", env),
+            ("platform", Value::str(NODE_OS_PLATFORM)),
+        ])?);
         let console = Value::Object(self.alloc_object_with_properties(&[
             (
                 "log",
@@ -22318,6 +22602,233 @@ impl InterpreterCore {
         }
     }
 
+    /// bd-qmy52: raw hostcall argument at `offset`, `None` when absent (the
+    /// querystring/os builtins have optional trailing arguments with
+    /// value-sensitive defaults, so absence must be distinguishable from an
+    /// explicit `undefined` only where Node distinguishes them — it never
+    /// does, both mean "use the default").
+    fn builtin_optional_arg(
+        &self,
+        args: RegRange,
+        offset: u32,
+    ) -> Result<Option<Value>, InterpreterError> {
+        if offset >= args.count {
+            return Ok(None);
+        }
+        let reg = args
+            .start
+            .checked_add(offset)
+            .ok_or(InterpreterError::RegisterOutOfBounds {
+                register: args.start,
+                max: self.config.max_registers,
+            })?;
+        Ok(Some(self.read_reg(reg)?))
+    }
+
+    /// bd-qmy52: optional custom separator argument for querystring
+    /// parse/stringify. Node treats any FALSY value (`undefined`, `null`,
+    /// `''`, `0`, `false`, `NaN`) as "use the default" and stringifies
+    /// everything else (`String(sep)`).
+    fn qs_separator_arg(
+        &self,
+        args: RegRange,
+        offset: u32,
+        default: &str,
+    ) -> Result<String, InterpreterError> {
+        let value = self
+            .builtin_optional_arg(args, offset)?
+            .unwrap_or(Value::Undefined);
+        if !value.is_truthy() {
+            return Ok(default.to_string());
+        }
+        Ok(self.value_to_string(&value))
+    }
+
+    /// bd-qmy52: `options.maxKeys` for `querystring.parse`. Default 1000
+    /// pairs; a number that is `<= 0`, `Infinity`, `NaN`, or non-integer
+    /// disables the limit (Node's `--pairs === 0` countdown never reaches 0
+    /// for those); a non-number `maxKeys` (or no/non-object options) keeps the
+    /// default. Own-property read only, like the other options bags.
+    fn qs_max_pairs_arg(
+        &self,
+        args: RegRange,
+        offset: u32,
+    ) -> Result<Option<u64>, InterpreterError> {
+        const DEFAULT_MAX_PAIRS: u64 = 1000;
+        let Some(Value::Object(options_id)) = self.builtin_optional_arg(args, offset)? else {
+            return Ok(Some(DEFAULT_MAX_PAIRS));
+        };
+        let max_keys = self
+            .heap
+            .get(options_id.0 as usize)
+            .and_then(|object| object.properties.get("maxKeys").cloned());
+        Ok(match max_keys {
+            Some(Value::Int(n)) => {
+                if n > 0 {
+                    Some(n as u64)
+                } else {
+                    None
+                }
+            }
+            Some(Value::Float(f)) => {
+                let v = f.inner();
+                if v.is_finite() && v > 0.0 && v.fract() == 0.0 {
+                    Some(v as u64)
+                } else {
+                    None
+                }
+            }
+            _ => Some(DEFAULT_MAX_PAIRS),
+        })
+    }
+
+    /// bd-qmy52: Node's `stringifyPrimitive` for `querystring.stringify`
+    /// values and array elements: strings pass through, finite numbers and
+    /// bigints stringify, booleans map to `true`/`false`, and EVERYTHING else
+    /// (undefined, null, NaN, Infinity, objects, functions) becomes `''`.
+    fn qs_stringify_primitive(&self, value: &Value) -> String {
+        match value {
+            Value::Str(s) => s.to_string(),
+            Value::Int(n) => n.to_string(),
+            Value::Float(f) if f.inner().is_finite() => self.value_to_string(value),
+            Value::BigInt(digits) => digits.clone(),
+            Value::Bool(b) => if *b { "true" } else { "false" }.to_string(),
+            _ => String::new(),
+        }
+    }
+
+    /// bd-qmy52: `querystring.stringify` body over a heap object: own
+    /// properties in the engine's `Object.keys` order (deterministic BTreeMap
+    /// order — DISC-013; Node uses insertion order), array values expand to
+    /// repeated `key=element` pairs (an EMPTY array contributes nothing, bun:
+    /// `stringify({e: [], f: 'y'})` is `'f=y'`), other values stringify via
+    /// [`Self::qs_stringify_primitive`]; keys and values escape with
+    /// [`node_qs_escape`]. An array receiver's `length` property is skipped
+    /// (approximates its non-enumerability).
+    fn qs_stringify_object(&self, object_id: ObjectId, sep: &str, eq: &str) -> String {
+        let entries: Vec<(String, Value)> = self
+            .heap
+            .get(object_id.0 as usize)
+            .map(|object| {
+                object
+                    .properties
+                    .iter()
+                    .filter(|(key, _)| !(object.is_array && key.as_str() == "length"))
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut pieces: Vec<String> = Vec::new();
+        for (key, value) in entries {
+            let key_prefix = format!("{}{eq}", node_qs_escape(&key));
+            if let Value::Object(id) = value
+                && self
+                    .heap
+                    .get(id.0 as usize)
+                    .is_some_and(|object| object.is_array)
+            {
+                for element in self.read_array_like_values(id) {
+                    pieces.push(format!(
+                        "{key_prefix}{}",
+                        node_qs_escape(&self.qs_stringify_primitive(&element))
+                    ));
+                }
+                continue;
+            }
+            pieces.push(format!(
+                "{key_prefix}{}",
+                node_qs_escape(&self.qs_stringify_primitive(&value))
+            ));
+        }
+        pieces.join(sep)
+    }
+
+    /// bd-qmy52: build and ARM a JS-catchable `RangeError` carrying Node's
+    /// `ERR_OUT_OF_RANGE` code for an os-builtin range-validation failure
+    /// (`os.setPriority(0, 1000)`), returning the `UncaughtException` the
+    /// `builtin:` HostCall arm routes into the enclosing catch frame — the
+    /// RangeError sibling of [`Self::throw_path_arg_type_error`].
+    fn throw_os_out_of_range_error(
+        &mut self,
+        arg_name: &str,
+        must_be: &str,
+        got: &Value,
+    ) -> InterpreterError {
+        let message = format!(
+            "The value of \"{arg_name}\" is out of range. It must be {must_be}. Received {}",
+            self.value_to_string(got)
+        );
+        let thrown = match self.construct_node_out_of_range_error(&message) {
+            Ok(value) => value,
+            Err(err) => return err,
+        };
+        self.pending_exception = Some(thrown.clone());
+        self.pending_exception_label = Label::Public;
+        InterpreterError::UncaughtException {
+            value: Self::uncaught_exception_description(&thrown),
+        }
+    }
+
+    /// bd-qmy52: RangeError object with `code: "ERR_OUT_OF_RANGE"` (Node's
+    /// range-validation error shape).
+    fn construct_node_out_of_range_error(
+        &mut self,
+        message: &str,
+    ) -> Result<Value, InterpreterError> {
+        let prototype = self.ensure_builtin_prototype("RangeError")?;
+        let error_id = self.alloc_object_with_prototype(Some(prototype))?;
+        self.initialize_error_like_object(error_id, "RangeError", message.to_string())?;
+        self.set_object_property(error_id, "code".to_string(), Value::str("ERR_OUT_OF_RANGE"))?;
+        Ok(Value::Object(error_id))
+    }
+
+    /// bd-qmy52: Node `validateInt32`-shaped check for the os builtins
+    /// (`getPriority`/`setPriority` pids and priorities): a non-number throws
+    /// the JS-catchable ERR_INVALID_ARG_TYPE TypeError (same shape as the path
+    /// builtins' [`Self::throw_path_arg_type_error`]); a non-integer or
+    /// out-of-`[lo, hi]` number throws the JS-catchable ERR_OUT_OF_RANGE
+    /// RangeError.
+    fn os_validate_int32(
+        &mut self,
+        value: &Value,
+        arg_name: &str,
+        lo: i64,
+        hi: i64,
+    ) -> Result<i64, InterpreterError> {
+        let number = match value {
+            Value::Int(n) => *n as f64,
+            Value::Float(f) => f.inner(),
+            other => {
+                return Err(self.throw_path_arg_type_error(arg_name, "number", other));
+            }
+        };
+        if !number.is_finite() || number.fract() != 0.0 {
+            return Err(self.throw_os_out_of_range_error(arg_name, "an integer", value));
+        }
+        let integer = number as i64;
+        if integer < lo || integer > hi {
+            return Err(self.throw_os_out_of_range_error(
+                arg_name,
+                &format!(">= {lo} && <= {hi}"),
+                value,
+            ));
+        }
+        Ok(integer)
+    }
+
+    /// bd-qmy52: allocate one flat `{ NAME: number, … }` group of the
+    /// `os.constants` object.
+    fn alloc_os_constant_group(
+        &mut self,
+        entries: &[(&str, i64)],
+    ) -> Result<Value, InterpreterError> {
+        let props: Vec<(&str, Value)> = entries
+            .iter()
+            .map(|(name, number)| (*name, Value::Int(*number)))
+            .collect();
+        Ok(Value::Object(self.alloc_object_with_properties(&props)?))
+    }
+
     fn dispatch_builtin_hostcall_inner(
         &mut self,
         cap: &str,
@@ -23458,6 +23969,180 @@ impl InterpreterCore {
             "builtin:PathWin32IsAbsolute" => {
                 let path = self.path_string_arg(args, 0, "path")?;
                 Ok(Value::Bool(node_path_win32_is_absolute(&path)))
+            }
+
+            // Node `querystring` builtins (bd-qmy52): pure-compute parse/
+            // stringify/escape/unescape, dispatched from the lowering's
+            // querystring-module member-call interception. No host effect;
+            // semantics pinned against bun 1.3.14.
+            "builtin:QuerystringParse" => {
+                let input = self
+                    .builtin_optional_arg(args, 0)?
+                    .unwrap_or(Value::Undefined);
+                // Node: a non-string (or empty) input yields an empty object.
+                let Value::Str(input) = input else {
+                    return Ok(Value::Object(self.alloc_object_with_properties(&[])?));
+                };
+                let sep = self.qs_separator_arg(args, 1, "&")?;
+                let eq = self.qs_separator_arg(args, 2, "=")?;
+                let max_pairs = self.qs_max_pairs_arg(args, 3)?;
+                let entries = node_qs_parse(input.as_ref(), &sep, &eq, max_pairs);
+                // Node returns a null-prototype object; engine objects already
+                // allocate without a prototype. Single-value keys are scalars,
+                // repeated keys are real engine arrays.
+                let object_id = self.alloc_object_with_properties(&[])?;
+                for (key, values) in entries {
+                    let value = if values.len() == 1 {
+                        Value::str(values.into_iter().next().unwrap_or_default())
+                    } else {
+                        let elements: Vec<Value> = values.into_iter().map(Value::str).collect();
+                        Value::Object(self.alloc_array_from_values(&elements)?)
+                    };
+                    self.set_object_property(object_id, key, value)?;
+                }
+                Ok(Value::Object(object_id))
+            }
+            "builtin:QuerystringStringify" => {
+                let sep = self.qs_separator_arg(args, 1, "&")?;
+                let eq = self.qs_separator_arg(args, 2, "=")?;
+                let value = self
+                    .builtin_optional_arg(args, 0)?
+                    .unwrap_or(Value::Undefined);
+                // Node: only a non-null object stringifies; every other input
+                // (undefined, null, primitives) is ''.
+                let Value::Object(object_id) = value else {
+                    return Ok(Value::str(""));
+                };
+                Ok(Value::str(self.qs_stringify_object(object_id, &sep, &eq)))
+            }
+            "builtin:QuerystringEscape" => {
+                // Node coerces the argument with String() before escaping
+                // (bun: qs.escape(42) is '42').
+                let value = self
+                    .builtin_optional_arg(args, 0)?
+                    .unwrap_or(Value::Undefined);
+                let coerced = match &value {
+                    Value::Str(s) => s.to_string(),
+                    other => self.value_to_string(other),
+                };
+                Ok(Value::str(node_qs_escape(&coerced)))
+            }
+            "builtin:QuerystringUnescape" => {
+                let value = self
+                    .builtin_optional_arg(args, 0)?
+                    .unwrap_or(Value::Undefined);
+                let coerced = match &value {
+                    Value::Str(s) => s.to_string(),
+                    other => self.value_to_string(other),
+                };
+                Ok(Value::str(node_qs_unescape(&coerced)))
+            }
+
+            // Node `os` builtins (bd-qmy52): FIXED deterministic engine-
+            // contained values (see the NODE_OS_* constants block) — the
+            // engine has no ambient authority, so nothing here reads the real
+            // host. getPriority/setPriority validate arguments like Node
+            // (TypeError ERR_INVALID_ARG_TYPE / RangeError ERR_OUT_OF_RANGE,
+            // both JS-catchable) and then return fixed/no-op results.
+            "builtin:OsPlatform" => Ok(Value::str(NODE_OS_PLATFORM)),
+            "builtin:OsArch" => Ok(Value::str("x64")),
+            "builtin:OsType" => Ok(Value::str("Linux")),
+            "builtin:OsEndianness" => Ok(Value::str("LE")),
+            "builtin:OsMachine" => Ok(Value::str("x86_64")),
+            "builtin:OsRelease" => Ok(Value::str(NODE_OS_RELEASE)),
+            "builtin:OsVersion" => Ok(Value::str(NODE_OS_VERSION)),
+            "builtin:OsHomedir" => Ok(Value::str("/home")),
+            "builtin:OsTmpdir" => Ok(Value::str("/tmp")),
+            "builtin:OsHostname" => Ok(Value::str("localhost")),
+            "builtin:OsUptime" => Ok(Value::Float(Float64::new(1.0))),
+            "builtin:OsTotalmem" => Ok(Value::Int(NODE_OS_TOTALMEM_BYTES)),
+            "builtin:OsFreemem" => Ok(Value::Int(NODE_OS_FREEMEM_BYTES)),
+            "builtin:OsAvailableParallelism" => Ok(Value::Int(1)),
+            "builtin:OsLoadavg" => {
+                // Fixed idle load; length 3 like Node.
+                let zero = Value::Float(Float64::new(0.0));
+                let array_id = self.alloc_array_from_values(&[zero.clone(), zero.clone(), zero])?;
+                Ok(Value::Object(array_id))
+            }
+            "builtin:OsCpus" => {
+                // One fixed virtual CPU: non-empty, fully-typed shape.
+                let times_id = self.alloc_object_with_properties(&[
+                    ("user", Value::Int(0)),
+                    ("nice", Value::Int(0)),
+                    ("sys", Value::Int(0)),
+                    ("idle", Value::Int(0)),
+                    ("irq", Value::Int(0)),
+                ])?;
+                let cpu_id = self.alloc_object_with_properties(&[
+                    ("model", Value::str("franken-virtual")),
+                    ("speed", Value::Int(1000)),
+                    ("times", Value::Object(times_id)),
+                ])?;
+                let array_id = self.alloc_array_from_values(&[Value::Object(cpu_id)])?;
+                Ok(Value::Object(array_id))
+            }
+            "builtin:OsNetworkInterfaces" => {
+                // The engine exposes NO network shape: an empty interfaces
+                // map (a valid Node shape — machines can have zero non-
+                // internal interfaces reported).
+                Ok(Value::Object(self.alloc_object_with_properties(&[])?))
+            }
+            "builtin:OsUserInfo" => {
+                let object_id = self.alloc_object_with_properties(&[
+                    ("username", Value::str("franken")),
+                    ("uid", Value::Int(0)),
+                    ("gid", Value::Int(0)),
+                    ("shell", Value::str("/bin/sh")),
+                    ("homedir", Value::str("/home")),
+                ])?;
+                Ok(Value::Object(object_id))
+            }
+            "builtin:OsGetPriority" => {
+                // Node: `getPriority(pid = 0)` — an absent/undefined pid takes
+                // the default; anything else validates as an int32. The fixed
+                // priority is 0 (PRIORITY_NORMAL) for every pid.
+                if let Some(pid) = self.builtin_optional_arg(args, 0)?
+                    && !matches!(pid, Value::Undefined)
+                {
+                    self.os_validate_int32(&pid, "pid", i64::from(i32::MIN), i64::from(i32::MAX))?;
+                }
+                Ok(Value::Int(0))
+            }
+            "builtin:OsSetPriority" => {
+                // Node: `setPriority([pid, ]priority)` — when `priority` is
+                // undefined the single-argument form applies (priority := pid,
+                // pid := 0). pid validates as an int32 first (TypeError
+                // ERR_INVALID_ARG_TYPE on non-number), then priority as an
+                // integer in [-20, 19] (RangeError ERR_OUT_OF_RANGE outside).
+                // The engine accepts valid values and does nothing (there is
+                // no host process to re-prioritize); returns undefined.
+                let first = self
+                    .builtin_optional_arg(args, 0)?
+                    .unwrap_or(Value::Undefined);
+                let second = self
+                    .builtin_optional_arg(args, 1)?
+                    .unwrap_or(Value::Undefined);
+                let (pid, priority) = if matches!(second, Value::Undefined) {
+                    (Value::Int(0), first)
+                } else {
+                    (first, second)
+                };
+                self.os_validate_int32(&pid, "pid", i64::from(i32::MIN), i64::from(i32::MAX))?;
+                self.os_validate_int32(&priority, "priority", -20, 19)?;
+                Ok(Value::Undefined)
+            }
+            "builtin:OsConstants" => {
+                // `os.constants` — the nested { signals, errno, priority }
+                // object (real POSIX numbers; see the NODE_OS_* tables).
+                let signals = self.alloc_os_constant_group(NODE_OS_SIGNALS)?;
+                let errno = self.alloc_os_constant_group(NODE_OS_ERRNO)?;
+                let priority = self.alloc_os_constant_group(NODE_OS_PRIORITY)?;
+                let object_id = self.alloc_object_with_properties(&[
+                    ("signals", signals),
+                    ("errno", errno),
+                    ("priority", priority),
+                ])?;
+                Ok(Value::Object(object_id))
             }
 
             // Math methods

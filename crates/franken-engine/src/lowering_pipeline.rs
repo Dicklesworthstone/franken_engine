@@ -781,6 +781,19 @@ fn lower_ir0_to_ir1_with_ambient_grant(
     for alias in confirmed_path_module_aliases(&ir0.tree.body, &binding_lookup) {
         binding_lookup.insert(path_module_alias_sentinel(&alias), 0);
     }
+    // bd-qmy52: same usage-gated sentinel recording for the two other
+    // pure-compute module families — `require('querystring')` (member calls
+    // lower to `builtin:Querystring*` HostCalls) and `require('os')` (member
+    // calls lower to `builtin:Os*` HostCalls; `os.EOL`/`os.devNull` property
+    // reads lower to string constants and `os.constants` to a 0-arg
+    // `builtin:OsConstants` HostCall). Fail-closed exactly like path: a
+    // bare/unused alias still hits the ambient-authority denial.
+    for alias in confirmed_querystring_module_aliases(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(querystring_module_alias_sentinel(&alias), 0);
+    }
+    for alias in confirmed_os_module_aliases(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(os_module_alias_sentinel(&alias), 0);
+    }
     let mut synthetic_export_index = 0u32;
     let mut synthetic_import_index = 0u32;
     let mut label_counter = 0u32;
@@ -2513,6 +2526,13 @@ fn lower_statement_to_ir1_with_flow(
                     // `builtin:Path*` hostcalls / string constants). A bare/unused
                     // `const path = require('path')` is not recorded, so it keeps
                     // the ambient-authority contract.
+                    // bd-qmy52 joins the querystring and os require-bindings to
+                    // the same disjunction: a confirmed `const qs =
+                    // require('querystring')` / `const os = require('os')` is
+                    // bound to `undefined` and elided; the pure-compute
+                    // operations are recognized at the member call/read sites
+                    // (`builtin:Querystring*` / `builtin:Os*` hostcalls and
+                    // string constants). Unused aliases stay ambient-refused.
                     if let BindingPattern::Identifier(alias) = &d.pattern
                         && ((is_require_fs_module_initializer(init, binding_lookup)
                             && binding_lookup.contains_key(&fs_module_alias_sentinel(alias)))
@@ -2523,7 +2543,12 @@ fn lower_statement_to_ir1_with_flow(
                             || (is_require_http_module_initializer(init, binding_lookup)
                                 && binding_lookup.contains_key(&http_module_alias_sentinel(alias)))
                             || (is_require_path_module_initializer(init, binding_lookup)
-                                && binding_lookup.contains_key(&path_module_alias_sentinel(alias))))
+                                && binding_lookup.contains_key(&path_module_alias_sentinel(alias)))
+                            || (is_require_querystring_module_initializer(init, binding_lookup)
+                                && binding_lookup
+                                    .contains_key(&querystring_module_alias_sentinel(alias)))
+                            || (is_require_os_module_initializer(init, binding_lookup)
+                                && binding_lookup.contains_key(&os_module_alias_sentinel(alias))))
                     {
                         ops.push(Ir1Op::LoadLiteral {
                             value: Ir1Literal::Undefined,
@@ -9399,6 +9424,41 @@ fn lower_expression_to_ir1_inner(
                     )?;
                     return Ok(());
                 }
+                // bd-qmy52: spread forms of the querystring/os builtins route
+                // through ReflectApply the same way (`qs.parse(...xs)`,
+                // `os.setPriority(...xs)`).
+                if let Some(capability) =
+                    querystring_builtin_call_capability(callee, binding_lookup)
+                {
+                    lower_spread_apply_hostcall_to_ir1(
+                        capability,
+                        &[],
+                        arguments,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                    return Ok(());
+                }
+                if let Some(capability) = os_builtin_call_capability(callee, binding_lookup) {
+                    lower_spread_apply_hostcall_to_ir1(
+                        capability,
+                        &[],
+                        arguments,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                    return Ok(());
+                }
                 if let Some(capability) = date_builtin_call_capability(callee, binding_lookup) {
                     lower_spread_apply_hostcall_to_ir1(
                         capability,
@@ -9672,6 +9732,43 @@ fn lower_expression_to_ir1_inner(
                 // elided) and recognition is purely syntactic. Arity is validated
                 // at dispatch (Node semantics: variadic join/resolve, optional
                 // basename ext), so all argument counts lower uniformly here.
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
+            // bd-qmy52: pure-compute Node `querystring` and `os` builtins.
+            // Recognized member calls on a confirmed module alias (`const qs =
+            // require('querystring')` / `const os = require('os')`) or on an
+            // inline `require('querystring')` / `require('os')` receiver lower
+            // to `builtin:Querystring*` / `builtin:Os*` HostCalls, exactly like
+            // the path interception above. The receiver is deliberately NOT
+            // lowered (no real module object; recognition is purely syntactic)
+            // and arity is validated at dispatch (Node semantics: optional
+            // sep/eq/options on parse/stringify, optional pid on getPriority).
+            if let Some(capability) = querystring_builtin_call_capability(callee, binding_lookup)
+                .or_else(|| os_builtin_call_capability(callee, binding_lookup))
+            {
                 let arg_count = arguments.len();
                 if arg_count > u32::MAX as usize {
                     return Err(LoweringPipelineError::TooManyArguments {
@@ -10805,6 +10902,32 @@ fn lower_expression_to_ir1_inner(
                 ops.push(Ir1Op::LoadLiteral {
                     value: Ir1Literal::String(constant.to_string()),
                 });
+                return Ok(());
+            }
+            // bd-qmy52: recognized `os` property READS on a confirmed os-module
+            // alias. `os.EOL` / `os.devNull` are deterministic constants and
+            // lower directly to string literals (like `path.sep`);
+            // `os.constants` lowers to a 0-arg `builtin:OsConstants` HostCall
+            // that allocates the nested `{ signals, errno, priority }` object,
+            // so chained reads (`os.constants.signals.SIGINT`) and bare reads
+            // (`typeof os.constants`) both work on a real heap object. The
+            // receiver is deliberately NOT lowered (no real os module object).
+            if let Some(lowering) =
+                os_member_read_lowering(object, property, *computed, binding_lookup)
+            {
+                match lowering {
+                    OsMemberReadLowering::StringConstant(constant) => {
+                        ops.push(Ir1Op::LoadLiteral {
+                            value: Ir1Literal::String(constant.to_string()),
+                        });
+                    }
+                    OsMemberReadLowering::ConstantsHostcall => {
+                        ops.push(Ir1Op::HostCall {
+                            capability: "builtin:OsConstants".to_string(),
+                            arg_count: 0,
+                        });
+                    }
+                }
                 return Ok(());
             }
             if let Some(capability) =
@@ -13198,6 +13321,426 @@ fn confirmed_path_module_aliases(
         let single: BTreeSet<String> = std::iter::once(name.clone()).collect();
         if body.iter().any(|stmt| {
             path_statement_contains_usage(stmt, &|e| expr_contains_path_alias_usage(e, &single))
+        }) {
+            used.insert(name.clone());
+        }
+    }
+    used
+}
+
+// ---------------------------------------------------------------------------
+// Node `querystring` + `os` builtin recognition (bd-qmy52)
+//
+// Two further pure-compute module families following the `path` template
+// (bd-tu0c3) exactly: a usage-lookahead pre-scan confirms `const qs =
+// require('querystring')` / `const os = require('os')` aliases that are
+// actually USED as a recognized builtin, records a NUL-sentinel, and the
+// recognized require declaration is elided. Member calls lower to
+// `builtin:Querystring*` / `builtin:Os*` HostCalls; the deterministic `os`
+// property constants (`EOL`, `devNull`) lower to string literals and
+// `os.constants` lowers to a 0-arg `builtin:OsConstants` HostCall. Bare/unused
+// aliases keep the ambient-authority denial (fail-closed, test-pinned).
+// ---------------------------------------------------------------------------
+
+/// bd-qmy52: true when `specifier` names the Node querystring module —
+/// `querystring` or `node:querystring`.
+fn is_querystring_module_specifier(specifier: &str) -> bool {
+    specifier == "querystring" || specifier == "node:querystring"
+}
+
+/// bd-qmy52: sentinel key recording that `name` is bound to the querystring
+/// module via `const <name> = require('querystring')` AND used as a recognized
+/// querystring builtin. Mirror of [`path_module_alias_sentinel`].
+fn querystring_module_alias_sentinel(name: &str) -> String {
+    format!("\0qsmod\0{name}")
+}
+
+/// bd-qmy52: true when `expr` is exactly `require('querystring')` /
+/// `require('node:querystring')` with an unshadowed `require`.
+fn is_require_querystring_module_initializer(
+    expr: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    let Expression::Call {
+        callee, arguments, ..
+    } = expr
+    else {
+        return false;
+    };
+    if !matches!(callee.as_ref(), Expression::Identifier(name)
+        if name == "require" && !binding_lookup.contains_key(name.as_str()))
+    {
+        return false;
+    }
+    matches!(
+        arguments.as_slice(),
+        [Expression::StringLiteral(spec)] if is_querystring_module_specifier(spec)
+    )
+}
+
+/// bd-qmy52: capability tag for a recognized `querystring` method. Single
+/// source of truth shared by the usage-lookahead scan and the call-site
+/// recognizer (an alias is confirmed only by a usage the call arm will really
+/// intercept). `decode`/`encode` are Node's documented aliases of
+/// `parse`/`stringify`.
+fn querystring_method_capability(method: &str) -> Option<&'static str> {
+    match method {
+        "parse" | "decode" => Some("builtin:QuerystringParse"),
+        "stringify" | "encode" => Some("builtin:QuerystringStringify"),
+        "escape" => Some("builtin:QuerystringEscape"),
+        "unescape" => Some("builtin:QuerystringUnescape"),
+        _ => None,
+    }
+}
+
+/// bd-qmy52: true when `expr` IS the querystring module object at lowering
+/// time — a sentinel-recorded require-binding alias or the inline
+/// `require('querystring')` call.
+fn is_querystring_module_object(
+    expr: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    match expr {
+        Expression::Identifier(alias) => {
+            binding_lookup.contains_key(&querystring_module_alias_sentinel(alias))
+        }
+        Expression::Call {
+            callee, arguments, ..
+        } => {
+            matches!(callee.as_ref(), Expression::Identifier(name)
+                if name == "require" && !binding_lookup.contains_key(name.as_str()))
+                && matches!(
+                    arguments.as_slice(),
+                    [Expression::StringLiteral(spec)] if is_querystring_module_specifier(spec)
+                )
+        }
+        _ => false,
+    }
+}
+
+/// bd-qmy52: recognize a `querystring` builtin member call and return its
+/// `builtin:Querystring*` capability. Purely syntactic (there is no real
+/// querystring module heap object); no sub-namespaces (unlike path).
+fn querystring_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee
+    else {
+        return None;
+    };
+    if !is_querystring_module_object(object, binding_lookup) {
+        return None;
+    }
+    let method = match property.as_ref() {
+        Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
+        _ => return None,
+    };
+    querystring_method_capability(method)
+}
+
+/// bd-qmy52: scan-time twin of [`querystring_builtin_call_capability`]'s
+/// receiver check — during the pre-scan the sentinels are not recorded yet, so
+/// the module-object predicate is membership in the candidate alias-name set.
+fn is_querystring_alias_method_callee(callee: &Expression, alias_names: &BTreeSet<String>) -> bool {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee
+    else {
+        return false;
+    };
+    if !matches!(object.as_ref(), Expression::Identifier(name) if alias_names.contains(name)) {
+        return false;
+    }
+    matches!(property.as_ref(),
+        Expression::Identifier(m) | Expression::StringLiteral(m)
+            if querystring_method_capability(m).is_some())
+}
+
+/// bd-qmy52: compute the set of identifier names that are BOTH bound via
+/// `const/let/var <name> = require('querystring')` at the unit root AND used
+/// as a recognized querystring builtin somewhere reachable by the fail-closed
+/// statement scan (shared with path: control-flow recursion, opaque
+/// function/class bodies).
+fn confirmed_querystring_module_aliases(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for stmt in body {
+        if let Statement::VariableDeclaration(vd) = stmt {
+            for d in &vd.declarations {
+                if let (BindingPattern::Identifier(name), Some(init)) = (&d.pattern, &d.initializer)
+                    && is_require_querystring_module_initializer(init, binding_lookup)
+                {
+                    candidates.insert(name.clone());
+                }
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return candidates;
+    }
+
+    let mut used = BTreeSet::new();
+    for name in &candidates {
+        let single: BTreeSet<String> = std::iter::once(name.clone()).collect();
+        if body.iter().any(|stmt| {
+            path_statement_contains_usage(stmt, &|e| {
+                expr_contains_matching_call(e, &|callee| {
+                    is_querystring_alias_method_callee(callee, &single)
+                })
+            })
+        }) {
+            used.insert(name.clone());
+        }
+    }
+    used
+}
+
+/// bd-qmy52: true when `specifier` names the Node os module — `os` or
+/// `node:os`.
+fn is_os_module_specifier(specifier: &str) -> bool {
+    specifier == "os" || specifier == "node:os"
+}
+
+/// bd-qmy52: sentinel key recording that `name` is bound to the os module via
+/// `const <name> = require('os')` AND used as a recognized os builtin. Mirror
+/// of [`path_module_alias_sentinel`].
+fn os_module_alias_sentinel(name: &str) -> String {
+    format!("\0osmod\0{name}")
+}
+
+/// bd-qmy52: true when `expr` is exactly `require('os')` / `require('node:os')`
+/// with an unshadowed `require`.
+fn is_require_os_module_initializer(
+    expr: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    let Expression::Call {
+        callee, arguments, ..
+    } = expr
+    else {
+        return false;
+    };
+    if !matches!(callee.as_ref(), Expression::Identifier(name)
+        if name == "require" && !binding_lookup.contains_key(name.as_str()))
+    {
+        return false;
+    }
+    matches!(
+        arguments.as_slice(),
+        [Expression::StringLiteral(spec)] if is_os_module_specifier(spec)
+    )
+}
+
+/// bd-qmy52: capability tag for a recognized `os` method. Single source of
+/// truth shared by the usage-lookahead scan and the call-site recognizer. All
+/// of these are pure-compute in this engine: the interpreter dispatch returns
+/// FIXED engine-contained values (documented at the dispatch arms) — the
+/// engine has no ambient authority, so nothing here reads the real host.
+fn os_method_capability(method: &str) -> Option<&'static str> {
+    match method {
+        "platform" => Some("builtin:OsPlatform"),
+        "arch" => Some("builtin:OsArch"),
+        "type" => Some("builtin:OsType"),
+        "release" => Some("builtin:OsRelease"),
+        "version" => Some("builtin:OsVersion"),
+        "homedir" => Some("builtin:OsHomedir"),
+        "tmpdir" => Some("builtin:OsTmpdir"),
+        "hostname" => Some("builtin:OsHostname"),
+        "uptime" => Some("builtin:OsUptime"),
+        "totalmem" => Some("builtin:OsTotalmem"),
+        "freemem" => Some("builtin:OsFreemem"),
+        "loadavg" => Some("builtin:OsLoadavg"),
+        "cpus" => Some("builtin:OsCpus"),
+        "networkInterfaces" => Some("builtin:OsNetworkInterfaces"),
+        "userInfo" => Some("builtin:OsUserInfo"),
+        "endianness" => Some("builtin:OsEndianness"),
+        "availableParallelism" => Some("builtin:OsAvailableParallelism"),
+        "machine" => Some("builtin:OsMachine"),
+        "getPriority" => Some("builtin:OsGetPriority"),
+        "setPriority" => Some("builtin:OsSetPriority"),
+        _ => None,
+    }
+}
+
+/// bd-qmy52: what a recognized `os` property READ lowers to.
+enum OsMemberReadLowering {
+    /// Deterministic constant (`os.EOL`, `os.devNull`) — a string literal.
+    StringConstant(&'static str),
+    /// `os.constants` — a 0-arg `builtin:OsConstants` HostCall allocating the
+    /// nested `{ signals, errno, priority }` object.
+    ConstantsHostcall,
+}
+
+/// bd-qmy52: the lowering of a recognized `os` property name, per Node
+/// (linux). Shared by the scan and the member arm so the confirmed-alias gate
+/// can never diverge from what the lowering rewrites.
+fn os_property_read_lowering(property: &str) -> Option<OsMemberReadLowering> {
+    match property {
+        "EOL" => Some(OsMemberReadLowering::StringConstant("\n")),
+        "devNull" => Some(OsMemberReadLowering::StringConstant("/dev/null")),
+        "constants" => Some(OsMemberReadLowering::ConstantsHostcall),
+        _ => None,
+    }
+}
+
+/// bd-qmy52: true when `expr` IS the os module object at lowering time — a
+/// sentinel-recorded require-binding alias or the inline `require('os')` call.
+fn is_os_module_object(expr: &Expression, binding_lookup: &BTreeMap<String, BindingId>) -> bool {
+    match expr {
+        Expression::Identifier(alias) => {
+            binding_lookup.contains_key(&os_module_alias_sentinel(alias))
+        }
+        Expression::Call {
+            callee, arguments, ..
+        } => {
+            matches!(callee.as_ref(), Expression::Identifier(name)
+                if name == "require" && !binding_lookup.contains_key(name.as_str()))
+                && matches!(
+                    arguments.as_slice(),
+                    [Expression::StringLiteral(spec)] if is_os_module_specifier(spec)
+                )
+        }
+        _ => false,
+    }
+}
+
+/// bd-qmy52: recognize an `os` builtin member call and return its
+/// `builtin:Os*` capability. Purely syntactic; no sub-namespaces.
+fn os_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee
+    else {
+        return None;
+    };
+    if !is_os_module_object(object, binding_lookup) {
+        return None;
+    }
+    let method = match property.as_ref() {
+        Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
+        _ => return None,
+    };
+    os_method_capability(method)
+}
+
+/// bd-qmy52: recognize an `os` property READ (`os.EOL`, `os.devNull`,
+/// `os.constants`) on a recognized os-module object and return its lowering.
+/// Accepts the same static/quoted property shapes as [`path_member_constant`].
+fn os_member_read_lowering(
+    object: &Expression,
+    property: &Expression,
+    computed: bool,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<OsMemberReadLowering> {
+    if !is_os_module_object(object, binding_lookup) {
+        return None;
+    }
+    let prop = match (computed, property) {
+        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
+        (true, Expression::StringLiteral(name)) => name.as_str(),
+        _ => return None,
+    };
+    os_property_read_lowering(prop)
+}
+
+/// bd-qmy52: scan-time twin of [`os_builtin_call_capability`]'s receiver check.
+fn is_os_alias_method_callee(callee: &Expression, alias_names: &BTreeSet<String>) -> bool {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee
+    else {
+        return false;
+    };
+    if !matches!(object.as_ref(), Expression::Identifier(name) if alias_names.contains(name)) {
+        return false;
+    }
+    matches!(property.as_ref(),
+        Expression::Identifier(m) | Expression::StringLiteral(m)
+            if os_method_capability(m).is_some())
+}
+
+/// bd-qmy52: scan-time twin of [`os_member_read_lowering`]: true when `expr`
+/// is a recognized os property read (`<alias>.EOL`, `<alias>.constants`, …) on
+/// one of the candidate alias names.
+fn is_os_alias_property_read(expr: &Expression, alias_names: &BTreeSet<String>) -> bool {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = expr
+    else {
+        return false;
+    };
+    if !matches!(object.as_ref(), Expression::Identifier(name) if alias_names.contains(name)) {
+        return false;
+    }
+    matches!(property.as_ref(),
+        Expression::Identifier(p) | Expression::StringLiteral(p)
+            if os_property_read_lowering(p).is_some())
+}
+
+/// bd-qmy52: true when `expr` contains a recognized os usage on one of
+/// `alias_names` — either a recognized method CALL (`<alias>.platform()`) or a
+/// recognized property READ (`<alias>.EOL`, `<alias>.constants`).
+fn expr_contains_os_alias_usage(expr: &Expression, alias_names: &BTreeSet<String>) -> bool {
+    expr_contains_matching_call(expr, &|callee| {
+        is_os_alias_method_callee(callee, alias_names)
+    }) || expr_contains_matching_member(expr, &|member| {
+        is_os_alias_property_read(member, alias_names)
+    })
+}
+
+/// bd-qmy52: compute the set of identifier names that are BOTH bound via
+/// `const/let/var <name> = require('os')` at the unit root AND used as a
+/// recognized os builtin (method call or property read) somewhere reachable by
+/// the fail-closed statement scan. Mirror of
+/// [`confirmed_path_module_aliases`].
+fn confirmed_os_module_aliases(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for stmt in body {
+        if let Statement::VariableDeclaration(vd) = stmt {
+            for d in &vd.declarations {
+                if let (BindingPattern::Identifier(name), Some(init)) = (&d.pattern, &d.initializer)
+                    && is_require_os_module_initializer(init, binding_lookup)
+                {
+                    candidates.insert(name.clone());
+                }
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return candidates;
+    }
+
+    let mut used = BTreeSet::new();
+    for name in &candidates {
+        let single: BTreeSet<String> = std::iter::once(name.clone()).collect();
+        if body.iter().any(|stmt| {
+            path_statement_contains_usage(stmt, &|e| expr_contains_os_alias_usage(e, &single))
         }) {
             used.insert(name.clone());
         }

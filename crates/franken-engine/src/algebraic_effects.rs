@@ -294,8 +294,14 @@ pub enum EffectError {
     CapabilityDenied { required: EffectCapabilities },
     /// Type mismatch in result conversion.
     TypeMismatch { expected: String, got: String },
-    /// Handler-specific error.
-    HandlerError { handler: String, message: String },
+    /// Handler-specific error. `code` carries a stable guest-visible domain
+    /// code when the handler can provide one (for example Node-style
+    /// filesystem `ENOENT`) without string-parsing the human message.
+    HandlerError {
+        handler: String,
+        message: String,
+        code: Option<String>,
+    },
     /// Effect parameters are invalid.
     InvalidParameters { effect_name: String, reason: String },
     /// Stack overflow in handler composition.
@@ -316,7 +322,9 @@ impl fmt::Display for EffectError {
             Self::TypeMismatch { expected, got } => {
                 write!(f, "Type mismatch: expected {}, got {}", expected, got)
             }
-            Self::HandlerError { handler, message } => {
+            Self::HandlerError {
+                handler, message, ..
+            } => {
                 write!(f, "Handler error in {}: {}", handler, message)
             }
             Self::InvalidParameters {
@@ -1291,6 +1299,7 @@ impl Handler for MockFsHandler {
                         Err(EffectError::HandlerError {
                             handler: "MockFsHandler".to_string(),
                             message: format!("File not found: {}", path),
+                            code: None,
                         })
                     }
                 } else {

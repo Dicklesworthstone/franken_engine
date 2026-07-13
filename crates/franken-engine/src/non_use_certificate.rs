@@ -671,6 +671,16 @@ fn host_effect_target(request: &HostIoRequest) -> (String, u64, Option<String>) 
             data.len() as u64,
             Some(ContentHash::compute(data).to_hex()),
         ),
+        HostIoRequest::FsMeta {
+            operation,
+            path,
+            arguments,
+            data,
+        } => (
+            format!("{}:{path} [{}]", operation.as_str(), arguments.join(",")),
+            data.len() as u64,
+            (!data.is_empty()).then(|| ContentHash::compute(data).to_hex()),
+        ),
         HostIoRequest::NetworkSend { endpoint, payload } => (
             endpoint.clone(),
             payload.len() as u64,

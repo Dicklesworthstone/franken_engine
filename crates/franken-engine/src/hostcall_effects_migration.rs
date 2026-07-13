@@ -19,8 +19,8 @@ use crate::algebraic_effects::{
 };
 use crate::capability::{CapabilityProfile, ProfileKind, RuntimeCapability};
 use frankenengine_extension_host::host_io::{
-    HostIoError, HostIoProvider, HostIoRecorder, HostIoRequest, HostIoResponse,
-    SANDBOXED_HOST_IO_MAX_BYTES,
+    FsOperation, HostIoCapability, HostIoError, HostIoProvider, HostIoRecorder, HostIoRequest,
+    HostIoResponse, SANDBOXED_HOST_IO_MAX_BYTES,
 };
 
 // ---------------------------------------------------------------------------
@@ -58,47 +58,50 @@ impl Effect for ConsoleHostcallEffect {
     }
 }
 
-/// Filesystem hostcall effect (read, write).
+/// Filesystem hostcall effect. The security capability remains the existing
+/// read/write class while `operation` records the concrete filesystem action.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FsHostcallEffect {
     pub operation: FsOperation,
     pub path: String,
-    pub content: Option<Vec<u8>>, // For write operations
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum FsOperation {
-    Read,
-    Write,
+    pub arguments: Vec<String>,
+    pub content: Option<Vec<u8>>,
 }
 
 impl Effect for FsHostcallEffect {
     type Output = ();
 
     fn effect_name(&self) -> &'static str {
-        match self.operation {
-            FsOperation::Read => "hostcall:fs:read",
-            FsOperation::Write => "hostcall:fs:write",
+        match self.operation.required_capability() {
+            HostIoCapability::FsRead => "hostcall:fs:read",
+            HostIoCapability::FsWrite => "hostcall:fs:write",
+            HostIoCapability::NetworkSend | HostIoCapability::NetworkRecv => {
+                unreachable!("filesystem operations cannot require a network capability")
+            }
         }
     }
 
     fn required_capabilities(&self) -> EffectCapabilities {
-        match self.operation {
-            FsOperation::Read => EffectCapabilities::runtime([RuntimeCapability::FsRead]),
-            FsOperation::Write => EffectCapabilities::runtime([RuntimeCapability::FsWrite]),
+        match self.operation.required_capability() {
+            HostIoCapability::FsRead => EffectCapabilities::runtime([RuntimeCapability::FsRead]),
+            HostIoCapability::FsWrite => EffectCapabilities::runtime([RuntimeCapability::FsWrite]),
+            HostIoCapability::NetworkSend | HostIoCapability::NetworkRecv => {
+                unreachable!("filesystem operations cannot require a network capability")
+            }
         }
     }
 
     fn parameters(&self) -> Box<dyn Any + Send + Sync> {
         Box::new((
-            self.operation.clone(),
+            self.operation,
             self.path.clone(),
+            self.arguments.clone(),
             self.content.clone(),
         ))
     }
 
     fn parameter_type_id(&self) -> TypeId {
-        TypeId::of::<(FsOperation, String, Option<Vec<u8>>)>()
+        TypeId::of::<(FsOperation, String, Vec<String>, Option<Vec<u8>>)>()
     }
 }
 
@@ -311,6 +314,12 @@ impl FullCapsHandler {
             Err(HostIoError::Io { detail }) => Err(EffectError::HandlerError {
                 handler: "full_caps_handler".to_string(),
                 message: detail,
+                code: None,
+            }),
+            Err(HostIoError::Fs { code, detail }) => Err(EffectError::HandlerError {
+                handler: "full_caps_handler".to_string(),
+                message: detail,
+                code: Some(code),
             }),
             Err(_) => Err(EffectError::CapabilityDenied {
                 required: effect.required_capabilities(),
@@ -325,17 +334,22 @@ impl FullCapsHandler {
             "hostcall:fs:read" | "hostcall:fs:write" => {
                 let params = effect
                     .parameters()
-                    .downcast::<(FsOperation, String, Option<Vec<u8>>)>()
+                    .downcast::<(FsOperation, String, Vec<String>, Option<Vec<u8>>)>()
                     .map_err(|_| EffectError::InvalidParameters {
                         effect_name: effect.effect_name().to_string(),
-                        reason: "Expected (FsOperation, String, Option<Vec<u8>>) parameters"
-                            .to_string(),
+                        reason: "Expected (FsOperation, String, Vec<String>, Option<Vec<u8>>) parameters".to_string(),
                     })?;
-                let (operation, path, content) = *params;
+                let (operation, path, arguments, content) = *params;
                 Ok(match operation {
                     FsOperation::Read => HostIoRequest::FsRead { path },
                     FsOperation::Write => HostIoRequest::FsWrite {
                         path,
+                        data: content.unwrap_or_default(),
+                    },
+                    _ => HostIoRequest::FsMeta {
+                        operation,
+                        path,
+                        arguments,
                         data: content.unwrap_or_default(),
                     },
                 })
@@ -382,6 +396,7 @@ impl FullCapsHandler {
         match response {
             HostIoResponse::FsRead { bytes } => EffectResult::new(bytes.clone()),
             HostIoResponse::FsWrite { bytes_written } => EffectResult::new(*bytes_written),
+            HostIoResponse::FsMeta { result } => EffectResult::new(result.clone()),
             HostIoResponse::NetworkSend { bytes_sent } => EffectResult::new(*bytes_sent),
             HostIoResponse::NetworkRecv { bytes } => EffectResult::new(bytes.clone()),
             // bd-3894s slice (4): the raw response bytes flow back to the
@@ -858,6 +873,21 @@ fn http_request_to_wire(
     (endpoint, payload, use_tls)
 }
 
+#[must_use]
+pub fn create_fs_effect(
+    operation: FsOperation,
+    path: String,
+    arguments: Vec<String>,
+    content: Option<Vec<u8>>,
+) -> Box<dyn ErasedEffect> {
+    Box::new(FsHostcallEffect {
+        operation,
+        path,
+        arguments,
+        content,
+    })
+}
+
 pub fn create_effect_from_hostcall_tag(
     tag: &str,
     args: &[String],
@@ -888,12 +918,7 @@ pub fn create_effect_from_hostcall_tag(
             } else {
                 None
             };
-            let effect = FsHostcallEffect {
-                operation,
-                path,
-                content,
-            };
-            Ok(Box::new(effect))
+            Ok(create_fs_effect(operation, path, Vec::new(), content))
         }
         tag if tag.starts_with("timer:") => {
             let operation = match tag {
@@ -1020,6 +1045,7 @@ mod tests {
         let fs_read = FsHostcallEffect {
             operation: FsOperation::Read,
             path: "/etc/hostname".to_string(),
+            arguments: Vec::new(),
             content: None,
         };
         assert!(
@@ -1034,6 +1060,7 @@ mod tests {
         let fs_write = FsHostcallEffect {
             operation: FsOperation::Write,
             path: "/tmp/out".to_string(),
+            arguments: Vec::new(),
             content: Some(b"data".to_vec()),
         };
         assert!(
@@ -1096,6 +1123,9 @@ mod tests {
                 },
                 HostIoRequest::FsWrite { data, .. } => HostIoResponse::FsWrite {
                     bytes_written: data.len() as u64,
+                },
+                HostIoRequest::FsMeta { .. } => HostIoResponse::FsMeta {
+                    result: frankenengine_extension_host::host_io::FsMetaResult::Unit,
                 },
                 HostIoRequest::NetworkSend { payload, .. } => HostIoResponse::NetworkSend {
                     bytes_sent: payload.len() as u64,
@@ -1354,6 +1384,7 @@ mod tests {
         let fs_read = FsHostcallEffect {
             operation: FsOperation::Read,
             path: "/data/x".to_string(),
+            arguments: Vec::new(),
             content: None,
         };
         assert!(handler.handle(&fs_read).expect("fs read routed").is_some());
@@ -1361,6 +1392,7 @@ mod tests {
         let fs_write = FsHostcallEffect {
             operation: FsOperation::Write,
             path: "/data/y".to_string(),
+            arguments: Vec::new(),
             content: Some(b"abc".to_vec()),
         };
         assert!(
@@ -1433,6 +1465,7 @@ mod tests {
         let write = FsHostcallEffect {
             operation: FsOperation::Write,
             path: "report.txt".to_string(),
+            arguments: Vec::new(),
             content: Some(b"real effect bytes".to_vec()),
         };
         stack
@@ -1448,6 +1481,7 @@ mod tests {
         let read = FsHostcallEffect {
             operation: FsOperation::Read,
             path: "report.txt".to_string(),
+            arguments: Vec::new(),
             content: None,
         };
         stack

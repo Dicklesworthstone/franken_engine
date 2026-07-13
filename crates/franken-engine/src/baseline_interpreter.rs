@@ -50,7 +50,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
-use frankenengine_extension_host::host_io::{HostIoProvider, HostIoRecorder};
+use frankenengine_extension_host::host_io::{
+    FsDirEntry, FsMetaResult, FsMetadata, FsOperation, HostIoProvider, HostIoRecorder,
+};
 
 use crate::algebraic_effects::EffectError;
 use crate::ast::ParseGoal;
@@ -62,8 +64,7 @@ use crate::deterministic_replay::{NondeterminismSource, NondeterminismTrace};
 use crate::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId, derive_id};
 use crate::hash_tiers::ContentHash;
 use crate::hostcall_effects_migration::{
-    create_effect_from_hostcall_tag, create_handler_stack_from_profile_with_host_io,
-    create_network_effect,
+    create_fs_effect, create_handler_stack_from_profile_with_host_io, create_network_effect,
 };
 use crate::hostcall_telemetry::{
     FlowLabel, HostcallResult as TelemetryHostcallResult, HostcallType as TelemetryHostcallType,
@@ -1912,6 +1913,17 @@ pub enum BuiltinFunctionKind {
     TimerRef,
     /// `Timeout.prototype.unref` — bound timer-handle method (bd-suwvw).
     TimerUnref,
+    /// `fs.Stats.prototype.isFile()` (bd-8u1t5). Appended at the enum tail to
+    /// preserve the register-hash ordinals of existing builtins.
+    FsStatsIsFile,
+    /// `fs.Stats.prototype.isDirectory()` (bd-8u1t5).
+    FsStatsIsDirectory,
+    /// `fs.Stats` / `fs.Dirent` `isSymbolicLink()` (bd-8u1t5).
+    FsEntryIsSymbolicLink,
+    /// `fs.Dirent.prototype.isFile()` (bd-8u1t5).
+    FsDirentIsFile,
+    /// `fs.Dirent.prototype.isDirectory()` (bd-8u1t5).
+    FsDirentIsDirectory,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -3175,6 +3187,11 @@ impl BuiltinFunction {
             BuiltinFunctionKind::TimerHasRef => "hasRef",
             BuiltinFunctionKind::TimerRef => "ref",
             BuiltinFunctionKind::TimerUnref => "unref",
+            BuiltinFunctionKind::FsStatsIsFile | BuiltinFunctionKind::FsDirentIsFile => "isFile",
+            BuiltinFunctionKind::FsStatsIsDirectory | BuiltinFunctionKind::FsDirentIsDirectory => {
+                "isDirectory"
+            }
+            BuiltinFunctionKind::FsEntryIsSymbolicLink => "isSymbolicLink",
         }
     }
 }
@@ -4695,6 +4712,8 @@ pub enum InterpreterError {
     ExportOutsideModule { name: String },
     /// Capability check failed for hostcall.
     CapabilityDenied { capability: String },
+    /// Guest-visible filesystem error preserving a stable Node-style code.
+    HostFilesystem { code: String, message: String },
     /// The baseline heap cannot safely answer prototype-aware membership.
     UnsupportedMembershipSemantics { operator: String },
     /// Iterator handle not found in interpreter state.
@@ -4799,6 +4818,9 @@ impl fmt::Display for InterpreterError {
             }
             Self::CapabilityDenied { capability } => {
                 write!(f, "capability denied: {capability}")
+            }
+            Self::HostFilesystem { code, message } => {
+                write!(f, "filesystem error {code}: {message}")
             }
             Self::UnsupportedMembershipSemantics { operator } => write!(
                 f,
@@ -5856,6 +5878,186 @@ impl InterpreterCore {
         self.host_io_recorder = recorder;
     }
 
+    fn fs_object_property(&self, value: &Value, key: &str) -> Option<Value> {
+        let Value::Object(object_id) = value else {
+            return None;
+        };
+        self.heap
+            .get(object_id.0 as usize)
+            .and_then(|object| object.properties.get(key))
+            .cloned()
+    }
+
+    fn fs_value_bytes(&self, value: &Value) -> Result<Vec<u8>, InterpreterError> {
+        match value {
+            Value::Str(value) => Ok(value.as_bytes().to_vec()),
+            Value::Object(object_id) => {
+                let Some(view) = self.typed_array_view_for_object(*object_id)? else {
+                    return Ok(self.value_to_string(value).into_bytes());
+                };
+                let values = self.typed_array_values_in_range(&view, 0, view.length)?;
+                Ok(values.iter().map(Self::typed_array_u8_value).collect())
+            }
+            other => Ok(self.value_to_string(other).into_bytes()),
+        }
+    }
+
+    fn fs_value_argument(&self, value: &Value) -> String {
+        match value {
+            Value::Str(value) => value.to_string(),
+            Value::Int(value) => value.to_string(),
+            Value::Float(value) => value.to_string(),
+            Value::Bool(value) => value.to_string(),
+            Value::Null | Value::Undefined => String::new(),
+            Value::Object(object_id) => self
+                .heap
+                .get(object_id.0 as usize)
+                .and_then(|object| object.properties.get("__timestamp"))
+                .map_or_else(
+                    || self.value_to_string(value),
+                    |timestamp| self.value_to_string(timestamp),
+                ),
+            other => self.value_to_string(other),
+        }
+    }
+
+    fn fs_option_is_true(&self, value: Option<&Value>, key: &str) -> bool {
+        value
+            .and_then(|options| self.fs_object_property(options, key))
+            .is_some_and(|value| matches!(value, Value::Bool(true)))
+    }
+
+    fn fs_operation_arguments(&self, operation: FsOperation, args: &[Value]) -> Vec<String> {
+        match operation {
+            FsOperation::Mkdir => vec![format!(
+                "recursive={}",
+                self.fs_option_is_true(args.get(1), "recursive")
+            )],
+            FsOperation::ReadDir => vec![format!(
+                "with_file_types={}",
+                self.fs_option_is_true(args.get(1), "withFileTypes")
+            )],
+            FsOperation::Remove => vec![
+                format!(
+                    "recursive={}",
+                    self.fs_option_is_true(args.get(1), "recursive")
+                ),
+                format!("force={}", self.fs_option_is_true(args.get(1), "force")),
+            ],
+            FsOperation::Symlink
+            | FsOperation::Rename
+            | FsOperation::CopyFile
+            | FsOperation::Truncate
+            | FsOperation::Chmod => args
+                .get(1)
+                .map_or_else(Vec::new, |value| vec![self.fs_value_argument(value)]),
+            FsOperation::Utimes => args
+                .iter()
+                .skip(1)
+                .take(2)
+                .map(|value| self.fs_value_argument(value))
+                .collect(),
+            FsOperation::Read
+            | FsOperation::Write
+            | FsOperation::Append
+            | FsOperation::Exists
+            | FsOperation::Stat
+            | FsOperation::Lstat
+            | FsOperation::ReadLink
+            | FsOperation::Unlink
+            | FsOperation::RemoveDir
+            | FsOperation::Access
+            | FsOperation::Realpath
+            | FsOperation::Mkdtemp => Vec::new(),
+        }
+    }
+
+    fn alloc_fs_date(&mut self, modified_millis: i64) -> Result<Value, InterpreterError> {
+        let date_id = self.alloc_object_with_prototype(None)?;
+        self.set_object_property(date_id, "__type".to_string(), Value::str("Date"))?;
+        self.set_object_property(
+            date_id,
+            "__timestamp".to_string(),
+            Value::Int(modified_millis),
+        )?;
+        Ok(Value::Object(date_id))
+    }
+
+    fn fs_metadata_value(&mut self, metadata: FsMetadata) -> Result<Value, InterpreterError> {
+        let modified = self.alloc_fs_date(metadata.modified_millis)?;
+        let object_id = self.alloc_object_with_prototype(None)?;
+        self.set_object_property(object_id, "__type".to_string(), Value::str("FsStats"))?;
+        self.set_object_property(
+            object_id,
+            "size".to_string(),
+            Value::Int(i64::try_from(metadata.size).unwrap_or(i64::MAX)),
+        )?;
+        self.set_object_property(
+            object_id,
+            "mode".to_string(),
+            Value::Int(i64::from(metadata.mode)),
+        )?;
+        self.set_object_property(object_id, "mtime".to_string(), modified)?;
+        self.set_object_property(
+            object_id,
+            "__isFile".to_string(),
+            Value::Bool(metadata.is_file),
+        )?;
+        self.set_object_property(
+            object_id,
+            "__isDirectory".to_string(),
+            Value::Bool(metadata.is_directory),
+        )?;
+        self.set_object_property(
+            object_id,
+            "__isSymbolicLink".to_string(),
+            Value::Bool(metadata.is_symbolic_link),
+        )?;
+        Ok(Value::Object(object_id))
+    }
+
+    fn fs_dir_entry_value(&mut self, entry: FsDirEntry) -> Result<Value, InterpreterError> {
+        let object_id = self.alloc_object_with_prototype(None)?;
+        self.set_object_property(object_id, "__type".to_string(), Value::str("FsDirent"))?;
+        self.set_object_property(object_id, "name".to_string(), Value::str(entry.name))?;
+        self.set_object_property(
+            object_id,
+            "__isFile".to_string(),
+            Value::Bool(entry.is_file),
+        )?;
+        self.set_object_property(
+            object_id,
+            "__isDirectory".to_string(),
+            Value::Bool(entry.is_directory),
+        )?;
+        self.set_object_property(
+            object_id,
+            "__isSymbolicLink".to_string(),
+            Value::Bool(entry.is_symbolic_link),
+        )?;
+        Ok(Value::Object(object_id))
+    }
+
+    fn fs_meta_result_value(&mut self, result: FsMetaResult) -> Result<Value, InterpreterError> {
+        match result {
+            FsMetaResult::Unit | FsMetaResult::Unsigned(_) => Ok(Value::Undefined),
+            FsMetaResult::Bool(value) => Ok(Value::Bool(value)),
+            FsMetaResult::String(value) => Ok(Value::str(value)),
+            FsMetaResult::Strings(values) => {
+                let values: Vec<Value> = values.into_iter().map(Value::str).collect();
+                Ok(Value::Object(self.alloc_array_from_values(&values)?))
+            }
+            FsMetaResult::DirEntries(entries) => {
+                let mut values = Vec::with_capacity(entries.len());
+                for entry in entries {
+                    values.push(self.fs_dir_entry_value(entry)?);
+                }
+                Ok(Value::Object(self.alloc_array_from_values(&values)?))
+            }
+            FsMetaResult::Metadata(metadata) => self.fs_metadata_value(metadata),
+        }
+    }
+
     /// Dispatch an `fs:` or `net:request` hostcall through the installed sandboxed
     /// host-I/O provider, performing (and recording) a real host effect and mapping
     /// the result back into a JS [`Value`]. The `net:request` egress is split off up
@@ -5948,35 +6150,58 @@ impl InterpreterCore {
         let Some(provider) = self.host_io.clone() else {
             return Ok(Value::Undefined);
         };
-        // Coerce the hostcall arg registers to strings for the tag->effect builder
-        // (fs paths and contents are string operands in baseline IR3).
-        let mut arg_strings: Vec<String> = Vec::with_capacity(args.count as usize);
-        // bd-rul7k: retain the raw second-arg Value so `fs:read` can resolve the
-        // options-object encoding form (`readFileSync(p, { encoding })`), whose
-        // object stringifies to a type name and would never match an encoding.
-        let mut second_arg_value: Option<Value> = None;
-        // bd-201vt: the async callback forms `fs.readFile(path[, enc], cb)` /
-        // `fs.writeFile(path, data, cb)` pass the callback closure as the FINAL
-        // argument (a `Value::Closure` that survives here un-coerced; the effect
-        // builder ignores trailing args — fs:read uses arg[0], fs:write arg[0..2]).
-        // Capturing it switches dispatch to the async path after the effect runs.
-        let mut callback_closure: Option<u32> = None;
+        let mut raw_args = Vec::with_capacity(args.count as usize);
         for offset in 0..args.count {
-            let value = self.read_reg(args.start + offset)?;
-            if offset == 1 {
-                second_arg_value = Some(value.clone());
-            }
-            if offset + 1 == args.count
-                && let Value::Closure(cid) = &value
-            {
-                callback_closure = Some(*cid);
-            }
-            arg_strings.push(match value {
-                Value::Str(s) => s.to_string(),
-                Value::Int(i) => i.to_string(),
-                Value::Undefined | Value::Null => String::new(),
-                other => other.type_name().to_string(),
-            });
+            raw_args.push(self.read_reg(args.start + offset)?);
+        }
+        // New breadth operations carry an internal leading discriminator while
+        // retaining the existing `fs:read` / `fs:write` capability tag. Keeping
+        // it in the typed effect/request makes transcripts and receipts commit to
+        // the concrete action without adding capability aliases.
+        let (mut operation, logical_args) = match raw_args.first() {
+            Some(Value::Str(value)) => value
+                .strip_prefix("\0fsop:")
+                .and_then(FsOperation::parse_name)
+                .map_or_else(
+                    || {
+                        (
+                            if capability == "fs:read" {
+                                FsOperation::Read
+                            } else {
+                                FsOperation::Write
+                            },
+                            raw_args.as_slice(),
+                        )
+                    },
+                    |operation| (operation, &raw_args[1..]),
+                ),
+            _ => (
+                if capability == "fs:read" {
+                    FsOperation::Read
+                } else {
+                    FsOperation::Write
+                },
+                raw_args.as_slice(),
+            ),
+        };
+        let callback_closure = logical_args.last().and_then(|value| match value {
+            Value::Closure(closure_id) => Some(*closure_id),
+            _ => None,
+        });
+        let path = logical_args
+            .first()
+            .map_or_else(String::new, |value| self.fs_value_argument(value));
+        let second_arg_value = logical_args.get(1).cloned();
+
+        // `writeFile[Sync](path, data, {flag:'a'})` is append-class I/O even
+        // though it shares Node's writeFile API entrypoint.
+        if operation == FsOperation::Write
+            && logical_args
+                .get(2)
+                .and_then(|options| self.fs_object_property(options, "flag"))
+                .is_some_and(|value| matches!(value, Value::Str(flag) if flag.as_ref() == "a"))
+        {
+            operation = FsOperation::Append;
         }
         // bd-rul7k item 3: validate an explicit `fs:read` encoding BEFORE performing
         // the read. Node's `readFileSync`/`readFile` throw `TypeError('Unknown
@@ -5985,7 +6210,7 @@ impl InterpreterCore {
         // return a JS-catchable `TypeError` here, before the effect is built/run, so
         // no spurious read effect is recorded in the host-effect transcript. The
         // resolved encoding is reused below for the return-shape decode.
-        let fs_read_encoding = if capability == "fs:read" {
+        let fs_read_encoding = if operation == FsOperation::Read {
             let encoding = self.resolve_fs_read_encoding(second_arg_value.as_ref());
             if let Some(ref enc) = encoding
                 && !Self::is_recognized_fs_encoding(enc)
@@ -5999,14 +6224,17 @@ impl InterpreterCore {
         } else {
             None
         };
-        // Build the fs host effect from the string-coerced operands. (The
-        // `net:request` egress is resolved off the heap and performed up front by
-        // the shared seam above, so only fs capabilities reach this builder.)
-        let effect = create_effect_from_hostcall_tag(capability, &arg_strings).map_err(|err| {
-            InterpreterError::InternalError {
-                details: format!("host effect build failed for {capability}: {err}"),
-            }
-        })?;
+        let operation_arguments = self.fs_operation_arguments(operation, logical_args);
+        let content = if matches!(operation, FsOperation::Write | FsOperation::Append) {
+            Some(
+                logical_args
+                    .get(1)
+                    .map_or_else(|| Ok(Vec::new()), |value| self.fs_value_bytes(value))?,
+            )
+        } else {
+            None
+        };
+        let effect = create_fs_effect(operation, path, operation_arguments, content);
         // Build a Full handler stack backed by the provider (+ recorder) for this
         // dispatch. Full grants all capabilities so the stack's gate never
         // re-denies what the interpreter already authorized; the provider performs
@@ -6018,14 +6246,27 @@ impl InterpreterCore {
         );
         let result = match stack.handle_effect(effect.as_ref()) {
             Ok(result) => result,
+            Err(EffectError::HandlerError {
+                message,
+                code: Some(code),
+                ..
+            }) => {
+                let error = InterpreterError::HostFilesystem { code, message };
+                if let Some(closure_id) = callback_closure {
+                    let thrown = self.native_error_to_thrown_value(&error)?;
+                    self.schedule_io_callback(closure_id, vec![thrown]);
+                    return Ok(Value::Undefined);
+                }
+                return Err(error);
+            }
             Err(err) => {
                 return Err(InterpreterError::InternalError {
                     details: format!("host effect dispatch failed for {capability}: {err}"),
                 });
             }
         };
-        Ok(match capability {
-            "fs:read" => {
+        Ok(match operation {
+            FsOperation::Read => {
                 // bd-1xl17.d / bd-rul7k: Node parity for `readFileSync`'s return
                 // shape. The optional second arg selects the character encoding,
                 // either as a bare string (`readFileSync(p, 'utf8')`) or an options
@@ -6033,7 +6274,7 @@ impl InterpreterCore {
                 // recognized encoding the call yields a `Buffer`. The encoding was
                 // resolved and validated up front (`fs_read_encoding`) so it only
                 // steers the value here; it is inert to the host effect itself
-                // (`create_effect_from_hostcall_tag` consumes arg[1] only for writes).
+                // (the typed effect consumes only the path for reads).
                 let value = match result.downcast::<Vec<u8>>() {
                     Ok(bytes) => self.decode_fs_read_result(&bytes, fs_read_encoding.as_deref())?,
                     Err(_) => Value::Undefined,
@@ -6055,7 +6296,7 @@ impl InterpreterCore {
             // write still happened and was recorded in the host-effect transcript
             // (the ledger source for bd-5r99w.12); only the JS-visible value
             // changes to match Node, not the recorded effect.
-            "fs:write" => {
+            FsOperation::Write | FsOperation::Append => {
                 if let Some(closure_id) = callback_closure {
                     // bd-201vt: async `fs.writeFile(path, data, cb)`. The write ran
                     // and was recorded above; defer the err-first `cb(null)` to the
@@ -6065,7 +6306,10 @@ impl InterpreterCore {
                 }
                 Value::Undefined
             }
-            _ => Value::Undefined,
+            _ => match result.downcast::<FsMetaResult>() {
+                Ok(result) => self.fs_meta_result_value(result)?,
+                Err(_) => Value::Undefined,
+            },
         })
     }
 
@@ -9893,6 +10137,34 @@ impl InterpreterCore {
                     }
                 }
                 Ok(Value::Float(f64::NAN.into()))
+            }
+            BuiltinFunctionKind::FsStatsIsFile
+            | BuiltinFunctionKind::FsStatsIsDirectory
+            | BuiltinFunctionKind::FsEntryIsSymbolicLink
+            | BuiltinFunctionKind::FsDirentIsFile
+            | BuiltinFunctionKind::FsDirentIsDirectory => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(object_id) = receiver else {
+                    return Ok(Value::Bool(false));
+                };
+                let property = match builtin.kind {
+                    BuiltinFunctionKind::FsStatsIsFile
+                    | BuiltinFunctionKind::FsDirentIsFile => "__isFile",
+                    BuiltinFunctionKind::FsStatsIsDirectory
+                    | BuiltinFunctionKind::FsDirentIsDirectory => "__isDirectory",
+                    BuiltinFunctionKind::FsEntryIsSymbolicLink => "__isSymbolicLink",
+                    _ => unreachable!("filesystem predicate arm only contains fs predicates"),
+                };
+                let value = self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .and_then(|object| object.properties.get(property))
+                    .and_then(|value| match value {
+                        Value::Bool(value) => Some(*value),
+                        _ => None,
+                    })
+                    .unwrap_or(false);
+                Ok(Value::Bool(value))
             }
             BuiltinFunctionKind::ClientRequestWrite => {
                 // bd-3894s slice (2b): `req.write(chunk)` — append the chunk to the
@@ -15523,6 +15795,7 @@ impl InterpreterCore {
                 Some("TypeError")
             }
             InterpreterError::RangeError { .. } => Some("RangeError"),
+            InterpreterError::HostFilesystem { .. } => Some("Error"),
             // Temporal-dead-zone access of a `let`/`const` binding is a
             // `ReferenceError` per ES semantics.
             InterpreterError::UninitializedBinding { .. } => Some("ReferenceError"),
@@ -15544,6 +15817,9 @@ impl InterpreterCore {
         let prototype = self.ensure_builtin_prototype(name)?;
         let error_id = self.alloc_object_with_prototype(Some(prototype))?;
         self.initialize_error_like_object(error_id, name, message)?;
+        if let InterpreterError::HostFilesystem { code, .. } = err {
+            self.set_object_property(error_id, "code".to_string(), Value::str(code.as_str()))?;
+        }
         Ok(Value::Object(error_id))
     }
 
@@ -16799,6 +17075,21 @@ impl InterpreterCore {
             ("Map", "clear") => Some(BuiltinFunction::map_clear()),
             ("Set", "clear") => Some(BuiltinFunction::set_clear()),
             ("Date", "getTime") => Some(BuiltinFunction::date_get_time()),
+            ("FsStats", "isFile") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::FsStatsIsFile,
+            )),
+            ("FsStats", "isDirectory") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::FsStatsIsDirectory,
+            )),
+            ("FsStats" | "FsDirent", "isSymbolicLink") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::FsEntryIsSymbolicLink,
+            )),
+            ("FsDirent", "isFile") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::FsDirentIsFile,
+            )),
+            ("FsDirent", "isDirectory") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::FsDirentIsDirectory,
+            )),
             // bd-3894s slice (2b): the writable `ClientRequest` returned by
             // `http.request(url[, opts])` exposes `.write`/`.end` via member access,
             // exactly like Map/Set/Date expose their methods through the `__type`
@@ -39499,6 +39790,9 @@ mod async_runtime_tests_current {
                     HostIoRequest::FsWrite { .. } => {
                         Ok(HostIoResponse::FsWrite { bytes_written: 0 })
                     }
+                    HostIoRequest::FsMeta { .. } => Ok(HostIoResponse::FsMeta {
+                        result: FsMetaResult::Unit,
+                    }),
                 }
             }
         }
@@ -39582,6 +39876,9 @@ mod async_runtime_tests_current {
                     HostIoRequest::FsWrite { .. } => {
                         Ok(HostIoResponse::FsWrite { bytes_written: 0 })
                     }
+                    HostIoRequest::FsMeta { .. } => Ok(HostIoResponse::FsMeta {
+                        result: FsMetaResult::Unit,
+                    }),
                 }
             }
         }

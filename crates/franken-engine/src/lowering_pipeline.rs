@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use bumpalo::collections::Vec as ArenaVec;
+use frankenengine_extension_host::host_io::FsOperation;
 
 use crate::lowering_arena::LoweringArena;
 
@@ -2550,7 +2551,7 @@ fn lower_statement_to_ir1_with_flow(
                         && ((is_require_fs_module_initializer(init, binding_lookup)
                             && binding_lookup.contains_key(&fs_module_alias_sentinel(alias)))
                             || ((is_require_fs_promises_module_initializer(init, binding_lookup)
-                                || is_require_fs_promises_subobject(init))
+                                || is_fs_promises_subobject(init, binding_lookup))
                                 && binding_lookup
                                     .contains_key(&fs_promises_module_alias_sentinel(alias)))
                             || (is_require_http_module_initializer(init, binding_lookup)
@@ -3696,6 +3697,7 @@ fn lower_statement_to_ir1_with_flow(
             // this function body (sentinel keys only; see
             // `seed_timers_module_alias_sentinels`).
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
+            seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -3828,6 +3830,7 @@ fn lower_statement_to_ir1_with_flow(
             // this function body (sentinel keys only; see
             // `seed_timers_module_alias_sentinels`).
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
+            seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -3989,6 +3992,7 @@ fn lower_statement_to_ir1_with_flow(
                 let mut m_lookup = BTreeMap::new();
                 // bd-suwvw: see the body_lookup seeding above.
                 seed_timers_module_alias_sentinels(&mut m_lookup, binding_lookup);
+                seed_fs_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 let mut m_binding_index: BindingId = 0;
                 let m_scope = ScopeId { depth: 0, index: 0 };
                 let mut m_label_counter: u32 = 0;
@@ -9914,7 +9918,7 @@ fn lower_expression_to_ir1_inner(
                 });
                 return Ok(());
             }
-            if let Some(capability) = fs_builtin_call_capability(callee, binding_lookup) {
+            if let Some(fs_call) = fs_builtin_call_capability(callee, binding_lookup) {
                 // bd-1xl17: inline `require('fs').readFileSync(path)` /
                 // `require('fs').writeFileSync(path, data)` (Sync) lower to an
                 // `fs:`-tagged HostCall so the interpreter's host-I/O seam performs
@@ -9930,12 +9934,12 @@ fn lower_expression_to_ir1_inner(
                 // (Buffer vs decoded string) at dispatch and is inert to the host
                 // effect. Otherwise fall through so a malformed call is not
                 // silently mis-shaped.
-                let arity_ok = if capability == "fs:write" {
-                    arguments.len() == 2
-                } else {
-                    matches!(arguments.len(), 1 | 2)
-                };
-                if arity_ok {
+                if fs_call.accepts_arity(arguments.len()) {
+                    if fs_call.carries_operation_discriminator() {
+                        ops.push(Ir1Op::LoadLiteral {
+                            value: Ir1Literal::String(fs_call.discriminator()),
+                        });
+                    }
                     for arg in arguments {
                         lower_expression_to_ir1(
                             arg,
@@ -9949,8 +9953,10 @@ fn lower_expression_to_ir1_inner(
                         )?;
                     }
                     ops.push(Ir1Op::HostCall {
-                        capability: capability.to_string(),
-                        arg_count: arguments.len() as u32,
+                        capability: fs_call.capability.to_string(),
+                        arg_count: (arguments.len()
+                            + usize::from(fs_call.carries_operation_discriminator()))
+                            as u32,
                     });
                     return Ok(());
                 }
@@ -9996,19 +10002,19 @@ fn lower_expression_to_ir1_inner(
                     return Ok(());
                 }
             }
-            if let Some(capability) = fs_promises_builtin_call_capability(callee, binding_lookup) {
+            if let Some(fs_call) = fs_promises_builtin_call_capability(callee, binding_lookup) {
                 // bd-1xl17.c: `require('fs/promises').readFile(path)` or the binding
                 // form `fsp.readFile(path)` (`const fsp = require('fs/promises')`).
                 // Lower to the SAME `fs:` HostCall as the synchronous member-call
                 // form (identical args + 1..=2 read arity), then wrap the result in
                 // a `promise:resolve` HostCall so the call evaluates to a Promise.
                 // Otherwise fall through so a malformed call is not mis-shaped.
-                let arity_ok = if capability == "fs:write" {
-                    arguments.len() == 2
-                } else {
-                    matches!(arguments.len(), 1 | 2)
-                };
-                if arity_ok {
+                if fs_call.accepts_arity(arguments.len()) {
+                    if fs_call.carries_operation_discriminator() {
+                        ops.push(Ir1Op::LoadLiteral {
+                            value: Ir1Literal::String(fs_call.discriminator()),
+                        });
+                    }
                     for arg in arguments {
                         lower_expression_to_ir1(
                             arg,
@@ -10022,8 +10028,10 @@ fn lower_expression_to_ir1_inner(
                         )?;
                     }
                     ops.push(Ir1Op::HostCall {
-                        capability: capability.to_string(),
-                        arg_count: arguments.len() as u32,
+                        capability: fs_call.capability.to_string(),
+                        arg_count: (arguments.len()
+                            + usize::from(fs_call.carries_operation_discriminator()))
+                            as u32,
                     });
                     ops.push(Ir1Op::HostCall {
                         capability: "promise:resolve".to_string(),
@@ -11012,6 +11020,17 @@ fn lower_expression_to_ir1_inner(
                 });
                 return Ok(());
             }
+            // bd-8u1t5: Node's access-mode constants are stable POSIX bit values.
+            // A confirmed fs module is a lowering-only shim (there is no runtime
+            // module object), so fold the nested `fs.constants.*` read directly.
+            if let Some(value) =
+                fs_constants_member_value(object, property, *computed, binding_lookup)
+            {
+                ops.push(Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Integer(value),
+                });
+                return Ok(());
+            }
             // bd-tu0c3: `path.sep` / `path.delimiter` (and the `.posix`/`.win32`
             // namespace forms) on a confirmed path-module alias are deterministic
             // platform constants; lower them directly to string literals. The
@@ -11591,6 +11610,7 @@ fn lower_expression_to_ir1_inner(
             // this function body (sentinel keys only; see
             // `seed_timers_module_alias_sentinels`).
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
+            seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -11730,6 +11750,7 @@ fn lower_expression_to_ir1_inner(
             // this function body (sentinel keys only; see
             // `seed_timers_module_alias_sentinels`).
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
+            seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -12203,6 +12224,7 @@ fn lower_expression_to_ir1_inner(
             // this function body (sentinel keys only; see
             // `seed_timers_module_alias_sentinels`).
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
+            seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -12342,6 +12364,7 @@ fn lower_expression_to_ir1_inner(
                 let mut m_lookup = BTreeMap::new();
                 // bd-suwvw: see the body_lookup seeding above.
                 seed_timers_module_alias_sentinels(&mut m_lookup, binding_lookup);
+                seed_fs_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 let mut m_binding_index: BindingId = 0;
                 let m_scope = ScopeId { depth: 0, index: 0 };
                 let mut m_label_counter: u32 = 0;
@@ -12839,16 +12862,56 @@ fn is_fs_alias_method_callee(callee: &Expression, alias_names: &BTreeSet<String>
     else {
         return false;
     };
-    let Expression::Identifier(obj) = object.as_ref() else {
+    let method = match property.as_ref() {
+        Expression::Identifier(method) | Expression::StringLiteral(method) => method.as_str(),
+        _ => return false,
+    };
+    match object.as_ref() {
+        Expression::Identifier(obj) if alias_names.contains(obj) => {
+            fs_sync_builtin_spec(method).is_some() || matches!(method, "readFile" | "writeFile")
+        }
+        Expression::Member {
+            object: fs_object,
+            property: promises_property,
+            computed: false,
+            ..
+        } if matches!(fs_object.as_ref(), Expression::Identifier(obj) if alias_names.contains(obj))
+            && matches!(promises_property.as_ref(),
+                Expression::Identifier(name) | Expression::StringLiteral(name)
+                    if name == "promises") =>
+        {
+            matches!(method, "readFile" | "writeFile" | "mkdir" | "readdir")
+        }
+        _ => false,
+    }
+}
+
+fn is_fs_alias_constant_member(expr: &Expression, alias_names: &BTreeSet<String>) -> bool {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = expr
+    else {
         return false;
     };
-    if !alias_names.contains(obj) {
+    let constant = match property.as_ref() {
+        Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
+        _ => return false,
+    };
+    if !matches!(constant, "F_OK" | "R_OK" | "W_OK" | "X_OK") {
         return false;
     }
-    matches!(property.as_ref(),
-        Expression::Identifier(m) | Expression::StringLiteral(m)
-            if m == "readFileSync" || m == "writeFileSync"
-                || m == "readFile" || m == "writeFile")
+    matches!(object.as_ref(), Expression::Member {
+        object: fs_object,
+        property: constants_property,
+        computed: false,
+        ..
+    } if matches!(fs_object.as_ref(), Expression::Identifier(alias) if alias_names.contains(alias))
+        && matches!(constants_property.as_ref(),
+            Expression::Identifier(name) | Expression::StringLiteral(name)
+                if name == "constants"))
 }
 
 /// Recursively scan `expr` for a call whose callee satisfies `is_target` — the
@@ -12922,16 +12985,6 @@ fn expr_contains_matching_call<F: Fn(&Expression) -> bool>(
     }
 }
 
-/// Usage-lookahead wrapper: true when `expr` contains a recognized fs host
-/// *method* call `<alias>.readFileSync/writeFileSync(...)` on one of
-/// `alias_names` — the binding (`const fs = require('fs')`, bd-1xl17.a) and ESM
-/// namespace/default-import (bd-1xl17.b) receiver forms.
-fn expr_uses_fs_alias_method(expr: &Expression, alias_names: &BTreeSet<String>) -> bool {
-    expr_contains_matching_call(expr, &|callee| {
-        is_fs_alias_method_callee(callee, alias_names)
-    })
-}
-
 /// True when any top-level expression statement or variable initializer in
 /// `body` satisfies `uses`. This is the shallow, fail-closed scan surface shared
 /// by every fs usage-lookahead (bd-1xl17.a/.b): only program-body positions are
@@ -12959,7 +13012,7 @@ fn body_top_level_expr_matches<F: Fn(&Expression) -> bool>(body: &[Statement], u
 /// deliberately left to the existing ambient-authority denial (preserving the
 /// `require(...)` rejection contract for bare/unused requires without any test
 /// changes). The usage scan covers top-level positions and fails closed for
-/// deeper nesting — see [`expr_uses_fs_alias_method`].
+/// deeper nesting is covered by the timers-family deep statement walker.
 fn confirmed_fs_module_aliases(
     body: &[Statement],
     binding_lookup: &BTreeMap<String, BindingId>,
@@ -12983,7 +13036,14 @@ fn confirmed_fs_module_aliases(
     let mut used = BTreeSet::new();
     for name in &candidates {
         let single: BTreeSet<String> = std::iter::once(name.clone()).collect();
-        if body_top_level_expr_matches(body, &|e| expr_uses_fs_alias_method(e, &single)) {
+        if body.iter().any(|stmt| {
+            timers_scan_statement_deep(stmt, &|candidate| {
+                is_fs_alias_constant_member(candidate, &single)
+                    || matches!(candidate,
+                        Expression::Call { callee, .. } | Expression::OptionalCall { callee, .. }
+                            if is_fs_alias_method_callee(callee, &single))
+            })
+        }) {
             used.insert(name.clone());
         }
     }
@@ -13005,10 +13065,116 @@ fn confirmed_fs_module_aliases(
 /// Only the `fs`/`node:fs` specifier and the synchronous `readFileSync` /
 /// `writeFileSync` methods are matched (async / ESM / return-shape variants are
 /// tracked separately as bd-1xl17.b–.d).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FsBuiltinCall {
+    capability: &'static str,
+    operation: FsOperation,
+    min_args: usize,
+    max_args: usize,
+}
+
+impl FsBuiltinCall {
+    fn accepts_arity(self, arg_count: usize) -> bool {
+        (self.min_args..=self.max_args).contains(&arg_count)
+    }
+
+    fn carries_operation_discriminator(self) -> bool {
+        !matches!(self.operation, FsOperation::Read | FsOperation::Write)
+    }
+
+    fn discriminator(self) -> String {
+        format!("\0fsop:{}", self.operation.as_str())
+    }
+}
+
+fn is_fs_module_object(
+    expression: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    match expression {
+        Expression::Call { .. } => is_require_fs_module_initializer(expression, binding_lookup),
+        Expression::Identifier(alias) => {
+            binding_lookup.contains_key(&fs_module_alias_sentinel(alias))
+        }
+        _ => false,
+    }
+}
+
+fn fs_constants_member_value(
+    object: &Expression,
+    property: &Expression,
+    computed: bool,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<i64> {
+    if computed {
+        return None;
+    }
+    let constant = match property {
+        Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
+        _ => return None,
+    };
+    let Expression::Member {
+        object: fs_object,
+        property: constants_property,
+        computed: false,
+        ..
+    } = object
+    else {
+        return None;
+    };
+    if !is_fs_module_object(fs_object, binding_lookup)
+        || !matches!(constants_property.as_ref(),
+            Expression::Identifier(name) | Expression::StringLiteral(name)
+                if name == "constants")
+    {
+        return None;
+    }
+    match constant {
+        "F_OK" => Some(0),
+        "X_OK" => Some(1),
+        "W_OK" => Some(2),
+        "R_OK" => Some(4),
+        _ => None,
+    }
+}
+
+fn fs_sync_builtin_spec(method: &str) -> Option<FsBuiltinCall> {
+    let (capability, operation, min_args, max_args) = match method {
+        "readFileSync" => ("fs:read", FsOperation::Read, 1, 2),
+        "writeFileSync" => ("fs:write", FsOperation::Write, 2, 3),
+        "appendFileSync" => ("fs:write", FsOperation::Append, 2, 3),
+        "existsSync" => ("fs:read", FsOperation::Exists, 1, 1),
+        "mkdirSync" => ("fs:write", FsOperation::Mkdir, 1, 2),
+        "readdirSync" => ("fs:read", FsOperation::ReadDir, 1, 2),
+        "statSync" => ("fs:read", FsOperation::Stat, 1, 2),
+        "lstatSync" => ("fs:read", FsOperation::Lstat, 1, 2),
+        "symlinkSync" => ("fs:write", FsOperation::Symlink, 2, 3),
+        "readlinkSync" => ("fs:read", FsOperation::ReadLink, 1, 2),
+        "renameSync" => ("fs:write", FsOperation::Rename, 2, 2),
+        "copyFileSync" => ("fs:write", FsOperation::CopyFile, 2, 3),
+        "unlinkSync" => ("fs:write", FsOperation::Unlink, 1, 1),
+        "rmSync" => ("fs:write", FsOperation::Remove, 1, 2),
+        "rmdirSync" => ("fs:write", FsOperation::RemoveDir, 1, 2),
+        "truncateSync" => ("fs:write", FsOperation::Truncate, 1, 2),
+        "accessSync" => ("fs:read", FsOperation::Access, 1, 2),
+        "chmodSync" => ("fs:write", FsOperation::Chmod, 2, 2),
+        "utimesSync" => ("fs:write", FsOperation::Utimes, 3, 3),
+        "realpathSync" => ("fs:read", FsOperation::Realpath, 1, 2),
+        "mkdtempSync" => ("fs:write", FsOperation::Mkdtemp, 1, 2),
+        _ => return None,
+    };
+    Some(FsBuiltinCall {
+        capability,
+        operation,
+        min_args,
+        max_args,
+    })
+}
+
 fn fs_builtin_call_capability(
     callee: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
-) -> Option<&'static str> {
+) -> Option<FsBuiltinCall> {
     let Expression::Member {
         object,
         property,
@@ -13018,37 +13184,14 @@ fn fs_builtin_call_capability(
     else {
         return None;
     };
-    let receiver_is_fs_module = match object.as_ref() {
-        // inline `require('fs')` / `require('node:fs')` receiver.
-        Expression::Call {
-            callee: require_callee,
-            arguments: require_args,
-            ..
-        } => {
-            matches!(require_callee.as_ref(), Expression::Identifier(name) if name == "require")
-                && matches!(
-                    require_args.as_slice(),
-                    [Expression::StringLiteral(spec)] if is_fs_module_specifier(spec)
-                )
-        }
-        // binding form: identifier aliased to the fs module (bd-1xl17.a).
-        Expression::Identifier(alias) => {
-            binding_lookup.contains_key(&fs_module_alias_sentinel(alias))
-        }
-        _ => false,
-    };
-    if !receiver_is_fs_module {
+    if !is_fs_module_object(object, binding_lookup) {
         return None;
     }
     let method = match property.as_ref() {
         Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
         _ => return None,
     };
-    match method {
-        "readFileSync" => Some("fs:read"),
-        "writeFileSync" => Some("fs:write"),
-        _ => None,
-    }
+    fs_sync_builtin_spec(method)
 }
 
 /// bd-tu0c3: true when `specifier` names the Node path module — `path` or
@@ -13997,6 +14140,25 @@ fn seed_timers_module_alias_sentinels(
     }
 }
 
+/// bd-8u1t5: carry confirmed fs and fs/promises provenance into every fresh
+/// function/method lookup. This makes the deep pre-scan actionable inside
+/// callbacks, try/catch bodies, and promise arrows without creating a runtime
+/// module object or widening the two existing fs capability classes.
+fn seed_fs_module_alias_sentinels(
+    body_lookup: &mut BTreeMap<String, BindingId>,
+    outer_lookup: &BTreeMap<String, BindingId>,
+) {
+    for key in outer_lookup.keys() {
+        if key.starts_with("\0fsmod\0")
+            || key.starts_with("\0fsnamed\0")
+            || key.starts_with("\0fsprommod\0")
+            || key.starts_with("\0fspromnamed\0")
+        {
+            body_lookup.insert(key.clone(), 0);
+        }
+    }
+}
+
 /// bd-suwvw: compute the identifier names BOTH bound via `const/let/var
 /// <name> = require('timers')` at the unit root AND used as a recognized
 /// timers export (member call OR member read) somewhere reachable by the
@@ -14387,7 +14549,7 @@ fn is_http_alias_method_callee(callee: &Expression, alias_names: &BTreeSet<Strin
 /// bd-656a2: usage-lookahead predicate — does `expr` contain a call to
 /// `<alias>.get/request(...)` for one of `alias_names`? Reuses the shared
 /// [`expr_contains_matching_call`] walker (function/class bodies and object
-/// literals are opaque, fail-closed), mirroring [`expr_uses_fs_alias_method`].
+/// literals are opaque, fail-closed), mirroring the original fs usage scan.
 fn expr_uses_http_alias_method(expr: &Expression, alias_names: &BTreeSet<String>) -> bool {
     expr_contains_matching_call(expr, &|callee| {
         is_http_alias_method_callee(callee, alias_names)
@@ -14703,6 +14865,16 @@ fn is_fs_named_callee(callee: &Expression, name: &str) -> bool {
     matches!(callee, Expression::Identifier(n) if n == name)
 }
 
+fn body_deep_contains_fs_named_call(body: &[Statement], local: &str) -> bool {
+    body.iter().any(|stmt| {
+        timers_scan_statement_deep(stmt, &|candidate| {
+            matches!(candidate,
+                Expression::Call { callee, .. } | Expression::OptionalCall { callee, .. }
+                    if is_fs_named_callee(callee, local))
+        })
+    })
+}
+
 /// Sentinel key recording that the local binding `local_name` is an fs *named
 /// import* (`import { readFileSync } from 'node:fs'`, incl. `as` renames) bound to
 /// `capability` ("fs:read"/"fs:write") AND used as a direct call (bd-1xl17.b).
@@ -14740,7 +14912,14 @@ fn confirmed_fs_namespace_import_aliases(body: &[Statement]) -> BTreeSet<String>
     let mut used = BTreeSet::new();
     for name in &candidates {
         let single: BTreeSet<String> = std::iter::once(name.clone()).collect();
-        if body_top_level_expr_matches(body, &|e| expr_uses_fs_alias_method(e, &single)) {
+        if body.iter().any(|stmt| {
+            timers_scan_statement_deep(stmt, &|candidate| {
+                is_fs_alias_constant_member(candidate, &single)
+                    || matches!(candidate,
+                        Expression::Call { callee, .. } | Expression::OptionalCall { callee, .. }
+                            if is_fs_alias_method_callee(callee, &single))
+            })
+        }) {
             used.insert(name.clone());
         }
     }
@@ -14777,11 +14956,7 @@ fn confirmed_fs_named_imports(body: &[Statement]) -> BTreeMap<String, &'static s
     }
     candidates
         .into_iter()
-        .filter(|(local, _)| {
-            body_top_level_expr_matches(body, &|e| {
-                expr_contains_matching_call(e, &|c| is_fs_named_callee(c, local))
-            })
-        })
+        .filter(|(local, _)| body_deep_contains_fs_named_call(body, local))
         .collect()
 }
 
@@ -14842,11 +15017,7 @@ fn confirmed_fs_destructured_requires(
     }
     candidates
         .into_iter()
-        .filter(|(local, _)| {
-            body_top_level_expr_matches(body, &|e| {
-                expr_contains_matching_call(e, &|c| is_fs_named_callee(c, local))
-            })
-        })
+        .filter(|(local, _)| body_deep_contains_fs_named_call(body, local))
         .collect()
 }
 
@@ -14959,11 +15130,7 @@ fn confirmed_fs_promises_named_imports(body: &[Statement]) -> BTreeMap<String, &
     }
     candidates
         .into_iter()
-        .filter(|(local, _)| {
-            body_top_level_expr_matches(body, &|e| {
-                expr_contains_matching_call(e, &|c| is_fs_named_callee(c, local))
-            })
-        })
+        .filter(|(local, _)| body_deep_contains_fs_named_call(body, local))
         .collect()
 }
 
@@ -15024,6 +15191,22 @@ fn fs_promises_module_alias_sentinel(name: &str) -> String {
     format!("\0fsprommod\0{name}")
 }
 
+fn fs_promises_method_spec(method: &str) -> Option<FsBuiltinCall> {
+    let (capability, operation, min_args, max_args) = match method {
+        "readFile" => ("fs:read", FsOperation::Read, 1, 2),
+        "writeFile" => ("fs:write", FsOperation::Write, 2, 3),
+        "mkdir" => ("fs:write", FsOperation::Mkdir, 1, 2),
+        "readdir" => ("fs:read", FsOperation::ReadDir, 1, 2),
+        _ => return None,
+    };
+    Some(FsBuiltinCall {
+        capability,
+        operation,
+        min_args,
+        max_args,
+    })
+}
+
 /// True when `callee` is `<obj>.readFile` / `.writeFile` whose object identifier
 /// is in `alias_names` — an fs/promises host method call on a
 /// `const fsp = require('fs/promises')` alias (bd-1xl17.c). Mirrors
@@ -15046,15 +15229,7 @@ fn is_fs_promises_alias_method_callee(callee: &Expression, alias_names: &BTreeSe
     }
     matches!(property.as_ref(),
         Expression::Identifier(m) | Expression::StringLiteral(m)
-            if m == "readFile" || m == "writeFile")
-}
-
-/// True when any top-level expression in `body` uses an fs/promises alias method
-/// (bd-1xl17.c). Mirrors [`expr_uses_fs_alias_method`].
-fn expr_uses_fs_promises_alias_method(expr: &Expression, alias_names: &BTreeSet<String>) -> bool {
-    expr_contains_matching_call(expr, &|callee| {
-        is_fs_promises_alias_method_callee(callee, alias_names)
-    })
+            if fs_promises_method_spec(m).is_some())
 }
 
 /// Confirmed fs/promises module aliases (bd-1xl17.c): names bound via
@@ -15077,7 +15252,7 @@ fn confirmed_fs_promises_module_aliases(
                 // sentinel and share `fs_promises_builtin_call_capability`.
                 if let (BindingPattern::Identifier(name), Some(init)) = (&d.pattern, &d.initializer)
                     && (is_require_fs_promises_module_initializer(init, binding_lookup)
-                        || is_require_fs_promises_subobject(init))
+                        || is_fs_promises_subobject(init, binding_lookup))
                 {
                     candidates.insert(name.clone());
                 }
@@ -15090,7 +15265,13 @@ fn confirmed_fs_promises_module_aliases(
     let mut used = BTreeSet::new();
     for name in &candidates {
         let single: BTreeSet<String> = std::iter::once(name.clone()).collect();
-        if body_top_level_expr_matches(body, &|e| expr_uses_fs_promises_alias_method(e, &single)) {
+        if body.iter().any(|stmt| {
+            timers_scan_statement_deep(stmt, &|candidate| {
+                matches!(candidate,
+                    Expression::Call { callee, .. } | Expression::OptionalCall { callee, .. }
+                        if is_fs_promises_alias_method_callee(callee, &single))
+            })
+        }) {
             used.insert(name.clone());
         }
     }
@@ -15123,7 +15304,13 @@ fn confirmed_fs_promises_namespace_import_aliases(body: &[Statement]) -> BTreeSe
     let mut used = BTreeSet::new();
     for name in &candidates {
         let single: BTreeSet<String> = std::iter::once(name.clone()).collect();
-        if body_top_level_expr_matches(body, &|e| expr_uses_fs_promises_alias_method(e, &single)) {
+        if body.iter().any(|stmt| {
+            timers_scan_statement_deep(stmt, &|candidate| {
+                matches!(candidate,
+                    Expression::Call { callee, .. } | Expression::OptionalCall { callee, .. }
+                        if is_fs_promises_alias_method_callee(callee, &single))
+            })
+        }) {
             used.insert(name.clone());
         }
     }
@@ -15139,7 +15326,7 @@ fn confirmed_fs_promises_namespace_import_aliases(body: &[Statement]) -> BTreeSe
 fn fs_promises_builtin_call_capability(
     callee: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
-) -> Option<&'static str> {
+) -> Option<FsBuiltinCall> {
     let Expression::Member {
         object,
         property,
@@ -15168,7 +15355,7 @@ fn fs_promises_builtin_call_capability(
         }
         // sub-object form: `require('fs').promises.readFile(...)` — the promises
         // API hung off the synchronous fs module (bd-1xl17.c).
-        member @ Expression::Member { .. } => is_require_fs_promises_subobject(member),
+        member @ Expression::Member { .. } => is_fs_promises_subobject(member, binding_lookup),
         _ => false,
     };
     if !receiver_is_fs_promises {
@@ -15178,11 +15365,7 @@ fn fs_promises_builtin_call_capability(
         Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
         _ => return None,
     };
-    match method {
-        "readFile" => Some("fs:read"),
-        "writeFile" => Some("fs:write"),
-        _ => None,
-    }
+    fs_promises_method_spec(method)
 }
 
 /// True when `expr` is the `require('fs').promises` sub-object — the promises API
@@ -15191,7 +15374,10 @@ fn fs_promises_builtin_call_capability(
 /// other fs recognizers: there is no real `fs` heap object, so `.promises` is
 /// recognized at lowering time and is never read at runtime. Both `fs` and
 /// `node:fs` specifiers are accepted (via [`is_fs_module_specifier`]).
-fn is_require_fs_promises_subobject(expr: &Expression) -> bool {
+fn is_fs_promises_subobject(
+    expr: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
     let Expression::Member {
         object,
         property,
@@ -15206,10 +15392,7 @@ fn is_require_fs_promises_subobject(expr: &Expression) -> bool {
     if !property_is_promises {
         return false;
     }
-    matches!(object.as_ref(), Expression::Call { callee, arguments, .. }
-        if matches!(callee.as_ref(), Expression::Identifier(name) if name == "require")
-            && matches!(arguments.as_slice(),
-                [Expression::StringLiteral(spec)] if is_fs_module_specifier(spec)))
+    is_fs_module_object(object, binding_lookup)
 }
 
 /// Confirmed fs/promises *destructured* CJS requires (bd-1xl17.c):
@@ -15260,11 +15443,7 @@ fn confirmed_fs_promises_destructured_requires(
     }
     candidates
         .into_iter()
-        .filter(|(local, _)| {
-            body_top_level_expr_matches(body, &|e| {
-                expr_contains_matching_call(e, &|c| is_fs_named_callee(c, local))
-            })
-        })
+        .filter(|(local, _)| body_deep_contains_fs_named_call(body, local))
         .collect()
 }
 
@@ -15316,7 +15495,13 @@ fn confirmed_fs_promises_subobject_destructures(
     let mut used = BTreeSet::new();
     for name in &candidates {
         let single: BTreeSet<String> = std::iter::once(name.clone()).collect();
-        if body_top_level_expr_matches(body, &|e| expr_uses_fs_promises_alias_method(e, &single)) {
+        if body.iter().any(|stmt| {
+            timers_scan_statement_deep(stmt, &|candidate| {
+                matches!(candidate,
+                    Expression::Call { callee, .. } | Expression::OptionalCall { callee, .. }
+                        if is_fs_promises_alias_method_callee(callee, &single))
+            })
+        }) {
             used.insert(name.clone());
         }
     }
@@ -18051,6 +18236,84 @@ mod tests {
             } if capability.as_str() == "fs:write" => Some(*arg_count),
             _ => None,
         })
+    }
+
+    fn ops_deep_match(ops: &[Ir1Op], predicate: &impl Fn(&Ir1Op) -> bool) -> bool {
+        ops.iter().any(|op| {
+            predicate(op)
+                || matches!(op,
+                    Ir1Op::DeclareFunction { body_ops, .. }
+                        | Ir1Op::CreateFunction { body_ops, .. }
+                    if ops_deep_match(body_ops, predicate))
+        })
+    }
+
+    #[test]
+    fn fs_sync_breadth_emits_operation_discriminators_bd_8u1t5() {
+        let ops = lower_script_source_ops(
+            "const fs = require('fs');\n\
+             fs.mkdirSync('tree', { recursive: true });\n\
+             fs.readdirSync('tree', { withFileTypes: true });\n\
+             fs.statSync('tree');\n",
+            "fs_sync_breadth_bd_8u1t5.js",
+        );
+        for discriminator in ["\0fsop:mkdir", "\0fsop:readdir", "\0fsop:stat"] {
+            assert!(
+                ops.iter().any(|op| matches!(op,
+                    Ir1Op::LoadLiteral { value: Ir1Literal::String(value) }
+                        if value == discriminator)),
+                "missing hidden operation discriminator {discriminator:?}"
+            );
+        }
+        assert!(ops.iter().any(|op| matches!(op,
+            Ir1Op::HostCall { capability, arg_count: 3 }
+                if capability == "fs:write")));
+        assert!(ops.iter().any(|op| matches!(op,
+            Ir1Op::HostCall { capability, arg_count: 3 }
+                if capability == "fs:read")));
+        assert!(ops.iter().any(|op| matches!(op,
+            Ir1Op::HostCall { capability, arg_count: 2 }
+                if capability == "fs:read")));
+    }
+
+    #[test]
+    fn fs_promises_subobject_is_deep_scanned_and_discriminated_bd_8u1t5() {
+        let ops = lower_script_source_ops(
+            "const fs = require('fs');\n\
+             (async () => {\n\
+               await fs.promises.mkdir('tree', { recursive: true });\n\
+               return fs.promises.readdir('tree');\n\
+             })();\n",
+            "fs_promises_deep_bd_8u1t5.js",
+        );
+        for discriminator in ["\0fsop:mkdir", "\0fsop:readdir"] {
+            assert!(
+                ops_deep_match(&ops, &|op| matches!(op,
+                    Ir1Op::LoadLiteral { value: Ir1Literal::String(value) }
+                        if value == discriminator)),
+                "deep fs.promises call must carry {discriminator:?}"
+            );
+        }
+        assert!(ops_deep_match(&ops, &|op| matches!(op,
+            Ir1Op::HostCall { capability, .. } if capability == "promise:resolve")));
+    }
+
+    #[test]
+    fn fs_access_constants_fold_to_posix_values_bd_8u1t5() {
+        let ops = lower_script_source_ops(
+            "const fs = require('fs');\n\
+             fs.accessSync('entry', fs.constants.F_OK);\n\
+             console.log(fs.constants.R_OK, fs.constants.W_OK, fs.constants.X_OK);\n",
+            "fs_constants_bd_8u1t5.js",
+        );
+        for expected in [0, 4, 2, 1] {
+            assert!(ops.iter().any(|op| matches!(op,
+                Ir1Op::LoadLiteral { value: Ir1Literal::Integer(value) }
+                    if *value == expected)));
+        }
+        assert!(ops.iter().any(|op| matches!(op,
+            Ir1Op::LoadLiteral { value: Ir1Literal::String(value) }
+                if value == "\0fsop:access")));
     }
 
     /// bd-201vt: the inline async callback read `require('fs').readFile(path, cb)`

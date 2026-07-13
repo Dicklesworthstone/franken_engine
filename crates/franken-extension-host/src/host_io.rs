@@ -21,6 +21,155 @@ pub enum HostIoCapability {
     NetworkRecv,
 }
 
+/// Filesystem operation carried across the engine/host policy seam.
+///
+/// Read-class operations deliberately reuse [`HostIoCapability::FsRead`] and
+/// mutation-class operations reuse [`HostIoCapability::FsWrite`].  The
+/// operation remains a separate, transcripted field so receipts commit to the
+/// concrete action without proliferating capability tags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FsOperation {
+    Read,
+    Write,
+    Append,
+    Exists,
+    Mkdir,
+    ReadDir,
+    Stat,
+    Lstat,
+    Symlink,
+    ReadLink,
+    Rename,
+    CopyFile,
+    Unlink,
+    Remove,
+    RemoveDir,
+    Truncate,
+    Access,
+    Chmod,
+    Utimes,
+    Realpath,
+    Mkdtemp,
+}
+
+impl FsOperation {
+    #[must_use]
+    pub const fn required_capability(self) -> HostIoCapability {
+        match self {
+            Self::Read
+            | Self::Exists
+            | Self::ReadDir
+            | Self::Stat
+            | Self::Lstat
+            | Self::ReadLink
+            | Self::Access
+            | Self::Realpath => HostIoCapability::FsRead,
+            Self::Write
+            | Self::Append
+            | Self::Mkdir
+            | Self::Symlink
+            | Self::Rename
+            | Self::CopyFile
+            | Self::Unlink
+            | Self::Remove
+            | Self::RemoveDir
+            | Self::Truncate
+            | Self::Chmod
+            | Self::Utimes
+            | Self::Mkdtemp => HostIoCapability::FsWrite,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Write => "write",
+            Self::Append => "append",
+            Self::Exists => "exists",
+            Self::Mkdir => "mkdir",
+            Self::ReadDir => "readdir",
+            Self::Stat => "stat",
+            Self::Lstat => "lstat",
+            Self::Symlink => "symlink",
+            Self::ReadLink => "readlink",
+            Self::Rename => "rename",
+            Self::CopyFile => "copy_file",
+            Self::Unlink => "unlink",
+            Self::Remove => "remove",
+            Self::RemoveDir => "rmdir",
+            Self::Truncate => "truncate",
+            Self::Access => "access",
+            Self::Chmod => "chmod",
+            Self::Utimes => "utimes",
+            Self::Realpath => "realpath",
+            Self::Mkdtemp => "mkdtemp",
+        }
+    }
+
+    #[must_use]
+    pub fn parse_name(value: &str) -> Option<Self> {
+        Some(match value {
+            "read" => Self::Read,
+            "write" => Self::Write,
+            "append" => Self::Append,
+            "exists" => Self::Exists,
+            "mkdir" => Self::Mkdir,
+            "readdir" => Self::ReadDir,
+            "stat" => Self::Stat,
+            "lstat" => Self::Lstat,
+            "symlink" => Self::Symlink,
+            "readlink" => Self::ReadLink,
+            "rename" => Self::Rename,
+            "copy_file" => Self::CopyFile,
+            "unlink" => Self::Unlink,
+            "remove" => Self::Remove,
+            "rmdir" => Self::RemoveDir,
+            "truncate" => Self::Truncate,
+            "access" => Self::Access,
+            "chmod" => Self::Chmod,
+            "utimes" => Self::Utimes,
+            "realpath" => Self::Realpath,
+            "mkdtemp" => Self::Mkdtemp,
+            _ => return None,
+        })
+    }
+}
+
+/// Stable, platform-neutral subset of Node's `fs.Stats` surface.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsMetadata {
+    pub size: u64,
+    pub mode: u32,
+    pub modified_millis: i64,
+    pub is_file: bool,
+    pub is_directory: bool,
+    pub is_symbolic_link: bool,
+}
+
+/// Stable subset of a Node `Dirent` returned by `readdir({withFileTypes:true})`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsDirEntry {
+    pub name: String,
+    pub is_file: bool,
+    pub is_directory: bool,
+    pub is_symbolic_link: bool,
+}
+
+/// Typed result for non-streaming filesystem operations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind", content = "value")]
+pub enum FsMetaResult {
+    Unit,
+    Bool(bool),
+    Unsigned(u64),
+    String(String),
+    Strings(Vec<String>),
+    DirEntries(Vec<FsDirEntry>),
+    Metadata(FsMetadata),
+}
+
 impl HostIoCapability {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -42,6 +191,16 @@ pub enum HostIoRequest {
     },
     FsWrite {
         path: String,
+        data: Vec<u8>,
+    },
+    /// Non-streaming filesystem operation beyond the read/write keystone.
+    /// `arguments` are operation-specific canonical strings (second path,
+    /// boolean options, lengths/modes/timestamps); `data` is populated only for
+    /// byte-consuming operations such as append.
+    FsMeta {
+        operation: FsOperation,
+        path: String,
+        arguments: Vec<String>,
         data: Vec<u8>,
     },
     NetworkSend {
@@ -81,6 +240,7 @@ impl HostIoRequest {
         match self {
             Self::FsRead { .. } => HostIoCapability::FsRead,
             Self::FsWrite { .. } => HostIoCapability::FsWrite,
+            Self::FsMeta { operation, .. } => operation.required_capability(),
             Self::NetworkSend { .. } => HostIoCapability::NetworkSend,
             Self::NetworkRecv { .. } => HostIoCapability::NetworkRecv,
             // The egress write is the gated action; reading the reply on the same
@@ -94,6 +254,7 @@ impl HostIoRequest {
         match self {
             Self::FsRead { .. } => "fs_read",
             Self::FsWrite { .. } => "fs_write",
+            Self::FsMeta { .. } => "fs_meta",
             Self::NetworkSend { .. } => "network_send",
             Self::NetworkRecv { .. } => "network_recv",
             Self::NetworkRequest { .. } => "network_request",
@@ -110,6 +271,9 @@ pub enum HostIoResponse {
     },
     FsWrite {
         bytes_written: u64,
+    },
+    FsMeta {
+        result: FsMetaResult,
     },
     NetworkSend {
         bytes_sent: u64,
@@ -131,11 +295,27 @@ pub enum HostIoResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum HostIoError {
-    Denied { reason: String },
-    CapabilityMissing { capability: HostIoCapability },
-    NotImplemented { what: String },
-    SandboxViolation { detail: String },
-    Io { detail: String },
+    Denied {
+        reason: String,
+    },
+    CapabilityMissing {
+        capability: HostIoCapability,
+    },
+    NotImplemented {
+        what: String,
+    },
+    SandboxViolation {
+        detail: String,
+    },
+    /// Guest-visible filesystem failure with a stable Node-style error code.
+    /// Policy/capability/sandbox failures remain separate non-catchable variants.
+    Fs {
+        code: String,
+        detail: String,
+    },
+    Io {
+        detail: String,
+    },
 }
 
 impl core::fmt::Display for HostIoError {
@@ -147,6 +327,7 @@ impl core::fmt::Display for HostIoError {
             }
             Self::NotImplemented { what } => write!(f, "host I/O not implemented: {what}"),
             Self::SandboxViolation { detail } => write!(f, "host I/O sandbox violation: {detail}"),
+            Self::Fs { code, detail } => write!(f, "host filesystem error {code}: {detail}"),
             Self::Io { detail } => write!(f, "host I/O error: {detail}"),
         }
     }
@@ -378,69 +559,67 @@ impl SandboxedHostIo {
         Ok(joined)
     }
 
-    fn fs_read(&self, raw: &str) -> HostIoOutcome {
-        let path = self.confine(raw)?;
-        // Resolve symlinks and re-confirm the real target is inside the root, so
-        // a symlink planted inside the sandbox cannot read outside it.
-        let real = path.canonicalize().map_err(|err| HostIoError::Io {
-            detail: format!("resolve {raw}: {err}"),
-        })?;
-        if !real.starts_with(&self.root) {
-            return Err(HostIoError::SandboxViolation {
-                detail: format!("symlinked path escapes the sandbox root: {raw}"),
-            });
+    fn fs_error(action: &str, raw: &str, err: std::io::Error) -> HostIoError {
+        let code = match err.kind() {
+            std::io::ErrorKind::NotFound => "ENOENT",
+            std::io::ErrorKind::AlreadyExists => "EEXIST",
+            std::io::ErrorKind::NotADirectory => "ENOTDIR",
+            std::io::ErrorKind::IsADirectory => "EISDIR",
+            std::io::ErrorKind::DirectoryNotEmpty => "ENOTEMPTY",
+            std::io::ErrorKind::PermissionDenied => "EACCES",
+            std::io::ErrorKind::InvalidInput | std::io::ErrorKind::InvalidData => "EINVAL",
+            _ => "EIO",
+        };
+        HostIoError::Fs {
+            code: code.to_string(),
+            detail: format!("{action} {raw}: {err}"),
         }
-        let metadata = std::fs::symlink_metadata(&real).map_err(|err| HostIoError::Io {
-            detail: format!("stat {raw}: {err}"),
-        })?;
-        if !metadata.is_file() {
-            return Err(HostIoError::SandboxViolation {
-                detail: format!("not a regular file: {raw}"),
-            });
-        }
-        if metadata.len() > self.max_bytes {
-            return Err(HostIoError::Io {
-                detail: format!(
-                    "file {raw} is {} bytes, exceeds the {}-byte read cap",
-                    metadata.len(),
-                    self.max_bytes
-                ),
-            });
-        }
-        // Bounded read: cap+1 so a file that grew between stat and read still
-        // fails closed rather than being silently truncated.
-        let file = std::fs::File::open(&real).map_err(|err| HostIoError::Io {
-            detail: format!("open {raw}: {err}"),
-        })?;
-        let mut bytes = Vec::new();
-        file.take(self.max_bytes.saturating_add(1))
-            .read_to_end(&mut bytes)
-            .map_err(|err| HostIoError::Io {
-                detail: format!("read {raw}: {err}"),
-            })?;
-        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > self.max_bytes {
-            return Err(HostIoError::Io {
-                detail: format!("file {raw} exceeds the {}-byte read cap", self.max_bytes),
-            });
-        }
-        Ok(HostIoResponse::FsRead { bytes })
     }
 
-    fn fs_write(&self, raw: &str, data: &[u8]) -> HostIoOutcome {
-        if u64::try_from(data.len()).unwrap_or(u64::MAX) > self.max_bytes {
-            return Err(HostIoError::Io {
-                detail: format!(
-                    "write of {} bytes to {raw} exceeds the {}-byte cap",
-                    data.len(),
-                    self.max_bytes
-                ),
+    /// Resolve an existing guest path and prove it remains inside the sandbox.
+    /// `follow_final=false` canonicalizes only the parent so `lstat`/`readlink`
+    /// can inspect a symlink without following its final component.
+    fn existing_path(&self, raw: &str, follow_final: bool) -> Result<PathBuf, HostIoError> {
+        let path = self.confine(raw)?;
+        if follow_final {
+            let real = path
+                .canonicalize()
+                .map_err(|err| Self::fs_error("resolve", raw, err))?;
+            if !real.starts_with(&self.root) {
+                return Err(HostIoError::SandboxViolation {
+                    detail: format!("symlinked path escapes the sandbox root: {raw}"),
+                });
+            }
+            return Ok(real);
+        }
+
+        let parent = path.parent().unwrap_or(&self.root);
+        let real_parent = parent
+            .canonicalize()
+            .map_err(|err| Self::fs_error("resolve parent for", raw, err))?;
+        if !real_parent.starts_with(&self.root) {
+            return Err(HostIoError::SandboxViolation {
+                detail: format!("symlinked parent escapes the sandbox root: {raw}"),
             });
         }
-        // Lexical confinement first (NUL / backslash / `..` / absolute rejection).
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| HostIoError::SandboxViolation {
+                detail: format!("path resolves to no final component: {raw}"),
+            })?;
+        Ok(real_parent.join(file_name))
+    }
+
+    /// Resolve a mutation target while refusing symlink traversal.  When
+    /// `create_parents` is true, missing parents are created one component at a
+    /// time; otherwise they produce the same structured filesystem error as the
+    /// underlying Node operation.
+    fn prepare_write_target(
+        &self,
+        raw: &str,
+        create_parents: bool,
+    ) -> Result<PathBuf, HostIoError> {
         self.confine(raw)?;
-        // Build the target path one component at a time, refusing to traverse a
-        // symlinked intermediate directory (which could redirect the write
-        // outside root). `confine` guarantees only Normal/CurDir components.
         let normal: Vec<&std::ffi::OsStr> = Path::new(raw)
             .components()
             .filter_map(|component| match component {
@@ -463,35 +642,390 @@ impl SandboxedHostIo {
                     });
                 }
                 Ok(meta) if !meta.is_dir() => {
-                    return Err(HostIoError::SandboxViolation {
+                    return Err(HostIoError::Fs {
+                        code: "ENOTDIR".to_string(),
                         detail: format!("intermediate path component is not a directory: {raw}"),
                     });
                 }
                 Ok(_) => {}
-                Err(_) => {
-                    std::fs::create_dir(&current).map_err(|err| HostIoError::Io {
-                        detail: format!("create parent for {raw}: {err}"),
-                    })?;
+                Err(err) if create_parents && err.kind() == std::io::ErrorKind::NotFound => {
+                    std::fs::create_dir(&current)
+                        .map_err(|err| Self::fs_error("create parent for", raw, err))?;
                 }
+                Err(err) => return Err(Self::fs_error("resolve parent for", raw, err)),
             }
         }
         current.push(file_name);
-        // Refuse to write through an existing symlink target (it could redirect
-        // outside root even though its parent chain is clean).
-        let target_is_symlink = std::fs::symlink_metadata(&current)
+        if std::fs::symlink_metadata(&current)
             .map(|meta| meta.file_type().is_symlink())
-            .unwrap_or(false);
-        if target_is_symlink {
+            .unwrap_or(false)
+        {
             return Err(HostIoError::SandboxViolation {
-                detail: format!("refusing to write through a symlink: {raw}"),
+                detail: format!("refusing to mutate through a symlink: {raw}"),
             });
         }
-        std::fs::write(&current, data).map_err(|err| HostIoError::Io {
-            detail: format!("write {raw}: {err}"),
-        })?;
+        Ok(current)
+    }
+
+    fn fs_read(&self, raw: &str) -> HostIoOutcome {
+        let real = self.existing_path(raw, true)?;
+        let metadata =
+            std::fs::symlink_metadata(&real).map_err(|err| Self::fs_error("stat", raw, err))?;
+        if !metadata.is_file() {
+            return Err(HostIoError::Fs {
+                code: "EISDIR".to_string(),
+                detail: format!("not a regular file: {raw}"),
+            });
+        }
+        if metadata.len() > self.max_bytes {
+            return Err(HostIoError::Io {
+                detail: format!(
+                    "file {raw} is {} bytes, exceeds the {}-byte read cap",
+                    metadata.len(),
+                    self.max_bytes
+                ),
+            });
+        }
+        // Bounded read: cap+1 so a file that grew between stat and read still
+        // fails closed rather than being silently truncated.
+        let file = std::fs::File::open(&real).map_err(|err| Self::fs_error("open", raw, err))?;
+        let mut bytes = Vec::new();
+        file.take(self.max_bytes.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|err| Self::fs_error("read", raw, err))?;
+        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > self.max_bytes {
+            return Err(HostIoError::Io {
+                detail: format!("file {raw} exceeds the {}-byte read cap", self.max_bytes),
+            });
+        }
+        Ok(HostIoResponse::FsRead { bytes })
+    }
+
+    fn fs_write(&self, raw: &str, data: &[u8]) -> HostIoOutcome {
+        if u64::try_from(data.len()).unwrap_or(u64::MAX) > self.max_bytes {
+            return Err(HostIoError::Io {
+                detail: format!(
+                    "write of {} bytes to {raw} exceeds the {}-byte cap",
+                    data.len(),
+                    self.max_bytes
+                ),
+            });
+        }
+        let current = self.prepare_write_target(raw, false)?;
+        std::fs::write(&current, data).map_err(|err| Self::fs_error("write", raw, err))?;
         Ok(HostIoResponse::FsWrite {
             bytes_written: u64::try_from(data.len()).unwrap_or(u64::MAX),
         })
+    }
+
+    fn fs_argument<'a>(arguments: &'a [String], name: &str) -> Option<&'a str> {
+        arguments.iter().find_map(|argument| {
+            argument
+                .strip_prefix(name)
+                .and_then(|value| value.strip_prefix('='))
+        })
+    }
+
+    fn fs_flag(arguments: &[String], name: &str) -> bool {
+        Self::fs_argument(arguments, name) == Some("true")
+    }
+
+    fn metadata_result(raw: &str, metadata: &std::fs::Metadata) -> Result<FsMetadata, HostIoError> {
+        #[cfg(unix)]
+        let mode = {
+            use std::os::unix::fs::MetadataExt;
+            metadata.mode()
+        };
+        #[cfg(not(unix))]
+        let mode = if metadata.permissions().readonly() {
+            0o444
+        } else {
+            0o666
+        };
+
+        let modified = metadata
+            .modified()
+            .map_err(|err| Self::fs_error("read modification time for", raw, err))?;
+        let modified_millis = match modified.duration_since(std::time::UNIX_EPOCH) {
+            Ok(duration) => i64::try_from(duration.as_millis()).unwrap_or(i64::MAX),
+            Err(err) => -i64::try_from(err.duration().as_millis()).unwrap_or(i64::MAX),
+        };
+        let file_type = metadata.file_type();
+        Ok(FsMetadata {
+            size: metadata.len(),
+            mode,
+            modified_millis,
+            is_file: file_type.is_file(),
+            is_directory: file_type.is_dir(),
+            is_symbolic_link: file_type.is_symlink(),
+        })
+    }
+
+    fn fs_meta(
+        &self,
+        operation: FsOperation,
+        raw: &str,
+        arguments: &[String],
+        data: &[u8],
+    ) -> HostIoOutcome {
+        let result = match operation {
+            FsOperation::Read | FsOperation::Write => {
+                return Err(HostIoError::NotImplemented {
+                    what: format!("fs_meta cannot route the {} keystone", operation.as_str()),
+                });
+            }
+            FsOperation::Append => {
+                if u64::try_from(data.len()).unwrap_or(u64::MAX) > self.max_bytes {
+                    return Err(HostIoError::Io {
+                        detail: format!(
+                            "append of {} bytes to {raw} exceeds the {}-byte cap",
+                            data.len(),
+                            self.max_bytes
+                        ),
+                    });
+                }
+                let target = self.prepare_write_target(raw, false)?;
+                let mut file = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&target)
+                    .map_err(|err| Self::fs_error("open for append", raw, err))?;
+                file.write_all(data)
+                    .map_err(|err| Self::fs_error("append", raw, err))?;
+                FsMetaResult::Unsigned(u64::try_from(data.len()).unwrap_or(u64::MAX))
+            }
+            FsOperation::Exists => match self.existing_path(raw, true) {
+                Ok(_) => FsMetaResult::Bool(true),
+                Err(HostIoError::Fs { code, .. }) if code == "ENOENT" || code == "ENOTDIR" => {
+                    FsMetaResult::Bool(false)
+                }
+                Err(err) => return Err(err),
+            },
+            FsOperation::Mkdir => {
+                let recursive = Self::fs_flag(arguments, "recursive");
+                let target = self.prepare_write_target(raw, recursive)?;
+                let outcome = if recursive {
+                    std::fs::create_dir_all(&target)
+                } else {
+                    std::fs::create_dir(&target)
+                };
+                outcome.map_err(|err| Self::fs_error("mkdir", raw, err))?;
+                FsMetaResult::Unit
+            }
+            FsOperation::ReadDir => {
+                let directory = self.existing_path(raw, true)?;
+                let with_file_types = Self::fs_flag(arguments, "with_file_types");
+                let mut names = Vec::new();
+                let mut entries = Vec::new();
+                let directory_entries = std::fs::read_dir(&directory)
+                    .map_err(|err| Self::fs_error("readdir", raw, err))?;
+                for entry in directory_entries {
+                    let entry = entry.map_err(|err| Self::fs_error("readdir entry", raw, err))?;
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    if with_file_types {
+                        let metadata = std::fs::symlink_metadata(entry.path())
+                            .map_err(|err| Self::fs_error("stat readdir entry", raw, err))?;
+                        let file_type = metadata.file_type();
+                        entries.push(FsDirEntry {
+                            name,
+                            is_file: file_type.is_file(),
+                            is_directory: file_type.is_dir(),
+                            is_symbolic_link: file_type.is_symlink(),
+                        });
+                    } else {
+                        names.push(name);
+                    }
+                }
+                if with_file_types {
+                    FsMetaResult::DirEntries(entries)
+                } else {
+                    FsMetaResult::Strings(names)
+                }
+            }
+            FsOperation::Stat | FsOperation::Lstat => {
+                let follow_final = operation == FsOperation::Stat;
+                let target = self.existing_path(raw, follow_final)?;
+                let metadata = std::fs::symlink_metadata(&target)
+                    .map_err(|err| Self::fs_error(operation.as_str(), raw, err))?;
+                FsMetaResult::Metadata(Self::metadata_result(raw, &metadata)?)
+            }
+            FsOperation::Symlink => {
+                let link_raw = arguments.first().ok_or_else(|| HostIoError::Fs {
+                    code: "EINVAL".to_string(),
+                    detail: "symlink requires a destination path".to_string(),
+                })?;
+                self.confine(raw)?;
+                let link = self.prepare_write_target(link_raw, false)?;
+                #[cfg(unix)]
+                {
+                    std::os::unix::fs::symlink(raw, &link)
+                        .map_err(|err| Self::fs_error("symlink", link_raw, err))?;
+                }
+                #[cfg(not(unix))]
+                {
+                    return Err(HostIoError::NotImplemented {
+                        what: "filesystem symlinks on this platform".to_string(),
+                    });
+                }
+                FsMetaResult::Unit
+            }
+            FsOperation::ReadLink => {
+                let target = self.existing_path(raw, false)?;
+                let link = std::fs::read_link(&target)
+                    .map_err(|err| Self::fs_error("readlink", raw, err))?;
+                FsMetaResult::String(link.to_string_lossy().into_owned())
+            }
+            FsOperation::Rename | FsOperation::CopyFile => {
+                let destination_raw = arguments.first().ok_or_else(|| HostIoError::Fs {
+                    code: "EINVAL".to_string(),
+                    detail: format!("{} requires a destination path", operation.as_str()),
+                })?;
+                let source = self.existing_path(raw, operation == FsOperation::CopyFile)?;
+                let destination = self.prepare_write_target(destination_raw, false)?;
+                if operation == FsOperation::Rename {
+                    std::fs::rename(&source, &destination)
+                        .map_err(|err| Self::fs_error("rename", raw, err))?;
+                } else {
+                    std::fs::copy(&source, &destination)
+                        .map_err(|err| Self::fs_error("copy", raw, err))?;
+                }
+                FsMetaResult::Unit
+            }
+            FsOperation::Unlink => {
+                let target = self.existing_path(raw, false)?;
+                std::fs::remove_file(&target).map_err(|err| Self::fs_error("unlink", raw, err))?;
+                FsMetaResult::Unit
+            }
+            FsOperation::Remove => {
+                let recursive = Self::fs_flag(arguments, "recursive");
+                let force = Self::fs_flag(arguments, "force");
+                let target = match self.existing_path(raw, false) {
+                    Ok(target) => target,
+                    Err(HostIoError::Fs { code, .. }) if force && code == "ENOENT" => {
+                        return Ok(HostIoResponse::FsMeta {
+                            result: FsMetaResult::Unit,
+                        });
+                    }
+                    Err(err) => return Err(err),
+                };
+                let metadata = match std::fs::symlink_metadata(&target) {
+                    Ok(metadata) => metadata,
+                    Err(err) if force && err.kind() == std::io::ErrorKind::NotFound => {
+                        return Ok(HostIoResponse::FsMeta {
+                            result: FsMetaResult::Unit,
+                        });
+                    }
+                    Err(err) => return Err(Self::fs_error("stat before remove", raw, err)),
+                };
+                let outcome = if metadata.is_dir() {
+                    if recursive {
+                        std::fs::remove_dir_all(&target)
+                    } else {
+                        std::fs::remove_dir(&target)
+                    }
+                } else {
+                    std::fs::remove_file(&target)
+                };
+                outcome.map_err(|err| Self::fs_error("remove", raw, err))?;
+                FsMetaResult::Unit
+            }
+            FsOperation::RemoveDir => {
+                let target = self.existing_path(raw, false)?;
+                std::fs::remove_dir(&target).map_err(|err| Self::fs_error("rmdir", raw, err))?;
+                FsMetaResult::Unit
+            }
+            FsOperation::Truncate => {
+                let length = arguments
+                    .first()
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or(0);
+                let target = self.existing_path(raw, true)?;
+                let file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&target)
+                    .map_err(|err| Self::fs_error("open for truncate", raw, err))?;
+                file.set_len(length)
+                    .map_err(|err| Self::fs_error("truncate", raw, err))?;
+                FsMetaResult::Unit
+            }
+            FsOperation::Access => {
+                self.existing_path(raw, true)?;
+                FsMetaResult::Unit
+            }
+            FsOperation::Chmod => {
+                let mode = arguments
+                    .first()
+                    .and_then(|value| value.parse::<u32>().ok())
+                    .ok_or_else(|| HostIoError::Fs {
+                        code: "EINVAL".to_string(),
+                        detail: format!("chmod requires a numeric mode: {raw}"),
+                    })?;
+                let target = self.existing_path(raw, true)?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(mode))
+                        .map_err(|err| Self::fs_error("chmod", raw, err))?;
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = (mode, target);
+                    return Err(HostIoError::NotImplemented {
+                        what: "filesystem chmod on this platform".to_string(),
+                    });
+                }
+                FsMetaResult::Unit
+            }
+            FsOperation::Utimes => {
+                let modified_millis = arguments
+                    .get(1)
+                    .or_else(|| arguments.first())
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .ok_or_else(|| HostIoError::Fs {
+                        code: "EINVAL".to_string(),
+                        detail: format!("utimes requires numeric millisecond timestamps: {raw}"),
+                    })?;
+                let target = self.existing_path(raw, true)?;
+                let file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&target)
+                    .map_err(|err| Self::fs_error("open for utimes", raw, err))?;
+                let modified = std::time::UNIX_EPOCH
+                    .checked_add(std::time::Duration::from_millis(modified_millis))
+                    .ok_or_else(|| HostIoError::Fs {
+                        code: "EINVAL".to_string(),
+                        detail: format!("utimes timestamp is out of range: {modified_millis}"),
+                    })?;
+                file.set_times(std::fs::FileTimes::new().set_modified(modified))
+                    .map_err(|err| Self::fs_error("utimes", raw, err))?;
+                FsMetaResult::Unit
+            }
+            FsOperation::Realpath => {
+                let target = self.existing_path(raw, true)?;
+                FsMetaResult::String(target.to_string_lossy().into_owned())
+            }
+            FsOperation::Mkdtemp => {
+                self.confine(raw)?;
+                let mut created = None;
+                for suffix in 0_u32..1_000_000 {
+                    let candidate_raw = format!("{raw}{suffix:06}");
+                    let candidate = self.prepare_write_target(&candidate_raw, false)?;
+                    match std::fs::create_dir(&candidate) {
+                        Ok(()) => {
+                            created = Some(candidate_raw);
+                            break;
+                        }
+                        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+                        Err(err) => return Err(Self::fs_error("mkdtemp", raw, err)),
+                    }
+                }
+                FsMetaResult::String(created.ok_or_else(|| HostIoError::Fs {
+                    code: "EEXIST".to_string(),
+                    detail: format!("unable to allocate a unique temporary directory for {raw}"),
+                })?)
+            }
+        };
+        Ok(HostIoResponse::FsMeta { result })
     }
 
     /// Open a time-bounded TCP connection to `endpoint`.
@@ -738,6 +1272,12 @@ impl HostIoProvider for SandboxedHostIo {
         match request {
             HostIoRequest::FsRead { path } => self.fs_read(path),
             HostIoRequest::FsWrite { path, data } => self.fs_write(path, data),
+            HostIoRequest::FsMeta {
+                operation,
+                path,
+                arguments,
+                data,
+            } => self.fs_meta(*operation, path, arguments, data),
             HostIoRequest::NetworkSend { endpoint, payload } => {
                 self.network_send(endpoint, payload)
             }
@@ -895,6 +1435,12 @@ mod tests {
                 path: "a.txt".to_string(),
                 data: vec![1, 2, 3],
             },
+            HostIoRequest::FsMeta {
+                operation: FsOperation::Stat,
+                path: "a.txt".to_string(),
+                arguments: Vec::new(),
+                data: Vec::new(),
+            },
             HostIoRequest::NetworkSend {
                 endpoint: "example.com:443".to_string(),
                 payload: vec![4, 5],
@@ -938,6 +1484,26 @@ mod tests {
             HostIoCapability::FsWrite
         );
         assert_eq!(
+            HostIoRequest::FsMeta {
+                operation: FsOperation::Stat,
+                path: String::new(),
+                arguments: Vec::new(),
+                data: Vec::new(),
+            }
+            .required_capability(),
+            HostIoCapability::FsRead
+        );
+        assert_eq!(
+            HostIoRequest::FsMeta {
+                operation: FsOperation::Remove,
+                path: String::new(),
+                arguments: Vec::new(),
+                data: Vec::new(),
+            }
+            .required_capability(),
+            HostIoCapability::FsWrite
+        );
+        assert_eq!(
             HostIoRequest::NetworkSend {
                 endpoint: String::new(),
                 payload: Vec::new()
@@ -972,6 +1538,22 @@ mod tests {
             serde_json::from_str::<HostIoResponse>(&json).expect("deserialize response")
         );
 
+        let response = HostIoResponse::FsMeta {
+            result: FsMetaResult::Metadata(FsMetadata {
+                size: 3,
+                mode: 0o100600,
+                modified_millis: 1_000,
+                is_file: true,
+                is_directory: false,
+                is_symbolic_link: false,
+            }),
+        };
+        let json = serde_json::to_string(&response).expect("serialize fs meta response");
+        assert_eq!(
+            response,
+            serde_json::from_str::<HostIoResponse>(&json).expect("deserialize fs meta response")
+        );
+
         let error = HostIoError::CapabilityMissing {
             capability: HostIoCapability::FsRead,
         };
@@ -979,6 +1561,16 @@ mod tests {
         assert_eq!(
             error,
             serde_json::from_str::<HostIoError>(&json).expect("deserialize error")
+        );
+
+        let error = HostIoError::Fs {
+            code: "ENOENT".to_string(),
+            detail: "missing".to_string(),
+        };
+        let json = serde_json::to_string(&error).expect("serialize fs error");
+        assert_eq!(
+            error,
+            serde_json::from_str::<HostIoError>(&json).expect("deserialize fs error")
         );
     }
 
@@ -1105,6 +1697,8 @@ mod tests {
     fn sandboxed_round_trip_writes_and_reads_real_bytes() {
         let scratch = ScratchDir::new();
         let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
+        std::fs::create_dir_all(provider.root().join("sub").join("dir"))
+            .expect("create explicit parent directories");
         let write = provider
             .perform(
                 &HostIoRequest::FsWrite {
@@ -1134,6 +1728,133 @@ mod tests {
                 bytes: b"real bytes".to_vec()
             }
         );
+    }
+
+    #[test]
+    fn sandboxed_fs_meta_operations_are_typed_and_path_jailed() {
+        let scratch = ScratchDir::new();
+        let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
+        let write = [HostIoCapability::FsWrite];
+        let read = [HostIoCapability::FsRead];
+
+        provider
+            .perform(
+                &HostIoRequest::FsMeta {
+                    operation: FsOperation::Mkdir,
+                    path: "tree/leaf".to_string(),
+                    arguments: vec!["recursive=true".to_string()],
+                    data: Vec::new(),
+                },
+                &write,
+            )
+            .expect("recursive mkdir");
+        provider
+            .perform(
+                &HostIoRequest::FsWrite {
+                    path: "tree/leaf/data.txt".to_string(),
+                    data: b"abc".to_vec(),
+                },
+                &write,
+            )
+            .expect("write under explicit parent");
+
+        let stat = provider
+            .perform(
+                &HostIoRequest::FsMeta {
+                    operation: FsOperation::Stat,
+                    path: "tree/leaf/data.txt".to_string(),
+                    arguments: Vec::new(),
+                    data: Vec::new(),
+                },
+                &read,
+            )
+            .expect("stat");
+        assert!(matches!(
+            stat,
+            HostIoResponse::FsMeta {
+                result: FsMetaResult::Metadata(FsMetadata {
+                    size: 3,
+                    is_file: true,
+                    ..
+                })
+            }
+        ));
+
+        let entries = provider
+            .perform(
+                &HostIoRequest::FsMeta {
+                    operation: FsOperation::ReadDir,
+                    path: "tree/leaf".to_string(),
+                    arguments: vec!["with_file_types=true".to_string()],
+                    data: Vec::new(),
+                },
+                &read,
+            )
+            .expect("readdir");
+        assert_eq!(
+            entries,
+            HostIoResponse::FsMeta {
+                result: FsMetaResult::DirEntries(vec![FsDirEntry {
+                    name: "data.txt".to_string(),
+                    is_file: true,
+                    is_directory: false,
+                    is_symbolic_link: false,
+                }])
+            }
+        );
+
+        let missing = provider.perform(
+            &HostIoRequest::FsMeta {
+                operation: FsOperation::Unlink,
+                path: "missing.txt".to_string(),
+                arguments: Vec::new(),
+                data: Vec::new(),
+            },
+            &write,
+        );
+        assert!(matches!(
+            missing,
+            Err(HostIoError::Fs { ref code, .. }) if code == "ENOENT"
+        ));
+
+        let forced_missing = provider.perform(
+            &HostIoRequest::FsMeta {
+                operation: FsOperation::Remove,
+                path: "still-missing.txt".to_string(),
+                arguments: vec!["force=true".to_string()],
+                data: Vec::new(),
+            },
+            &write,
+        );
+        assert_eq!(
+            forced_missing,
+            Ok(HostIoResponse::FsMeta {
+                result: FsMetaResult::Unit
+            })
+        );
+
+        let missing_parent = provider.perform(
+            &HostIoRequest::FsWrite {
+                path: "missing-parent/data.txt".to_string(),
+                data: b"must not create parents".to_vec(),
+            },
+            &write,
+        );
+        assert!(matches!(
+            missing_parent,
+            Err(HostIoError::Fs { ref code, .. }) if code == "ENOENT"
+        ));
+
+        let escape = provider.perform(
+            &HostIoRequest::FsMeta {
+                operation: FsOperation::Stat,
+                path: "../outside".to_string(),
+                arguments: Vec::new(),
+                data: Vec::new(),
+            },
+            &read,
+        );
+        assert!(matches!(escape, Err(HostIoError::SandboxViolation { .. })));
     }
 
     #[test]

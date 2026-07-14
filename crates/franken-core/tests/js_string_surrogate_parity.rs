@@ -568,6 +568,192 @@ fn nested_class_capture_metadata_names_the_exact_enclosing_local() {
 }
 
 #[test]
+fn transitive_closure_capture_bubbles_through_non_referencing_functions() {
+    assert_eq!(
+        completion(
+            "let x = 41; \
+             let outer = function () { return function () { return x + 1; }; }; \
+             outer()();"
+        ),
+        Value::Int(42)
+    );
+    assert_eq!(
+        completion(
+            "let x = 7; \
+             let outer = function () { \
+               return function () { return function () { return x; }; }; \
+             }; outer()()();"
+        ),
+        Value::Int(7)
+    );
+    assert_eq!(
+        completion(
+            "let x = 1; \
+             let outer = function () { let x = 2; \
+               return function () { return function () { return x; }; }; \
+             }; outer()()();"
+        ),
+        Value::Int(2),
+        "transitive propagation must retain the nearest lexical binding"
+    );
+    assert_eq!(
+        completion(
+            "let outer = function () { return function () { return missing; }; }; outer()();"
+        ),
+        Value::Undefined,
+        "a truly unresolved name must keep the existing undefined posture"
+    );
+    assert_eq!(
+        completion(
+            "let x = 11; \
+             function outer() { function middle() { return function () { return x; }; } \
+               return middle(); } outer()();"
+        ),
+        Value::Int(11),
+        "function declarations must propagate a child's capture"
+    );
+    assert_eq!(
+        completion("let x = 12; let outer = () => () => x; outer()();"),
+        Value::Int(12),
+        "arrow functions must propagate a child's capture"
+    );
+    assert_eq!(
+        completion(
+            "let x = 13; class C { make() { return function () { return x; }; } } \
+             (new C()).make()();"
+        ),
+        Value::Int(13),
+        "class methods must propagate a child's capture"
+    );
+    assert_eq!(
+        completion(
+            "let x = 14; let C = class { make() { return function () { return x; }; } }; \
+             (new C()).make()();"
+        ),
+        Value::Int(14),
+        "class-expression methods must propagate a child's capture"
+    );
+    assert_eq!(
+        completion(
+            "let x = 15; class C { constructor() { \
+               this.read = function () { return x; }; \
+             } } (new C()).read();"
+        ),
+        Value::Int(15),
+        "class constructors must propagate a child's capture"
+    );
+    assert_eq!(
+        completion(
+            "let x = 16; let C = class { constructor() { \
+               this.read = function () { return x; }; \
+             } }; (new C()).read();"
+        ),
+        Value::Int(16),
+        "class-expression constructors must propagate a child's capture"
+    );
+    assert_eq!(
+        completion(
+            "let a = 20; let b = 2; \
+             let outer = function () { return function () { return a + b + a; }; }; \
+             outer()();"
+        ),
+        Value::Int(42),
+        "multiple and repeated captures must retain their exact identities"
+    );
+}
+
+#[test]
+fn transitive_closure_capture_metadata_uses_each_immediate_outer_binding() {
+    let source = "let x = 7; let outer = function () { return function () { return x; }; };";
+    let tree = CanonicalEs2020Parser
+        .parse(source, ParseGoal::Script)
+        .expect("source should parse");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "bd_x0ld5_capture_metadata");
+    let ir1 = lower_ir0_to_ir1(&ir0)
+        .expect("source should lower to IR1")
+        .module;
+    let (outer_free_vars, outer_free_ids, outer_body) = ir1
+        .ops
+        .iter()
+        .find_map(|op| match op {
+            Ir1Op::CreateFunction {
+                free_vars,
+                free_var_ids,
+                body_ops,
+                ..
+            } => Some((free_vars, free_var_ids, body_ops)),
+            _ => None,
+        })
+        .expect("outer function metadata");
+    let (inner_free_vars, inner_outer_ids) = outer_body
+        .iter()
+        .find_map(|op| match op {
+            Ir1Op::CreateFunction {
+                free_vars,
+                free_var_outer_ids,
+                ..
+            } => Some((free_vars, free_var_outer_ids)),
+            _ => None,
+        })
+        .expect("inner function metadata");
+
+    assert_eq!(outer_free_vars, &["x"]);
+    assert_eq!(inner_free_vars, &["x"]);
+    assert_eq!(inner_outer_ids, outer_free_ids);
+}
+
+#[test]
+fn transitive_capture_discovery_does_not_shadow_direct_require() {
+    fn contains_module_require(ops: &[Ir1Op]) -> bool {
+        ops.iter().any(|op| match op {
+            Ir1Op::HostCall { capability, .. } => capability == "module:require",
+            Ir1Op::CreateFunction { body_ops, .. } | Ir1Op::DeclareFunction { body_ops, .. } => {
+                contains_module_require(body_ops)
+            }
+            _ => false,
+        })
+    }
+
+    let sources = [
+        "let outer = function () { return function () { return require; }; }; require('x');",
+        "let outer = function () { let inner = function () { return require; }; \
+         return require('x'); }; outer();",
+        "let outer = function () { require('x'); \
+         return function () { return require; }; }; outer();",
+    ];
+    for source in sources {
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect("source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_x0ld5_require_order");
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("source should lower to IR1")
+            .module;
+        assert!(
+            contains_module_require(&ir1.ops),
+            "unbound bare require must not hide the direct-call hostcall: {ir1:#?}"
+        );
+        let err = completion_err(source);
+        assert!(
+            matches!(err, InterpreterError::CapabilityDenied { .. }),
+            "the preserved module:require hostcall must fail closed without capability: {err:?}"
+        );
+    }
+
+    assert_eq!(
+        completion(
+            "let outer = function () { \
+               let require = function () { return 21; }; \
+               let inner = function () { return require; }; \
+               return require('x') + inner()('x'); \
+             }; outer();"
+        ),
+        Value::Int(42),
+        "a real lexical require binding must still shadow and be captured"
+    );
+}
+
+#[test]
 fn nested_static_builtin_authority_is_consistent_across_ir2_proof_and_ir3() {
     let source = "(function () { return (function () { return Math.abs(-4); })(); })();";
     let lower = || {

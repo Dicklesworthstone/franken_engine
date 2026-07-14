@@ -1290,8 +1290,17 @@ fn os_builtin_call_capability(
 /// wider aspirational surface that is not callable yet (bd-zql4d).
 const STATIC_BUILTIN_GLOBALS: [&str; 5] = ["Object", "Array", "String", "Math", "JSON"];
 
+/// Intrinsics that exist only through a direct-call lowering seam. Bare
+/// unshadowed reads are undefined, but a real outer lexical binding with the
+/// same name must still propagate into a nested function and shadow the seam.
+const DIRECT_CALL_INTRINSIC_GLOBALS: [&str; 1] = ["require"];
+
 fn is_static_builtin_global(name: &str) -> bool {
     STATIC_BUILTIN_GLOBALS.contains(&name)
+}
+
+fn is_non_materialized_intrinsic_global(name: &str) -> bool {
+    is_static_builtin_global(name) || DIRECT_CALL_INTRINSIC_GLOBALS.contains(&name)
 }
 
 fn static_builtin_call_capability(
@@ -2177,7 +2186,11 @@ fn prepare_function_body_bindings(
             body_binding_index,
         ));
     }
-    for global in STATIC_BUILTIN_GLOBALS {
+    for global in STATIC_BUILTIN_GLOBALS
+        .iter()
+        .chain(DIRECT_CALL_INTRINSIC_GLOBALS.iter())
+        .copied()
+    {
         if !body_lookup.contains_key(global) && outer_lookup.contains_key(global) {
             reserve_binding_id(body_lookup, body_binding_index, global);
         }
@@ -3587,8 +3600,14 @@ fn lower_statement_to_ir1_with_flow(
             // references that exist in the OUTER scope's lookup. Capture the
             // body binding-id alongside the name so the deferred IR3 pass can
             // resolve them exactly (bd-snlhk; mirrors the engine fix).
-            let (free_vars, free_var_ids, free_var_outer_ids) =
-                collect_free_vars(&body_lookup, &pre_lower_names, binding_lookup);
+            let (free_vars, free_var_ids, free_var_outer_ids) = collect_free_vars(
+                &body_lookup,
+                &pre_lower_names,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+            );
 
             ops.push(Ir1Op::DeclareFunction {
                 name,
@@ -3652,8 +3671,14 @@ fn lower_statement_to_ir1_with_flow(
                 });
                 body_ops.push(Ir1Op::Return);
             }
-            let (ctor_free_vars, ctor_free_var_ids, ctor_free_var_outer_ids) =
-                collect_free_vars(&body_lookup, &ctor_pre_lower_names, binding_lookup);
+            let (ctor_free_vars, ctor_free_var_ids, ctor_free_var_outer_ids) = collect_free_vars(
+                &body_lookup,
+                &ctor_pre_lower_names,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+            );
             let bid = alloc_binding(
                 bindings,
                 binding_lookup,
@@ -3769,7 +3794,14 @@ fn lower_statement_to_ir1_with_flow(
                     m_body_ops.push(Ir1Op::Return);
                 }
                 let (method_free_vars, method_free_var_ids, method_free_var_outer_ids) =
-                    collect_free_vars(&m_lookup, &method_pre_lower_names, binding_lookup);
+                    collect_free_vars(
+                        &m_lookup,
+                        &method_pre_lower_names,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                    );
                 let method_super_binding = if cls.super_class.is_some() {
                     Some(alloc_internal_binding(
                         bindings,
@@ -3968,28 +4000,58 @@ fn lower_switch_to_ir1(
     switch_result
 }
 
+/// Synthetic names never denote source-level bindings and therefore must not
+/// be promoted through enclosing closure scopes.
+fn is_internal_lowering_binding(name: &str) -> bool {
+    name.starts_with("<internal:")
+        || name.starts_with("@@franken_internal_")
+        || name.starts_with('\0')
+}
+
 /// Collect free variables of a function body: names present in the body's
 /// binding lookup that were NOT declared by the body itself (params /
-/// pre-lowered names) but DO resolve in the enclosing scope. Returns the
-/// names paired index-wise with their body-scope binding ids so downstream
-/// passes get the exact id->name mapping instead of reconstructing it
-/// heuristically (bd-snlhk; mirrors the engine's bd-g0aok fix).
+/// pre-lowered names). If a name is not yet present in the immediate outer
+/// lookup, reserve an exact forward binding there before recording the child
+/// capture. As recursive lowering unwinds, the intermediate function's own
+/// collection promotes that same binding one scope farther outward. This is
+/// what lets `outer -> middle -> inner -> x` capture `x` even when `middle`
+/// never references it directly (bd-x0ld5).
+///
+/// Returns names paired index-wise with both their body-scope and immediate
+/// outer-scope binding ids, so downstream passes never reconstruct capture
+/// identity heuristically (bd-snlhk; mirrors the engine's bd-g0aok fix).
 fn collect_free_vars(
     body_lookup: &BTreeMap<String, BindingId>,
     pre_lower_names: &BTreeSet<String>,
-    outer_lookup: &BTreeMap<String, BindingId>,
+    outer_bindings: &mut Vec<ResolvedBinding>,
+    outer_lookup: &mut BTreeMap<String, BindingId>,
+    outer_binding_index: &mut BindingId,
+    outer_scope: ScopeId,
 ) -> (Vec<String>, Vec<BindingId>, Vec<BindingId>) {
     let mut names = Vec::new();
     let mut body_ids = Vec::new();
     let mut outer_ids = Vec::new();
     for (name, id) in body_lookup.iter() {
-        if !pre_lower_names.contains(name.as_str())
-            && let Some(outer_id) = outer_lookup.get(name.as_str())
-        {
-            names.push(name.clone());
-            body_ids.push(*id);
-            outer_ids.push(*outer_id);
+        if pre_lower_names.contains(name.as_str()) || is_internal_lowering_binding(name) {
+            continue;
         }
+        let outer_id = if let Some(outer_id) = outer_lookup.get(name.as_str()) {
+            *outer_id
+        } else {
+            let outer_id = *outer_binding_index;
+            *outer_binding_index = outer_binding_index.saturating_add(1);
+            outer_bindings.push(ResolvedBinding {
+                name: name.clone(),
+                binding_id: outer_id,
+                scope: outer_scope,
+                kind: BindingKind::Let,
+            });
+            outer_lookup.insert(name.clone(), outer_id);
+            outer_id
+        };
+        names.push(name.clone());
+        body_ids.push(*id);
+        outer_ids.push(outer_id);
     }
     (names, body_ids, outer_ids)
 }
@@ -7062,8 +7124,14 @@ fn lower_class_expression_to_ir1(
         });
         body_ops.push(Ir1Op::Return);
     }
-    let (ctor_free_vars, ctor_free_var_ids, ctor_free_var_outer_ids) =
-        collect_free_vars(&body_lookup, &ctor_pre_lower_names, binding_lookup);
+    let (ctor_free_vars, ctor_free_var_ids, ctor_free_var_outer_ids) = collect_free_vars(
+        &body_lookup,
+        &ctor_pre_lower_names,
+        bindings,
+        binding_lookup,
+        binding_index,
+        scope_id,
+    );
 
     let class_binding = alloc_internal_binding(
         bindings,
@@ -7173,8 +7241,14 @@ fn lower_class_expression_to_ir1(
             });
             method_body_ops.push(Ir1Op::Return);
         }
-        let (method_free_vars, method_free_var_ids, method_free_var_outer_ids) =
-            collect_free_vars(&method_lookup, &method_pre_lower_names, binding_lookup);
+        let (method_free_vars, method_free_var_ids, method_free_var_outer_ids) = collect_free_vars(
+            &method_lookup,
+            &method_pre_lower_names,
+            bindings,
+            binding_lookup,
+            binding_index,
+            scope_id,
+        );
 
         let method_super_binding = if super_class.is_some() {
             Some(alloc_internal_binding(
@@ -7263,11 +7337,16 @@ fn lower_expression_to_ir1(
 ) -> Result<(), LoweringPipelineError> {
     match expression {
         Expression::Identifier(name) => {
-            // Core has no heap-backed Object/Array/String/Math/JSON globals.
-            // An unbound read is therefore undefined and must not create a
-            // forward-reference entry that poisons a later supported static
-            // call such as `Math.nope; Math.abs(1)` (bd-zql4d).
-            if is_static_builtin_global(name) && !binding_lookup.contains_key(name.as_str()) {
+            // Core has no heap-backed Object/Array/String/Math/JSON globals,
+            // and `require` is supported only as a direct-call lowering seam.
+            // An unbound bare read is therefore undefined and must not create
+            // a forward-reference entry that poisons a later supported static
+            // call such as `Math.nope; Math.abs(1)` (bd-zql4d) or a later
+            // unshadowed `require('x')` after lowering a nested closure
+            // (bd-x0ld5).
+            if is_non_materialized_intrinsic_global(name)
+                && !binding_lookup.contains_key(name.as_str())
+            {
                 ops.push(Ir1Op::LoadLiteral {
                     value: Ir1Literal::Undefined,
                 });
@@ -8994,8 +9073,14 @@ fn lower_expression_to_ir1(
             if !matches!(body_ops.last(), Some(Ir1Op::Return)) {
                 body_ops.push(Ir1Op::Return);
             }
-            let (arrow_free_vars, arrow_free_var_ids, arrow_free_var_outer_ids) =
-                collect_free_vars(&body_lookup, &pre_lower_names, binding_lookup);
+            let (arrow_free_vars, arrow_free_var_ids, arrow_free_var_outer_ids) = collect_free_vars(
+                &body_lookup,
+                &pre_lower_names,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+            );
             ops.push(Ir1Op::CreateFunction {
                 name: None,
                 param_names,
@@ -9069,8 +9154,14 @@ fn lower_expression_to_ir1(
                 });
                 body_ops.push(Ir1Op::Return);
             }
-            let (fn_free_vars, fn_free_var_ids, fn_free_var_outer_ids) =
-                collect_free_vars(&body_lookup, &pre_lower_names, binding_lookup);
+            let (fn_free_vars, fn_free_var_ids, fn_free_var_outer_ids) = collect_free_vars(
+                &body_lookup,
+                &pre_lower_names,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+            );
             ops.push(Ir1Op::CreateFunction {
                 name: name.clone(),
                 param_names,

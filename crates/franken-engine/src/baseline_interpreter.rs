@@ -4143,6 +4143,8 @@ struct CallFrame {
     /// calls, `undefined` for plain calls, or the newly allocated object for
     /// constructor calls.  Arrow functions inherit from the defining frame.
     this_value: Value,
+    /// IFC label paired with `this_value` for receiver-aware calls.
+    this_label: Label,
     /// The `new.target` value for this call frame. Constructor calls set this
     /// to the invoked constructor value; non-constructor calls use undefined.
     new_target_value: Value,
@@ -7873,23 +7875,37 @@ impl InterpreterCore {
 
     /// Get the IFC label for a register.
     pub fn get_register_label(&self, reg: u32) -> Result<&Label, InterpreterError> {
-        self.register_labels.get(reg as usize).ok_or({
-            InterpreterError::RegisterOutOfBounds {
+        if reg >= self.config.max_registers {
+            return Err(InterpreterError::RegisterOutOfBounds {
                 register: reg,
-                max: self.register_labels.len() as u32,
-            }
-        })
+                max: self.config.max_registers,
+            });
+        }
+        let actual_reg = self.register_base + reg as usize;
+        self.register_labels
+            .get(actual_reg)
+            .ok_or(InterpreterError::RegisterOutOfBounds {
+                register: reg,
+                max: self.config.max_registers,
+            })
     }
 
     /// Set the IFC label for a register.
     pub fn set_register_label(&mut self, reg: u32, label: Label) -> Result<(), InterpreterError> {
-        if reg as usize >= self.register_labels.len() {
+        if reg >= self.config.max_registers {
             return Err(InterpreterError::RegisterOutOfBounds {
                 register: reg,
-                max: self.register_labels.len() as u32,
+                max: self.config.max_registers,
             });
         }
-        self.register_labels[reg as usize] = label;
+        let actual_reg = self.register_base + reg as usize;
+        let Some(slot) = self.register_labels.get_mut(actual_reg) else {
+            return Err(InterpreterError::RegisterOutOfBounds {
+                register: reg,
+                max: self.config.max_registers,
+            });
+        };
+        *slot = label;
         Ok(())
     }
 
@@ -8579,6 +8595,8 @@ impl InterpreterCore {
             r.clear();
             r.resize(max_regs, Value::Undefined);
         });
+        self.register_labels.clear();
+        self.register_labels.resize(max_regs, Label::Public);
         self.call_stack.clear();
         self.ip = 0;
         self.register_base = 0;
@@ -9586,6 +9604,7 @@ impl InterpreterCore {
         let result = (|| -> Result<Value, InterpreterError> {
             self.registers =
                 SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
+            self.register_labels.fill(Label::Public);
             self.call_stack.clear();
             self.ip = wrapper_start;
             self.register_base = 0;
@@ -12064,7 +12083,11 @@ impl InterpreterCore {
         Ok(())
     }
 
-    fn complete_return(&mut self, return_val: Value) -> Result<Option<Value>, InterpreterError> {
+    fn complete_return(
+        &mut self,
+        return_val: Value,
+        return_label: Label,
+    ) -> Result<Option<Value>, InterpreterError> {
         let current_depth = self.call_stack.len();
         // A function can return from inside an active try block before `EndTry`
         // executes. Those catch frames belong to the returning callee and must
@@ -12078,13 +12101,11 @@ impl InterpreterCore {
             // ES2020 §9.2.2 step 13: if this is a constructor call and the
             // return value is not an object, use the allocated `this` object
             // instead.
-            let effective_val = if let Some(this_obj) = &frame.construct_this {
-                match &return_val {
-                    Value::Object(_) => return_val,
-                    _ => this_obj.clone(),
+            let (effective_val, effective_label) = match &frame.construct_this {
+                Some(this_obj) if !matches!(&return_val, Value::Object(_)) => {
+                    (this_obj.clone(), frame.this_label.clone())
                 }
-            } else {
-                return_val
+                _ => (return_val, return_label),
             };
             let async_function_id = frame.async_function_id;
             self.restore_call_frame_state(&frame);
@@ -12096,7 +12117,7 @@ impl InterpreterCore {
             if let Some(async_id) = async_function_id {
                 self.settle_async_function(async_id, Ok(effective_val))?;
             } else {
-                self.write_reg(frame.return_reg, effective_val)?;
+                self.write_reg_with_label(frame.return_reg, effective_val, effective_label)?;
             }
             self.ip = frame.return_ip;
             Ok(None)
@@ -13090,8 +13111,7 @@ impl InterpreterCore {
                 self.apply_scope_chain_memory_delta(previous_resume_scope_bytes)?;
 
                 self.register_base = self.registers.len();
-                let req_len = self.register_base + self.config.max_registers as usize;
-                self.mutate_registers(|r| r.resize(req_len, Value::Undefined));
+                self.clear_current_register_frame();
 
                 self.ip = func.entry as usize;
                 Ok(())
@@ -13445,7 +13465,9 @@ impl InterpreterCore {
             if self.ip >= module.instructions.len() {
                 // Fell off the end of the instruction stream.
                 if !self.call_stack.is_empty() {
-                    if let Some(final_value) = self.complete_return(Value::Undefined)? {
+                    if let Some(final_value) =
+                        self.complete_return(Value::Undefined, Label::Public)?
+                    {
                         return Ok(final_value);
                     }
                     continue;
@@ -13901,14 +13923,16 @@ impl InterpreterCore {
                             } else {
                                 None
                             };
-                        let frame_this = self
+                        let (frame_this, frame_this_label) = self
                             .call_stack
                             .last()
-                            .map_or(Value::Undefined, |f| f.this_value.clone());
-                        let call_this = if captured_env.is_some() {
-                            frame_this
+                            .map_or((Value::Undefined, Label::Public), |frame| {
+                                (frame.this_value.clone(), frame.this_label.clone())
+                            });
+                        let (call_this, call_this_label) = if captured_env.is_some() {
+                            (frame_this, frame_this_label)
                         } else {
-                            Value::Undefined
+                            (Value::Undefined, Label::Public)
                         };
                         let previous_scope_bytes = self.scope_chain_memory_bytes();
                         let previous_closure_bytes = self.closures_memory_bytes();
@@ -13920,6 +13944,7 @@ impl InterpreterCore {
                             register_base: self.register_base,
                             function_index: Some(func_idx),
                             this_value: call_this,
+                            this_label: call_this_label,
                             new_target_value: Value::Undefined,
                             super_value: Value::Undefined,
                             construct_this: None,
@@ -13958,16 +13983,7 @@ impl InterpreterCore {
                         }
 
                         self.register_base += self.config.max_registers as usize;
-
-                        let req_len = self.register_base + self.config.max_registers as usize;
-                        let register_base = self.register_base;
-                        self.mutate_registers(|r| {
-                            if req_len > r.len() {
-                                r.resize(req_len, Value::Undefined);
-                            } else {
-                                r[register_base..req_len].fill(Value::Undefined);
-                            }
-                        });
+                        self.clear_current_register_frame();
 
                         for (i, val) in arg_vals.into_iter().enumerate() {
                             let reg = i as u32;
@@ -14051,6 +14067,7 @@ impl InterpreterCore {
                             }
 
                             let mut arg_vals = Vec::new();
+                            let mut arg_labels = Vec::new();
                             for i in 0..args.count.min(func.arity) {
                                 let reg = args.start.checked_add(i).ok_or(
                                     InterpreterError::RegisterOutOfBounds {
@@ -14059,8 +14076,14 @@ impl InterpreterCore {
                                     },
                                 )?;
                                 arg_vals.push(self.read_reg(reg)?);
+                                arg_labels.push(self.get_register_label(reg)?.clone());
                             }
                             self.apply_rest_param(&mut arg_vals, func.rest_param_index, args)?;
+                            self.apply_rest_param_labels(
+                                &mut arg_labels,
+                                func.rest_param_index,
+                                args,
+                            )?;
 
                             self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
@@ -14083,15 +14106,17 @@ impl InterpreterCore {
                             };
                             // For plain calls, this_value is undefined.
                             // Method calls set this via the CallMethod instruction (TODO).
-                            let frame_this = self
+                            let (frame_this, frame_this_label) = self
                                 .call_stack
                                 .last()
-                                .map_or(Value::Undefined, |f| f.this_value.clone());
+                                .map_or((Value::Undefined, Label::Public), |frame| {
+                                    (frame.this_value.clone(), frame.this_label.clone())
+                                });
                             // Arrow closures inherit `this` from the defining frame.
-                            let call_this = if captured_env.is_some() {
-                                frame_this
+                            let (call_this, call_this_label) = if captured_env.is_some() {
+                                (frame_this, frame_this_label)
                             } else {
-                                Value::Undefined
+                                (Value::Undefined, Label::Public)
                             };
                             let previous_scope_bytes = self.scope_chain_memory_bytes();
                             let previous_closure_bytes = self.closures_memory_bytes();
@@ -14103,6 +14128,7 @@ impl InterpreterCore {
                                 register_base: self.register_base,
                                 function_index: Some(func_idx),
                                 this_value: call_this,
+                                this_label: call_this_label,
                                 new_target_value: Value::Undefined,
                                 super_value: Value::Undefined,
                                 construct_this: None,
@@ -14143,23 +14169,15 @@ impl InterpreterCore {
                             }
 
                             self.register_base += self.config.max_registers as usize;
-
-                            // Clear all registers in the new frame to prevent data leakage from previous calls
-                            let req_len = self.register_base + self.config.max_registers as usize;
-                            let register_base = self.register_base;
-                            self.mutate_registers(|r| {
-                                if req_len > r.len() {
-                                    r.resize(req_len, Value::Undefined);
-                                } else {
-                                    r[register_base..req_len].fill(Value::Undefined);
-                                }
-                            });
+                            self.clear_current_register_frame();
 
                             // Copy arguments into registers for the callee.
-                            for (i, val) in arg_vals.into_iter().enumerate() {
+                            for (i, (val, label)) in
+                                arg_vals.into_iter().zip(arg_labels).enumerate()
+                            {
                                 let reg = i as u32;
                                 if reg < self.config.max_registers {
-                                    self.write_reg(reg, val)?;
+                                    self.write_reg_with_label(reg, val, label)?;
                                 }
                             }
 
@@ -14180,6 +14198,7 @@ impl InterpreterCore {
                     dst,
                 } => {
                     let receiver_val = self.read_reg(receiver)?;
+                    let receiver_label = self.get_register_label(receiver)?.clone();
                     let callee_val = self.read_reg(callee)?;
 
                     // Generator `.next()` method-call: step the generator
@@ -14379,6 +14398,7 @@ impl InterpreterCore {
                             register_base: self.register_base,
                             function_index: Some(func_idx),
                             this_value: receiver_val.clone(),
+                            this_label: receiver_label.clone(),
                             new_target_value: Value::Undefined,
                             super_value: Value::Undefined,
                             construct_this: None,
@@ -14417,16 +14437,7 @@ impl InterpreterCore {
                         }
 
                         self.register_base += self.config.max_registers as usize;
-
-                        let req_len = self.register_base + self.config.max_registers as usize;
-                        let register_base = self.register_base;
-                        self.mutate_registers(|r| {
-                            if req_len > r.len() {
-                                r.resize(req_len, Value::Undefined);
-                            } else {
-                                r[register_base..req_len].fill(Value::Undefined);
-                            }
-                        });
+                        self.clear_current_register_frame();
 
                         for (i, val) in arg_vals.into_iter().enumerate() {
                             let reg = i as u32;
@@ -14478,6 +14489,7 @@ impl InterpreterCore {
                     }
 
                     let mut arg_vals = Vec::new();
+                    let mut arg_labels = Vec::new();
                     for i in 0..args.count.min(func.arity) {
                         let reg = args.start.checked_add(i).ok_or(
                             InterpreterError::RegisterOutOfBounds {
@@ -14486,8 +14498,10 @@ impl InterpreterCore {
                             },
                         )?;
                         arg_vals.push(self.read_reg(reg)?);
+                        arg_labels.push(self.get_register_label(reg)?.clone());
                     }
                     self.apply_rest_param(&mut arg_vals, func.rest_param_index, args)?;
+                    self.apply_rest_param_labels(&mut arg_labels, func.rest_param_index, args)?;
 
                     self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
@@ -14511,6 +14525,7 @@ impl InterpreterCore {
                         register_base: self.register_base,
                         function_index: Some(func_idx),
                         this_value: receiver_val.clone(),
+                        this_label: receiver_label,
                         new_target_value: Value::Undefined,
                         super_value: Value::Undefined,
                         construct_this: None,
@@ -14546,20 +14561,12 @@ impl InterpreterCore {
                     }
 
                     self.register_base += self.config.max_registers as usize;
-                    let req_len = self.register_base + self.config.max_registers as usize;
-                    let register_base = self.register_base;
-                    self.mutate_registers(|r| {
-                        if req_len > r.len() {
-                            r.resize(req_len, Value::Undefined);
-                        } else {
-                            r[register_base..req_len].fill(Value::Undefined);
-                        }
-                    });
+                    self.clear_current_register_frame();
 
-                    for (i, val) in arg_vals.into_iter().enumerate() {
+                    for (i, (val, label)) in arg_vals.into_iter().zip(arg_labels).enumerate() {
                         let reg = i as u32;
                         if reg < self.config.max_registers {
-                            self.write_reg(reg, val)?;
+                            self.write_reg_with_label(reg, val, label)?;
                         }
                     }
 
@@ -14567,6 +14574,7 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::Return { value } => {
                     let return_val = self.read_reg(value)?;
+                    let return_label = self.get_register_label(value)?.clone();
                     // A return from inside a finally overrides any in-flight
                     // exception, and a return from inside try/catch must still
                     // unwind through enclosing finally blocks before it can
@@ -14578,7 +14586,7 @@ impl InterpreterCore {
                         self.ip = finally_target;
                     } else {
                         self.pending_return = None;
-                        if let Some(final_value) = self.complete_return(return_val)? {
+                        if let Some(final_value) = self.complete_return(return_val, return_label)? {
                             return Ok(final_value);
                         }
                     }
@@ -15521,6 +15529,7 @@ impl InterpreterCore {
                                 register_base: self.register_base,
                                 function_index: Some(func_idx),
                                 this_value: this_val.clone(),
+                                this_label: Label::Public,
                                 new_target_value: callee_val.clone(),
                                 super_value: Value::Undefined,
                                 construct_this: Some(this_val.clone()),
@@ -15559,15 +15568,7 @@ impl InterpreterCore {
                             }
 
                             self.register_base += self.config.max_registers as usize;
-                            let req_len = self.register_base + self.config.max_registers as usize;
-                            let register_base = self.register_base;
-                            self.mutate_registers(|r| {
-                                if req_len > r.len() {
-                                    r.resize(req_len, Value::Undefined);
-                                } else {
-                                    r[register_base..req_len].fill(Value::Undefined);
-                                }
-                            });
+                            self.clear_current_register_frame();
 
                             // Arguments occupy r0..rN-1, matching the IR3
                             // lowering's parameter-register allocation
@@ -15651,11 +15652,13 @@ impl InterpreterCore {
                     return Err(InterpreterError::Halted);
                 }
                 Ir3Instruction::LoadThis { dst } => {
-                    let this_val = self
+                    let (this_val, this_label) = self
                         .call_stack
                         .last()
-                        .map_or(Value::Undefined, |f| f.this_value.clone());
-                    self.write_reg(dst, this_val)?;
+                        .map_or((Value::Undefined, Label::Public), |frame| {
+                            (frame.this_value.clone(), frame.this_label.clone())
+                        });
+                    self.write_reg_with_label(dst, this_val, this_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::LoadNewTarget { dst } => {
@@ -15783,7 +15786,9 @@ impl InterpreterCore {
                                     self.pending_return = Some(return_val);
                                     self.ip = finally_target;
                                 } else {
-                                    if let Some(final_value) = self.complete_return(return_val)? {
+                                    if let Some(final_value) =
+                                        self.complete_return(return_val, Label::Public)?
+                                    {
                                         return Ok(final_value);
                                     }
                                 }
@@ -25039,19 +25044,11 @@ impl InterpreterCore {
                     })?;
                 self.write_reg(register, argument)?;
                 if let Some(label) = &argument_label {
-                    // Wrapper-level builtins consume r(2+i), while a user
-                    // function entered by CallMethod reads logical parameter
-                    // r(i). The current label file is logical-register based,
-                    // so seed both locations conservatively.
+                    // Seed the wrapper argument. CallMethod transports the
+                    // paired label into the callee's frame-relative parameter
+                    // register; pre-seeding logical r(i) here would instead
+                    // taint unrelated wrapper metadata such as receiver r0.
                     self.set_register_label(register, label.clone())?;
-                    let parameter_register =
-                        u32::try_from(index).map_err(|_| InterpreterError::TypeError {
-                            expected: "u32-bounded inline callback parameter register".to_string(),
-                            got: format!("argument index {index}"),
-                        })?;
-                    if parameter_register < self.config.max_registers {
-                        self.set_register_label(parameter_register, label.clone())?;
-                    }
                 }
             }
             self.run_loop(&wrapper)
@@ -25142,6 +25139,7 @@ impl InterpreterCore {
         let result = (|| -> Result<Value, InterpreterError> {
             self.registers =
                 SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
+            self.register_labels.fill(Label::Public);
             self.call_stack.clear();
             self.ip = wrapper_start;
             self.register_base = 0;
@@ -35428,6 +35426,38 @@ impl InterpreterCore {
         Ok(())
     }
 
+    fn write_reg_with_label(
+        &mut self,
+        reg: u32,
+        value: Value,
+        label: Label,
+    ) -> Result<(), InterpreterError> {
+        self.write_reg(reg, value)?;
+        self.set_register_label(reg, label)
+    }
+
+    /// Reset the active stacked register frame as one value+label unit.
+    ///
+    /// Values have always been isolated per call frame. Keeping the parallel
+    /// label file at the same physical indices prevents a new callee from
+    /// inheriting stale caller taint after `register_base` advances.
+    fn clear_current_register_frame(&mut self) {
+        let frame_start = self.register_base;
+        let frame_end = frame_start + self.config.max_registers as usize;
+        self.mutate_registers(|registers| {
+            if frame_end > registers.len() {
+                registers.resize(frame_end, Value::Undefined);
+            } else {
+                registers[frame_start..frame_end].fill(Value::Undefined);
+            }
+        });
+        if frame_end > self.register_labels.len() {
+            self.register_labels.resize(frame_end, Label::Public);
+        } else {
+            self.register_labels[frame_start..frame_end].fill(Label::Public);
+        }
+    }
+
     // -- Heap operations ---------------------------------------------------
 
     fn estimate_string_bytes(text: &str) -> u64 {
@@ -37019,6 +37049,39 @@ impl InterpreterCore {
         }
         arg_vals.truncate(rest_slot + 1);
         arg_vals[rest_slot] = Value::Object(array_id);
+        Ok(())
+    }
+
+    /// Label-file twin of [`Self::apply_rest_param`]. A rest array depends on
+    /// every trailing argument, so its register receives their lattice join.
+    fn apply_rest_param_labels(
+        &self,
+        arg_labels: &mut Vec<Label>,
+        rest_param_index: Option<u32>,
+        args: RegRange,
+    ) -> Result<(), InterpreterError> {
+        let Some(rest_idx) = rest_param_index else {
+            return Ok(());
+        };
+        let mut rest_label = Label::Public;
+        let mut i = rest_idx;
+        while i < args.count {
+            let reg = args
+                .start
+                .checked_add(i)
+                .ok_or(InterpreterError::RegisterOutOfBounds {
+                    register: args.start,
+                    max: self.config.max_registers,
+                })?;
+            rest_label = rest_label.join(self.get_register_label(reg)?);
+            i = i.checked_add(1).unwrap_or(args.count);
+        }
+        let rest_slot = rest_idx as usize;
+        if arg_labels.len() <= rest_slot {
+            arg_labels.resize(rest_slot + 1, Label::Public);
+        }
+        arg_labels.truncate(rest_slot + 1);
+        arg_labels[rest_slot] = rest_label;
         Ok(())
     }
 
@@ -43417,6 +43480,279 @@ mod async_runtime_tests_current {
         );
     }
 
+    #[test]
+    fn plain_call_secret_argument_returns_secret_bd_ur3tk_1() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 2,
+                },
+                Ir3Instruction::Return { value: 2 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 1,
+                name: Some("identity".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        core.mutate_registers(|registers| {
+            registers[0] = Value::Function(0);
+            registers[1] = Value::str("secret-argument");
+        });
+        core.set_register_label(1, Label::Secret)
+            .expect("secret argument label");
+
+        assert_eq!(
+            core.run_loop(&module).expect("identity call should return"),
+            Value::str("secret-argument")
+        );
+        assert_eq!(
+            core.get_register_label(2).expect("caller return label"),
+            &Label::Secret
+        );
+    }
+
+    #[test]
+    fn plain_call_label_frames_do_not_alias_bd_ur3tk_1() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 1,
+                },
+                Ir3Instruction::Return { value: 1 },
+                Ir3Instruction::Return { value: 7 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 0,
+                frame_size: 8,
+                name: Some("return_fresh_r7".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        core.mutate_registers(|registers| {
+            registers[0] = Value::Function(0);
+            registers[7] = Value::str("caller-only");
+        });
+        core.set_register_label(7, Label::Confidential)
+            .expect("caller frame label");
+        core.set_register_label(1, Label::Secret)
+            .expect("stale destination label");
+
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("fresh callee frame should return"),
+            Value::Undefined
+        );
+        assert_eq!(
+            core.get_register_label(1).expect("public return label"),
+            &Label::Public
+        );
+        assert_eq!(
+            core.get_register_label(7).expect("preserved caller label"),
+            &Label::Confidential
+        );
+    }
+
+    #[test]
+    fn nested_plain_calls_preserve_labels_across_two_physical_frames_bd_ur3tk_1() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::Return { value: 3 },
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 2,
+                },
+                Ir3Instruction::Return { value: 2 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 2,
+                    frame_size: 3,
+                    name: Some("outer_identity".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 4,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("inner_identity".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        );
+        let mut core = test_interpreter();
+        core.mutate_registers(|registers| {
+            registers[0] = Value::Function(0);
+            registers[1] = Value::Function(1);
+            registers[2] = Value::str("nested-secret");
+        });
+        core.set_register_label(2, Label::Secret)
+            .expect("nested argument label");
+
+        assert_eq!(
+            core.run_loop(&module).expect("nested calls should return"),
+            Value::str("nested-secret")
+        );
+        assert_eq!(
+            core.get_register_label(3).expect("nested return label"),
+            &Label::Secret
+        );
+    }
+
+    #[test]
+    fn call_method_load_this_preserves_receiver_label_bd_ur3tk_1() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 1,
+                    args: RegRange { start: 2, count: 0 },
+                    dst: 2,
+                },
+                Ir3Instruction::Return { value: 2 },
+                Ir3Instruction::LoadThis { dst: 0 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 0,
+                frame_size: 1,
+                name: Some("return_this".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        core.mutate_registers(|registers| {
+            registers[0] = Value::str("secret-receiver");
+            registers[1] = Value::Function(0);
+        });
+        core.set_register_label(0, Label::Secret)
+            .expect("receiver label");
+
+        assert_eq!(
+            core.run_loop(&module).expect("method should return this"),
+            Value::str("secret-receiver")
+        );
+        assert_eq!(
+            core.get_register_label(2).expect("method return label"),
+            &Label::Secret
+        );
+    }
+
+    #[test]
+    fn call_method_argument_preserves_label_bd_ur3tk_1() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 1,
+                    args: RegRange { start: 2, count: 1 },
+                    dst: 3,
+                },
+                Ir3Instruction::Return { value: 3 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 1,
+                name: Some("return_argument".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        core.mutate_registers(|registers| {
+            registers[0] = Value::str("public-receiver");
+            registers[1] = Value::Function(0);
+            registers[2] = Value::str("secret-argument");
+        });
+        core.set_register_label(2, Label::Secret)
+            .expect("method argument label");
+
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("method should return argument"),
+            Value::str("secret-argument")
+        );
+        assert_eq!(
+            core.get_register_label(3).expect("method result label"),
+            &Label::Secret
+        );
+    }
+
+    #[test]
+    fn rest_parameter_joins_trailing_argument_labels_bd_ur3tk_1() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 3 },
+                    dst: 4,
+                },
+                Ir3Instruction::Return { value: 4 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 2,
+                frame_size: 2,
+                name: Some("return_rest".to_string()),
+                is_generator: false,
+                rest_param_index: Some(1),
+            }],
+        );
+        let mut core = test_interpreter();
+        core.mutate_registers(|registers| {
+            registers[0] = Value::Function(0);
+            registers[1] = Value::str("fixed");
+            registers[2] = Value::str("confidential-rest");
+            registers[3] = Value::str("secret-rest");
+        });
+        core.set_register_label(2, Label::Confidential)
+            .expect("confidential rest label");
+        core.set_register_label(3, Label::Secret)
+            .expect("secret rest label");
+
+        let Value::Object(rest_id) = core
+            .run_loop(&module)
+            .expect("rest-parameter call should return array")
+        else {
+            panic!("rest parameter should return an array object");
+        };
+        assert_eq!(
+            core.read_array_like_values(rest_id),
+            vec![Value::str("confidential-rest"), Value::str("secret-rest")]
+        );
+        assert_eq!(
+            core.get_register_label(4).expect("rest result label"),
+            &Label::Secret
+        );
+    }
+
     /// bd-fw7zd: the engine-owned finite stream queue must participate in both
     /// incremental and recomputed memory totals, and terminal close must release
     /// its side-table charge exactly once.
@@ -49536,6 +49872,7 @@ mod tests {
             register_base: 0,
             function_index: Some(7),
             this_value: Value::str("receiver"),
+            this_label: Label::Public,
             new_target_value: Value::Undefined,
             super_value: Value::Undefined,
             construct_this: None,
@@ -49554,7 +49891,7 @@ mod tests {
             .expect("seed call-frame state should fit memory budget");
 
         let outcome = core
-            .complete_return(Value::str("done"))
+            .complete_return(Value::str("done"), Label::Public)
             .expect("return should complete");
         assert_eq!(outcome, None);
         assert_eq!(core.ip, 123);
@@ -49621,6 +49958,7 @@ mod tests {
             register_base: 0,
             function_index: Some(7),
             this_value: Value::str("receiver"),
+            this_label: Label::Public,
             new_target_value: Value::Undefined,
             super_value: Value::Undefined,
             construct_this: None,
@@ -49708,6 +50046,7 @@ mod tests {
             register_base: 4,
             function_index: Some(7),
             this_value: Value::str("receiver"),
+            this_label: Label::Public,
             new_target_value: Value::Undefined,
             super_value: Value::Undefined,
             construct_this: None,
@@ -49786,6 +50125,7 @@ mod tests {
             register_base: 8,
             function_index: Some(7),
             this_value: Value::str("receiver"),
+            this_label: Label::Public,
             new_target_value: Value::Undefined,
             super_value: Value::Undefined,
             construct_this: None,

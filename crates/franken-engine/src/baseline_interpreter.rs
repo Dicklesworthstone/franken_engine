@@ -236,6 +236,10 @@ const MEMORY_ESTIMATE_READABLE_BUFFERED_CHUNK_BYTES: u64 = 32;
 /// Additional retained side-table charge while `Readable.toArray()` waits for
 /// the stream's terminal close phase before settling its Promise.
 const MEMORY_ESTIMATE_READABLE_TO_ARRAY_WAITER_BYTES: u64 = 48;
+/// Conservative fixed charges for the engine-owned Writable kernel. Retained
+/// strings and custom IFC-label names are charged separately.
+const MEMORY_ESTIMATE_WRITABLE_BASE_BYTES: u64 = 96;
+const MEMORY_ESTIMATE_WRITABLE_WRITE_BYTES: u64 = 48;
 /// BotGuard typed-array v1 per-buffer cap from bd-8enww.2.1.
 const MAX_ARRAY_BUFFER_BYTE_LENGTH: u64 = 8 * 1024 * 1024;
 /// Approximate metadata footprint for an ArrayBuffer-backed typed-array view.
@@ -2023,6 +2027,19 @@ pub enum BuiltinFunctionKind {
     StreamReadableSetEncoding,
     /// `Readable.prototype.destroy([error])` lifecycle teardown.
     StreamReadableDestroy,
+    /// Identity coercion for `String.prototype.toString`. Writable's honest
+    /// string-chunk representation exercises this ordinary primitive method.
+    StringToString,
+    /// `Writable.prototype.write()` over the engine-owned Writable kernel
+    /// (bd-fw7zd). These variants remain at the true enum tail because the
+    /// discriminant participates in deterministic register hashing.
+    StreamWritableWrite,
+    /// `Writable.prototype.end()`.
+    StreamWritableEnd,
+    /// Token-bound completion passed to a custom `_write` implementation.
+    StreamWritableWriteDone,
+    /// Token-bound completion passed to a custom `_final` implementation.
+    StreamWritableFinalDone,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -2130,6 +2147,15 @@ impl BuiltinFunction {
             module_specifier: String::new(),
             iterator_handle: None,
             bound_object: Some(handle_object.0),
+        }
+    }
+
+    fn writable_completion(kind: BuiltinFunctionKind, object_id: ObjectId, token: u32) -> Self {
+        Self {
+            kind,
+            module_specifier: String::new(),
+            iterator_handle: Some(token),
+            bound_object: Some(object_id.0),
         }
     }
 
@@ -3208,6 +3234,10 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StreamReadableRead => "read",
             BuiltinFunctionKind::StreamReadableSetEncoding => "setEncoding",
             BuiltinFunctionKind::StreamReadableDestroy => "destroy",
+            BuiltinFunctionKind::StreamWritableWrite => "write",
+            BuiltinFunctionKind::StreamWritableEnd => "end",
+            BuiltinFunctionKind::StreamWritableWriteDone
+            | BuiltinFunctionKind::StreamWritableFinalDone => "callback",
             BuiltinFunctionKind::ArrayPush => "push",
             BuiltinFunctionKind::ArrayPop => "pop",
             BuiltinFunctionKind::ArrayShift => "shift",
@@ -3314,6 +3344,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::ObjectPrototypeToString => "toString",
             BuiltinFunctionKind::StringIsWellFormed => "isWellFormed",
             BuiltinFunctionKind::StringToWellFormed => "toWellFormed",
+            BuiltinFunctionKind::StringToString => "toString",
             BuiltinFunctionKind::SetTimeout => "setTimeout",
             BuiltinFunctionKind::ClearTimeout => "clearTimeout",
             BuiltinFunctionKind::SetInterval => "setInterval",
@@ -5391,6 +5422,9 @@ struct ModuleExecutionSnapshot {
     /// execution replaces the register values, so its snapshot must preserve
     /// labels as well or a stream/event callback can corrupt caller taint.
     register_labels: Vec<Label>,
+    /// PC-style provenance for an isolated stream/event callback. Keeping one
+    /// snapshotted label avoids cloning a Custom label into every register.
+    active_inline_callback_context_label: Option<Label>,
     call_stack: Vec<CallFrame>,
     ip: usize,
     register_base: usize,
@@ -5758,6 +5792,86 @@ struct ReadableFromState {
     to_array_waiter: Option<ReadableToArrayWaiter>,
 }
 
+/// Completion state for one engine-owned Writable write record. The token is
+/// checked by the internal callback builtin so a retained or duplicated guest
+/// callback cannot complete a later write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WritableWriteStatus {
+    Pending,
+    Active(u32),
+    Completed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WritableWriteRecord {
+    value: Value,
+    label: Label,
+    units: usize,
+    callback: Option<WritableCallbackRecord>,
+    status: WritableWriteStatus,
+    /// Whether this record completed under the stream's one shared terminal
+    /// write error. Keeping only a bit avoids duplicating an attacker-sized
+    /// error value into every queued record at the memory ceiling.
+    completion_failed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WritableCallbackRecord {
+    value: Value,
+    label: Label,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WritableFinalStatus {
+    NotStarted,
+    Active(u32),
+    Done,
+}
+
+/// Deferred lifecycle work has its own deterministic checkpoint ahead of
+/// microtasks and Immediate macrotasks. This matches Node/Bun's stream-tick
+/// ordering without pretending pure stream bookkeeping is host I/O.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WritableTickPhase {
+    Callbacks,
+    Finish,
+    Error,
+    Close,
+    Release,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WritableErrorOrigin {
+    Write,
+    Final,
+}
+
+/// Authoritative Writable state. Public `writable*` properties are mirrors
+/// only; guest writes or deletions cannot forge progress, callback tokens, or
+/// lifecycle completion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WritableState {
+    object_mode: bool,
+    high_water_mark: usize,
+    write_callback: Option<Value>,
+    final_callback: Option<Value>,
+    writes: VecDeque<WritableWriteRecord>,
+    buffered_length: usize,
+    end_requested: bool,
+    end_callback: Option<WritableCallbackRecord>,
+    final_status: WritableFinalStatus,
+    prefinish_emitted: bool,
+    terminal_error: Option<(Value, Label)>,
+    terminal_error_origin: Option<WritableErrorOrigin>,
+    tick_phase: WritableTickPhase,
+    /// Monotonic scheduling sequence for the next internal stream checkpoint.
+    /// Keeping it in the fixed-size, already-accounted state preserves FIFO
+    /// scheduling without retaining a second allocation-owning queue.
+    tick_sequence: Option<u64>,
+    inside_write_invocation: bool,
+    lifecycle_label: Label,
+}
+
 /// One listener in the interpreter-wide EventEmitter side table (bd-2dmnn).
 ///
 /// The pre-existing HTTP stream emitter stored bare closure ids. Keeping the
@@ -6007,6 +6121,15 @@ pub struct InterpreterCore {
     /// Scheduled pure-compute stream pumps keyed by their `IoCompletion`
     /// registration sequence. At most one pump is queued per readable object.
     pending_readable_from_pumps: BTreeMap<u64, ObjectId>,
+    /// Engine-owned Writable instances. Their per-state ready bit drives a
+    /// pre-microtask lifecycle checkpoint without a separately retained queue.
+    writable_streams: BTreeMap<ObjectId, WritableState>,
+    next_writable_tick_sequence: u64,
+    /// Process-lifetime authentication nonce for internal Writable completion
+    /// callbacks. Unlike heap ObjectIds and execution seeds, this counter is
+    /// never reset between `execute()` calls, so a deferred callback retained
+    /// by an unref'd timer cannot authenticate against a newly reused object.
+    next_writable_completion_token: u32,
     /// Active promise combinator trackers keyed by combinator id.
     promise_combinators: BTreeMap<u64, PromiseCombinatorState>,
     /// Watchers keyed by promise handle for combinator updates.
@@ -6062,6 +6185,10 @@ pub struct InterpreterCore {
     nondeterminism_trace: NondeterminismTrace,
     /// IFC labels for each register (same indexing as registers vec).
     register_labels: Vec<Label>,
+    /// Aggregate provenance active while an isolated callback runs. Register
+    /// writes join this label after per-call frame clearing, so zero-argument
+    /// callbacks cannot lose lifecycle/emission context.
+    active_inline_callback_context_label: Option<Label>,
     /// WeakMap storage with weak reference semantics.
     weakmap_storage: BTreeMap<ObjectId, WeakMapStorage>,
     /// Global Symbol registry for `Symbol.for(key)` / `Symbol.keyFor(sym)`
@@ -6155,6 +6282,9 @@ impl InterpreterCore {
             pending_stream_emissions: BTreeMap::new(),
             readable_from_streams: BTreeMap::new(),
             pending_readable_from_pumps: BTreeMap::new(),
+            writable_streams: BTreeMap::new(),
+            next_writable_tick_sequence: 0,
+            next_writable_completion_token: 0,
             promise_combinators: BTreeMap::new(),
             promise_combinator_watchers: BTreeMap::new(),
             next_promise_combinator_id: 0,
@@ -6176,6 +6306,7 @@ impl InterpreterCore {
             decision_receipts: EvidenceLog::new(),
             nondeterminism_trace,
             register_labels: vec![Label::Public; max_regs],
+            active_inline_callback_context_label: None,
             weakmap_storage: BTreeMap::new(),
             symbol_registry: BTreeMap::new(),
             gc_remembered_set: BTreeSet::new(),
@@ -7175,6 +7306,44 @@ impl InterpreterCore {
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
     }
 
+    fn clear_event_promise_waiters_for_target(&mut self, target_id: ObjectId) {
+        let released_bytes = self
+            .event_promise_waiters
+            .remove(&target_id)
+            .map(|by_event| {
+                by_event
+                    .iter()
+                    .flat_map(|(event, records)| {
+                        records.iter().map(move |record| {
+                            Self::estimate_event_promise_waiter_record_bytes(
+                                event,
+                                &record.registration_label,
+                            )
+                        })
+                    })
+                    .sum()
+            })
+            .unwrap_or(0);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
+    }
+
+    /// Side-table state is execution-local even when the interpreter instance
+    /// is reused. Clear it before restored heap ObjectIds can alias a prior
+    /// Writable, including listener and static `events.once` links keyed by
+    /// the same ids.
+    fn clear_writable_execution_state(&mut self) {
+        while let Some(object_id) = self.writable_streams.keys().next().copied() {
+            if let Some(state) = self.writable_streams.remove(&object_id) {
+                self.estimated_memory_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(Self::estimate_writable_state_bytes(&state));
+            }
+            self.clear_event_listeners(object_id, None);
+            self.clear_event_promise_waiters_for_target(object_id);
+        }
+        self.next_writable_tick_sequence = 0;
+    }
+
     fn event_name_arg(
         &self,
         args: RegRange,
@@ -7422,7 +7591,38 @@ impl InterpreterCore {
     }
 
     fn construct_stream_writable(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
-        let (object_mode, high_water_mark, _) = self.stream_constructor_options(args, 65_536)?;
+        let (object_mode, high_water_mark, lifecycle_label) =
+            self.stream_constructor_options(args, 65_536)?;
+        let (write_callback, final_callback) = if args.count == 0 {
+            (None, None)
+        } else {
+            match self.read_reg(args.start)? {
+                Value::Undefined | Value::Null => (None, None),
+                Value::Object(options_id) => {
+                    let object = self
+                        .heap
+                        .get(options_id.0 as usize)
+                        .ok_or(InterpreterError::ObjectNotFound { id: options_id.0 })?;
+                    let callback = |name: &str| -> Result<Option<Value>, InterpreterError> {
+                        match object.properties.get(name).cloned() {
+                            None | Some(Value::Undefined) => Ok(None),
+                            Some(value) if value.is_callable() => Ok(Some(value)),
+                            Some(value) => Err(InterpreterError::TypeError {
+                                expected: format!("callable Writable {name} option"),
+                                got: value.type_name().to_string(),
+                            }),
+                        }
+                    };
+                    (callback("write")?, callback("final")?)
+                }
+                other => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "stream constructor options object".to_string(),
+                        got: other.type_name().to_string(),
+                    });
+                }
+            }
+        };
         let properties = [
             ("__type", Value::str("Writable")),
             ("__maxListeners", Value::Int(10)),
@@ -7436,6 +7636,24 @@ impl InterpreterCore {
             ("destroyed", Value::Bool(false)),
             ("closed", Value::Bool(false)),
         ];
+        let state = WritableState {
+            object_mode,
+            high_water_mark: usize::try_from(high_water_mark).unwrap_or(usize::MAX),
+            write_callback,
+            final_callback,
+            writes: VecDeque::new(),
+            buffered_length: 0,
+            end_requested: false,
+            end_callback: None,
+            final_status: WritableFinalStatus::NotStarted,
+            prefinish_emitted: false,
+            terminal_error: None,
+            terminal_error_origin: None,
+            tick_phase: WritableTickPhase::Callbacks,
+            tick_sequence: None,
+            inside_write_invocation: false,
+            lifecycle_label,
+        };
         let mut projected_object = HeapObject::new();
         for (key, value) in &properties {
             projected_object
@@ -7443,16 +7661,968 @@ impl InterpreterCore {
                 .insert((*key).to_string(), value.clone());
         }
         let object_bytes = Self::estimate_heap_object_bytes(&projected_object);
-        let requested_bytes = self.estimated_memory_bytes.saturating_add(object_bytes);
+        let state_bytes = Self::estimate_writable_state_bytes(&state);
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_add(object_bytes)
+            .saturating_add(state_bytes);
         if requested_bytes > self.config.max_total_memory_bytes {
             return Err(self.memory_budget_error(
                 requested_bytes,
                 self.heap_object_count_u32().saturating_add(1),
             ));
         }
-        Ok(Value::Object(
-            self.alloc_object_with_properties(&properties)?,
-        ))
+        self.apply_memory_component_delta(0, state_bytes)?;
+        let object_id = match self.alloc_object_with_properties(&properties) {
+            Ok(object_id) => object_id,
+            Err(error) => {
+                self.estimated_memory_bytes =
+                    self.estimated_memory_bytes.saturating_sub(state_bytes);
+                return Err(error);
+            }
+        };
+        self.writable_streams.insert(object_id, state);
+        Ok(Value::Object(object_id))
+    }
+
+    fn writable_receiver_id(&self, receiver: Value) -> Result<ObjectId, InterpreterError> {
+        let Value::Object(object_id) = receiver else {
+            return Err(InterpreterError::TypeError {
+                expected: "Writable receiver".to_string(),
+                got: receiver.type_name().to_string(),
+            });
+        };
+        if !self.writable_streams.contains_key(&object_id) {
+            return Err(InterpreterError::TypeError {
+                expected: "Writable receiver".to_string(),
+                got: "non-Writable object".to_string(),
+            });
+        }
+        Ok(object_id)
+    }
+
+    fn clone_writable_state_with_budget(
+        &self,
+        object_id: ObjectId,
+    ) -> Result<Option<WritableState>, InterpreterError> {
+        let Some(state) = self.writable_streams.get(&object_id) else {
+            return Ok(None);
+        };
+        self.check_temporary_memory_budget(Self::estimate_writable_state_bytes(state))?;
+        Ok(Some(state.clone()))
+    }
+
+    fn commit_writable_state(
+        &mut self,
+        object_id: ObjectId,
+        projected: WritableState,
+    ) -> Result<(), InterpreterError> {
+        let previous_bytes = self
+            .writable_streams
+            .get(&object_id)
+            .map(Self::estimate_writable_state_bytes)
+            .unwrap_or(0);
+        let next_bytes = Self::estimate_writable_state_bytes(&projected);
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        let length = projected.buffered_length;
+        self.writable_streams.insert(object_id, projected);
+        self.mirror_writable_length(object_id, length);
+        Ok(())
+    }
+
+    fn mirror_writable_length(&mut self, object_id: ObjectId, length: usize) {
+        let key = "writableLength";
+        let value = Value::Int(i64::try_from(length).unwrap_or(i64::MAX));
+        let previous_bytes = self
+            .heap
+            .get(object_id.0 as usize)
+            .and_then(|object| object.properties.get(key))
+            .map(|previous| Self::estimate_property_entry_bytes(key, previous));
+        self.mutate_heap(|heap| {
+            if let Some(slot) = heap
+                .get_mut(object_id.0 as usize)
+                .and_then(|object| object.properties.get_mut(key))
+            {
+                *slot = value.clone();
+            }
+        });
+        if let Some(previous_bytes) = previous_bytes {
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(previous_bytes)
+                .saturating_add(Self::estimate_property_entry_bytes(key, &value));
+        }
+    }
+
+    fn mirror_writable_bool(&mut self, object_id: ObjectId, key: &'static str, value: bool) {
+        self.mirror_readable_bool(object_id, key, value);
+    }
+
+    fn schedule_writable_tick(&mut self, object_id: ObjectId) -> Result<(), InterpreterError> {
+        if self
+            .writable_streams
+            .get(&object_id)
+            .is_none_or(|state| state.tick_sequence.is_some())
+        {
+            return Ok(());
+        }
+        let sequence = self.next_writable_tick_sequence;
+        self.next_writable_tick_sequence =
+            sequence
+                .checked_add(1)
+                .ok_or_else(|| InterpreterError::InternalError {
+                    details: "Writable tick sequence space exhausted".to_string(),
+                })?;
+        if let Some(state) = self.writable_streams.get_mut(&object_id) {
+            state.tick_sequence = Some(sequence);
+        }
+        Ok(())
+    }
+
+    fn next_scheduled_writable_tick(&mut self) -> Result<Option<ObjectId>, InterpreterError> {
+        // Selection currently scans the engine-owned state table. Charge the
+        // exact number of entries inspected (and one step for the empty scan)
+        // to the shared instruction budget so many short-lived streams cannot
+        // turn deterministic lifecycle work into unbounded O(N^2) host CPU.
+        let scan_cost = u64::try_from(self.writable_streams.len().max(1)).unwrap_or(u64::MAX);
+        let next_executed = self.instructions_executed.saturating_add(scan_cost);
+        if next_executed > self.config.instruction_budget {
+            return Err(InterpreterError::BudgetExhausted {
+                executed: self.instructions_executed,
+                budget: self.config.instruction_budget,
+            });
+        }
+        self.instructions_executed = next_executed;
+        Ok(self
+            .writable_streams
+            .iter()
+            .filter_map(|(id, state)| state.tick_sequence.map(|sequence| (sequence, *id)))
+            .min_by_key(|(sequence, _)| *sequence)
+            .map(|(_, object_id)| object_id))
+    }
+
+    fn allocate_writable_completion_token(&mut self) -> Result<u32, InterpreterError> {
+        let token = self.next_writable_completion_token;
+        self.next_writable_completion_token =
+            token
+                .checked_add(1)
+                .ok_or_else(|| InterpreterError::InternalError {
+                    details: "Writable completion token space exhausted".to_string(),
+                })?;
+        Ok(token)
+    }
+
+    fn writable_chunk_units(
+        &self,
+        object_mode: bool,
+        value: &Value,
+    ) -> Result<usize, InterpreterError> {
+        if object_mode {
+            return Ok(1);
+        }
+        match value {
+            Value::Str(text) => Ok(text.len()),
+            Value::Object(_) => {
+                let view = self.buffer_like_view(value)?;
+                Ok(self.typed_array_view_bytes(&view)?.len())
+            }
+            other => Err(InterpreterError::TypeError {
+                expected: "string, Buffer, or Uint8Array Writable chunk".to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn writable_callback_arg(
+        &self,
+        args: RegRange,
+        indices: &[u32],
+    ) -> Result<Option<WritableCallbackRecord>, InterpreterError> {
+        for index in indices {
+            if let Some(value) = self.builtin_arg(args, *index)?
+                && value.is_callable()
+            {
+                let register = args.start.checked_add(*index).ok_or(
+                    InterpreterError::RegisterOutOfBounds {
+                        register: args.start,
+                        max: self.config.max_registers,
+                    },
+                )?;
+                return Ok(Some(WritableCallbackRecord {
+                    value,
+                    label: self.get_register_label(register)?.clone(),
+                }));
+            }
+        }
+        Ok(None)
+    }
+
+    fn writable_enqueue(
+        &mut self,
+        object_id: ObjectId,
+        value: Value,
+        label: Label,
+        callback: Option<WritableCallbackRecord>,
+    ) -> Result<bool, InterpreterError> {
+        let Some(mut projected) = self.clone_writable_state_with_budget(object_id)? else {
+            return Ok(false);
+        };
+        if projected.end_requested {
+            return Err(InterpreterError::TypeError {
+                expected: "Writable that has not ended".to_string(),
+                got: "write after end".to_string(),
+            });
+        }
+        let units = self.writable_chunk_units(projected.object_mode, &value)?;
+        let next_length = projected
+            .buffered_length
+            .checked_add(units)
+            .ok_or_else(|| InterpreterError::RangeError {
+                message: "Writable buffered length overflows host address space".to_string(),
+            })?;
+        projected
+            .writes
+            .try_reserve(1)
+            .map_err(|_| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
+        let record_label = projected.lifecycle_label.join(&label);
+        projected.lifecycle_label = record_label.clone();
+        projected.writes.push_back(WritableWriteRecord {
+            value,
+            label: record_label,
+            units,
+            callback,
+            status: WritableWriteStatus::Pending,
+            completion_failed: false,
+        });
+        projected.buffered_length = next_length;
+        let below_high_water_mark = next_length < projected.high_water_mark;
+        self.commit_writable_state(object_id, projected)?;
+        Ok(below_high_water_mark)
+    }
+
+    fn writable_write(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let object_id = self.writable_receiver_id(receiver)?;
+        let value = self
+            .builtin_arg(args, 0)?
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "Writable chunk".to_string(),
+                got: "missing argument".to_string(),
+            })?;
+        let mut label = self.get_register_label(args.start)?.clone();
+        if let Value::Object(chunk_id) = &value {
+            label = label.join(&self.binary_storage_label(*chunk_id));
+        }
+        label = label.join(&self.join_arg_range_label(args)?);
+        let callback = self.writable_callback_arg(args, &[1, 2])?;
+        let below_high_water_mark = self.writable_enqueue(object_id, value, label, callback)?;
+        self.drive_writable(object_id, module)?;
+        Ok(Value::Bool(below_high_water_mark))
+    }
+
+    fn writable_end(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let object_id = self.writable_receiver_id(receiver)?;
+        let first = self.builtin_arg(args, 0)?;
+        let callback = self.writable_callback_arg(args, &[0, 1, 2])?;
+        let chunk =
+            first.filter(|value| !value.is_callable() && !matches!(value, Value::Undefined));
+        let args_label = self.join_arg_range_label(args)?;
+        if let Some(value) = chunk {
+            let mut label = self.get_register_label(args.start)?.clone();
+            if let Value::Object(chunk_id) = &value {
+                label = label.join(&self.binary_storage_label(*chunk_id));
+            }
+            label = label.join(&args_label);
+            let Some(mut projected) = self.clone_writable_state_with_budget(object_id)? else {
+                return Ok(Value::Object(object_id));
+            };
+            if projected.end_requested {
+                return Err(InterpreterError::TypeError {
+                    expected: "Writable that has not ended".to_string(),
+                    got: "end after end".to_string(),
+                });
+            }
+            let units = self.writable_chunk_units(projected.object_mode, &value)?;
+            let next_length = projected
+                .buffered_length
+                .checked_add(units)
+                .ok_or_else(|| InterpreterError::RangeError {
+                    message: "Writable buffered length overflows host address space".to_string(),
+                })?;
+            projected
+                .writes
+                .try_reserve(1)
+                .map_err(|_| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
+            let record_label = projected.lifecycle_label.join(&label);
+            projected.lifecycle_label = record_label.clone();
+            projected.writes.push_back(WritableWriteRecord {
+                value,
+                label: record_label,
+                units,
+                callback: None,
+                status: WritableWriteStatus::Pending,
+                completion_failed: false,
+            });
+            projected.buffered_length = next_length;
+            projected.end_requested = true;
+            projected.end_callback = callback;
+            projected.lifecycle_label = projected.lifecycle_label.join(&args_label);
+            self.commit_writable_state(object_id, projected)?;
+        } else {
+            let Some(state) = self.writable_streams.get(&object_id) else {
+                return Ok(Value::Object(object_id));
+            };
+            if state.end_requested {
+                return Err(InterpreterError::TypeError {
+                    expected: "Writable that has not ended".to_string(),
+                    got: "end after end".to_string(),
+                });
+            }
+            let next_lifecycle_label = state.lifecycle_label.join(&args_label);
+            let old_dynamic = Self::estimate_label_bytes(&state.lifecycle_label).saturating_add(
+                state
+                    .end_callback
+                    .as_ref()
+                    .map(Self::estimate_writable_callback_bytes)
+                    .unwrap_or(0),
+            );
+            let next_dynamic = Self::estimate_label_bytes(&next_lifecycle_label).saturating_add(
+                callback
+                    .as_ref()
+                    .map(Self::estimate_writable_callback_bytes)
+                    .unwrap_or(0),
+            );
+            self.apply_memory_component_delta(old_dynamic, next_dynamic)?;
+            if let Some(state) = self.writable_streams.get_mut(&object_id) {
+                state.end_requested = true;
+                state.end_callback = callback;
+                state.lifecycle_label = next_lifecycle_label;
+            }
+        }
+        self.mirror_writable_bool(object_id, "writable", false);
+        self.mirror_writable_bool(object_id, "writableEnded", true);
+        self.drive_writable(object_id, module)?;
+        Ok(Value::Object(object_id))
+    }
+
+    fn writable_bound_completion(
+        builtin: &BuiltinFunction,
+    ) -> Result<(ObjectId, u32), InterpreterError> {
+        let object_id = builtin
+            .bound_object
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "Writable completion is missing its object binding".to_string(),
+            })?;
+        let token = builtin
+            .iterator_handle
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "Writable completion is missing its token".to_string(),
+            })?;
+        Ok((ObjectId(object_id), token))
+    }
+
+    fn take_writable_completion_error(
+        &mut self,
+        args: RegRange,
+    ) -> Result<Option<(Value, Label)>, InterpreterError> {
+        let Some(error) = self.builtin_arg(args, 0)? else {
+            return Ok(None);
+        };
+        if matches!(&error, Value::Undefined | Value::Null) {
+            return Ok(None);
+        }
+        let label = self.get_register_label(args.start)?.clone();
+        // The internal completion wrapper owns this argument register. Consume
+        // its value before charging the same logical bytes to terminal state so
+        // Active -> Completed progress remains possible at the exact ceiling.
+        self.write_reg(args.start, Value::Undefined)?;
+        Ok(Some((error, label)))
+    }
+
+    fn writable_write_done(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let (object_id, token) = Self::writable_bound_completion(builtin)?;
+        let completion_error = self.take_writable_completion_error(args)?;
+        let Some(state) = self.writable_streams.get(&object_id) else {
+            return Ok(Value::Undefined);
+        };
+        let Some((record_index, record)) = state
+            .writes
+            .iter()
+            .enumerate()
+            .find(|(_, record)| record.status == WritableWriteStatus::Active(token))
+        else {
+            return Ok(Value::Undefined);
+        };
+        let units = record.units;
+        let resume = !state.inside_write_invocation;
+        let old_dynamic = Self::estimate_writable_error_dynamic_bytes(state);
+        let (next_lifecycle_label, next_terminal_error, next_terminal_error_origin) =
+            match &completion_error {
+                Some((error, label)) => (
+                    state.lifecycle_label.join(label),
+                    Some((error.clone(), label.clone())),
+                    Some(WritableErrorOrigin::Write),
+                ),
+                None => (
+                    state.lifecycle_label.clone(),
+                    state.terminal_error.clone(),
+                    state.terminal_error_origin,
+                ),
+            };
+        let next_dynamic = old_dynamic
+            .saturating_sub(Self::estimate_label_bytes(&state.lifecycle_label))
+            .saturating_sub(
+                state
+                    .terminal_error
+                    .as_ref()
+                    .map(|(value, label)| {
+                        Self::estimate_value_bytes(value)
+                            .saturating_add(Self::estimate_label_bytes(label))
+                    })
+                    .unwrap_or(0),
+            )
+            .saturating_add(Self::estimate_label_bytes(&next_lifecycle_label))
+            .saturating_add(
+                next_terminal_error
+                    .as_ref()
+                    .map(|(value, label)| {
+                        Self::estimate_value_bytes(value)
+                            .saturating_add(Self::estimate_label_bytes(label))
+                    })
+                    .unwrap_or(0),
+            );
+        if let Err(error) = self.apply_memory_component_delta(old_dynamic, next_dynamic) {
+            self.release_writable_state_storage(object_id);
+            return Err(error);
+        }
+        if let Some(state) = self.writable_streams.get_mut(&object_id) {
+            state.writes[record_index].status = WritableWriteStatus::Completed;
+            state.writes[record_index].completion_failed = completion_error.is_some();
+            if completion_error.is_some() {
+                for record in &mut state.writes {
+                    if record.status == WritableWriteStatus::Pending {
+                        record.status = WritableWriteStatus::Completed;
+                        record.completion_failed = true;
+                    }
+                }
+                state.buffered_length = 0;
+            } else {
+                state.buffered_length = state.buffered_length.saturating_sub(units);
+            }
+            state.lifecycle_label = next_lifecycle_label;
+            state.terminal_error = next_terminal_error;
+            state.terminal_error_origin = next_terminal_error_origin;
+        }
+        let length = self
+            .writable_streams
+            .get(&object_id)
+            .map_or(0, |state| state.buffered_length);
+        self.mirror_writable_length(object_id, length);
+        self.schedule_writable_tick(object_id)?;
+        if resume {
+            self.drive_writable(object_id, module)?;
+        }
+        Ok(Value::Undefined)
+    }
+
+    fn writable_final_done(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let (object_id, token) = Self::writable_bound_completion(builtin)?;
+        let completion_error = self.take_writable_completion_error(args)?;
+        let Some(state) = self.writable_streams.get(&object_id) else {
+            return Ok(Value::Undefined);
+        };
+        if state.final_status != WritableFinalStatus::Active(token) {
+            return Ok(Value::Undefined);
+        }
+        let old_dynamic = Self::estimate_label_bytes(&state.lifecycle_label).saturating_add(
+            state
+                .terminal_error
+                .as_ref()
+                .map(|(value, label)| {
+                    Self::estimate_value_bytes(value)
+                        .saturating_add(Self::estimate_label_bytes(label))
+                })
+                .unwrap_or(0),
+        );
+        let (next_lifecycle_label, next_terminal_error, next_terminal_error_origin) =
+            match completion_error {
+                Some((error, label)) => (
+                    state.lifecycle_label.join(&label),
+                    Some((error, label)),
+                    Some(WritableErrorOrigin::Final),
+                ),
+                None => (
+                    state.lifecycle_label.clone(),
+                    state.terminal_error.clone(),
+                    state.terminal_error_origin,
+                ),
+            };
+        let next_dynamic = Self::estimate_label_bytes(&next_lifecycle_label).saturating_add(
+            next_terminal_error
+                .as_ref()
+                .map(|(value, label)| {
+                    Self::estimate_value_bytes(value)
+                        .saturating_add(Self::estimate_label_bytes(label))
+                })
+                .unwrap_or(0),
+        );
+        if let Err(error) = self.apply_memory_component_delta(old_dynamic, next_dynamic) {
+            self.release_writable_state_storage(object_id);
+            return Err(error);
+        }
+        if let Some(state) = self.writable_streams.get_mut(&object_id) {
+            state.final_status = WritableFinalStatus::Done;
+            state.lifecycle_label = next_lifecycle_label;
+            state.terminal_error = next_terminal_error;
+            state.terminal_error_origin = next_terminal_error_origin;
+        }
+        self.schedule_writable_tick(object_id)?;
+        self.emit_writable_prefinish(object_id, module)?;
+        Ok(Value::Undefined)
+    }
+
+    fn writable_invocation_error_value(
+        &mut self,
+        error: &InterpreterError,
+        fallback_label: Label,
+    ) -> (Value, Label) {
+        if matches!(error, InterpreterError::UncaughtException { .. })
+            && let Some(value) = self.pending_exception.take()
+        {
+            let label = std::mem::replace(&mut self.pending_exception_label, Label::Public);
+            (value, label)
+        } else {
+            (Value::str(error.to_string()), fallback_label)
+        }
+    }
+
+    fn record_writable_terminal_error(
+        &mut self,
+        object_id: ObjectId,
+        error: Value,
+        error_label: Label,
+        origin: WritableErrorOrigin,
+    ) -> Result<(), InterpreterError> {
+        let Some(state) = self.writable_streams.get(&object_id) else {
+            return Ok(());
+        };
+        let old_dynamic = Self::estimate_writable_error_dynamic_bytes(state);
+        let per_record = Self::estimate_value_bytes(&error)
+            .saturating_add(Self::estimate_label_bytes(&error_label));
+        let next_lifecycle_label = state.lifecycle_label.join(&error_label);
+        let next_dynamic = old_dynamic
+            .saturating_sub(Self::estimate_label_bytes(&state.lifecycle_label))
+            .saturating_sub(
+                state
+                    .terminal_error
+                    .as_ref()
+                    .map(|(value, label)| {
+                        Self::estimate_value_bytes(value)
+                            .saturating_add(Self::estimate_label_bytes(label))
+                    })
+                    .unwrap_or(0),
+            )
+            .saturating_add(Self::estimate_label_bytes(&next_lifecycle_label))
+            .saturating_add(per_record);
+        if let Err(error) = self.apply_memory_component_delta(old_dynamic, next_dynamic) {
+            self.release_writable_state_storage(object_id);
+            return Err(error);
+        }
+        if let Some(state) = self.writable_streams.get_mut(&object_id) {
+            state.lifecycle_label = next_lifecycle_label;
+            state.terminal_error = Some((error.clone(), error_label.clone()));
+            state.terminal_error_origin = Some(origin);
+            state.final_status = WritableFinalStatus::Done;
+            state.inside_write_invocation = false;
+        }
+        self.schedule_writable_tick(object_id)
+    }
+
+    fn emit_writable_prefinish(
+        &mut self,
+        object_id: ObjectId,
+        module: &Ir3Module,
+    ) -> Result<(), InterpreterError> {
+        let Some(state) = self.writable_streams.get_mut(&object_id) else {
+            return Ok(());
+        };
+        if state.prefinish_emitted || state.terminal_error.is_some() {
+            return Ok(());
+        }
+        state.prefinish_emitted = true;
+        let label = state.lifecycle_label.clone();
+        self.schedule_writable_tick(object_id)?;
+        self.emit_event_listener_records(module, object_id, "prefinish", Vec::new(), label)?;
+        Ok(())
+    }
+
+    fn drive_writable(
+        &mut self,
+        object_id: ObjectId,
+        module: &Ir3Module,
+    ) -> Result<(), InterpreterError> {
+        loop {
+            let action = {
+                let Some(state) = self.writable_streams.get(&object_id) else {
+                    return Ok(());
+                };
+                if state.terminal_error.is_some()
+                    || state
+                        .writes
+                        .iter()
+                        .any(|record| matches!(record.status, WritableWriteStatus::Active(_)))
+                {
+                    return Ok(());
+                }
+                if let Some(index) = state
+                    .writes
+                    .iter()
+                    .position(|record| record.status == WritableWriteStatus::Pending)
+                {
+                    Some((
+                        false,
+                        Some(index),
+                        state.write_callback.clone(),
+                        state.writes[index].value.clone(),
+                        state.writes[index].label.clone(),
+                    ))
+                } else if state.end_requested
+                    && state.final_status == WritableFinalStatus::NotStarted
+                    && state
+                        .writes
+                        .iter()
+                        .all(|record| record.status == WritableWriteStatus::Completed)
+                {
+                    Some((
+                        true,
+                        None,
+                        state.final_callback.clone(),
+                        Value::Undefined,
+                        state.lifecycle_label.clone(),
+                    ))
+                } else {
+                    None
+                }
+            };
+
+            let Some((is_final, record_index, callback, value, label)) = action else {
+                return Ok(());
+            };
+            let token = self.allocate_writable_completion_token()?;
+            let Some(state) = self.writable_streams.get_mut(&object_id) else {
+                return Ok(());
+            };
+            if let Some(index) = record_index {
+                state.writes[index].status = WritableWriteStatus::Active(token);
+                state.inside_write_invocation = true;
+            } else {
+                state.final_status = WritableFinalStatus::Active(token);
+            }
+            if is_final {
+                let Some(callback) = callback else {
+                    if let Some(state) = self.writable_streams.get_mut(&object_id) {
+                        state.final_status = WritableFinalStatus::Done;
+                    }
+                    self.emit_writable_prefinish(object_id, module)?;
+                    return Ok(());
+                };
+                let completion = Value::BuiltinFunction(BuiltinFunction::writable_completion(
+                    BuiltinFunctionKind::StreamWritableFinalDone,
+                    object_id,
+                    token,
+                ));
+                let invocation = self.invoke_inline_method_call_with_argument_label(
+                    Some(module),
+                    callback,
+                    Value::Object(object_id),
+                    vec![completion],
+                    Some(label.clone()),
+                );
+                if let Err(error) = invocation {
+                    let (error_value, error_label) =
+                        self.writable_invocation_error_value(&error, label);
+                    self.record_writable_terminal_error(
+                        object_id,
+                        error_value,
+                        error_label,
+                        WritableErrorOrigin::Final,
+                    )?;
+                }
+                return Ok(());
+            }
+
+            let Some(callback) = callback else {
+                return Err(InterpreterError::TypeError {
+                    expected: "Writable with a callable write implementation".to_string(),
+                    got: "missing write option".to_string(),
+                });
+            };
+            let completion = Value::BuiltinFunction(BuiltinFunction::writable_completion(
+                BuiltinFunctionKind::StreamWritableWriteDone,
+                object_id,
+                token,
+            ));
+            let invocation = self.invoke_inline_method_call_with_argument_label(
+                Some(module),
+                callback,
+                Value::Object(object_id),
+                vec![value, Value::str("utf8"), completion],
+                Some(label.clone()),
+            );
+            if let Some(state) = self.writable_streams.get_mut(&object_id) {
+                state.inside_write_invocation = false;
+            }
+            // Bun/Node propagate a synchronous `_write` throw from write()
+            // itself. The guest callback never completed the engine-owned
+            // token, so preserve Active/buffered state rather than fabricating
+            // an asynchronous terminal completion.
+            invocation?;
+            let completed = self.writable_streams.get(&object_id).is_some_and(|state| {
+                state
+                    .writes
+                    .iter()
+                    .any(|record| record.status == WritableWriteStatus::Completed)
+            });
+            if !completed {
+                return Ok(());
+            }
+        }
+    }
+
+    fn invoke_writable_deferred_callback(
+        &mut self,
+        module: &Ir3Module,
+        callback: WritableCallbackRecord,
+        object_id: ObjectId,
+        error: Option<(Value, Label)>,
+        fallback_label: Label,
+    ) -> Result<(), InterpreterError> {
+        let callback_label = fallback_label.join(&callback.label);
+        let (arguments, label) = match error {
+            Some((error, label)) => (vec![error], callback_label.join(&label)),
+            None => (Vec::new(), callback_label),
+        };
+        self.invoke_inline_method_call_with_argument_label(
+            Some(module),
+            callback.value,
+            Value::Object(object_id),
+            arguments,
+            Some(label),
+        )?;
+        Ok(())
+    }
+
+    fn take_writable_end_callback(
+        &mut self,
+        object_id: ObjectId,
+    ) -> Option<WritableCallbackRecord> {
+        let state = self.writable_streams.get_mut(&object_id)?;
+        let previous = Self::estimate_writable_state_bytes(state);
+        let callback = state.end_callback.take()?;
+        let next = Self::estimate_writable_state_bytes(state);
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous.saturating_sub(next));
+        Some(callback)
+    }
+
+    fn release_writable_state_storage(&mut self, object_id: ObjectId) {
+        let released = self
+            .writable_streams
+            .remove(&object_id)
+            .map(|state| Self::estimate_writable_state_bytes(&state))
+            .unwrap_or(0);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released);
+        self.clear_event_listeners(object_id, None);
+        self.clear_event_promise_waiters_for_target(object_id);
+    }
+
+    fn drive_writable_tick(
+        &mut self,
+        object_id: ObjectId,
+        module: Option<&Ir3Module>,
+    ) -> Result<(), InterpreterError> {
+        let Some(module) = module else {
+            return Ok(());
+        };
+        loop {
+            let Some(state) = self.writable_streams.get(&object_id) else {
+                return Ok(());
+            };
+            let terminal_error = state.terminal_error.clone();
+            let terminal_error_origin = state.terminal_error_origin;
+            let lifecycle_label = state.lifecycle_label.clone();
+            let phase = state.tick_phase;
+            if phase == WritableTickPhase::Callbacks {
+                let completed_front = state
+                    .writes
+                    .front()
+                    .is_some_and(|record| record.status == WritableWriteStatus::Completed);
+                if completed_front {
+                    let (record, released) = {
+                        let state = self
+                            .writable_streams
+                            .get_mut(&object_id)
+                            .expect("Writable state was checked above");
+                        let previous = Self::estimate_writable_state_bytes(state);
+                        let record = state
+                            .writes
+                            .pop_front()
+                            .expect("completed Writable front was checked");
+                        let next = Self::estimate_writable_state_bytes(state);
+                        (record, previous.saturating_sub(next))
+                    };
+                    self.estimated_memory_bytes =
+                        self.estimated_memory_bytes.saturating_sub(released);
+                    self.schedule_writable_tick(object_id)?;
+                    return match record.callback {
+                        Some(callback) => self.invoke_writable_deferred_callback(
+                            module,
+                            callback,
+                            object_id,
+                            if record.completion_failed {
+                                terminal_error.clone()
+                            } else {
+                                None
+                            },
+                            record.label,
+                        ),
+                        None => Ok(()),
+                    };
+                }
+                if !state.writes.is_empty()
+                    || (state.final_status != WritableFinalStatus::Done
+                        && state.terminal_error.is_none())
+                {
+                    return Ok(());
+                }
+                if let Some(state) = self.writable_streams.get_mut(&object_id) {
+                    state.tick_phase = if state.terminal_error.is_some() {
+                        WritableTickPhase::Error
+                    } else {
+                        WritableTickPhase::Finish
+                    };
+                }
+                continue;
+            }
+
+            if phase == WritableTickPhase::Finish {
+                if let Some(state) = self.writable_streams.get_mut(&object_id) {
+                    state.tick_phase = WritableTickPhase::Close;
+                }
+                self.schedule_writable_tick(object_id)?;
+                self.mirror_writable_bool(object_id, "writableFinished", true);
+                let end_result =
+                    if let Some(end_callback) = self.take_writable_end_callback(object_id) {
+                        self.invoke_writable_deferred_callback(
+                            module,
+                            end_callback,
+                            object_id,
+                            None,
+                            lifecycle_label.clone(),
+                        )
+                    } else {
+                        Ok(())
+                    };
+                let finish_result = self.emit_event_listener_records(
+                    module,
+                    object_id,
+                    "finish",
+                    Vec::new(),
+                    lifecycle_label,
+                );
+                return end_result.and(finish_result.map(|_| ()));
+            }
+
+            if phase == WritableTickPhase::Error {
+                if let Some(state) = self.writable_streams.get_mut(&object_id) {
+                    state.tick_phase = WritableTickPhase::Close;
+                }
+                self.schedule_writable_tick(object_id)?;
+                let end_result = if terminal_error_origin == Some(WritableErrorOrigin::Write) {
+                    if let Some(end_callback) = self.take_writable_end_callback(object_id) {
+                        self.invoke_writable_deferred_callback(
+                            module,
+                            end_callback,
+                            object_id,
+                            terminal_error.clone(),
+                            lifecycle_label.clone(),
+                        )
+                    } else {
+                        Ok(())
+                    }
+                } else {
+                    Ok(())
+                };
+                let error_result = if let Some((error, error_label)) = terminal_error {
+                    self.emit_event_listener_records(
+                        module,
+                        object_id,
+                        "error",
+                        vec![error],
+                        lifecycle_label.join(&error_label),
+                    )
+                    .map(|_| ())
+                } else {
+                    Ok(())
+                };
+                return end_result.and(error_result);
+            }
+
+            if phase == WritableTickPhase::Close {
+                if let Some(state) = self.writable_streams.get_mut(&object_id) {
+                    state.tick_phase = WritableTickPhase::Release;
+                }
+                self.schedule_writable_tick(object_id)?;
+                self.mirror_writable_bool(object_id, "destroyed", true);
+                self.mirror_writable_bool(object_id, "closed", true);
+                let close_result = self.emit_event_listener_records(
+                    module,
+                    object_id,
+                    "close",
+                    Vec::new(),
+                    lifecycle_label.clone(),
+                );
+                let end_result = if terminal_error_origin == Some(WritableErrorOrigin::Final) {
+                    if let Some(end_callback) = self.take_writable_end_callback(object_id) {
+                        self.invoke_writable_deferred_callback(
+                            module,
+                            end_callback,
+                            object_id,
+                            terminal_error,
+                            lifecycle_label,
+                        )
+                    } else {
+                        Ok(())
+                    }
+                } else {
+                    Ok(())
+                };
+                return close_result.map(|_| ()).and(end_result);
+            }
+
+            self.release_writable_state_storage(object_id);
+            return Ok(());
+        }
     }
 
     fn allocate_readable_with_state(
@@ -9162,6 +10332,12 @@ impl InterpreterCore {
         &mut self,
         seed: &std::rc::Rc<std::cell::RefCell<ExecutionSeed>>,
     ) -> Result<(), InterpreterError> {
+        // Execution-local Writable state is keyed by heap ObjectId and must
+        // disappear at the same authoritative boundary that restores the
+        // seeded heap. Otherwise a reused id can inherit callbacks, listeners,
+        // or static `events.once` links from the preceding execution.
+        self.clear_writable_execution_state();
+        self.active_inline_callback_context_label = None;
         let restore = {
             let snapshot = seed.borrow();
             match &*snapshot {
@@ -9240,13 +10416,17 @@ impl InterpreterCore {
             });
         }
         let actual_reg = self.register_base + reg as usize;
+        let effective_label = match &self.active_inline_callback_context_label {
+            Some(context) => label.join(context),
+            None => label,
+        };
         let Some(slot) = self.register_labels.get_mut(actual_reg) else {
             return Err(InterpreterError::RegisterOutOfBounds {
                 register: reg,
                 max: self.config.max_registers,
             });
         };
-        *slot = label;
+        *slot = effective_label;
         Ok(())
     }
 
@@ -9269,10 +10449,15 @@ impl InterpreterCore {
             .unwrap_or(Label::Public)
     }
 
-    fn readable_state_label(&self, object_id: ObjectId) -> Label {
+    fn stream_state_label(&self, object_id: ObjectId) -> Label {
         self.readable_from_streams
             .get(&object_id)
             .map(|state| state.lifecycle_label.clone())
+            .or_else(|| {
+                self.writable_streams
+                    .get(&object_id)
+                    .map(|state| state.lifecycle_label.clone())
+            })
             .unwrap_or(Label::Public)
     }
 
@@ -9817,13 +11002,19 @@ impl InterpreterCore {
         let result = self.run_loop(module);
         let suspended_at_top_level_await = !self.top_level_await_resumption_contexts.is_empty();
 
-        // Drain any pending microtasks enqueued during execution
-        // (promise reactions, thenable resolutions, etc.).
-        self.drain_microtasks(Some(module));
+        // Writable completion callbacks occupy Node's internal stream-tick
+        // checkpoint ahead of Promise/nextTick work and Immediate macrotasks.
+        let checkpoint_error = self.drain_runtime_checkpoint(Some(module)).err();
 
         // Run the event loop until all pending work is complete
         // (macrotasks like timers, with microtask draining after each).
-        self.run_event_loop_until_idle_with_module(Some(module));
+        let event_loop_error = self
+            .run_event_loop_until_idle_with_module(Some(module))
+            .err();
+
+        if let Some(error) = checkpoint_error.or(event_loop_error) {
+            return Err(error);
+        }
 
         if let Some(resumed_outcome) = self.top_level_await_outcome.take() {
             return resumed_outcome;
@@ -9900,6 +11091,7 @@ impl InterpreterCore {
         ModuleExecutionSnapshot {
             registers: self.registers.clone(),
             register_labels: self.register_labels.clone(),
+            active_inline_callback_context_label: self.active_inline_callback_context_label.clone(),
             call_stack: self.call_stack.clone(),
             ip: self.ip,
             register_base: self.register_base,
@@ -9919,6 +11111,7 @@ impl InterpreterCore {
     fn restore_module_execution(&mut self, snapshot: ModuleExecutionSnapshot) {
         self.registers = SeedTrackedField::new(snapshot.registers);
         self.register_labels = snapshot.register_labels;
+        self.active_inline_callback_context_label = snapshot.active_inline_callback_context_label;
         self.call_stack = snapshot.call_stack;
         self.ip = snapshot.ip;
         self.register_base = snapshot.register_base;
@@ -11152,6 +12345,16 @@ impl InterpreterCore {
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 Ok(Value::str(value.as_utf8_projection()))
             }
+            BuiltinFunctionKind::StringToString => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                match receiver {
+                    Value::Str(value) => Ok(Value::Str(value)),
+                    other => Err(InterpreterError::TypeError {
+                        expected: "String receiver".to_string(),
+                        got: other.type_name().to_string(),
+                    }),
+                }
+            }
             BuiltinFunctionKind::StringToUpperCase => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
@@ -11347,6 +12550,18 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::StreamReadableDestroy => {
                 self.readable_destroy(receiver.unwrap_or(Value::Undefined), args)
+            }
+            BuiltinFunctionKind::StreamWritableWrite => {
+                self.writable_write(module, receiver.unwrap_or(Value::Undefined), args)
+            }
+            BuiltinFunctionKind::StreamWritableEnd => {
+                self.writable_end(module, receiver.unwrap_or(Value::Undefined), args)
+            }
+            BuiltinFunctionKind::StreamWritableWriteDone => {
+                self.writable_write_done(module, builtin, args)
+            }
+            BuiltinFunctionKind::StreamWritableFinalDone => {
+                self.writable_final_done(module, builtin, args)
             }
             BuiltinFunctionKind::ArrayPush => {
                 // ES2020 23.1.3.20: append each argument to `this` at the
@@ -13421,7 +14636,8 @@ impl InterpreterCore {
 
     fn run_nested_module_execution(&mut self, module: &Ir3Module) -> Result<(), InterpreterError> {
         let result = self.run_loop(module);
-        self.drain_microtasks(Some(module));
+        let checkpoint_result = self.drain_runtime_checkpoint(Some(module));
+        checkpoint_result?;
         match result {
             Ok(_) | Err(InterpreterError::Halted) => Ok(()),
             Err(err) => Err(err),
@@ -15631,15 +16847,15 @@ impl InterpreterCore {
                             Value::Object(object_id) => self.binary_storage_label(*object_id),
                             _ => Label::Public,
                         };
-                        let readable_state_label = match &receiver_val {
-                            Value::Object(object_id) => self.readable_state_label(*object_id),
+                        let stream_state_label = match &receiver_val {
+                            Value::Object(object_id) => self.stream_state_label(*object_id),
                             _ => Label::Public,
                         };
                         let result_label = self
                             .join_arg_range_label(args)?
                             .join(self.get_register_label(receiver)?)
                             .join(&binary_storage_label)
-                            .join(&readable_state_label);
+                            .join(&stream_state_label);
                         self.propagate_builtin_binary_mutation_label(
                             builtin,
                             &receiver_val,
@@ -16103,8 +17319,8 @@ impl InterpreterCore {
                         Value::Object(object_id) => self.binary_storage_label(*object_id),
                         _ => Label::Public,
                     };
-                    let readable_state_label = match &obj_val {
-                        Value::Object(object_id) => self.readable_state_label(*object_id),
+                    let stream_state_label = match &obj_val {
+                        Value::Object(object_id) => self.stream_state_label(*object_id),
                         _ => Label::Public,
                     };
                     let key_val = self.read_reg(key)?;
@@ -16205,7 +17421,7 @@ impl InterpreterCore {
                         .get_register_label(dst)?
                         .join(self.get_register_label(obj)?)
                         .join(&binary_storage_label)
-                        .join(&readable_state_label);
+                        .join(&stream_state_label);
                     self.set_register_label(dst, joined_label)?;
                     self.ip += 1;
                 }
@@ -19544,6 +20760,9 @@ impl InterpreterCore {
             "padEnd" => Value::BuiltinFunction(BuiltinFunction::string_pad_end()),
             "isWellFormed" => Value::BuiltinFunction(BuiltinFunction::string_is_well_formed()),
             "toWellFormed" => Value::BuiltinFunction(BuiltinFunction::string_to_well_formed()),
+            "toString" => Value::BuiltinFunction(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::StringToString,
+            )),
             _ => Value::Undefined,
         }
     }
@@ -19928,6 +21147,8 @@ impl InterpreterCore {
         // and a user-assigned `m.set = …` shadows the builtin.
         let root_type_tag = if self.readable_from_streams.contains_key(&object_id) {
             Some("Readable".to_string())
+        } else if self.writable_streams.contains_key(&object_id) {
+            Some("Writable".to_string())
         } else {
             self.heap.get(object_id.0 as usize).and_then(|object| {
                 match object.properties.get("__type") {
@@ -20070,6 +21291,12 @@ impl InterpreterCore {
             )),
             ("Readable", "destroy") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamReadableDestroy,
+            )),
+            ("Writable", "write") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::StreamWritableWrite,
+            )),
+            ("Writable", "end") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::StreamWritableEnd,
             )),
             // bd-3894s / bd-2dmnn: standalone EventEmitter objects and both HTTP
             // stream tags resolve against one receiver-aware EventEmitter method
@@ -21899,12 +23126,16 @@ impl InterpreterCore {
     #[cfg(test)]
     #[allow(dead_code)]
     fn run_event_loop_until_idle(&mut self) {
-        self.run_event_loop_until_idle_with_module(None);
+        let _ = self.run_event_loop_until_idle_with_module(None);
     }
 
-    fn run_event_loop_until_idle_with_module(&mut self, module: Option<&Ir3Module>) {
+    fn run_event_loop_until_idle_with_module(
+        &mut self,
+        module: Option<&Ir3Module>,
+    ) -> Result<(), InterpreterError> {
         const MAX_TURNS: u32 = 10_000; // Safety limit to prevent infinite loops
         let mut turns = 0;
+        let mut first_writable_error = None;
 
         while self.event_loop.has_pending_work() && turns < MAX_TURNS {
             // bd-suwvw: unref'd timers do not keep the loop alive. When every
@@ -21930,9 +23161,59 @@ impl InterpreterCore {
                 }
             }
 
-            // Phase 2: Drain all microtasks enqueued during macrotask execution
-            self.drain_microtasks(module);
+            // Phase 2: settle internal Writable work, then drain microtasks.
+            if let Err(error) = self.drain_runtime_checkpoint(module)
+                && first_writable_error.is_none()
+            {
+                first_writable_error = Some(error);
+            }
         }
+        match first_writable_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    /// Drain engine-internal stream lifecycle work before the ordinary
+    /// microtask checkpoint. Writable readiness and its monotonic FIFO sequence
+    /// live in each accounted state, so selecting the minimum sequence retains
+    /// no separate queue allocation or capacity. A microtask may complete a
+    /// delayed `_write`, so repeat until both phases reach a fixed point
+    /// (bounded like the surrounding event loop).
+    fn drain_runtime_checkpoint(
+        &mut self,
+        module: Option<&Ir3Module>,
+    ) -> Result<(), InterpreterError> {
+        const MAX_CHECKPOINT_ROUNDS: u32 = 10_000;
+        let mut first_error = None;
+        for _ in 0..MAX_CHECKPOINT_ROUNDS {
+            while let Some(object_id) = self.next_scheduled_writable_tick()? {
+                if let Some(state) = self.writable_streams.get_mut(&object_id) {
+                    state.tick_sequence = None;
+                }
+                if let Err(error) = self.drive_writable_tick(object_id, module)
+                    && first_error.is_none()
+                {
+                    first_error = Some(error);
+                }
+            }
+            self.drain_microtasks(module);
+            if !self
+                .writable_streams
+                .values()
+                .any(|state| state.tick_sequence.is_some())
+            {
+                return match first_error {
+                    Some(error) => Err(error),
+                    None => Ok(()),
+                };
+            }
+        }
+        Err(
+            first_error.unwrap_or_else(|| InterpreterError::InternalError {
+                details: "Writable runtime checkpoint round limit exhausted".to_string(),
+            }),
+        )
     }
 
     fn execute_promise_reaction_handler(
@@ -26354,11 +27635,11 @@ impl InterpreterCore {
         )
     }
 
-    /// Invoke an isolated inline callback while conservatively assigning one
-    /// aggregate IFC label to every argument. EventEmitter supplies its
-    /// emission label here; ordinary inline calls use `None` and retain their
-    /// existing value-only behavior. Both paths snapshot and clear the label
-    /// file so callback execution cannot inherit or leak stale caller labels.
+    /// Invoke an isolated inline callback under one aggregate IFC context.
+    /// EventEmitter supplies its emission label here; ordinary inline calls use
+    /// `None` and retain their existing value-only behavior. The context is
+    /// joined by register writes even after callee frame clearing, while the
+    /// single snapshotted label avoids max-register Custom-label amplification.
     fn invoke_inline_method_call_with_argument_label(
         &mut self,
         module: Option<&Ir3Module>,
@@ -26410,6 +27691,15 @@ impl InterpreterCore {
             .push(Ir3Instruction::Return { value: 0 });
 
         let snapshot = self.snapshot_module_execution();
+        let callback_context_label = match (
+            snapshot.active_inline_callback_context_label.as_ref(),
+            argument_label.as_ref(),
+        ) {
+            (Some(inherited), Some(argument)) => Some(inherited.join(argument)),
+            (Some(inherited), None) => Some(inherited.clone()),
+            (None, Some(argument)) => Some(argument.clone()),
+            (None, None) => None,
+        };
         let saved_active_cjs_context = self.active_cjs_context.clone();
         let setup_previous_register_bytes = self.registers_memory_bytes();
         let setup_previous_scope_bytes = self.scope_chain_memory_bytes();
@@ -26419,6 +27709,7 @@ impl InterpreterCore {
             self.registers =
                 SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
             self.register_labels.fill(Label::Public);
+            self.active_inline_callback_context_label = callback_context_label.clone();
             self.call_stack.clear();
             self.ip = wrapper_start;
             self.register_base = 0;
@@ -26452,10 +27743,9 @@ impl InterpreterCore {
                     })?;
                 self.write_reg(register, argument)?;
                 if let Some(label) = &argument_label {
-                    // Seed the wrapper argument. CallMethod transports the
-                    // paired label into the callee's frame-relative parameter
-                    // register; pre-seeding logical r(i) here would instead
-                    // taint unrelated wrapper metadata such as receiver r0.
+                    // Keep explicit callback parameters at the same aggregate
+                    // context label; set_register_label also joins the active
+                    // PC-style context fail-closed.
                     self.set_register_label(register, label.clone())?;
                 }
             }
@@ -28061,8 +29351,8 @@ impl InterpreterCore {
                 self.construct_stream_readable(args)
             }
             "builtin:StreamWritable" => {
-                // Constructor-observable Writable state only; write/finish
-                // behavior stays fail-closed until its later stream slice.
+                // bd-fw7zd: engine-owned Writable state drives deterministic
+                // write/final callbacks and terminal lifecycle checkpoints.
                 self.construct_stream_writable(args)
             }
             "builtin:ImportMeta" => {
@@ -36841,6 +38131,12 @@ impl InterpreterCore {
         }
         self.mutate_registers(|r| r[actual_reg] = value);
         self.estimated_memory_bytes = projected;
+        if let Some(context) = &self.active_inline_callback_context_label {
+            if actual_reg >= self.register_labels.len() {
+                self.register_labels.resize(actual_reg + 1, Label::Public);
+            }
+            self.register_labels[actual_reg] = self.register_labels[actual_reg].join(context);
+        }
         Ok(())
     }
 
@@ -36963,6 +38259,82 @@ impl InterpreterCore {
                     .map(|waiter| Self::estimate_readable_to_array_waiter_bytes(&waiter.label))
                     .unwrap_or(0),
             )
+    }
+
+    fn estimate_label_bytes(label: &Label) -> u64 {
+        match label {
+            Label::Custom { name, .. } => Self::estimate_string_bytes(name),
+            _ => 0,
+        }
+    }
+
+    fn estimate_writable_callback_bytes(callback: &WritableCallbackRecord) -> u64 {
+        Self::estimate_value_bytes(&callback.value)
+            .saturating_add(Self::estimate_label_bytes(&callback.label))
+    }
+
+    fn estimate_writable_error_dynamic_bytes(state: &WritableState) -> u64 {
+        let terminal = state
+            .terminal_error
+            .as_ref()
+            .map(|(value, label)| {
+                Self::estimate_value_bytes(value).saturating_add(Self::estimate_label_bytes(label))
+            })
+            .unwrap_or(0);
+        Self::estimate_label_bytes(&state.lifecycle_label).saturating_add(terminal)
+    }
+
+    fn estimate_writable_state_bytes(state: &WritableState) -> u64 {
+        MEMORY_ESTIMATE_WRITABLE_BASE_BYTES
+            .saturating_add(
+                state
+                    .write_callback
+                    .as_ref()
+                    .map(Self::estimate_value_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                state
+                    .final_callback
+                    .as_ref()
+                    .map(Self::estimate_value_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                u64::try_from(state.writes.capacity())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(MEMORY_ESTIMATE_WRITABLE_WRITE_BYTES),
+            )
+            .saturating_add(state.writes.iter().fold(0u64, |total, record| {
+                total
+                    .saturating_add(Self::estimate_value_bytes(&record.value))
+                    .saturating_add(Self::estimate_label_bytes(&record.label))
+                    .saturating_add(
+                        record
+                            .callback
+                            .as_ref()
+                            .map(Self::estimate_writable_callback_bytes)
+                            .unwrap_or(0),
+                    )
+            }))
+            .saturating_add(
+                state
+                    .end_callback
+                    .as_ref()
+                    .map(Self::estimate_writable_callback_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                state
+                    .terminal_error
+                    .as_ref()
+                    .map(|(value, label)| {
+                        Self::estimate_value_bytes(value)
+                            .saturating_add(Self::estimate_label_bytes(label))
+                    })
+                    .unwrap_or(0),
+            )
+            .saturating_add(Self::estimate_label_bytes(&state.lifecycle_label))
     }
 
     fn estimate_scope_frame_bytes(frame: &ScopeFrame) -> u64 {
@@ -37161,6 +38533,13 @@ impl InterpreterCore {
             .sum()
     }
 
+    fn writable_streams_memory_bytes(&self) -> u64 {
+        self.writable_streams
+            .values()
+            .map(Self::estimate_writable_state_bytes)
+            .sum()
+    }
+
     fn release_event_listener_memory(&mut self, event: &str, record: &EventListenerRecord) {
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
@@ -37220,6 +38599,7 @@ impl InterpreterCore {
             .saturating_add(self.event_listeners_memory_bytes())
             .saturating_add(self.event_promise_waiters_memory_bytes())
             .saturating_add(self.readable_from_streams_memory_bytes())
+            .saturating_add(self.writable_streams_memory_bytes())
     }
 
     #[cfg(test)]
@@ -42386,6 +43766,82 @@ mod async_runtime_tests_current {
         InterpreterCore::new(config, "async-runtime-test")
     }
 
+    fn writable_order_module(markers: &[&str]) -> Ir3Module {
+        let mut instructions = Vec::new();
+        let mut functions = Vec::new();
+        for (index, marker) in markers.iter().enumerate() {
+            let entry = u32::try_from(instructions.len()).expect("test instruction index");
+            instructions.extend([
+                Ir3Instruction::LoadScoped {
+                    dst: 0,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: u32::try_from(index + 1).expect("test marker pool index"),
+                },
+                Ir3Instruction::ArrayPush {
+                    array: 0,
+                    element: 1,
+                },
+                Ir3Instruction::Return { value: 1 },
+            ]);
+            functions.push(Ir3FunctionDesc {
+                entry,
+                arity: 0,
+                frame_size: 2,
+                name: Some(format!("record_{marker}")),
+                is_generator: false,
+                rest_param_index: None,
+            });
+        }
+        let mut module = test_module_with_functions(instructions, functions);
+        module.constant_pool.push("log".to_string());
+        module
+            .constant_pool
+            .extend(markers.iter().map(|marker| (*marker).to_string()));
+        module
+    }
+
+    fn install_writable_order_log(core: &mut InterpreterCore) -> ObjectId {
+        let log = core
+            .alloc_array_from_values(&[])
+            .expect("Writable order log array");
+        core.scope_chain
+            .current_mut()
+            .expect("global scope")
+            .bindings
+            .insert(
+                "log".to_string(),
+                ScopeBinding {
+                    value: Value::Object(log),
+                    kind: BindingKind::Var,
+                    initialized: true,
+                },
+            );
+        core.sync_estimated_memory_bytes()
+            .expect("Writable order log accounting");
+        log
+    }
+
+    fn writable_order_entries(core: &InterpreterCore, log: ObjectId) -> Vec<String> {
+        let object = &core.heap[log.0 as usize];
+        let length = object
+            .properties
+            .get("length")
+            .and_then(|value| match value {
+                Value::Int(length) => usize::try_from(*length).ok(),
+                _ => None,
+            })
+            .expect("Writable order log length");
+        (0..length)
+            .map(|index| match object.properties.get(&index.to_string()) {
+                Some(Value::Str(value)) => value.to_string(),
+                other => panic!("Writable order entry {index}: {other:?}"),
+            })
+            .collect()
+    }
+
     fn promise_state_for_register(
         core: &InterpreterCore,
         register: usize,
@@ -45254,7 +46710,8 @@ mod async_runtime_tests_current {
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
         );
-        core.run_event_loop_until_idle_with_module(Some(&module));
+        core.run_event_loop_until_idle_with_module(Some(&module))
+            .expect("readable event loop");
 
         assert!(!core.readable_from_streams.contains_key(&readable_id));
         assert!(core.pending_readable_from_pumps.is_empty());
@@ -45450,6 +46907,1173 @@ mod async_runtime_tests_current {
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
         );
+    }
+
+    #[test]
+    fn writable_completion_progresses_at_ceiling_and_releases_exactly_bd_fw7zd() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let Value::Object(writable) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("generic Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        let callback = WritableCallbackRecord {
+            value: Value::BuiltinFunction(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::ArrayIsArray,
+            )),
+            label: Label::Secret,
+        };
+        core.writable_enqueue(
+            writable,
+            Value::str("classified"),
+            Label::Secret,
+            Some(callback),
+        )
+        .expect("engine-owned write enqueue");
+        {
+            let state = core
+                .writable_streams
+                .get_mut(&writable)
+                .expect("live Writable state");
+            state.writes[0].status = WritableWriteStatus::Active(7);
+        }
+        core.next_writable_completion_token = 8;
+        assert_eq!(
+            core.writable_streams[&writable].writes[0]
+                .callback
+                .as_ref()
+                .expect("retained callback")
+                .label,
+            Label::Secret,
+            "callback registration labels must not collapse into a bare Value"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.config.max_total_memory_bytes = core.estimated_memory_bytes();
+        let completion = BuiltinFunction::writable_completion(
+            BuiltinFunctionKind::StreamWritableWriteDone,
+            writable,
+            7,
+        );
+        core.writable_write_done(&module, &completion, RegRange { start: 0, count: 0 })
+            .expect("retained completion must progress at the exact memory ceiling");
+        let state = &core.writable_streams[&writable];
+        assert_eq!(state.writes[0].status, WritableWriteStatus::Completed);
+        assert_eq!(state.buffered_length, 0);
+        assert!(state.tick_sequence.is_some());
+        assert_eq!(state.lifecycle_label, Label::Secret);
+
+        // A duplicated retained callback is token-checked and cannot complete
+        // another write or perturb the already-completed record.
+        core.writable_write_done(&module, &completion, RegRange { start: 0, count: 0 })
+            .expect("duplicate completion is an idempotent no-op");
+        {
+            let state = core
+                .writable_streams
+                .get_mut(&writable)
+                .expect("live Writable state");
+            state.end_requested = true;
+            state.final_status = WritableFinalStatus::Done;
+        }
+        core.drain_runtime_checkpoint(Some(&module))
+            .expect("successful Writable checkpoint");
+        assert!(!core.writable_streams.contains_key(&writable));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "destructive callback drain and close must release exact state memory"
+        );
+    }
+
+    #[test]
+    fn writable_write_and_final_errors_progress_at_exact_memory_ceiling_bd_fw7zd() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+
+        let mut write_core = test_interpreter();
+        let Value::Object(write_stream) = write_core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("write-error Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        write_core
+            .writable_enqueue(write_stream, Value::str("x"), Label::Public, None)
+            .expect("write-error record");
+        {
+            let state = write_core
+                .writable_streams
+                .get_mut(&write_stream)
+                .expect("write-error state");
+            state.writes[0].status = WritableWriteStatus::Active(21);
+            state.end_requested = true;
+            state.final_status = WritableFinalStatus::Done;
+        }
+        write_core
+            .write_reg(0, Value::str("ceiling-write-error"))
+            .expect("write error argument");
+        write_core.config.max_total_memory_bytes = write_core.estimated_memory_bytes();
+        let write_completion = BuiltinFunction::writable_completion(
+            BuiltinFunctionKind::StreamWritableWriteDone,
+            write_stream,
+            21,
+        );
+        write_core
+            .writable_write_done(&module, &write_completion, RegRange { start: 0, count: 1 })
+            .expect("write callback(error) must progress at the exact ceiling");
+        assert_eq!(
+            write_core.writable_streams[&write_stream].writes[0].status,
+            WritableWriteStatus::Completed
+        );
+        assert!(write_core.writable_streams[&write_stream].writes[0].completion_failed);
+        assert!(matches!(
+            write_core.drain_runtime_checkpoint(Some(&module)),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert!(!write_core.writable_streams.contains_key(&write_stream));
+
+        let mut final_core = test_interpreter();
+        let Value::Object(final_stream) = final_core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("final-error Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        {
+            let state = final_core
+                .writable_streams
+                .get_mut(&final_stream)
+                .expect("final-error state");
+            state.end_requested = true;
+            state.final_status = WritableFinalStatus::Active(22);
+        }
+        final_core
+            .write_reg(0, Value::str("ceiling-final-error"))
+            .expect("final error argument");
+        final_core.config.max_total_memory_bytes = final_core.estimated_memory_bytes();
+        let final_completion = BuiltinFunction::writable_completion(
+            BuiltinFunctionKind::StreamWritableFinalDone,
+            final_stream,
+            22,
+        );
+        final_core
+            .writable_final_done(&module, &final_completion, RegRange { start: 0, count: 1 })
+            .expect("final callback(error) must progress at the exact ceiling");
+        assert_eq!(
+            final_core.writable_streams[&final_stream].final_status,
+            WritableFinalStatus::Done
+        );
+        assert!(matches!(
+            final_core.drain_runtime_checkpoint(Some(&module)),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert!(!final_core.writable_streams.contains_key(&final_stream));
+
+        let mut refusal_core = test_interpreter();
+        let Value::Object(refusal_stream) = refusal_core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("refusal Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        refusal_core
+            .writable_enqueue(refusal_stream, Value::str("x"), Label::Public, None)
+            .expect("refusal record");
+        refusal_core
+            .writable_streams
+            .get_mut(&refusal_stream)
+            .expect("refusal state")
+            .writes[0]
+            .status = WritableWriteStatus::Active(23);
+        refusal_core
+            .write_reg(0, Value::Int(1))
+            .expect("zero-byte error value");
+        refusal_core
+            .set_register_label(
+                0,
+                Label::Custom {
+                    name: "ceiling-label".repeat(32),
+                    level: 3,
+                },
+            )
+            .expect("large error label");
+        refusal_core.config.max_total_memory_bytes = refusal_core.estimated_memory_bytes();
+        let refusal_completion = BuiltinFunction::writable_completion(
+            BuiltinFunctionKind::StreamWritableWriteDone,
+            refusal_stream,
+            23,
+        );
+        assert!(matches!(
+            refusal_core.writable_write_done(
+                &module,
+                &refusal_completion,
+                RegRange { start: 0, count: 1 },
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(
+            !refusal_core.writable_streams.contains_key(&refusal_stream),
+            "a residual label charge refusal must destructively clean rather than strand Active"
+        );
+
+        for core in [&write_core, &final_core, &refusal_core] {
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn writable_guest_failures_leave_the_next_phase_scheduled_bd_fw7zd() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let throwing_listener = || EventListenerRecord {
+            listener: Value::BuiltinFunction(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::StreamReadablePause,
+            )),
+            once: false,
+        };
+
+        let mut callback_core = test_interpreter();
+        let Value::Object(callback_writable) = callback_core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("callback Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        callback_core
+            .writable_enqueue(
+                callback_writable,
+                Value::str("x"),
+                Label::Public,
+                Some(WritableCallbackRecord {
+                    value: throwing_listener().listener,
+                    label: Label::Public,
+                }),
+            )
+            .expect("callback write enqueue");
+        {
+            let state = callback_core
+                .writable_streams
+                .get_mut(&callback_writable)
+                .expect("callback state");
+            state.writes[0].status = WritableWriteStatus::Completed;
+            state.buffered_length = 0;
+            state.end_requested = true;
+            state.final_status = WritableFinalStatus::Done;
+            state.tick_sequence = None;
+        }
+        assert!(matches!(
+            callback_core.drive_writable_tick(callback_writable, Some(&module)),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        assert!(
+            callback_core.writable_streams[&callback_writable]
+                .tick_sequence
+                .is_some()
+        );
+        callback_core
+            .drain_runtime_checkpoint(Some(&module))
+            .expect("throwing write callback must not strand finish/close");
+        assert!(
+            !callback_core
+                .writable_streams
+                .contains_key(&callback_writable)
+        );
+
+        let mut prefinish_core = test_interpreter();
+        let Value::Object(prefinish_writable) = prefinish_core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("prefinish Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        prefinish_core
+            .insert_event_listener(prefinish_writable, "prefinish", throwing_listener(), false)
+            .expect("prefinish listener");
+        {
+            let state = prefinish_core
+                .writable_streams
+                .get_mut(&prefinish_writable)
+                .expect("prefinish state");
+            state.end_requested = true;
+            state.final_status = WritableFinalStatus::Done;
+        }
+        assert!(matches!(
+            prefinish_core.emit_writable_prefinish(prefinish_writable, &module),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        let state = &prefinish_core.writable_streams[&prefinish_writable];
+        assert!(state.prefinish_emitted);
+        assert!(state.tick_sequence.is_some());
+        prefinish_core
+            .drain_runtime_checkpoint(Some(&module))
+            .expect("throwing prefinish listener must not strand finish/close");
+        assert!(
+            !prefinish_core
+                .writable_streams
+                .contains_key(&prefinish_writable)
+        );
+
+        let mut finish_core = test_interpreter();
+        let Value::Object(finish_writable) = finish_core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("finish Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        finish_core
+            .insert_event_listener(finish_writable, "finish", throwing_listener(), false)
+            .expect("finish listener");
+        {
+            let state = finish_core
+                .writable_streams
+                .get_mut(&finish_writable)
+                .expect("finish state");
+            state.end_requested = true;
+            state.final_status = WritableFinalStatus::Done;
+            state.tick_phase = WritableTickPhase::Finish;
+        }
+        assert!(matches!(
+            finish_core.drive_writable_tick(finish_writable, Some(&module)),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        let state = &finish_core.writable_streams[&finish_writable];
+        assert_eq!(state.tick_phase, WritableTickPhase::Close);
+        assert!(state.tick_sequence.is_some());
+        finish_core
+            .drain_runtime_checkpoint(Some(&module))
+            .expect("throwing finish listener must not strand close");
+        assert!(!finish_core.writable_streams.contains_key(&finish_writable));
+
+        for core in [&callback_core, &prefinish_core, &finish_core] {
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn writable_error_drains_every_queued_callback_before_terminal_cleanup_bd_fw7zd() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let Value::Object(writable) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("generic Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        let callback = || WritableCallbackRecord {
+            value: Value::BuiltinFunction(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::ArrayIsArray,
+            )),
+            label: Label::Secret,
+        };
+        for chunk in ["first", "second", "third"] {
+            core.writable_enqueue(writable, Value::str(chunk), Label::Secret, Some(callback()))
+                .expect("queued write");
+        }
+        let mut projected = core
+            .clone_writable_state_with_budget(writable)
+            .expect("Writable clone budget")
+            .expect("live Writable state");
+        projected.writes[0].status = WritableWriteStatus::Completed;
+        projected.writes[1].status = WritableWriteStatus::Active(9);
+        projected.writes[2].status = WritableWriteStatus::Pending;
+        projected.buffered_length = projected.writes[1].units + projected.writes[2].units;
+        projected.end_requested = true;
+        projected.final_status = WritableFinalStatus::Done;
+        projected.end_callback = Some(callback());
+        core.commit_writable_state(writable, projected)
+            .expect("commit arranged write queue");
+        core.write_reg(10, Value::Object(writable))
+            .expect("events.once receiver");
+        core.write_reg(11, Value::str("never"))
+            .expect("events.once event name");
+        let Value::Promise(error_promise_id) = core
+            .register_event_promise_once(RegRange {
+                start: 10,
+                count: 2,
+            })
+            .expect("unsettled Writable waiter")
+        else {
+            panic!("events.once must return a Promise");
+        };
+
+        core.write_reg(0, Value::str("write failed"))
+            .expect("completion error register");
+        core.set_register_label(0, Label::Secret)
+            .expect("completion error label");
+        let completion = BuiltinFunction::writable_completion(
+            BuiltinFunctionKind::StreamWritableWriteDone,
+            writable,
+            9,
+        );
+        core.writable_write_done(&module, &completion, RegRange { start: 0, count: 1 })
+            .expect("write failure must enter terminal drainage");
+
+        let state = &core.writable_streams[&writable];
+        assert!(
+            state
+                .writes
+                .iter()
+                .all(|record| record.status == WritableWriteStatus::Completed)
+        );
+        assert_eq!(state.buffered_length, 0);
+        assert!(!state.writes[0].completion_failed);
+        assert!(state.writes[1].completion_failed);
+        assert!(state.writes[2].completion_failed);
+        assert!(state.terminal_error.is_some());
+
+        core.drain_runtime_checkpoint(Some(&module))
+            .expect("events.once error link must handle and reject on terminal error");
+        let error_promise = core
+            .promise_store
+            .get(crate::promise_model::PromiseHandle(error_promise_id))
+            .expect("terminal error Promise");
+        assert!(matches!(
+            &error_promise.state,
+            crate::promise_model::PromiseState::Rejected(
+                crate::object_model::JsValue::Str(reason)
+            ) if reason == "write failed"
+        ));
+        assert_eq!(error_promise.label, Label::Secret);
+        assert!(
+            !core.writable_streams.contains_key(&writable),
+            "handled error must remain observable without stranding close/release"
+        );
+        assert!(
+            !core.event_promise_waiters.contains_key(&writable),
+            "terminal release must not leave a waiter keyed by a reusable ObjectId"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn writable_write_and_final_failures_preserve_node_phase_order_bd_fw7zd() {
+        let write_module = writable_order_module(&["a", "b", "end", "error", "close"]);
+        let mut write_core = test_interpreter();
+        let write_log = install_writable_order_log(&mut write_core);
+        let Value::Object(write_stream) = write_core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("write-failure Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        for (chunk, function_index) in [("a", 0), ("b", 1)] {
+            write_core
+                .writable_enqueue(
+                    write_stream,
+                    Value::str(chunk),
+                    Label::Public,
+                    Some(WritableCallbackRecord {
+                        value: Value::Function(function_index),
+                        label: Label::Public,
+                    }),
+                )
+                .expect("write-failure queue");
+        }
+        let mut projected = write_core
+            .clone_writable_state_with_budget(write_stream)
+            .expect("write-failure clone budget")
+            .expect("write-failure state");
+        projected.writes[0].status = WritableWriteStatus::Completed;
+        projected.writes[1].status = WritableWriteStatus::Active(11);
+        projected.buffered_length = projected.writes[1].units;
+        projected.end_requested = true;
+        projected.final_status = WritableFinalStatus::Done;
+        projected.end_callback = Some(WritableCallbackRecord {
+            value: Value::Function(2),
+            label: Label::Public,
+        });
+        write_core
+            .commit_writable_state(write_stream, projected)
+            .expect("write-failure state setup");
+        write_core
+            .insert_event_listener(
+                write_stream,
+                "error",
+                EventListenerRecord {
+                    listener: Value::Function(3),
+                    once: false,
+                },
+                false,
+            )
+            .expect("write error listener");
+        write_core
+            .insert_event_listener(
+                write_stream,
+                "close",
+                EventListenerRecord {
+                    listener: Value::Function(4),
+                    once: false,
+                },
+                false,
+            )
+            .expect("write close listener");
+        write_core
+            .write_reg(0, Value::str("b"))
+            .expect("write failure value");
+        let write_completion = BuiltinFunction::writable_completion(
+            BuiltinFunctionKind::StreamWritableWriteDone,
+            write_stream,
+            11,
+        );
+        write_core
+            .writable_write_done(
+                &write_module,
+                &write_completion,
+                RegRange { start: 0, count: 1 },
+            )
+            .expect("write failure completion");
+        assert_eq!(
+            write_core.writable_streams[&write_stream].terminal_error_origin,
+            Some(WritableErrorOrigin::Write)
+        );
+        write_core
+            .drain_runtime_checkpoint(Some(&write_module))
+            .expect("handled write failure checkpoint");
+        assert_eq!(
+            writable_order_entries(&write_core, write_log),
+            ["a", "b", "end", "error", "close"]
+        );
+
+        let final_module = writable_order_module(&["wcb", "error", "close", "endcb"]);
+        let mut final_core = test_interpreter();
+        let final_log = install_writable_order_log(&mut final_core);
+        let Value::Object(final_stream) = final_core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("final-failure Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        final_core
+            .writable_enqueue(
+                final_stream,
+                Value::str("done"),
+                Label::Public,
+                Some(WritableCallbackRecord {
+                    value: Value::Function(0),
+                    label: Label::Public,
+                }),
+            )
+            .expect("final-failure write");
+        let mut projected = final_core
+            .clone_writable_state_with_budget(final_stream)
+            .expect("final-failure clone budget")
+            .expect("final-failure state");
+        projected.writes[0].status = WritableWriteStatus::Completed;
+        projected.buffered_length = 0;
+        projected.end_requested = true;
+        projected.final_status = WritableFinalStatus::Active(12);
+        projected.end_callback = Some(WritableCallbackRecord {
+            value: Value::Function(3),
+            label: Label::Public,
+        });
+        final_core
+            .commit_writable_state(final_stream, projected)
+            .expect("final-failure state setup");
+        for (event, function_index) in [("error", 1), ("close", 2)] {
+            final_core
+                .insert_event_listener(
+                    final_stream,
+                    event,
+                    EventListenerRecord {
+                        listener: Value::Function(function_index),
+                        once: false,
+                    },
+                    false,
+                )
+                .expect("final-failure listener");
+        }
+        final_core
+            .write_reg(0, Value::str("f"))
+            .expect("final failure value");
+        let final_completion = BuiltinFunction::writable_completion(
+            BuiltinFunctionKind::StreamWritableFinalDone,
+            final_stream,
+            12,
+        );
+        final_core
+            .writable_final_done(
+                &final_module,
+                &final_completion,
+                RegRange { start: 0, count: 1 },
+            )
+            .expect("final failure completion");
+        assert_eq!(
+            final_core.writable_streams[&final_stream].terminal_error_origin,
+            Some(WritableErrorOrigin::Final)
+        );
+        final_core
+            .drain_runtime_checkpoint(Some(&final_module))
+            .expect("handled final failure checkpoint");
+        assert_eq!(
+            writable_order_entries(&final_core, final_log),
+            ["wcb", "error", "close", "endcb"]
+        );
+
+        for core in [&write_core, &final_core] {
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn writable_ticks_follow_monotonic_schedule_order_not_object_ids_bd_fw7zd() {
+        let mut core = test_interpreter();
+        let Value::Object(lower_id) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("first Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        let Value::Object(higher_id) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("second Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        assert!(lower_id < higher_id);
+
+        core.schedule_writable_tick(higher_id)
+            .expect("schedule higher ObjectId first");
+        core.schedule_writable_tick(lower_id)
+            .expect("schedule lower ObjectId second");
+        assert!(
+            core.writable_streams[&higher_id].tick_sequence
+                < core.writable_streams[&lower_id].tick_sequence
+        );
+        assert_eq!(
+            core.next_scheduled_writable_tick()
+                .expect("charged Writable tick selection"),
+            Some(higher_id)
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "fixed-size tick sequence metadata must not create an unaccounted queue"
+        );
+    }
+
+    #[test]
+    fn writable_checkpoint_yields_between_stream_units_in_bun_order_bd_fw7zd() {
+        let module = writable_order_module(&[
+            "b:writecb",
+            "a:writecb",
+            "b:endcb",
+            "b:finish",
+            "a:endcb",
+            "a:finish",
+            "b:close",
+            "a:close",
+        ]);
+        let mut core = test_interpreter();
+        let log = install_writable_order_log(&mut core);
+        let Value::Object(a) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("Writable A")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        let Value::Object(b) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("Writable B")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+
+        for (stream, write_fn, end_fn, finish_fn, close_fn) in [(b, 0, 2, 3, 6), (a, 1, 4, 5, 7)] {
+            core.writable_enqueue(
+                stream,
+                Value::str("x"),
+                Label::Public,
+                Some(WritableCallbackRecord {
+                    value: Value::Function(write_fn),
+                    label: Label::Public,
+                }),
+            )
+            .expect("completed write record");
+            let mut projected = core
+                .clone_writable_state_with_budget(stream)
+                .expect("state clone budget")
+                .expect("live Writable");
+            projected.writes[0].status = WritableWriteStatus::Completed;
+            projected.buffered_length = 0;
+            projected.end_requested = true;
+            projected.final_status = WritableFinalStatus::Done;
+            projected.end_callback = Some(WritableCallbackRecord {
+                value: Value::Function(end_fn),
+                label: Label::Public,
+            });
+            core.commit_writable_state(stream, projected)
+                .expect("terminal state setup");
+            for (event, function_index) in [("finish", finish_fn), ("close", close_fn)] {
+                core.insert_event_listener(
+                    stream,
+                    event,
+                    EventListenerRecord {
+                        listener: Value::Function(function_index),
+                        once: false,
+                    },
+                    false,
+                )
+                .expect("lifecycle listener");
+            }
+        }
+
+        core.schedule_writable_tick(b).expect("schedule B first");
+        core.schedule_writable_tick(a).expect("schedule A second");
+        core.drain_runtime_checkpoint(Some(&module))
+            .expect("two-stream checkpoint");
+        assert_eq!(
+            writable_order_entries(&core, log),
+            [
+                "b:writecb",
+                "a:writecb",
+                "b:endcb",
+                "b:finish",
+                "a:endcb",
+                "a:finish",
+                "b:close",
+                "a:close",
+            ]
+        );
+        assert!(!core.writable_streams.contains_key(&a));
+        assert!(!core.writable_streams.contains_key(&b));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn zero_argument_writable_callbacks_inherit_lifecycle_ifc_context_bd_fw7zd() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                Ir3Instruction::Throw { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 2,
+                name: Some("zero_arg_writable_callback".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        let Value::Object(writable) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("generic Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        core.writable_enqueue(
+            writable,
+            Value::str("classified"),
+            Label::Secret,
+            Some(WritableCallbackRecord {
+                value: Value::Function(0),
+                label: Label::Secret,
+            }),
+        )
+        .expect("Secret Writable record");
+        {
+            let state = core
+                .writable_streams
+                .get_mut(&writable)
+                .expect("live Writable");
+            state.writes[0].status = WritableWriteStatus::Completed;
+            state.buffered_length = 0;
+            state.end_requested = true;
+            state.final_status = WritableFinalStatus::Done;
+        }
+        core.schedule_writable_tick(writable)
+            .expect("Writable callback tick");
+        assert!(matches!(
+            core.drive_writable_tick(writable, Some(&module)),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert_eq!(core.pending_exception, Some(Value::Int(7)));
+        assert_eq!(
+            core.pending_exception_label,
+            Label::Secret,
+            "a real zero-argument callback write must retain its lifecycle label through throw capture"
+        );
+        core.drain_runtime_checkpoint(Some(&module))
+            .expect("throwing callback must not strand finish/close");
+        assert!(!core.writable_streams.contains_key(&writable));
+    }
+
+    #[test]
+    fn nested_zero_argument_callback_inherits_outer_ifc_context_bd_fw7zd() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 13 },
+                Ir3Instruction::Throw { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 2,
+                name: Some("nested_zero_arg_callback".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        core.active_inline_callback_context_label = Some(Label::Secret);
+        assert!(matches!(
+            core.invoke_inline_method_call_with_argument_label(
+                Some(&module),
+                Value::Function(0),
+                Value::Undefined,
+                Vec::new(),
+                None,
+            ),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert_eq!(core.pending_exception, Some(Value::Int(13)));
+        assert_eq!(core.pending_exception_label, Label::Secret);
+        assert_eq!(
+            core.active_inline_callback_context_label,
+            Some(Label::Secret),
+            "the nested wrapper restore must preserve its outer callback context"
+        );
+    }
+
+    #[test]
+    fn synchronous_final_throw_is_reported_after_close_and_exact_release_bd_fw7zd() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let options = core
+            .alloc_object_with_properties(&[(
+                "final",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::StreamReadablePause,
+                )),
+            )])
+            .expect("Writable final options");
+        core.write_reg(0, Value::Object(options))
+            .expect("Writable options register");
+        let Value::Object(writable) = core
+            .construct_stream_writable(RegRange { start: 0, count: 1 })
+            .expect("Writable with throwing final")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+
+        core.writable_end(
+            &module,
+            Value::Object(writable),
+            RegRange { start: 1, count: 0 },
+        )
+        .expect("synchronous final throw must become terminal stream state");
+        let state = &core.writable_streams[&writable];
+        assert_eq!(state.final_status, WritableFinalStatus::Done);
+        assert!(state.terminal_error.is_some());
+        assert!(state.tick_sequence.is_some());
+
+        assert!(matches!(
+            core.drain_runtime_checkpoint(Some(&module)),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert!(!core.writable_streams.contains_key(&writable));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "terminal final failure must remain observable after exact cleanup"
+        );
+    }
+
+    #[test]
+    fn synchronous_write_throw_propagates_without_fabricating_completion_bd_fw7zd() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 31 },
+                Ir3Instruction::Throw { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 3,
+                frame_size: 4,
+                name: Some("throwing_write".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        let options = core
+            .alloc_object_with_properties(&[("write", Value::Function(0))])
+            .expect("Writable write options");
+        core.write_reg(0, Value::Object(options))
+            .expect("Writable options register");
+        let Value::Object(writable) = core
+            .construct_stream_writable(RegRange { start: 0, count: 1 })
+            .expect("Writable with throwing write")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        core.write_reg(1, Value::str("x")).expect("write chunk");
+        assert!(matches!(
+            core.writable_write(
+                &module,
+                Value::Object(writable),
+                RegRange { start: 1, count: 1 },
+            ),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        let state = &core.writable_streams[&writable];
+        assert!(matches!(
+            state.writes[0].status,
+            WritableWriteStatus::Active(_)
+        ));
+        assert_eq!(state.buffered_length, 1);
+        assert!(state.terminal_error.is_none());
+        assert!(!state.inside_write_invocation);
+        assert!(state.tick_sequence.is_none());
+        assert_eq!(core.pending_exception, Some(Value::Int(31)));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn empty_writable_end_progresses_at_memory_ceiling_bd_fw7zd() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let Value::Object(writable) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("generic Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        core.config.max_total_memory_bytes = core.estimated_memory_bytes();
+        core.writable_end(
+            &module,
+            Value::Object(writable),
+            RegRange { start: 0, count: 0 },
+        )
+        .expect("empty end must not require a temporary full-state clone");
+        core.drain_runtime_checkpoint(Some(&module))
+            .expect("empty Writable lifecycle checkpoint");
+        assert!(!core.writable_streams.contains_key(&writable));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn seed_reset_clears_writable_state_listeners_and_waiters_bd_fw7zd() {
+        let mut core = test_interpreter();
+        let Value::Object(writable) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("generic Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        core.insert_event_listener(
+            writable,
+            "finish",
+            EventListenerRecord {
+                listener: Value::BuiltinFunction(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::ArrayIsArray,
+                )),
+                once: false,
+            },
+            false,
+        )
+        .expect("Writable listener");
+        core.write_reg(0, Value::Object(writable))
+            .expect("events.once receiver");
+        core.write_reg(1, Value::str("finish"))
+            .expect("events.once name");
+        // Keep the heap/register seed byte-identical so this test isolates the
+        // execution-local side-table release performed by the reset boundary.
+        let seed = core.capture_execution_seed();
+        core.register_event_promise_once(RegRange { start: 0, count: 2 })
+            .expect("events.once waiter");
+        assert!(core.event_listeners.contains_key(&writable));
+        assert!(core.event_promise_waiters.contains_key(&writable));
+
+        core.reset_execution_state_from_seed(&seed)
+            .expect("seed reset");
+        assert!(!core.writable_streams.contains_key(&writable));
+        assert!(!core.event_listeners.contains_key(&writable));
+        assert!(!core.event_promise_waiters.contains_key(&writable));
+        assert!(matches!(
+            core.writable_receiver_id(Value::Object(writable)),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn writable_completion_tokens_fail_closed_before_wraparound_bd_fw7zd() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let Value::Object(writable) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("generic Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        core.writable_enqueue(writable, Value::str("x"), Label::Public, None)
+            .expect("pending write");
+        core.next_writable_completion_token = u32::MAX;
+        assert!(matches!(
+            core.drive_writable(writable, &module),
+            Err(InterpreterError::InternalError { .. })
+        ));
+        assert_eq!(
+            core.writable_streams[&writable].writes[0].status,
+            WritableWriteStatus::Pending
+        );
+    }
+
+    #[test]
+    fn writable_completion_nonce_survives_seed_reset_and_object_id_reuse_bd_fw7zd() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let seed = core.capture_execution_seed();
+
+        let Value::Object(old_stream) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("old Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        core.writable_enqueue(old_stream, Value::str("old"), Label::Public, None)
+            .expect("old write");
+        let old_token = core
+            .allocate_writable_completion_token()
+            .expect("old completion token");
+        core.writable_streams
+            .get_mut(&old_stream)
+            .expect("old state")
+            .writes[0]
+            .status = WritableWriteStatus::Active(old_token);
+        let stale_completion = BuiltinFunction::writable_completion(
+            BuiltinFunctionKind::StreamWritableWriteDone,
+            old_stream,
+            old_token,
+        );
+
+        let previous_register_bytes = core.registers_memory_bytes();
+        let previous_heap_bytes = core.heap_memory_bytes();
+        core.reset_execution_state_from_seed(&seed)
+            .expect("execution reset");
+        core.apply_register_heap_memory_delta(previous_register_bytes, previous_heap_bytes)
+            .expect("reset memory delta");
+
+        let Value::Object(new_stream) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("new Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        assert_eq!(
+            new_stream, old_stream,
+            "heap ObjectId must be reused by the probe"
+        );
+        core.writable_enqueue(new_stream, Value::str("new"), Label::Public, None)
+            .expect("new write");
+        let new_token = core
+            .allocate_writable_completion_token()
+            .expect("new completion token");
+        assert_ne!(new_token, old_token);
+        core.writable_streams
+            .get_mut(&new_stream)
+            .expect("new state")
+            .writes[0]
+            .status = WritableWriteStatus::Active(new_token);
+
+        core.writable_write_done(&module, &stale_completion, RegRange { start: 0, count: 0 })
+            .expect("stale completion must be an authenticated no-op");
+        assert_eq!(
+            core.writable_streams[&new_stream].writes[0].status,
+            WritableWriteStatus::Active(new_token)
+        );
+        assert_eq!(core.next_writable_completion_token, new_token + 1);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn writable_scheduler_scans_are_instruction_budgeted_bd_fw7zd() {
+        let mut core = test_interpreter();
+        let mut streams = Vec::new();
+        for _ in 0..8 {
+            let Value::Object(stream) = core
+                .construct_stream_writable(RegRange { start: 0, count: 0 })
+                .expect("budgeted Writable")
+            else {
+                panic!("Writable constructor must return an object");
+            };
+            core.schedule_writable_tick(stream)
+                .expect("schedule budgeted Writable");
+            streams.push(stream);
+        }
+        core.instructions_executed = 0;
+        core.config.instruction_budget = 7;
+        assert!(matches!(
+            core.next_scheduled_writable_tick(),
+            Err(InterpreterError::BudgetExhausted {
+                executed: 0,
+                budget: 7
+            })
+        ));
+        assert!(
+            streams
+                .iter()
+                .all(|stream| core.writable_streams[stream].tick_sequence.is_some())
+        );
+        assert_eq!(core.instructions_executed, 0);
+    }
+
+    #[test]
+    fn string_to_string_builtin_rejects_non_string_receiver_bd_fw7zd() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let builtin = BuiltinFunction::new_kind(BuiltinFunctionKind::StringToString);
+        assert_eq!(
+            core.dispatch_builtin_function(
+                &module,
+                &builtin,
+                RegRange { start: 0, count: 0 },
+                Some(Value::str("text")),
+            )
+            .expect("string receiver"),
+            Value::str("text")
+        );
+        assert!(matches!(
+            core.dispatch_builtin_function(
+                &module,
+                &builtin,
+                RegRange { start: 0, count: 0 },
+                Some(Value::Int(123)),
+            ),
+            Err(InterpreterError::TypeError { .. })
+        ));
     }
 
     #[test]
@@ -46086,7 +48710,9 @@ mod async_runtime_tests_current {
             ceiling_core.estimated_memory_bytes(),
             ceiling_core.recompute_estimated_memory_bytes()
         );
-        ceiling_core.run_event_loop_until_idle_with_module(Some(&module));
+        ceiling_core
+            .run_event_loop_until_idle_with_module(Some(&module))
+            .expect("ceiling readable event loop");
         assert!(
             !ceiling_core
                 .readable_from_streams
@@ -46181,7 +48807,8 @@ mod async_runtime_tests_current {
             promises.push(promise);
         }
 
-        core.run_event_loop_until_idle_with_module(Some(&module));
+        core.run_event_loop_until_idle_with_module(Some(&module))
+            .expect("readable lifecycle event loop");
 
         for promise in promises {
             let record = core
@@ -46240,7 +48867,8 @@ mod async_runtime_tests_current {
             .expect("throwing listener registration");
             core.activate_readable_from_data_flow(readable_id, "data");
 
-            core.run_event_loop_until_idle_with_module(Some(&module));
+            core.run_event_loop_until_idle_with_module(Some(&module))
+                .expect("throwing readable listener cleanup event loop");
 
             assert!(
                 !core.readable_from_streams.contains_key(&readable_id),

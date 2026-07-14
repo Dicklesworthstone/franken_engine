@@ -125,12 +125,16 @@ const IMPLEMENTED_FIXTURE_IDS: &[&str] = &[
     "tc::stream::0007",
     "tc::stream::0008",
     "tc::stream::0009",
+    "tc::stream::0010",
+    "tc::stream::0011",
+    "tc::stream::0012",
     "tc::stream::0022",
     "tc::stream::0023",
     "tc::stream::0029",
     "tc::stream::0030",
     "tc::stream::0032",
     "tc::stream::0033",
+    "tc::stream::0034",
     "tc::stream::0035",
     "tc::stream::0036",
     "tc::stream::0037",
@@ -138,6 +142,8 @@ const IMPLEMENTED_FIXTURE_IDS: &[&str] = &[
     "tc::stream::0047",
     "tc::stream::0049",
     "tc::stream::0050",
+    "tc::stream::0051",
+    "tc::stream::0054",
 ];
 
 #[test]
@@ -151,7 +157,7 @@ fn target_and_implemented_inventories_are_explicit() {
         .iter()
         .copied()
         .collect::<BTreeSet<_>>();
-    assert_eq!(IMPLEMENTED_FIXTURE_IDS.len(), 21);
+    assert_eq!(IMPLEMENTED_FIXTURE_IDS.len(), 27);
     assert_eq!(implemented.len(), IMPLEMENTED_FIXTURE_IDS.len());
     assert!(IMPLEMENTED_FIXTURE_IDS.iter().all(|id| unique.contains(id)));
 }
@@ -725,7 +731,6 @@ fn readable_destroy_is_synchronous_then_emits_error_before_close() {
 }
 
 #[test]
-#[ignore = "bd-fw7zd: Writable slice not implemented yet"]
 fn writable_write_end_final_flags_and_callbacks() {
     assert_cases(&[
         EvalCase {

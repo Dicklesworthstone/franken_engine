@@ -14172,7 +14172,7 @@ mod tests {
                 core.read_reg_label(2)
                     .expect("constructed result label should exist"),
                 crate::ifc_artifacts::Label::Secret,
-                "constructor this provenance comes from the callee, not an ignored or discarded argument ({return_explicit_this=})"
+                "constructor this provenance comes from the callee, not an ignored or discarded argument (return_explicit_this={return_explicit_this})"
             );
         }
     }
@@ -15295,7 +15295,7 @@ mod tests {
                 assert_eq!(
                     core.read_reg_label(2).expect("result label should exist"),
                     crate::ifc_artifacts::Label::Secret,
-                    "{capability} returned handle must join every direct input ({secret_first=})"
+                    "{capability} returned handle must join every direct input (secret_first={secret_first})"
                 );
                 let record = core
                     .promise_store
@@ -15304,7 +15304,7 @@ mod tests {
                 assert_eq!(
                     record.label,
                     crate::ifc_artifacts::Label::Secret,
-                    "{capability} settlement must be independent of input order ({secret_first=})"
+                    "{capability} settlement must be independent of input order (secret_first={secret_first})"
                 );
                 assert!(record.state.is_settled());
             }
@@ -15351,7 +15351,7 @@ mod tests {
                 assert_eq!(
                     core.read_reg_label(2).expect("result label should exist"),
                     crate::ifc_artifacts::Label::Secret,
-                    "{capability} handle must include known settlement provenance ({secret_first=})"
+                    "{capability} handle must include known settlement provenance (secret_first={secret_first})"
                 );
                 let record = core
                     .promise_store
@@ -15449,7 +15449,7 @@ mod tests {
                 } else if secret_first {
                     core.reject_promise(
                         first,
-                        crate::object_model::JsValue::Str("secret-first".to_string()),
+                        crate::object_model::JsValue::Str("secret-first".into()),
                         crate::ifc_artifacts::Label::Secret,
                     )
                     .expect("first Promise should reject");
@@ -15468,7 +15468,7 @@ mod tests {
                     .expect("first Promise should fulfill");
                     core.reject_promise(
                         second,
-                        crate::object_model::JsValue::Str("secret-last".to_string()),
+                        crate::object_model::JsValue::Str("secret-last".into()),
                         crate::ifc_artifacts::Label::Secret,
                     )
                     .expect("second Promise should reject");
@@ -15481,7 +15481,7 @@ mod tests {
                 assert_eq!(
                     record.label,
                     crate::ifc_artifacts::Label::Secret,
-                    "{capability} must retain the earlier settlement label ({secret_first=})"
+                    "{capability} must retain the earlier settlement label (secret_first={secret_first})"
                 );
                 assert!(matches!(
                     &record.state,
@@ -15518,13 +15518,13 @@ mod tests {
             };
             core.reject_promise(
                 first,
-                crate::object_model::JsValue::Str("first".to_string()),
+                crate::object_model::JsValue::Str("first".into()),
                 first_label,
             )
             .expect("first Promise should reject");
             core.reject_promise(
                 second,
-                crate::object_model::JsValue::Str("second".to_string()),
+                crate::object_model::JsValue::Str("second".into()),
                 second_label,
             )
             .expect("second Promise should reject");
@@ -15569,14 +15569,14 @@ mod tests {
                 .expect("first Promise should fulfill");
                 core.reject_promise(
                     second,
-                    crate::object_model::JsValue::Str("public-rejection".to_string()),
+                    crate::object_model::JsValue::Str("public-rejection".into()),
                     crate::ifc_artifacts::Label::Public,
                 )
                 .expect("second Promise should reject");
             } else {
                 core.reject_promise(
                     first,
-                    crate::object_model::JsValue::Str("secret-rejection".to_string()),
+                    crate::object_model::JsValue::Str("secret-rejection".into()),
                     crate::ifc_artifacts::Label::Secret,
                 )
                 .expect("first Promise should reject");
@@ -15645,7 +15645,7 @@ mod tests {
             if reject_winner {
                 core.reject_promise(
                     winner,
-                    crate::object_model::JsValue::Str("public-winner".to_string()),
+                    crate::object_model::JsValue::Str("public-winner".into()),
                     crate::ifc_artifacts::Label::Public,
                 )
                 .expect("winner should reject");

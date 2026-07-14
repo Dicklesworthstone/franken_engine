@@ -5782,27 +5782,25 @@ fn find_constructor_arguments_before_postfix(
                     paren += 1;
                 }
             }
-            b')' => {
-                if open.is_some() {
-                    paren -= 1;
-                    if paren == 0
-                        && let Some(open_index) = open.take()
+            b')' if open.is_some() => {
+                paren -= 1;
+                if paren == 0
+                    && let Some(open_index) = open.take()
+                {
+                    let (_, callee_src) = strip_leading_new_operators(s[..open_index].trim());
+                    let trailing = strip_leading_new_postfix_trivia(&s[i + 1..]);
+                    if !callee_src.is_empty()
+                        && (trailing.starts_with('.')
+                            || trailing.starts_with('[')
+                            || trailing.starts_with('(')
+                            || trailing.starts_with("?."))
                     {
-                        let (_, callee_src) = strip_leading_new_operators(s[..open_index].trim());
-                        let trailing = strip_leading_new_postfix_trivia(&s[i + 1..]);
-                        if !callee_src.is_empty()
-                            && (trailing.starts_with('.')
-                                || trailing.starts_with('[')
-                                || trailing.starts_with('(')
-                                || trailing.starts_with("?."))
-                        {
-                            if argument_pairs_to_skip > 0 {
-                                argument_pairs_to_skip -= 1;
-                                i += 1;
-                                continue;
-                            }
-                            return Some((open_index, i));
+                        if argument_pairs_to_skip > 0 {
+                            argument_pairs_to_skip -= 1;
+                            i += 1;
+                            continue;
                         }
+                        return Some((open_index, i));
                     }
                 }
             }

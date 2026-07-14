@@ -5978,8 +5978,16 @@ pub fn lower_ir2_to_ir3(
         validate_deferred_rest_parameter_abi(param_names.len(), fn_rest_param_index)?;
         let (body_ops, param_names, fn_name, free_vars, free_var_ids) =
             (&body_ops, &param_names, &fn_name, &free_vars, &free_var_ids);
-        let entry = ir3.instructions.len() as u32;
-        let arity = param_names.len() as u32;
+        let entry = u32::try_from(ir3.instructions.len()).map_err(|_| {
+            LoweringPipelineError::InvariantViolation {
+                detail: "IR3 instruction stream exceeds addressable size",
+            }
+        })?;
+        let arity = u32::try_from(param_names.len()).map_err(|_| {
+            LoweringPipelineError::InvariantViolation {
+                detail: "Function parameter count exceeds the IR3 positional ABI",
+            }
+        })?;
         let mut fn_reg: Reg = 0;
         let mut fn_binding_regs = BTreeMap::<BindingId, Reg>::new();
         let mut fn_value_stack: Vec<Reg> = Vec::new();
@@ -6325,8 +6333,16 @@ pub fn lower_ir2_to_ir3(
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::Label { id } => {
-                    let target = ir3.instructions.len() as u32;
-                    fn_label_targets.insert(*id, target);
+                    let target = u32::try_from(ir3.instructions.len()).map_err(|_| {
+                        LoweringPipelineError::InvariantViolation {
+                            detail: "IR3 instruction stream exceeds addressable size",
+                        }
+                    })?;
+                    if fn_label_targets.insert(*id, target).is_some() {
+                        return Err(LoweringPipelineError::InvariantViolation {
+                            detail: "Deferred function body contains duplicate label ids",
+                        });
+                    }
                     if fn_catch_entry_labels.contains(id) {
                         let dst = alloc_register(&mut fn_reg);
                         ir3.instructions.push(Ir3Instruction::EnterCatch { dst });
@@ -6399,6 +6415,21 @@ pub fn lower_ir2_to_ir3(
                         .push(Ir3Instruction::JumpIf { cond, target: 0 });
                     fn_pending_jumps.push(PendingJump::Conditional {
                         instruction_index: idx,
+                        label_id: *label_id,
+                    });
+                }
+                Ir1Op::JumpIfNullish { label_id } => {
+                    let cond = fn_value_stack.pop().ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail:
+                                "JumpIfNullish requires a condition register in a function body",
+                        },
+                    )?;
+                    let instruction_index = ir3.instructions.len();
+                    ir3.instructions
+                        .push(Ir3Instruction::JumpIfNullish { cond, target: 0 });
+                    fn_pending_jumps.push(PendingJump::Conditional {
+                        instruction_index,
                         label_id: *label_id,
                     });
                 }
@@ -6492,6 +6523,47 @@ pub fn lower_ir2_to_ir3(
                         val: value,
                     });
                     fn_value_stack.push(value);
+                }
+                Ir1Op::DeleteProperty { key } => {
+                    let (obj, key_reg) = match key {
+                        Ir1PropertyKey::Static(key) => {
+                            let obj = fn_value_stack.pop().ok_or(
+                                LoweringPipelineError::InvariantViolation {
+                                    detail:
+                                        "DeleteProperty requires an object register in a function body",
+                                },
+                            )?;
+                            let key_reg = alloc_register(&mut fn_reg);
+                            let pool_index = push_constant(&mut ir3.constant_pool, key);
+                            ir3.instructions.push(Ir3Instruction::LoadStr {
+                                dst: key_reg,
+                                pool_index,
+                            });
+                            (obj, key_reg)
+                        }
+                        Ir1PropertyKey::Dynamic => {
+                            let key_reg = fn_value_stack.pop().ok_or(
+                                LoweringPipelineError::InvariantViolation {
+                                    detail:
+                                        "DeleteProperty requires a key register in a function body",
+                                },
+                            )?;
+                            let obj = fn_value_stack.pop().ok_or(
+                                LoweringPipelineError::InvariantViolation {
+                                    detail:
+                                        "DeleteProperty requires an object register in a function body",
+                                },
+                            )?;
+                            (obj, key_reg)
+                        }
+                    };
+                    let dst = alloc_register(&mut fn_reg);
+                    ir3.instructions.push(Ir3Instruction::DeleteProperty {
+                        obj,
+                        key: key_reg,
+                        dst,
+                    });
+                    fn_value_stack.push(dst);
                 }
                 Ir1Op::LoadThis => {
                     let dst = alloc_register(&mut fn_reg);
@@ -6822,8 +6894,110 @@ pub fn lower_ir2_to_ir3(
                         reason: *reason,
                     });
                 }
-                // Fallthrough: unhandled ops in function bodies become nops.
-                _ => {}
+                Ir1Op::Construct { arg_count } => {
+                    let count = *arg_count as usize;
+                    if count
+                        .checked_add(1)
+                        .is_none_or(|needed| needed > fn_value_stack.len())
+                    {
+                        return Err(LoweringPipelineError::InvariantViolation {
+                            detail: "Value stack underflow in function-body Construct",
+                        });
+                    }
+                    let mut args = Vec::with_capacity(count.min(1024));
+                    for _ in 0..count {
+                        args.push(fn_value_stack.pop().unwrap_or(0));
+                    }
+                    args.reverse();
+                    let callee = fn_value_stack.pop().unwrap_or(0);
+                    let dst = alloc_register(&mut fn_reg);
+                    let args = if args.is_empty() {
+                        RegRange { start: 0, count: 0 }
+                    } else {
+                        let start = fn_reg;
+                        for src in args {
+                            let contiguous_dst = alloc_register(&mut fn_reg);
+                            ir3.instructions.push(Ir3Instruction::Move {
+                                dst: contiguous_dst,
+                                src,
+                            });
+                        }
+                        RegRange {
+                            start,
+                            count: *arg_count,
+                        }
+                    };
+                    ir3.instructions
+                        .push(Ir3Instruction::Construct { callee, args, dst });
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::TemplateLiteral { quasi_count } => {
+                    let quasi_count = *quasi_count as usize;
+                    let part_count = if quasi_count == 0 {
+                        0
+                    } else {
+                        quasi_count
+                            .checked_mul(2)
+                            .and_then(|n| n.checked_sub(1))
+                            .ok_or(LoweringPipelineError::InvariantViolation {
+                                detail: "Function-body template literal part count overflow",
+                            })?
+                    };
+                    if part_count > fn_value_stack.len() {
+                        return Err(LoweringPipelineError::InvariantViolation {
+                            detail: "Value stack underflow in function-body TemplateLiteral",
+                        });
+                    }
+                    let mut parts = Vec::with_capacity(part_count.min(1024));
+                    for _ in 0..part_count {
+                        parts.push(fn_value_stack.pop().unwrap_or(0));
+                    }
+                    parts.reverse();
+
+                    let dst = alloc_register(&mut fn_reg);
+                    if parts.is_empty() {
+                        let pool_index = push_constant(&mut ir3.constant_pool, "");
+                        ir3.instructions
+                            .push(Ir3Instruction::LoadStr { dst, pool_index });
+                    } else {
+                        let start = fn_reg;
+                        for src in parts {
+                            let contiguous_dst = alloc_register(&mut fn_reg);
+                            ir3.instructions.push(Ir3Instruction::Move {
+                                dst: contiguous_dst,
+                                src,
+                            });
+                        }
+                        ir3.instructions.push(Ir3Instruction::TemplateLiteral {
+                            parts: RegRange {
+                                start,
+                                count: part_count as u32,
+                            },
+                            dst,
+                        });
+                    }
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::ImportModule { .. } => {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "ImportModule is not valid in a deferred function body",
+                    });
+                }
+                Ir1Op::ExportBinding { .. } => {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "ExportBinding is not valid in a deferred function body",
+                    });
+                }
+                Ir1Op::DeclareFunction { .. } => {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "Deferred function declaration has an empty body",
+                    });
+                }
+                Ir1Op::HostCall { .. } => {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "HostCall bypassed function-body capability lowering",
+                    });
+                }
             }
         }
 
@@ -6849,27 +7023,37 @@ pub fn lower_ir2_to_ir3(
                     instruction_index,
                     label_id,
                 } => {
-                    if let Some(&target) = fn_label_targets.get(&label_id) {
-                        ir3.instructions[instruction_index] = Ir3Instruction::Jump { target };
-                    }
+                    let target = *fn_label_targets.get(&label_id).ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail: "function-body control-flow references missing label",
+                        },
+                    )?;
+                    ir3.instructions[instruction_index] = Ir3Instruction::Jump { target };
                 }
                 PendingJump::Conditional {
                     instruction_index,
                     label_id,
                 } => {
-                    if let Some(&target) = fn_label_targets.get(&label_id) {
-                        match &mut ir3.instructions[instruction_index] {
-                            Ir3Instruction::JumpIf {
-                                target: jump_target,
-                                ..
-                            }
-                            | Ir3Instruction::JumpIfNullish {
-                                target: jump_target,
-                                ..
-                            } => {
-                                *jump_target = target;
-                            }
-                            _ => {}
+                    let target = *fn_label_targets.get(&label_id).ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail: "function-body control-flow references missing label",
+                        },
+                    )?;
+                    match &mut ir3.instructions[instruction_index] {
+                        Ir3Instruction::JumpIf {
+                            target: jump_target,
+                            ..
+                        }
+                        | Ir3Instruction::JumpIfNullish {
+                            target: jump_target,
+                            ..
+                        } => {
+                            *jump_target = target;
+                        }
+                        _ => {
+                            return Err(LoweringPipelineError::InvariantViolation {
+                                detail: "function-body conditional lowering emitted unexpected instruction shape",
+                            });
                         }
                     }
                 }
@@ -6882,20 +7066,31 @@ pub fn lower_ir2_to_ir3(
                     // `JumpIf` skips the unconditional `Jump` when the condition
                     // is truthy (so control falls through past the loop/if
                     // target); the `Jump` carries the falsy branch to `label_id`.
-                    if let Some(&falsy_target) = fn_label_targets.get(&label_id) {
-                        let truthy_target = (falsy_jump_index + 1) as u32;
-                        if let Ir3Instruction::JumpIf { cond, .. } =
-                            ir3.instructions[truthy_skip_index]
-                        {
-                            ir3.instructions[truthy_skip_index] = Ir3Instruction::JumpIf {
-                                cond,
-                                target: truthy_target,
-                            };
-                            ir3.instructions[falsy_jump_index] = Ir3Instruction::Jump {
-                                target: falsy_target,
-                            };
+                    let falsy_target = *fn_label_targets.get(&label_id).ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail: "function-body control-flow references missing label",
+                        },
+                    )?;
+                    let truthy_target = u32::try_from(falsy_jump_index + 1).map_err(|_| {
+                        LoweringPipelineError::InvariantViolation {
+                            detail: "IR3 instruction stream exceeds addressable size",
                         }
-                    }
+                    })?;
+                    let cond = match ir3.instructions[truthy_skip_index] {
+                        Ir3Instruction::JumpIf { cond, .. } => cond,
+                        _ => {
+                            return Err(LoweringPipelineError::InvariantViolation {
+                                detail: "function-body conditional lowering emitted unexpected instruction shape",
+                            });
+                        }
+                    };
+                    ir3.instructions[truthy_skip_index] = Ir3Instruction::JumpIf {
+                        cond,
+                        target: truthy_target,
+                    };
+                    ir3.instructions[falsy_jump_index] = Ir3Instruction::Jump {
+                        target: falsy_target,
+                    };
                 }
                 PendingJump::IteratorDoneTarget {
                     instruction_index,
@@ -10104,6 +10299,84 @@ mod tests {
             .execute(module, "trace-bd-47p8z")
             .expect("exception-lowering regression should execute")
             .value
+    }
+
+    fn lower_and_execute_deferred_source_bd_6pvhn(source: &str) -> (Ir1Module, Ir3Module, Value) {
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect("deferred-operation regression source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_6pvhn.js");
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("deferred-operation regression should lower to IR1")
+            .module;
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("deferred-operation regression should lower to IR2")
+            .module;
+        let module = lower_ir2_to_ir3(&ir2)
+            .expect("deferred-operation regression should lower to IR3")
+            .module;
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
+        let value = QuickJsLane::with_config(config)
+            .execute(&module, "trace-bd-6pvhn")
+            .expect("deferred-operation regression should execute")
+            .value;
+        (ir1, module, value)
+    }
+
+    fn deferred_ir1_body_bd_6pvhn<'a>(ir1: &'a Ir1Module, name: &str) -> &'a [Ir1Op] {
+        ir1.ops
+            .iter()
+            .find_map(|op| match op {
+                Ir1Op::DeclareFunction {
+                    name: function_name,
+                    body_ops,
+                    ..
+                } if function_name == name => Some(body_ops.as_slice()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing IR1 deferred body for {name}"))
+    }
+
+    fn deferred_ir3_body_bd_6pvhn<'a>(module: &'a Ir3Module, name: &str) -> &'a [Ir3Instruction] {
+        let start = module
+            .function_table
+            .iter()
+            .find(|desc| desc.name.as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("missing IR3 deferred body for {name}"))
+            .entry as usize;
+        let end = module
+            .function_table
+            .iter()
+            .map(|desc| desc.entry as usize)
+            .filter(|entry| *entry > start)
+            .min()
+            .unwrap_or(module.instructions.len());
+        &module.instructions[start..end]
+    }
+
+    fn malformed_deferred_ir2_bd_6pvhn(body_ops: Vec<Ir1Op>) -> Ir2Module {
+        let mut ir1 = Ir1Module::new(
+            ContentHash::compute(b"malformed-deferred-ir0"),
+            "bd_6pvhn_malformed.js",
+        );
+        ir1.ops.push(Ir1Op::DeclareFunction {
+            name: "outer".to_string(),
+            binding_id: 0,
+            param_names: Vec::new(),
+            body_ops,
+            free_vars: Vec::new(),
+            free_var_ids: Vec::new(),
+            free_var_outer_ids: Vec::new(),
+            is_generator: false,
+            rest_param_index: None,
+        });
+        lower_ir1_to_ir2(&ir1)
+            .expect("hand-built deferred IR1 should reach IR2 validation")
+            .module
     }
 
     #[test]
@@ -14219,6 +14492,283 @@ mod tests {
                 .any(|instruction| matches!(instruction, Ir3Instruction::Return { .. })),
             "deferred function body should lower to executable IR3"
         );
+    }
+
+    #[test]
+    fn deferred_nullish_jump_lowers_and_executes_bd_6pvhn() {
+        let (ir1, module, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function fallback(value) { return value ?? 7; } fallback(null) * 10 + fallback(3);",
+        );
+        assert!(
+            deferred_ir1_body_bd_6pvhn(&ir1, "fallback")
+                .iter()
+                .any(|op| matches!(op, Ir1Op::JumpIfNullish { .. })),
+            "the source must reach the affected deferred IR1 operation"
+        );
+        assert!(
+            deferred_ir3_body_bd_6pvhn(&module, "fallback")
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::JumpIfNullish { .. })),
+            "the deferred body must retain its nullish branch"
+        );
+        assert_eq!(value, Value::Int(73));
+    }
+
+    #[test]
+    fn deferred_delete_property_lowers_and_executes_bd_6pvhn() {
+        let (ir1, module, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function remove(key) {\
+                 let object = { fixed: 1, dynamic: 2 };\
+                 let fixed = delete object.fixed;\
+                 let dynamic = delete object[key];\
+                 return fixed && dynamic;\
+             }\
+             remove('dynamic');",
+        );
+        assert_eq!(
+            deferred_ir1_body_bd_6pvhn(&ir1, "remove")
+                .iter()
+                .filter(|op| matches!(op, Ir1Op::DeleteProperty { .. }))
+                .count(),
+            2,
+            "the source must reach static and dynamic deferred delete operations"
+        );
+        assert_eq!(
+            deferred_ir3_body_bd_6pvhn(&module, "remove")
+                .iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::DeleteProperty { .. }))
+                .count(),
+            2,
+            "the deferred body must retain both delete operations"
+        );
+        assert_eq!(value, Value::Bool(true));
+    }
+
+    #[test]
+    fn deferred_construct_lowers_and_executes_bd_6pvhn() {
+        let (ir1, module, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function Empty() { this.value = 1; }\
+             function Pair(left, right) { this.value = left + right; }\
+             function make(EmptyConstructor, PairConstructor) {\
+                 return new EmptyConstructor().value * 10\
+                     + new PairConstructor(3, 4).value;\
+             }\
+             make(Empty, Pair);",
+        );
+        assert_eq!(
+            deferred_ir1_body_bd_6pvhn(&ir1, "make")
+                .iter()
+                .filter(|op| matches!(op, Ir1Op::Construct { .. }))
+                .count(),
+            2,
+            "the source must reach zero- and multi-argument deferred construction"
+        );
+        let construct_arg_counts = deferred_ir3_body_bd_6pvhn(&module, "make")
+            .iter()
+            .filter_map(|instruction| match instruction {
+                Ir3Instruction::Construct { args, .. } => Some(args.count),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(construct_arg_counts, vec![0, 2]);
+        assert_eq!(value, Value::Int(17));
+    }
+
+    #[test]
+    fn deferred_template_literal_lowers_and_executes_bd_6pvhn() {
+        let (ir1, module, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function render(left, right) { return `${left}:${right}` + ``; } render('a', 7);",
+        );
+        assert_eq!(
+            deferred_ir1_body_bd_6pvhn(&ir1, "render")
+                .iter()
+                .filter(|op| matches!(op, Ir1Op::TemplateLiteral { .. }))
+                .count(),
+            2,
+            "the source must reach interpolated and empty deferred templates"
+        );
+        assert_eq!(
+            deferred_ir3_body_bd_6pvhn(&module, "render")
+                .iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::TemplateLiteral { .. }))
+                .count(),
+            2,
+            "the deferred body must retain both template concatenations"
+        );
+        assert_eq!(value, Value::Str("a:7".into()));
+    }
+
+    #[test]
+    fn malformed_module_ops_in_deferred_body_fail_closed_bd_6pvhn() {
+        for (body_op, expected_detail) in [
+            (
+                Ir1Op::ImportModule {
+                    specifier: "./dependency.js".to_string(),
+                },
+                "ImportModule is not valid in a deferred function body",
+            ),
+            (
+                Ir1Op::ExportBinding {
+                    name: "value".to_string(),
+                    binding_id: 0,
+                },
+                "ExportBinding is not valid in a deferred function body",
+            ),
+        ] {
+            let ir2 = malformed_deferred_ir2_bd_6pvhn(vec![body_op]);
+            assert_eq!(
+                lower_ir2_to_ir3(&ir2)
+                    .expect_err("module-only operations in deferred bodies must fail closed"),
+                LoweringPipelineError::InvariantViolation {
+                    detail: expected_detail,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_empty_nested_declaration_fails_closed_bd_6pvhn() {
+        let ir2 = malformed_deferred_ir2_bd_6pvhn(vec![Ir1Op::DeclareFunction {
+            name: "empty".to_string(),
+            binding_id: 1,
+            param_names: Vec::new(),
+            body_ops: Vec::new(),
+            free_vars: Vec::new(),
+            free_var_ids: Vec::new(),
+            free_var_outer_ids: Vec::new(),
+            is_generator: false,
+            rest_param_index: None,
+        }]);
+
+        assert_eq!(
+            lower_ir2_to_ir3(&ir2)
+                .expect_err("empty nested deferred declarations must fail closed"),
+            LoweringPipelineError::InvariantViolation {
+                detail: "Deferred function declaration has an empty body",
+            }
+        );
+    }
+
+    #[test]
+    fn valid_empty_nested_source_function_still_lowers_bd_6pvhn() {
+        let (ir1, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function outer() { function inner() {} return inner(); } outer();",
+        );
+        let inner_body = deferred_ir1_body_bd_6pvhn(&ir1, "outer")
+            .iter()
+            .find_map(|op| match op {
+                Ir1Op::DeclareFunction { name, body_ops, .. } if name == "inner" => Some(body_ops),
+                _ => None,
+            })
+            .expect("source nested declaration should reach the deferred matcher");
+        assert!(
+            !inner_body.is_empty(),
+            "source lowering must synthesize the empty function's return body"
+        );
+        assert_eq!(value, Value::Undefined);
+    }
+
+    #[test]
+    fn malformed_deferred_hostcall_underflow_fails_closed_bd_6pvhn() {
+        let ir2 = malformed_deferred_ir2_bd_6pvhn(vec![Ir1Op::HostCall {
+            capability: "hostcall.invoke".to_string(),
+            arg_count: 1,
+        }]);
+
+        assert_eq!(
+            lower_ir2_to_ir3(&ir2)
+                .expect_err("hostcalls must pass through checked capability lowering"),
+            LoweringPipelineError::InvariantViolation {
+                detail: "Value stack underflow in function-body HostCall",
+            }
+        );
+    }
+
+    #[test]
+    fn malformed_deferred_operation_underflows_fail_closed_bd_6pvhn() {
+        for (body_op, expected_detail) in [
+            (
+                Ir1Op::JumpIfNullish { label_id: 0 },
+                "JumpIfNullish requires a condition register in a function body",
+            ),
+            (
+                Ir1Op::DeleteProperty {
+                    key: Ir1PropertyKey::Static("value".to_string()),
+                },
+                "DeleteProperty requires an object register in a function body",
+            ),
+            (
+                Ir1Op::Construct { arg_count: 0 },
+                "Value stack underflow in function-body Construct",
+            ),
+            (
+                Ir1Op::TemplateLiteral { quasi_count: 1 },
+                "Value stack underflow in function-body TemplateLiteral",
+            ),
+        ] {
+            let ir2 = malformed_deferred_ir2_bd_6pvhn(vec![body_op]);
+            assert_eq!(
+                lower_ir2_to_ir3(&ir2)
+                    .expect_err("malformed deferred stack consumers must fail closed"),
+                LoweringPipelineError::InvariantViolation {
+                    detail: expected_detail,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_deferred_jump_target_fails_closed_bd_6pvhn() {
+        let ir2 = malformed_deferred_ir2_bd_6pvhn(vec![
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::Null,
+            },
+            Ir1Op::JumpIfNullish { label_id: 99 },
+        ]);
+
+        assert_eq!(
+            lower_ir2_to_ir3(&ir2)
+                .expect_err("an unresolved deferred jump must not retain target zero"),
+            LoweringPipelineError::InvariantViolation {
+                detail: "function-body control-flow references missing label",
+            }
+        );
+    }
+
+    #[test]
+    fn malformed_duplicate_deferred_labels_fail_closed_bd_6pvhn() {
+        let ir2 =
+            malformed_deferred_ir2_bd_6pvhn(vec![Ir1Op::Label { id: 7 }, Ir1Op::Label { id: 7 }]);
+
+        assert_eq!(
+            lower_ir2_to_ir3(&ir2)
+                .expect_err("duplicate labels must not overwrite deferred jump targets"),
+            LoweringPipelineError::InvariantViolation {
+                detail: "Deferred function body contains duplicate label ids",
+            }
+        );
+    }
+
+    #[test]
+    fn zero_quasi_deferred_template_loads_real_empty_string_bd_6pvhn() {
+        let ir2 = malformed_deferred_ir2_bd_6pvhn(vec![
+            Ir1Op::TemplateLiteral { quasi_count: 0 },
+            Ir1Op::Return,
+        ]);
+        let module = lower_ir2_to_ir3(&ir2)
+            .expect("zero-quasi compatibility artifact should lower deterministically")
+            .module;
+        let entry = module
+            .function_table
+            .iter()
+            .find(|desc| desc.name.as_deref() == Some("outer"))
+            .expect("deferred function descriptor should exist")
+            .entry as usize;
+
+        let Ir3Instruction::LoadStr { pool_index, .. } = module.instructions[entry] else {
+            panic!("zero-quasi template must materialize an empty string")
+        };
+        assert_eq!(module.constant_pool[pool_index as usize], "");
     }
 
     #[test]

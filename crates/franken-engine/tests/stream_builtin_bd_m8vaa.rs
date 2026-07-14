@@ -120,15 +120,20 @@ const IMPLEMENTED_FIXTURE_IDS: &[&str] = &[
     "tc::stream::0001",
     "tc::stream::0002",
     "tc::stream::0004",
+    "tc::stream::0005",
+    "tc::stream::0006",
     "tc::stream::0007",
     "tc::stream::0008",
     "tc::stream::0009",
+    "tc::stream::0023",
+    "tc::stream::0029",
     "tc::stream::0030",
     "tc::stream::0032",
     "tc::stream::0035",
     "tc::stream::0036",
     "tc::stream::0037",
     "tc::stream::0046",
+    "tc::stream::0047",
     "tc::stream::0049",
 ];
 
@@ -143,7 +148,7 @@ fn target_and_implemented_inventories_are_explicit() {
         .iter()
         .copied()
         .collect::<BTreeSet<_>>();
-    assert_eq!(IMPLEMENTED_FIXTURE_IDS.len(), 13);
+    assert_eq!(IMPLEMENTED_FIXTURE_IDS.len(), 18);
     assert_eq!(implemented.len(), IMPLEMENTED_FIXTURE_IDS.len());
     assert!(IMPLEMENTED_FIXTURE_IDS.iter().all(|id| unique.contains(id)));
 }
@@ -414,7 +419,6 @@ fn stream_constructor_provenance_does_not_bypass_cjs_tdz() {
 }
 
 #[test]
-#[ignore = "bd-fw7zd: custom Readable slice not implemented yet"]
 fn readable_custom_push_paused_read_and_encoding() {
     assert_cases(&[
         EvalCase {
@@ -481,6 +485,68 @@ fn readable_custom_push_paused_read_and_encoding() {
             expected: "string:enc\nend",
         },
         EvalCase {
+            ids: &[],
+            description: "byte-mode data is Buffer-backed and UTF-8 decoding retains split suffixes",
+            source: r#"
+                const { Readable } = require('stream');
+                const bytes = new Readable({ read() {} });
+                bytes.on('data', (chunk) => console.log('buffer:' + Buffer.isBuffer(chunk) + ':' + chunk.toString()));
+                bytes.on('end', () => {
+                  const decoded = new Readable({ read() {} });
+                  decoded.setEncoding('utf-8');
+                  decoded.on('data', (chunk) => console.log(typeof chunk + ':' + chunk));
+                  decoded.on('end', () => console.log('decoded-end'));
+                  decoded.push(Buffer.from([0xe2, 0x82]));
+                  decoded.push(Buffer.from([0xac]));
+                  decoded.push(null);
+                });
+                bytes.push('raw');
+                bytes.push(null);
+            "#,
+            expected: "buffer:true:raw\nstring:€\ndecoded-end",
+        },
+        EvalCase {
+            ids: &[],
+            description: "a custom _read that makes no progress parks without spinning",
+            source: r#"
+                const { Readable } = require('stream');
+                const readable = new Readable({ read() {} });
+                readable.on('data', () => console.log('unexpected'));
+                console.log('parked');
+            "#,
+            expected: "parked",
+        },
+        EvalCase {
+            ids: &[],
+            description: "partial UTF-8 output counts as custom _read progress",
+            source: r#"
+                const { Readable } = require('stream');
+                const pieces = [Buffer.from([0xe2, 0x82]), Buffer.from([0xac]), null];
+                const readable = new Readable({
+                  read() { this.push(pieces.shift()); }
+                });
+                readable.setEncoding('utf8');
+                readable.on('data', (chunk) => console.log(chunk));
+                readable.on('end', () => console.log('end'));
+            "#,
+            expected: "€\nend",
+        },
+        EvalCase {
+            ids: &[],
+            description: "setEncoding converts bytes already buffered before the call",
+            source: r#"
+                const { Readable } = require('stream');
+                const readable = new Readable({ read() {} });
+                readable.push(Buffer.from([0xe2, 0x82]));
+                readable.push(Buffer.from([0xac]));
+                readable.setEncoding('utf8');
+                console.log(readable.readableLength);
+                console.log(readable.read());
+                readable.push(null);
+            "#,
+            expected: "1\n€",
+        },
+        EvalCase {
             ids: &["tc::stream::0047"],
             description: "ESM paused Readable.from preserves iterator chunk boundaries",
             source: r#"
@@ -503,6 +569,13 @@ fn readable_custom_push_paused_read_and_encoding() {
             expected: "readable,readable,readable,end,close\nleft,right",
         },
     ]);
+
+    for source in [
+        "const { Readable } = require('stream'); new Readable({ read: 1 });",
+        "const { Readable } = require('stream'); new Readable({ read() {} }).setEncoding('bogus');",
+    ] {
+        assert!(eval_error(source).contains("type error"));
+    }
 }
 
 #[test]
@@ -551,6 +624,21 @@ fn readable_state_flags_high_water_marks_and_to_array() {
                 })();
             "#,
             expected: "true:2:t1+t2",
+        },
+        EvalCase {
+            ids: &[],
+            description: "toArray retains the chunk prefetched for a readable observer",
+            source: r#"
+                const { once } = require('events');
+                const { Readable } = require('stream');
+                (async () => {
+                  const readable = Readable.from(['prefetched', 'remaining']);
+                  await once(readable, 'readable');
+                  const values = await readable.toArray();
+                  console.log(values.join(','));
+                })();
+            "#,
+            expected: "prefetched,remaining",
         },
         EvalCase {
             ids: &["tc::stream::0035"],

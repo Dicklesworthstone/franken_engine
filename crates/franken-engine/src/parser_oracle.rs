@@ -330,15 +330,10 @@ impl ParseObservation {
 pub fn run_parser_oracle(
     config: &ParserOracleConfig,
 ) -> Result<ParserOracleReport, ParserOracleError> {
-    let catalog = load_fixture_catalog(config.fixture_catalog_path.as_path())?;
-    let fixture_catalog_hash = hash_bytes(
-        &fs::read(config.fixture_catalog_path.as_path()).map_err(|source| {
-            ParserOracleError::Io {
-                path: config.fixture_catalog_path.display().to_string(),
-                source,
-            }
-        })?,
-    );
+    let catalog_bytes = read_fixture_catalog_bytes(config.fixture_catalog_path.as_path())?;
+    let fixture_catalog_hash = hash_bytes(&catalog_bytes);
+    let catalog = decode_fixture_catalog(&catalog_bytes)?;
+    drop(catalog_bytes);
     let fixtures = partition_fixtures(&catalog, config.partition);
     let parser = CanonicalEs2020Parser;
     let options = ParserOptions::default();
@@ -452,11 +447,19 @@ pub fn derive_seed(master_seed: u64, fixture_id: &str, parser_mode: ParserMode) 
 }
 
 pub fn load_fixture_catalog(path: &Path) -> Result<OracleFixtureCatalog, ParserOracleError> {
-    let bytes = fs::read(path).map_err(|source| ParserOracleError::Io {
+    let bytes = read_fixture_catalog_bytes(path)?;
+    decode_fixture_catalog(&bytes)
+}
+
+fn read_fixture_catalog_bytes(path: &Path) -> Result<Vec<u8>, ParserOracleError> {
+    fs::read(path).map_err(|source| ParserOracleError::Io {
         path: path.display().to_string(),
         source,
-    })?;
-    let catalog: OracleFixtureCatalog = serde_json::from_slice(&bytes)
+    })
+}
+
+fn decode_fixture_catalog(bytes: &[u8]) -> Result<OracleFixtureCatalog, ParserOracleError> {
+    let catalog: OracleFixtureCatalog = serde_json::from_slice(bytes)
         .map_err(|error| ParserOracleError::DecodeCatalog(error.to_string()))?;
     validate_fixture_catalog(&catalog)?;
     Ok(catalog)
@@ -543,9 +546,10 @@ fn classify_observation(
         }
         (ParseObservation::Error(first_error), ParseObservation::Error(second_error)) => {
             if first_error == second_error {
-                // Both parsers fail with identical errors — deterministically
-                // equivalent behavior, not diagnostics drift.
-                DriftClass::Equivalent
+                // The v1 fixture schema always declares an expected success
+                // hash. A deterministic parse error is therefore semantic
+                // drift even when both observations preserve the same code.
+                DriftClass::SemanticDrift
             } else {
                 DriftClass::HarnessNondeterminism
             }
@@ -991,14 +995,13 @@ mod tests {
     }
 
     #[test]
-    fn classify_matching_errors_equivalent() {
+    fn classify_matching_errors_are_semantic_drift_for_hash_fixture() {
         let class = classify_observation(
             "sha256:0000",
             ParseObservation::Error(ParseErrorCode::UnsupportedSyntax),
             ParseObservation::Error(ParseErrorCode::UnsupportedSyntax),
         );
-        // Both parsers fail identically — deterministically equivalent.
-        assert_eq!(class, DriftClass::Equivalent);
+        assert_eq!(class, DriftClass::SemanticDrift);
     }
 
     #[test]
@@ -1486,6 +1489,45 @@ mod tests {
     fn load_fixture_catalog_nonexistent() {
         let err = load_fixture_catalog(Path::new("/nonexistent/catalog.json")).unwrap_err();
         assert!(err.to_string().contains("failed to read"));
+    }
+
+    #[test]
+    fn run_parser_oracle_fail_closed_rejects_matching_errors_for_hash_fixture() {
+        let catalog_file = tempfile::NamedTempFile::new().expect("create fixture catalog");
+        let catalog_bytes = br#"{
+            "schema_version": "franken-engine.parser-phase0.semantic-fixtures.v1",
+            "parser_mode": "scalar_reference",
+            "fixtures": [{
+                "id": "deterministic-error",
+                "family_id": "regression",
+                "goal": "script",
+                "source": "const answer",
+                "expected_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            }]
+        }"#;
+        std::fs::write(catalog_file.path(), catalog_bytes).expect("write fixture catalog");
+
+        let mut config =
+            ParserOracleConfig::with_defaults(OraclePartition::Full, OracleGateMode::FailClosed, 7);
+        config.fixture_catalog_path = catalog_file.path().to_path_buf();
+
+        let report = run_parser_oracle(&config).expect("run parser oracle");
+        assert_eq!(report.fixture_catalog_hash, hash_bytes(catalog_bytes));
+        assert_eq!(report.fixture_results.len(), 1);
+
+        let result = &report.fixture_results[0];
+        assert_eq!(result.drift_class, DriftClass::SemanticDrift);
+        assert_eq!(result.comparator_decision, "drift_critical");
+        assert!(result.observed_hash.is_none());
+        assert!(result.repeated_hash.is_none());
+        assert!(result.parse_error_code.is_some());
+        assert_eq!(result.parse_error_code, result.repeated_error_code);
+
+        assert_eq!(report.summary.equivalent_count, 0);
+        assert_eq!(report.summary.critical_drift_count, 1);
+        assert_eq!(report.decision.action, GateAction::Reject);
+        assert!(report.decision.promotion_blocked);
+        assert!(report.decision.fallback_triggered);
     }
 
     // -- Enrichment: PearlTower 2026-02-26 --

@@ -230,10 +230,8 @@ const MEMORY_ESTIMATE_EVENT_LISTENER_BASE_BYTES: u64 = 48;
 /// implicit rejection-on-`error` observer), both accounted independently.
 const MEMORY_ESTIMATE_EVENT_PROMISE_WAITER_BASE_BYTES: u64 = 48;
 /// Conservative base charge for one finite `Readable.from` side-table entry.
-/// Chunk values and custom IFC labels are charged separately.
+/// A retained string source and custom IFC label are charged separately.
 const MEMORY_ESTIMATE_READABLE_FROM_BASE_BYTES: u64 = 64;
-/// Conservative metadata charge for one retained, IFC-labelled stream chunk.
-const MEMORY_ESTIMATE_READABLE_FROM_CHUNK_BASE_BYTES: u64 = 32;
 /// BotGuard typed-array v1 per-buffer cap from bd-8enww.2.1.
 const MAX_ARRAY_BUFFER_BYTE_LENGTH: u64 = 8 * 1024 * 1024;
 /// Approximate metadata footprint for an ArrayBuffer-backed typed-array view.
@@ -5667,15 +5665,6 @@ struct PendingStreamEmission {
     phase: StreamEventPhase,
 }
 
-/// One chunk retained by the pure-compute `Readable.from` kernel. The label is
-/// captured from the source argument before hostcall dispatch returns, so a
-/// later event-loop turn cannot lose the source's IFC provenance.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LabeledReadableChunk {
-    value: Value,
-    label: Label,
-}
-
 /// Current phase of one finite `Readable.from` pump.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReadableFromPumpPhase {
@@ -5684,13 +5673,18 @@ enum ReadableFromPumpPhase {
     Close,
 }
 
-/// Finite pure-compute readable state, kept outside the JS heap so guest code
-/// cannot forge or mutate the pending chunk sequence.
+/// Finite pure-compute readable state. The cursor and flow-control bit stay
+/// outside the JS heap so guest property writes cannot forge stream progress.
+/// Within the supported array subset, own indexed elements and length are read
+/// lazily so ordinary source mutation is observed between pump turns. Custom
+/// iterators, accessors, and inherited indexed properties remain fail-closed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReadableFromState {
-    chunks: Vec<LabeledReadableChunk>,
-    next_chunk: usize,
+    source: Value,
+    next_index: usize,
     phase: ReadableFromPumpPhase,
+    flowing: bool,
+    lifecycle_label: Label,
 }
 
 /// One listener in the interpreter-wide EventEmitter side table (bd-2dmnn).
@@ -6866,6 +6860,7 @@ impl InterpreterCore {
                     registration_label,
                 });
         }
+        self.activate_readable_from_data_flow(target_id, &event);
         Ok(Value::Promise(promise.0))
     }
 
@@ -7194,38 +7189,20 @@ impl InterpreterCore {
                 Value::Object(object_id) => self.binary_storage_label(*object_id),
                 _ => Label::Public,
             });
-        let values = match &source {
-            Value::Str(_) => vec![source.clone()],
+        match &source {
+            Value::Str(_) => {}
             Value::Object(object_id)
                 if self
                     .heap
                     .get(object_id.0 as usize)
-                    .is_some_and(|object| object.is_array) =>
-            {
-                let length = self.array_like_length(*object_id)?;
-                let mut values = Vec::with_capacity(length);
-                for index in 0..length {
-                    values.push(
-                        self.array_index_value(*object_id, index)?
-                            .unwrap_or(Value::Undefined),
-                    );
-                }
-                values
-            }
+                    .is_some_and(|object| object.is_array) => {}
             other => {
                 return Err(InterpreterError::TypeError {
                     expected: "array or string source for Readable.from".to_string(),
                     got: other.type_name().to_string(),
                 });
             }
-        };
-        let chunks = values
-            .into_iter()
-            .map(|value| LabeledReadableChunk {
-                value,
-                label: source_label.clone(),
-            })
-            .collect::<Vec<_>>();
+        }
         let object_mode = if args.count > 1 {
             match self.read_reg(args.start + 1)? {
                 Value::Object(options_id) => self
@@ -7241,29 +7218,34 @@ impl InterpreterCore {
             true
         };
         let state = ReadableFromState {
-            phase: if chunks.is_empty() {
-                ReadableFromPumpPhase::End
-            } else {
-                ReadableFromPumpPhase::Data
-            },
-            chunks,
-            next_chunk: 0,
+            source,
+            next_index: 0,
+            phase: ReadableFromPumpPhase::Data,
+            flowing: false,
+            lifecycle_label: source_label,
         };
         let state_bytes = Self::estimate_readable_from_state_bytes(&state);
+        let object_properties = Self::readable_from_object_properties(object_mode);
+        let mut projected_object = HeapObject::new();
+        for (key, value) in &object_properties {
+            projected_object
+                .properties
+                .insert((*key).to_string(), value.clone());
+        }
+        let object_bytes = Self::estimate_heap_object_bytes(&projected_object);
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_add(state_bytes)
+            .saturating_add(object_bytes);
+        if requested_bytes > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(
+                requested_bytes,
+                self.heap_object_count_u32().saturating_add(1),
+            ));
+        }
         self.apply_memory_component_delta(0, state_bytes)?;
 
-        let object_id = match self.alloc_object_with_properties(&[
-            ("__type", Value::str("Readable")),
-            ("__maxListeners", Value::Int(10)),
-            ("readable", Value::Bool(true)),
-            ("readableEnded", Value::Bool(false)),
-            ("readableFlowing", Value::Null),
-            ("readableLength", Value::Int(0)),
-            ("readableObjectMode", Value::Bool(object_mode)),
-            ("readableHighWaterMark", Value::Int(1)),
-            ("destroyed", Value::Bool(false)),
-            ("closed", Value::Bool(false)),
-        ]) {
+        let object_id = match self.alloc_object_with_properties(&object_properties) {
             Ok(object_id) => object_id,
             Err(error) => {
                 self.estimated_memory_bytes =
@@ -7274,6 +7256,21 @@ impl InterpreterCore {
         self.readable_from_streams.insert(object_id, state);
         self.schedule_readable_from_pump(object_id);
         Ok(Value::Object(object_id))
+    }
+
+    fn readable_from_object_properties(object_mode: bool) -> [(&'static str, Value); 10] {
+        [
+            ("__type", Value::str("Readable")),
+            ("__maxListeners", Value::Int(10)),
+            ("readable", Value::Bool(true)),
+            ("readableEnded", Value::Bool(false)),
+            ("readableFlowing", Value::Null),
+            ("readableLength", Value::Int(0)),
+            ("readableObjectMode", Value::Bool(object_mode)),
+            ("readableHighWaterMark", Value::Int(1)),
+            ("destroyed", Value::Bool(false)),
+            ("closed", Value::Bool(false)),
+        ]
     }
 
     /// Queue one future pump turn, suppressing duplicate schedules created by
@@ -7291,6 +7288,42 @@ impl InterpreterCore {
             .event_loop
             .schedule_io_completion(crate::closure_model::ClosureHandle(0), Label::Public);
         self.pending_readable_from_pumps.insert(seq, object_id);
+    }
+
+    /// A data observer puts a finite Readable into flowing mode. This is an
+    /// engine-owned internal-slot transition. Mirror it into the existing
+    /// public property without a fallible guest write after a listener/waiter
+    /// record has been committed. If guest code deleted that mirror, preserve
+    /// the deletion rather than performing a potentially budget-failing insert.
+    fn activate_readable_from_data_flow(&mut self, object_id: ObjectId, event: &str) {
+        if event != "data" {
+            return;
+        }
+        let Some(state) = self.readable_from_streams.get_mut(&object_id) else {
+            return;
+        };
+        state.flowing = true;
+        let key = "readableFlowing";
+        let previous_bytes = self
+            .heap
+            .get(object_id.0 as usize)
+            .and_then(|object| object.properties.get(key))
+            .map(|value| Self::estimate_property_entry_bytes(key, value));
+        self.mutate_heap(|heap| {
+            if let Some(flowing) = heap
+                .get_mut(object_id.0 as usize)
+                .and_then(|object| object.properties.get_mut(key))
+            {
+                *flowing = Value::Bool(true);
+            }
+        });
+        if let Some(previous_bytes) = previous_bytes {
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(previous_bytes)
+                .saturating_add(Self::estimate_property_entry_bytes(key, &Value::Bool(true)));
+        }
+        self.schedule_readable_from_pump(object_id);
     }
 
     /// Execute one finite-readable phase without holding the stream-state or
@@ -7314,74 +7347,112 @@ impl InterpreterCore {
 
         match phase {
             ReadableFromPumpPhase::Data => {
-                // A finite Readable enters flowing mode only after a data
-                // listener exists. If this construction-time pump wins the
-                // race, listener registration will schedule a replacement.
-                if self
-                    .event_listener_records_for(object_id, "data")
-                    .is_empty()
-                {
+                let flowing = self
+                    .readable_from_streams
+                    .get(&object_id)
+                    .is_some_and(|state| state.flowing);
+                if !flowing {
                     return Ok(());
                 }
-                let chunk = {
-                    let Some(state) = self.readable_from_streams.get_mut(&object_id) else {
-                        return Ok(());
-                    };
-                    let Some(chunk) = state.chunks.get(state.next_chunk).cloned() else {
-                        state.phase = ReadableFromPumpPhase::End;
-                        self.schedule_readable_from_pump(object_id);
-                        return Ok(());
-                    };
-                    state.next_chunk = state.next_chunk.saturating_add(1);
-                    if state.next_chunk == state.chunks.len() {
+
+                let Some((source, next_index, lifecycle_label)) =
+                    self.readable_from_streams.get(&object_id).map(|state| {
+                        (
+                            state.source.clone(),
+                            state.next_index,
+                            state.lifecycle_label.clone(),
+                        )
+                    })
+                else {
+                    return Ok(());
+                };
+                let next_value = match source {
+                    Value::Str(text) if next_index == 0 => Some(Value::Str(text)),
+                    Value::Str(_) => None,
+                    Value::Object(source_id) => {
+                        let length = self.array_like_length(source_id)?;
+                        if next_index < length {
+                            Some(
+                                self.array_index_value(source_id, next_index)?
+                                    .unwrap_or(Value::Undefined),
+                            )
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+
+                let Some(value) = next_value else {
+                    if let Some(state) = self.readable_from_streams.get_mut(&object_id) {
                         state.phase = ReadableFromPumpPhase::End;
                     }
-                    chunk
+                    self.schedule_readable_from_pump(object_id);
+                    return Ok(());
                 };
-                self.emit_event_listener_records(
+                let Some(state) = self.readable_from_streams.get_mut(&object_id) else {
+                    return Ok(());
+                };
+                if state.phase != ReadableFromPumpPhase::Data || state.next_index != next_index {
+                    return Ok(());
+                }
+                state.next_index = state.next_index.saturating_add(1);
+                let emission = self.emit_event_listener_records(
                     module,
                     object_id,
                     "data",
-                    vec![chunk.value],
-                    chunk.label,
-                )?;
+                    vec![value],
+                    lifecycle_label,
+                );
                 self.schedule_readable_from_pump(object_id);
+                emission?;
             }
             ReadableFromPumpPhase::End => {
-                if let Some(state) = self.readable_from_streams.get_mut(&object_id) {
-                    state.phase = ReadableFromPumpPhase::Close;
-                }
+                let Some(lifecycle_label) =
+                    self.readable_from_streams.get_mut(&object_id).map(|state| {
+                        state.phase = ReadableFromPumpPhase::Close;
+                        state.lifecycle_label.clone()
+                    })
+                else {
+                    return Ok(());
+                };
                 self.set_object_property(object_id, "readable".to_string(), Value::Bool(false))?;
                 self.set_object_property(
                     object_id,
                     "readableEnded".to_string(),
                     Value::Bool(true),
                 )?;
-                self.emit_event_listener_records(
+                let emission = self.emit_event_listener_records(
                     module,
                     object_id,
                     "end",
                     Vec::new(),
-                    Label::Public,
-                )?;
+                    lifecycle_label,
+                );
                 self.schedule_readable_from_pump(object_id);
+                emission?;
             }
             ReadableFromPumpPhase::Close => {
                 self.set_object_property(object_id, "destroyed".to_string(), Value::Bool(true))?;
                 self.set_object_property(object_id, "closed".to_string(), Value::Bool(true))?;
+                let lifecycle_label = self
+                    .readable_from_streams
+                    .remove(&object_id)
+                    .map(|state| {
+                        self.estimated_memory_bytes = self
+                            .estimated_memory_bytes
+                            .saturating_sub(Self::estimate_readable_from_state_bytes(&state));
+                        state.lifecycle_label
+                    })
+                    .unwrap_or(Label::Public);
                 let emission = self.emit_event_listener_records(
                     module,
                     object_id,
                     "close",
                     Vec::new(),
-                    Label::Public,
+                    lifecycle_label,
                 );
                 self.clear_event_listeners(object_id, None);
-                if let Some(state) = self.readable_from_streams.remove(&object_id) {
-                    self.estimated_memory_bytes = self
-                        .estimated_memory_bytes
-                        .saturating_sub(Self::estimate_readable_from_state_bytes(&state));
-                }
                 emission?;
             }
         }
@@ -11422,14 +11493,7 @@ impl InterpreterCore {
                         },
                         false,
                     )?;
-                    if event == "data" && self.readable_from_streams.contains_key(&target_id) {
-                        self.set_object_property(
-                            target_id,
-                            "readableFlowing".to_string(),
-                            Value::Bool(true),
-                        )?;
-                        self.schedule_readable_from_pump(target_id);
-                    }
+                    self.activate_readable_from_data_flow(target_id, &event);
                 }
                 Ok(Value::Object(target_id))
             }
@@ -11473,6 +11537,7 @@ impl InterpreterCore {
                                 | BuiltinFunctionKind::EmitterPrependOnceListener
                         ),
                     )?;
+                    self.activate_readable_from_data_flow(target_id, &event);
                 }
                 Ok(Value::Object(target_id))
             }
@@ -35494,19 +35559,13 @@ impl InterpreterCore {
     }
 
     fn estimate_readable_from_state_bytes(state: &ReadableFromState) -> u64 {
-        state
-            .chunks
-            .iter()
-            .fold(MEMORY_ESTIMATE_READABLE_FROM_BASE_BYTES, |total, chunk| {
-                let label_bytes = match &chunk.label {
-                    Label::Custom { name, .. } => Self::estimate_string_bytes(name),
-                    _ => 0,
-                };
-                total
-                    .saturating_add(MEMORY_ESTIMATE_READABLE_FROM_CHUNK_BASE_BYTES)
-                    .saturating_add(Self::estimate_value_bytes(&chunk.value))
-                    .saturating_add(label_bytes)
-            })
+        let label_bytes = match &state.lifecycle_label {
+            Label::Custom { name, .. } => Self::estimate_string_bytes(name),
+            _ => 0,
+        };
+        MEMORY_ESTIMATE_READABLE_FROM_BASE_BYTES
+            .saturating_add(Self::estimate_value_bytes(&state.source))
+            .saturating_add(label_bytes)
     }
 
     fn estimate_scope_frame_bytes(frame: &ScopeFrame) -> u64 {
@@ -43777,16 +43836,211 @@ mod async_runtime_tests_current {
             core.recompute_estimated_memory_bytes()
         );
 
-        core.drive_readable_from_pump(readable_id, Some(&module))
-            .expect("empty readable end phase");
-        core.drive_readable_from_pump(readable_id, Some(&module))
-            .expect("empty readable close phase");
-
-        assert!(!core.readable_from_streams.contains_key(&readable_id));
+        core.set_object_property(
+            readable_id,
+            "readableFlowing".to_string(),
+            Value::str("guest-forged-flow-state"),
+        )
+        .expect("guest flowing mirror mutation");
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
         );
+        core.activate_readable_from_data_flow(readable_id, "data");
+        assert_eq!(
+            core.heap
+                .get(readable_id.0 as usize)
+                .and_then(|object| object.properties.get("readableFlowing")),
+            Some(&Value::Bool(true))
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        core.run_event_loop_until_idle_with_module(Some(&module));
+
+        assert!(!core.readable_from_streams.contains_key(&readable_id));
+        assert!(core.pending_readable_from_pumps.is_empty());
+        assert!(!core.event_loop.has_pending_work());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn readable_from_precharges_fixed_state_before_heap_side_effects_bd_fw7zd() {
+        let mut core = test_interpreter();
+        let source = core
+            .alloc_array_from_values(&[])
+            .expect("empty source array");
+        core.mutate_registers(|registers| registers[0] = Value::Object(source));
+        let baseline_bytes = core.estimated_memory_bytes();
+        let baseline_heap_len = core.heap.len();
+        let state = ReadableFromState {
+            source: Value::Object(source),
+            next_index: 0,
+            phase: ReadableFromPumpPhase::Data,
+            flowing: false,
+            lifecycle_label: Label::Public,
+        };
+        let state_bytes = InterpreterCore::estimate_readable_from_state_bytes(&state);
+        core.config.max_total_memory_bytes =
+            baseline_bytes.saturating_add(state_bytes).saturating_sub(1);
+
+        let error = core
+            .construct_readable_from(RegRange { start: 0, count: 1 })
+            .expect_err("state charge above the memory budget must fail first");
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(core.heap.len(), baseline_heap_len);
+        assert!(core.readable_from_streams.is_empty());
+        assert!(core.pending_readable_from_pumps.is_empty());
+        assert_eq!(core.estimated_memory_bytes(), baseline_bytes);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        let properties = InterpreterCore::readable_from_object_properties(true);
+        let mut projected_object = HeapObject::new();
+        for (key, value) in properties {
+            projected_object.properties.insert(key.to_string(), value);
+        }
+        let object_bytes = InterpreterCore::estimate_heap_object_bytes(&projected_object);
+        core.config.max_total_memory_bytes = baseline_bytes
+            .saturating_add(state_bytes)
+            .saturating_add(object_bytes)
+            .saturating_sub(1);
+
+        let error = core
+            .construct_readable_from(RegRange { start: 0, count: 1 })
+            .expect_err("full Readable object charge must be preflighted atomically");
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(core.heap.len(), baseline_heap_len);
+        assert!(core.readable_from_streams.is_empty());
+        assert!(core.pending_readable_from_pumps.is_empty());
+        assert_eq!(core.estimated_memory_bytes(), baseline_bytes);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn readable_from_data_end_and_close_promises_retain_source_label_bd_fw7zd() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let source = core
+            .alloc_array_from_values(&[Value::str("classified")])
+            .expect("single-chunk source array");
+        core.mutate_registers(|registers| registers[0] = Value::Object(source));
+        core.set_register_label(0, Label::Secret)
+            .expect("source label");
+        let Value::Object(readable_id) = core
+            .construct_readable_from(RegRange { start: 0, count: 1 })
+            .expect("construct finite readable")
+        else {
+            panic!("Readable.from must return an object");
+        };
+
+        let mut promises = Vec::new();
+        for event in ["data", "end", "close"] {
+            core.write_reg(1, Value::Object(readable_id))
+                .expect("emitter registration value");
+            core.write_reg(2, Value::str(event))
+                .expect("event registration value");
+            core.set_register_label(1, Label::Public)
+                .expect("emitter registration label");
+            core.set_register_label(2, Label::Public)
+                .expect("event registration label");
+            let Value::Promise(promise) = core
+                .register_event_promise_once(RegRange { start: 1, count: 2 })
+                .expect("register static events.once waiter")
+            else {
+                panic!("events.once must return a Promise");
+            };
+            promises.push(promise);
+        }
+
+        core.run_event_loop_until_idle_with_module(Some(&module));
+
+        for promise in promises {
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(promise))
+                .expect("settled lifecycle promise");
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Fulfilled(_)
+            ));
+            assert_eq!(record.label, Label::Secret);
+        }
+        assert!(core.readable_from_streams.is_empty());
+        assert!(core.pending_readable_from_pumps.is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn readable_from_throwing_data_or_end_listener_still_closes_bd_fw7zd() {
+        let module = test_module_with_functions(
+            vec![Ir3Instruction::Throw { value: 0 }],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 1,
+                frame_size: 1,
+                name: Some("throw_from_stream_listener".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+
+        for event in ["data", "end"] {
+            let mut core = test_interpreter();
+            let source = core
+                .alloc_array_from_values(&[Value::str("chunk")])
+                .expect("single-chunk source array");
+            core.mutate_registers(|registers| registers[0] = Value::Object(source));
+            let Value::Object(readable_id) = core
+                .construct_readable_from(RegRange { start: 0, count: 1 })
+                .expect("construct finite readable")
+            else {
+                panic!("Readable.from must return an object");
+            };
+            core.insert_event_listener(
+                readable_id,
+                event,
+                EventListenerRecord {
+                    listener: Value::Function(0),
+                    once: false,
+                },
+                false,
+            )
+            .expect("throwing listener registration");
+            core.activate_readable_from_data_flow(readable_id, "data");
+
+            core.run_event_loop_until_idle_with_module(Some(&module));
+
+            assert!(
+                !core.readable_from_streams.contains_key(&readable_id),
+                "throwing {event} listener must not retain stream state"
+            );
+            assert!(core.pending_readable_from_pumps.is_empty());
+            assert!(!core.event_loop.has_pending_work());
+            assert!(!core.event_listeners.contains_key(&readable_id));
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
     }
 
     /// bd-2dmnn: listener records live outside the JS heap but still consume

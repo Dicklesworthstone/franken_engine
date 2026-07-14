@@ -1059,6 +1059,15 @@ fn lower_ir0_to_ir1_with_ambient_grant(
                         // import maps to the single `net:request` capability, and
                         // the calls are recognized at their direct-call sites by
                         // `http_named_import_call_capability`.
+                        let complete_stream_named_import =
+                            is_stream_module_specifier(&import.source)
+                                && !specifiers.is_empty()
+                                && specifiers.iter().all(|spec| {
+                                    spec.import_name == "Readable"
+                                        && binding_lookup.contains_key(
+                                            &stream_readable_binding_sentinel(&spec.local_name),
+                                        )
+                                });
                         let named_builtin_import = (is_fs_module_specifier(&import.source)
                             && specifiers.iter().any(|spec| {
                                 binding_lookup.contains_key(&fs_named_import_sentinel(
@@ -1097,12 +1106,15 @@ fn lower_ir0_to_ir1_with_ambient_grant(
                                         &spec.local_name,
                                     ))
                                 }))
-                            || (is_stream_module_specifier(&import.source)
-                                && specifiers.iter().any(|spec| {
-                                    binding_lookup.contains_key(&stream_readable_binding_sentinel(
-                                        &spec.local_name,
-                                    ))
-                                }));
+                            || complete_stream_named_import;
+                        if is_stream_module_specifier(&import.source)
+                            && !complete_stream_named_import
+                        {
+                            for spec in specifiers {
+                                binding_lookup
+                                    .remove(&stream_readable_binding_sentinel(&spec.local_name));
+                            }
+                        }
                         if named_builtin_import {
                             for spec in specifiers {
                                 ir1.ops.push(Ir1Op::LoadLiteral {
@@ -1990,9 +2002,11 @@ fn reserve_and_mark_source_scope_bindings(
     binding_lookup: &mut BTreeMap<String, BindingId>,
     binding_index: &mut BindingId,
 ) {
-    for name in direct_lexical_binding_names(statements) {
-        reserve_fresh_binding_id(binding_lookup, binding_index, &name);
+    let lexical_names = direct_lexical_binding_names(statements);
+    for name in &lexical_names {
+        reserve_fresh_binding_id(binding_lookup, binding_index, name);
     }
+    suppress_stream_module_sentinels(binding_lookup, &lexical_names);
     for name in reserve_root_scope_bindings(statements, binding_lookup, binding_index) {
         binding_lookup.insert(lexical_binding_sentinel(&name), 0);
         let binding_id = *binding_lookup
@@ -2007,7 +2021,9 @@ fn mark_pre_reserved_source_scope_bindings(
     binding_lookup: &mut BTreeMap<String, BindingId>,
     binding_index: &mut BindingId,
 ) {
-    for name in reserve_root_scope_bindings(statements, binding_lookup, binding_index) {
+    let reserved = reserve_root_scope_bindings(statements, binding_lookup, binding_index);
+    suppress_stream_module_sentinels(binding_lookup, &reserved);
+    for name in reserved {
         binding_lookup.insert(lexical_binding_sentinel(&name), 0);
         let binding_id = *binding_lookup
             .get(&name)
@@ -2060,9 +2076,11 @@ fn binding_entry_snapshot(
         .iter()
         .flat_map(|name| {
             let origin = capture_origin_sentinel(name);
+            let stream = stream_readable_binding_sentinel(name);
             [
                 (name.clone(), binding_lookup.get(name).copied()),
                 (origin.clone(), binding_lookup.get(&origin).copied()),
+                (stream.clone(), binding_lookup.get(&stream).copied()),
             ]
         })
         .collect()
@@ -2109,6 +2127,14 @@ fn prepare_function_body_bindings(
             body_binding_index,
         ));
     }
+    // A stream provenance sentinel belongs to the imported binding in the
+    // enclosing scope, not to a same-spelled parameter/local in this fresh
+    // function scope. Remove inherited sentinels before lowering the body so
+    // lexical shadowing cannot rewrite `Readable.from` into the engine builtin
+    // (bd-fw7zd fresh-eyes audit).
+    for name in &local_names {
+        body_lookup.remove(&stream_readable_binding_sentinel(name));
+    }
     for name in &local_names {
         body_lookup.insert(lexical_binding_sentinel(name), 0);
         if let Some(&binding_id) = body_lookup.get(name) {
@@ -2116,6 +2142,7 @@ fn prepare_function_body_bindings(
         }
     }
     if let Some(name) = self_name {
+        body_lookup.remove(&stream_readable_binding_sentinel(name));
         body_lookup.insert(lexical_binding_sentinel(name), 0);
     }
 
@@ -2605,6 +2632,30 @@ fn push_param_slot<'a>(
             destructure_params.push((synthetic, &param.pattern));
         }
     }
+}
+
+fn allocate_destructure_param_bindings(
+    destructure_params: &[(String, &BindingPattern)],
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    scope_id: ScopeId,
+) -> Result<(), LoweringPipelineError> {
+    for (_, pattern) in destructure_params {
+        for inner_name in pattern.binding_names() {
+            let _ = alloc_binding(
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                inner_name,
+                BindingKind::Var,
+            )
+            .map_err(LoweringPipelineError::SemanticViolation)?;
+            binding_lookup.remove(&stream_readable_binding_sentinel(inner_name));
+        }
+    }
+    Ok(())
 }
 
 /// Index of the rest parameter (`...x`) in a parameter list, if present
@@ -3236,18 +3287,6 @@ fn lower_statement_to_ir1_with_flow(
             //   8. Jump → loop_label
             //   9. end_label:
             //  10. IteratorClose (break path wired through control_flow)
-            lower_expression_to_ir1(
-                &for_in_stmt.object,
-                ops,
-                bindings,
-                binding_lookup,
-                binding_index,
-                scope_id,
-                label_counter,
-                span_table,
-            )?;
-            ops.push(Ir1Op::ForInInit);
-
             let lexical_marker_snapshot = source_lexical_marker_snapshot(binding_lookup);
             let lexical_names = if for_in_stmt.binding_kind != Some(VariableDeclarationKind::Var) {
                 for_in_stmt
@@ -3260,6 +3299,7 @@ fn lower_statement_to_ir1_with_flow(
                 BTreeSet::new()
             };
             let lexical_binding_snapshot = binding_entry_snapshot(binding_lookup, &lexical_names);
+            suppress_stream_module_sentinels(binding_lookup, &lexical_names);
             for name in for_in_stmt.binding.binding_names() {
                 let binding_id = if for_in_stmt.binding_kind == Some(VariableDeclarationKind::Var) {
                     reserve_binding_id(binding_lookup, binding_index, name)
@@ -3269,6 +3309,18 @@ fn lower_statement_to_ir1_with_flow(
                 binding_lookup.insert(lexical_binding_sentinel(name), 0);
                 binding_lookup.insert(capture_origin_sentinel(name), binding_id);
             }
+
+            lower_expression_to_ir1(
+                &for_in_stmt.object,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                label_counter,
+                span_table,
+            )?;
+            ops.push(Ir1Op::ForInInit);
 
             let loop_label = alloc_label(label_counter);
             let continue_label = alloc_label(label_counter);
@@ -3365,18 +3417,6 @@ fn lower_statement_to_ir1_with_flow(
             //   7. body (break path calls IteratorClose)
             //   8. Jump → loop_label
             //   9. end_label:
-            lower_expression_to_ir1(
-                &for_of_stmt.iterable,
-                ops,
-                bindings,
-                binding_lookup,
-                binding_index,
-                scope_id,
-                label_counter,
-                span_table,
-            )?;
-            ops.push(Ir1Op::ForOfInit);
-
             let lexical_marker_snapshot = source_lexical_marker_snapshot(binding_lookup);
             let lexical_names = if for_of_stmt.binding_kind != Some(VariableDeclarationKind::Var) {
                 for_of_stmt
@@ -3389,6 +3429,7 @@ fn lower_statement_to_ir1_with_flow(
                 BTreeSet::new()
             };
             let lexical_binding_snapshot = binding_entry_snapshot(binding_lookup, &lexical_names);
+            suppress_stream_module_sentinels(binding_lookup, &lexical_names);
             for name in for_of_stmt.binding.binding_names() {
                 let binding_id = if for_of_stmt.binding_kind == Some(VariableDeclarationKind::Var) {
                     reserve_binding_id(binding_lookup, binding_index, name)
@@ -3398,6 +3439,18 @@ fn lower_statement_to_ir1_with_flow(
                 binding_lookup.insert(lexical_binding_sentinel(name), 0);
                 binding_lookup.insert(capture_origin_sentinel(name), binding_id);
             }
+
+            lower_expression_to_ir1(
+                &for_of_stmt.iterable,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                label_counter,
+                span_table,
+            )?;
+            ops.push(Ir1Op::ForOfInit);
 
             let loop_label = alloc_label(label_counter);
             let continue_label = alloc_label(label_counter);
@@ -3828,6 +3881,7 @@ fn lower_statement_to_ir1_with_flow(
                     }
                     let catch_binding_snapshot =
                         binding_entry_snapshot(binding_lookup, &catch_lexical_names);
+                    suppress_stream_module_sentinels(binding_lookup, &catch_lexical_names);
                     reserve_and_mark_source_scope_bindings(
                         &handler.body.body,
                         binding_lookup,
@@ -4220,23 +4274,20 @@ fn lower_statement_to_ir1_with_flow(
                     BindingKind::Parameter,
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
+                body_lookup.remove(&stream_readable_binding_sentinel(pname));
             }
             // For destructuring-pattern params, allocate inner identifier
             // bindings and emit destructuring ops that copy from each
             // `__param_N` slot into the inner names. Must run before body
             // statement lowering so the body sees the inner bindings.
+            allocate_destructure_param_bindings(
+                &destructure_params,
+                &mut body_bindings,
+                &mut body_lookup,
+                &mut body_binding_index,
+                body_scope,
+            )?;
             for (synthetic_name, pattern) in &destructure_params {
-                for inner_name in pattern.binding_names() {
-                    let _ = alloc_binding(
-                        &mut body_bindings,
-                        &mut body_lookup,
-                        &mut body_binding_index,
-                        body_scope,
-                        inner_name,
-                        BindingKind::Var,
-                    )
-                    .map_err(LoweringPipelineError::SemanticViolation)?;
-                }
                 let source_bid = *body_lookup
                     .get(synthetic_name.as_str())
                     .expect("synthetic param binding allocated above");
@@ -4364,20 +4415,17 @@ fn lower_statement_to_ir1_with_flow(
                     BindingKind::Parameter,
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
+                body_lookup.remove(&stream_readable_binding_sentinel(pname));
             }
             // Destructure non-identifier ctor params (applies defaults) before the body.
+            allocate_destructure_param_bindings(
+                &destructure_params,
+                &mut body_bindings,
+                &mut body_lookup,
+                &mut body_binding_index,
+                body_scope,
+            )?;
             for (synthetic_name, pattern) in &destructure_params {
-                for inner_name in pattern.binding_names() {
-                    let _ = alloc_binding(
-                        &mut body_bindings,
-                        &mut body_lookup,
-                        &mut body_binding_index,
-                        body_scope,
-                        inner_name,
-                        BindingKind::Var,
-                    )
-                    .map_err(LoweringPipelineError::SemanticViolation)?;
-                }
                 let source_bid = *body_lookup
                     .get(synthetic_name.as_str())
                     .expect("synthetic param binding allocated above");
@@ -4551,20 +4599,17 @@ fn lower_statement_to_ir1_with_flow(
                         BindingKind::Parameter,
                     )
                     .map_err(LoweringPipelineError::SemanticViolation)?;
+                    m_lookup.remove(&stream_readable_binding_sentinel(pname));
                 }
                 // Destructure non-identifier params (applies defaults) before the body.
+                allocate_destructure_param_bindings(
+                    &m_destructure_params,
+                    &mut m_bindings,
+                    &mut m_lookup,
+                    &mut m_binding_index,
+                    m_scope,
+                )?;
                 for (synthetic_name, pattern) in &m_destructure_params {
-                    for inner_name in pattern.binding_names() {
-                        let _ = alloc_binding(
-                            &mut m_bindings,
-                            &mut m_lookup,
-                            &mut m_binding_index,
-                            m_scope,
-                            inner_name,
-                            BindingKind::Var,
-                        )
-                        .map_err(LoweringPipelineError::SemanticViolation)?;
-                    }
                     let source_bid = *m_lookup
                         .get(synthetic_name.as_str())
                         .expect("synthetic param binding allocated above");
@@ -4709,6 +4754,7 @@ fn lower_switch_to_ir1(
         lexical_names.extend(direct_lexical_binding_names(&case.consequent));
     }
     let lexical_binding_snapshot = binding_entry_snapshot(binding_lookup, &lexical_names);
+    suppress_stream_module_sentinels(binding_lookup, &lexical_names);
     for name in &lexical_names {
         let binding_id = reserve_fresh_binding_id(binding_lookup, binding_index, name);
         binding_lookup.insert(lexical_binding_sentinel(name), 0);
@@ -12468,20 +12514,17 @@ fn lower_expression_to_ir1_inner(
                     BindingKind::Parameter,
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
+                body_lookup.remove(&stream_readable_binding_sentinel(pname));
             }
             // Destructure non-identifier params (applies defaults) before the body.
+            allocate_destructure_param_bindings(
+                &destructure_params,
+                &mut body_bindings,
+                &mut body_lookup,
+                &mut body_binding_index,
+                body_scope,
+            )?;
             for (synthetic_name, pattern) in &destructure_params {
-                for inner_name in pattern.binding_names() {
-                    let _ = alloc_binding(
-                        &mut body_bindings,
-                        &mut body_lookup,
-                        &mut body_binding_index,
-                        body_scope,
-                        inner_name,
-                        BindingKind::Var,
-                    )
-                    .map_err(LoweringPipelineError::SemanticViolation)?;
-                }
                 let source_bid = *body_lookup
                     .get(synthetic_name.as_str())
                     .expect("synthetic param binding allocated above");
@@ -12593,6 +12636,9 @@ fn lower_expression_to_ir1_inner(
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
+            if let Some(self_name) = name {
+                body_lookup.remove(&stream_readable_binding_sentinel(self_name));
+            }
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -12618,19 +12664,16 @@ fn lower_expression_to_ir1_inner(
                     BindingKind::Parameter,
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
+                body_lookup.remove(&stream_readable_binding_sentinel(pname));
             }
+            allocate_destructure_param_bindings(
+                &destructure_params,
+                &mut body_bindings,
+                &mut body_lookup,
+                &mut body_binding_index,
+                body_scope,
+            )?;
             for (synthetic_name, pattern) in &destructure_params {
-                for inner_name in pattern.binding_names() {
-                    let _ = alloc_binding(
-                        &mut body_bindings,
-                        &mut body_lookup,
-                        &mut body_binding_index,
-                        body_scope,
-                        inner_name,
-                        BindingKind::Var,
-                    )
-                    .map_err(LoweringPipelineError::SemanticViolation)?;
-                }
                 let source_bid = *body_lookup
                     .get(synthetic_name.as_str())
                     .expect("synthetic param binding allocated above");
@@ -13111,6 +13154,9 @@ fn lower_expression_to_ir1_inner(
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
+            if let Some(self_name) = name {
+                body_lookup.remove(&stream_readable_binding_sentinel(self_name));
+            }
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -13124,20 +13170,17 @@ fn lower_expression_to_ir1_inner(
                     BindingKind::Parameter,
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
+                body_lookup.remove(&stream_readable_binding_sentinel(pname));
             }
             // Destructure non-identifier ctor params (applies defaults) before the body.
+            allocate_destructure_param_bindings(
+                &destructure_params,
+                &mut body_bindings,
+                &mut body_lookup,
+                &mut body_binding_index,
+                body_scope,
+            )?;
             for (synthetic_name, pattern) in &destructure_params {
-                for inner_name in pattern.binding_names() {
-                    let _ = alloc_binding(
-                        &mut body_bindings,
-                        &mut body_lookup,
-                        &mut body_binding_index,
-                        body_scope,
-                        inner_name,
-                        BindingKind::Var,
-                    )
-                    .map_err(LoweringPipelineError::SemanticViolation)?;
-                }
                 let source_bid = *body_lookup
                     .get(synthetic_name.as_str())
                     .expect("synthetic param binding allocated above");
@@ -13276,6 +13319,9 @@ fn lower_expression_to_ir1_inner(
                 seed_fs_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_events_module_sentinels(&mut m_lookup, binding_lookup);
                 seed_stream_module_sentinels(&mut m_lookup, binding_lookup);
+                if let Some(self_name) = name {
+                    m_lookup.remove(&stream_readable_binding_sentinel(self_name));
+                }
                 let mut m_binding_index: BindingId = 0;
                 let m_scope = ScopeId { depth: 0, index: 0 };
                 let mut m_label_counter: u32 = 0;
@@ -13289,20 +13335,17 @@ fn lower_expression_to_ir1_inner(
                         BindingKind::Parameter,
                     )
                     .map_err(LoweringPipelineError::SemanticViolation)?;
+                    m_lookup.remove(&stream_readable_binding_sentinel(pname));
                 }
                 // Destructure non-identifier params (applies defaults) before the body.
+                allocate_destructure_param_bindings(
+                    &m_destructure_params,
+                    &mut m_bindings,
+                    &mut m_lookup,
+                    &mut m_binding_index,
+                    m_scope,
+                )?;
                 for (synthetic_name, pattern) in &m_destructure_params {
-                    for inner_name in pattern.binding_names() {
-                        let _ = alloc_binding(
-                            &mut m_bindings,
-                            &mut m_lookup,
-                            &mut m_binding_index,
-                            m_scope,
-                            inner_name,
-                            BindingKind::Var,
-                        )
-                        .map_err(LoweringPipelineError::SemanticViolation)?;
-                    }
                     let source_bid = *m_lookup
                         .get(synthetic_name.as_str())
                         .expect("synthetic param binding allocated above");
@@ -15187,6 +15230,15 @@ fn stream_readable_binding_sentinel(name: &str) -> String {
     format!("\0stream-readable\0{name}")
 }
 
+fn suppress_stream_module_sentinels(
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    names: &BTreeSet<String>,
+) {
+    for name in names {
+        binding_lookup.remove(&stream_readable_binding_sentinel(name));
+    }
+}
+
 fn is_require_stream_module_initializer(
     expr: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
@@ -15229,6 +15281,9 @@ fn confirmed_stream_readable_destructured_requires(
     let mut candidates = BTreeSet::new();
     for stmt in body {
         if let Statement::VariableDeclaration(vd) = stmt {
+            if vd.kind != VariableDeclarationKind::Const {
+                continue;
+            }
             for declaration in &vd.declarations {
                 let (Some(init), BindingPattern::ObjectPattern(properties)) =
                     (&declaration.initializer, &declaration.pattern)

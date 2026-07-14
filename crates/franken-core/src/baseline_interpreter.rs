@@ -889,6 +889,8 @@ struct CallFrame {
     /// calls, `undefined` for plain calls, or the newly allocated object for
     /// constructor calls.  Arrow functions inherit from the defining frame.
     this_value: Value,
+    /// IFC label paired with `this_value` for receiver-aware calls.
+    this_label: crate::ifc_artifacts::Label,
     /// The `new.target` value for this call frame. Constructor calls set this
     /// to the invoked constructor value; non-constructor calls use undefined.
     new_target_value: Value,
@@ -3014,7 +3016,11 @@ impl InterpreterCore {
         Ok(())
     }
 
-    fn complete_return(&mut self, return_val: Value) -> Result<Option<Value>, InterpreterError> {
+    fn complete_return(
+        &mut self,
+        return_val: Value,
+        return_label: crate::ifc_artifacts::Label,
+    ) -> Result<Option<Value>, InterpreterError> {
         let current_depth = self.call_stack.len();
         // A function can return from inside an active try block before `EndTry`
         // executes. Those catch frames belong to the returning callee and must
@@ -3033,16 +3039,14 @@ impl InterpreterCore {
             // ES2020 §9.2.2 step 13: if this is a constructor call and the
             // return value is not an object, use the allocated `this` object
             // instead.
-            let effective_val = if let Some(this_obj) = frame.construct_this {
-                match &return_val {
-                    Value::Object(_) => return_val,
-                    _ => this_obj,
+            let (effective_val, effective_label) = match &frame.construct_this {
+                Some(this_obj) if !matches!(&return_val, Value::Object(_)) => {
+                    (this_obj.clone(), frame.this_label.clone())
                 }
-            } else {
-                return_val
+                _ => (return_val, return_label),
             };
             if let Some(return_reg) = frame.return_reg {
-                self.write_reg(return_reg, effective_val)?;
+                self.write_reg_with_label(return_reg, effective_val, effective_label)?;
             }
             self.ip = frame.return_ip;
             self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
@@ -3516,6 +3520,7 @@ impl InterpreterCore {
             register_base: self.register_base,
             function_index: Some(func_idx),
             this_value,
+            this_label: crate::ifc_artifacts::Label::Public,
             new_target_value: Value::Undefined,
             super_value,
             construct_this: None,
@@ -4015,7 +4020,9 @@ impl InterpreterCore {
             if self.ip >= module.instructions.len() {
                 // Fell off the end of the instruction stream.
                 if !self.call_stack.is_empty() {
-                    if let Some(final_value) = self.complete_return(Value::Undefined)? {
+                    if let Some(final_value) =
+                        self.complete_return(Value::Undefined, crate::ifc_artifacts::Label::Public)?
+                    {
                         return Ok(final_value);
                     }
                     continue;
@@ -4328,6 +4335,7 @@ impl InterpreterCore {
                             register_base: self.register_base,
                             function_index: Some(func_idx),
                             this_value: Value::Undefined,
+                            this_label: crate::ifc_artifacts::Label::Public,
                             new_target_value: Value::Undefined,
                             super_value: Value::Undefined,
                             construct_this: None,
@@ -4454,6 +4462,7 @@ impl InterpreterCore {
                             }
 
                             let mut arg_vals = Vec::new();
+                            let mut arg_labels = Vec::new();
                             for i in 0..args.count.min(func.arity) {
                                 let reg = args.start.checked_add(i).ok_or(
                                     InterpreterError::RegisterOutOfBounds {
@@ -4462,6 +4471,7 @@ impl InterpreterCore {
                                     },
                                 )?;
                                 arg_vals.push(self.read_reg(reg)?);
+                                arg_labels.push(self.read_reg_label(reg)?);
                             }
 
                             self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
@@ -4485,15 +4495,15 @@ impl InterpreterCore {
                             };
                             // Plain calls do not supply a receiver. Closures inherit the
                             // defining frame's `this`; non-closure calls use `undefined`.
-                            let frame_this = self
-                                .call_stack
-                                .last()
-                                .map_or(Value::Undefined, |f| f.this_value.clone());
+                            let (frame_this, frame_this_label) = self.call_stack.last().map_or(
+                                (Value::Undefined, crate::ifc_artifacts::Label::Public),
+                                |frame| (frame.this_value.clone(), frame.this_label.clone()),
+                            );
                             // Arrow closures inherit `this` from the defining frame.
-                            let call_this = if captured_env.is_some() {
-                                frame_this
+                            let (call_this, call_this_label) = if captured_env.is_some() {
+                                (frame_this, frame_this_label)
                             } else {
-                                Value::Undefined
+                                (Value::Undefined, crate::ifc_artifacts::Label::Public)
                             };
                             let super_value = self
                                 .function_super_value(&callee_val, IR_SUPER_PROTOTYPE_PROPERTY)?;
@@ -4504,6 +4514,7 @@ impl InterpreterCore {
                                 register_base: self.register_base,
                                 function_index: Some(func_idx),
                                 this_value: call_this,
+                                this_label: call_this_label,
                                 new_target_value: Value::Undefined,
                                 super_value,
                                 construct_this: None,
@@ -4542,10 +4553,12 @@ impl InterpreterCore {
                             self.clear_register_range(self.register_base, req_len);
 
                             // Copy arguments into registers for the callee.
-                            for (i, val) in arg_vals.into_iter().enumerate() {
+                            for (i, (val, label)) in
+                                arg_vals.into_iter().zip(arg_labels).enumerate()
+                            {
                                 let reg = i as u32;
                                 if reg < self.config.max_registers {
-                                    self.write_reg(reg, val)?;
+                                    self.write_reg_with_label(reg, val, label)?;
                                 }
                             }
 
@@ -4566,6 +4579,7 @@ impl InterpreterCore {
                     dst,
                 } => {
                     let receiver_val = self.read_reg(receiver)?;
+                    let receiver_label = self.read_reg_label(receiver)?;
                     let callee_val = self.read_reg(callee)?;
 
                     if let Value::BuiltinFunction(builtin) = &callee_val {
@@ -4619,6 +4633,7 @@ impl InterpreterCore {
                     }
 
                     let mut arg_vals = Vec::new();
+                    let mut arg_labels = Vec::new();
                     for i in 0..args.count.min(func.arity) {
                         let reg = args.start.checked_add(i).ok_or(
                             InterpreterError::RegisterOutOfBounds {
@@ -4627,6 +4642,7 @@ impl InterpreterCore {
                             },
                         )?;
                         arg_vals.push(self.read_reg(reg)?);
+                        arg_labels.push(self.read_reg_label(reg)?);
                     }
 
                     self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
@@ -4649,6 +4665,7 @@ impl InterpreterCore {
                         register_base: self.register_base,
                         function_index: Some(func_idx),
                         this_value: receiver_val,
+                        this_label: receiver_label,
                         new_target_value: Value::Undefined,
                         super_value,
                         construct_this: None,
@@ -4679,10 +4696,10 @@ impl InterpreterCore {
                     let req_len = self.register_base + self.config.max_registers as usize;
                     self.clear_register_range(self.register_base, req_len);
 
-                    for (i, val) in arg_vals.into_iter().enumerate() {
+                    for (i, (val, label)) in arg_vals.into_iter().zip(arg_labels).enumerate() {
                         let reg = i as u32;
                         if reg < self.config.max_registers {
-                            self.write_reg(reg, val)?;
+                            self.write_reg_with_label(reg, val, label)?;
                         }
                     }
 
@@ -4690,6 +4707,7 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::Return { value } => {
                     let return_val = self.read_reg(value)?;
+                    let return_label = self.read_reg_label(value)?;
                     // A return from inside a finally overrides any in-flight
                     // exception, and a return from inside try/catch must still
                     // unwind through enclosing finally blocks before it can
@@ -4701,7 +4719,7 @@ impl InterpreterCore {
                         self.ip = finally_target;
                     } else {
                         self.pending_return = None;
-                        if let Some(final_value) = self.complete_return(return_val)? {
+                        if let Some(final_value) = self.complete_return(return_val, return_label)? {
                             return Ok(final_value);
                         }
                     }
@@ -5331,6 +5349,7 @@ impl InterpreterCore {
                                 register_base: self.register_base,
                                 function_index: Some(func_idx),
                                 this_value: this_val.clone(),
+                                this_label: crate::ifc_artifacts::Label::Public,
                                 new_target_value: callee_val.clone(),
                                 super_value,
                                 construct_this: Some(this_val.clone()),
@@ -5426,11 +5445,11 @@ impl InterpreterCore {
                     return Err(InterpreterError::Halted);
                 }
                 Ir3Instruction::LoadThis { dst } => {
-                    let this_val = self
-                        .call_stack
-                        .last()
-                        .map_or(Value::Undefined, |f| f.this_value.clone());
-                    self.write_reg(dst, this_val)?;
+                    let (this_val, this_label) = self.call_stack.last().map_or(
+                        (Value::Undefined, crate::ifc_artifacts::Label::Public),
+                        |frame| (frame.this_value.clone(), frame.this_label.clone()),
+                    );
+                    self.write_reg_with_label(dst, this_val, this_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::LoadNewTarget { dst } => {
@@ -5546,7 +5565,10 @@ impl InterpreterCore {
                                     self.pending_return = Some(return_val);
                                     self.ip = finally_target;
                                 } else {
-                                    if let Some(final_value) = self.complete_return(return_val)? {
+                                    if let Some(final_value) = self.complete_return(
+                                        return_val,
+                                        crate::ifc_artifacts::Label::Public,
+                                    )? {
                                         return Ok(final_value);
                                     }
                                 }
@@ -5773,9 +5795,10 @@ impl InterpreterCore {
                                     {
                                         func.phase = AsyncFunctionPhase::Completed;
                                     }
-                                    if let Some(final_value) =
-                                        self.complete_return(Value::Undefined)?
-                                    {
+                                    if let Some(final_value) = self.complete_return(
+                                        Value::Undefined,
+                                        crate::ifc_artifacts::Label::Public,
+                                    )? {
                                         return Ok(final_value);
                                     }
                                     continue;
@@ -5881,7 +5904,9 @@ impl InterpreterCore {
 
                     // Return from the async function without overwriting the
                     // caller register that already holds the result promise.
-                    if let Some(final_value) = self.complete_return(Value::Undefined)? {
+                    if let Some(final_value) =
+                        self.complete_return(Value::Undefined, crate::ifc_artifacts::Label::Public)?
+                    {
                         return Ok(final_value);
                     }
                     continue;
@@ -5929,7 +5954,9 @@ impl InterpreterCore {
 
                     // Return from the async function without overwriting the
                     // caller register that already holds the result promise.
-                    if let Some(final_value) = self.complete_return(Value::Undefined)? {
+                    if let Some(final_value) =
+                        self.complete_return(Value::Undefined, crate::ifc_artifacts::Label::Public)?
+                    {
                         return Ok(final_value);
                     }
                     continue;
@@ -7813,6 +7840,7 @@ impl InterpreterCore {
             register_base: self.register_base,
             function_index: Some(func_idx),
             this_value: Value::Undefined,
+            this_label: crate::ifc_artifacts::Label::Public,
             new_target_value: Value::Undefined,
             super_value: self.function_super_value(&callee, IR_SUPER_PROTOTYPE_PROPERTY)?,
             construct_this: None,
@@ -12669,6 +12697,233 @@ mod tests {
         core.registers[1] = Value::Int(5);
         let result = core.execute(&m).unwrap();
         assert_eq!(result.value, Value::Int(15));
+    }
+
+    #[test]
+    fn plain_call_secret_argument_returns_secret_bd_ur3tk_6() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 2,
+                },
+                Ir3Instruction::Return { value: 2 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 1,
+                name: Some("identity".to_string()),
+                is_generator: false,
+            }],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+        core.write_reg_with_label(
+            1,
+            Value::str("secret-argument"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("secret argument should be writable");
+
+        assert_eq!(
+            core.run_loop(&module).expect("identity call should return"),
+            Value::str("secret-argument")
+        );
+        assert_eq!(
+            core.read_reg_label(2).expect("caller return label"),
+            crate::ifc_artifacts::Label::Secret
+        );
+    }
+
+    #[test]
+    fn plain_call_label_frames_do_not_alias_bd_ur3tk_6() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 1,
+                },
+                Ir3Instruction::Return { value: 1 },
+                Ir3Instruction::Return { value: 7 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 0,
+                frame_size: 8,
+                name: Some("return_fresh_r7".to_string()),
+                is_generator: false,
+            }],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+        core.write_reg_with_label(
+            7,
+            Value::str("caller-only"),
+            crate::ifc_artifacts::Label::Confidential,
+        )
+        .expect("caller label should be writable");
+        core.write_reg_with_label(
+            1,
+            Value::str("stale-destination"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("stale destination should be writable");
+
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("fresh callee frame should return"),
+            Value::Undefined
+        );
+        assert_eq!(
+            core.read_reg_label(1).expect("public return label"),
+            crate::ifc_artifacts::Label::Public
+        );
+        assert_eq!(
+            core.read_reg_label(7).expect("preserved caller label"),
+            crate::ifc_artifacts::Label::Confidential
+        );
+    }
+
+    #[test]
+    fn nested_plain_calls_preserve_labels_across_two_frames_bd_ur3tk_6() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::Return { value: 3 },
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 2,
+                },
+                Ir3Instruction::Return { value: 2 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 2,
+                    frame_size: 3,
+                    name: Some("outer_identity".to_string()),
+                    is_generator: false,
+                },
+                Ir3FunctionDesc {
+                    entry: 4,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("inner_identity".to_string()),
+                    is_generator: false,
+                },
+            ],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+        core.registers[1] = Value::Function(1);
+        core.write_reg_with_label(
+            2,
+            Value::str("nested-secret"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("nested argument should be writable");
+
+        assert_eq!(
+            core.run_loop(&module).expect("nested calls should return"),
+            Value::str("nested-secret")
+        );
+        assert_eq!(
+            core.read_reg_label(3).expect("nested return label"),
+            crate::ifc_artifacts::Label::Secret
+        );
+    }
+
+    #[test]
+    fn call_method_load_this_preserves_receiver_label_bd_ur3tk_6() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 1,
+                    args: RegRange { start: 2, count: 0 },
+                    dst: 2,
+                },
+                Ir3Instruction::Return { value: 2 },
+                Ir3Instruction::LoadThis { dst: 0 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 0,
+                frame_size: 1,
+                name: Some("return_this".to_string()),
+                is_generator: false,
+            }],
+        );
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(
+            0,
+            Value::str("secret-receiver"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("receiver should be writable");
+        core.registers[1] = Value::Function(0);
+
+        assert_eq!(
+            core.run_loop(&module).expect("method should return this"),
+            Value::str("secret-receiver")
+        );
+        assert_eq!(
+            core.read_reg_label(2).expect("method return label"),
+            crate::ifc_artifacts::Label::Secret
+        );
+    }
+
+    #[test]
+    fn call_method_argument_preserves_label_bd_ur3tk_6() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 1,
+                    args: RegRange { start: 2, count: 1 },
+                    dst: 3,
+                },
+                Ir3Instruction::Return { value: 3 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 1,
+                name: Some("return_argument".to_string()),
+                is_generator: false,
+            }],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::str("public-receiver");
+        core.registers[1] = Value::Function(0);
+        core.write_reg_with_label(
+            2,
+            Value::str("secret-argument"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("argument should be writable");
+
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("method should return argument"),
+            Value::str("secret-argument")
+        );
+        assert_eq!(
+            core.read_reg_label(3).expect("method result label"),
+            crate::ifc_artifacts::Label::Secret
+        );
     }
 
     #[test]

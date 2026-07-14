@@ -450,9 +450,10 @@ impl PromiseStore {
 
         let record = self.get_mut(handle)?;
         let reactions: Vec<PromiseReaction> = std::mem::take(&mut record.reactions);
-        let has_reject_handler = reactions
-            .iter()
-            .any(|r| r.kind == ReactionKind::Reject && r.handler.is_some());
+        let has_reject_handler = record.rejection_handled
+            || reactions
+                .iter()
+                .any(|r| r.kind == ReactionKind::Reject && r.handler.is_some());
         record.state = PromiseState::Rejected(reason.clone());
         record.label = label.clone();
         record.rejection_handled = has_reject_handler;
@@ -546,6 +547,59 @@ impl PromiseStore {
                         label,
                     });
                 }
+            }
+        }
+
+        Ok(result_promise)
+    }
+
+    /// Register the internal identity/thrower reactions used by `await`.
+    ///
+    /// Await has no user-visible closure handle, but it still observes and
+    /// handles rejection by resuming the suspended execution context. Keeping
+    /// this separate from ordinary `.then(None, None)` preserves the latter's
+    /// intentionally-unhandled rejection semantics.
+    pub fn then_for_await(
+        &mut self,
+        handle: PromiseHandle,
+        label: Label,
+        queue: &mut MicrotaskQueue,
+    ) -> Result<PromiseHandle, PromiseError> {
+        let state = self.get(handle)?.state.clone();
+        let result_promise = self.create();
+
+        match state {
+            PromiseState::Pending => {
+                let record = self.get_mut(handle)?;
+                record.rejection_handled = true;
+                record.reactions.push(PromiseReaction {
+                    kind: ReactionKind::Fulfill,
+                    handler: None,
+                    result_promise,
+                    label: label.clone(),
+                });
+                record.reactions.push(PromiseReaction {
+                    kind: ReactionKind::Reject,
+                    handler: None,
+                    result_promise,
+                    label,
+                });
+            }
+            PromiseState::Fulfilled(value) => {
+                queue.enqueue(Microtask::PromiseReaction {
+                    handler: None,
+                    argument: value,
+                    result_promise,
+                    label,
+                });
+            }
+            PromiseState::Rejected(reason) => {
+                self.get_mut(handle)?.rejection_handled = true;
+                queue.enqueue(Microtask::PromiseRejection {
+                    reason,
+                    result_promise,
+                    label,
+                });
             }
         }
 
@@ -2079,6 +2133,41 @@ mod tests {
             .then(h, Some(ClosureHandle(1)), None, Label::Public, &mut queue)
             .expect("operation should succeed for valid inputs");
         assert_eq!(store.unhandled_rejections(), vec![h]);
+    }
+
+    #[test]
+    fn await_reaction_marks_future_rejection_handled_without_a_closure() {
+        let mut store = PromiseStore::new();
+        let mut queue = MicrotaskQueue::new();
+        let h = store.create();
+
+        store
+            .then_for_await(h, Label::Public, &mut queue)
+            .expect("pending Promise should accept an await reaction");
+        store
+            .reject(h, js_str("awaited"), Label::Public, &mut queue)
+            .expect("awaited Promise should reject");
+
+        assert!(store.unhandled_rejections().is_empty());
+        assert_eq!(queue.pending_count(), 1);
+    }
+
+    #[test]
+    fn await_reaction_marks_existing_rejection_handled() {
+        let mut store = PromiseStore::new();
+        let mut queue = MicrotaskQueue::new();
+        let h = store.create();
+        store
+            .reject(h, js_str("awaited"), Label::Public, &mut queue)
+            .expect("Promise should reject before awaiting");
+        assert_eq!(store.unhandled_rejections(), vec![h]);
+
+        store
+            .then_for_await(h, Label::Public, &mut queue)
+            .expect("rejected Promise should accept an await reaction");
+
+        assert!(store.unhandled_rejections().is_empty());
+        assert_eq!(queue.pending_count(), 1);
     }
 
     // ----- IFC label propagation -----

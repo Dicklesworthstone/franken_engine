@@ -2065,6 +2065,7 @@ impl ExecutionOrchestrator {
                 "create_async_function"
             }
             &crate::ir_contract::Ir3Instruction::AwaitValue { .. } => "await_value",
+            &crate::ir_contract::Ir3Instruction::ModuleAwaitValue { .. } => "module_await_value",
             &crate::ir_contract::Ir3Instruction::AsyncReturn { .. } => "async_return",
             &crate::ir_contract::Ir3Instruction::AsyncThrow { .. } => "async_throw",
             &crate::ir_contract::Ir3Instruction::CreateAsyncGenerator { .. } => {

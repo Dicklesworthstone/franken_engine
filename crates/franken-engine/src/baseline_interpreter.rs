@@ -3882,6 +3882,16 @@ struct AsyncResumptionContext {
     result_register: u32,
 }
 
+/// Context for resuming entry-module evaluation after a pending top-level
+/// await. Unlike an async function, the entry module already owns the core's
+/// active register/scope state, so the continuation only needs to identify the
+/// destination register. The instruction pointer is advanced past
+/// `ModuleAwaitValue` when the suspension is installed.
+#[derive(Debug, Clone)]
+struct TopLevelAwaitResumptionContext {
+    result_register: u32,
+}
+
 /// An async generator object combines generator suspension with promise wrapping.
 /// Each yield creates a promise-wrapped value, and can use await inside the body.
 #[allow(dead_code)]
@@ -5850,6 +5860,14 @@ pub struct InterpreterCore {
     async_functions: Vec<AsyncFunctionObject>,
     /// Context information for async function resumption after await.
     async_resumption_contexts: BTreeMap<u32, AsyncResumptionContext>,
+    /// Promise-reaction contexts for pending entry-module top-level awaits.
+    /// Keyed by the Promise returned from the internal `.then()` registration,
+    /// matching `async_resumption_contexts`.
+    top_level_await_resumption_contexts: BTreeMap<u32, TopLevelAwaitResumptionContext>,
+    /// Completion produced when a resumed entry module either falls through,
+    /// halts, or throws. `drain_microtasks` cannot return an error directly, so
+    /// the outer execution driver consumes this after the event-loop drain.
+    top_level_await_outcome: Option<Result<Value, InterpreterError>>,
     /// Async generator object store.
     async_generators: Vec<AsyncGeneratorObject>,
     /// Promise store for ES2020 Promise semantics.
@@ -5893,6 +5911,10 @@ pub struct InterpreterCore {
     active_cjs_context: Option<CjsModuleContext>,
     /// Current module specifier (used to resolve relative imports).
     current_module_specifier: Option<String>,
+    /// Source label of the entry module for the active `execute()` call.
+    /// Pending top-level await is currently supported only for this module;
+    /// imported async-module graph evaluation remains fail-closed.
+    entry_module_specifier: Option<String>,
     /// Console output captured for deterministic replay.
     console_output: Vec<ConsoleEntry>,
     /// Profiling data collection (optional for performance measurements).
@@ -6012,6 +6034,8 @@ impl InterpreterCore {
             generator_yielded: false,
             async_functions: Vec::new(),
             async_resumption_contexts: BTreeMap::new(),
+            top_level_await_resumption_contexts: BTreeMap::new(),
+            top_level_await_outcome: None,
             async_generators: Vec::new(),
             promise_store: crate::promise_model::PromiseStore::new(),
             event_loop: crate::promise_model::EventLoop::new(),
@@ -6026,6 +6050,7 @@ impl InterpreterCore {
             module_state: ModuleState::new(),
             active_cjs_context: None,
             current_module_specifier: None,
+            entry_module_specifier: None,
             console_output: Vec::new(),
             profiling_data: None,
             next_timer_id: 0,
@@ -8146,6 +8171,8 @@ impl InterpreterCore {
             _ => current_seed,
         };
         self.last_pre_run_seed = Some(seed.clone());
+        self.top_level_await_resumption_contexts.clear();
+        self.top_level_await_outcome = None;
         let previous_register_bytes = self.registers_memory_bytes();
         let previous_heap_bytes = self.heap_memory_bytes();
         self.reset_execution_state_from_seed(&seed)?;
@@ -8153,6 +8180,7 @@ impl InterpreterCore {
         // perf: hot path - avoid double clone of source_label
         let entry_specifier = module.header.source_label.clone();
         self.ensure_module_record(module, &entry_specifier)?;
+        self.entry_module_specifier = Some(entry_specifier.clone());
         self.current_module_specifier = Some(entry_specifier);
         self.inject_runtime_globals()?;
 
@@ -8163,6 +8191,7 @@ impl InterpreterCore {
 
     fn run_top_level_execution(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
         let result = self.run_loop(module);
+        let suspended_at_top_level_await = !self.top_level_await_resumption_contexts.is_empty();
 
         // Drain any pending microtasks enqueued during execution
         // (promise reactions, thenable resolutions, etc.).
@@ -8171,6 +8200,22 @@ impl InterpreterCore {
         // Run the event loop until all pending work is complete
         // (macrotasks like timers, with microtask draining after each).
         self.run_event_loop_until_idle_with_module(Some(module));
+
+        if let Some(resumed_outcome) = self.top_level_await_outcome.take() {
+            return resumed_outcome;
+        }
+
+        if suspended_at_top_level_await && !self.top_level_await_resumption_contexts.is_empty() {
+            let got = if self.event_loop.has_pending_work() {
+                "pending module Promise after the deterministic event-loop turn limit"
+            } else {
+                "pending module Promise with no remaining event-loop work"
+            };
+            return Err(InterpreterError::TypeError {
+                expected: "top-level await to settle before the event loop became idle".to_string(),
+                got: got.to_string(),
+            });
+        }
 
         result
     }
@@ -11965,13 +12010,11 @@ impl InterpreterCore {
             (self.register_base + self.config.max_registers as usize).min(self.registers.len());
         async_function.saved_registers = self.registers[reg_start..reg_end].to_vec();
 
-        // Register the reactions with the awaited promise using the public then method
+        // Register the internal await reactions with the awaited Promise.
         let result_promise = self
             .promise_store
-            .then(
+            .then_for_await(
                 promise_handle,
-                None, // on_fulfilled - use None to trigger async resumption path
-                None, // on_rejected - use None to trigger async resumption path
                 crate::ifc_artifacts::Label::Public,
                 &mut self.event_loop.microtasks,
             )
@@ -11989,6 +12032,35 @@ impl InterpreterCore {
             },
         );
 
+        Ok(())
+    }
+
+    fn suspend_top_level_await(
+        &mut self,
+        promise_handle: crate::promise_model::PromiseHandle,
+        result_reg: u32,
+        promise_label: Label,
+    ) -> Result<(), InterpreterError> {
+        let result_promise = self
+            .promise_store
+            .then_for_await(
+                promise_handle,
+                promise_label,
+                &mut self.event_loop.microtasks,
+            )
+            .map_err(|error| InterpreterError::TypeError {
+                expected: "valid top-level await Promise".to_string(),
+                got: error.to_string(),
+            })?;
+
+        self.top_level_await_resumption_contexts.insert(
+            result_promise.0,
+            TopLevelAwaitResumptionContext {
+                result_register: result_reg,
+            },
+        );
+        self.ip += 1;
+        self.push_event("top_level_await_suspended", "ok", None);
         Ok(())
     }
 
@@ -12084,14 +12156,62 @@ impl InterpreterCore {
         }
     }
 
+    fn resume_top_level_after_await(
+        &mut self,
+        resumption_context: TopLevelAwaitResumptionContext,
+        settled: Result<crate::object_model::JsValue, crate::object_model::JsValue>,
+        label: Label,
+    ) -> Result<(), InterpreterError> {
+        self.push_event("top_level_await_resumed", "ok", None);
+        match settled {
+            Ok(argument) => {
+                self.write_reg(
+                    resumption_context.result_register,
+                    Self::js_value_to_value(&argument),
+                )?;
+                self.set_register_label(resumption_context.result_register, label)?;
+            }
+            Err(reason) => {
+                let error_value = Self::js_value_to_value(&reason);
+                let _ = self.raise_await_rejection_with_label(error_value, label)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn continue_resumed_top_level(&mut self, module: Option<&Ir3Module>) {
+        let outcome = match module {
+            Some(module) => self.run_loop(module),
+            None => Err(InterpreterError::TypeError {
+                expected: "module context for top-level await resumption".to_string(),
+                got: "missing module context".to_string(),
+            }),
+        };
+
+        if self.top_level_await_resumption_contexts.is_empty() {
+            let outcome = match outcome {
+                Err(InterpreterError::Halted) => self.read_reg(0),
+                other => other,
+            };
+            self.top_level_await_outcome = Some(outcome);
+        } else if let Err(error) = outcome {
+            self.top_level_await_outcome = Some(Err(error));
+        }
+    }
+
     fn raise_await_rejection(&mut self, error_value: Value) -> Result<bool, InterpreterError> {
+        self.raise_await_rejection_with_label(error_value, Label::Public)
+    }
+
+    fn raise_await_rejection_with_label(
+        &mut self,
+        error_value: Value,
+        label: Label,
+    ) -> Result<bool, InterpreterError> {
         self.suspend_current_abrupt_completion();
         self.pending_return = None;
         self.pending_exception = Some(error_value.clone());
-        // Async rejection values do not yet carry IFC labels across the
-        // promise boundary (tracked by the bd-ooaka family); the re-entry
-        // here is engine-mediated, so the label is explicitly Public.
-        self.pending_exception_label = Label::Public;
+        self.pending_exception_label = label;
         if let Some(frame) = self.pop_exception_target_frame()? {
             self.ip = frame.catch_target;
             Ok(false)
@@ -15594,7 +15714,21 @@ impl InterpreterCore {
                     self.generator_yielded = true;
                     return Ok(Value::Object(result_id));
                 }
-                Ir3Instruction::AwaitValue { promise_reg } => {
+                await_instruction @ (Ir3Instruction::AwaitValue { promise_reg }
+                | Ir3Instruction::ModuleAwaitValue { promise_reg }) => {
+                    let is_module_await =
+                        matches!(await_instruction, Ir3Instruction::ModuleAwaitValue { .. });
+                    if is_module_await {
+                        let current = self.current_module_specifier.as_deref();
+                        let entry = self.entry_module_specifier.as_deref();
+                        if !self.call_stack.is_empty() || current != entry {
+                            return Err(InterpreterError::ModuleEvaluationFailed {
+                                specifier: current.unwrap_or("<unknown>").to_string(),
+                                reason: "top-level await in an imported module requires async module-graph continuation support".to_string(),
+                            });
+                        }
+                    }
+
                     let awaited_value = self.read_reg(promise_reg)?;
                     let awaited_label = self.get_register_label(promise_reg)?.clone();
 
@@ -15620,6 +15754,14 @@ impl InterpreterCore {
                     let promise_state = promise_record.state.clone();
                     let promise_label = promise_record.label.clone();
 
+                    // Module evaluation always crosses a Promise-reaction
+                    // microtask boundary, including for non-Promise and
+                    // already-settled operands.
+                    if is_module_await {
+                        self.suspend_top_level_await(promise_handle, promise_reg, promise_label)?;
+                        return Ok(Value::Undefined);
+                    }
+
                     if promise_state.is_settled() {
                         // Promise already settled - continue execution synchronously
                         match promise_state {
@@ -15640,7 +15782,6 @@ impl InterpreterCore {
                             }
                         }
                     } else {
-                        // Promise is pending - suspend the async function
                         self.suspend_async_function_for_await(promise_handle, promise_reg)?;
 
                         // Return special value to indicate suspension
@@ -20158,6 +20299,20 @@ impl InterpreterCore {
                                     task_label.clone(),
                                 );
                             }
+                        } else if let Some(resumption_context) = self
+                            .top_level_await_resumption_contexts
+                            .remove(&result_promise.0)
+                        {
+                            let resumed = self.resume_top_level_after_await(
+                                resumption_context,
+                                Ok(argument.clone()),
+                                task_label.clone(),
+                            );
+                            if let Err(error) = resumed {
+                                self.top_level_await_outcome = Some(Err(error));
+                            } else {
+                                self.continue_resumed_top_level(module);
+                            }
                         } else {
                             // With no closure handler, the identity transform propagates
                             // the argument to the result promise as a fulfillment value.
@@ -20212,6 +20367,20 @@ impl InterpreterCore {
                             let reason = Self::promise_rejection_from_error(&err);
                             let _ =
                                 self.reject_promise(*result_promise, reason, task_label.clone());
+                        }
+                    } else if let Some(resumption_context) = self
+                        .top_level_await_resumption_contexts
+                        .remove(&result_promise.0)
+                    {
+                        let resumed = self.resume_top_level_after_await(
+                            resumption_context,
+                            Err(reason.clone()),
+                            task_label.clone(),
+                        );
+                        if let Err(error) = resumed {
+                            self.top_level_await_outcome = Some(Err(error));
+                        } else {
+                            self.continue_resumed_top_level(module);
                         }
                     } else {
                         let _ = self.reject_promise(

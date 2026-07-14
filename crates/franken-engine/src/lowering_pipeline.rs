@@ -5523,6 +5523,8 @@ pub fn lower_ir2_to_ir3(
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions
                     .push(Ir3Instruction::Move { dst, src: current });
+                ir3.instructions
+                    .push(Ir3Instruction::ModuleAwaitValue { promise_reg: dst });
                 value_stack.push(dst);
             }
             Ir1Op::Yield { delegate } => {

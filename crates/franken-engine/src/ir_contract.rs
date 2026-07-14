@@ -1517,6 +1517,11 @@ pub enum Ir3Instruction {
         function_index: u32,
         capture_count: u32,
     },
+    /// Await a value while evaluating an ES module's top-level instruction
+    /// stream. This is distinct from `AwaitValue` so a script or hand-authored
+    /// IR program cannot acquire module-continuation semantics merely because
+    /// its call stack is empty.
+    ModuleAwaitValue { promise_reg: Reg },
 }
 
 impl Ir3Instruction {
@@ -2082,6 +2087,10 @@ impl Ir3Instruction {
                     "capture_count",
                     CanonicalValue::U64(u64::from(*capture_count)),
                 ),
+            ]),
+            Self::ModuleAwaitValue { promise_reg } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("module_await_value")),
+                ("promise_reg", CanonicalValue::U64(u64::from(*promise_reg))),
             ]),
         }
     }

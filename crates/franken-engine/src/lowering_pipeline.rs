@@ -808,6 +808,17 @@ fn lower_ir0_to_ir1_with_ambient_grant(
     for alias in confirmed_timers_promises_module_aliases(&ir0.tree.body, &binding_lookup) {
         binding_lookup.insert(timers_promises_module_alias_sentinel(&alias), 0);
     }
+    // bd-2dmnn: `events` is also a lowering-only Node builtin surface. Record
+    // only the CJS bindings whose supported exports are actually consumed:
+    // destructured `EventEmitter` locals used as constructors/static constants,
+    // and module aliases used for `events.captureRejections`. This keeps a
+    // bare/unused `require('events')` on the ambient-authority denial path.
+    for local in confirmed_event_emitter_destructured_requires(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(event_emitter_binding_sentinel(&local), 0);
+    }
+    for alias in confirmed_events_module_aliases(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(events_module_alias_sentinel(&alias), 0);
+    }
     let mut synthetic_export_index = 0u32;
     let mut synthetic_import_index = 0u32;
     let mut label_counter = 0u32;
@@ -2489,6 +2500,13 @@ fn lower_statement_to_ir1_with_flow(
                             .or_else(|| {
                                 confirmed_fs_destructure_locals(&d.pattern, init, binding_lookup)
                             })
+                            .or_else(|| {
+                                confirmed_events_destructure_locals(
+                                    &d.pattern,
+                                    init,
+                                    binding_lookup,
+                                )
+                            })
                 {
                     for local in &locals {
                         if let Some(&local_bid) = binding_lookup.get(local) {
@@ -2573,7 +2591,13 @@ fn lower_statement_to_ir1_with_flow(
                                 init,
                                 binding_lookup,
                             ) && binding_lookup
-                                .contains_key(&timers_promises_module_alias_sentinel(alias))))
+                                .contains_key(&timers_promises_module_alias_sentinel(alias)))
+                            // bd-2dmnn: confirmed `events.captureRejections`
+                            // module aliases are lowering-only and therefore
+                            // elide their ambient-denied require initializer.
+                            || (is_require_events_module_initializer(init, binding_lookup)
+                                && binding_lookup
+                                    .contains_key(&events_module_alias_sentinel(alias))))
                     {
                         ops.push(Ir1Op::LoadLiteral {
                             value: Ir1Literal::Undefined,
@@ -3698,6 +3722,7 @@ fn lower_statement_to_ir1_with_flow(
             // `seed_timers_module_alias_sentinels`).
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
+            seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -3831,6 +3856,7 @@ fn lower_statement_to_ir1_with_flow(
             // `seed_timers_module_alias_sentinels`).
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
+            seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -3993,6 +4019,7 @@ fn lower_statement_to_ir1_with_flow(
                 // bd-suwvw: see the body_lookup seeding above.
                 seed_timers_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_fs_module_alias_sentinels(&mut m_lookup, binding_lookup);
+                seed_events_module_sentinels(&mut m_lookup, binding_lookup);
                 let mut m_binding_index: BindingId = 0;
                 let m_scope = ScopeId { depth: 0, index: 0 };
                 let mut m_label_counter: u32 = 0;
@@ -11020,6 +11047,26 @@ fn lower_expression_to_ir1_inner(
                 });
                 return Ok(());
             }
+            // bd-2dmnn: fold the two supported static `events` constants. Both
+            // receivers are confirmed provenance sentinels, so no ambient
+            // `require` or synthetic module/constructor object is evaluated.
+            if event_emitter_default_max_listeners_member(
+                object,
+                property,
+                *computed,
+                binding_lookup,
+            ) {
+                ops.push(Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Integer(10),
+                });
+                return Ok(());
+            }
+            if events_capture_rejections_member(object, property, *computed, binding_lookup) {
+                ops.push(Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Boolean(false),
+                });
+                return Ok(());
+            }
             // bd-8u1t5: Node's access-mode constants are stable POSIX bit values.
             // A confirmed fs module is a lowering-only shim (there is no runtime
             // module object), so fold the nested `fs.constants.*` read directly.
@@ -11611,6 +11658,7 @@ fn lower_expression_to_ir1_inner(
             // `seed_timers_module_alias_sentinels`).
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
+            seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -11751,6 +11799,7 @@ fn lower_expression_to_ir1_inner(
             // `seed_timers_module_alias_sentinels`).
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
+            seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -11867,6 +11916,36 @@ fn lower_expression_to_ir1_inner(
             });
         }
         Expression::New { callee, arguments } => {
+            // bd-2dmnn: a confirmed destructured `EventEmitter` export is a
+            // lowering-only constructor binding (the `events` module itself is
+            // never materialized). Route `new EventEmitter(...)` directly to
+            // the interpreter builtin and do not load the undefined shim local.
+            if event_emitter_constructor_capability(callee, binding_lookup).is_some() {
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: "builtin:EventEmitter".to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
             // `new Error(msg)` / error subclasses have no global binding on the
             // eval scope path; recognize the constructor and route to the
             // `builtin:<Name>` hostcall (bd-bg9l1.27.10), mirroring the Math/Symbol
@@ -12225,6 +12304,7 @@ fn lower_expression_to_ir1_inner(
             // `seed_timers_module_alias_sentinels`).
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
+            seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -12365,6 +12445,7 @@ fn lower_expression_to_ir1_inner(
                 // bd-suwvw: see the body_lookup seeding above.
                 seed_timers_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_fs_module_alias_sentinels(&mut m_lookup, binding_lookup);
+                seed_events_module_sentinels(&mut m_lookup, binding_lookup);
                 let mut m_binding_index: BindingId = 0;
                 let m_scope = ScopeId { depth: 0, index: 0 };
                 let mut m_label_counter: u32 = 0;
@@ -14234,6 +14315,246 @@ fn confirmed_timers_promises_module_aliases(
     used
 }
 
+// ---------------------------------------------------------------------------
+// Node `events` builtin recognition (bd-2dmnn)
+//
+// The engine does not materialize a CommonJS `events` module object. Instead,
+// a pre-scan confirms only the two supported CJS export shapes and records
+// provenance sentinels in the lowering lookup:
+//   * `const { EventEmitter } = require('events')`, when the local is used by
+//     `new EventEmitter(...)` or `EventEmitter.defaultMaxListeners`;
+//   * `const events = require('events')`, when the alias is read as
+//     `events.captureRejections`.
+// Bare/unused requires and the deliberately deferred `events.once` export do
+// not get a sentinel, so they preserve the ambient-authority denial.
+
+fn is_events_module_specifier(specifier: &str) -> bool {
+    specifier == "events" || specifier == "node:events"
+}
+
+fn event_emitter_binding_sentinel(name: &str) -> String {
+    format!("\0eventemitter\0{name}")
+}
+
+fn events_module_alias_sentinel(name: &str) -> String {
+    format!("\0eventsmod\0{name}")
+}
+
+fn is_require_events_module_initializer(
+    expr: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    let Expression::Call {
+        callee, arguments, ..
+    } = expr
+    else {
+        return false;
+    };
+    if !matches!(callee.as_ref(), Expression::Identifier(name)
+        if name == "require" && !binding_lookup.contains_key(name.as_str()))
+    {
+        return false;
+    }
+    matches!(
+        arguments.as_slice(),
+        [Expression::StringLiteral(specifier)] if is_events_module_specifier(specifier)
+    )
+}
+
+fn event_emitter_constructor_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Identifier(name) = callee else {
+        return None;
+    };
+    binding_lookup
+        .contains_key(&event_emitter_binding_sentinel(name))
+        .then_some("builtin:EventEmitter")
+}
+
+fn event_emitter_default_max_listeners_member(
+    object: &Expression,
+    property: &Expression,
+    computed: bool,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    if computed {
+        return false;
+    }
+    matches!(object, Expression::Identifier(name)
+        if binding_lookup.contains_key(&event_emitter_binding_sentinel(name)))
+        && matches!(property,
+            Expression::Identifier(name) | Expression::StringLiteral(name)
+                if name == "defaultMaxListeners")
+}
+
+fn events_capture_rejections_member(
+    object: &Expression,
+    property: &Expression,
+    computed: bool,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    if computed {
+        return false;
+    }
+    matches!(object, Expression::Identifier(name)
+        if binding_lookup.contains_key(&events_module_alias_sentinel(name)))
+        && matches!(property,
+            Expression::Identifier(name) | Expression::StringLiteral(name)
+                if name == "captureRejections")
+}
+
+fn is_event_emitter_usage(expr: &Expression, local: &str) -> bool {
+    match expr {
+        Expression::New { callee, .. } => {
+            matches!(callee.as_ref(), Expression::Identifier(name) if name == local)
+        }
+        Expression::Member {
+            object,
+            property,
+            computed: false,
+            ..
+        } => {
+            matches!(object.as_ref(), Expression::Identifier(name) if name == local)
+                && matches!(property.as_ref(),
+                    Expression::Identifier(name) | Expression::StringLiteral(name)
+                        if name == "defaultMaxListeners")
+        }
+        _ => false,
+    }
+}
+
+fn is_events_alias_capture_rejections_read(expr: &Expression, alias: &str) -> bool {
+    matches!(expr,
+        Expression::Member {
+            object,
+            property,
+            computed: false,
+            ..
+        } if matches!(object.as_ref(), Expression::Identifier(name) if name == alias)
+            && matches!(property.as_ref(),
+                Expression::Identifier(name) | Expression::StringLiteral(name)
+                    if name == "captureRejections"))
+}
+
+fn confirmed_event_emitter_destructured_requires(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for stmt in body {
+        if let Statement::VariableDeclaration(vd) = stmt {
+            for declaration in &vd.declarations {
+                let (Some(init), BindingPattern::ObjectPattern(properties)) =
+                    (&declaration.initializer, &declaration.pattern)
+                else {
+                    continue;
+                };
+                if !is_require_events_module_initializer(init, binding_lookup) {
+                    continue;
+                }
+                for property in properties {
+                    if property.computed
+                        || !matches!(&property.key,
+                            Expression::Identifier(name) | Expression::StringLiteral(name)
+                                if name == "EventEmitter")
+                    {
+                        continue;
+                    }
+                    if let BindingPattern::Identifier(local) = &property.value {
+                        candidates.insert(local.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    candidates
+        .into_iter()
+        .filter(|local| {
+            body.iter().any(|stmt| {
+                timers_scan_statement_deep(stmt, &|expr| is_event_emitter_usage(expr, local))
+            })
+        })
+        .collect()
+}
+
+fn confirmed_events_module_aliases(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for stmt in body {
+        if let Statement::VariableDeclaration(vd) = stmt {
+            for declaration in &vd.declarations {
+                if let (BindingPattern::Identifier(alias), Some(init)) =
+                    (&declaration.pattern, &declaration.initializer)
+                    && is_require_events_module_initializer(init, binding_lookup)
+                {
+                    candidates.insert(alias.clone());
+                }
+            }
+        }
+    }
+
+    candidates
+        .into_iter()
+        .filter(|alias| {
+            body.iter().any(|stmt| {
+                timers_scan_statement_deep(stmt, &|expr| {
+                    is_events_alias_capture_rejections_read(expr, alias)
+                })
+            })
+        })
+        .collect()
+}
+
+fn confirmed_events_destructure_locals(
+    pattern: &BindingPattern,
+    init: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<Vec<String>> {
+    let BindingPattern::ObjectPattern(properties) = pattern else {
+        return None;
+    };
+    if !is_require_events_module_initializer(init, binding_lookup) {
+        return None;
+    }
+
+    let mut locals = Vec::new();
+    for property in properties {
+        if property.computed {
+            return None;
+        }
+        if !matches!(&property.key,
+            Expression::Identifier(name) | Expression::StringLiteral(name)
+                if name == "EventEmitter")
+        {
+            return None;
+        }
+        let BindingPattern::Identifier(local) = &property.value else {
+            return None;
+        };
+        if !binding_lookup.contains_key(&event_emitter_binding_sentinel(local)) {
+            return None;
+        }
+        locals.push(local.clone());
+    }
+    (!locals.is_empty()).then_some(locals)
+}
+
+fn seed_events_module_sentinels(
+    body_lookup: &mut BTreeMap<String, BindingId>,
+    outer_lookup: &BTreeMap<String, BindingId>,
+) {
+    for key in outer_lookup.keys() {
+        if key.starts_with("\0eventemitter\0") || key.starts_with("\0eventsmod\0") {
+            body_lookup.insert(key.clone(), 0);
+        }
+    }
+}
+
 /// bd-qmy52: true when `specifier` names the Node os module — `os` or
 /// `node:os`.
 fn is_os_module_specifier(specifier: &str) -> bool {
@@ -15735,13 +16056,12 @@ fn timer_builtin_call_capability(
 }
 
 /// Capability for a bare global function-builtin call (`parseInt("42")`,
-/// `parseFloat("3.5")`, `isNaN(x)`, `isFinite(x)`). These standard globals have
-/// no binding on the eval scope, so — like the Math/timer/error interceptions —
-/// recognize the bare identifier callee and route to the canonical
-/// `builtin:<name>` hostcall (whose impls already exist in
-/// `dispatch_builtin_hostcall_inner`). Returns `None` when the name is shadowed
-/// by a user binding in scope, so a local `let parseInt = …` is never
-/// reinterpreted as the host builtin (bd-n5lhl).
+/// `parseFloat("3.5")`, `isNaN(x)`, `isFinite(x)`, `String(value)`). These
+/// standard globals have no binding on the eval scope, so — like the
+/// Math/timer/error interceptions — recognize the bare identifier callee and
+/// route to the canonical `builtin:<name>` hostcall. Returns `None` when the
+/// name is shadowed by a user binding in scope, so a local declaration is never
+/// reinterpreted as the host builtin (bd-n5lhl, bd-wgezf).
 fn global_function_call_capability(
     callee: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
@@ -15757,6 +16077,10 @@ fn global_function_call_capability(
         "parseFloat" => Some("builtin:parseFloat"),
         "isNaN" => Some("builtin:isNaN"),
         "isFinite" => Some("builtin:isFinite"),
+        // `String([value])` is the standard callable conversion intrinsic. It
+        // is distinct from `new String` (boxed strings, still deferred) and
+        // from the static `String.*` member surface (bd-wgezf).
+        "String" => Some("builtin:String"),
         // `Symbol([description])` — the bare `Symbol` global has no eval-scope
         // binding, so route the call to the existing `builtin:Symbol` hostcall
         // (which allocates a fresh, unique `__type:"symbol"` value; `typeof` of it
@@ -18246,6 +18570,102 @@ mod tests {
                         | Ir1Op::CreateFunction { body_ops, .. }
                     if ops_deep_match(body_ops, predicate))
         })
+    }
+
+    #[test]
+    fn events_destructured_constructor_lowers_to_builtin_bd_2dmnn() {
+        let ops = lower_script_source_ops(
+            "const { EventEmitter } = require('events');\n\
+             const emitter = new EventEmitter();\n",
+            "events_constructor_bd_2dmnn.js",
+        );
+        assert!(ops.iter().any(|op| matches!(op,
+            Ir1Op::HostCall { capability, arg_count: 0 }
+                if capability == "builtin:EventEmitter")));
+    }
+
+    #[test]
+    fn node_events_constructor_sentinel_reaches_nested_body_bd_2dmnn() {
+        let ops = lower_script_source_ops(
+            "const { EventEmitter } = require('node:events');\n\
+             function makeEmitter() { return new EventEmitter(); }\n\
+             makeEmitter();\n",
+            "events_nested_constructor_bd_2dmnn.js",
+        );
+        assert!(ops_deep_match(&ops, &|op| matches!(op,
+            Ir1Op::HostCall { capability, arg_count: 0 }
+                if capability == "builtin:EventEmitter")));
+    }
+
+    #[test]
+    fn events_static_constants_fold_to_literals_bd_2dmnn() {
+        let constructor_ops = lower_script_source_ops(
+            "const { EventEmitter } = require('events');\n\
+             console.log(EventEmitter.defaultMaxListeners);\n",
+            "events_default_max_bd_2dmnn.js",
+        );
+        assert!(constructor_ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::Integer(10)
+            }
+        )));
+
+        let module_ops = lower_script_source_ops(
+            "const events = require('node:events');\n\
+             console.log(events.captureRejections);\n",
+            "events_capture_rejections_bd_2dmnn.js",
+        );
+        assert!(module_ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::Boolean(false)
+            }
+        )));
+    }
+
+    #[test]
+    fn callable_string_global_is_shadow_aware_bd_wgezf() {
+        let global_ops = lower_script_source_ops(
+            "console.log(String(true));",
+            "callable_string_global_bd_wgezf.js",
+        );
+        assert!(global_ops.iter().any(|op| matches!(op,
+            Ir1Op::HostCall { capability, arg_count: 1 }
+                if capability == "builtin:String")));
+
+        let shadowed_ops = lower_script_source_ops(
+            "const String = (value) => 'local:' + value; console.log(String('x'));",
+            "shadowed_string_global_bd_wgezf.js",
+        );
+        assert!(!ops_deep_match(&shadowed_ops, &|op| matches!(op,
+            Ir1Op::HostCall { capability, .. } if capability == "builtin:String")));
+    }
+
+    #[test]
+    fn unused_and_deferred_events_requires_remain_ambient_refused_bd_2dmnn() {
+        for (source, label) in [
+            (
+                "const { EventEmitter } = require('events');\n",
+                "events_unused_destructure_bd_2dmnn.js",
+            ),
+            (
+                "const events = require('events');\nconsole.log(events.once);\n",
+                "events_once_deferred_bd_2dmnn.js",
+            ),
+            (
+                "const { EventEmitter, once } = require('events');\n\
+                 new EventEmitter();\nconsole.log(once);\n",
+                "events_mixed_destructure_bd_2dmnn.js",
+            ),
+        ] {
+            let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
+            let ir0 = Ir0Module::from_syntax_tree(tree, label);
+            assert!(
+                lower_ir0_to_ir1(&ir0).is_err(),
+                "unsupported or unused events require must remain ambient-refused: {label}"
+            );
+        }
     }
 
     #[test]

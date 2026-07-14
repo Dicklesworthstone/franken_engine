@@ -222,6 +222,9 @@ const MEMORY_ESTIMATE_CALL_FRAME_BASE_BYTES: u64 = 64;
 const MEMORY_ESTIMATE_ITERATOR_BASE_BYTES: u64 = 32;
 /// Approximate per-generator base footprint.
 const MEMORY_ESTIMATE_GENERATOR_BASE_BYTES: u64 = 48;
+/// Conservative per-record charge for the emitter listener side table. The
+/// event name and any string-backed listener payload are charged separately.
+const MEMORY_ESTIMATE_EVENT_LISTENER_BASE_BYTES: u64 = 48;
 /// BotGuard typed-array v1 per-buffer cap from bd-8enww.2.1.
 const MAX_ARRAY_BUFFER_BYTE_LENGTH: u64 = 8 * 1024 * 1024;
 /// Approximate metadata footprint for an ArrayBuffer-backed typed-array view.
@@ -1924,6 +1927,30 @@ pub enum BuiltinFunctionKind {
     FsDirentIsFile,
     /// `fs.Dirent.prototype.isDirectory()` (bd-8u1t5).
     FsDirentIsDirectory,
+    /// `EventEmitter.prototype.once(event, listener)` (bd-2dmnn). EventEmitter
+    /// variants are appended at the enum tail because the discriminant feeds
+    /// deterministic register hashing.
+    EmitterOnce,
+    /// `EventEmitter.prototype.off/removeListener` (bd-2dmnn).
+    EmitterOff,
+    /// `EventEmitter.prototype.removeAllListeners` (bd-2dmnn).
+    EmitterRemoveAllListeners,
+    /// `EventEmitter.prototype.listenerCount` (bd-2dmnn).
+    EmitterListenerCount,
+    /// `EventEmitter.prototype.eventNames` (bd-2dmnn).
+    EmitterEventNames,
+    /// `EventEmitter.prototype.prependListener` (bd-2dmnn).
+    EmitterPrependListener,
+    /// `EventEmitter.prototype.prependOnceListener` (bd-2dmnn).
+    EmitterPrependOnceListener,
+    /// `EventEmitter.prototype.emit` (bd-2dmnn).
+    EmitterEmit,
+    /// `EventEmitter.prototype.getMaxListeners` (bd-2dmnn).
+    EmitterGetMaxListeners,
+    /// `EventEmitter.prototype.setMaxListeners` (bd-2dmnn).
+    EmitterSetMaxListeners,
+    /// `EventEmitter.prototype.listeners` (bd-2dmnn).
+    EmitterListeners,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -3192,6 +3219,17 @@ impl BuiltinFunction {
                 "isDirectory"
             }
             BuiltinFunctionKind::FsEntryIsSymbolicLink => "isSymbolicLink",
+            BuiltinFunctionKind::EmitterOnce => "once",
+            BuiltinFunctionKind::EmitterOff => "removeListener",
+            BuiltinFunctionKind::EmitterRemoveAllListeners => "removeAllListeners",
+            BuiltinFunctionKind::EmitterListenerCount => "listenerCount",
+            BuiltinFunctionKind::EmitterEventNames => "eventNames",
+            BuiltinFunctionKind::EmitterPrependListener => "prependListener",
+            BuiltinFunctionKind::EmitterPrependOnceListener => "prependOnceListener",
+            BuiltinFunctionKind::EmitterEmit => "emit",
+            BuiltinFunctionKind::EmitterGetMaxListeners => "getMaxListeners",
+            BuiltinFunctionKind::EmitterSetMaxListeners => "setMaxListeners",
+            BuiltinFunctionKind::EmitterListeners => "listeners",
         }
     }
 }
@@ -5469,6 +5507,18 @@ struct PendingStreamEmission {
     phase: StreamEventPhase,
 }
 
+/// One listener in the interpreter-wide EventEmitter side table (bd-2dmnn).
+///
+/// The pre-existing HTTP stream emitter stored bare closure ids. Keeping the
+/// listener as a [`Value`] lets the same table represent ordinary functions and
+/// builtins without creating a second event subsystem, while `once` records the
+/// removal-before-invocation contract needed for re-entrant emits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EventListenerRecord {
+    listener: Value,
+    once: bool,
+}
+
 /// The core interpreter loop shared between both lanes.
 /// One register's value and IFC label as observed at a capture tick
 /// (bd-fqlfw.3.5.5 / E3.T5d). Only registers holding a non-`Undefined`
@@ -5657,14 +5707,12 @@ pub struct InterpreterCore {
     /// drains the entry by seq when it fires, so the map never retains completed
     /// callbacks.
     pending_io_callbacks: BTreeMap<u64, Vec<Value>>,
-    /// bd-3894s slice (2d): registered event listeners for the HTTP stream objects
-    /// (`ClientRequest` writable / `IncomingMessage` readable), keyed by heap object
-    /// id then event name, each value the closure ids registered via `.on(event, cb)`
-    /// in registration order (Node fires listeners in the order they were added).
-    /// Held on the interpreter (not the heap) so listeners survive across event-loop
-    /// turns — they are registered on the `'response'` callback turn and fired on
-    /// later `'data'`/`'end'` turns. Mirrors the `pending_io_callbacks` side-table.
-    event_listeners: BTreeMap<ObjectId, BTreeMap<String, Vec<u32>>>,
+    /// Registered listeners shared by standalone `EventEmitter` objects and the
+    /// HTTP stream objects (`ClientRequest` / `IncomingMessage`), keyed by heap
+    /// object id then event name. Records stay in registration order and carry
+    /// `once` state; holding them outside the heap keeps listeners live across
+    /// deferred HTTP event-loop turns (bd-3894s, bd-2dmnn).
+    event_listeners: BTreeMap<ObjectId, BTreeMap<String, Vec<EventListenerRecord>>>,
     /// bd-3894s slice (2d): deferred readable-stream emissions (`'data'`/`'end'`),
     /// keyed by the `IoCompletion` macrotask registration sequence (parallel to
     /// `pending_io_callbacks`, which carries closure callbacks). Drained by
@@ -6490,24 +6538,236 @@ impl InterpreterCore {
     /// stream object `target_id`, preserving registration order. Backs the shared
     /// `EventEmitter.prototype.on` for the HTTP `ClientRequest`/`IncomingMessage`
     /// objects.
+    #[cfg(test)]
     fn register_event_listener(&mut self, target_id: ObjectId, event: &str, closure_id: u32) {
-        self.event_listeners
+        self.insert_event_listener(
+            target_id,
+            event,
+            EventListenerRecord {
+                listener: Value::Closure(closure_id),
+                once: false,
+            },
+            false,
+        )
+        .expect("test listener registration fits the memory budget");
+    }
+
+    /// Insert one listener record at the front or back of the shared emitter
+    /// table. Meta-event delivery is handled by the receiver-aware builtin
+    /// dispatch before this mutation, so the helper is also safe for the legacy
+    /// HTTP setup path that has no module context.
+    fn insert_event_listener(
+        &mut self,
+        target_id: ObjectId,
+        event: &str,
+        record: EventListenerRecord,
+        prepend: bool,
+    ) -> Result<(), InterpreterError> {
+        let added_bytes = Self::estimate_event_listener_record_bytes(event, &record);
+        self.apply_memory_component_delta(0, added_bytes)?;
+        let listeners = self
+            .event_listeners
             .entry(target_id)
             .or_default()
             .entry(event.to_string())
-            .or_default()
-            .push(closure_id);
+            .or_default();
+        if prepend {
+            listeners.insert(0, record);
+        } else {
+            listeners.push(record);
+        }
+        Ok(())
+    }
+
+    /// Snapshot all records for one event. Snapshotting before dispatch gives
+    /// Node's rule that listeners added or removed during an `emit` affect only
+    /// later emits, while `once` records are removed before their callback runs.
+    fn event_listener_records_for(
+        &self,
+        target_id: ObjectId,
+        event: &str,
+    ) -> Vec<EventListenerRecord> {
+        self.event_listeners
+            .get(&target_id)
+            .and_then(|by_event| by_event.get(event))
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// bd-3894s slice (2d): the closure ids registered for `event` on `target_id`,
     /// cloned so the caller can invoke them without holding a borrow on
     /// `event_listeners`. Empty when no listener was registered.
     fn event_listeners_for(&self, target_id: ObjectId, event: &str) -> Vec<u32> {
-        self.event_listeners
+        self.event_listener_records_for(target_id, event)
+            .into_iter()
+            .filter_map(|record| match record.listener {
+                Value::Closure(closure_id) => Some(closure_id),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Remove the most recently registered occurrence of `listener`, matching
+    /// Node's duplicate-listener semantics. Empty event/object buckets are
+    /// pruned so `eventNames()` reports only live events.
+    fn remove_event_listener(
+        &mut self,
+        target_id: ObjectId,
+        event: &str,
+        listener: &Value,
+    ) -> Option<EventListenerRecord> {
+        let (removed, event_empty) = {
+            let listeners = self.event_listeners.get_mut(&target_id)?.get_mut(event)?;
+            let index = listeners
+                .iter()
+                .rposition(|record| Self::strict_eq_values(&record.listener, listener))?;
+            let removed = listeners.remove(index);
+            (removed, listeners.is_empty())
+        };
+        if event_empty {
+            if let Some(by_event) = self.event_listeners.get_mut(&target_id) {
+                by_event.remove(event);
+            }
+        }
+        if self
+            .event_listeners
             .get(&target_id)
-            .and_then(|by_event| by_event.get(event))
-            .cloned()
-            .unwrap_or_default()
+            .is_some_and(BTreeMap::is_empty)
+        {
+            self.event_listeners.remove(&target_id);
+        }
+        self.release_event_listener_memory(event, &removed);
+        Some(removed)
+    }
+
+    /// Remove one specific `once` record from a pre-emit snapshot without
+    /// consuming a same-listener persistent registration.
+    fn remove_once_event_listener(
+        &mut self,
+        target_id: ObjectId,
+        event: &str,
+        listener: &Value,
+    ) -> Option<EventListenerRecord> {
+        let (removed, event_empty) = {
+            let listeners = self.event_listeners.get_mut(&target_id)?.get_mut(event)?;
+            let index = listeners.iter().position(|record| {
+                record.once && Self::strict_eq_values(&record.listener, listener)
+            })?;
+            let removed = listeners.remove(index);
+            (removed, listeners.is_empty())
+        };
+        if event_empty {
+            if let Some(by_event) = self.event_listeners.get_mut(&target_id) {
+                by_event.remove(event);
+            }
+        }
+        if self
+            .event_listeners
+            .get(&target_id)
+            .is_some_and(BTreeMap::is_empty)
+        {
+            self.event_listeners.remove(&target_id);
+        }
+        self.release_event_listener_memory(event, &removed);
+        Some(removed)
+    }
+
+    /// Remove one event bucket, or every bucket for an emitter, and release
+    /// the same conservative memory charge applied during registration.
+    fn clear_event_listeners(&mut self, target_id: ObjectId, event: Option<&str>) {
+        let released_bytes = match (self.event_listeners.get(&target_id), event) {
+            (Some(by_event), Some(event)) => by_event.get(event).map_or(0, |records| {
+                records
+                    .iter()
+                    .map(|record| Self::estimate_event_listener_record_bytes(event, record))
+                    .sum()
+            }),
+            (Some(by_event), None) => by_event
+                .iter()
+                .flat_map(|(event, records)| {
+                    records.iter().map(move |record| {
+                        Self::estimate_event_listener_record_bytes(event, record)
+                    })
+                })
+                .sum(),
+            (None, _) => 0,
+        };
+
+        if let Some(event) = event {
+            if let Some(by_event) = self.event_listeners.get_mut(&target_id) {
+                by_event.remove(event);
+            }
+            if self
+                .event_listeners
+                .get(&target_id)
+                .is_some_and(BTreeMap::is_empty)
+            {
+                self.event_listeners.remove(&target_id);
+            }
+        } else {
+            self.event_listeners.remove(&target_id);
+        }
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
+    }
+
+    fn event_name_arg(
+        &self,
+        args: RegRange,
+        index: u32,
+    ) -> Result<Option<String>, InterpreterError> {
+        Ok(match self.builtin_arg(args, index)? {
+            Some(Value::Str(event)) => Some(event.to_string()),
+            _ => None,
+        })
+    }
+
+    /// Invoke the current snapshot for `event` with the emitter as `this`.
+    /// Returns whether at least one listener existed. An unhandled `error`
+    /// re-throws its first argument as a JS exception, matching EventEmitter's
+    /// fail-fast behavior.
+    fn emit_event_listener_records(
+        &mut self,
+        module: &Ir3Module,
+        target_id: ObjectId,
+        event: &str,
+        arguments: Vec<Value>,
+    ) -> Result<bool, InterpreterError> {
+        let records = self.event_listener_records_for(target_id, event);
+        if records.is_empty() {
+            if event == "error" {
+                let thrown = if let Some(value) = arguments.first() {
+                    value.clone()
+                } else {
+                    let prototype = self.ensure_builtin_prototype("Error")?;
+                    let error_id = self.alloc_object_with_prototype(Some(prototype))?;
+                    self.initialize_error_like_object(
+                        error_id,
+                        "Error",
+                        "Unhandled error.".to_string(),
+                    )?;
+                    Value::Object(error_id)
+                };
+                self.pending_exception = Some(thrown.clone());
+                self.pending_exception_label = Label::Public;
+                return Err(InterpreterError::UncaughtException {
+                    value: Self::uncaught_exception_description(&thrown),
+                });
+            }
+            return Ok(false);
+        }
+
+        for record in records {
+            if record.once {
+                let _ = self.remove_once_event_listener(target_id, event, &record.listener);
+            }
+            self.invoke_inline_method_call(
+                Some(module),
+                record.listener,
+                Value::Object(target_id),
+                arguments.clone(),
+            )?;
+        }
+        Ok(true)
     }
 
     /// bd-3894s slice (2d): schedule a deferred readable-stream emission (`'data'` or
@@ -6551,7 +6811,12 @@ impl InterpreterCore {
                 let has_body = matches!(&chunk, Value::Str(s) if !s.is_empty());
                 if has_body {
                     for closure_id in self.event_listeners_for(object_id, "data") {
-                        self.invoke_stream_listener(module, closure_id, vec![chunk.clone()])?;
+                        self.invoke_stream_listener(
+                            module,
+                            object_id,
+                            closure_id,
+                            vec![chunk.clone()],
+                        )?;
                     }
                 }
                 // `'end'` always follows `'data'`, on its own turn.
@@ -6560,11 +6825,11 @@ impl InterpreterCore {
             }
             StreamEventPhase::End => {
                 for closure_id in self.event_listeners_for(object_id, "end") {
-                    self.invoke_stream_listener(module, closure_id, Vec::new())?;
+                    self.invoke_stream_listener(module, object_id, closure_id, Vec::new())?;
                 }
                 // The response stream is fully consumed; drop its listener table so
                 // the side-table stays bounded to in-flight streams.
-                self.event_listeners.remove(&object_id);
+                self.clear_event_listeners(object_id, None);
                 Ok(())
             }
         }
@@ -6578,6 +6843,7 @@ impl InterpreterCore {
     fn invoke_stream_listener(
         &mut self,
         module: Option<&Ir3Module>,
+        target_id: ObjectId,
         closure_id: u32,
         args: Vec<Value>,
     ) -> Result<(), InterpreterError> {
@@ -6590,7 +6856,7 @@ impl InterpreterCore {
         self.invoke_inline_method_call(
             Some(module),
             Value::Closure(closure_id),
-            Value::Undefined,
+            Value::Object(target_id),
             args,
         )?;
         Ok(())
@@ -10358,14 +10624,6 @@ impl InterpreterCore {
                 }
             }
             BuiltinFunctionKind::EmitterOn => {
-                // bd-3894s slice (2d): `emitter.on(event, listener)` — register
-                // `listener` for `event` on the receiver stream object and return the
-                // receiver (Node's `.on` returns `this`, enabling
-                // `res.on('data', …).on('end', …)` chaining). The listeners are stored
-                // in the interpreter side-table and invoked when the matching stream
-                // event is emitted on a later event-loop turn (`'data'`/`'end'` on a
-                // response, `'response'`/`'error'` on a request). A non-string event
-                // name or non-closure listener is a no-op registration.
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let Value::Object(target_id) = receiver else {
                     return Err(InterpreterError::TypeError {
@@ -10373,15 +10631,234 @@ impl InterpreterCore {
                         got: receiver.type_name().to_string(),
                     });
                 };
-                let event = match self.builtin_arg(args, 0)? {
-                    Some(Value::Str(s)) => Some(s.to_string()),
-                    _ => None,
-                };
+                let event = self.event_name_arg(args, 0)?;
                 let listener = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
-                if let (Some(event), Value::Closure(closure_id)) = (event, listener) {
-                    self.register_event_listener(target_id, &event, closure_id);
+                if let Some(event) = event
+                    && listener.is_callable()
+                {
+                    let _ = self.emit_event_listener_records(
+                        module,
+                        target_id,
+                        "newListener",
+                        vec![Value::str(event.as_str()), listener.clone()],
+                    )?;
+                    self.insert_event_listener(
+                        target_id,
+                        &event,
+                        EventListenerRecord {
+                            listener,
+                            once: false,
+                        },
+                        false,
+                    )?;
                 }
                 Ok(Value::Object(target_id))
+            }
+            BuiltinFunctionKind::EmitterOnce
+            | BuiltinFunctionKind::EmitterPrependListener
+            | BuiltinFunctionKind::EmitterPrependOnceListener => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(target_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "EventEmitter receiver for listener registration".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let event = self.event_name_arg(args, 0)?;
+                let listener = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                if let Some(event) = event
+                    && listener.is_callable()
+                {
+                    let _ = self.emit_event_listener_records(
+                        module,
+                        target_id,
+                        "newListener",
+                        vec![Value::str(event.as_str()), listener.clone()],
+                    )?;
+                    self.insert_event_listener(
+                        target_id,
+                        &event,
+                        EventListenerRecord {
+                            listener,
+                            once: matches!(
+                                builtin.kind,
+                                BuiltinFunctionKind::EmitterOnce
+                                    | BuiltinFunctionKind::EmitterPrependOnceListener
+                            ),
+                        },
+                        matches!(
+                            builtin.kind,
+                            BuiltinFunctionKind::EmitterPrependListener
+                                | BuiltinFunctionKind::EmitterPrependOnceListener
+                        ),
+                    )?;
+                }
+                Ok(Value::Object(target_id))
+            }
+            BuiltinFunctionKind::EmitterOff => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(target_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "EventEmitter receiver for removeListener".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let event = self.event_name_arg(args, 0)?;
+                let listener = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                if let Some(event) = event
+                    && listener.is_callable()
+                    && let Some(removed) =
+                        self.remove_event_listener(target_id, &event, &listener)
+                {
+                    let _ = self.emit_event_listener_records(
+                        module,
+                        target_id,
+                        "removeListener",
+                        vec![Value::str(event.as_str()), removed.listener],
+                    )?;
+                }
+                Ok(Value::Object(target_id))
+            }
+            BuiltinFunctionKind::EmitterRemoveAllListeners => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(target_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "EventEmitter receiver for removeAllListeners".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                if let Some(event) = self.event_name_arg(args, 0)? {
+                    self.clear_event_listeners(target_id, Some(&event));
+                } else {
+                    self.clear_event_listeners(target_id, None);
+                }
+                Ok(Value::Object(target_id))
+            }
+            BuiltinFunctionKind::EmitterListenerCount => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(target_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "EventEmitter receiver for listenerCount".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let count = if let Some(event) = self.event_name_arg(args, 0)? {
+                    let records = self.event_listener_records_for(target_id, &event);
+                    if let Some(listener) = self.builtin_arg(args, 1)? {
+                        records
+                            .iter()
+                            .filter(|record| {
+                                Self::strict_eq_values(&record.listener, &listener)
+                            })
+                            .count()
+                    } else {
+                        records.len()
+                    }
+                } else {
+                    0
+                };
+                Ok(Value::Int(i64::try_from(count).unwrap_or(i64::MAX)))
+            }
+            BuiltinFunctionKind::EmitterEventNames => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(target_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "EventEmitter receiver for eventNames".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let names = self
+                    .event_listeners
+                    .get(&target_id)
+                    .map(|by_event| {
+                        by_event
+                            .keys()
+                            .map(|event| Value::str(event.as_str()))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                Ok(Value::Object(self.alloc_array_from_values(&names)?))
+            }
+            BuiltinFunctionKind::EmitterEmit => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(target_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "EventEmitter receiver for emit".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let Some(event) = self.event_name_arg(args, 0)? else {
+                    return Ok(Value::Bool(false));
+                };
+                let mut arguments = Vec::with_capacity(args.count.saturating_sub(1) as usize);
+                for index in 1..args.count {
+                    arguments.push(
+                        self.builtin_arg(args, index)?
+                            .unwrap_or(Value::Undefined),
+                    );
+                }
+                Ok(Value::Bool(self.emit_event_listener_records(
+                    module, target_id, &event, arguments,
+                )?))
+            }
+            BuiltinFunctionKind::EmitterGetMaxListeners => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(target_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "EventEmitter receiver for getMaxListeners".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                Ok(self
+                    .heap
+                    .get(target_id.0 as usize)
+                    .and_then(|object| object.properties.get("__maxListeners"))
+                    .cloned()
+                    .unwrap_or(Value::Int(10)))
+            }
+            BuiltinFunctionKind::EmitterSetMaxListeners => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(target_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "EventEmitter receiver for setMaxListeners".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let valid = match &value {
+                    Value::Int(number) => *number >= 0,
+                    Value::Float(number) => {
+                        let number = number.inner();
+                        number >= 0.0 && (number.is_infinite() || number.fract() == 0.0)
+                    }
+                    _ => false,
+                };
+                if !valid {
+                    return Err(InterpreterError::RangeError {
+                        message: "max listeners must be a non-negative number".to_string(),
+                    });
+                }
+                self.set_object_property(target_id, "__maxListeners".to_string(), value)?;
+                Ok(Value::Object(target_id))
+            }
+            BuiltinFunctionKind::EmitterListeners => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(target_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "EventEmitter receiver for listeners".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let listeners = self
+                    .event_name_arg(args, 0)?
+                    .map(|event| {
+                        self.event_listener_records_for(target_id, &event)
+                            .into_iter()
+                            .map(|record| record.listener)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                Ok(Value::Object(self.alloc_array_from_values(&listeners)?))
             }
             BuiltinFunctionKind::PerformanceNow => {
                 self.dispatch_builtin_hostcall("builtin:PerformanceNow", args, Some(module))
@@ -17097,12 +17574,45 @@ impl InterpreterCore {
             // deferred egress.
             ("ClientRequest", "write") => Some(BuiltinFunction::client_request_write()),
             ("ClientRequest", "end") => Some(BuiltinFunction::client_request_end()),
-            // bd-3894s slice (2d): `req.on('response'|'error', …)` on the writable
-            // request and `res.on('data'|'end'|'error', …)` on the readable response
-            // both resolve to the shared `EventEmitter.prototype.on` via the `__type`
-            // tag, exactly like `.write`/`.end` above.
-            ("ClientRequest", "on") => Some(BuiltinFunction::emitter_on()),
-            ("IncomingMessage", "on") => Some(BuiltinFunction::emitter_on()),
+            // bd-3894s / bd-2dmnn: standalone EventEmitter objects and both HTTP
+            // stream tags resolve against one receiver-aware EventEmitter method
+            // surface and one listener side table.
+            ("ClientRequest" | "IncomingMessage" | "EventEmitter", "on" | "addListener") => {
+                Some(BuiltinFunction::emitter_on())
+            }
+            ("ClientRequest" | "IncomingMessage" | "EventEmitter", "once") => {
+                Some(BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterOnce))
+            }
+            ("ClientRequest" | "IncomingMessage" | "EventEmitter", "off" | "removeListener") => {
+                Some(BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterOff))
+            }
+            ("ClientRequest" | "IncomingMessage" | "EventEmitter", "removeAllListeners") => Some(
+                BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterRemoveAllListeners),
+            ),
+            ("ClientRequest" | "IncomingMessage" | "EventEmitter", "listenerCount") => Some(
+                BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterListenerCount),
+            ),
+            ("ClientRequest" | "IncomingMessage" | "EventEmitter", "eventNames") => Some(
+                BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterEventNames),
+            ),
+            ("ClientRequest" | "IncomingMessage" | "EventEmitter", "prependListener") => Some(
+                BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterPrependListener),
+            ),
+            ("ClientRequest" | "IncomingMessage" | "EventEmitter", "prependOnceListener") => Some(
+                BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterPrependOnceListener),
+            ),
+            ("ClientRequest" | "IncomingMessage" | "EventEmitter", "emit") => {
+                Some(BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterEmit))
+            }
+            ("ClientRequest" | "IncomingMessage" | "EventEmitter", "getMaxListeners") => Some(
+                BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterGetMaxListeners),
+            ),
+            ("ClientRequest" | "IncomingMessage" | "EventEmitter", "setMaxListeners") => Some(
+                BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterSetMaxListeners),
+            ),
+            ("ClientRequest" | "IncomingMessage" | "EventEmitter", "listeners") => Some(
+                BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterListeners),
+            ),
             ("RegExp", "test") => Some(BuiltinFunction::regexp_test()),
             ("DataView", "getUint8") => Some(BuiltinFunction::data_view_get_uint8()),
             ("DataView", "setUint8") => Some(BuiltinFunction::data_view_set_uint8()),
@@ -23810,6 +24320,28 @@ impl InterpreterCore {
         }
 
         match cap {
+            "builtin:String" => {
+                // ECMA ToString conversion for the callable `String` global.
+                // With no argument it returns the empty string; additional
+                // arguments are ignored. `new String` remains a separate boxed
+                // constructor surface and is not routed here (bd-wgezf).
+                let converted = match self.builtin_arg(args, 0)? {
+                    Some(value) => self.value_to_string(&value),
+                    None => String::new(),
+                };
+                Ok(Value::str(converted))
+            }
+            "builtin:EventEmitter" => {
+                // bd-2dmnn: both `EventEmitter()` and `new EventEmitter()` lower
+                // to this pure-compute constructor. Methods are resolved lazily
+                // from the `__type` tag through `collection_prototype_method`,
+                // while listener state remains in the shared HTTP emitter table.
+                let object_id = self.alloc_object_with_properties(&[
+                    ("__type", Value::str("EventEmitter")),
+                    ("__maxListeners", Value::Int(10)),
+                ])?;
+                Ok(Value::Object(object_id))
+            }
             "builtin:ImportMeta" => {
                 if args.count != 0 {
                     return Err(InterpreterError::TypeError {
@@ -32611,6 +33143,12 @@ impl InterpreterCore {
             .saturating_add(Self::estimate_value_bytes(value))
     }
 
+    fn estimate_event_listener_record_bytes(event: &str, record: &EventListenerRecord) -> u64 {
+        MEMORY_ESTIMATE_EVENT_LISTENER_BASE_BYTES
+            .saturating_add(Self::estimate_string_bytes(event))
+            .saturating_add(Self::estimate_value_bytes(&record.listener))
+    }
+
     fn estimate_scope_frame_bytes(frame: &ScopeFrame) -> u64 {
         let bindings = frame
             .bindings
@@ -32769,6 +33307,24 @@ impl InterpreterCore {
         Self::estimate_generators_bytes(&self.generators)
     }
 
+    fn event_listeners_memory_bytes(&self) -> u64 {
+        self.event_listeners
+            .values()
+            .flat_map(|by_event| by_event.iter())
+            .flat_map(|(event, records)| {
+                records
+                    .iter()
+                    .map(move |record| Self::estimate_event_listener_record_bytes(event, record))
+            })
+            .sum()
+    }
+
+    fn release_event_listener_memory(&mut self, event: &str, record: &EventListenerRecord) {
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(Self::estimate_event_listener_record_bytes(event, record));
+    }
+
     fn heap_object_count_u32(&self) -> u32 {
         u32::try_from(self.heap.len()).unwrap_or(u32::MAX)
     }
@@ -32819,6 +33375,7 @@ impl InterpreterCore {
                     .sum::<u64>(),
             )
             .saturating_add(Self::estimate_generators_bytes(&self.generators))
+            .saturating_add(self.event_listeners_memory_bytes())
     }
 
     #[cfg(test)]
@@ -40047,6 +40604,207 @@ mod async_runtime_tests_current {
         assert!(
             core.event_listeners_for(target_id, "error").is_empty(),
             "a non-closure listener is not registered"
+        );
+    }
+
+    /// bd-2dmnn: the pure-compute EventEmitter constructor tags a standalone
+    /// object onto the same method-resolution path used by HTTP emitters.
+    #[test]
+    fn event_emitter_constructor_exposes_shared_runtime_surface_bd_2dmnn() {
+        let mut core = test_interpreter();
+        let Value::Object(target_id) = core
+            .dispatch_builtin_hostcall_inner(
+                "builtin:EventEmitter",
+                RegRange { start: 0, count: 0 },
+                None,
+            )
+            .expect("EventEmitter construction")
+        else {
+            panic!("EventEmitter constructor must return an object");
+        };
+        let object = core.heap.get(target_id.0 as usize).expect("emitter object");
+        assert_eq!(
+            object.properties.get("__type"),
+            Some(&Value::str("EventEmitter"))
+        );
+        assert_eq!(
+            object.properties.get("__maxListeners"),
+            Some(&Value::Int(10))
+        );
+        for method in [
+            "on",
+            "addListener",
+            "once",
+            "off",
+            "removeListener",
+            "removeAllListeners",
+            "listenerCount",
+            "eventNames",
+            "prependListener",
+            "prependOnceListener",
+            "emit",
+            "getMaxListeners",
+            "setMaxListeners",
+            "listeners",
+        ] {
+            assert!(
+                InterpreterCore::collection_prototype_method("EventEmitter", method).is_some(),
+                "EventEmitter.{method} must resolve through the shared method table"
+            );
+        }
+    }
+
+    /// bd-2dmnn: listener records preserve prepend/append order, remove the most
+    /// recent duplicate, and retain once metadata. An unhandled `error` rethrows
+    /// the original error value so an enclosing JS catch observes its message.
+    #[test]
+    fn event_emitter_listener_records_and_unhandled_error_bd_2dmnn() {
+        let mut core = test_interpreter();
+        let module = test_module_with_functions(vec![], vec![]);
+        let target_id = core
+            .alloc_object_with_properties(&[
+                ("__type", Value::str("EventEmitter")),
+                ("__maxListeners", Value::Int(10)),
+            ])
+            .expect("emitter object");
+
+        let dispatch_listener = |core: &mut InterpreterCore,
+                                 kind,
+                                 listener: Value|
+         -> Result<Value, InterpreterError> {
+            core.mutate_registers(|registers| {
+                if registers.len() < 2 {
+                    registers.resize(2, Value::Undefined);
+                }
+                registers[0] = Value::str("tick");
+                registers[1] = listener;
+            });
+            core.dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::new_kind(kind),
+                RegRange { start: 0, count: 2 },
+                Some(Value::Object(target_id)),
+            )
+        };
+
+        dispatch_listener(&mut core, BuiltinFunctionKind::EmitterOn, Value::Closure(1))
+            .expect("append listener");
+        dispatch_listener(
+            &mut core,
+            BuiltinFunctionKind::EmitterPrependOnceListener,
+            Value::Closure(2),
+        )
+        .expect("prepend once listener");
+        dispatch_listener(&mut core, BuiltinFunctionKind::EmitterOn, Value::Closure(1))
+            .expect("append duplicate listener");
+        let records = core.event_listener_records_for(target_id, "tick");
+        assert_eq!(
+            records,
+            vec![
+                EventListenerRecord {
+                    listener: Value::Closure(2),
+                    once: true,
+                },
+                EventListenerRecord {
+                    listener: Value::Closure(1),
+                    once: false,
+                },
+                EventListenerRecord {
+                    listener: Value::Closure(1),
+                    once: false,
+                },
+            ]
+        );
+
+        dispatch_listener(
+            &mut core,
+            BuiltinFunctionKind::EmitterOff,
+            Value::Closure(1),
+        )
+        .expect("remove most recent duplicate");
+        assert_eq!(
+            core.event_listener_records_for(target_id, "tick"),
+            vec![
+                EventListenerRecord {
+                    listener: Value::Closure(2),
+                    once: true,
+                },
+                EventListenerRecord {
+                    listener: Value::Closure(1),
+                    once: false,
+                },
+            ]
+        );
+
+        let error_id = core
+            .alloc_object_with_properties(&[("message", Value::str("boom"))])
+            .expect("error object");
+        core.mutate_registers(|registers| {
+            registers[0] = Value::str("error");
+            registers[1] = Value::Object(error_id);
+        });
+        let err = core
+            .dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterEmit),
+                RegRange { start: 0, count: 2 },
+                Some(Value::Object(target_id)),
+            )
+            .expect_err("an unhandled error event must throw");
+        assert!(matches!(err, InterpreterError::UncaughtException { .. }));
+        assert_eq!(core.pending_exception, Some(Value::Object(error_id)));
+    }
+
+    /// bd-2dmnn: listener records live outside the JS heap but still consume
+    /// the same total-memory budget. Failed registrations must leave both the
+    /// side table and incremental accumulator unchanged, while removals release
+    /// the full conservative charge.
+    #[test]
+    fn event_emitter_listener_side_table_is_memory_accounted_bd_2dmnn() {
+        let mut core = test_interpreter();
+        let target_id = ObjectId(999);
+        let event = "tick";
+        let record = EventListenerRecord {
+            listener: Value::Closure(7),
+            once: false,
+        };
+        let baseline_bytes = core.estimated_memory_bytes();
+        let record_bytes = InterpreterCore::estimate_event_listener_record_bytes(event, &record);
+
+        assert_eq!(baseline_bytes, core.recompute_estimated_memory_bytes());
+        core.config.max_total_memory_bytes = baseline_bytes
+            .saturating_add(record_bytes)
+            .saturating_sub(1);
+        let error = core
+            .insert_event_listener(target_id, event, record.clone(), false)
+            .expect_err("listener registration above the memory budget must fail");
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert!(!core.event_listeners.contains_key(&target_id));
+        assert_eq!(core.estimated_memory_bytes(), baseline_bytes);
+
+        core.config.max_total_memory_bytes = u64::MAX;
+        core.insert_event_listener(target_id, event, record.clone(), false)
+            .expect("listener registration within the memory budget");
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            baseline_bytes.saturating_add(record_bytes)
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        assert_eq!(
+            core.remove_event_listener(target_id, event, &record.listener),
+            Some(record)
+        );
+        assert_eq!(core.estimated_memory_bytes(), baseline_bytes);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
         );
     }
 

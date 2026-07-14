@@ -1991,6 +1991,9 @@ pub enum BuiltinFunctionKind {
     BufferSwap16,
     BufferSwap32,
     BufferSwap64,
+    /// Receiver-independent `Array.isArray`, materialized by a dedicated pure
+    /// factory hostcall for unshadowed static member reads (bd-cue2u).
+    ArrayIsArray,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -2360,6 +2363,10 @@ impl BuiltinFunction {
             iterator_handle: None,
             bound_object: None,
         }
+    }
+
+    fn array_is_array() -> Self {
+        Self::new_kind(BuiltinFunctionKind::ArrayIsArray)
     }
 
     fn array_push() -> Self {
@@ -3163,6 +3170,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::NumberToString => "toString",
             BuiltinFunctionKind::NumberValueOf => "valueOf",
             BuiltinFunctionKind::ProxyRevoke => "revoke",
+            BuiltinFunctionKind::ArrayIsArray => "isArray",
             BuiltinFunctionKind::ArrayPush => "push",
             BuiltinFunctionKind::ArrayPop => "pop",
             BuiltinFunctionKind::ArrayShift => "shift",
@@ -9166,6 +9174,19 @@ impl InterpreterCore {
         result
     }
 
+    /// Single semantic implementation shared by the direct
+    /// `builtin:ArrayIsArray` hostcall and its first-class callable twin.
+    fn array_is_array_value(&self, arg: Option<Value>) -> Value {
+        let is_array = match arg {
+            Some(Value::Object(object_id)) => self
+                .heap
+                .get(object_id.0 as usize)
+                .is_some_and(|object| object.is_array),
+            _ => false,
+        };
+        Value::Bool(is_array)
+    }
+
     fn dispatch_builtin_function(
         &mut self,
         module: &Ir3Module,
@@ -9427,6 +9448,10 @@ impl InterpreterCore {
                 // ES2020 20.1.3.7: return the primitive number value itself. The
                 // number-property seam only routes Int/Float receivers here.
                 Ok(receiver.unwrap_or(Value::Undefined))
+            }
+            BuiltinFunctionKind::ArrayIsArray => {
+                let arg = self.builtin_arg(args, 0)?;
+                Ok(self.array_is_array_value(arg))
             }
             BuiltinFunctionKind::ArrayPush => {
                 // ES2020 23.1.3.20: append each argument to `this` at the
@@ -22952,7 +22977,10 @@ impl InterpreterCore {
             }
         };
 
-        if !matches!(callback, Value::Function(_) | Value::Closure(_)) {
+        if !matches!(
+            callback,
+            Value::Function(_) | Value::Closure(_) | Value::BuiltinFunction(_)
+        ) {
             return Err(InterpreterError::TypeError {
                 expected: "function".to_string(),
                 got: callback.type_name().to_string(),
@@ -25985,20 +26013,11 @@ impl InterpreterCore {
                 Ok(Value::Int(args.count as i64))
             }
             "builtin:ArrayIsArray" => {
-                // Array.isArray implementation - checks if argument is an array
-                if args.count == 0 {
-                    return Ok(Value::Bool(false));
-                }
-
-                let arg = self.read_reg(args.start)?;
-                match arg {
-                    Value::Object(obj_id) => Ok(Value::Bool(
-                        self.heap
-                            .get(obj_id.0 as usize)
-                            .is_some_and(|object| object.is_array),
-                    )),
-                    _ => Ok(Value::Bool(false)), // Non-object values are not arrays
-                }
+                let arg = self.builtin_arg(args, 0)?;
+                Ok(self.array_is_array_value(arg))
+            }
+            "builtin:ArrayIsArrayFunction" => {
+                Ok(Value::BuiltinFunction(BuiltinFunction::array_is_array()))
             }
             "builtin:ArrayPrototypePop" => {
                 // Array.prototype.pop implementation - removes and returns last element from array

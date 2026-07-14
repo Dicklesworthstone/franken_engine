@@ -5,7 +5,18 @@
 //! Array.isArray, String.fromCharCode, etc. faulted ("expected function/object,
 //! got undefined") because the bare `Object`/`Array`/`String` globals have no
 //! eval-scope binding. Fix extends the static-member interception (cf. bd-6kkg6).
+//!
+//! bd-cue2u extends the same narrow surface for VALUE reads of
+//! `Array.isArray`: a dedicated zero-argument factory materializes a
+//! first-class builtin without creating a synthetic `Array` global or widening
+//! arbitrary hostcall capabilities into guest-callable values.
 use frankenengine_engine::HybridRouter;
+use frankenengine_engine::ast::ParseGoal;
+use frankenengine_engine::ir_contract::{Ir0Module, Ir1Op};
+use frankenengine_engine::lowering_pipeline::{
+    LoweringContext, lower_ir0_to_ir1, lower_ir0_to_ir3,
+};
+use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
 
 fn eval(src: &str) -> String {
     let mut e = HybridRouter::default();
@@ -73,6 +84,171 @@ fn array_is_array() {
     assert_eq!(eval("Array.isArray([1,2,3]);"), "true");
     assert_eq!(eval("Array.isArray({});"), "false");
     assert_eq!(eval("Array.isArray(5);"), "false");
+}
+
+#[test]
+fn array_is_array_member_reads_are_first_class() {
+    assert_eq!(
+        eval("let predicate = Array.isArray; predicate([1,2,3]);"),
+        "true"
+    );
+    assert_eq!(
+        eval("let predicate = Array[\"isArray\"]; predicate({0:1});"),
+        "false"
+    );
+    assert_eq!(eval("typeof Array.isArray;"), "function");
+    assert_eq!(eval("Array.isArray === Array.isArray;"), "true");
+    assert_eq!(eval("Array.isArray === Array[\"isArray\"];"), "true");
+    assert_eq!(eval("Array[\"isArray\"]([]);"), "true");
+    assert_eq!(eval("Array.isArray();"), "false");
+    assert_eq!(eval("let predicate = Array.isArray; predicate();"), "false");
+}
+
+#[test]
+fn array_is_array_value_works_as_array_callback() {
+    assert_eq!(eval("[[1], [2,3], []].every(Array.isArray);"), "true");
+    assert_eq!(eval("[[1], {0:2}, []].every(Array.isArray);"), "false");
+    assert_eq!(eval("[{}, [1]].some(Array.isArray);"), "true");
+    assert_eq!(
+        eval("(function (predicate) { return predicate([1]); })(Array.isArray);"),
+        "true"
+    );
+}
+
+#[test]
+fn array_is_array_value_respects_lexical_shadowing() {
+    assert_eq!(
+        eval(
+            "let Array = {isArray: function(value) { return value === 42; }}; \
+             let predicate = Array.isArray; predicate(42);"
+        ),
+        "true"
+    );
+    assert_eq!(
+        eval(
+            "(function(Array) { let predicate = Array.isArray; return predicate(42); }) \
+             ({isArray: function(value) { return value === 42; }});"
+        ),
+        "true"
+    );
+    assert_eq!(
+        eval(
+            "let Array = {isArray: function(value) { return value === 42; }}; \
+             let outer = function() { \
+               return function() { let predicate = Array.isArray; return predicate(42); }; \
+             }; outer()();"
+        ),
+        "true"
+    );
+}
+
+#[test]
+fn array_is_array_factory_lowering_is_narrow() {
+    fn collect_hostcalls<'a>(ops: &'a [Ir1Op], out: &mut Vec<(&'a str, u32)>) {
+        for op in ops {
+            match op {
+                Ir1Op::HostCall {
+                    capability,
+                    arg_count,
+                } => out.push((capability.as_str(), *arg_count)),
+                Ir1Op::DeclareFunction { body_ops, .. }
+                | Ir1Op::CreateFunction { body_ops, .. } => collect_hostcalls(body_ops, out),
+                _ => {}
+            }
+        }
+    }
+
+    let source = "let first = Array.isArray; let second = Array[\"isArray\"]; \
+                  Array.isArray([]); Array[\"isArray\"]([]); first === second;";
+    let lower = || {
+        let tree = CanonicalEs2020Parser
+            .parse_with_options(source, ParseGoal::Script, &ParserOptions::default())
+            .expect("source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd-cue2u-array-is-array-factory.js");
+        let context =
+            LoweringContext::new("bd-cue2u-trace", "bd-cue2u-decision", "bd-cue2u-policy");
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("source should lower to IR1")
+            .module;
+        let lowered = lower_ir0_to_ir3(&ir0, &context).expect("source should lower to IR3");
+        (ir1, lowered)
+    };
+
+    let (ir1, first) = lower();
+    let (_, second) = lower();
+    let mut hostcalls = Vec::new();
+    collect_hostcalls(&ir1.ops, &mut hostcalls);
+    assert_eq!(
+        hostcalls
+            .iter()
+            .filter(|(capability, _)| *capability == "builtin:ArrayIsArrayFunction")
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![
+            ("builtin:ArrayIsArrayFunction", 0),
+            ("builtin:ArrayIsArrayFunction", 0),
+        ]
+    );
+    assert_eq!(
+        hostcalls
+            .iter()
+            .filter(|(capability, _)| *capability == "builtin:ArrayIsArray")
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![("builtin:ArrayIsArray", 1), ("builtin:ArrayIsArray", 1),],
+        "dot and literal-computed direct calls must retain the dedicated hostcall"
+    );
+    assert!(
+        !hostcalls
+            .iter()
+            .any(|(capability, _)| *capability == "hostcall.invoke")
+    );
+    assert!(
+        first
+            .ir3
+            .required_capabilities
+            .iter()
+            .any(|capability| capability.0 == "builtin:ArrayIsArrayFunction")
+    );
+    assert_eq!(
+        first.ir3.required_capabilities, second.ir3.required_capabilities,
+        "factory capability accounting must be deterministic"
+    );
+
+    let shadowed = "let Array = {isArray: function(value) { return value; }}; \
+                    let predicate = Array.isArray; predicate(true);";
+    let tree = CanonicalEs2020Parser
+        .parse_with_options(shadowed, ParseGoal::Script, &ParserOptions::default())
+        .expect("shadowing source should parse");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "bd-cue2u-array-shadow.js");
+    let ir1 = lower_ir0_to_ir1(&ir0)
+        .expect("shadowing source should lower")
+        .module;
+    let mut shadowed_hostcalls = Vec::new();
+    collect_hostcalls(&ir1.ops, &mut shadowed_hostcalls);
+    assert!(
+        !shadowed_hostcalls
+            .iter()
+            .any(|(capability, _)| *capability == "builtin:ArrayIsArrayFunction")
+    );
+
+    let unrelated = "let key = \"isArray\"; let dynamic = Array[key]; \
+                     let other = Array.from; dynamic === other;";
+    let tree = CanonicalEs2020Parser
+        .parse_with_options(unrelated, ParseGoal::Script, &ParserOptions::default())
+        .expect("unrelated member source should parse");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "bd-cue2u-array-unrelated-members.js");
+    let ir1 = lower_ir0_to_ir1(&ir0)
+        .expect("unrelated member source should lower")
+        .module;
+    let mut unrelated_hostcalls = Vec::new();
+    collect_hostcalls(&ir1.ops, &mut unrelated_hostcalls);
+    assert!(
+        !unrelated_hostcalls
+            .iter()
+            .any(|(capability, _)| *capability == "builtin:ArrayIsArrayFunction"),
+        "dynamic and unrelated member reads must not use the narrow factory"
+    );
 }
 
 #[test]

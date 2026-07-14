@@ -13,9 +13,25 @@ use frankenengine_engine::ir_contract::{
 const BASELINE_INTERPRETER: &str = include_str!("../src/baseline_interpreter.rs");
 
 fn render_dispatch_arm_snapshot(source: &str) -> String {
+    let dispatch_source = source
+        .split_once("    fn dispatch_builtin_hostcall_inner(")
+        .expect("baseline interpreter must define dispatch_builtin_hostcall_inner")
+        .1
+        .split_once("\n    fn ")
+        .expect("dispatch_builtin_hostcall_inner must be followed by another method")
+        .0;
     let mut capabilities = Vec::new();
-    for line in source.lines() {
-        let trimmed = line.trim_start();
+    for line in dispatch_source.lines() {
+        // rustfmt indents the direct `match cap` arms by twelve spaces. Keep
+        // the scanner at that exact depth so nested capability selectors and
+        // helper matches elsewhere in the source cannot masquerade as a
+        // second dispatch arm.
+        let Some(trimmed) = line.strip_prefix("            ") else {
+            continue;
+        };
+        if trimmed.starts_with(' ') || trimmed.starts_with('\t') {
+            continue;
+        }
         if !trimmed.starts_with("\"builtin:") || !trimmed.contains("\" =>") {
             continue;
         }

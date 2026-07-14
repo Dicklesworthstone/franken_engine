@@ -93,6 +93,8 @@ const MEMORY_ESTIMATE_MAP_ENTRY_BYTES: u64 = 48;
 const MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES: u64 = 32;
 /// Approximate per-scope-binding base footprint.
 const MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES: u64 = 24;
+/// Approximate inline footprint of one IFC label value.
+const MEMORY_ESTIMATE_LABEL_BASE_BYTES: u64 = 32;
 /// Approximate per-closure base footprint.
 const MEMORY_ESTIMATE_CLOSURE_BASE_BYTES: u64 = 32;
 /// Approximate per-call-frame base footprint.
@@ -752,6 +754,7 @@ impl BindingKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ScopeBinding {
     value: Value,
+    label: crate::ifc_artifacts::Label,
     kind: BindingKind,
     /// `true` once initialized (let/const start uninitialized in TDZ).
     initialized: bool,
@@ -781,6 +784,7 @@ impl ScopeFrame {
             name,
             ScopeBinding {
                 value: Value::Undefined,
+                label: crate::ifc_artifacts::Label::Public,
                 kind,
                 initialized,
             },
@@ -2258,6 +2262,7 @@ impl InterpreterCore {
                 let replaced_binding = frame.declare(name.clone(), BindingKind::Var);
                 if let Some(binding) = frame.get_mut(&name) {
                     binding.value = value;
+                    binding.label = crate::ifc_artifacts::Label::Public;
                     binding.initialized = true;
                 }
                 replaced.push((name, replaced_binding));
@@ -4191,7 +4196,8 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::Move { dst, src } => {
                     let val = self.read_reg(src)?;
-                    self.write_reg(dst, val)?;
+                    let label = self.read_reg_label(src)?;
+                    self.write_reg_with_label(dst, val, label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Jump { target } => {
@@ -6120,25 +6126,26 @@ impl InterpreterCore {
                         .get(name_pool_index as usize)
                         .cloned()
                         .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
-                    let val = if let Some((_, binding)) = self.scope_chain.resolve(&name) {
+                    let (val, label) = if let Some((_, binding)) = self.scope_chain.resolve(&name) {
                         if !binding.initialized {
                             return Err(InterpreterError::UninitializedBinding {
                                 name: name.clone(),
                             });
                         }
-                        binding.value.clone()
+                        (binding.value.clone(), binding.label.clone())
                     } else if let Some(context) = self.active_cjs_context.as_ref() {
                         let (filename, dirname) =
                             self.cjs_filename_dirname(Some(&context.module_specifier));
-                        match name.as_str() {
+                        let value = match name.as_str() {
                             "__filename" => filename,
                             "__dirname" => dirname,
                             _ => Value::Undefined,
-                        }
+                        };
+                        (value, crate::ifc_artifacts::Label::Public)
                     } else {
-                        Value::Undefined
+                        (Value::Undefined, crate::ifc_artifacts::Label::Public)
                     };
-                    self.write_reg(dst, val)?;
+                    self.write_reg_with_label(dst, val, label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::StoreScoped {
@@ -6151,6 +6158,7 @@ impl InterpreterCore {
                         .cloned()
                         .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
                     let val = self.read_reg(src)?;
+                    let label = self.read_reg_label(src)?;
                     let mut previous = None;
                     if let Some(binding) = self.scope_chain.resolve_mut(&name) {
                         if !binding.initialized {
@@ -6163,6 +6171,7 @@ impl InterpreterCore {
                         }
                         previous = Some(binding.clone());
                         binding.value = val;
+                        binding.label = label;
                     }
                     // Silently ignore stores to undeclared variables
                     // (strict mode would throw, but baseline is lenient).
@@ -6187,10 +6196,12 @@ impl InterpreterCore {
                         .cloned()
                         .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
                     let val = self.read_reg(src)?;
+                    let label = self.read_reg_label(src)?;
                     let mut previous = None;
                     if let Some(binding) = self.scope_chain.resolve_mut(&name) {
                         previous = Some(binding.clone());
                         binding.value = val;
+                        binding.label = label;
                         binding.initialized = true;
                     }
                     if let Err(err) = self.sync_estimated_memory_bytes() {
@@ -9728,6 +9739,13 @@ impl InterpreterCore {
         }
     }
 
+    fn estimate_label_bytes(label: &crate::ifc_artifacts::Label) -> u64 {
+        MEMORY_ESTIMATE_LABEL_BASE_BYTES.saturating_add(match label {
+            crate::ifc_artifacts::Label::Custom { name, .. } => name.len() as u64,
+            _ => 0,
+        })
+    }
+
     fn estimate_scope_frame_bytes(frame: &ScopeFrame) -> u64 {
         let bindings = frame
             .bindings
@@ -9736,6 +9754,7 @@ impl InterpreterCore {
                 MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES
                     .saturating_add(Self::estimate_string_bytes(name))
                     .saturating_add(Self::estimate_value_bytes(&binding.value))
+                    .saturating_add(Self::estimate_label_bytes(&binding.label))
             })
             .sum::<u64>();
         MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES.saturating_add(bindings)
@@ -11858,7 +11877,7 @@ mod tests {
     use super::*;
     use crate::ast::{Expression, Statement};
     use crate::ir_contract::{
-        CapabilityTag, Ir3FunctionDesc, IrHeader, IrLevel, IrSchemaVersion, RegRange,
+        CapabilityTag, Ir3FunctionDesc, IrHeader, IrLevel, IrSchemaVersion, Reg, RegRange,
     };
     use crate::parser::Es2020Parser;
     use std::sync::{Arc, Mutex};
@@ -13158,6 +13177,300 @@ mod tests {
         assert_eq!(
             core.read_reg_label(3).expect("method result label"),
             crate::ifc_artifacts::Label::Secret
+        );
+    }
+
+    #[test]
+    fn nested_frame_move_preserves_argument_and_return_label_bd_ur3tk_11() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 2,
+                },
+                Ir3Instruction::Return { value: 2 },
+                Ir3Instruction::Move { dst: 1, src: 0 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 2,
+                name: Some("move_identity".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+        core.write_reg_with_label(
+            1,
+            Value::str("secret-through-move"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("secret argument should be writable");
+
+        assert_eq!(
+            core.run_loop(&module).expect("Move identity should return"),
+            Value::str("secret-through-move")
+        );
+        assert_eq!(
+            core.read_reg_label(2).expect("caller Move return label"),
+            crate::ifc_artifacts::Label::Secret
+        );
+    }
+
+    #[test]
+    fn move_is_self_safe_and_overwrites_destination_label_bd_ur3tk_11() {
+        let module = test_module(vec![
+            Ir3Instruction::Move { dst: 0, src: 0 },
+            Ir3Instruction::Move { dst: 1, src: 2 },
+            Ir3Instruction::Return { value: 1 },
+        ]);
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(
+            0,
+            Value::str("self-secret"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("self-Move source should be writable");
+        core.write_reg_with_label(
+            1,
+            Value::str("stale-secret"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("destination should be writable");
+        core.registers[2] = Value::str("public-source");
+
+        assert_eq!(
+            core.run_loop(&module).expect("Move sequence should return"),
+            Value::str("public-source")
+        );
+        assert_eq!(
+            core.read_reg_label(0).expect("self-Move label"),
+            crate::ifc_artifacts::Label::Secret
+        );
+        assert_eq!(
+            core.read_reg_label(1)
+                .expect("overwritten destination label"),
+            crate::ifc_artifacts::Label::Public
+        );
+    }
+
+    #[test]
+    fn scoped_binding_init_store_and_load_preserve_labels_bd_ur3tk_11() {
+        let module = test_module_with_pool(
+            vec![
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: BindingKind::Let as u8,
+                },
+                Ir3Instruction::InitBinding {
+                    name_pool_index: 0,
+                    src: 0,
+                },
+                Ir3Instruction::LoadScoped {
+                    dst: 1,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 1,
+                    kind: BindingKind::Var as u8,
+                },
+                Ir3Instruction::StoreScoped {
+                    src: 2,
+                    name_pool_index: 1,
+                },
+                Ir3Instruction::LoadScoped {
+                    dst: 3,
+                    name_pool_index: 1,
+                },
+                Ir3Instruction::StoreScoped {
+                    src: 4,
+                    name_pool_index: 1,
+                },
+                Ir3Instruction::LoadScoped {
+                    dst: 5,
+                    name_pool_index: 1,
+                },
+                Ir3Instruction::Return { value: 3 },
+            ],
+            vec!["initialized".to_string(), "stored".to_string()],
+        );
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(
+            0,
+            Value::str("initialized-secret"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("InitBinding source should be writable");
+        core.write_reg_with_label(
+            2,
+            Value::str("stored-confidential"),
+            crate::ifc_artifacts::Label::Confidential,
+        )
+        .expect("StoreScoped source should be writable");
+        core.registers[4] = Value::str("public-overwrite");
+
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("scope transfers should return"),
+            Value::str("stored-confidential")
+        );
+        assert_eq!(
+            core.read_reg_label(1).expect("initialized binding label"),
+            crate::ifc_artifacts::Label::Secret
+        );
+        assert_eq!(
+            core.read_reg_label(3).expect("stored binding label"),
+            crate::ifc_artifacts::Label::Confidential
+        );
+        assert_eq!(
+            core.read_reg_label(5).expect("overwritten binding label"),
+            crate::ifc_artifacts::Label::Public
+        );
+    }
+
+    fn lower_source_and_find_unresolved_argument_seed_bd_ur3tk_11(
+        source: &str,
+    ) -> (Ir3Module, Reg) {
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect("value-transfer regression source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_ur3tk_11.js");
+        let output = lower_ir0_to_ir3(
+            &ir0,
+            &LoweringContext::new(
+                "trace-bd-ur3tk-11",
+                "decision-bd-ur3tk-11",
+                "policy-bd-ur3tk-11",
+            ),
+        )
+        .expect("value-transfer regression source should lower");
+        let module = output.ir3;
+        let main_end = module
+            .instructions
+            .iter()
+            .position(|instruction| matches!(instruction, Ir3Instruction::Halt))
+            .expect("lowered main block should terminate with Halt");
+        let (call_index, mut seed_reg) = module.instructions[..main_end]
+            .iter()
+            .enumerate()
+            .find_map(|(index, instruction)| match instruction {
+                Ir3Instruction::Call { args, .. } if args.count == 1 => Some((index, args.start)),
+                _ => None,
+            })
+            .expect("source should contain one top-level single-argument call");
+
+        // Ordinary source lowering moves an unresolved input through one or
+        // more fresh temporaries before packing the call range. Walk that
+        // exact Move chain back to the unwritten backing register so the test
+        // can inject a labeled external input without introducing a new IR
+        // source-label opcode.
+        let mut search_end = call_index;
+        let mut traced_move_count = 0_u32;
+        while let Some((index, source_reg)) = module.instructions[..search_end]
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, instruction)| match instruction {
+                Ir3Instruction::Move { dst, src } if *dst == seed_reg => Some((index, *src)),
+                _ => None,
+            })
+        {
+            seed_reg = source_reg;
+            search_end = index;
+            traced_move_count = traced_move_count.saturating_add(1);
+        }
+        assert!(
+            traced_move_count >= 2,
+            "seed tracing should cross the unresolved-binding load and call-range packing moves"
+        );
+
+        // Pin the monotonic-allocation assumption behind the white-box seed:
+        // the terminal unresolved binding register must not be produced by an
+        // earlier instruction. Canonical IR names synchronous destinations
+        // `dst` or `value_dst`; the two suspended-result forms use
+        // `resume_dst` and `promise_reg`. Checking all four avoids duplicating
+        // the instruction enum's large match here.
+        assert!(
+            module.instructions[..call_index].iter().all(|instruction| {
+                let crate::deterministic_serde::CanonicalValue::Map(fields) =
+                    instruction.canonical_value()
+                else {
+                    unreachable!("IR3 instructions canonicalize to maps");
+                };
+                ["dst", "value_dst", "resume_dst", "promise_reg"]
+                    .iter()
+                    .all(|field| {
+                        !matches!(
+                            fields.get(*field),
+                            Some(crate::deterministic_serde::CanonicalValue::U64(destination))
+                                if *destination == u64::from(seed_reg)
+                        )
+                    })
+            }),
+            "terminal unresolved input r{seed_reg} must have no earlier writer"
+        );
+
+        (module, seed_reg)
+    }
+
+    fn assert_source_transfer_preserves_secret_bd_ur3tk_11(source: &str) {
+        let (module, seed_reg) = lower_source_and_find_unresolved_argument_seed_bd_ur3tk_11(source);
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(
+            seed_reg,
+            Value::str("source-secret"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("unresolved source input should be seedable");
+
+        let result = core
+            .execute(&module)
+            .expect("source-lowered value transfers should execute");
+        assert_eq!(result.value, Value::str("source-secret"));
+        assert_eq!(
+            core.read_reg_label(0).expect("source completion label"),
+            crate::ifc_artifacts::Label::Secret
+        );
+    }
+
+    #[test]
+    fn source_local_moves_preserve_secret_to_completion_bd_ur3tk_11() {
+        assert_source_transfer_preserves_secret_bd_ur3tk_11(
+            "function identity(value) { return value; } identity(secret_input);",
+        );
+    }
+
+    #[test]
+    fn captured_parameter_preserves_secret_through_scope_bd_ur3tk_11() {
+        assert_source_transfer_preserves_secret_bd_ur3tk_11(
+            "function outer(value) { return function inner() { return value; }; }\
+             outer(secret_input)();",
+        );
+    }
+
+    #[test]
+    fn captured_local_preserves_secret_through_scope_bd_ur3tk_11() {
+        assert_source_transfer_preserves_secret_bd_ur3tk_11(
+            "function outer(value) {\
+               let local = value;\
+               return function inner() { return local; };\
+             }\
+             outer(secret_input)();",
+        );
+    }
+
+    #[test]
+    fn destructuring_default_preserves_secret_through_moves_bd_ur3tk_11() {
+        assert_source_transfer_preserves_secret_bd_ur3tk_11(
+            "function unpack(value) {\
+               let { missing = value } = {};\
+               return missing;\
+             }\
+             unpack(secret_input);",
         );
     }
 
@@ -14927,6 +15240,7 @@ mod tests {
             "payload".to_string(),
             ScopeBinding {
                 value: Value::str("x".repeat(128)),
+                label: crate::ifc_artifacts::Label::Public,
                 kind: BindingKind::Var,
                 initialized: true,
             },
@@ -14949,6 +15263,7 @@ mod tests {
             "payload".to_string(),
             ScopeBinding {
                 value: Value::str("x".repeat(128)),
+                label: crate::ifc_artifacts::Label::Public,
                 kind: BindingKind::Var,
                 initialized: true,
             },
@@ -14965,6 +15280,57 @@ mod tests {
             .snapshot_scope_chain_with_temporary_budget(snapshot_bytes)
             .unwrap_err();
         assert!(matches!(err, InterpreterError::MemoryBudgetExceeded { .. }));
+    }
+
+    #[test]
+    fn custom_scope_label_is_accounted_and_store_rolls_back_bd_ur3tk_11() {
+        let config = InterpreterConfig::quickjs_defaults();
+        let mut core = InterpreterCore::new(config, "custom-scope-label-budget");
+        core.scope_chain.current_mut().bindings.insert(
+            "payload".to_string(),
+            ScopeBinding {
+                value: Value::Undefined,
+                label: crate::ifc_artifacts::Label::Public,
+                kind: BindingKind::Var,
+                initialized: true,
+            },
+        );
+        core.sync_estimated_memory_bytes().unwrap();
+        let custom_name = "tenant-sensitive".repeat(32);
+        core.write_reg_with_label(
+            0,
+            Value::Int(7),
+            crate::ifc_artifacts::Label::Custom {
+                name: custom_name.clone(),
+                level: 3,
+            },
+        )
+        .expect("custom-labeled source should be writable before tightening the budget");
+        core.config.max_total_memory_bytes = core
+            .estimated_memory_bytes()
+            .saturating_add(custom_name.len() as u64)
+            .saturating_sub(1);
+        let module = test_module_with_pool(
+            vec![Ir3Instruction::StoreScoped {
+                src: 0,
+                name_pool_index: 0,
+            }],
+            vec!["payload".to_string()],
+        );
+
+        let error = core
+            .run_loop(&module)
+            .expect_err("custom scope label must respect the memory budget");
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        let (_, binding) = core
+            .scope_chain
+            .resolve("payload")
+            .expect("failed StoreScoped should restore the binding");
+        assert_eq!(binding.value, Value::Undefined);
+        assert_eq!(binding.label, crate::ifc_artifacts::Label::Public);
     }
 
     #[test]
@@ -15161,6 +15527,7 @@ mod tests {
                 binding_name.clone(),
                 ScopeBinding {
                     value: Value::str(binding_value.clone()),
+                    label: crate::ifc_artifacts::Label::Public,
                     kind: BindingKind::Var,
                     initialized: true,
                 },

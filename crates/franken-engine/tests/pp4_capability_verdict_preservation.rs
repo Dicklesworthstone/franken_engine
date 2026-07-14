@@ -44,10 +44,11 @@ use std::path::PathBuf;
 use frankenengine_engine::algebraic_effects::{EffectCapabilities, ErasedEffect};
 use frankenengine_engine::capability::{CapabilityProfile, RuntimeCapability};
 use frankenengine_engine::hostcall_effects_migration::{
-    ConsoleHostcallEffect, FsHostcallEffect, FsOperation, ModuleHostcallEffect, ModuleImportType,
+    ConsoleHostcallEffect, FsHostcallEffect, ModuleHostcallEffect, ModuleImportType,
     NetworkHostcallEffect, TimerHostcallEffect, TimerOperation, create_effect_from_hostcall_tag,
     create_handler_stack_from_profile,
 };
+use frankenengine_extension_host::host_io::FsOperation;
 use sha2::{Digest, Sha256};
 
 // ---------------------------------------------------------------------------
@@ -86,6 +87,7 @@ fn hostcall_effects() -> Vec<(&'static str, RuntimeCapability, Box<dyn ErasedEff
             Box::new(FsHostcallEffect {
                 operation: FsOperation::Read,
                 path: "/app/config.json".to_string(),
+                arguments: Vec::new(),
                 content: None,
             }),
         ),
@@ -95,6 +97,7 @@ fn hostcall_effects() -> Vec<(&'static str, RuntimeCapability, Box<dyn ErasedEff
             Box::new(FsHostcallEffect {
                 operation: FsOperation::Write,
                 path: "/tmp/output.txt".to_string(),
+                arguments: Vec::new(),
                 content: Some(vec![1, 2, 3]),
             }),
         ),

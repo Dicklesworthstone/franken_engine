@@ -418,8 +418,19 @@ fn buffer_concat_validates_and_truncates_an_explicit_total_length() {
 fn buffer_byte_length_handles_invalid_encodings_estimates_and_binary_views() {
     let source = r#"
         const backing = new ArrayBuffer(5);
+        console.log(Buffer.byteLength('😀', 'not-an-encoding'));
+        console.log(Buffer.byteLength('😀', null));
+        console.log(Buffer.byteLength('😀', 42));
+        console.log(Buffer.byteLength('😀', true));
+        console.log(Buffer.byteLength('😀', {}));
         try {
-          Buffer.byteLength('😀', 'not-an-encoding');
+          Buffer.from('😀', 'not-an-encoding');
+          console.log(false);
+        } catch (error) {
+          console.log(error instanceof TypeError);
+        }
+        try {
+          Buffer.from('😀').toString('not-an-encoding');
           console.log(false);
         } catch (error) {
           console.log(error instanceof TypeError);
@@ -429,7 +440,10 @@ fn buffer_byte_length_handles_invalid_encodings_estimates_and_binary_views() {
         console.log(Buffer.byteLength(new DataView(backing, 1, 3)));
         console.log(Buffer.byteLength(new Int32Array(3)));
     "#;
-    assert_eq!(eval_console(source), "true\n4\n5\n3\n12");
+    assert_eq!(
+        eval_console(source),
+        "4\n4\n4\n4\n4\ntrue\ntrue\n4\n5\n3\n12"
+    );
 }
 
 #[test]

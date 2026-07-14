@@ -22435,7 +22435,10 @@ impl InterpreterCore {
         let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let length = match value {
             Value::Str(text) => {
-                let encoding = self.buffer_encoding(self.builtin_arg(args, 1)?, "utf8")?;
+                let encoding = match self.builtin_arg(args, 1)? {
+                    Some(Value::Str(encoding)) => encoding.to_ascii_lowercase(),
+                    _ => "utf8".to_string(),
+                };
                 match encoding.as_str() {
                     "utf8" | "utf-8" => text.len(),
                     "latin1" | "binary" => text.encode_utf16().count(),
@@ -22454,12 +22457,7 @@ impl InterpreterCore {
                         }
                         encoded_len.saturating_mul(3) / 4
                     }
-                    _ => {
-                        return Err(InterpreterError::TypeError {
-                            expected: "a recognized Node BufferEncoding".to_string(),
-                            got: encoding,
-                        });
-                    }
+                    _ => text.len(),
                 }
             }
             Value::Object(object_id) => {

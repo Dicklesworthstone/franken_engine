@@ -10290,6 +10290,23 @@ fn lower_expression_to_ir1_inner(
                     return Ok(());
                 }
                 if let Some(capability) =
+                    buffer_static_builtin_call_capability(callee, binding_lookup)
+                {
+                    lower_spread_apply_hostcall_to_ir1(
+                        capability,
+                        &[],
+                        arguments,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                    return Ok(());
+                }
+                if let Some(capability) =
                     object_json_builtin_call_capability(callee, binding_lookup)
                 {
                     lower_spread_apply_hostcall_to_ir1(
@@ -11009,6 +11026,37 @@ fn lower_expression_to_ir1_inner(
                 // `dispatch_builtin_hostcall_inner` (bd-6kkg6). These read their
                 // arguments from slot 0 (no receiver placeholder), the same
                 // convention as the Math/Object builtins.
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
+            if let Some(capability) = buffer_static_builtin_call_capability(callee, binding_lookup)
+            {
+                // `Buffer.from/alloc/allocUnsafe/byteLength/concat/compare/isBuffer`
+                // are pure-compute static calls. The global has no eval-scope
+                // object; route the statically recognized, unshadowed member call
+                // directly to its builtin hostcall with no receiver placeholder.
                 let arg_count = arguments.len();
                 if arg_count > u32::MAX as usize {
                     return Err(LoweringPipelineError::TooManyArguments {
@@ -16987,6 +17035,48 @@ fn number_static_builtin_call_capability(
         "isNaN" => Some("builtin:NumberIsNaN"),
         "parseInt" => Some("builtin:NumberParseInt"),
         "parseFloat" => Some("builtin:NumberParseFloat"),
+        _ => None,
+    }
+}
+
+/// Recognize the core Node-compatible `Buffer.*` static calls used by the
+/// compatibility corpus. Buffer values reuse the interpreter's Uint8Array
+/// substrate, but the global itself is intentionally not materialized: an
+/// unshadowed, statically named member call lowers directly to a pure-compute
+/// builtin. A lexical `Buffer` binding always wins, and dynamic property names
+/// remain ordinary JavaScript member calls (bd-ys3f4).
+fn buffer_static_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed,
+        ..
+    } = callee
+    else {
+        return None;
+    };
+    let Expression::Identifier(global) = object.as_ref() else {
+        return None;
+    };
+    if global.as_str() != "Buffer" || is_lexically_shadowed(binding_lookup, global) {
+        return None;
+    }
+    let property_name = match (*computed, property.as_ref()) {
+        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
+        (true, Expression::StringLiteral(name)) => name.as_str(),
+        _ => return None,
+    };
+    match property_name {
+        "from" => Some("builtin:BufferFrom"),
+        "alloc" => Some("builtin:BufferAlloc"),
+        "allocUnsafe" => Some("builtin:BufferAllocUnsafe"),
+        "byteLength" => Some("builtin:BufferByteLength"),
+        "concat" => Some("builtin:BufferConcat"),
+        "compare" => Some("builtin:BufferCompare"),
+        "isBuffer" => Some("builtin:BufferIsBuffer"),
         _ => None,
     }
 }

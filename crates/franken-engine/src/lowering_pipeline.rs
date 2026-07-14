@@ -894,6 +894,17 @@ fn lower_ir0_to_ir1_with_ambient_grant(
     for alias in confirmed_events_module_aliases(&ir0.tree.body, &binding_lookup) {
         binding_lookup.insert(events_module_alias_sentinel(&alias), 0);
     }
+    // bd-fw7zd: `stream` is likewise a lowering-only builtin surface. The
+    // first vertical slice recognizes only a statically proven `Readable.from`
+    // call reached through a CJS destructure or ESM named import. The sentinel
+    // never materializes a module/constructor object; unsupported possession,
+    // computed access, and dynamic loading remain on the ambient-denial path.
+    for local in confirmed_stream_readable_destructured_requires(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(stream_readable_binding_sentinel(&local), 0);
+    }
+    for local in confirmed_stream_readable_named_imports(&ir0.tree.body) {
+        binding_lookup.insert(stream_readable_binding_sentinel(&local), 0);
+    }
     let mut synthetic_export_index = 0u32;
     let mut synthetic_import_index = 0u32;
     let mut label_counter = 0u32;
@@ -1083,6 +1094,12 @@ fn lower_ir0_to_ir1_with_ambient_grant(
                             || (is_events_module_specifier(&import.source)
                                 && specifiers.iter().any(|spec| {
                                     binding_lookup.contains_key(&events_once_binding_sentinel(
+                                        &spec.local_name,
+                                    ))
+                                }))
+                            || (is_stream_module_specifier(&import.source)
+                                && specifiers.iter().any(|spec| {
+                                    binding_lookup.contains_key(&stream_readable_binding_sentinel(
                                         &spec.local_name,
                                     ))
                                 }));
@@ -2880,6 +2897,13 @@ fn lower_statement_to_ir1_with_flow(
                                     binding_lookup,
                                 )
                             })
+                            .or_else(|| {
+                                confirmed_stream_destructure_locals(
+                                    &d.pattern,
+                                    init,
+                                    binding_lookup,
+                                )
+                            })
                 {
                     for local in &locals {
                         if let Some(&local_bid) = binding_lookup.get(local) {
@@ -4181,6 +4205,7 @@ fn lower_statement_to_ir1_with_flow(
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
+            seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -4325,6 +4350,7 @@ fn lower_statement_to_ir1_with_flow(
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
+            seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -4511,6 +4537,7 @@ fn lower_statement_to_ir1_with_flow(
                 seed_timers_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_fs_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_events_module_sentinels(&mut m_lookup, binding_lookup);
+                seed_stream_module_sentinels(&mut m_lookup, binding_lookup);
                 let mut m_binding_index: BindingId = 0;
                 let m_scope = ScopeId { depth: 0, index: 0 };
                 let mut m_label_counter: u32 = 0;
@@ -10582,6 +10609,10 @@ fn lower_expression_to_ir1_inner(
                 // and a confirmed CJS module alias (`events.once(...)`) route
                 // here without materializing the ambient module object.
                 .or_else(|| events_once_call_capability(callee, binding_lookup))
+                // bd-fw7zd: a confirmed static `Readable.from(...)` call is a
+                // pure engine builtin; no stream module or constructor object
+                // crosses the lowering boundary.
+                .or_else(|| stream_readable_from_call_capability(callee, binding_lookup))
             {
                 let arg_count = arguments.len();
                 if arg_count > u32::MAX as usize {
@@ -12409,6 +12440,7 @@ fn lower_expression_to_ir1_inner(
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
+            seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -12560,6 +12592,7 @@ fn lower_expression_to_ir1_inner(
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
+            seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -13077,6 +13110,7 @@ fn lower_expression_to_ir1_inner(
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
+            seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -13241,6 +13275,7 @@ fn lower_expression_to_ir1_inner(
                 seed_timers_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_fs_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_events_module_sentinels(&mut m_lookup, binding_lookup);
+                seed_stream_module_sentinels(&mut m_lookup, binding_lookup);
                 let mut m_binding_index: BindingId = 0;
                 let m_scope = ScopeId { depth: 0, index: 0 };
                 let mut m_label_counter: u32 = 0;
@@ -15133,6 +15168,193 @@ fn confirmed_timers_promises_module_aliases(
         }
     }
     used
+}
+
+// ---------------------------------------------------------------------------
+// Node `stream` builtin recognition (bd-fw7zd)
+//
+// The stream kernel is exposed only through statically proven exports. This
+// first slice recognizes `Readable.from(...)` through either
+// `const { Readable } = require('stream')` or an ESM named import. It does not
+// materialize the stream module, the Readable constructor, namespace imports,
+// computed properties, or dynamic module names.
+
+fn is_stream_module_specifier(specifier: &str) -> bool {
+    specifier == "stream" || specifier == "node:stream"
+}
+
+fn stream_readable_binding_sentinel(name: &str) -> String {
+    format!("\0stream-readable\0{name}")
+}
+
+fn is_require_stream_module_initializer(
+    expr: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    let Expression::Call {
+        callee, arguments, ..
+    } = expr
+    else {
+        return false;
+    };
+    if !matches!(callee.as_ref(), Expression::Identifier(name)
+        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+    {
+        return false;
+    }
+    matches!(
+        arguments.as_slice(),
+        [Expression::StringLiteral(specifier)] if is_stream_module_specifier(specifier)
+    )
+}
+
+fn is_stream_readable_from_direct_call(expr: &Expression, local: &str) -> bool {
+    matches!(expr,
+        Expression::Call { callee, .. }
+            if matches!(callee.as_ref(), Expression::Member {
+                object,
+                property,
+                computed: false,
+                ..
+            } if matches!(object.as_ref(), Expression::Identifier(name) if name == local)
+                && matches!(property.as_ref(),
+                    Expression::Identifier(name) | Expression::StringLiteral(name)
+                        if name == "from")))
+}
+
+fn confirmed_stream_readable_destructured_requires(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for stmt in body {
+        if let Statement::VariableDeclaration(vd) = stmt {
+            for declaration in &vd.declarations {
+                let (Some(init), BindingPattern::ObjectPattern(properties)) =
+                    (&declaration.initializer, &declaration.pattern)
+                else {
+                    continue;
+                };
+                if !is_require_stream_module_initializer(init, binding_lookup) {
+                    continue;
+                }
+                for property in properties {
+                    if property.computed
+                        || !matches!(&property.key,
+                            Expression::Identifier(name) | Expression::StringLiteral(name)
+                                if name == "Readable")
+                    {
+                        continue;
+                    }
+                    if let BindingPattern::Identifier(local) = &property.value {
+                        candidates.insert(local.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    candidates
+        .into_iter()
+        .filter(|local| {
+            body.iter().any(|stmt| {
+                timers_scan_statement_deep(stmt, &|expr| {
+                    is_stream_readable_from_direct_call(expr, local)
+                })
+            })
+        })
+        .collect()
+}
+
+fn confirmed_stream_readable_named_imports(body: &[Statement]) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for stmt in body {
+        if let Statement::Import(import) = stmt
+            && is_stream_module_specifier(&import.source)
+            && let ImportClause::Named { specifiers } = &import.clause
+        {
+            for specifier in specifiers {
+                if specifier.import_name == "Readable" {
+                    candidates.insert(specifier.local_name.clone());
+                }
+            }
+        }
+    }
+
+    candidates
+        .into_iter()
+        .filter(|local| {
+            body.iter().any(|stmt| {
+                timers_scan_statement_deep(stmt, &|expr| {
+                    is_stream_readable_from_direct_call(expr, local)
+                })
+            })
+        })
+        .collect()
+}
+
+fn confirmed_stream_destructure_locals(
+    pattern: &BindingPattern,
+    init: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<Vec<String>> {
+    let BindingPattern::ObjectPattern(properties) = pattern else {
+        return None;
+    };
+    if !is_require_stream_module_initializer(init, binding_lookup) {
+        return None;
+    }
+
+    let mut locals = Vec::new();
+    for property in properties {
+        if property.computed
+            || !matches!(&property.key,
+                Expression::Identifier(name) | Expression::StringLiteral(name)
+                    if name == "Readable")
+        {
+            return None;
+        }
+        let BindingPattern::Identifier(local) = &property.value else {
+            return None;
+        };
+        if !binding_lookup.contains_key(&stream_readable_binding_sentinel(local)) {
+            return None;
+        }
+        locals.push(local.clone());
+    }
+    (!locals.is_empty()).then_some(locals)
+}
+
+fn seed_stream_module_sentinels(
+    body_lookup: &mut BTreeMap<String, BindingId>,
+    outer_lookup: &BTreeMap<String, BindingId>,
+) {
+    for key in outer_lookup.keys() {
+        if key.starts_with("\0stream-readable\0") {
+            body_lookup.insert(key.clone(), 0);
+        }
+    }
+}
+
+fn stream_readable_from_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee
+    else {
+        return None;
+    };
+    matches!(object.as_ref(), Expression::Identifier(name)
+        if binding_lookup.contains_key(&stream_readable_binding_sentinel(name)))
+    .then_some(())?;
+    matches!(property.as_ref(),
+        Expression::Identifier(name) | Expression::StringLiteral(name) if name == "from")
+    .then_some("builtin:StreamReadableFrom")
 }
 
 // ---------------------------------------------------------------------------

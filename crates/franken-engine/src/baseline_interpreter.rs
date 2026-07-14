@@ -229,6 +229,11 @@ const MEMORY_ESTIMATE_EVENT_LISTENER_BASE_BYTES: u64 = 48;
 /// A non-`error` wait registers two linked records (the awaited event and the
 /// implicit rejection-on-`error` observer), both accounted independently.
 const MEMORY_ESTIMATE_EVENT_PROMISE_WAITER_BASE_BYTES: u64 = 48;
+/// Conservative base charge for one finite `Readable.from` side-table entry.
+/// Chunk values and custom IFC labels are charged separately.
+const MEMORY_ESTIMATE_READABLE_FROM_BASE_BYTES: u64 = 64;
+/// Conservative metadata charge for one retained, IFC-labelled stream chunk.
+const MEMORY_ESTIMATE_READABLE_FROM_CHUNK_BASE_BYTES: u64 = 32;
 /// BotGuard typed-array v1 per-buffer cap from bd-8enww.2.1.
 const MAX_ARRAY_BUFFER_BYTE_LENGTH: u64 = 8 * 1024 * 1024;
 /// Approximate metadata footprint for an ArrayBuffer-backed typed-array view.
@@ -5352,6 +5357,10 @@ pub struct ExecutionResult {
 #[derive(Debug, Clone)]
 struct ModuleExecutionSnapshot {
     registers: Vec<Value>,
+    /// IFC labels parallel the logical register file. Inline callback
+    /// execution replaces the register values, so its snapshot must preserve
+    /// labels as well or a stream/event callback can corrupt caller taint.
+    register_labels: Vec<Label>,
     call_stack: Vec<CallFrame>,
     ip: usize,
     register_base: usize,
@@ -5656,6 +5665,32 @@ struct PendingStreamEmission {
     phase: StreamEventPhase,
 }
 
+/// One chunk retained by the pure-compute `Readable.from` kernel. The label is
+/// captured from the source argument before hostcall dispatch returns, so a
+/// later event-loop turn cannot lose the source's IFC provenance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LabeledReadableChunk {
+    value: Value,
+    label: Label,
+}
+
+/// Current phase of one finite `Readable.from` pump.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReadableFromPumpPhase {
+    Data,
+    End,
+    Close,
+}
+
+/// Finite pure-compute readable state, kept outside the JS heap so guest code
+/// cannot forge or mutate the pending chunk sequence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReadableFromState {
+    chunks: Vec<LabeledReadableChunk>,
+    next_chunk: usize,
+    phase: ReadableFromPumpPhase,
+}
+
 /// One listener in the interpreter-wide EventEmitter side table (bd-2dmnn).
 ///
 /// The pre-existing HTTP stream emitter stored bare closure ids. Keeping the
@@ -5898,6 +5933,13 @@ pub struct InterpreterCore {
     /// `pending_io_callbacks`, which carries closure callbacks). Drained by
     /// `execute_macrotask_callback` when the macrotask fires.
     pending_stream_emissions: BTreeMap<u64, PendingStreamEmission>,
+    /// Finite `Readable.from` streams keyed by their JS-visible heap object.
+    /// Values and IFC labels remain engine-owned while lifecycle events reuse
+    /// the shared EventEmitter tables above.
+    readable_from_streams: BTreeMap<ObjectId, ReadableFromState>,
+    /// Scheduled pure-compute stream pumps keyed by their `IoCompletion`
+    /// registration sequence. At most one pump is queued per readable object.
+    pending_readable_from_pumps: BTreeMap<u64, ObjectId>,
     /// Active promise combinator trackers keyed by combinator id.
     promise_combinators: BTreeMap<u64, PromiseCombinatorState>,
     /// Watchers keyed by promise handle for combinator updates.
@@ -6044,6 +6086,8 @@ impl InterpreterCore {
             event_promise_waiters: BTreeMap::new(),
             next_event_promise_waiter_id: 0,
             pending_stream_emissions: BTreeMap::new(),
+            readable_from_streams: BTreeMap::new(),
+            pending_readable_from_pumps: BTreeMap::new(),
             promise_combinators: BTreeMap::new(),
             promise_combinator_watchers: BTreeMap::new(),
             next_promise_combinator_id: 0,
@@ -7104,7 +7148,7 @@ impl InterpreterCore {
                     Value::Object(error_id)
                 };
                 self.pending_exception = Some(thrown.clone());
-                self.pending_exception_label = Label::Public;
+                self.pending_exception_label = emission_label;
                 return Err(InterpreterError::UncaughtException {
                     value: Self::uncaught_exception_description(&thrown),
                 });
@@ -7116,14 +7160,230 @@ impl InterpreterCore {
             if record.once {
                 let _ = self.remove_once_event_listener(target_id, event, &record.listener);
             }
-            self.invoke_inline_method_call(
+            self.invoke_inline_method_call_with_argument_label(
                 Some(module),
                 record.listener,
                 Value::Object(target_id),
                 arguments.clone(),
+                Some(emission_label.clone()),
             )?;
         }
         Ok(true)
+    }
+
+    /// Build the finite, pure-compute subset of `Readable.from(iterable,
+    /// options)`. This slice deliberately accepts arrays and strings only:
+    /// strings are one chunk (Node's `Readable.from(string)` fast path), while
+    /// array elements retain identity and order. Other iterable protocols stay
+    /// fail-closed until their iterator/async-iterator continuation is modeled.
+    fn construct_readable_from(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        if args.count == 0 {
+            return Err(InterpreterError::TypeError {
+                expected: "array or string source for Readable.from".to_string(),
+                got: "missing argument".to_string(),
+            });
+        }
+
+        let source = self.read_reg(args.start)?;
+        let source_label = self
+            .get_register_label(args.start)?
+            .clone()
+            .join(&match &source {
+                Value::Object(object_id) => self.binary_storage_label(*object_id),
+                _ => Label::Public,
+            });
+        let values = match &source {
+            Value::Str(_) => vec![source.clone()],
+            Value::Object(object_id)
+                if self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .is_some_and(|object| object.is_array) =>
+            {
+                let length = self.array_like_length(*object_id)?;
+                let mut values = Vec::with_capacity(length);
+                for index in 0..length {
+                    values.push(
+                        self.array_index_value(*object_id, index)?
+                            .unwrap_or(Value::Undefined),
+                    );
+                }
+                values
+            }
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "array or string source for Readable.from".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        let chunks = values
+            .into_iter()
+            .map(|value| LabeledReadableChunk {
+                value,
+                label: source_label.clone(),
+            })
+            .collect::<Vec<_>>();
+        let object_mode = if args.count > 1 {
+            match self.read_reg(args.start + 1)? {
+                Value::Object(options_id) => self
+                    .heap
+                    .get(options_id.0 as usize)
+                    .and_then(|object| object.properties.get("objectMode"))
+                    .map(Value::is_truthy)
+                    .unwrap_or(true),
+                Value::Undefined => true,
+                _ => true,
+            }
+        } else {
+            true
+        };
+        let state = ReadableFromState {
+            phase: if chunks.is_empty() {
+                ReadableFromPumpPhase::End
+            } else {
+                ReadableFromPumpPhase::Data
+            },
+            chunks,
+            next_chunk: 0,
+        };
+        let state_bytes = Self::estimate_readable_from_state_bytes(&state);
+        self.apply_memory_component_delta(0, state_bytes)?;
+
+        let object_id = match self.alloc_object_with_properties(&[
+            ("__type", Value::str("Readable")),
+            ("__maxListeners", Value::Int(10)),
+            ("readable", Value::Bool(true)),
+            ("readableEnded", Value::Bool(false)),
+            ("readableFlowing", Value::Null),
+            ("readableLength", Value::Int(0)),
+            ("readableObjectMode", Value::Bool(object_mode)),
+            ("readableHighWaterMark", Value::Int(1)),
+            ("destroyed", Value::Bool(false)),
+            ("closed", Value::Bool(false)),
+        ]) {
+            Ok(object_id) => object_id,
+            Err(error) => {
+                self.estimated_memory_bytes =
+                    self.estimated_memory_bytes.saturating_sub(state_bytes);
+                return Err(error);
+            }
+        };
+        self.readable_from_streams.insert(object_id, state);
+        self.schedule_readable_from_pump(object_id);
+        Ok(Value::Object(object_id))
+    }
+
+    /// Queue one future pump turn, suppressing duplicate schedules created by
+    /// re-entrant listener registration.
+    fn schedule_readable_from_pump(&mut self, object_id: ObjectId) {
+        if !self.readable_from_streams.contains_key(&object_id)
+            || self
+                .pending_readable_from_pumps
+                .values()
+                .any(|pending| *pending == object_id)
+        {
+            return;
+        }
+        let seq = self
+            .event_loop
+            .schedule_io_completion(crate::closure_model::ClosureHandle(0), Label::Public);
+        self.pending_readable_from_pumps.insert(seq, object_id);
+    }
+
+    /// Execute one finite-readable phase without holding the stream-state or
+    /// listener-table borrow across user callback re-entrancy.
+    fn drive_readable_from_pump(
+        &mut self,
+        object_id: ObjectId,
+        module: Option<&Ir3Module>,
+    ) -> Result<(), InterpreterError> {
+        let module = module.ok_or_else(|| InterpreterError::TypeError {
+            expected: "module context for Readable.from pump".to_string(),
+            got: "missing module context".to_string(),
+        })?;
+        let Some(phase) = self
+            .readable_from_streams
+            .get(&object_id)
+            .map(|state| state.phase)
+        else {
+            return Ok(());
+        };
+
+        match phase {
+            ReadableFromPumpPhase::Data => {
+                // A finite Readable enters flowing mode only after a data
+                // listener exists. If this construction-time pump wins the
+                // race, listener registration will schedule a replacement.
+                if self
+                    .event_listener_records_for(object_id, "data")
+                    .is_empty()
+                {
+                    return Ok(());
+                }
+                let chunk = {
+                    let Some(state) = self.readable_from_streams.get_mut(&object_id) else {
+                        return Ok(());
+                    };
+                    let Some(chunk) = state.chunks.get(state.next_chunk).cloned() else {
+                        state.phase = ReadableFromPumpPhase::End;
+                        self.schedule_readable_from_pump(object_id);
+                        return Ok(());
+                    };
+                    state.next_chunk = state.next_chunk.saturating_add(1);
+                    if state.next_chunk == state.chunks.len() {
+                        state.phase = ReadableFromPumpPhase::End;
+                    }
+                    chunk
+                };
+                self.emit_event_listener_records(
+                    module,
+                    object_id,
+                    "data",
+                    vec![chunk.value],
+                    chunk.label,
+                )?;
+                self.schedule_readable_from_pump(object_id);
+            }
+            ReadableFromPumpPhase::End => {
+                if let Some(state) = self.readable_from_streams.get_mut(&object_id) {
+                    state.phase = ReadableFromPumpPhase::Close;
+                }
+                self.set_object_property(object_id, "readable".to_string(), Value::Bool(false))?;
+                self.set_object_property(
+                    object_id,
+                    "readableEnded".to_string(),
+                    Value::Bool(true),
+                )?;
+                self.emit_event_listener_records(
+                    module,
+                    object_id,
+                    "end",
+                    Vec::new(),
+                    Label::Public,
+                )?;
+                self.schedule_readable_from_pump(object_id);
+            }
+            ReadableFromPumpPhase::Close => {
+                self.set_object_property(object_id, "destroyed".to_string(), Value::Bool(true))?;
+                self.set_object_property(object_id, "closed".to_string(), Value::Bool(true))?;
+                let emission = self.emit_event_listener_records(
+                    module,
+                    object_id,
+                    "close",
+                    Vec::new(),
+                    Label::Public,
+                );
+                self.clear_event_listeners(object_id, None);
+                if let Some(state) = self.readable_from_streams.remove(&object_id) {
+                    self.estimated_memory_bytes = self
+                        .estimated_memory_bytes
+                        .saturating_sub(Self::estimate_readable_from_state_bytes(&state));
+                }
+                emission?;
+            }
+        }
+        Ok(())
     }
 
     /// bd-3894s slice (2d): schedule a deferred readable-stream emission (`'data'` or
@@ -8275,6 +8535,7 @@ impl InterpreterCore {
     fn snapshot_module_execution(&self) -> ModuleExecutionSnapshot {
         ModuleExecutionSnapshot {
             registers: self.registers.clone(),
+            register_labels: self.register_labels.clone(),
             call_stack: self.call_stack.clone(),
             ip: self.ip,
             register_base: self.register_base,
@@ -8293,6 +8554,7 @@ impl InterpreterCore {
 
     fn restore_module_execution(&mut self, snapshot: ModuleExecutionSnapshot) {
         self.registers = SeedTrackedField::new(snapshot.registers);
+        self.register_labels = snapshot.register_labels;
         self.call_stack = snapshot.call_stack;
         self.ip = snapshot.ip;
         self.register_base = snapshot.register_base;
@@ -11141,6 +11403,14 @@ impl InterpreterCore {
                         },
                         false,
                     )?;
+                    if event == "data" && self.readable_from_streams.contains_key(&target_id) {
+                        self.set_object_property(
+                            target_id,
+                            "readableFlowing".to_string(),
+                            Value::Bool(true),
+                        )?;
+                        self.schedule_readable_from_pump(target_id);
+                    }
                 }
                 Ok(Value::Object(target_id))
             }
@@ -18395,42 +18665,66 @@ impl InterpreterCore {
             // bd-3894s / bd-2dmnn: standalone EventEmitter objects and both HTTP
             // stream tags resolve against one receiver-aware EventEmitter method
             // surface and one listener side table.
-            ("ClientRequest" | "IncomingMessage" | "EventEmitter", "on" | "addListener") => {
-                Some(BuiltinFunction::emitter_on())
-            }
-            ("ClientRequest" | "IncomingMessage" | "EventEmitter", "once") => {
+            (
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable",
+                "on" | "addListener",
+            ) => Some(BuiltinFunction::emitter_on()),
+            ("ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable", "once") => {
                 Some(BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterOnce))
             }
-            ("ClientRequest" | "IncomingMessage" | "EventEmitter", "off" | "removeListener") => {
-                Some(BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterOff))
+            (
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable",
+                "off" | "removeListener",
+            ) => Some(BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterOff)),
+            (
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable",
+                "removeAllListeners",
+            ) => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::EmitterRemoveAllListeners,
+            )),
+            (
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable",
+                "listenerCount",
+            ) => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::EmitterListenerCount,
+            )),
+            ("ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable", "eventNames") => {
+                Some(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::EmitterEventNames,
+                ))
             }
-            ("ClientRequest" | "IncomingMessage" | "EventEmitter", "removeAllListeners") => Some(
-                BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterRemoveAllListeners),
-            ),
-            ("ClientRequest" | "IncomingMessage" | "EventEmitter", "listenerCount") => Some(
-                BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterListenerCount),
-            ),
-            ("ClientRequest" | "IncomingMessage" | "EventEmitter", "eventNames") => Some(
-                BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterEventNames),
-            ),
-            ("ClientRequest" | "IncomingMessage" | "EventEmitter", "prependListener") => Some(
-                BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterPrependListener),
-            ),
-            ("ClientRequest" | "IncomingMessage" | "EventEmitter", "prependOnceListener") => Some(
-                BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterPrependOnceListener),
-            ),
-            ("ClientRequest" | "IncomingMessage" | "EventEmitter", "emit") => {
+            (
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable",
+                "prependListener",
+            ) => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::EmitterPrependListener,
+            )),
+            (
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable",
+                "prependOnceListener",
+            ) => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::EmitterPrependOnceListener,
+            )),
+            ("ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable", "emit") => {
                 Some(BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterEmit))
             }
-            ("ClientRequest" | "IncomingMessage" | "EventEmitter", "getMaxListeners") => Some(
-                BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterGetMaxListeners),
-            ),
-            ("ClientRequest" | "IncomingMessage" | "EventEmitter", "setMaxListeners") => Some(
-                BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterSetMaxListeners),
-            ),
-            ("ClientRequest" | "IncomingMessage" | "EventEmitter", "listeners") => Some(
-                BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterListeners),
-            ),
+            (
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable",
+                "getMaxListeners",
+            ) => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::EmitterGetMaxListeners,
+            )),
+            (
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable",
+                "setMaxListeners",
+            ) => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::EmitterSetMaxListeners,
+            )),
+            ("ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable", "listeners") => {
+                Some(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::EmitterListeners,
+                ))
+            }
             ("RegExp", "test") => Some(BuiltinFunction::regexp_test()),
             ("DataView", "getUint8") => Some(BuiltinFunction::data_view_get_uint8()),
             ("DataView", "setUint8") => Some(BuiltinFunction::data_view_set_uint8()),
@@ -20456,6 +20750,15 @@ impl InterpreterCore {
                 result.map(|_| ())
             }
             crate::promise_model::MacrotaskSource::IoCompletion => {
+                // bd-fw7zd: finite `Readable.from` pumps share the deterministic
+                // I/O-completion lane but carry their state in an engine-owned
+                // table, so the sentinel handler is never invoked as a closure.
+                if let Some(object_id) = self
+                    .pending_readable_from_pumps
+                    .remove(&macrotask.registration_seq)
+                {
+                    return self.drive_readable_from_pump(object_id, module);
+                }
                 // bd-3894s slice (2d): a deferred readable-stream emission
                 // (`'data'`/`'end'` on an `IncomingMessage`) carries no real handler
                 // closure — it is identified by its registration sequence and
@@ -24635,6 +24938,24 @@ impl InterpreterCore {
         receiver: Value,
         arguments: Vec<Value>,
     ) -> Result<Value, InterpreterError> {
+        self.invoke_inline_method_call_with_argument_label(
+            module, callee, receiver, arguments, None,
+        )
+    }
+
+    /// Invoke an isolated inline callback while conservatively assigning one
+    /// aggregate IFC label to every argument. EventEmitter supplies its
+    /// emission label here; ordinary inline calls use `None` and retain their
+    /// existing value-only behavior. Both paths snapshot and clear the label
+    /// file so callback execution cannot inherit or leak stale caller labels.
+    fn invoke_inline_method_call_with_argument_label(
+        &mut self,
+        module: Option<&Ir3Module>,
+        callee: Value,
+        receiver: Value,
+        arguments: Vec<Value>,
+        argument_label: Option<Label>,
+    ) -> Result<Value, InterpreterError> {
         let module = module.ok_or_else(|| InterpreterError::TypeError {
             expected: "module-backed Function.prototype.call/apply dispatch".to_string(),
             got: "missing module context".to_string(),
@@ -24686,6 +25007,7 @@ impl InterpreterCore {
         let result = (|| -> Result<Value, InterpreterError> {
             self.registers =
                 SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
+            self.register_labels.fill(Label::Public);
             self.call_stack.clear();
             self.ip = wrapper_start;
             self.register_base = 0;
@@ -24718,6 +25040,21 @@ impl InterpreterCore {
                         got: format!("r2 + argument index {index}"),
                     })?;
                 self.write_reg(register, argument)?;
+                if let Some(label) = &argument_label {
+                    // Wrapper-level builtins consume r(2+i), while a user
+                    // function entered by CallMethod reads logical parameter
+                    // r(i). The current label file is logical-register based,
+                    // so seed both locations conservatively.
+                    self.set_register_label(register, label.clone())?;
+                    let parameter_register =
+                        u32::try_from(index).map_err(|_| InterpreterError::TypeError {
+                            expected: "u32-bounded inline callback parameter register".to_string(),
+                            got: format!("argument index {index}"),
+                        })?;
+                    if parameter_register < self.config.max_registers {
+                        self.set_register_label(parameter_register, label.clone())?;
+                    }
+                }
             }
             self.run_loop(&wrapper)
         })();
@@ -26307,6 +26644,12 @@ impl InterpreterCore {
                 // event/error waiter records; no module or host authority is
                 // materialized by this dispatch.
                 self.register_event_promise_once(args)
+            }
+            "builtin:StreamReadableFrom" => {
+                // bd-fw7zd: statically proven `Readable.from(...)` is an
+                // engine-contained finite stream. No module object or host
+                // authority is materialized by this dispatch.
+                self.construct_readable_from(args)
             }
             "builtin:ImportMeta" => {
                 if args.count != 0 {
@@ -35122,6 +35465,22 @@ impl InterpreterCore {
             .saturating_add(label_bytes)
     }
 
+    fn estimate_readable_from_state_bytes(state: &ReadableFromState) -> u64 {
+        state
+            .chunks
+            .iter()
+            .fold(MEMORY_ESTIMATE_READABLE_FROM_BASE_BYTES, |total, chunk| {
+                let label_bytes = match &chunk.label {
+                    Label::Custom { name, .. } => Self::estimate_string_bytes(name),
+                    _ => 0,
+                };
+                total
+                    .saturating_add(MEMORY_ESTIMATE_READABLE_FROM_CHUNK_BASE_BYTES)
+                    .saturating_add(Self::estimate_value_bytes(&chunk.value))
+                    .saturating_add(label_bytes)
+            })
+    }
+
     fn estimate_scope_frame_bytes(frame: &ScopeFrame) -> u64 {
         let bindings = frame
             .bindings
@@ -35311,6 +35670,13 @@ impl InterpreterCore {
             .sum()
     }
 
+    fn readable_from_streams_memory_bytes(&self) -> u64 {
+        self.readable_from_streams
+            .values()
+            .map(Self::estimate_readable_from_state_bytes)
+            .sum()
+    }
+
     fn release_event_listener_memory(&mut self, event: &str, record: &EventListenerRecord) {
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
@@ -35369,6 +35735,7 @@ impl InterpreterCore {
             .saturating_add(Self::estimate_generators_bytes(&self.generators))
             .saturating_add(self.event_listeners_memory_bytes())
             .saturating_add(self.event_promise_waiters_memory_bytes())
+            .saturating_add(self.readable_from_streams_memory_bytes())
     }
 
     #[cfg(test)]
@@ -42984,6 +43351,8 @@ mod async_runtime_tests_current {
             registers[0] = Value::str("error");
             registers[1] = Value::Object(error_id);
         });
+        core.set_register_label(1, Label::Secret)
+            .expect("error argument label");
         let err = core
             .dispatch_builtin_function(
                 &module,
@@ -42994,6 +43363,96 @@ mod async_runtime_tests_current {
             .expect_err("an unhandled error event must throw");
         assert!(matches!(err, InterpreterError::UncaughtException { .. }));
         assert_eq!(core.pending_exception, Some(Value::Object(error_id)));
+        assert_eq!(core.pending_exception_label, Label::Secret);
+    }
+
+    /// bd-fw7zd: stream chunks retain their IFC label through ordinary
+    /// EventEmitter callbacks, not only through the Promise-backed
+    /// `events.once` path. Isolated callback execution must also restore the
+    /// caller's complete register-label file after the callback throws.
+    #[test]
+    fn event_emitter_callback_arguments_preserve_labels_and_restore_caller_bd_fw7zd() {
+        let module = test_module_with_functions(
+            vec![Ir3Instruction::Throw { value: 0 }],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 1,
+                frame_size: 1,
+                name: Some("throw_stream_chunk".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        let target_id = core
+            .alloc_object_with_properties(&[("__type", Value::str("Readable"))])
+            .expect("readable emitter object");
+        core.insert_event_listener(
+            target_id,
+            "data",
+            EventListenerRecord {
+                listener: Value::Function(0),
+                once: false,
+            },
+            false,
+        )
+        .expect("data listener registration");
+        core.set_register_label(7, Label::Confidential)
+            .expect("caller label seed");
+
+        let error = core
+            .emit_event_listener_records(
+                &module,
+                target_id,
+                "data",
+                vec![Value::str("secret-chunk")],
+                Label::Secret,
+            )
+            .expect_err("throwing data listener must escape");
+
+        assert!(matches!(error, InterpreterError::UncaughtException { .. }));
+        assert_eq!(core.pending_exception, Some(Value::str("secret-chunk")));
+        assert_eq!(core.pending_exception_label, Label::Secret);
+        assert_eq!(
+            core.get_register_label(7).expect("restored caller label"),
+            &Label::Confidential
+        );
+    }
+
+    /// bd-fw7zd: the engine-owned finite stream queue must participate in both
+    /// incremental and recomputed memory totals, and terminal close must release
+    /// its side-table charge exactly once.
+    #[test]
+    fn readable_from_state_is_memory_accounted_and_released_bd_fw7zd() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let source = core
+            .alloc_array_from_values(&[])
+            .expect("empty source array");
+        core.mutate_registers(|registers| registers[0] = Value::Object(source));
+
+        let Value::Object(readable_id) = core
+            .construct_readable_from(RegRange { start: 0, count: 1 })
+            .expect("construct finite readable")
+        else {
+            panic!("Readable.from must return an object");
+        };
+        assert!(core.readable_from_streams.contains_key(&readable_id));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.drive_readable_from_pump(readable_id, Some(&module))
+            .expect("empty readable end phase");
+        core.drive_readable_from_pump(readable_id, Some(&module))
+            .expect("empty readable close phase");
+
+        assert!(!core.readable_from_streams.contains_key(&readable_id));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     /// bd-2dmnn: listener records live outside the JS heap but still consume

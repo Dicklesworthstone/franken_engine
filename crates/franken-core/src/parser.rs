@@ -4117,13 +4117,40 @@ fn parse_new_expression(
     recursion_depth: u64,
 ) -> ParseResult<Expression> {
     // `rest` is everything after `new `, e.g. `Foo(a, b)` or `Foo` or `Foo.Bar()`
+    //
+    // A member / call / index chain that follows the constructor's argument list
+    // binds to the NEW RESULT, not the callee: per ES2020 §13.3, `new X(a).b`
+    // parses as `(new X(a)).b` (and `new X(a)()` / `new X(a)[i]` likewise). The
+    // base cases below only handle a `rest` whose constructor call is the whole
+    // expression; when a trailing chain follows the `)`, re-group explicitly so
+    // the trailing access applies to the constructed object, reusing the existing
+    // postfix (member/call/index) machinery (bd-7rj0t; engine donor bd-if9uy).
+    // The parenthesized form is known-good, so this is a faithful regrouping
+    // rather than new parsing logic.
+    let (nested_new_count, _) = strip_leading_new_operators(rest);
+    if let Some((_open, close)) = find_constructor_arguments_before_postfix(rest, nested_new_count)
+    {
+        let trailing = strip_leading_new_postfix_trivia(&rest[close + 1..]);
+        let grouped = format!("(new {}){}", &rest[..=close], trailing);
+        return parse_expression(&grouped, span, context, recursion_depth + 1);
+    }
+
     // Find the arguments list at the end, if any.
     if rest.ends_with(')')
         && let Some((callee_src, args_inner)) = {
             let open = find_matching_open_paren(rest);
             open.map(|pos| (rest[..pos].trim(), &rest[pos + 1..rest.len() - 1]))
+                .filter(|(callee_src, _)| !callee_src.is_empty())
         }
     {
+        if callee_src.ends_with("?.") {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "optional chaining cannot be used in constructor position",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
+        }
         let callee = parse_expression(callee_src, span, context, recursion_depth + 1)?;
         let arguments = if args_inner.trim().is_empty() {
             Vec::new()
@@ -4911,6 +4938,7 @@ fn slash_can_start_regexp(expr: &str, slash_pos: usize) -> bool {
             | b'%'
             | b'<'
             | b'>'
+            | b';'
     )
 }
 
@@ -5512,6 +5540,276 @@ fn find_top_level_template_start(s: &str) -> Option<usize> {
         }
     }
 
+    None
+}
+
+/// Find the top-level constructor-argument pair immediately before a result-side
+/// postfix chain. Leading parenthesized callees and function parameter lists are
+/// skipped because their suffix is not a postfix on a constructed result.
+/// Returns `(open_index, close_index)` so the result-side chain can be regrouped
+/// outside `new` (bd-7rj0t).
+fn strip_leading_new_operators(mut input: &str) -> (usize, &str) {
+    let mut count = 0;
+    loop {
+        if input == "new" {
+            return (count + 1, "");
+        }
+        let Some(rest) = input
+            .strip_prefix("new ")
+            .or_else(|| input.strip_prefix("new\t"))
+        else {
+            return (count, input);
+        };
+        count += 1;
+        input = rest.trim_start();
+    }
+}
+
+fn regexp_can_start_in_delimiter_scan(source: &str, slash_pos: usize) -> bool {
+    if slash_can_start_regexp(source, slash_pos) {
+        return true;
+    }
+    let prefix = source[..slash_pos].trim_end();
+    let keyword_start = prefix
+        .char_indices()
+        .rev()
+        .find_map(|(index, ch)| (!is_identifier_continue(ch)).then_some(index + ch.len_utf8()))
+        .unwrap_or(0);
+    if prefix[..keyword_start].trim_end().ends_with('.') {
+        return false;
+    }
+    matches!(
+        &prefix[keyword_start..],
+        "await"
+            | "case"
+            | "delete"
+            | "in"
+            | "instanceof"
+            | "new"
+            | "of"
+            | "return"
+            | "throw"
+            | "typeof"
+            | "void"
+            | "yield"
+    )
+}
+
+fn strip_leading_new_postfix_trivia(mut input: &str) -> &str {
+    loop {
+        input = input.trim_start();
+        if let Some(line_comment) = input.strip_prefix("//") {
+            let Some(line_end) = line_comment.find(['\n', '\r']) else {
+                return "";
+            };
+            input = &line_comment[line_end..];
+            continue;
+        }
+        if let Some(block_comment) = input.strip_prefix("/*") {
+            let Some(comment_end) = block_comment.find("*/") else {
+                return "";
+            };
+            input = &block_comment[comment_end + 2..];
+            continue;
+        }
+        return input;
+    }
+}
+
+fn skip_quoted_literal_for_delimiter_scan(bytes: &[u8], start: usize, quote: u8) -> usize {
+    let mut i = start.saturating_add(1);
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i = i.saturating_add(2),
+            byte if byte == quote => return i.saturating_add(1),
+            _ => i = i.saturating_add(1),
+        }
+    }
+    bytes.len()
+}
+
+#[derive(Clone, Copy)]
+enum TemplateDelimiterState {
+    Template,
+    Interpolation { brace_depth: usize },
+}
+
+fn skip_template_literal_for_delimiter_scan(source: &str, start: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    if bytes.get(start) != Some(&b'`') {
+        return None;
+    }
+
+    let mut states = vec![TemplateDelimiterState::Template];
+    let mut i = start.saturating_add(1);
+    while let Some(state) = states.last().copied() {
+        if i >= bytes.len() {
+            return None;
+        }
+
+        match state {
+            TemplateDelimiterState::Template => match bytes[i] {
+                b'\\' => i = i.saturating_add(2),
+                b'`' => {
+                    states.pop();
+                    i += 1;
+                    if states.is_empty() {
+                        return Some(i);
+                    }
+                }
+                b'$' if bytes.get(i + 1) == Some(&b'{') => {
+                    states.push(TemplateDelimiterState::Interpolation { brace_depth: 1 });
+                    i += 2;
+                }
+                _ => i += 1,
+            },
+            TemplateDelimiterState::Interpolation { brace_depth } => match bytes[i] {
+                b'\'' | b'"' => {
+                    i = skip_quoted_literal_for_delimiter_scan(bytes, i, bytes[i]);
+                }
+                b'`' => {
+                    states.push(TemplateDelimiterState::Template);
+                    i += 1;
+                }
+                b'/' if bytes.get(i + 1) == Some(&b'/') => {
+                    i += 2;
+                    while i < bytes.len() && !matches!(bytes[i], b'\n' | b'\r') {
+                        i += 1;
+                    }
+                }
+                b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                    i += 2;
+                    while i + 1 < bytes.len() && &bytes[i..i + 2] != b"*/" {
+                        i += 1;
+                    }
+                    i = i.saturating_add(2).min(bytes.len());
+                }
+                b'/' if regexp_can_start_in_delimiter_scan(source, i)
+                    && let Some((_pattern, _flags, consumed)) =
+                        parse_regexp_literal_prefix(&source[i..]) =>
+                {
+                    i += consumed;
+                }
+                b'{' => {
+                    *states.last_mut()? = TemplateDelimiterState::Interpolation {
+                        brace_depth: brace_depth.saturating_add(1),
+                    };
+                    i += 1;
+                }
+                b'}' => {
+                    if brace_depth == 1 {
+                        states.pop();
+                    } else {
+                        *states.last_mut()? = TemplateDelimiterState::Interpolation {
+                            brace_depth: brace_depth - 1,
+                        };
+                    }
+                    i += 1;
+                }
+                _ => i += 1,
+            },
+        }
+    }
+    None
+}
+
+fn find_constructor_arguments_before_postfix(
+    s: &str,
+    mut argument_pairs_to_skip: usize,
+) -> Option<(usize, usize)> {
+    let bytes = s.as_bytes();
+    let mut in_quote: Option<u8> = None;
+    let mut escaped = false;
+    let mut open: Option<usize> = None;
+    let mut paren: i64 = 0;
+    let mut bracket: i64 = 0;
+    let mut brace: i64 = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = in_quote {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == q {
+                in_quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'`'
+            && let Some(next) = skip_template_literal_for_delimiter_scan(s, i)
+        {
+            i = next;
+            continue;
+        }
+        if b == b'/' && bytes.get(i + 1) == Some(&b'/') {
+            i += 2;
+            while i < bytes.len() && !matches!(bytes[i], b'\n' | b'\r') {
+                i += 1;
+            }
+            continue;
+        }
+        if b == b'/' && bytes.get(i + 1) == Some(&b'*') {
+            i += 2;
+            while i + 1 < bytes.len() && &bytes[i..i + 2] != b"*/" {
+                i += 1;
+            }
+            i = i.saturating_add(2).min(bytes.len());
+            continue;
+        }
+        if b == b'/'
+            && regexp_can_start_in_delimiter_scan(s, i)
+            && let Some((_pattern, _flags, consumed)) = parse_regexp_literal_prefix(&s[i..])
+        {
+            i += consumed;
+            continue;
+        }
+        match b {
+            b'\'' | b'"' | b'`' => in_quote = Some(b),
+            b'[' => bracket += 1,
+            b']' => bracket -= 1,
+            b'{' => brace += 1,
+            b'}' => brace -= 1,
+            b'(' => {
+                if open.is_none() {
+                    if bracket == 0 && brace == 0 {
+                        open = Some(i);
+                        paren = 1;
+                    }
+                } else {
+                    paren += 1;
+                }
+            }
+            b')' => {
+                if open.is_some() {
+                    paren -= 1;
+                    if paren == 0
+                        && let Some(open_index) = open.take()
+                    {
+                        let (_, callee_src) = strip_leading_new_operators(s[..open_index].trim());
+                        let trailing = strip_leading_new_postfix_trivia(&s[i + 1..]);
+                        if !callee_src.is_empty()
+                            && (trailing.starts_with('.')
+                                || trailing.starts_with('[')
+                                || trailing.starts_with('(')
+                                || trailing.starts_with("?."))
+                        {
+                            if argument_pairs_to_skip > 0 {
+                                argument_pairs_to_skip -= 1;
+                                i += 1;
+                                continue;
+                            }
+                            return Some((open_index, i));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
     None
 }
 
@@ -12364,6 +12662,181 @@ mod tests {
             }
             other => panic!("expected Expression, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn postfix_chain_binds_to_new_result_bd_7rj0t() {
+        let member = parse_script("new Foo(1).bar");
+        assert!(matches!(
+            first_expr(&member),
+            Expression::Member {
+                object,
+                property,
+                computed: false,
+            } if matches!(object.as_ref(), Expression::New { arguments, .. } if arguments.len() == 1)
+                && matches!(property.as_ref(), Expression::Identifier(name) if name == "bar")
+        ));
+
+        let method = parse_script("new Foo(1).bar()");
+        assert!(matches!(
+            first_expr(&method),
+            Expression::Call { callee, arguments }
+                if arguments.is_empty()
+                    && matches!(callee.as_ref(), Expression::Member { object, computed: false, .. }
+                        if matches!(object.as_ref(), Expression::New { arguments, .. } if arguments.len() == 1))
+        ));
+
+        let computed = parse_script("new Foo(1)[0]");
+        assert!(matches!(
+            first_expr(&computed),
+            Expression::Member {
+                object,
+                property,
+                computed: true,
+            } if matches!(object.as_ref(), Expression::New { arguments, .. } if arguments.len() == 1)
+                && matches!(property.as_ref(), Expression::NumericLiteral(0))
+        ));
+
+        let called_result = parse_script("new Foo(1)()");
+        assert!(matches!(
+            first_expr(&called_result),
+            Expression::Call { callee, arguments }
+                if arguments.is_empty()
+                    && matches!(callee.as_ref(), Expression::New { arguments, .. } if arguments.len() == 1)
+        ));
+    }
+
+    #[test]
+    fn new_result_regrouping_preserves_existing_forms_bd_7rj0t() {
+        assert!(matches!(
+            first_expr(&parse_script("(new Foo()).bar")),
+            Expression::Member { object, .. }
+                if matches!(object.as_ref(), Expression::New { arguments, .. } if arguments.is_empty())
+        ));
+        assert!(matches!(
+            first_expr(&parse_script("new (factory())(1)")),
+            Expression::New { callee, arguments }
+                if arguments.len() == 1 && matches!(callee.as_ref(), Expression::Call { .. })
+        ));
+        assert!(matches!(
+            first_expr(&parse_script("new (factory())(1).value")),
+            Expression::Member { object, computed: false, .. }
+                if matches!(object.as_ref(), Expression::New { callee, arguments }
+                    if arguments.len() == 1 && matches!(callee.as_ref(), Expression::Call { .. }))
+        ));
+        assert!(matches!(
+            first_expr(&parse_script("new (factory()).value")),
+            Expression::New { callee, arguments }
+                if arguments.is_empty()
+                    && matches!(callee.as_ref(), Expression::Member { object, computed: false, .. }
+                        if matches!(object.as_ref(), Expression::Call { .. }))
+        ));
+        assert!(matches!(
+            first_expr(&parse_script("new Foo()?.value")),
+            Expression::OptionalMember { object, computed: false, .. }
+                if matches!(object.as_ref(), Expression::New { arguments, .. } if arguments.is_empty())
+        ));
+        assert!(matches!(
+            first_expr(&parse_script("new Foo()?.[0]")),
+            Expression::OptionalMember { object, computed: true, .. }
+                if matches!(object.as_ref(), Expression::New { arguments, .. } if arguments.is_empty())
+        ));
+        assert!(matches!(
+            first_expr(&parse_script("new Foo()?.()")),
+            Expression::OptionalCall { callee, arguments }
+                if arguments.is_empty()
+                    && matches!(callee.as_ref(), Expression::New { arguments, .. } if arguments.is_empty())
+        ));
+        assert!(matches!(
+            first_expr(&parse_script("new new Foo().value")),
+            Expression::New { callee, arguments }
+                if arguments.is_empty()
+                    && matches!(callee.as_ref(), Expression::Member { object, .. }
+                        if matches!(object.as_ref(), Expression::New { arguments, .. } if arguments.is_empty()))
+        ));
+        assert!(matches!(
+            first_expr(&parse_script("new new Foo()(1).value")),
+            Expression::Member { object, computed: false, .. }
+                if matches!(object.as_ref(), Expression::New { callee, arguments }
+                    if matches!(arguments.as_slice(), [Expression::NumericLiteral(1)])
+                        && matches!(callee.as_ref(), Expression::New { arguments, .. }
+                            if arguments.is_empty()))
+        ));
+        assert!(matches!(
+            first_expr(&parse_script("new new (Foo)(1).value")),
+            Expression::New { callee, arguments }
+                if arguments.is_empty()
+                    && matches!(callee.as_ref(), Expression::Member { object, computed: false, .. }
+                        if matches!(object.as_ref(), Expression::New { callee, arguments }
+                            if matches!(arguments.as_slice(), [Expression::NumericLiteral(1)])
+                                && matches!(callee.as_ref(), Expression::Identifier(name) if name == "Foo")))
+        ));
+        assert!(matches!(
+            first_expr(&parse_script("new new (factory())(1).value")),
+            Expression::New { callee, arguments }
+                if arguments.is_empty()
+                    && matches!(callee.as_ref(), Expression::Member { object, computed: false, .. }
+                        if matches!(object.as_ref(), Expression::New { callee, arguments }
+                            if matches!(arguments.as_slice(), [Expression::NumericLiteral(1)])
+                                && matches!(callee.as_ref(), Expression::Call { .. })))
+        ));
+
+        let invalid_optional_constructor = CanonicalEs2020Parser
+            .parse("new Foo?.()", ParseGoal::Script)
+            .expect_err("optional chaining in constructor position must fail");
+        assert_eq!(
+            invalid_optional_constructor.code,
+            ParseErrorCode::UnsupportedSyntax
+        );
+        assert_eq!(
+            invalid_optional_constructor.message,
+            "optional chaining cannot be used in constructor position"
+        );
+    }
+
+    #[test]
+    fn new_result_regrouping_ignores_argument_delimiters_bd_7rj0t() {
+        assert!(matches!(
+            first_expr(&parse_script("new Foo(\")\").value")),
+            Expression::Member { object, .. }
+                if matches!(object.as_ref(), Expression::New { arguments, .. }
+                    if matches!(arguments.as_slice(), [Expression::StringLiteral(value)] if value == ")"))
+        ));
+        assert!(matches!(
+            first_expr(&parse_script(r"new Foo(/\)/).value")),
+            Expression::Member { object, .. }
+                if matches!(object.as_ref(), Expression::New { arguments, .. }
+                    if matches!(arguments.as_slice(), [Expression::RegExpLiteral { pattern, .. }] if pattern == r"\)"))
+        ));
+        assert!(matches!(
+            first_expr(&parse_script(r"new Foo(`${`)`}`).value")),
+            Expression::Member { object, .. }
+                if matches!(object.as_ref(), Expression::New { arguments, .. }
+                    if matches!(arguments.as_slice(), [Expression::TemplateLiteral { expressions, .. }]
+                        if expressions.len() == 1))
+        ));
+        assert!(matches!(
+            first_expr(&parse_script(
+                r"new Foo(function(){ return /\)/; }).value"
+            )),
+            Expression::Member { object, .. }
+                if matches!(object.as_ref(), Expression::New { arguments, .. }
+                    if matches!(arguments.as_slice(), [Expression::Function { .. }]))
+        ));
+        assert!(matches!(
+            first_expr(&parse_script(
+                r"new Foo(function(){ let x=1; /\)/.test(x); }).value"
+            )),
+            Expression::Member { object, .. }
+                if matches!(object.as_ref(), Expression::New { arguments, .. }
+                    if matches!(arguments.as_slice(), [Expression::Function { .. }]))
+        ));
+        assert!(matches!(
+            first_expr(&parse_script("new Foo() /* gap */ .value")),
+            Expression::Member { object, property, computed: false }
+                if matches!(object.as_ref(), Expression::New { arguments, .. } if arguments.is_empty())
+                    && matches!(property.as_ref(), Expression::Identifier(name) if name == "value")
+        ));
     }
 
     #[test]

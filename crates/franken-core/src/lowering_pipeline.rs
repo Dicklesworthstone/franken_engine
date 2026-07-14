@@ -14545,6 +14545,27 @@ mod tests {
     }
 
     #[test]
+    fn postfix_member_and_call_on_new_result_execute_bd_7rj0t() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function Constructor(value) {\
+                 this.value = value;\
+                 this.method = function() { return 9; };\
+             }\
+             new Constructor(5).value + new Constructor().method() + new Constructor(4)['value'];",
+        );
+        assert_eq!(value, Value::Int(18));
+    }
+
+    #[test]
+    fn parenthesized_callee_postfix_executes_bd_7rj0t() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function Constructor(value) { this.value = value; }\
+             new (Constructor)(6).value;",
+        );
+        assert_eq!(value, Value::Int(6));
+    }
+
+    #[test]
     fn deferred_construct_lowers_and_executes_bd_6pvhn() {
         let (ir1, module, value) = lower_and_execute_deferred_source_bd_6pvhn(
             "function Empty() { this.value = 1; }\

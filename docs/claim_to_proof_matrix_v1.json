@@ -18,7 +18,7 @@
         "must_contain": "A native Rust runtime for adversarial JavaScript/TypeScript extension workloads",
         "start_line": 17
       },
-      "verification_command": "CARGO_TARGET_DIR=/data/projects/franken_engine/target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc\" cargo check -p frankenengine-engine --tests"
+      "verification_command": "CARGO_TARGET_DIR=/data/projects/franken_engine/target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc -Clinker-features=-lld\" cargo check -p frankenengine-engine --tests"
     },
     {
       "actual_wording_state": "observed",
@@ -58,7 +58,7 @@
         "must_contain": "Deterministic replay for the declared high-severity inventory",
         "start_line": 138
       },
-      "verification_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc\" cargo test -p frankenengine-engine --test deterministic_replay_integration --test counterfactual_replay_engine_integration"
+      "verification_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc -Clinker-features=-lld\" cargo test -p frankenengine-engine --test deterministic_replay_integration --test counterfactual_replay_engine_integration"
     },
     {
       "actual_wording_state": "observed",
@@ -294,7 +294,7 @@
         "must_contain": "`100%` deterministic replay coverage",
         "start_line": 60
       },
-      "verification_command": "./scripts/run_replay_coverage_metric_gate.sh ci && rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc\" cargo test -p frankenengine-engine --test deterministic_replay_integration frankenctl_compile_and_run_artifacts_are_byte_identical_with_fixed_inputs"
+      "verification_command": "./scripts/run_replay_coverage_metric_gate.sh ci && rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc -Clinker-features=-lld\" cargo test -p frankenengine-engine --test deterministic_replay_integration frankenctl_compile_and_run_artifacts_are_byte_identical_with_fixed_inputs"
     },
     {
       "actual_wording_state": "observed",

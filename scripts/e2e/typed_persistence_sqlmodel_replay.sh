@@ -18,6 +18,34 @@ target_dir="${CARGO_TARGET_DIR:-${root_dir}/target/typed_persistence_sqlmodel_re
 trace_id="${TYPED_PERSISTENCE_TRACE_ID:-trace-typed-persistence-${run_id}}"
 decision_id="${TYPED_PERSISTENCE_DECISION_ID:-decision-typed-persistence-${run_id}}"
 policy_id="${TYPED_PERSISTENCE_POLICY_ID:-policy-sqlmodel-typed-boundaries-v1}"
+required_linker_rustflag="-Clinker-features=-lld"
+
+linker_policy_is_effective() {
+  local rustflags_value="${1-}"
+  local -a tokens=()
+  local index
+  local effective_state="unset"
+
+  read -r -a tokens <<<"$rustflags_value"
+  for index in "${!tokens[@]}"; do
+    case "${tokens[$index]}" in
+      "$required_linker_rustflag") effective_state="disabled" ;;
+      -Clinker-features=*) effective_state="other" ;;
+      -C)
+        case "${tokens[$((index + 1))]:-}" in
+          linker-features=-lld) effective_state="disabled" ;;
+          linker-features=*) effective_state="other" ;;
+        esac
+        ;;
+    esac
+  done
+  [[ "$effective_state" == "disabled" ]]
+}
+
+rustflags="${RUSTFLAGS:--C linker=cc -Clinker-features=-lld}"
+if ! linker_policy_is_effective "$rustflags"; then
+  rustflags="${rustflags:+${rustflags} }${required_linker_rustflag}"
+fi
 
 mkdir -p "$step_logs_dir"
 : >"$events_path"
@@ -27,6 +55,40 @@ declare -a commands_run=()
 failed_command=""
 mode_completed=false
 manifest_written=false
+
+render_shell_command() {
+  local rendered=""
+  local argument quoted
+
+  for argument in "$@"; do
+    printf -v quoted '%q' "$argument"
+    rendered="${rendered}${rendered:+ }${quoted}"
+  done
+  printf '%s' "$rendered"
+}
+
+assert_shell_command_round_trip() {
+  local rendered="$1"
+  shift
+  local -a expected=("$@")
+  local -a decoded=()
+  local index
+
+  # `rendered` is generated exclusively by render_shell_command using Bash's
+  # %q format, so evaluating it as an array cannot execute caller input.
+  # shellcheck disable=SC2294
+  eval "decoded=( ${rendered} )"
+  if [[ "${#decoded[@]}" -ne "$#" ]]; then
+    printf 'rendered command changed argv length: expected=%s actual=%s\n' "$#" "${#decoded[@]}" >&2
+    return 1
+  fi
+  for index in "${!decoded[@]}"; do
+    if [[ "${decoded[$index]}" != "${expected[$index]}" ]]; then
+      printf 'rendered command changed argv element %s\n' "$index" >&2
+      return 1
+    fi
+  done
+}
 
 json_event() {
   local event="$1"
@@ -70,16 +132,20 @@ run_step() {
   shift
   local log_path="${step_logs_dir}/${step_id}.log"
   local -a command=(
-    rch exec -- env
+    env -u CARGO_ENCODED_RUSTFLAGS
+    rch exec -- env -u CARGO_ENCODED_RUSTFLAGS
     "RUSTC_WRAPPER=${RUSTC_WRAPPER:-}"
     "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-1}"
     "CARGO_INCREMENTAL=${CARGO_INCREMENTAL:-0}"
     "CARGO_TARGET_DIR=${target_dir}"
-    "RUSTFLAGS=${RUSTFLAGS:--C linker=cc}"
+    "RUSTFLAGS=${rustflags}"
     "$@"
   )
-  local command_text="${command[*]}"
+  local command_text
   local started_ms ended_ms duration_ms
+
+  command_text="$(render_shell_command "${command[@]}")"
+  assert_shell_command_round_trip "$command_text" "${command[@]}"
 
   commands_run+=("$command_text")
   printf '%s\n' "$command_text" >>"$commands_path"

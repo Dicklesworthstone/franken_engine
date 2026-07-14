@@ -15,8 +15,9 @@ The contract is intentionally conservative:
 
 - it classifies dirty context, but never deletes, moves, rewrites, formats, or
   hides unrelated files;
-- it preserves the exact command the operator intended to run, especially
-  `rch exec -- env ... cargo ...` command shapes;
+- it preserves the exact command the operator intended to run, especially the
+  canonical `env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u
+  CARGO_ENCODED_RUSTFLAGS ... cargo ...` command shape;
 - it distinguishes "scoped files pass" from "the package or workspace gate is
   blocked by external context";
 - it leaves package/workspace validation failures visible even when they are not
@@ -156,12 +157,17 @@ closeout. Field names are stable for the V1 contract.
   "repo_root": "/data/projects/franken_engine",
   "command": {
     "argv": [
+      "env",
+      "-u",
+      "CARGO_ENCODED_RUSTFLAGS",
       "rch",
       "exec",
       "--",
       "env",
+      "-u",
+      "CARGO_ENCODED_RUSTFLAGS",
       "CARGO_INCREMENTAL=0",
-      "RUSTFLAGS=-C linker=cc",
+      "RUSTFLAGS=-C linker=cc -Clinker-features=-lld",
       "cargo",
       "test",
       "-p",

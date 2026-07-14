@@ -12,7 +12,42 @@ RCH_BIN="${RCH_BIN:-rch}"
 CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
 CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
 RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-nightly}"
-RUSTFLAGS="${RUSTFLAGS:--C linker=cc}"
+LINKER_POLICY_RUSTFLAG="-Clinker-features=-lld"
+
+linker_policy_is_effective() {
+  local rustflags="${1-}"
+  local -a tokens=()
+  local index
+  local effective_state="unset"
+
+  read -r -a tokens <<<"$rustflags"
+  for index in "${!tokens[@]}"; do
+    case "${tokens[$index]}" in
+      "$LINKER_POLICY_RUSTFLAG")
+        effective_state="disabled"
+        ;;
+      -Clinker-features=*)
+        effective_state="other"
+        ;;
+      -C)
+        case "${tokens[$((index + 1))]:-}" in
+          linker-features=-lld) effective_state="disabled" ;;
+          linker-features=*) effective_state="other" ;;
+        esac
+        ;;
+    esac
+  done
+  [[ "$effective_state" == "disabled" ]]
+}
+
+supplied_rustflags="${RUSTFLAGS-}"
+if [[ -z "$supplied_rustflags" ]]; then
+  RUSTFLAGS="-C linker=cc ${LINKER_POLICY_RUSTFLAG}"
+elif linker_policy_is_effective "$supplied_rustflags"; then
+  RUSTFLAGS="$supplied_rustflags"
+else
+  RUSTFLAGS="${supplied_rustflags} ${LINKER_POLICY_RUSTFLAG}"
+fi
 RCH_TIMEOUT_SECONDS="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 EXPECTED_RCH_WORKER="${FRANKEN_ENGINE_LIB_UNIT_EXPECTED_WORKER:-${RCH_WORKER:-}}"
 NATIVE_ROUTE_ADVISORY_JSON="${FRANKEN_ENGINE_LIB_UNIT_NATIVE_ROUTE_ADVISORY_JSON:-}"
@@ -51,6 +86,12 @@ Environment:
                                       fail closed if RCH selects outside them
   RCH_BIN                               rch binary (default: rch)
   RCH_EXEC_TIMEOUT_SECONDS              outer timeout seconds (default: 900)
+  RUSTFLAGS                             custom flags to preserve; the required
+                                      -Clinker-features=-lld policy is appended
+                                      unless it is the effective final
+                                      linker-features directive
+  CARGO_ENCODED_RUSTFLAGS               cleared before rch so it cannot override
+                                      the normalized RUSTFLAGS proof identity
 USAGE
 }
 
@@ -69,12 +110,13 @@ strip_ansi() {
 
 command_text() {
   local mode="${1:-compile}"
-  local rch_prefix="rch"
+  local rch_prefix="env -u CARGO_ENCODED_RUSTFLAGS"
   if [[ "${#RCH_SELECTION_ENV[@]}" -gt 0 ]]; then
-    rch_prefix="${RCH_SELECTION_ENV[*]} rch"
+    rch_prefix="${rch_prefix} ${RCH_SELECTION_ENV[*]}"
   fi
+  rch_prefix="${rch_prefix} rch"
   if [[ "$mode" == "execute" ]]; then
-    printf '%s exec -- env RUSTUP_TOOLCHAIN=%s CARGO_INCREMENTAL=%s CARGO_BUILD_JOBS=%s CARGO_TARGET_DIR=%s RUSTFLAGS=%q cargo test -p %s --%s %s -- --nocapture\n' \
+    printf '%s exec -- env -u CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN=%s CARGO_INCREMENTAL=%s CARGO_BUILD_JOBS=%s CARGO_TARGET_DIR=%s RUSTFLAGS=%q cargo test -p %s --%s %s -- --nocapture\n' \
       "$rch_prefix" \
       "$RUSTUP_TOOLCHAIN" \
       "$CARGO_INCREMENTAL" \
@@ -87,7 +129,7 @@ command_text() {
     return 0
   fi
 
-  printf '%s exec -- env RUSTUP_TOOLCHAIN=%s CARGO_INCREMENTAL=%s CARGO_BUILD_JOBS=%s CARGO_TARGET_DIR=%s RUSTFLAGS=%q cargo test -p %s --%s %s --no-run\n' \
+  printf '%s exec -- env -u CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN=%s CARGO_INCREMENTAL=%s CARGO_BUILD_JOBS=%s CARGO_TARGET_DIR=%s RUSTFLAGS=%q cargo test -p %s --%s %s --no-run\n' \
     "$rch_prefix" \
     "$RUSTUP_TOOLCHAIN" \
     "$CARGO_INCREMENTAL" \
@@ -274,7 +316,7 @@ preflight_worker_selection() {
   fi
 
   local -a diagnose_command=(
-    "$RCH_BIN" diagnose --json -- env \
+    "$RCH_BIN" diagnose --json -- env -u CARGO_ENCODED_RUSTFLAGS \
       "RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN}" \
       "CARGO_INCREMENTAL=${CARGO_INCREMENTAL}" \
       "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}" \
@@ -292,7 +334,7 @@ preflight_worker_selection() {
   fi
 
   set +e
-  env "${RCH_SELECTION_ENV[@]}" "${diagnose_command[@]}" >"$diagnose_path" 2>"$diagnose_stderr_path"
+  env -u CARGO_ENCODED_RUSTFLAGS "${RCH_SELECTION_ENV[@]}" "${diagnose_command[@]}" >"$diagnose_path" 2>"$diagnose_stderr_path"
   local diagnose_status=$?
   set -e
 
@@ -351,7 +393,7 @@ run_gate() {
   preflight_worker_selection "$mode"
 
   local -a command=(
-    "$RCH_BIN" exec -- env \
+    "$RCH_BIN" exec -- env -u CARGO_ENCODED_RUSTFLAGS \
       "RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN}" \
       "CARGO_INCREMENTAL=${CARGO_INCREMENTAL}" \
       "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}" \
@@ -369,7 +411,7 @@ run_gate() {
   fi
 
   set +e
-  timeout "$RCH_TIMEOUT_SECONDS" env "${RCH_SELECTION_ENV[@]}" "${command[@]}" >"$log_path" 2>&1
+  timeout "$RCH_TIMEOUT_SECONDS" env -u CARGO_ENCODED_RUSTFLAGS "${RCH_SELECTION_ENV[@]}" "${command[@]}" >"$log_path" 2>&1
   local exit_code=$?
   set -e
 

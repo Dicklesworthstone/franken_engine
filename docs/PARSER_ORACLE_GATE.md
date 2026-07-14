@@ -55,7 +55,10 @@ Override with environment variables:
 - `PARSER_ORACLE_TAXONOMY_VERSION` = expected drift taxonomy version
 - `PARSER_ORACLE_REMEDIATION_MAP_VERSION` = remediation mapping version string
 - `RUSTUP_TOOLCHAIN`, `CARGO_TARGET_DIR` as usual
-- `RUSTFLAGS` must include `-C linker=cc` (set automatically by the runner with default override)
+- The runner constructs a complete `RUSTFLAGS` override containing `-C linker=cc`
+  and a final `-Clinker-features=-lld`; an operator-supplied `RUSTFLAGS` value is
+  normalized the same way before execution. Commands that omit `RUSTFLAGS`
+  instead inherit the target policy from `.cargo/config.toml`.
 
 All heavy cargo operations in the gate script route through `rch` when available.
 

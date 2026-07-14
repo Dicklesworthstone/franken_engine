@@ -40,10 +40,52 @@ DW_FAILED_STEP=""
 DW_DEGRADED=0
 DW_SCHEMA="franken-engine.dw-e2e-bundle.v1"
 DW_START_NS=0
+DW_LINKER_POLICY_RUSTFLAG="-Clinker-features=-lld"
 
 # ---- helpers ----------------------------------------------------------------
 dw__now_ns()  { date -u +%s%N; }
 dw__now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# Match only rustc's actual linker-policy flag forms. Substring matching is
+# insufficient because an unrelated value such as
+# `-Cmetadata=-Clinker-features=-lld` must not suppress policy composition.
+dw_rustflags_have_linker_policy() {
+  local rustflags="${1-}"
+  local -a tokens=()
+  local index
+  local effective_state="unset"
+
+  read -r -a tokens <<<"$rustflags"
+  for index in "${!tokens[@]}"; do
+    case "${tokens[$index]}" in
+      "$DW_LINKER_POLICY_RUSTFLAG")
+        effective_state="disabled"
+        ;;
+      -Clinker-features=*)
+        effective_state="other"
+        ;;
+      -C)
+        case "${tokens[$((index + 1))]:-}" in
+          linker-features=-lld) effective_state="disabled" ;;
+          linker-features=*) effective_state="other" ;;
+        esac
+        ;;
+    esac
+  done
+  [[ "$effective_state" == "disabled" ]]
+}
+
+dw_compose_linker_policy_rustflags() {
+  local rustflags="${1-}"
+
+  if dw_rustflags_have_linker_policy "$rustflags"; then
+    printf '%s' "$rustflags"
+  elif [[ -n "$rustflags" ]]; then
+    printf '%s %s' "$rustflags" "$DW_LINKER_POLICY_RUSTFLAG"
+  else
+    printf '%s' "$DW_LINKER_POLICY_RUSTFLAG"
+  fi
+}
 
 # sha256 of a file (empty string yields the well-known empty-input digest)
 dw_sha256() {

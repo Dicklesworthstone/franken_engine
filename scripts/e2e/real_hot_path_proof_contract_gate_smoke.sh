@@ -144,6 +144,160 @@ run_gate_expect_fail() {
   record_pass "gate failed ${case_name} on ${expected_code}"
 }
 
+run_substring_bypass_selftest() {
+  local tmp_root="$1"
+  local bundle_dir="${tmp_root}/substring-bypass-bundle"
+  local output_dir="${tmp_root}/substring-bypass-output"
+  local source_dir="${fixture_dir}/valid"
+  local output exit_code
+
+  mkdir -p "$bundle_dir"
+  cp -a \
+    "${source_dir}/commands.txt" \
+    "${source_dir}/events.jsonl" \
+    "${source_dir}/rch-log.step_000.log" \
+    "${source_dir}/step_logs" \
+    "${source_dir}/trace_ids.json" \
+    "$bundle_dir"
+  jq '.rustflags = "-Cdebuginfo=0 -Cmetadata=-Clinker-features=-lld"' \
+    "${source_dir}/run_manifest.json" >"${bundle_dir}/run_manifest.json"
+
+  set +e
+  output="$("$gate" \
+    --bundle-dir "$bundle_dir" \
+    --output-dir "$output_dir" \
+    --source-revision "$expected_source_revision" 2>&1)"
+  exit_code=$?
+  set -e
+
+  if [[ "$exit_code" -eq 0 ]]; then
+    record_failure "gate accepted substring-only linker opt-out"
+    printf '%s\n' "$output" >&2
+    return 1
+  fi
+  jq -e '
+    .status == "fail"
+    and (.failures | map(.code) | index("FE-REAL-HOT-PATH-CONTRACT-RCH-POLICY") != null)
+  ' "${output_dir}/diagnostics.json" >/dev/null
+  record_pass "gate rejects substring-only linker opt-out"
+}
+
+copy_valid_case_support_files() {
+  local destination="$1"
+  local source_dir="${fixture_dir}/valid"
+
+  mkdir -p "$destination"
+  cp -a \
+    "${source_dir}/events.jsonl" \
+    "${source_dir}/rch-log.step_000.log" \
+    "${source_dir}/step_logs" \
+    "${source_dir}/trace_ids.json" \
+    "$destination"
+}
+
+run_mutated_command_expect_policy_failure() {
+  local case_name="$1"
+  local tmp_root="$2"
+  local command="$3"
+  local manifest_filter="$4"
+  local expected_code="${5:-FE-REAL-HOT-PATH-CONTRACT-COMMAND-POLICY}"
+  local bundle_dir="${tmp_root}/${case_name}-bundle"
+  local output_dir="${tmp_root}/${case_name}-output"
+  local output exit_code
+
+  copy_valid_case_support_files "$bundle_dir"
+  printf '%s\n' "$command" >"${bundle_dir}/commands.txt"
+  jq --arg command "$command" "$manifest_filter | .commands = [\$command]" \
+    "${fixture_dir}/valid/run_manifest.json" >"${bundle_dir}/run_manifest.json"
+
+  set +e
+  output="$("$gate" \
+    --bundle-dir "$bundle_dir" \
+    --output-dir "$output_dir" \
+    --source-revision "$expected_source_revision" 2>&1)"
+  exit_code=$?
+  set -e
+
+  if [[ "$exit_code" -eq 0 ]]; then
+    record_failure "gate accepted command-policy mutation ${case_name}"
+    printf '%s\n' "$output" >&2
+    return 1
+  fi
+  jq -e --arg expected_code "$expected_code" '
+    .status == "fail"
+    and (.failures | map(.code) | index($expected_code) != null)
+  ' "${output_dir}/diagnostics.json" >/dev/null
+  record_pass "gate rejects ${case_name} on ${expected_code}"
+}
+
+run_check_mode_command_selftest() {
+  local tmp_root="$1"
+  local bundle_dir="${tmp_root}/check-mode-bundle"
+  local output_dir="${tmp_root}/check-mode-output"
+  local canonical_command check_command
+
+  canonical_command="$(cat "${fixture_dir}/valid/commands.txt")"
+  check_command="${canonical_command/cargo bench -p frankenengine-engine --no-default-features --bench hot_paths -- --test/cargo check -p frankenengine-engine --no-default-features --bench hot_paths}"
+  copy_valid_case_support_files "$bundle_dir"
+  printf '%s\n' "$check_command" >"${bundle_dir}/commands.txt"
+  jq --arg command "$check_command" '.mode = "check" | .commands = [$command]' \
+    "${fixture_dir}/valid/run_manifest.json" >"${bundle_dir}/run_manifest.json"
+
+  "$gate" \
+    --bundle-dir "$bundle_dir" \
+    --output-dir "$output_dir" \
+    --source-revision "$expected_source_revision" >/dev/null
+  jq -e '.status == "pass" and (.contract.command | contains("cargo check -p frankenengine-engine"))' \
+    "${output_dir}/diagnostics.json" >/dev/null
+  record_pass "gate accepts producer check-mode argv"
+}
+
+# linker-policy-negative-fixtures-begin: manifest mutation probes
+run_command_binding_selftests() {
+  local tmp_root="$1"
+  local canonical_command
+  local missing_client_clear
+  local missing_remote_clear
+  local later_reenable
+  local malformed_env_name
+  local metachar_target
+  local old_rustflags='RUSTFLAGS=-Cdebuginfo=0\ -Clinker-features=-lld'
+  local conflicting_rustflags='RUSTFLAGS=-Cdebuginfo=0\ -Clinker-features=-lld\ -Clinker-features=+lld'
+  local canonical_target='/tmp/rch_target_franken_engine_real_hot_path_proof_golden'
+  local hostile_target='/tmp/rch_target_franken_engine_real_hot_path_proof_golden_$(id)'
+
+  canonical_command="$(cat "${fixture_dir}/valid/commands.txt")"
+  missing_client_clear="${canonical_command#env -u CARGO_ENCODED_RUSTFLAGS }"
+  missing_remote_clear="${canonical_command/rch exec -- env -u CARGO_ENCODED_RUSTFLAGS/rch exec -- env}"
+  later_reenable="${canonical_command/$old_rustflags/$conflicting_rustflags}"
+  malformed_env_name="${canonical_command/RCH_PRIORITY=high/=high}"
+  metachar_target="${canonical_command/$canonical_target/$hostile_target}"
+
+  run_mutated_command_expect_policy_failure \
+    "missing-client-encoded-clear" "$tmp_root" "$missing_client_clear" '.'
+  run_mutated_command_expect_policy_failure \
+    "missing-remote-encoded-clear" "$tmp_root" "$missing_remote_clear" '.'
+  run_mutated_command_expect_policy_failure \
+    "target-dir-field-mismatch" "$tmp_root" "$canonical_command" \
+    '.cargo_target_dir = "/tmp/rch_target_franken_engine_real_hot_path_proof_mismatch"'
+  run_mutated_command_expect_policy_failure \
+    "toolchain-field-mismatch" "$tmp_root" "$canonical_command" \
+    '.toolchain = "nightly-mismatch"'
+  run_mutated_command_expect_policy_failure \
+    "malformed-empty-env-name" "$tmp_root" "$malformed_env_name" '.'
+  run_mutated_command_expect_policy_failure \
+    "shell-metachar-target" "$tmp_root" "$metachar_target" \
+    '.cargo_target_dir = "/tmp/rch_target_franken_engine_real_hot_path_proof_golden_$(id)"'
+
+  # A conflicting final linker directive must fail both the effective policy
+  # check and the exact command-to-manifest binding.
+  run_mutated_command_expect_policy_failure \
+    "later-linker-feature-reenable" "$tmp_root" "$later_reenable" \
+    '.rustflags = "-Cdebuginfo=0 -Clinker-features=-lld -Clinker-features=+lld"' \
+    'FE-REAL-HOT-PATH-CONTRACT-RCH-POLICY'
+}
+# linker-policy-negative-fixtures-end
+
 run_selftest() {
   local tmp_parent tmp_root
 
@@ -178,6 +332,10 @@ run_selftest() {
     "$tmp_root" \
     "${tmp_root}/stale-output" \
     "${golden_dir}/real_hot_path_proof_contract_stale_source.golden"
+
+  run_substring_bypass_selftest "$tmp_root"
+  run_command_binding_selftests "$tmp_root"
+  run_check_mode_command_selftest "$tmp_root"
 
   printf 'real_hot_path_proof_contract_gate_smoke_artifacts=%s\n' "$tmp_root"
 }

@@ -4,7 +4,7 @@
   "cases": [
     {
       "case_id": "accepted_direct_rch_cargo",
-      "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RCH_VISIBILITY=verbose cargo test -p frankenengine-engine proof_broker_contract --lib -- --nocapture",
+      "command": "env -u CARGO_ENCODED_RUSTFLAGS RCH_VISIBILITY=verbose rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker_contract --lib -- --nocapture",
       "context": {
         "bead_id": "bd-ua5n2.9",
         "evidence_requires_visibility": true
@@ -15,8 +15,93 @@
         "reason_code": "direct_rch_cargo_proof",
         "command_kind": "cargo_test",
         "transport": "rch_direct_env",
-        "pasteable_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RCH_VISIBILITY=verbose cargo test -p frankenengine-engine proof_broker_contract --lib -- --nocapture",
-        "remediation": "Command is preflight-safe; preserve the direct rch exec -- env shape, CARGO_TARGET_DIR, and env allowlist when scheduling proof."
+        "pasteable_command": "env -u CARGO_ENCODED_RUSTFLAGS RCH_VISIBILITY=verbose rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker_contract --lib -- --nocapture",
+        "remediation": "Command is preflight-safe; preserve both encoded-flag clears, direct rch exec -- env argv, CARGO_TARGET_DIR, and the client/remote env allowlists when scheduling proof."
+      }
+    },
+    {
+      "case_id": "accepted_composed_rustflags",
+      "command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C debuginfo=0 -Clinker-features=-lld' cargo check -p frankenengine-engine --tests",
+      "context": {
+        "bead_id": "bd-ua5n2.9",
+        "evidence_requires_visibility": false
+      },
+      "expected": {
+        "exit_code": 0,
+        "decision": "proof_safe",
+        "reason_code": "direct_rch_cargo_proof",
+        "command_kind": "cargo_check",
+        "transport": "rch_direct_env",
+        "pasteable_command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C debuginfo=0 -Clinker-features=-lld' cargo check -p frankenengine-engine --tests",
+        "remediation": "Command is preflight-safe; preserve both encoded-flag clears, direct rch exec -- env argv, CARGO_TARGET_DIR, and the client/remote env allowlists when scheduling proof."
+      }
+    },
+    {
+      "case_id": "accepted_two_token_linker_policy",
+      "command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C debuginfo=0 -C linker-features=-lld' cargo check -p frankenengine-engine --tests",
+      "context": {
+        "bead_id": "bd-ua5n2.9",
+        "evidence_requires_visibility": false
+      },
+      "expected": {
+        "exit_code": 0,
+        "decision": "proof_safe",
+        "reason_code": "direct_rch_cargo_proof",
+        "command_kind": "cargo_check",
+        "transport": "rch_direct_env",
+        "pasteable_command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C debuginfo=0 -C linker-features=-lld' cargo check -p frankenengine-engine --tests",
+        "remediation": "Command is preflight-safe; preserve both encoded-flag clears, direct rch exec -- env argv, CARGO_TARGET_DIR, and the client/remote env allowlists when scheduling proof."
+      }
+    },
+    {
+      "case_id": "rejected_uncomposed_rustflags",
+      "command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS=-Cdebuginfo=0 cargo check -p frankenengine-engine --tests",
+      "context": {
+        "bead_id": "bd-ua5n2.9",
+        "evidence_requires_visibility": false
+      },
+      "expected": {
+        "exit_code": 42,
+        "decision": "proof_unsafe",
+        "reason_code": "uncomposed_rustflags_override",
+        "command_kind": "cargo_check",
+        "transport": "rch_direct_env",
+        "pasteable_command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests",
+        "remediation": "Omit RUSTFLAGS to inherit .cargo/config.toml, or include the exact -Clinker-features=-lld token (the two-token -C linker-features=-lld form is also accepted): env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests"
+      }
+    },
+    {
+      "case_id": "rejected_later_linker_feature_reenable",
+      "command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-Clinker-features=-lld -Clinker-features=+lld' cargo check -p frankenengine-engine --tests",
+      "context": {
+        "bead_id": "bd-ua5n2.9",
+        "evidence_requires_visibility": false
+      },
+      "expected": {
+        "exit_code": 42,
+        "decision": "proof_unsafe",
+        "reason_code": "uncomposed_rustflags_override",
+        "command_kind": "cargo_check",
+        "transport": "rch_direct_env",
+        "pasteable_command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests",
+        "remediation": "Omit RUSTFLAGS to inherit .cargo/config.toml, or include the exact -Clinker-features=-lld token (the two-token -C linker-features=-lld form is also accepted): env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests"
+      }
+    },
+    {
+      "case_id": "rejected_rustflags_substring_bypass",
+      "command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS=-Cmetadata=-Clinker-features=-lld cargo check -p frankenengine-engine --tests",
+      "context": {
+        "bead_id": "bd-ua5n2.9",
+        "evidence_requires_visibility": false
+      },
+      "expected": {
+        "exit_code": 42,
+        "decision": "proof_unsafe",
+        "reason_code": "uncomposed_rustflags_override",
+        "command_kind": "cargo_check",
+        "transport": "rch_direct_env",
+        "pasteable_command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests",
+        "remediation": "Omit RUSTFLAGS to inherit .cargo/config.toml, or include the exact -Clinker-features=-lld token (the two-token -C linker-features=-lld form is also accepted): env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests"
       }
     },
     {
@@ -32,8 +117,8 @@
         "reason_code": "shell_wrapper_fallback_risk",
         "command_kind": "cargo_test",
         "transport": "shell_wrapper",
-        "pasteable_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RCH_VISIBILITY=verbose cargo test -p frankenengine-engine --lib",
-        "remediation": "Remove the shell wrapper and run the command as direct argv: rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RCH_VISIBILITY=verbose cargo test -p frankenengine-engine --lib"
+        "pasteable_command": "env -u CARGO_ENCODED_RUSTFLAGS RCH_VISIBILITY=verbose rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib",
+        "remediation": "Remove the shell wrapper and run the command as direct argv: env -u CARGO_ENCODED_RUSTFLAGS RCH_VISIBILITY=verbose rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib"
       }
     },
     {
@@ -49,8 +134,8 @@
         "reason_code": "bare_cargo_not_allowed",
         "command_kind": "cargo_check",
         "transport": "local_bare",
-        "pasteable_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check --all-targets",
-        "remediation": "Do not use bare Cargo for proof. Run through RCH with an isolated target dir: rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check --all-targets"
+        "pasteable_command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check --all-targets",
+        "remediation": "Do not use bare Cargo for proof. Run through RCH with an isolated target dir: env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check --all-targets"
       }
     },
     {
@@ -72,7 +157,7 @@
     },
     {
       "case_id": "rejected_missing_target_dir",
-      "command": "rch exec -- env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib",
+      "command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib",
       "context": {
         "bead_id": "bd-ua5n2.9",
         "evidence_requires_visibility": false
@@ -83,13 +168,47 @@
         "reason_code": "missing_target_dir_policy",
         "command_kind": "cargo_test",
         "transport": "rch_direct_env",
-        "pasteable_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib",
-        "remediation": "Add an isolated target dir before scheduling proof: rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib"
+        "pasteable_command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib",
+        "remediation": "Add an isolated target dir before scheduling proof: env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib"
+      }
+    },
+    {
+      "case_id": "rejected_missing_client_encoded_clear",
+      "command": "rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests",
+      "context": {
+        "bead_id": "bd-ua5n2.9",
+        "evidence_requires_visibility": false
+      },
+      "expected": {
+        "exit_code": 42,
+        "decision": "proof_unsafe",
+        "reason_code": "missing_encoded_rustflags_clear",
+        "command_kind": "cargo_check",
+        "transport": "rch_direct_env",
+        "pasteable_command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests",
+        "remediation": "Clear CARGO_ENCODED_RUSTFLAGS on both the RCH client and worker before scheduling proof: env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests"
+      }
+    },
+    {
+      "case_id": "rejected_missing_remote_encoded_clear",
+      "command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests",
+      "context": {
+        "bead_id": "bd-ua5n2.9",
+        "evidence_requires_visibility": false
+      },
+      "expected": {
+        "exit_code": 42,
+        "decision": "proof_unsafe",
+        "reason_code": "missing_encoded_rustflags_clear",
+        "command_kind": "cargo_check",
+        "transport": "rch_direct_env",
+        "pasteable_command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests",
+        "remediation": "Clear CARGO_ENCODED_RUSTFLAGS on both the RCH client and worker before scheduling proof: env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests"
       }
     },
     {
       "case_id": "rejected_target_dir_bead_mismatch",
-      "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_shared CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib",
+      "command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_shared CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib",
       "context": {
         "bead_id": "bd-ua5n2.9",
         "evidence_requires_visibility": false
@@ -100,13 +219,13 @@
         "reason_code": "target_dir_bead_mismatch",
         "command_kind": "cargo_test",
         "transport": "rch_direct_env",
-        "pasteable_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib",
-        "remediation": "Use a target dir correlated with bead bd-ua5n2.9: rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib"
+        "pasteable_command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib",
+        "remediation": "Use a target dir correlated with bead bd-ua5n2.9: env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib"
       }
     },
     {
       "case_id": "rejected_env_mismatch",
-      "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 SECRET_TOKEN=abc cargo check -p frankenengine-engine --tests",
+      "command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 SECRET_TOKEN=abc cargo check -p frankenengine-engine --tests",
       "context": {
         "bead_id": "bd-ua5n2.9",
         "evidence_requires_visibility": false
@@ -117,13 +236,64 @@
         "reason_code": "unsupported_env_leakage",
         "command_kind": "cargo_check",
         "transport": "rch_direct_env",
-        "pasteable_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests",
-        "remediation": "Remove unsupported env assignments (SECRET_TOKEN) and use the allowlisted shape: rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests"
+        "pasteable_command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests",
+        "remediation": "Remove unsupported env assignments (SECRET_TOKEN) and use the allowlisted shape: env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests"
+      }
+    },
+    {
+      "case_id": "rejected_remote_env_option",
+      "command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS -C /tmp CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests",
+      "context": {
+        "bead_id": "bd-ua5n2.9",
+        "evidence_requires_visibility": false
+      },
+      "expected": {
+        "exit_code": 42,
+        "decision": "proof_unsafe",
+        "reason_code": "unsupported_env_syntax",
+        "command_kind": "cargo_check",
+        "transport": "rch_direct_env",
+        "pasteable_command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests",
+        "remediation": "Use only allowlisted NAME=value assignments after the required remote env -u CARGO_ENCODED_RUSTFLAGS prefix: env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests"
+      }
+    },
+    {
+      "case_id": "rejected_target_dir_suffix_decoy",
+      "command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --config CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9",
+      "context": {
+        "bead_id": "bd-ua5n2.9",
+        "evidence_requires_visibility": false
+      },
+      "expected": {
+        "exit_code": 42,
+        "decision": "proof_unsafe",
+        "reason_code": "missing_target_dir_policy",
+        "command_kind": "cargo_check",
+        "transport": "rch_direct_env",
+        "pasteable_command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --config CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9",
+        "remediation": "Add an isolated target dir before scheduling proof: env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --config CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9"
+      }
+    },
+    {
+      "case_id": "rejected_encoded_rustflags",
+      "command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_ENCODED_RUSTFLAGS=-Clinker-features=-lld cargo check -p frankenengine-engine --tests",
+      "context": {
+        "bead_id": "bd-ua5n2.9",
+        "evidence_requires_visibility": false
+      },
+      "expected": {
+        "exit_code": 42,
+        "decision": "proof_unsafe",
+        "reason_code": "unsupported_env_leakage",
+        "command_kind": "cargo_check",
+        "transport": "rch_direct_env",
+        "pasteable_command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests",
+        "remediation": "Remove unsupported env assignments (CARGO_ENCODED_RUSTFLAGS) and use the allowlisted shape: env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests"
       }
     },
     {
       "case_id": "rejected_missing_visibility",
-      "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo clippy -p frankenengine-engine --all-targets -- -D warnings",
+      "command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo clippy -p frankenengine-engine --all-targets -- -D warnings",
       "context": {
         "bead_id": "bd-ua5n2.9",
         "evidence_requires_visibility": true
@@ -134,8 +304,8 @@
         "reason_code": "missing_rch_visibility",
         "command_kind": "cargo_clippy",
         "transport": "rch_direct_env",
-        "pasteable_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RCH_VISIBILITY=verbose cargo clippy -p frankenengine-engine --all-targets -- -D warnings",
-        "remediation": "Add RCH_VISIBILITY=verbose for evidence capture before scheduling proof: rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RCH_VISIBILITY=verbose cargo clippy -p frankenengine-engine --all-targets -- -D warnings"
+        "pasteable_command": "env -u CARGO_ENCODED_RUSTFLAGS RCH_VISIBILITY=verbose rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo clippy -p frankenengine-engine --all-targets -- -D warnings",
+        "remediation": "Add RCH_VISIBILITY=verbose for evidence capture before scheduling proof: env -u CARGO_ENCODED_RUSTFLAGS RCH_VISIBILITY=verbose rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo clippy -p frankenengine-engine --all-targets -- -D warnings"
       }
     },
     {
@@ -153,6 +323,57 @@
         "transport": "unknown",
         "pasteable_command": null,
         "remediation": "Command shape is not recognized by the proof broker preflight; request human review and do not reuse it as green proof."
+      }
+    },
+    {
+      "case_id": "rejected_visibility_suffix_decoy",
+      "command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo clippy -p frankenengine-engine --all-targets --config RCH_VISIBILITY=verbose -- -D warnings",
+      "context": {
+        "bead_id": "bd-ua5n2.9",
+        "evidence_requires_visibility": true
+      },
+      "expected": {
+        "exit_code": 42,
+        "decision": "proof_unsafe",
+        "reason_code": "missing_rch_visibility",
+        "command_kind": "cargo_clippy",
+        "transport": "rch_direct_env",
+        "pasteable_command": "env -u CARGO_ENCODED_RUSTFLAGS RCH_VISIBILITY=verbose rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo clippy -p frankenengine-engine --all-targets --config RCH_VISIBILITY=verbose -- -D warnings",
+        "remediation": "Add RCH_VISIBILITY=verbose for evidence capture before scheduling proof: env -u CARGO_ENCODED_RUSTFLAGS RCH_VISIBILITY=verbose rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo clippy -p frankenengine-engine --all-targets --config RCH_VISIBILITY=verbose -- -D warnings"
+      }
+    },
+    {
+      "case_id": "rejected_empty_visibility",
+      "command": "env -u CARGO_ENCODED_RUSTFLAGS RCH_VISIBILITY= rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo clippy -p frankenengine-engine --all-targets -- -D warnings",
+      "context": {
+        "bead_id": "bd-ua5n2.9",
+        "evidence_requires_visibility": true
+      },
+      "expected": {
+        "exit_code": 42,
+        "decision": "proof_unsafe",
+        "reason_code": "missing_rch_visibility",
+        "command_kind": "cargo_clippy",
+        "transport": "rch_direct_env",
+        "pasteable_command": "env -u CARGO_ENCODED_RUSTFLAGS RCH_VISIBILITY=verbose rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo clippy -p frankenengine-engine --all-targets -- -D warnings",
+        "remediation": "Add RCH_VISIBILITY=verbose for evidence capture before scheduling proof: env -u CARGO_ENCODED_RUSTFLAGS RCH_VISIBILITY=verbose rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo clippy -p frankenengine-engine --all-targets -- -D warnings"
+      }
+    },
+    {
+      "case_id": "rejected_shell_expansion_in_target_dir",
+      "command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9_$(id) CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests",
+      "context": {
+        "bead_id": "bd-ua5n2.9",
+        "evidence_requires_visibility": false
+      },
+      "expected": {
+        "exit_code": 42,
+        "decision": "proof_unsafe",
+        "reason_code": "unsupported_env_syntax",
+        "command_kind": "cargo_check",
+        "transport": "rch_direct_env",
+        "pasteable_command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests",
+        "remediation": "Use only allowlisted NAME=value assignments after the required remote env -u CARGO_ENCODED_RUSTFLAGS prefix: env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests"
       }
     }
   ]

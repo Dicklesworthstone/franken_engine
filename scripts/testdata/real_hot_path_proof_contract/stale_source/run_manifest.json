@@ -13,7 +13,7 @@
   "cargo_target_dir": "/tmp/rch_target_franken_engine_real_hot_path_proof_golden",
   "cargo_incremental": "0",
   "cargo_build_jobs": "4",
-  "rustflags": "-Cdebuginfo=0",
+  "rustflags": "-Cdebuginfo=0 -Clinker-features=-lld",
   "rch": {
     "exec_timeout_seconds": 3900,
     "test_timeout_seconds": 1800,
@@ -33,7 +33,7 @@
   "error_code": null,
   "failure_reason": null,
   "commands": [
-    "RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS=3600 RCH_QUEUE_WHEN_BUSY=1 RCH_PRIORITY=high RCH_VISIBILITY=verbose RCH_TEST_TIMEOUT_SEC=1800 rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_real_hot_path_proof_golden CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUSTFLAGS=-Cdebuginfo=0 cargo bench -p frankenengine-engine --no-default-features --bench hot_paths -- --test"
+    "env -u CARGO_ENCODED_RUSTFLAGS RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS=3600 RCH_QUEUE_WHEN_BUSY=1 RCH_PRIORITY=high RCH_VISIBILITY=verbose RCH_TEST_TIMEOUT_SEC=1800 timeout --kill-after=30 3900 rch exec -- env -u CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_real_hot_path_proof_golden CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUSTFLAGS=-Cdebuginfo=0\\ -Clinker-features=-lld cargo bench -p frankenengine-engine --no-default-features --bench hot_paths -- --test"
   ],
   "artifacts": {
     "manifest": "scripts/testdata/real_hot_path_proof_contract/stale_source/run_manifest.json",

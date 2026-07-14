@@ -4,9 +4,9 @@ set -euo pipefail
 # PERF-H3.4 (bd-o4cbn.2.4): Bench validation for the H3 EngineObjectId hex
 # optimization (`to_hex` -> `hex::encode`, the iterator_protocol_trace hotspot).
 #
-# Builds `hot_paths` with the exact pass1 flags, runs the full Criterion group,
-# and compares every sub-bench against the saved pass1 baseline. Encodes the
-# H3.4 pass gate so the verdict is reproducible and reviewable.
+# Builds `hot_paths` with the current linker-policy successor flags, runs the
+# full Criterion group, and compares every sub-bench against historical pass1.
+# It encodes the H3.4 pass gate so the verdict is reproducible and reviewable.
 #
 # Pass criteria (all must hold), per bd-o4cbn.2.4:
 #   1. iterator_protocol_trace mean <= 3000 ns (pass1 ~6098 ns) AND drop >= 50 %.
@@ -40,6 +40,7 @@ PASS1_DIR="tests/artifacts/perf/20260520T214829Z-prof-pass1"
 CRIT_DIR="target/criterion"
 BEAD="bd-o4cbn.2.4"
 SCENARIO="h3_bench"
+CURRENT_RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc -Clinker-features=-lld"
 
 # H3 optimization target: must hit <=3000 ns mean, >=50% drop, non-overlapping CI.
 TARGET="iterator_protocol_trace"
@@ -65,11 +66,12 @@ VERDICT_ONLY=0
 
 if [[ "$VERDICT_ONLY" -eq 0 ]]; then
     # -----------------------------------------------------------------------
-    # 1. Build the bench with the identical pass1 flags (local; bypass rch).
+    # 1. Build with the current-policy successor to the historical pass1 flags.
     # -----------------------------------------------------------------------
-    echo "[h3.4] building hot_paths bench (pass1 flags)..."
+    echo "[h3.4] building hot_paths bench (current linker-policy flags)..."
+    env -u CARGO_ENCODED_RUSTFLAGS \
     RCH_CARGO_WRAPPER_BYPASS=1 \
-    RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc" \
+    RUSTFLAGS="$CURRENT_RUSTFLAGS" \
     CARGO_INCREMENTAL=0 \
     "${CARGO:-/home/ubuntu/.cargo/bin/cargo}" bench --bench hot_paths --no-run
 
@@ -107,9 +109,9 @@ fi
 # ---------------------------------------------------------------------------
 # 4. Fingerprint for this run.
 # ---------------------------------------------------------------------------
-python3 - "$RUN_DIR" "$BEAD" "$PASS1_DIR" <<'PYFP'
+python3 - "$RUN_DIR" "$BEAD" "$PASS1_DIR" "$CURRENT_RUSTFLAGS" "$VERDICT_ONLY" <<'PYFP'
 import json, subprocess, sys, time, platform
-run_dir, bead, pass1_dir = sys.argv[1:4]
+run_dir, bead, pass1_dir, current_rustflags, verdict_only = sys.argv[1:6]
 def sh(*a):
     try:
         return subprocess.check_output(a, text=True, stderr=subprocess.DEVNULL).strip()
@@ -127,11 +129,22 @@ fp = {
         "kernel": platform.release(),
     },
     "toolchain": {"rustc": sh("rustc", "--version"), "python": platform.python_version()},
-    "build_flags": {
-        "RUSTFLAGS": "-C force-frame-pointers=yes -C linker=cc",
-        "CARGO_INCREMENTAL": "0",
-    },
 }
+if verdict_only == "0":
+    fp["build_flags"] = {
+        "RUSTFLAGS": current_rustflags,
+        "CARGO_ENCODED_RUSTFLAGS": None,
+        "CARGO_INCREMENTAL": "0",
+    }
+    fp["build_provenance"] = {
+        "status": "executed_build_command",
+        "effective_channel": "RUSTFLAGS",
+    }
+else:
+    fp["build_provenance"] = {
+        "status": "unknown",
+        "reason": "verdict-only mode reused Criterion artifacts without a bound source-run fingerprint",
+    }
 json.dump(fp, open(f"{run_dir}/fingerprint.json", "w"), indent=2)
 PYFP
 
@@ -156,10 +169,10 @@ OTHER_MAX_REGRESS_PCT = 5.0   # criterion 4: no NEW other bench regresses > 5%
 # are reported (never hidden) but do not fail the H3-specific gate, since H3 only
 # touched EngineObjectId::to_hex. baseline_value_string_clone's +15.93% vs pass1 was
 # attributed in bd-o4cbn.15 to the system->mimalloc global-allocator transition
-# (added 2026-05-23, after the 2026-05-20 pass1 baseline): the bench fn, the `Value`
-# type, ContentHash::compute, and the rustc build are all byte-identical, so it is an
-# allocator/measurement-condition artifact, not a code regression. See
-# docs/PERFORMANCE_BASELINE.md.
+# (added 2026-05-23, after the 2026-05-20 pass1 baseline). The prior attribution
+# identified an allocator/measurement-condition artifact, not a code regression.
+# This script does not claim build-profile symmetry with pass1; `honest_gate.sh`
+# decides that separately from explicit baseline and post fingerprints.
 KNOWN_REGRESSIONS = {"baseline_value_string_clone": "bd-o4cbn.15"}
 
 def sh(*a):

@@ -861,8 +861,9 @@ sources — `baseline_interpreter.rs`, `lowering_pipeline.rs`, `parser_arena.rs`
 
 **What it does.**
 
-1. Builds and runs `cargo bench --bench hot_paths` (canonical flags:
-   `CARGO_INCREMENTAL=0`, `RUSTFLAGS=-C linker=cc`).
+1. Builds and runs `cargo bench --bench hot_paths` with
+   `CARGO_INCREMENTAL=0`; the linker policy is inherited from
+   `.cargo/config.toml` (`cc` with rust-lld disabled).
 2. Resolves the most recent frozen baseline under
    `tests/artifacts/perf/baselines/<git-sha>/` (newest `baseline_summary.json`
    timestamp).
@@ -962,9 +963,10 @@ macro scripts widen coverage so the optimizer does not over-fit to the
 micro benches. The instrumentation/collection pass that consumes this
 corpus is tracked separately in `bd-o4cbn.11.2` (PERF-ALIEN-3.2).
 
-Collection and optimization runs use the canonical perf build flags
-(`CARGO_INCREMENTAL=0`, `RUSTFLAGS=-C linker=cc`) so PGO artifacts compare
-cleanly against the frozen baselines above.
+Collection and optimization runs use `CARGO_INCREMENTAL=0` and inherit the
+repository linker policy from `.cargo/config.toml` so PGO artifacts compare
+cleanly against the frozen baselines above without replacing the target-level
+rustflags.
 
 ## Honest Performance Statement
 

@@ -15,7 +15,7 @@ set -euo pipefail
 # Three checks, each fail-closed:
 #   1. UNIT      — `cargo test --lib engine_object_id` passes (the to_hex
 #                  hex-equivalence + property tests, PERF-H3.3).
-#   2. BUILD     — the `hot_paths` bench compiles with the canonical pass1 flags.
+#   2. BUILD     — the `hot_paths` bench compiles with current linker-policy flags.
 #   3. BENCH     — iterator_protocol_trace executes under a short Criterion
 #                  budget AND its mean is <= 3 us (the H3 hot path is live and
 #                  the optimization is in effect; pass1 was ~6.1 us).
@@ -69,6 +69,7 @@ PREREQS=(
 )
 
 CARGO="${CARGO:-/home/ubuntu/.cargo/bin/cargo}"
+CURRENT_RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc -Clinker-features=-lld"
 UNIT_STATUS="skipped"
 BUILD_STATUS="skipped"
 BENCH_STATUS="skipped"
@@ -96,8 +97,20 @@ if ! grep -q "hex::encode" "crates/franken-engine/src/engine_object_id.rs"; then
 fi
 
 if [[ "$MODE" == "self-check" ]]; then
+    # The child shell expands the probe environment.
+    # shellcheck disable=SC2016
+    CANONICAL_ENV_PROBE="$(
+        CARGO_ENCODED_RUSTFLAGS="hostile-self-check-override" \
+        env -u CARGO_ENCODED_RUSTFLAGS \
+        RUSTFLAGS="$CURRENT_RUSTFLAGS" \
+        bash -c 'printf "%s|%s" "$RUSTFLAGS" "${CARGO_ENCODED_RUSTFLAGS+present}"'
+    )"
+    if [[ "$CANONICAL_ENV_PROBE" != "${CURRENT_RUSTFLAGS}|" ]]; then
+        echo "[h3.5] canonical flag environment probe failed: $CANONICAL_ENV_PROBE" >&2
+        PREREQ_OK=0
+    fi
     if [[ "$PREREQ_OK" -eq 1 ]]; then
-        echo "[h3.5] self-check PASS — all prerequisites present (run-id $RUN_TS)"
+        echo "[h3.5] self-check PASS — prerequisites present; encoded override cleared (run-id $RUN_TS)"
     else
         echo "[h3.5] self-check FAIL — missing prerequisites (run-id $RUN_TS)" >&2
     fi
@@ -124,12 +137,13 @@ if [[ "$MODE" == "full" || "$MODE" == "quick" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 2. BUILD — bench compiles with canonical pass1 flags (full mode only).
+# 2. BUILD — bench compiles with current linker-policy flags (full mode only).
 # ---------------------------------------------------------------------------
 if [[ "$MODE" == "full" ]]; then
-    echo "[h3.5] building hot_paths bench (pass1 flags)..."
-    if RCH_CARGO_WRAPPER_BYPASS=1 \
-        RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc" \
+    echo "[h3.5] building hot_paths bench (current linker-policy flags)..."
+    if env -u CARGO_ENCODED_RUSTFLAGS \
+        RCH_CARGO_WRAPPER_BYPASS=1 \
+        RUSTFLAGS="$CURRENT_RUSTFLAGS" \
         CARGO_INCREMENTAL=0 \
         "$CARGO" bench --bench hot_paths --no-run > "$RUN_DIR/build.log" 2>&1; then
         BUILD_STATUS="pass"
@@ -191,9 +205,9 @@ fi
 # ---------------------------------------------------------------------------
 # 4. Fingerprint.
 # ---------------------------------------------------------------------------
-python3 - "$RUN_DIR" "$BEAD" <<'PYFP'
+python3 - "$RUN_DIR" "$BEAD" "$CURRENT_RUSTFLAGS" "$MODE" "$BUILD_STATUS" <<'PYFP'
 import json, subprocess, sys, time, platform
-run_dir, bead = sys.argv[1:3]
+run_dir, bead, current_rustflags, mode, build_status = sys.argv[1:6]
 def sh(*a):
     try:
         return subprocess.check_output(a, text=True, stderr=subprocess.DEVNULL).strip()
@@ -210,11 +224,22 @@ fp = {
         "kernel": platform.release(),
     },
     "toolchain": {"rustc": sh("rustc", "--version"), "python": platform.python_version()},
-    "build_flags": {
-        "RUSTFLAGS": "-C force-frame-pointers=yes -C linker=cc",
-        "CARGO_INCREMENTAL": "0",
-    },
 }
+if mode == "full" and build_status == "pass":
+    fp["build_flags"] = {
+        "RUSTFLAGS": current_rustflags,
+        "CARGO_ENCODED_RUSTFLAGS": None,
+        "CARGO_INCREMENTAL": "0",
+    }
+    fp["build_provenance"] = {
+        "status": "executed_build_command",
+        "effective_channel": "RUSTFLAGS",
+    }
+else:
+    fp["build_provenance"] = {
+        "status": "unknown",
+        "reason": f"bench build not executed successfully (mode={mode}, build_status={build_status})",
+    }
 json.dump(fp, open(f"{run_dir}/fingerprint.json", "w"), indent=2)
 PYFP
 
@@ -288,7 +313,7 @@ with open(os.path.join(run_dir, "summary.md"), "w") as f:
     f.write("| check | what it proves | status |\n")
     f.write("|---|---|---|\n")
     f.write(f"| unit | `cargo test --lib engine_object_id` (to_hex equivalence) | {unit_status} |\n")
-    f.write(f"| build | `hot_paths` compiles with pass1 flags | {build_status} |\n")
+    f.write(f"| build | `hot_paths` compiles with current linker-policy flags | {build_status} |\n")
     f.write(f"| bench | `{target}` mean ≤ {max_mean_ns} ns (measured {mean_str}) | {bench_status} |\n")
     f.write(f"\n**Overall: {'PASS' if all_pass else 'FAIL'}**\n\n")
     if fail_reasons:

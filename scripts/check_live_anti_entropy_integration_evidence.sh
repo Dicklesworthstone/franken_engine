@@ -6,7 +6,34 @@ cd "$root_dir"
 
 mode="${1:-ci}"
 target_dir="${CARGO_TARGET_DIR:-target_rch_reality_check}"
-rustflags="${RUSTFLAGS:--C linker=cc}"
+linker_policy_rustflag="-Clinker-features=-lld"
+
+linker_policy_is_effective() {
+  local rustflags_value="${1-}"
+  local -a tokens=()
+  local index
+  local effective_state="unset"
+
+  read -r -a tokens <<<"$rustflags_value"
+  for index in "${!tokens[@]}"; do
+    case "${tokens[$index]}" in
+      "$linker_policy_rustflag") effective_state="disabled" ;;
+      -Clinker-features=*) effective_state="other" ;;
+      -C)
+        case "${tokens[$((index + 1))]:-}" in
+          linker-features=-lld) effective_state="disabled" ;;
+          linker-features=*) effective_state="other" ;;
+        esac
+        ;;
+    esac
+  done
+  [[ "$effective_state" == "disabled" ]]
+}
+
+rustflags="${RUSTFLAGS:--C linker=cc -Clinker-features=-lld}"
+if ! linker_policy_is_effective "$rustflags"; then
+  rustflags="${rustflags:+${rustflags} }${linker_policy_rustflag}"
+fi
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 component="live_anti_entropy_integration_evidence_gate"
 bead_id="bd-fmyrx"
@@ -50,7 +77,8 @@ run_rch_cargo() {
   log_path="${run_dir}/rch-log-${step_index}.log"
 
   echo "==> $command_text"
-  if ! rch exec -- env \
+  if ! env -u CARGO_ENCODED_RUSTFLAGS \
+    rch exec -- env -u CARGO_ENCODED_RUSTFLAGS \
     "RUSTFLAGS=${rustflags}" \
     CARGO_INCREMENTAL=0 \
     CARGO_BUILD_JOBS=1 \

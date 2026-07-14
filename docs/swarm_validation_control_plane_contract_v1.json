@@ -198,7 +198,7 @@
         "crates/franken-engine/tests/proof_manifest_golden_artifacts.rs"
       ],
       "read_commands": [
-        "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_proof_manifest cargo test -p frankenengine-engine --test proof_manifest_golden_artifacts"
+        "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_proof_manifest cargo test -p frankenengine-engine --test proof_manifest_golden_artifacts"
       ],
       "artifacts_emitted": [
         "ProofManifest",

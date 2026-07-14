@@ -33,6 +33,9 @@ RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc" \
 CARGO_INCREMENTAL=0 \
 /home/ubuntu/.cargo/bin/cargo bench --bench hot_paths --no-run
 
+# For a new run on the current nightly toolchain, use the current-policy
+# successor command in §4; the command above intentionally reproduces pass1.
+
 # 0d. Run the Criterion group, diffing against the frozen pass1 baseline. See §5.
 HOT="$(ls target/release/deps/hot_paths-* | grep -v '\.d$' | sort | tail -1)"
 "$HOT" --bench --baseline pass1 real_runtime_hot_paths | tee "$RUN_DIR/bench_output.txt"
@@ -187,12 +190,26 @@ CARGO_INCREMENTAL=0 \
 /home/ubuntu/.cargo/bin/cargo bench --bench hot_paths --no-run
 ```
 
+That is the frozen 2026-05-20 pass1 command, preserved verbatim for artifact
+provenance. For a new profiling run under the current x86_64 Linux linker
+policy, use this successor command and record it as a new run identity:
+
+```bash
+env -u CARGO_ENCODED_RUSTFLAGS \
+  RCH_CARGO_WRAPPER_BYPASS=1 \
+  RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc -Clinker-features=-lld" \
+  CARGO_INCREMENTAL=0 \
+  /home/ubuntu/.cargo/bin/cargo bench --bench hot_paths --no-run
+```
+
 Why each flag:
 
 - `-C force-frame-pointers=yes` — frame pointers are the default unwind path for
   `perf record --call-graph fp` (no `--call-graph dwarf` needed).
-- `-C linker=cc` — works around the project's documented nightly-`lld` breakage
-  (see `memory/MEMORY.md`).
+- `-C linker=cc` — selects the system C linker driver.
+- `-Clinker-features=-lld` — disables rustc's implicit LLD linker feature on
+  the current nightly; this is a successor-policy flag and was not part of the
+  frozen 2026-05-20 pass1 identity.
 - `CARGO_INCREMENTAL=0` — matches the disk-pressure mitigation; per-agent
   incremental caches otherwise balloon to 100+ GB.
 - The measurement build profile (already in the workspace root `Cargo.toml`)
@@ -281,8 +298,11 @@ Outputs under `--out`: `regressions.jsonl` (one `perf.regression.diff` event per
 sub-bench) + `regression_report.md`. **Exit codes:** `0` none regressed · `1` at
 least one regressed · `2` usage/env error (missing baseline, bad args, no `jq`).
 
-Per-`H[N]` validators wrap this same flow with the pass1 flags baked in — copy
-one as a template for a new optimization:
+Per-`H[N]` validators wrap this flow using the current-policy successor flags
+from §4 while comparing measurements with historical pass1. That comparison is
+not proof of a symmetric build identity: the honest gate fails Q2 unless both
+baseline and candidate fingerprints explicitly bind every Cargo rustflags
+channel. Copy one as a template for a new optimization:
 
 - `scripts/perf/h1_bench_validate.sh` — H1 (default-key cache) ≥ target drop.
 - `scripts/perf/h6_bench_validate.sh` — H6 (capacity hints); builds `hot_paths`

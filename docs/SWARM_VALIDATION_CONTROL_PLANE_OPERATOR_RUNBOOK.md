@@ -47,6 +47,13 @@ Implementation surfaces:
 The control plane fails closed when it cannot prove ownership, resource health,
 remote execution routing, or artifact freshness. Heavy Rust validation uses
 `rch exec -- env` with an explicit `CARGO_TARGET_DIR=...`.
+Standard proof commands inherit linker selection from the checked-in
+`.cargo/config.toml` and omit both `RUSTFLAGS` and `CARGO_ENCODED_RUSTFLAGS`.
+If custom Rust flags are required, the `RUSTFLAGS` override must also compose
+the exact token `-Clinker-features=-lld` because environment `RUSTFLAGS`
+replace the checked-in target rustflags; the complete optional override remains
+part of proof and warm-cache identity. Encoded Rust flags are unsupported in
+canonical proof commands.
 
 ## Fresh Operator Workflow
 
@@ -135,7 +142,7 @@ the remediation in the decision artifact and publish the blocker.
 6. Produce the SWARM-CTRL-III admission artifacts that feed operator status:
 
 ```bash
-./scripts/swarm_resource_lease_planner.sh --agent-id ScarletOwl --bead-id bd-mkz2h --requested-command "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_mkz2h cargo test -p frankenengine-engine --test swarm_validation_control_plane_e2e" --target-dir /tmp/rch_target_franken_engine_bd_mkz2h --reservation-snapshot-json /tmp/swarm-reservations.json --br-snapshot-json /tmp/swarm-in-progress.json --rch-workers-json /tmp/swarm-rch-workers.json --dirty-files-json /tmp/swarm-dirty-files.json --output-dir /tmp/franken-engine-swarm-resource-lease
+./scripts/swarm_resource_lease_planner.sh --agent-id ScarletOwl --bead-id bd-mkz2h --requested-command "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_mkz2h cargo test -p frankenengine-engine --test swarm_validation_control_plane_e2e" --target-dir /tmp/rch_target_franken_engine_bd_mkz2h --reservation-snapshot-json /tmp/swarm-reservations.json --br-snapshot-json /tmp/swarm-in-progress.json --rch-workers-json /tmp/swarm-rch-workers.json --dirty-files-json /tmp/swarm-dirty-files.json --output-dir /tmp/franken-engine-swarm-resource-lease
 ./scripts/proof_reuse_cache_planner.sh --proof-index-json /tmp/franken-engine-proof-index/proof_index.json --freshness-report /tmp/franken-engine-proof-freshness/proof_freshness_report.json --expected-source-revision smoke-rev --changed-path docs/SWARM_VALIDATION_CONTROL_PLANE_OPERATOR_RUNBOOK.md --output-dir /tmp/franken-engine-proof-reuse-cache
 ./scripts/build_storm_qos_batch_planner.sh --pending-requests-json /tmp/swarm-pending-validation-requests.json --resource-lease-plans-json /tmp/swarm-resource-lease-plans.json --proof-cost-history-json /tmp/swarm-proof-cost-history.json --rch-workers-json /tmp/swarm-rch-workers.json --output-dir /tmp/franken-engine-build-storm-qos
 ./scripts/stale_lock_stalled_bead_recommender.sh --in-progress-json /tmp/swarm-in-progress.json --agent-profiles-json /tmp/swarm-agent-profiles.json --thread-timestamps-json /tmp/swarm-thread-timestamps.json --file-reservations-json /tmp/swarm-reservations.json --git-activity-json /tmp/swarm-git-activity.json --output-dir /tmp/franken-engine-stale-lock
@@ -165,14 +172,18 @@ target kind, test filter, and source file lane. The command identity must record
 The cold-refresh command shape is intentionally narrow and copy/pasteable:
 
 ```bash
-rch exec -- env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_source_local_bd_lnks9 RUSTFLAGS=-Clinker=cc cargo test -p frankenengine-engine --lib shadow_decision_composer::tests::output_dir_file_lock_blocks_second_writer_until_release -- --exact --nocapture
+env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_source_local_bd_lnks9 cargo test -p frankenengine-engine --lib shadow_decision_composer::tests::output_dir_file_lock_blocks_second_writer_until_release -- --exact --nocapture
 ```
 
-Use compact `RUSTFLAGS=-Clinker=cc` in source-local proof commands so the
-preflight parser treats the linker flag as one environment value. Do not widen
-the command to `--tests`, `--all-targets`, or an unfiltered package test unless
-the admission report selects a cold refresh and the closeout says why the
-source-local proof no longer covers the requested lane.
+Omit both `RUSTFLAGS` and `CARGO_ENCODED_RUSTFLAGS` in source-local proof
+commands when no custom flags are needed. For an exceptional override, keep
+the complete `RUSTFLAGS` value in one environment token, for example
+`RUSTFLAGS=-Cdebuginfo=0\ -Clinker-features=-lld`, so the preflight parser and
+cache identity retain the composed policy. Encoded Rust flags are unsupported
+in canonical proof commands. Do not widen the command to `--tests`,
+`--all-targets`, or an unfiltered package test unless the admission report
+selects a cold refresh and the closeout says why the source-local proof no
+longer covers the requested lane.
 
 Generate advisory admission artifacts before any live proof:
 
@@ -277,7 +288,7 @@ envelope memory headroom below the topology admission floor produces
 Heavy Rust proof commands must keep this shape:
 
 ```bash
-rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_swarm_validation PROOF_ARTIFACT_SOURCE_REVISION=smoke-rev cargo test -p frankenengine-engine --test swarm_validation_control_plane_e2e -- --nocapture
+env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_swarm_validation PROOF_ARTIFACT_SOURCE_REVISION=smoke-rev cargo test -p frankenengine-engine --test swarm_validation_control_plane_e2e -- --nocapture
 ```
 
 8. Inspect proof artifacts before reporting success:
@@ -396,4 +407,7 @@ jq empty docs/swarm_predictive_dashboard_contract_v1.json
 The truth gate verifies that referenced docs and scripts exist, that the
 contract advertises the runbook surface, that predictive dashboard fields are
 contract-only and `/dp/frankentui`-owned, and that heavy Cargo examples remain
-`rch exec -- env CARGO_TARGET_DIR=...` wrapped.
+`rch exec -- env CARGO_TARGET_DIR=...` wrapped. It also rejects canonical
+`RUSTFLAGS` overrides that fail to compose the exact
+`-Clinker-features=-lld` token with the checked-in `.cargo/config.toml` linker
+policy, and rejects every explicit `CARGO_ENCODED_RUSTFLAGS` override.

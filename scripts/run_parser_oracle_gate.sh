@@ -23,12 +23,51 @@ if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
 else
   target_dir="/tmp/rch_target_franken_engine_parser_oracle_gate_${timestamp}"
 fi
-parser_oracle_rustflags="${RUSTFLAGS-}"
-if [[ -n "${parser_oracle_rustflags}" ]] && [[ "${parser_oracle_rustflags}" != *"-C linker=cc"* ]]; then
-  parser_oracle_rustflags="${parser_oracle_rustflags} -C linker=cc"
-else
-  parser_oracle_rustflags="-C linker=cc"
+
+parser_rustflags_have_linker_policy() {
+  local rustflags="${1-}"
+  local -a tokens=()
+  local index
+  local effective_state="unset"
+
+  read -r -a tokens <<<"$rustflags"
+  for index in "${!tokens[@]}"; do
+    case "${tokens[$index]}" in
+      -Clinker-features=-lld) effective_state="disabled" ;;
+      -Clinker-features=*) effective_state="other" ;;
+      -C)
+        case "${tokens[$((index + 1))]:-}" in
+          linker-features=-lld) effective_state="disabled" ;;
+          linker-features=*) effective_state="other" ;;
+        esac
+        ;;
+    esac
+  done
+  [[ "$effective_state" == "disabled" ]]
+}
+
+parser_compose_linker_policy_rustflags() {
+  local rustflags="${1-}"
+
+  if parser_rustflags_have_linker_policy "$rustflags"; then
+    printf '%s' "$rustflags"
+  elif [[ -n "$rustflags" ]]; then
+    printf '%s %s' "$rustflags" '-Clinker-features=-lld'
+  else
+    printf '%s' '-Clinker-features=-lld'
+  fi
+}
+
+parser_oracle_flags="${RUSTFLAGS-}"
+if [[ -z "${parser_oracle_flags}" ]]; then
+  parser_oracle_flags="-C linker=cc"
+elif [[ "${parser_oracle_flags}" != *"-C linker=cc"* ]] &&
+     [[ "${parser_oracle_flags}" != *"-Clinker=cc"* ]]; then
+  parser_oracle_flags="${parser_oracle_flags} -C linker=cc"
 fi
+parser_oracle_flags="$(parser_compose_linker_policy_rustflags "$parser_oracle_flags")"
+printf -v parser_oracle_flags_shell '%q' "${parser_oracle_flags}"
+parser_oracle_replay_prefix="env -u CARGO_ENCODED_RUSTFLAGS RUSTFLAGS=${parser_oracle_flags_shell}"
 run_dir="${artifact_root}/${timestamp}"
 manifest_path="${run_dir}/manifest.json"
 events_path="${run_dir}/events.jsonl"
@@ -76,8 +115,9 @@ ensure_required_tools() {
 }
 
 run_rch() {
-  timeout "${rch_timeout_seconds}" \
-    rch exec -- env "RUSTUP_TOOLCHAIN=${toolchain}" "CARGO_TARGET_DIR=${target_dir}" "RUSTFLAGS=${parser_oracle_rustflags}" "$@"
+  env -u CARGO_ENCODED_RUSTFLAGS timeout "${rch_timeout_seconds}" \
+    rch exec -- env -u CARGO_ENCODED_RUSTFLAGS \
+    "RUSTUP_TOOLCHAIN=${toolchain}" "CARGO_TARGET_DIR=${target_dir}" "RUSTFLAGS=${parser_oracle_flags}" "$@"
 }
 
 rch_strip_ansi() {
@@ -726,7 +766,7 @@ write_supporting_artifacts() {
 ## Replay
 
 \`\`\`bash
-cargo run -p frankenengine-engine --bin franken_parser_oracle_report -- \
+${parser_oracle_replay_prefix} cargo run -p frankenengine-engine --bin franken_parser_oracle_report -- \
   --partition ${partition} \
   --gate-mode ${gate_mode} \
   --seed ${seed} \
@@ -767,7 +807,7 @@ EOF_NOTE
 ## Replay
 
 \`\`\`bash
-./scripts/run_parser_oracle_gate.sh ${mode}
+${parser_oracle_replay_prefix} ./scripts/run_parser_oracle_gate.sh ${mode}
 \`\`\`
 EOF_NOTE
   fi
@@ -877,7 +917,7 @@ write_manifest() {
   if [[ -f "$missing_artifact_receipt_path" ]]; then
     jq -c \
       --arg taxonomy_version "$taxonomy_version" \
-      --arg replay_command "./scripts/run_parser_oracle_gate.sh ${mode}" \
+      --arg replay_command "${parser_oracle_replay_prefix} ./scripts/run_parser_oracle_gate.sh ${mode}" \
       --arg outcome "$outcome" \
       --argjson error_code "${error_code_json}" \
       '{
@@ -907,7 +947,7 @@ write_manifest() {
     --arg trace_id "$trace_id" \
     --arg decision_id "$decision_id" \
     --arg policy_id "$policy_id" \
-    --arg replay_command "./scripts/run_parser_oracle_gate.sh ${mode}" \
+    --arg replay_command "${parser_oracle_replay_prefix} ./scripts/run_parser_oracle_gate.sh ${mode}" \
     --arg outcome "$outcome" \
     --argjson error_code "${error_code_json}" \
     '{

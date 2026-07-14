@@ -31,7 +31,37 @@ toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
 target_dir="${CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_real_hot_path_proof_${timestamp}_$$}"
 cargo_incremental="${CARGO_INCREMENTAL:-0}"
 cargo_build_jobs="${CARGO_BUILD_JOBS:-4}"
-rustflags="${RUSTFLAGS:--Cdebuginfo=0}"
+required_linker_rustflag="-Clinker-features=-lld"
+canonical_rustflags_default="-Cdebuginfo=0 ${required_linker_rustflag}"
+rustflags="${RUSTFLAGS:-$canonical_rustflags_default}"
+
+rustflags_has_effective_codegen_option() {
+  local flags="$1"
+  local option_name="$2"
+  local expected_value="$3"
+  local -a tokens=()
+  local index
+  local effective_value=""
+
+  read -r -a tokens <<<"$flags"
+  for ((index = 0; index < ${#tokens[@]}; index += 1)); do
+    case "${tokens[index]}" in
+      -C"${option_name}"=*)
+        effective_value="${tokens[index]#-C${option_name}=}"
+        ;;
+      -C)
+        if [[ "${tokens[index + 1]:-}" == "${option_name}="* ]]; then
+          effective_value="${tokens[index + 1]#${option_name}=}"
+        fi
+        ;;
+    esac
+  done
+  [[ "$effective_value" == "$expected_value" ]]
+}
+
+if ! rustflags_has_effective_codegen_option "$rustflags" "linker-features" "-lld"; then
+  rustflags="${rustflags} ${required_linker_rustflag}"
+fi
 rch_exec_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-3900}"
 rch_test_timeout_seconds="${RCH_TEST_TIMEOUT_SEC:-1800}"
 rch_wait_timeout_seconds="${RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS:-3600}"
@@ -93,11 +123,12 @@ dirty_worktree_json() {
 
 command_text_for() {
   local cargo_text="$1"
-  printf 'RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS=%s RCH_QUEUE_WHEN_BUSY=1 RCH_PRIORITY=%s RCH_VISIBILITY=%s RCH_TEST_TIMEOUT_SEC=%s rch exec -- env RUSTUP_TOOLCHAIN=%s CARGO_TARGET_DIR=%s CARGO_INCREMENTAL=%s CARGO_BUILD_JOBS=%s RUSTFLAGS=%q %s\n' \
+  printf 'env -u CARGO_ENCODED_RUSTFLAGS RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS=%q RCH_QUEUE_WHEN_BUSY=1 RCH_PRIORITY=%q RCH_VISIBILITY=%q RCH_TEST_TIMEOUT_SEC=%q timeout --kill-after=30 %q rch exec -- env -u CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN=%q CARGO_TARGET_DIR=%q CARGO_INCREMENTAL=%q CARGO_BUILD_JOBS=%q RUSTFLAGS=%q %s\n' \
     "$rch_wait_timeout_seconds" \
     "$rch_priority" \
     "$rch_visibility" \
     "$rch_test_timeout_seconds" \
+    "$rch_exec_timeout_seconds" \
     "$toolchain" \
     "$target_dir" \
     "$cargo_incremental" \
@@ -313,14 +344,14 @@ esac
 printf '%s' "$(command_text_for "$cargo_text")" >"$commands_path"
 
 set +e
-env \
+env -u CARGO_ENCODED_RUSTFLAGS \
   "RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS=${rch_wait_timeout_seconds}" \
   "RCH_QUEUE_WHEN_BUSY=1" \
   "RCH_PRIORITY=${rch_priority}" \
   "RCH_VISIBILITY=${rch_visibility}" \
   "RCH_TEST_TIMEOUT_SEC=${rch_test_timeout_seconds}" \
   timeout --kill-after=30 "${rch_exec_timeout_seconds}" \
-  rch exec -- env \
+  rch exec -- env -u CARGO_ENCODED_RUSTFLAGS \
   "RUSTUP_TOOLCHAIN=${toolchain}" \
   "CARGO_TARGET_DIR=${target_dir}" \
   "CARGO_INCREMENTAL=${cargo_incremental}" \

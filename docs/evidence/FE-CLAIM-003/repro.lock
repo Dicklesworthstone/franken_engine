@@ -33,7 +33,7 @@
   "manifest_id": "manifest-fe-claim-003-20260521",
   "replay": {
     "command_sequence": [
-      "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc\" cargo test -p frankenengine-engine --test deterministic_replay_integration --test counterfactual_replay_engine_integration"
+      "cargo test -p frankenengine-engine --test deterministic_replay_integration --test counterfactual_replay_engine_integration"
     ],
     "environment_vars": {
       "CARGO_INCREMENTAL": "0",

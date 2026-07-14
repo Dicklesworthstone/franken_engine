@@ -8,4 +8,4 @@
 //! harness graph.
 //!
 //! Run the package through rch with:
-//! `rch exec -- env CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' cargo test -p frankenengine-control-plane-integration-tests`
+//! `env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc -Clinker-features=-lld' cargo test -p frankenengine-control-plane-integration-tests`

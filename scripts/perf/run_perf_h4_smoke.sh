@@ -17,7 +17,7 @@ set -euo pipefail
 #                  passes. This is the H4.7 frankenctl compile/replay golden:
 #                  compile hashes stay byte-identical and strict replay
 #                  completes over a captured trace.
-#   2. BUILD    -- the `hot_paths` bench compiles with the canonical pass1 flags.
+#   2. BUILD    -- the `hot_paths` bench compiles with current linker-policy flags.
 #   3. BENCH-PA -- `parser_arena_materialization` executes under a short
 #                  Criterion budget AND its mean is <= 27 us (H4.5 cap).
 #   4. BENCH-LP -- `lowering_pipeline_ir3` executes under a short Criterion
@@ -75,6 +75,7 @@ PREREQS=(
 )
 
 CARGO="${CARGO:-/home/ubuntu/.cargo/bin/cargo}"
+CURRENT_RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc -Clinker-features=-lld"
 INTEG_STATUS="skipped"
 BUILD_STATUS="skipped"
 BENCH_PA_STATUS="skipped"
@@ -142,12 +143,13 @@ if [[ "$MODE" == "full" || "$MODE" == "quick" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 2. BUILD -- bench compiles with canonical pass1 flags (full mode only).
+# 2. BUILD -- bench compiles with current linker-policy flags (full mode only).
 # ---------------------------------------------------------------------------
 if [[ "$MODE" == "full" ]]; then
-    echo "[h4.6] building hot_paths bench (pass1 flags)..."
-    if RCH_CARGO_WRAPPER_BYPASS=1 \
-        RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc" \
+    echo "[h4.6] building hot_paths bench (current linker-policy flags)..."
+    if env -u CARGO_ENCODED_RUSTFLAGS \
+        RCH_CARGO_WRAPPER_BYPASS=1 \
+        RUSTFLAGS="$CURRENT_RUSTFLAGS" \
         CARGO_INCREMENTAL=0 \
         "$CARGO" bench --bench hot_paths --no-run > "$RUN_DIR/build.log" 2>&1; then
         BUILD_STATUS="pass"
@@ -233,14 +235,14 @@ fi
 # ---------------------------------------------------------------------------
 # 4. Fingerprint.
 # ---------------------------------------------------------------------------
-python3 - "$RUN_DIR" "$BEAD" <<'PYFP'
+python3 - "$RUN_DIR" "$BEAD" "$CURRENT_RUSTFLAGS" "$MODE" "$BUILD_STATUS" <<'PYFP'
 import json
 import platform
 import subprocess
 import sys
 import time
 
-run_dir, bead = sys.argv[1:3]
+run_dir, bead, current_rustflags, mode, build_status = sys.argv[1:6]
 
 def sh(*args):
     try:
@@ -262,11 +264,22 @@ fp = {
         "kernel": platform.release(),
     },
     "toolchain": {"rustc": sh("rustc", "--version"), "python": platform.python_version()},
-    "build_flags": {
-        "RUSTFLAGS": "-C force-frame-pointers=yes -C linker=cc",
-        "CARGO_INCREMENTAL": "0",
-    },
 }
+if mode == "full" and build_status == "pass":
+    fp["build_flags"] = {
+        "RUSTFLAGS": current_rustflags,
+        "CARGO_ENCODED_RUSTFLAGS": None,
+        "CARGO_INCREMENTAL": "0",
+    }
+    fp["build_provenance"] = {
+        "status": "executed_build_command",
+        "effective_channel": "RUSTFLAGS",
+    }
+else:
+    fp["build_provenance"] = {
+        "status": "unknown",
+        "reason": f"bench build not executed successfully (mode={mode}, build_status={build_status})",
+    }
 json.dump(fp, open(f"{run_dir}/fingerprint.json", "w"), indent=2)
 PYFP
 
@@ -379,7 +392,7 @@ with open(os.path.join(run_dir, "summary.md"), "w") as f:
     f.write("|---|---|---|\n")
     f.write("| integration | H4.7 frankenctl compile hashes and strict replay remain stable | "
             f"{integ_status} |\n")
-    f.write("| build | `hot_paths` compiles with pass1 flags | "
+    f.write("| build | `hot_paths` compiles with current linker-policy flags | "
             f"{build_status} |\n")
     f.write(f"| bench {target_pa} | target executes and mean <= {int(target_pa_max_ns) / 1000:.0f} us | "
             f"{bench_pa_status}")

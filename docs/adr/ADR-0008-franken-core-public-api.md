@@ -249,7 +249,7 @@ J.7 may remove the root `Cargo.toml` exclusion only after this ADR is present an
 after it re-validates:
 
 ```bash
-rch exec -- env CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' cargo check --all-targets
+env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc -Clinker-features=-lld' cargo check --all-targets
 ```
 
 If the all-target workspace check fails, J.7 must keep the workspace exclusion

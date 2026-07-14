@@ -192,7 +192,9 @@ fn run(out_dir: PathBuf, seed: u64) -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     let command_line = env::args().collect::<Vec<_>>().join(" ");
-    let replay_command = "rch exec 'env RUSTFLAGS=\"-C linker=cc\" cargo run -p frankenengine-engine --bin franken_extension_host_topology_assessment -- --out-dir <DIR>'";
+    let replay_command = format!(
+        "EXTENSION_HOST_TOPOLOGY_ASSESSMENT_ARTIFACT_ROOT='<ARTIFACT_ROOT>' EXTENSION_HOST_TOPOLOGY_ASSESSMENT_SEED={seed} ./scripts/run_extension_host_topology_assessment.sh bundle"
+    );
     fs::write(
         &commands_path,
         format!("{command_line}\n{replay_command}\n"),
@@ -228,7 +230,7 @@ fn run(out_dir: PathBuf, seed: u64) -> Result<(), Box<dyn std::error::Error>> {
             "component": COMPONENT,
             "bead_id": BEAD_ID,
             "content_hash": assessment.content_hash.clone(),
-            "replay_command": replay_command,
+            "replay_command": &replay_command,
         }),
     )?;
 

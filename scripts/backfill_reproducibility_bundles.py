@@ -23,61 +23,92 @@ OBSERVED_CLAIMS = [
         "claim_id": "FE-CLAIM-001",
         "claim_scope": "runtime",
         "original_artifact_path": "docs/audit/ga_success_criteria_gap_analysis.md",
-        "verification_command": "CARGO_TARGET_DIR=/data/projects/franken_engine/target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc\" cargo check -p frankenengine-engine --tests"
+        "verification_command": "CARGO_TARGET_DIR=/data/projects/franken_engine/target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc -Clinker-features=-lld\" cargo check -p frankenengine-engine --tests",
+        "replay_commands": [
+            "cargo check -p frankenengine-engine --tests"
+        ]
     },
     {
         "claim_id": "FE-CLAIM-002",
         "claim_scope": "security",
         "original_artifact_path": "scripts/e2e/live_guardplane_decision_smoke.sh",
-        "verification_command": "./scripts/e2e/live_guardplane_decision_smoke.sh"
+        "verification_command": "./scripts/e2e/live_guardplane_decision_smoke.sh",
+        "replay_commands": [
+            "./scripts/e2e/live_guardplane_decision_smoke.sh"
+        ]
     },
     {
         "claim_id": "FE-CLAIM-003",
         "claim_scope": "replay",
         "original_artifact_path": "crates/franken-engine/src/counterfactual_replay_engine.rs",
-        "verification_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc\" cargo test -p frankenengine-engine --test deterministic_replay_integration --test counterfactual_replay_engine_integration"
+        "verification_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc -Clinker-features=-lld\" cargo test -p frankenengine-engine --test deterministic_replay_integration --test counterfactual_replay_engine_integration",
+        "replay_commands": [
+            "cargo test -p frankenengine-engine --test deterministic_replay_integration --test counterfactual_replay_engine_integration"
+        ]
     },
     {
         "claim_id": "FE-CLAIM-004",
         "claim_scope": "security",
         "original_artifact_path": "scripts/run_rgc_signed_decision_receipt.sh",
-        "verification_command": "./scripts/run_rgc_signed_decision_receipt.sh ci"
+        "verification_command": "./scripts/run_rgc_signed_decision_receipt.sh ci",
+        "replay_commands": [
+            "./scripts/run_rgc_signed_decision_receipt.sh ci"
+        ]
     },
     {
         "claim_id": "FE-CLAIM-007",
         "claim_scope": "operations",
         "original_artifact_path": "scripts/e2e/readme_cli_workflow_smoke.sh",
-        "verification_command": "FRANKENCTL_BIN=target/debug/frankenctl ./scripts/e2e/readme_cli_workflow_smoke.sh"
+        "verification_command": "FRANKENCTL_BIN=target/debug/frankenctl ./scripts/e2e/readme_cli_workflow_smoke.sh",
+        "replay_commands": [
+            "./scripts/e2e/readme_cli_workflow_smoke.sh"
+        ]
     },
     {
         "claim_id": "FE-CLAIM-008",
         "claim_scope": "operations",
         "original_artifact_path": "README.md",
-        "verification_command": "./scripts/run_claim_to_proof_matrix_gate.sh ci"
+        "verification_command": "./scripts/run_claim_to_proof_matrix_gate.sh ci",
+        "replay_commands": [
+            "./scripts/run_claim_to_proof_matrix_gate.sh ci"
+        ]
     },
     {
         "claim_id": "FE-CLAIM-011",
         "claim_scope": "security",
         "original_artifact_path": "scripts/run_red_team_compromise_rate_metric_gate.sh",
-        "verification_command": "./scripts/run_red_team_compromise_rate_metric_gate.sh ci"
+        "verification_command": "./scripts/run_red_team_compromise_rate_metric_gate.sh ci",
+        "replay_commands": [
+            "./scripts/run_red_team_compromise_rate_metric_gate.sh ci"
+        ]
     },
     {
         "claim_id": "FE-CLAIM-012",
         "claim_scope": "security",
         "original_artifact_path": "scripts/run_containment_latency_metric_gate.sh",
-        "verification_command": "./scripts/run_containment_latency_metric_gate.sh ci"
+        "verification_command": "./scripts/run_containment_latency_metric_gate.sh ci",
+        "replay_commands": [
+            "./scripts/run_containment_latency_metric_gate.sh ci"
+        ]
     },
     {
         "claim_id": "FE-CLAIM-013",
         "claim_scope": "replay",
         "original_artifact_path": "scripts/run_replay_coverage_metric_gate.sh",
-        "verification_command": "./scripts/run_replay_coverage_metric_gate.sh ci && rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc\" cargo test -p frankenengine-engine --test deterministic_replay_integration frankenctl_compile_and_run_artifacts_are_byte_identical_with_fixed_inputs"
+        "verification_command": "./scripts/run_replay_coverage_metric_gate.sh ci && rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc -Clinker-features=-lld\" cargo test -p frankenengine-engine --test deterministic_replay_integration frankenctl_compile_and_run_artifacts_are_byte_identical_with_fixed_inputs",
+        "replay_commands": [
+            "./scripts/run_replay_coverage_metric_gate.sh ci",
+            "cargo test -p frankenengine-engine --test deterministic_replay_integration frankenctl_compile_and_run_artifacts_are_byte_identical_with_fixed_inputs"
+        ]
     },
     {
         "claim_id": "FE-CLAIM-015",
         "claim_scope": "ifc",
         "original_artifact_path": "scripts/e2e/live_ifc_declassification_smoke.sh",
-        "verification_command": "./scripts/e2e/live_ifc_declassification_smoke.sh"
+        "verification_command": "./scripts/e2e/live_ifc_declassification_smoke.sh",
+        "replay_commands": [
+            "./scripts/e2e/live_ifc_declassification_smoke.sh"
+        ]
     },
     {
         # bd-c1nbg: FE-CLAIM-023 was observed in the matrix but absent here, so
@@ -86,7 +117,10 @@ OBSERVED_CLAIMS = [
         "claim_id": "FE-CLAIM-023",
         "claim_scope": "reproducibility",
         "original_artifact_path": "scripts/run_rgc_cross_platform_matrix_gate.sh",
-        "verification_command": "./scripts/run_rgc_cross_platform_matrix_gate.sh ci"
+        "verification_command": "./scripts/run_rgc_cross_platform_matrix_gate.sh ci",
+        "replay_commands": [
+            "./scripts/run_rgc_cross_platform_matrix_gate.sh ci"
+        ]
     }
 ]
 
@@ -205,7 +239,12 @@ def generate_manifest_json(claim_id: str, claim_scope: str, original_artifact_pa
         }
     }
 
-def generate_repro_lock(claim_id: str, original_artifact_path: str, verification_command: str) -> Dict:
+def generate_repro_lock(
+    claim_id: str,
+    original_artifact_path: str,
+    verification_command: str,
+    replay_commands: List[str],
+) -> Dict:
     """Generate repro.lock per reproducibility contract."""
     lock_id = f"lock-{claim_id.lower()}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
     manifest_id = f"manifest-{claim_id.lower()}-{datetime.now(timezone.utc).strftime('%Y%m%d')}"
@@ -247,12 +286,13 @@ def generate_repro_lock(claim_id: str, original_artifact_path: str, verification
             "evidence_generated": True
         },
         "replay": {
-            "command_sequence": [
-                verification_command
-            ],
+            # The verifier owns the deterministic environment and wraps bare
+            # Cargo commands with rch. Keep the operator-oriented command above
+            # as metadata, but never copy its inline env/rch envelope here.
+            "command_sequence": replay_commands,
             "environment_vars": {
                 "CARGO_INCREMENTAL": "0",
-                "RUSTFLAGS": "-C linker=cc"
+                "RUSTFLAGS": "-C linker=cc -Clinker-features=-lld"
             },
             "working_directory": "/data/projects/franken_engine"
         },
@@ -296,7 +336,10 @@ def backfill_claim(claim: Dict) -> None:
 
     # Generate repro.lock
     lock_data = generate_repro_lock(
-        claim_id, claim["original_artifact_path"], claim["verification_command"]
+        claim_id,
+        claim["original_artifact_path"],
+        claim["verification_command"],
+        claim["replay_commands"],
     )
     write_json_file(bundle_dir / "repro.lock", lock_data)
 

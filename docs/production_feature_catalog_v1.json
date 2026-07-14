@@ -46,7 +46,7 @@
       ],
       "verification_commands": [
         "./scripts/run_replay_coverage_metric_gate.sh ci",
-        "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc\" cargo test -p frankenengine-engine --test deterministic_replay_integration"
+        "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc -Clinker-features=-lld' cargo test -p frankenengine-engine --test deterministic_replay_integration"
       ],
       "artifact_root": "artifacts/replay_coverage/<timestamp>/",
       "primary_doc": "docs/DETERMINISTIC_REPLAY_COVERAGE_V1.md",

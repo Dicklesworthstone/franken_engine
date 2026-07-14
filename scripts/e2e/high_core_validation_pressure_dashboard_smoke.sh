@@ -51,7 +51,7 @@ docs_shape_ok() {
   grep -Fq "run_rch_proof" "$docs_path" \
     && grep -Fq "run_cheap_local_non_cargo_checks" "$docs_path" \
     && grep -Fq "split_file_blocker_bead" "$docs_path" \
-    && grep -Fq "RCH_PRIORITY=low RCH_VISIBILITY=summary rch exec -- env" "$docs_path"
+    && grep -Fq "env -u CARGO_ENCODED_RUSTFLAGS RCH_PRIORITY=low RCH_VISIBILITY=summary rch exec -- env -u CARGO_ENCODED_RUSTFLAGS" "$docs_path"
 }
 
 fixtures_shape_ok() {
@@ -201,7 +201,7 @@ run_case() {
   if [[ "$case_id" == "idle_host_fixture" ]]; then
     jq -e '
       .recommended_commands[0]
-      | startswith("RCH_PRIORITY=low RCH_VISIBILITY=summary rch exec -- env")
+      | startswith("env -u CARGO_ENCODED_RUSTFLAGS RCH_PRIORITY=low RCH_VISIBILITY=summary rch exec -- env -u CARGO_ENCODED_RUSTFLAGS")
     ' "$dashboard" >/dev/null || record_failure "idle host missing rch proof command"
   fi
   if [[ "$case_id" == "local_cargo_contention_fixture" ]]; then

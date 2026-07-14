@@ -33,7 +33,8 @@ fi
 
 run_rch() {
   timeout "${rch_timeout_seconds}" \
-    rch exec -- env \
+    env -u CARGO_ENCODED_RUSTFLAGS \
+    rch exec -- env -u CARGO_ENCODED_RUSTFLAGS \
     "RUSTUP_TOOLCHAIN=${toolchain}" \
     "CARGO_TARGET_DIR=${target_dir}" \
     "CARGO_BUILD_JOBS=${cargo_build_jobs}" \
@@ -81,12 +82,12 @@ run_mode() {
         cargo test -p frankenengine-engine --test catastrophic_tail_tournament_gate_integration evaluate_near_cliff_band_warns_without_failing -- --exact || mode_exit=1
       ;;
     clippy)
-      run_step "env RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS=-Dwarnings cargo test -p frankenengine-engine catastrophic_tail_tournament_gate::tests::evaluate_missing_neighborhoods_are_inconclusive --no-run -- --exact" \
-        env RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS=-Dwarnings cargo test -p frankenengine-engine catastrophic_tail_tournament_gate::tests::evaluate_missing_neighborhoods_are_inconclusive --no-run -- --exact || mode_exit=1
-      run_step "env RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS=-Dwarnings cargo test -p frankenengine-engine catastrophic_tail_tournament_gate::tests::continuation_cliff_atlas_hash_uses_escape_action_display_contract --no-run -- --exact" \
-        env RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS=-Dwarnings cargo test -p frankenengine-engine catastrophic_tail_tournament_gate::tests::continuation_cliff_atlas_hash_uses_escape_action_display_contract --no-run -- --exact || mode_exit=1
-      run_step "env RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS=-Dwarnings cargo test -p frankenengine-engine --test catastrophic_tail_tournament_gate_integration --no-run" \
-        env RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS=-Dwarnings cargo test -p frankenengine-engine --test catastrophic_tail_tournament_gate_integration --no-run || mode_exit=1
+      run_step "env -u CARGO_ENCODED_RUSTFLAGS RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS='-Dwarnings -Clinker-features=-lld' cargo test -p frankenengine-engine catastrophic_tail_tournament_gate::tests::evaluate_missing_neighborhoods_are_inconclusive --no-run -- --exact" \
+        env -u CARGO_ENCODED_RUSTFLAGS RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS='-Dwarnings -Clinker-features=-lld' cargo test -p frankenengine-engine catastrophic_tail_tournament_gate::tests::evaluate_missing_neighborhoods_are_inconclusive --no-run -- --exact || mode_exit=1
+      run_step "env -u CARGO_ENCODED_RUSTFLAGS RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS='-Dwarnings -Clinker-features=-lld' cargo test -p frankenengine-engine catastrophic_tail_tournament_gate::tests::continuation_cliff_atlas_hash_uses_escape_action_display_contract --no-run -- --exact" \
+        env -u CARGO_ENCODED_RUSTFLAGS RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS='-Dwarnings -Clinker-features=-lld' cargo test -p frankenengine-engine catastrophic_tail_tournament_gate::tests::continuation_cliff_atlas_hash_uses_escape_action_display_contract --no-run -- --exact || mode_exit=1
+      run_step "env -u CARGO_ENCODED_RUSTFLAGS RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS='-Dwarnings -Clinker-features=-lld' cargo test -p frankenengine-engine --test catastrophic_tail_tournament_gate_integration --no-run" \
+        env -u CARGO_ENCODED_RUSTFLAGS RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS='-Dwarnings -Clinker-features=-lld' cargo test -p frankenengine-engine --test catastrophic_tail_tournament_gate_integration --no-run || mode_exit=1
       ;;
     ci)
       run_step "cargo test -p frankenengine-engine catastrophic_tail_tournament_gate::tests::evaluate_missing_neighborhoods_are_inconclusive --no-run -- --exact" \
@@ -105,8 +106,8 @@ run_mode() {
         cargo test -p frankenengine-engine --test catastrophic_tail_tournament_gate_integration evaluate_missing_neighborhood_is_inconclusive_and_emits_witness -- --exact || mode_exit=1
       run_step "cargo test -p frankenengine-engine --test catastrophic_tail_tournament_gate_integration evaluate_near_cliff_band_warns_without_failing -- --exact" \
         cargo test -p frankenengine-engine --test catastrophic_tail_tournament_gate_integration evaluate_near_cliff_band_warns_without_failing -- --exact || mode_exit=1
-      run_step "env RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS=-Dwarnings cargo test -p frankenengine-engine --test catastrophic_tail_tournament_gate_integration --no-run" \
-        env RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS=-Dwarnings cargo test -p frankenengine-engine --test catastrophic_tail_tournament_gate_integration --no-run || mode_exit=1
+      run_step "env -u CARGO_ENCODED_RUSTFLAGS RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS='-Dwarnings -Clinker-features=-lld' cargo test -p frankenengine-engine --test catastrophic_tail_tournament_gate_integration --no-run" \
+        env -u CARGO_ENCODED_RUSTFLAGS RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS='-Dwarnings -Clinker-features=-lld' cargo test -p frankenengine-engine --test catastrophic_tail_tournament_gate_integration --no-run || mode_exit=1
       ;;
     *)
       echo "usage: $0 [check|test|clippy|ci]" >&2

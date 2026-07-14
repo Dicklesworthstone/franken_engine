@@ -33,7 +33,7 @@
   "manifest_id": "manifest-fe-claim-001-20260521",
   "replay": {
     "command_sequence": [
-      "CARGO_TARGET_DIR=/data/projects/franken_engine/target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc\" cargo check -p frankenengine-engine --tests"
+      "cargo check -p frankenengine-engine --tests"
     ],
     "environment_vars": {
       "CARGO_INCREMENTAL": "0",

@@ -16,16 +16,18 @@ source "$script_dir/dw/lib/dw_e2e_lib.sh"
 mode="${1:-ci}"
 dw_begin "dw_intrinsic_table" "$mode"
 
+dw_rustflags="$(dw_compose_linker_policy_rustflags "${RUSTFLAGS:--C linker=cc -C debuginfo=0}")"
+
 rch_cargo() {
   local target_dir
   target_dir="${CARGO_TARGET_DIR:-/tmp/rch_target_dw_intrinsic_table_${USER:-agent}}"
-  env \
+  env -u CARGO_ENCODED_RUSTFLAGS \
     RCH_REQUIRE_REMOTE="${RCH_REQUIRE_REMOTE:-1}" \
     CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}" \
     CARGO_PROFILE_DEV_DEBUG="${CARGO_PROFILE_DEV_DEBUG:-0}" \
-    RUSTFLAGS="${RUSTFLAGS:--C linker=cc -C debuginfo=0}" \
+    RUSTFLAGS="$dw_rustflags" \
     CARGO_TARGET_DIR="$target_dir" \
-    rch exec --no-self-healing -- "$@"
+    rch exec --no-self-healing -- env -u CARGO_ENCODED_RUSTFLAGS "$@"
 }
 
 run_source_guards() {

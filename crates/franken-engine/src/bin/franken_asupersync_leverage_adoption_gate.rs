@@ -206,7 +206,9 @@ fn run(out_dir: PathBuf, seed: u64) -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     let command_line = env::args().collect::<Vec<_>>().join(" ");
-    let replay_command = "rch exec 'env RUSTFLAGS=\"-C linker=cc\" cargo run -p frankenengine-engine --bin franken_asupersync_leverage_adoption_gate -- --out-dir <DIR>'";
+    let replay_command = format!(
+        "ASUPERSYNC_LEVERAGE_ADOPTION_GATE_ARTIFACT_ROOT='<ARTIFACT_ROOT>' ASUPERSYNC_LEVERAGE_ADOPTION_GATE_SEED={seed} ./scripts/run_asupersync_leverage_adoption_gate.sh bundle"
+    );
     fs::write(
         &commands_path,
         format!("{command_line}\n{replay_command}\n"),
@@ -241,7 +243,7 @@ fn run(out_dir: PathBuf, seed: u64) -> Result<(), Box<dyn std::error::Error>> {
             "component": COMPONENT,
             "bead_id": BEAD_ID,
             "content_hash": gate.content_hash,
-            "replay_command": replay_command,
+            "replay_command": &replay_command,
         }),
     )?;
 

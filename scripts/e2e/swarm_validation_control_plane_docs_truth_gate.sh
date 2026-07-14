@@ -81,7 +81,11 @@ required_runbook_patterns=(
   "rch-output.plain.log"
   "run_manifest.json"
   "dependency_root_hash"
-  "RUSTFLAGS=-Clinker=cc"
+  ".cargo/config.toml"
+  "-Clinker-features=-lld"
+  "replace the checked-in target rustflags"
+  "CARGO_ENCODED_RUSTFLAGS"
+  "Encoded Rust flags are unsupported"
   "CARGO_INCREMENTAL=0"
   "CARGO_BUILD_JOBS=1"
   "admit_reuse"
@@ -306,9 +310,130 @@ validate_predictive_doc_claims() {
   fi
 }
 
+has_env_assignment() {
+  local line="$1"
+  local variable_name="$2"
+  local assignment_pattern="(^|[[:space:]])${variable_name}="
+
+  [[ "$line" =~ $assignment_pattern ]]
+}
+
+extract_env_assignment_value() {
+  local line="$1"
+  local variable_name="$2"
+  local rest
+  local value=""
+  local quote=""
+  local escaped=false
+  local character
+  local index
+
+  has_env_assignment "$line" "$variable_name" || return 1
+  rest="${line#*"${variable_name}"=}"
+
+  if [[ "${rest:0:1}" == "'" || "${rest:0:1}" == '"' ]]; then
+    quote="${rest:0:1}"
+    rest="${rest:1}"
+  fi
+
+  for ((index = 0; index < ${#rest}; index++)); do
+    character="${rest:index:1}"
+    if [[ "$escaped" == true ]]; then
+      value+="$character"
+      escaped=false
+    elif [[ "$character" == "\\" && "$quote" != "'" ]]; then
+      escaped=true
+    elif [[ -n "$quote" && "$character" == "$quote" ]]; then
+      break
+    elif [[ -z "$quote" && "$character" =~ [[:space:]] ]]; then
+      break
+    else
+      value+="$character"
+    fi
+  done
+
+  if [[ "$escaped" == true ]]; then
+    value+="\\"
+  fi
+  printf '%s\n' "$value"
+}
+
+rustflags_value_has_effective_linker_policy() {
+  local value="$1"
+  local -a tokens=()
+  local index
+  local effective_state="unset"
+
+  read -r -a tokens <<<"$value"
+  for ((index = 0; index < ${#tokens[@]}; index += 1)); do
+    case "${tokens[index]}" in
+      -Clinker-features=-lld)
+        effective_state="disabled"
+        ;;
+      -Clinker-features=*)
+        effective_state="other"
+        ;;
+      -C)
+        case "${tokens[index + 1]:-}" in
+          linker-features=-lld) effective_state="disabled" ;;
+          linker-features=*) effective_state="other" ;;
+        esac
+        ;;
+    esac
+  done
+  [[ "$effective_state" == "disabled" ]]
+}
+
+command_has_dual_encoded_rustflags_clear() {
+  local command="$1"
+  local client_prefix
+  local remote_suffix
+  local remote_prefix
+
+  [[ "$command" == *"rch exec --"* ]] || return 1
+  client_prefix="${command%%rch exec --*}"
+  remote_suffix="${command#*rch exec --}"
+  remote_prefix="${remote_suffix%%cargo *}"
+  [[ "$client_prefix" == *"env -u CARGO_ENCODED_RUSTFLAGS"* ]] &&
+    [[ "$remote_prefix" == *"env -u CARGO_ENCODED_RUSTFLAGS"* ]]
+}
+
+emit_logical_source_records() {
+  local source="$1"
+
+  if [[ "$source" == *.json ]]; then
+    jq -r '.. | strings' "$source"
+  else
+    awk '
+      function append(part) {
+        if (buffer == "") buffer = part
+        else buffer = buffer " " part
+      }
+      {
+        line = $0
+        sub(/\r$/, "", line)
+        if (line ~ /\\[[:space:]]*$/) {
+          sub(/\\[[:space:]]*$/, "", line)
+          append(line)
+          next
+        }
+        if (buffer != "") {
+          append(line)
+          print buffer
+          buffer = ""
+        } else {
+          print line
+        }
+      }
+      END { if (buffer != "") print buffer }
+    ' "$source"
+  fi
+}
+
 validate_heavy_cargo_command_shape() {
   local line
   local source
+  local rustflags_value
 
   for source in "$runbook_path" "$contract_path" "$predictive_doc_path" "$predictive_contract_path"; do
     [[ -f "$source" ]] || continue
@@ -316,17 +441,22 @@ validate_heavy_cargo_command_shape() {
       if [[ "$line" =~ (^|[[:space:]])cargo[[:space:]]+(build|check|test|clippy|bench|run)([[:space:]]|$) ]]; then
         if [[ "$line" != *"rch exec -- env"* || "$line" != *"CARGO_TARGET_DIR="* ]]; then
           record_failure "bare or non-target-dir heavy cargo command in ${source}: ${line}"
+        elif ! command_has_dual_encoded_rustflags_clear "$line"; then
+          record_failure "heavy cargo command lacks client/worker CARGO_ENCODED_RUSTFLAGS clears in ${source}: ${line}"
+        elif has_env_assignment "$line" "CARGO_ENCODED_RUSTFLAGS"; then
+          record_failure "unsupported CARGO_ENCODED_RUSTFLAGS override in ${source}: ${line}"
+        elif has_env_assignment "$line" "RUSTFLAGS"; then
+          rustflags_value="$(extract_env_assignment_value "$line" "RUSTFLAGS")"
+          if ! rustflags_value_has_effective_linker_policy "$rustflags_value"; then
+            record_failure "uncomposed RUSTFLAGS override in ${source}: ${line}"
+          else
+            record_pass "heavy cargo command is rch-target-dir wrapped and linker-policy-safe in ${source}"
+          fi
         else
-          record_pass "heavy cargo command is rch-target-dir wrapped in ${source}"
+          record_pass "heavy cargo command is rch-target-dir wrapped and linker-policy-safe in ${source}"
         fi
       fi
-    done < <(
-      if [[ "$source" == *.json ]]; then
-        jq -r '.. | strings' "$source"
-      else
-        cat "$source"
-      fi
-    )
+    done < <(emit_logical_source_records "$source")
   done
 }
 
@@ -344,9 +474,32 @@ validate_all() {
   fi
 }
 
+validate_runbook_fixture() {
+  local runbook_path="$1"
+  validate_all
+}
+
+validate_contract_fixture() {
+  local contract_path="$1"
+  validate_all
+}
+
+validate_predictive_contract_fixture() {
+  local predictive_contract_path="$1"
+  validate_all
+}
+
+# linker-policy-negative-fixtures-begin: documentation mutation probes
 run_selftest() {
   local tmp_dir
   local bad_runbook
+  local bad_linker_only_runbook
+  local bad_uncomposed_runbook
+  local bad_substring_bypass_runbook
+  local bad_encoded_override_runbook
+  local bad_later_reenable_runbook
+  local bad_multiline_override_runbook
+  local good_two_token_runbook
   local bad_contract
   local bad_predictive_contract
   local bad_predictive_sections
@@ -354,6 +507,13 @@ run_selftest() {
 
   tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/swarm-validation-docs-truth.XXXXXX")"
   bad_runbook="${tmp_dir}/bad-runbook.md"
+  bad_linker_only_runbook="${tmp_dir}/bad-linker-only-runbook.md"
+  bad_uncomposed_runbook="${tmp_dir}/bad-uncomposed-runbook.md"
+  bad_substring_bypass_runbook="${tmp_dir}/bad-substring-bypass-runbook.md"
+  bad_encoded_override_runbook="${tmp_dir}/bad-encoded-override-runbook.md"
+  bad_later_reenable_runbook="${tmp_dir}/bad-later-reenable-runbook.md"
+  bad_multiline_override_runbook="${tmp_dir}/bad-multiline-override-runbook.md"
+  good_two_token_runbook="${tmp_dir}/good-two-token-runbook.md"
   bad_contract="${tmp_dir}/bad-contract.json"
   bad_predictive_contract="${tmp_dir}/bad-predictive-contract.json"
   bad_predictive_sections="${tmp_dir}/bad-predictive-sections.json"
@@ -361,21 +521,77 @@ run_selftest() {
 
   cp "$runbook_path" "$bad_runbook"
   printf "\n%s\n%s\n%s\n" '```bash' 'cargo test -p frankenengine-engine --lib' '```' >>"$bad_runbook"
-  if (runbook_path="$bad_runbook"; validate_all) >/dev/null 2>&1; then
+  if (validate_runbook_fixture "$bad_runbook") >/dev/null 2>&1; then
     record_failure "selftest expected bare cargo example rejection"
   else
     record_pass "selftest rejects bare cargo example"
   fi
 
+  cp "$runbook_path" "$bad_linker_only_runbook"
+  printf "\n%s\n%s\n%s\n" '```bash' 'env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bad RUSTFLAGS=-Clinker=cc cargo test -p frankenengine-engine --lib' '```' >>"$bad_linker_only_runbook"
+  if (validate_runbook_fixture "$bad_linker_only_runbook") >/dev/null 2>&1; then
+    record_failure "selftest expected linker-only RUSTFLAGS rejection"
+  else
+    record_pass "selftest rejects linker-only RUSTFLAGS override"
+  fi
+
+  cp "$runbook_path" "$bad_uncomposed_runbook"
+  printf "\n%s\n%s\n%s\n" '```bash' 'env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bad RUSTFLAGS=-Cdebuginfo=0 cargo test -p frankenengine-engine --lib' '```' >>"$bad_uncomposed_runbook"
+  if (validate_runbook_fixture "$bad_uncomposed_runbook") >/dev/null 2>&1; then
+    record_failure "selftest expected uncomposed custom RUSTFLAGS rejection"
+  else
+    record_pass "selftest rejects uncomposed custom RUSTFLAGS override"
+  fi
+
+  cp "$runbook_path" "$bad_substring_bypass_runbook"
+  printf "\n%s\n%s\n%s\n" '```bash' 'env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bad RUSTFLAGS=-Cdebuginfo=0\ -Clinker-features=-lldevil cargo test -p frankenengine-engine --lib' '```' >>"$bad_substring_bypass_runbook"
+  if (validate_runbook_fixture "$bad_substring_bypass_runbook") >/dev/null 2>&1; then
+    record_failure "selftest expected RUSTFLAGS linker-token substring bypass rejection"
+  else
+    record_pass "selftest rejects RUSTFLAGS linker-token substring bypass"
+  fi
+
+  cp "$runbook_path" "$bad_encoded_override_runbook"
+  printf "\n%s\n%s\n%s\n" '```bash' 'env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bad CARGO_ENCODED_RUSTFLAGS=-Clinker-features=-lld cargo test -p frankenengine-engine --lib' '```' >>"$bad_encoded_override_runbook"
+  if (validate_runbook_fixture "$bad_encoded_override_runbook") >/dev/null 2>&1; then
+    record_failure "selftest expected encoded RUSTFLAGS override rejection"
+  else
+    record_pass "selftest rejects encoded RUSTFLAGS override"
+  fi
+
+  cp "$runbook_path" "$bad_later_reenable_runbook"
+  printf "\n%s\n%s\n%s\n" '```bash' 'env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bad RUSTFLAGS=-Clinker-features=-lld\ -Clinker-features=+lld cargo test -p frankenengine-engine --lib' '```' >>"$bad_later_reenable_runbook"
+  if (validate_runbook_fixture "$bad_later_reenable_runbook") >/dev/null 2>&1; then
+    record_failure "selftest expected later linker-feature re-enable rejection"
+  else
+    record_pass "selftest rejects later linker-feature re-enable"
+  fi
+
+  cp "$runbook_path" "$bad_multiline_override_runbook"
+  printf '\n```bash\nenv -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS \\\nCARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bad RUSTFLAGS=-Cdebuginfo=0 \\\ncargo test -p frankenengine-engine --lib\n```\n' >>"$bad_multiline_override_runbook"
+  if (validate_runbook_fixture "$bad_multiline_override_runbook") >/dev/null 2>&1; then
+    record_failure "selftest expected multiline uncomposed RUSTFLAGS rejection"
+  else
+    record_pass "selftest rejects multiline uncomposed RUSTFLAGS override"
+  fi
+
+  cp "$runbook_path" "$good_two_token_runbook"
+  printf "\n%s\n%s\n%s\n" '```bash' 'env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_good RUSTFLAGS=-Cdebuginfo=0\ -C\ linker-features=-lld cargo test -p frankenengine-engine --lib' '```' >>"$good_two_token_runbook"
+  if (validate_runbook_fixture "$good_two_token_runbook") >/dev/null 2>&1; then
+    record_pass "selftest accepts two-token linker policy"
+  else
+    record_failure "selftest rejected two-token linker policy"
+  fi
+
   jq '.workload_surfaces |= map(select(.surface_id != "operator_runbook_truth_gate"))' "$contract_path" >"$bad_contract"
-  if (contract_path="$bad_contract"; validate_all) >/dev/null 2>&1; then
+  if (validate_contract_fixture "$bad_contract") >/dev/null 2>&1; then
     record_failure "selftest expected missing contract surface rejection"
   else
     record_pass "selftest rejects missing contract surface"
   fi
 
   jq '.renderer.shipped_in_franken_engine = true | .renderer.local_renderer = true' "$predictive_contract_path" >"$bad_predictive_contract"
-  if (predictive_contract_path="$bad_predictive_contract"; validate_all) >/dev/null 2>&1; then
+  if (validate_predictive_contract_fixture "$bad_predictive_contract") >/dev/null 2>&1; then
     record_failure "selftest expected shipped predictive renderer rejection"
   else
     record_pass "selftest rejects shipped predictive renderer claim"
@@ -383,12 +599,13 @@ run_selftest() {
 
   jq '(.input_snapshot_contracts |= map(select(. != "franken-engine.swarm-resource-lease-plan.v1"))) | (.required_dashboard_fields |= map(select(. != "predictive_dashboard.resource_leases.lease_decision")))' \
     "$current_predictive_contract" >"$bad_predictive_sections"
-  if (predictive_contract_path="$bad_predictive_sections"; validate_all) >/dev/null 2>&1; then
+  if (validate_predictive_contract_fixture "$bad_predictive_sections") >/dev/null 2>&1; then
     record_failure "selftest expected missing admission dashboard section rejection"
   else
     record_pass "selftest rejects missing admission dashboard section"
   fi
 }
+# linker-policy-negative-fixtures-end
 
 case "${1:-check}" in
   check)

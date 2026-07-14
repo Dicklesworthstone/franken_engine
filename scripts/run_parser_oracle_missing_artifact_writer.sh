@@ -13,12 +13,50 @@ artifact_root="${PARSER_ORACLE_MISSING_ARTIFACT_WRITER_ARTIFACT_ROOT:-artifacts/
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 target_namespace="${mode}_$$"
 target_dir="${CARGO_TARGET_DIR:-${root_dir}/target_rch_parser_oracle_missing_artifact_writer_${target_namespace}}"
-writer_rustflags="${RUSTFLAGS-}"
-if [[ -n "${writer_rustflags}" ]] && [[ "${writer_rustflags}" != *"-C linker=cc"* ]]; then
-  writer_rustflags="${writer_rustflags} -C linker=cc"
-else
-  writer_rustflags="-C linker=cc"
+
+parser_rustflags_have_linker_policy() {
+  local rustflags="${1-}"
+  local -a tokens=()
+  local index
+  local effective_state="unset"
+
+  read -r -a tokens <<<"$rustflags"
+  for index in "${!tokens[@]}"; do
+    case "${tokens[$index]}" in
+      -Clinker-features=-lld) effective_state="disabled" ;;
+      -Clinker-features=*) effective_state="other" ;;
+      -C)
+        case "${tokens[$((index + 1))]:-}" in
+          linker-features=-lld) effective_state="disabled" ;;
+          linker-features=*) effective_state="other" ;;
+        esac
+        ;;
+    esac
+  done
+  [[ "$effective_state" == "disabled" ]]
+}
+
+parser_compose_linker_policy_rustflags() {
+  local rustflags="${1-}"
+
+  if parser_rustflags_have_linker_policy "$rustflags"; then
+    printf '%s' "$rustflags"
+  elif [[ -n "$rustflags" ]]; then
+    printf '%s %s' "$rustflags" '-Clinker-features=-lld'
+  else
+    printf '%s' '-Clinker-features=-lld'
+  fi
+}
+
+writer_flags="${RUSTFLAGS-}"
+if [[ -z "${writer_flags}" ]]; then
+  writer_flags="-C linker=cc"
+elif [[ "${writer_flags}" != *"-C linker=cc"* ]] &&
+     [[ "${writer_flags}" != *"-Clinker=cc"* ]]; then
+  writer_flags="${writer_flags} -C linker=cc"
 fi
+writer_flags="$(parser_compose_linker_policy_rustflags "$writer_flags")"
+printf -v writer_flags_shell '%q' "${writer_flags}"
 run_dir="${artifact_root}/${timestamp}"
 manifest_path="${run_dir}/run_manifest.json"
 trace_ids_path="${run_dir}/trace_ids.json"
@@ -41,7 +79,7 @@ decision_id="decision-parser-oracle-missing-artifact-writer-${timestamp}"
 policy_id="policy-parser-oracle-missing-artifact-writer-v1"
 component="parser_oracle_missing_artifact_writer_gate"
 scenario_id="rgc-920g2"
-replay_command="./scripts/e2e/parser_oracle_missing_artifact_writer_replay.sh ${mode}"
+replay_command="env -u CARGO_ENCODED_RUSTFLAGS RUSTFLAGS=${writer_flags_shell} ./scripts/e2e/parser_oracle_missing_artifact_writer_replay.sh ${mode}"
 
 declare -a commands_run=()
 declare -a validation_errors=()
@@ -64,11 +102,11 @@ json_array_from_args() {
 }
 
 run_rch() {
-  timeout "${rch_timeout_seconds}" \
-    rch exec -- env \
+  env -u CARGO_ENCODED_RUSTFLAGS timeout "${rch_timeout_seconds}" \
+    rch exec -- env -u CARGO_ENCODED_RUSTFLAGS \
     "RUSTUP_TOOLCHAIN=${toolchain}" \
     "CARGO_TARGET_DIR=${target_dir}" \
-    "RUSTFLAGS=${writer_rustflags}" \
+    "RUSTFLAGS=${writer_flags}" \
     "CARGO_BUILD_JOBS=${cargo_build_jobs}" \
     "CARGO_INCREMENTAL=${cargo_incremental}" \
     "$@"

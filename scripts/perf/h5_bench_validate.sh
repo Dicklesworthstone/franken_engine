@@ -11,9 +11,9 @@ set -euo pipefail
 # self-time). This gate proves the refactor produced a real, measured win
 # against the committed pass1 baseline, and that nothing else regressed.
 #
-# Builds `hot_paths` with the exact pass1 flags, runs the full Criterion group,
-# and compares every sub-bench against the saved pass1 baseline. Encodes the
-# H5.3 pass gate so the verdict is reproducible and reviewable.
+# Builds `hot_paths` with the current linker-policy successor flags, runs the
+# full Criterion group, and compares every sub-bench against historical pass1.
+# It encodes the H5.3 pass gate so the verdict is reproducible and reviewable.
 #
 # Pass criteria (all must hold), per bd-o4cbn.7.3:
 #   1. `transport_certificate_serialization` drops >= 20 % vs pass1.
@@ -42,6 +42,7 @@ PASS1_DIR="tests/artifacts/perf/20260520T214829Z-prof-pass1"
 CRIT_DIR="target/criterion"
 BEAD="bd-o4cbn.7.3"
 SCENARIO="h5_bench"
+CURRENT_RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc -Clinker-features=-lld"
 
 # H5 target: the transport-certificate serialization bench refactored in H5.2.
 TARGET="transport_certificate_serialization"
@@ -69,11 +70,12 @@ VERDICT_ONLY=0
 
 if [[ "$VERDICT_ONLY" -eq 0 ]]; then
     # -----------------------------------------------------------------------
-    # 1. Build the bench with the identical pass1 flags.
+    # 1. Build with the current-policy successor to the historical pass1 flags.
     # -----------------------------------------------------------------------
-    echo "[h5.3] building hot_paths bench (pass1 flags)..."
+    echo "[h5.3] building hot_paths bench (current linker-policy flags)..."
+    env -u CARGO_ENCODED_RUSTFLAGS \
     RCH_CARGO_WRAPPER_BYPASS=1 \
-    RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc" \
+    RUSTFLAGS="$CURRENT_RUSTFLAGS" \
     CARGO_INCREMENTAL=0 \
     "${CARGO:-/home/ubuntu/.cargo/bin/cargo}" bench --bench hot_paths --no-run
 
@@ -110,9 +112,9 @@ fi
 # ---------------------------------------------------------------------------
 # 4. Fingerprint for this run.
 # ---------------------------------------------------------------------------
-python3 - "$RUN_DIR" "$BEAD" "$PASS1_DIR" <<'PYFP'
+python3 - "$RUN_DIR" "$BEAD" "$PASS1_DIR" "$CURRENT_RUSTFLAGS" "$VERDICT_ONLY" <<'PYFP'
 import json, subprocess, sys, time, platform
-run_dir, bead, pass1_dir = sys.argv[1:4]
+run_dir, bead, pass1_dir, current_rustflags, verdict_only = sys.argv[1:6]
 def sh(*a):
     try:
         return subprocess.check_output(a, text=True, stderr=subprocess.DEVNULL).strip()
@@ -130,11 +132,22 @@ fp = {
         "kernel": platform.release(),
     },
     "toolchain": {"rustc": sh("rustc", "--version"), "python": platform.python_version()},
-    "build_flags": {
-        "RUSTFLAGS": "-C force-frame-pointers=yes -C linker=cc",
-        "CARGO_INCREMENTAL": "0",
-    },
 }
+if verdict_only == "0":
+    fp["build_flags"] = {
+        "RUSTFLAGS": current_rustflags,
+        "CARGO_ENCODED_RUSTFLAGS": None,
+        "CARGO_INCREMENTAL": "0",
+    }
+    fp["build_provenance"] = {
+        "status": "executed_build_command",
+        "effective_channel": "RUSTFLAGS",
+    }
+else:
+    fp["build_provenance"] = {
+        "status": "unknown",
+        "reason": "verdict-only mode reused Criterion artifacts without a bound source-run fingerprint",
+    }
 json.dump(fp, open(f"{run_dir}/fingerprint.json", "w"), indent=2)
 PYFP
 

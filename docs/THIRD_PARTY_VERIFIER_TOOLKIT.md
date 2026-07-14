@@ -54,25 +54,71 @@ Replay wrapper:
 
 ## Repro.lock Scripted Environment (`bd-cixqu.14.2`)
 
-External operators can verify a shipped reproducibility lock without knowing the
-original gate script:
+External operators can verify a shipped reproducibility lock that implements
+the deterministic replay profile below:
 
 ```bash
 scripts/third_party_repro_lock_verifier.sh --lock artifacts/<bundle>/repro.lock --report verify_report.json
 ```
 
-The verifier accepts both canonical `franken-engine.repro-lock.v1` locks and
-the runbook backfill shape `frankenengine.reproducibility.lock.v1`. It extracts
-the locked replay command sequence, enforces a fail-closed deterministic policy,
-wraps direct Cargo commands with:
+The profile supports the `franken-engine.repro-lock.v1` and
+`frankenengine.reproducibility.lock.v1` schema identifiers only when all of the
+following are true:
+
+- `source_commit` is non-empty.
+- `determinism` either denies network, wall-clock, and randomness access with
+  zero clock skew, or declares strict reproducible-build mode.
+- `replay.command_sequence` is a non-empty array of non-empty strings.
+- Every replay entry is one bare `cargo ...` command or one repository-local
+  `./scripts/<path>.sh ...` command. Arguments use the verifier's literal-token
+  alphabet; quoting, expansion, redirects, pipelines, chaining, inline
+  environment assignments, `cargo --config`, pre-wrapped `rch`, and
+  path-qualified `cargo`/`rch` binaries are rejected.
+
+This is deliberately narrower than every historical file that happens to use a
+repro.lock schema identifier. Locks without an authoritative
+`replay.command_sequence`, permissive wall-clock policy, or the canonical bare
+command grammar are not supported by this scripted verifier.
+
+`commands.verification` remains operator-facing provenance. The verifier never
+executes it when `replay.command_sequence` is present. Likewise,
+`replay.environment_vars` is lock metadata rather than an override channel; the
+verifier owns the effective replay environment.
+
+For a bare Cargo entry, the verifier executes the equivalent of:
 
 ```bash
-rch exec -- env CARGO_INCREMENTAL=0 RUSTFLAGS="-C linker=cc" bash -lc '<locked command>'
+env -u CARGO_ENCODED_RUSTFLAGS \
+  rch exec -- env -u CARGO_ENCODED_RUSTFLAGS \
+  CARGO_INCREMENTAL=0 RUSTFLAGS="-Clinker-features=-lld" \
+  cargo check -p frankenengine-engine --tests
 ```
 
-and emits `franken-engine.third-party-repro-lock-verifier-report.v1` with the
+The checked-in Cargo target configuration selects `cc` and disables rustc's
+implicit LLD driver request. The verifier repeats the LLD opt-out because an
+explicit `RUSTFLAGS` value replaces target-configured rustflags rather than
+extending them. It also clears inherited `CARGO_ENCODED_RUSTFLAGS`, whose
+higher precedence would otherwise defeat the pinned replay policy. Repository
+script entries run directly under the same deterministic variables; each script
+remains responsible for any Cargo/RCH work it performs internally.
+
+The verifier emits `franken-engine.third-party-repro-lock-verifier-report.v1` with the
 commands, source commit, deterministic-policy verdict, execution count, and
 failed command if any.
+
+The shell backfill helper keeps a historical/operator command separate from the
+authoritative replay command when they differ:
+
+```bash
+runbooks/scripts/backfill_repro_lock.sh \
+  <gate-name> <bundle-dir> \
+  '<operator verification command, retained as metadata>' \
+  'cargo test -p frankenengine-engine --test deterministic_replay_integration'
+```
+
+If the verification command contains environment assignments, `rch`, shell
+operators, or a path-qualified tool, the fourth canonical replay argument is
+required. A canonical verification command can still serve as both arguments.
 
 Dry-run planning for release packages:
 

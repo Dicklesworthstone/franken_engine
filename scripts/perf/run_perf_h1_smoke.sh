@@ -38,9 +38,9 @@ CRITERION_HOME_DIR="${REPO_ROOT}/${RUN_DIR}/criterion"
 CARGO_TARGET_DIR_DEFAULT="/tmp/rch_target_franken_engine_h1_smoke_${USER:-agent}_${RUN_TS}"
 EFFECTIVE_CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$CARGO_TARGET_DIR_DEFAULT}"
 RCH_EXEC_TIMEOUT_SECONDS="${RCH_EXEC_TIMEOUT_SECONDS:-5400}"
-PASS1_RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc"
+CURRENT_RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc -Clinker-features=-lld"
 UNIT_SEPARATOR=$'\037'
-PASS1_ENCODED_RUSTFLAGS="-Cforce-frame-pointers=yes${UNIT_SEPARATOR}-Clinker=cc"
+CURRENT_ENCODED_RUSTFLAGS="-Cforce-frame-pointers=yes${UNIT_SEPARATOR}-Clinker=cc${UNIT_SEPARATOR}-Clinker-features=-lld"
 CARGO="${CARGO:-/home/ubuntu/.cargo/bin/cargo}"
 EVENTS_FILE="${RUN_DIR}/events.jsonl"
 SUMMARY_FILE="${RUN_DIR}/summary.md"
@@ -126,7 +126,8 @@ run_rch_dry_run() {
     local out_path="$2"
     shift 2
     log "dry-run remote admission for ${label}"
-    if ! RCH_REQUIRE_REMOTE=1 RCH_BUILD_TIMEOUT_SEC="$RCH_EXEC_TIMEOUT_SECONDS" \
+    if ! env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS \
+        RCH_REQUIRE_REMOTE=1 RCH_BUILD_TIMEOUT_SEC="$RCH_EXEC_TIMEOUT_SECONDS" \
         rch diagnose --dry-run --json -- "$@" > "$out_path"; then
         fail_log "rch dry-run command failed for ${label}; see $out_path"
         return 1
@@ -154,7 +155,8 @@ run_rch_capture() {
     shift 2
     log "running ${label} through rch"
     set +e
-    RCH_REQUIRE_REMOTE=1 RCH_BUILD_TIMEOUT_SEC="$RCH_EXEC_TIMEOUT_SECONDS" \
+    env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS \
+        RCH_REQUIRE_REMOTE=1 RCH_BUILD_TIMEOUT_SEC="$RCH_EXEC_TIMEOUT_SECONDS" \
         timeout "$RCH_EXEC_TIMEOUT_SECONDS" rch exec -- "$@" 2>&1 | tee "$log_path"
     local -a pipe_status=("${PIPESTATUS[@]}")
     set -e
@@ -305,7 +307,7 @@ PY
 }
 
 write_fingerprint() {
-    python3 - "$FINGERPRINT_FILE" "$ISSUE_ID" "$RUN_TS" "$EFFECTIVE_CARGO_TARGET_DIR" "$CRITERION_HOME_DIR" "$PASS1_RUSTFLAGS" <<'PY'
+    python3 - "$FINGERPRINT_FILE" "$ISSUE_ID" "$RUN_TS" "$EFFECTIVE_CARGO_TARGET_DIR" "$CRITERION_HOME_DIR" "$CURRENT_RUSTFLAGS" "$CURRENT_ENCODED_RUSTFLAGS" "$UNIT_STATUS" <<'PY'
 import json
 import os
 import platform
@@ -313,7 +315,8 @@ import subprocess
 import sys
 import time
 
-path, issue_id, run_ts, cargo_target_dir, criterion_home, rustflags = sys.argv[1:7]
+(path, issue_id, run_ts, cargo_target_dir, criterion_home, rustflags,
+ encoded_rustflags, unit_status) = sys.argv[1:9]
 
 def sh(*args):
     try:
@@ -337,11 +340,24 @@ payload = {
         "criterion_home": criterion_home,
         "timeout_sec": os.environ.get("RCH_EXEC_TIMEOUT_SECONDS", ""),
     },
-    "build_flags": {
-        "RUSTFLAGS": rustflags,
-        "CARGO_INCREMENTAL": "0",
-    },
 }
+if unit_status == "pass":
+    payload["build_flags"] = {
+        "RUSTFLAGS": None,
+        "RUSTFLAGS_SEMANTICS": rustflags,
+        "CARGO_ENCODED_RUSTFLAGS": encoded_rustflags,
+        "CARGO_INCREMENTAL": "0",
+    }
+    payload["build_provenance"] = {
+        "status": "executed_build_command",
+        "effective_channel": "CARGO_ENCODED_RUSTFLAGS",
+        "note": "RUSTFLAGS was explicitly unset in both the rch client and remote command",
+    }
+else:
+    payload["build_provenance"] = {
+        "status": "unknown",
+        "reason": f"no successful remote Cargo execution (unit_status={unit_status})",
+    }
 with open(path, "w", encoding="utf-8") as fh:
     json.dump(payload, fh, indent=2, sort_keys=True)
 PY
@@ -488,9 +504,10 @@ if [[ "$PREREQ_OK" -ne 1 ]]; then
 fi
 
 COMMON_ENV=(
-    env
+    env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS
     RCH_CARGO_WRAPPER_BYPASS=1
     CARGO_BUILD_JOBS=1
+    CARGO_ENCODED_RUSTFLAGS="$CURRENT_ENCODED_RUSTFLAGS"
     CARGO_INCREMENTAL=0
     CARGO_PROFILE_DEV_DEBUG=0
     CARGO_TARGET_DIR="$EFFECTIVE_CARGO_TARGET_DIR"
@@ -500,10 +517,10 @@ TEST_CMD=(
     "$CARGO" test -p frankenengine-engine --lib evidence_ledger
 )
 BENCH_CMD=(
-    env
+    env -u RUSTFLAGS
     RCH_CARGO_WRAPPER_BYPASS=1
     CRITERION_HOME="$CRITERION_HOME_DIR"
-    CARGO_ENCODED_RUSTFLAGS="$PASS1_ENCODED_RUSTFLAGS"
+    CARGO_ENCODED_RUSTFLAGS="$CURRENT_ENCODED_RUSTFLAGS"
     CARGO_INCREMENTAL=0
     CARGO_TARGET_DIR="$EFFECTIVE_CARGO_TARGET_DIR"
     "$CARGO" bench -p frankenengine-engine --bench hot_paths --

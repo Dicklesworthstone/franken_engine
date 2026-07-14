@@ -77,10 +77,30 @@ def substitute(command: str) -> str:
     return cmd
 
 
+def linker_policy_is_effective(rustflags: str) -> bool:
+    """Return whether the final linker-features directive disables implicit LLD."""
+    tokens = rustflags.split()
+    effective_value: str | None = None
+    for index, token in enumerate(tokens):
+        if token.startswith("-Clinker-features="):
+            effective_value = token.removeprefix("-Clinker-features=")
+        elif (
+            token == "-C"
+            and index + 1 < len(tokens)
+            and tokens[index + 1].startswith("linker-features=")
+        ):
+            effective_value = tokens[index + 1].removeprefix("linker-features=")
+    return effective_value == "-lld"
+
+
 def run_command(command: str, timeout: int) -> tuple[int, str]:
     env = dict(os.environ)
+    env.pop("CARGO_ENCODED_RUSTFLAGS", None)
     env["RCH_CARGO_WRAPPER_BYPASS"] = "1"
-    env.setdefault("RUSTFLAGS", "-C linker=cc")
+    rustflags = env.get("RUSTFLAGS") or "-C linker=cc -Clinker-features=-lld"
+    if not linker_policy_is_effective(rustflags):
+        rustflags = f"{rustflags} -Clinker-features=-lld"
+    env["RUSTFLAGS"] = rustflags
     env.setdefault("CARGO_INCREMENTAL", "0")
     # Bare `cargo ...` commands (no explicit CARGO_TARGET_DIR) reuse the warm target.
     if "cargo" in command and "CARGO_TARGET_DIR" not in command:

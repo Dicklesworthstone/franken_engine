@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Third-party scripted verifier for repro.lock bundles (bd-cixqu.14.2).
 #
-# Consumes a repro.lock, extracts its deterministic replay commands, and
-# reruns them in a pinned environment. Direct cargo commands are wrapped with
-# rch; gate scripts that already own their rch usage are executed as scripts.
+# Consumes the deterministic replay profile of a repro.lock and reruns its
+# authoritative bare command sequence in a pinned environment. Direct Cargo
+# commands are wrapped with rch; repository gate scripts execute directly.
 
 set -euo pipefail
 
@@ -19,6 +19,7 @@ cd "${ROOT_DIR}"
 readonly REPORT_SCHEMA_VERSION="franken-engine.third-party-repro-lock-verifier-report.v1"
 readonly COMPONENT="third_party_repro_lock_verifier"
 readonly DEFAULT_REPORT_ROOT="artifacts/third_party_repro_lock_verifier"
+readonly REPLAY_RUSTFLAGS="-Clinker-features=-lld"
 
 lock_path=""
 report_path=""
@@ -39,10 +40,6 @@ Exit codes:
   1  replay command failed or lock is invalid
   2  CLI/environment error
 EOF
-}
-
-json_string_array() {
-  jq -Rn '[inputs]' <<<"$1"
 }
 
 write_report() {
@@ -73,6 +70,7 @@ write_report() {
     --argjson command_count "${command_count}" \
     --argjson executed_count "${executed_count}" \
     --argjson commands "${commands_json}" \
+    --arg rustflags "${REPLAY_RUSTFLAGS}" \
     '{
       schema_version: $schema,
       component: $component,
@@ -88,9 +86,13 @@ write_report() {
       failed_command: (if $failed_command == "" then null else $failed_command end),
       commands: $commands,
       execution_policy: {
-        cargo_commands: "wrapped with rch exec and CARGO_INCREMENTAL=0",
-        script_commands: "executed with deterministic environment; scripts must own any cargo/rch calls",
-        rustflags: "-C linker=cc"
+        command_source: "replay.command_sequence only; operator-facing commands metadata is not executable",
+        command_grammar: "one bare cargo command or one ./scripts/*.sh command per entry; no shell syntax or inline environment",
+        cargo_commands: "wrapped with dual-clear rch and CARGO_INCREMENTAL=0",
+        script_commands: "executed directly with deterministic environment; scripts own any internal cargo/rch calls",
+        rustflags: $rustflags,
+        cargo_encoded_rustflags: "cleared so it cannot override the pinned policy",
+        noncanonical_commands: "rejected before planning or execution"
       }
     }')"
 
@@ -101,19 +103,52 @@ write_report() {
   printf '%s\n' "${report_json}"
 }
 
-requires_rch_for_cargo() {
+canonical_replay_command() {
   local command_text="$1"
-  local cargo_regex='(^|[[:space:];(&])cargo[[:space:]]'
-  [[ "${command_text}" =~ ${cargo_regex} ]] \
-    && [[ "${command_text}" != *"rch exec"* ]]
+  local first_token token
+  local -a command_argv=()
+
+  [[ -n "${command_text}" && "${command_text}" != *$'\n'* ]] || return 1
+
+  # Deliberately do not implement a shell parser here. This narrow alphabet
+  # excludes quoting, expansion, redirection, pipelines, and command chaining,
+  # so whitespace splitting below is deterministic and literal.
+  if [[ ! "${command_text}" =~ ^[[:alnum:]_./:+,@%=-]+([[:blank:]]+[[:alnum:]_./:+,@%=-]+)*$ ]]; then
+    return 1
+  fi
+
+  read -r -a command_argv <<<"${command_text}"
+  ((${#command_argv[@]} > 0)) || return 1
+  first_token="${command_argv[0]}"
+
+  for token in "${command_argv[@]}"; do
+    case "${token}" in
+      RUSTFLAGS=*|RUSTFLAGS+=*|CARGO_ENCODED_RUSTFLAGS=*|CARGO_ENCODED_RUSTFLAGS+=*|--config|--config=*)
+        return 1
+        ;;
+    esac
+  done
+
+  if [[ "${first_token}" == "cargo" ]]; then
+    return 0
+  fi
+
+  [[ "${first_token}" =~ ^\./scripts/[[:alnum:]_./-]+\.sh$ ]] || return 1
+  [[ "${first_token}" != *"/../"* && "${first_token}" != *"/./"* && "${first_token}" != *"//"* ]]
 }
 
 run_locked_command() {
   local command_text="$1"
-  if requires_rch_for_cargo "${command_text}"; then
-    rch exec -- env CARGO_INCREMENTAL=0 RUSTFLAGS="-C linker=cc" bash -lc "${command_text}"
+  local -a command_argv=()
+  canonical_replay_command "${command_text}" || return 125
+  read -r -a command_argv <<<"${command_text}"
+
+  if [[ "${command_argv[0]}" == "cargo" ]]; then
+    env -u CARGO_ENCODED_RUSTFLAGS \
+      rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_INCREMENTAL=0 RUSTFLAGS="${REPLAY_RUSTFLAGS}" "${command_argv[@]}"
   else
-    env CARGO_INCREMENTAL=0 RUSTFLAGS="-C linker=cc" bash -lc "${command_text}"
+    env -u CARGO_ENCODED_RUSTFLAGS \
+      CARGO_INCREMENTAL=0 RUSTFLAGS="${REPLAY_RUSTFLAGS}" "${command_argv[@]}"
   fi
 }
 
@@ -173,6 +208,7 @@ fi
 
 schema_version="$(jq -r '.schema_version // ""' "${lock_path}")"
 source_commit="$(jq -r '.source_commit // ""' "${lock_path}")"
+source_commit_valid="$(jq -r '(.source_commit | type) == "string" and (.source_commit | length) > 0' "${lock_path}")"
 determinism_ok="$(jq -r '
   if (.determinism | type) != "object" then
     false
@@ -189,29 +225,30 @@ determinism_ok="$(jq -r '
   end
 ' "${lock_path}")"
 
-commands_json="$(jq '
-  def string_array(value):
-    if (value | type) == "array" then
-      [value[] | select(type == "string" and length > 0)]
-    else
-      []
-    end;
-  (
-    string_array(.replay.command_sequence)
-    + string_array(.commands)
-    + (if (.commands | type) == "object" and (.commands.verification | type) == "string"
-       then [.commands.verification] else [] end)
-    + (if (.verification.command | type) == "string"
-       then [.verification.command] else [] end)
-  )
-  | reduce .[] as $cmd ([]; if index($cmd) then . else . + [$cmd] end)
+command_sequence_valid="$(jq -r '
+  (.replay.command_sequence | type) == "array"
+  and (.replay.command_sequence | length) > 0
+  and all(.replay.command_sequence[]; type == "string" and length > 0)
 ' "${lock_path}")"
+
+if [[ "${command_sequence_valid}" == "true" ]]; then
+  commands_json="$(jq '.replay.command_sequence' "${lock_path}")"
+else
+  commands_json="[]"
+fi
 
 command_count="$(jq 'length' <<<"${commands_json}")"
 
-if [[ "${schema_version}" != *"repro"* || "${schema_version}" != *"lock"* ]]; then
+if [[ "${schema_version}" != "franken-engine.repro-lock.v1" \
+    && "${schema_version}" != "frankenengine.reproducibility.lock.v1" ]]; then
   write_report "fail" 1 "" "${commands_json}" "${source_commit}" "${schema_version}" "${determinism_ok}" "${command_count}" 0 >/dev/null
-  echo "schema_version is not a repro.lock schema: ${schema_version}" >&2
+  echo "unsupported repro.lock schema_version: ${schema_version}" >&2
+  exit 1
+fi
+
+if [[ "${source_commit_valid}" != "true" ]]; then
+  write_report "fail" 1 "" "${commands_json}" "${source_commit}" "${schema_version}" "${determinism_ok}" "${command_count}" 0 >/dev/null
+  echo "source_commit is required by the deterministic replay profile" >&2
   exit 1
 fi
 
@@ -221,9 +258,23 @@ if [[ "${determinism_ok}" != "true" ]]; then
   exit 1
 fi
 
-if [[ "${command_count}" -eq 0 ]]; then
+if [[ "${command_sequence_valid}" != "true" ]]; then
   write_report "fail" 1 "" "${commands_json}" "${source_commit}" "${schema_version}" "${determinism_ok}" 0 0 >/dev/null
-  echo "no replay command found in ${lock_path}" >&2
+  echo "deterministic replay profile requires a non-empty string array at replay.command_sequence" >&2
+  exit 1
+fi
+
+policy_violation_command=""
+while IFS= read -r -d '' command_text; do
+  if ! canonical_replay_command "$command_text"; then
+    policy_violation_command="$command_text"
+    break
+  fi
+done < <(jq -j '.[] | ., "\u0000"' <<<"${commands_json}")
+
+if [[ -n "$policy_violation_command" ]]; then
+  write_report "fail" 1 "$policy_violation_command" "${commands_json}" "${source_commit}" "${schema_version}" "${determinism_ok}" "${command_count}" 0 >/dev/null
+  echo "locked replay command violates the canonical bare-command grammar: ${policy_violation_command}" >&2
   exit 1
 fi
 
@@ -234,7 +285,7 @@ fi
 
 executed_count=0
 failed_command=""
-while IFS= read -r command_text; do
+while IFS= read -r -d '' command_text; do
   if [[ -z "${command_text}" ]]; then
     continue
   fi
@@ -245,6 +296,6 @@ while IFS= read -r command_text; do
     exit 1
   fi
   executed_count=$((executed_count + 1))
-done < <(jq -r '.[]' <<<"${commands_json}")
+done < <(jq -j '.[] | ., "\u0000"' <<<"${commands_json}")
 
 write_report "pass" 0 "" "${commands_json}" "${source_commit}" "${schema_version}" "${determinism_ok}" "${command_count}" "${executed_count}"

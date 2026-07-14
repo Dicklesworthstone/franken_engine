@@ -171,7 +171,10 @@ fn binary_emits_adoption_gate_bundle() {
 
     let commands = fs::read_to_string(out_dir.join("commands.txt")).expect("read commands");
     assert!(commands.contains("franken_asupersync_leverage_adoption_gate"));
-    assert!(commands.contains("rch exec"));
+    assert!(commands.contains(
+        "ASUPERSYNC_LEVERAGE_ADOPTION_GATE_ARTIFACT_ROOT='<ARTIFACT_ROOT>' ASUPERSYNC_LEVERAGE_ADOPTION_GATE_SEED=4317 ./scripts/run_asupersync_leverage_adoption_gate.sh bundle"
+    ));
+    assert!(!commands.contains("rch exec -- cargo"));
 }
 
 #[test]

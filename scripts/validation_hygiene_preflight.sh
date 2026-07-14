@@ -365,7 +365,7 @@ fi
 
 if [[ "${#rust_scopes[@]}" -gt 0 ]]; then
   append_object "$suggestions_jsonl" \
-    --arg command "rch exec -- env CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' cargo test -p frankenengine-engine <focused-target-for-scoped-files>" \
+    --arg command "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc -Clinker-features=-lld' cargo test -p frankenengine-engine <focused-target-for-scoped-files>" \
     --arg claim_scope "focused_rust_validation" \
     '{command:$command,claim_scope:$claim_scope,full_gate_claim:false,requires_rch:true,requires_operator_target_selection:true}'
 fi

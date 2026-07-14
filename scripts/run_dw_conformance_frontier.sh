@@ -34,19 +34,25 @@ source "$script_dir/dw/lib/dw_e2e_lib.sh"
 mode="${1:-ci}"
 dw_begin "dw_conformance_frontier" "$mode"
 
+dw_rustflags="$(dw_compose_linker_policy_rustflags "${RUSTFLAGS:--C linker=cc}")"
+printf -v dw_rustflags_shell '%q' "$dw_rustflags"
+
 dw_cargo() {
   if [[ "${DW_RUN_LOCAL:-0}" == "1" ]]; then
-    env RCH_CARGO_WRAPPER_BYPASS=1 CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' "$@"
+    env -u CARGO_ENCODED_RUSTFLAGS \
+      RCH_CARGO_WRAPPER_BYPASS=1 CARGO_INCREMENTAL=0 RUSTFLAGS="$dw_rustflags" "$@"
   else
-    rch exec -- env CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' "$@"
+    env -u CARGO_ENCODED_RUSTFLAGS \
+      rch exec -- env -u CARGO_ENCODED_RUSTFLAGS \
+      CARGO_INCREMENTAL=0 RUSTFLAGS="$dw_rustflags" "$@"
   fi
 }
 
 dw_cargo_label() {
   if [[ "${DW_RUN_LOCAL:-0}" == "1" ]]; then
-    printf 'DW_RUN_LOCAL env RCH_CARGO_WRAPPER_BYPASS=1 %s' "$*"
+    printf 'DW_RUN_LOCAL=1 env -u CARGO_ENCODED_RUSTFLAGS RCH_CARGO_WRAPPER_BYPASS=1 RUSTFLAGS=%s %s' "$dw_rustflags_shell" "$*"
   else
-    printf "rch exec -- env CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' %s" "$*"
+    printf 'env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_INCREMENTAL=0 RUSTFLAGS=%s %s' "$dw_rustflags_shell" "$*"
   fi
 }
 

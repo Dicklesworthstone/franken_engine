@@ -3,9 +3,9 @@ set -euo pipefail
 
 # PERF-H1.4 (bd-o4cbn.1.4): Bench validation — evidence_ledger_bundle >= 50% drop.
 #
-# Builds `hot_paths` with the exact pass1 flags, runs Criterion against the
-# saved pass1 baseline, and asserts the H1 win is real and statistically
-# significant while the other 7 sub-benches do not regress.
+# Builds `hot_paths` with the current x86_64 Linux linker-policy successor
+# flags, runs Criterion against the saved historical pass1 baseline, and
+# asserts the H1 threshold while reporting that build-identity boundary.
 #
 # Pass criteria (all must hold):
 #   1. evidence_ledger_bundle Criterion mean drops >= 50% vs pass1.
@@ -15,10 +15,10 @@ set -euo pipefail
 #      Pre-existing, separately-tracked regressions (KNOWN_REGRESSIONS below)
 #      are reported but excluded from the H1-specific gate.
 #
-# This frozen-pass1 gate is not a same-day/same-allocator code-drift verdict.
-# See bd-bwztz for the 2026-06-12 endpoint audit; H1.4 only decides whether the
-# evidence_ledger_bundle target clears its bead criteria without new H1-caused
-# regressions.
+# This frozen-pass1 gate is not a same-day, same-allocator, or same-build-profile
+# code-drift verdict. The frozen fingerprint does not bind Cargo flag channels;
+# `honest_gate.sh` therefore fails its symmetry question for this comparison.
+# See bd-bwztz for the 2026-06-12 endpoint audit.
 #
 # Emits, under tests/artifacts/perf/h1_bench/<ts>/ (gitignored — local evidence):
 #   - bench_output.txt          full Criterion run log
@@ -51,9 +51,9 @@ EFFECTIVE_CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$CARGO_TARGET_DIR_DEFAULT}"
 CRIT_DIR="$CRITERION_HOME_DIR"
 RCH_EXEC_TIMEOUT_SECONDS="${RCH_EXEC_TIMEOUT_SECONDS:-5400}"
 RCH_LOG_DIR="${H1_BENCH_VALIDATE_RCH_LOG_DIR:-tests/artifacts/perf/h1_bench/rch_logs}"
-PASS1_RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc"
+CURRENT_RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc -Clinker-features=-lld"
 UNIT_SEPARATOR=$'\037'
-PASS1_ENCODED_RUSTFLAGS="-Cforce-frame-pointers=yes${UNIT_SEPARATOR}-Clinker=cc"
+CURRENT_ENCODED_RUSTFLAGS="-Cforce-frame-pointers=yes${UNIT_SEPARATOR}-Clinker=cc${UNIT_SEPARATOR}-Clinker-features=-lld"
 export RCH_BUILD_TIMEOUT_SEC="$RCH_EXEC_TIMEOUT_SECONDS"
 
 BENCHES=(
@@ -91,23 +91,24 @@ mkdir -p "$RCH_LOG_DIR"
 rch_log_path="${RCH_LOG_DIR}/${RUN_TS}.log"
 remote_target_dir="$EFFECTIVE_CARGO_TARGET_DIR"
 echo "[h1.4] heavy validation must run remotely through rch"
-printf '[h1.4] probe command: RCH_REQUIRE_REMOTE=1 RCH_BUILD_TIMEOUT_SEC=%q rch diagnose --dry-run --json -- env RCH_CARGO_WRAPPER_BYPASS=1 CRITERION_HOME=%q CARGO_ENCODED_RUSTFLAGS=%q CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=%q %q bench --bench hot_paths -- --save-baseline post_h1 %q\n' \
+printf '[h1.4] probe command: env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS RCH_REQUIRE_REMOTE=1 RCH_BUILD_TIMEOUT_SEC=%q rch diagnose --dry-run --json -- env -u RUSTFLAGS RCH_CARGO_WRAPPER_BYPASS=1 CRITERION_HOME=%q CARGO_ENCODED_RUSTFLAGS=%q CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=%q %q bench --bench hot_paths -- --save-baseline post_h1 %q\n' \
     "$RCH_BUILD_TIMEOUT_SEC" \
     "$CRITERION_HOME_DIR" \
-    "$PASS1_ENCODED_RUSTFLAGS" \
+    "$CURRENT_ENCODED_RUSTFLAGS" \
     "$remote_target_dir" \
     "${CARGO:-/home/ubuntu/.cargo/bin/cargo}" \
     "$GROUP"
 
 # The probe proves the exact heavy command is classified as cargo_bench and
 # selected for remote execution before any benchmark work starts.
-if ! RCH_REQUIRE_REMOTE=1 \
+if ! env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS \
+    RCH_REQUIRE_REMOTE=1 \
     RCH_BUILD_TIMEOUT_SEC="$RCH_EXEC_TIMEOUT_SECONDS" \
     rch diagnose --dry-run --json -- \
-    env \
+    env -u RUSTFLAGS \
     RCH_CARGO_WRAPPER_BYPASS=1 \
     CRITERION_HOME="$CRITERION_HOME_DIR" \
-    CARGO_ENCODED_RUSTFLAGS="$PASS1_ENCODED_RUSTFLAGS" \
+    CARGO_ENCODED_RUSTFLAGS="$CURRENT_ENCODED_RUSTFLAGS" \
     CARGO_INCREMENTAL=0 \
     CARGO_TARGET_DIR="${remote_target_dir}" \
     "${CARGO:-/home/ubuntu/.cargo/bin/cargo}" bench --bench hot_paths -- \
@@ -132,25 +133,26 @@ if dry_run.get("would_offload") is not True:
 PYRCHDRY
 
 echo "[h1.4] remote cargo bench command:" | tee "$rch_log_path"
-printf 'RCH_REQUIRE_REMOTE=1 RCH_BUILD_TIMEOUT_SEC=%q timeout %q rch exec -- env RCH_CARGO_WRAPPER_BYPASS=1 CRITERION_HOME=%q CARGO_ENCODED_RUSTFLAGS=%q CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=%q %q bench --bench hot_paths -- --save-baseline post_h1 %q\n' \
+printf 'env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS RCH_REQUIRE_REMOTE=1 RCH_BUILD_TIMEOUT_SEC=%q timeout %q rch exec -- env -u RUSTFLAGS RCH_CARGO_WRAPPER_BYPASS=1 CRITERION_HOME=%q CARGO_ENCODED_RUSTFLAGS=%q CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=%q %q bench --bench hot_paths -- --save-baseline post_h1 %q\n' \
     "$RCH_EXEC_TIMEOUT_SECONDS" \
     "$RCH_EXEC_TIMEOUT_SECONDS" \
     "$CRITERION_HOME_DIR" \
-    "$PASS1_ENCODED_RUSTFLAGS" \
+    "$CURRENT_ENCODED_RUSTFLAGS" \
     "$remote_target_dir" \
     "${CARGO:-/home/ubuntu/.cargo/bin/cargo}" \
     "$GROUP" \
     | tee -a "$rch_log_path"
 
 run_status=0
-if ! RCH_REQUIRE_REMOTE=1 \
+if ! env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS \
+    RCH_REQUIRE_REMOTE=1 \
     RCH_BUILD_TIMEOUT_SEC="$RCH_EXEC_TIMEOUT_SECONDS" \
     timeout "$RCH_EXEC_TIMEOUT_SECONDS" \
     rch exec -- \
-    env \
+    env -u RUSTFLAGS \
     RCH_CARGO_WRAPPER_BYPASS=1 \
     CRITERION_HOME="$CRITERION_HOME_DIR" \
-    CARGO_ENCODED_RUSTFLAGS="$PASS1_ENCODED_RUSTFLAGS" \
+    CARGO_ENCODED_RUSTFLAGS="$CURRENT_ENCODED_RUSTFLAGS" \
     CARGO_INCREMENTAL=0 \
     CARGO_TARGET_DIR="${remote_target_dir}" \
     "${CARGO:-/home/ubuntu/.cargo/bin/cargo}" bench --bench hot_paths -- \
@@ -201,7 +203,7 @@ done
 # ---------------------------------------------------------------------------
 # 5. Fingerprint for this run.
 # ---------------------------------------------------------------------------
-python3 - "$RUN_DIR" "${RUN_DIR}/rch_dry_run.json" "$rch_log_path" "$remote_target_dir" "$CRITERION_HOME_DIR" "$PASS1_RUSTFLAGS" "$PASS1_ENCODED_RUSTFLAGS" <<'PYFP'
+python3 - "$RUN_DIR" "${RUN_DIR}/rch_dry_run.json" "$rch_log_path" "$remote_target_dir" "$CRITERION_HOME_DIR" "$CURRENT_RUSTFLAGS" "$CURRENT_ENCODED_RUSTFLAGS" <<'PYFP'
 import json, os, subprocess, sys, time, platform
 (
     run_dir,
@@ -209,8 +211,8 @@ import json, os, subprocess, sys, time, platform
     rch_log_path,
     cargo_target_dir,
     criterion_home,
-    pass1_rustflags,
-    pass1_encoded_rustflags,
+    current_rustflags,
+    current_encoded_rustflags,
 ) = sys.argv[1:8]
 def sh(*a):
     try:
@@ -272,9 +274,15 @@ fp = {
     },
     "toolchain": {"scope": host_scope, "rustc": sh("rustc", "--version"), "python": platform.python_version()},
     "build_flags": {
-        "RUSTFLAGS_SEMANTICS": pass1_rustflags,
-        "CARGO_ENCODED_RUSTFLAGS": pass1_encoded_rustflags,
+        "RUSTFLAGS": None,
+        "RUSTFLAGS_SEMANTICS": current_rustflags,
+        "CARGO_ENCODED_RUSTFLAGS": current_encoded_rustflags,
         "CARGO_INCREMENTAL": "0",
+    },
+    "build_provenance": {
+        "status": "executed_build_command",
+        "effective_channel": "CARGO_ENCODED_RUSTFLAGS",
+        "note": "RUSTFLAGS was explicitly unset in both the rch client and remote command",
     },
 }
 json.dump(fp, open(f"{run_dir}/fingerprint.json", "w"), indent=2)

@@ -31,7 +31,9 @@ fi
 
 run_rch() {
   timeout "${rch_timeout_seconds}" \
-    rch exec -q -- env "RUSTUP_TOOLCHAIN=${toolchain}" "CARGO_TARGET_DIR=${target_dir}" "$@"
+    env -u CARGO_ENCODED_RUSTFLAGS \
+    rch exec -q -- env -u CARGO_ENCODED_RUSTFLAGS \
+    "RUSTUP_TOOLCHAIN=${toolchain}" "CARGO_TARGET_DIR=${target_dir}" "$@"
 }
 
 declare -a commands_run=()
@@ -65,8 +67,8 @@ run_mode() {
         cargo test -p frankenengine-engine --test local_semantic_atlas_integration || mode_exit=1
       ;;
     clippy)
-      run_step "env RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS=-Dwarnings cargo test -p frankenengine-engine --test local_semantic_atlas_integration --no-run" \
-        env RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS=-Dwarnings \
+      run_step "env -u CARGO_ENCODED_RUSTFLAGS RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS='-Dwarnings -Clinker-features=-lld' cargo test -p frankenengine-engine --test local_semantic_atlas_integration --no-run" \
+        env -u CARGO_ENCODED_RUSTFLAGS RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS='-Dwarnings -Clinker-features=-lld' \
         cargo test -p frankenengine-engine --test local_semantic_atlas_integration --no-run || mode_exit=1
       ;;
     ci)
@@ -76,8 +78,8 @@ run_mode() {
         cargo test -p frankenengine-engine --lib local_semantic_atlas || mode_exit=1
       run_step "cargo test -p frankenengine-engine --test local_semantic_atlas_integration" \
         cargo test -p frankenengine-engine --test local_semantic_atlas_integration || mode_exit=1
-      run_step "env RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS=-Dwarnings cargo test -p frankenengine-engine --test local_semantic_atlas_integration --no-run" \
-        env RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS=-Dwarnings \
+      run_step "env -u CARGO_ENCODED_RUSTFLAGS RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS='-Dwarnings -Clinker-features=-lld' cargo test -p frankenengine-engine --test local_semantic_atlas_integration --no-run" \
+        env -u CARGO_ENCODED_RUSTFLAGS RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS='-Dwarnings -Clinker-features=-lld' \
         cargo test -p frankenengine-engine --test local_semantic_atlas_integration --no-run || mode_exit=1
       ;;
     *)

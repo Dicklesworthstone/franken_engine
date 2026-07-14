@@ -9,6 +9,7 @@
 //! shadowing trick documented on the type — is unchanged for engine code.
 //!
 //! See `crates/franken-core/src/js_string.rs` for the full module
-//! documentation, the canonical invariant, and the unit-test suite.
+//! documentation, the canonical invariant, the exact property-map carrier,
+//! and the unit-test suite.
 
-pub use frankenengine_core::js_string::{CodeUnits, JsString};
+pub use frankenengine_core::js_string::{CodeUnits, ExactPropertyMap, JsString};

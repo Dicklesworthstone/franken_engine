@@ -57,8 +57,11 @@
 //!
 //! # Known boundaries (documented, fail-safe)
 //!
-//! - Object property keys remain `String` (UTF-8): using a lone-surrogate
-//!   string as a property key routes through the lossy projection.
+//! - Runtime heap property maps still use `String` (UTF-8): using a
+//!   lone-surrogate string as a property key routes through the lossy
+//!   projection. [`ExactPropertyMap`] provides the wire-safe exact-key carrier
+//!   for the staged bd-b12xs migration; runtime integration remains a later
+//!   child.
 //! - Source-literal lone-surrogate escapes (`"\uD800"`) remain fail-closed in
 //!   the parser; paired escapes already heal (bd-k9jb0).
 //! - Relational ordering: the derived [`Ord`] remains projection-first (with
@@ -67,9 +70,11 @@
 //!   code units — are provided separately by [`JsString::utf16_cmp`], which
 //!   the engine's relational operators use (bd-rdnhc).
 
-use serde::de::{self, MapAccess, Visitor};
+use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::BTreeMap;
 use std::fmt;
+use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -489,6 +494,214 @@ impl<'de> Deserialize<'de> for JsString {
     }
 }
 
+/// Deterministic property storage keyed by exact ECMAScript string values.
+///
+/// JSON object member names cannot carry an unpaired UTF-16 surrogate. This
+/// carrier therefore has two self-describing wire shapes:
+///
+/// - when every key is well formed, it serializes as the historical JSON
+///   object map, preserving existing bytes and snapshots;
+/// - when any key contains a lone surrogate, it serializes the whole map as a
+///   deterministic sequence of `[JsString, value]` pairs, where [`JsString`]
+///   uses its exact `$wtf16` representation.
+///
+/// Deserialization accepts either shape and rejects duplicate exact keys. The
+/// dual-shape decoder requires a self-describing serde format, matching the
+/// JSON heap/snapshot boundary this type is designed for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExactPropertyMap<V> {
+    entries: BTreeMap<JsString, V>,
+}
+
+impl<V> Default for ExactPropertyMap<V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<V> ExactPropertyMap<V> {
+    /// Create an empty exact-key property map.
+    pub fn new() -> Self {
+        Self {
+            entries: BTreeMap::new(),
+        }
+    }
+
+    /// Return the number of stored entries.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Return whether the map contains no entries.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Return whether `key` is present without projecting its code units.
+    pub fn contains_key(&self, key: &JsString) -> bool {
+        self.entries.contains_key(key)
+    }
+
+    /// Return the value associated with `key` without projecting its code
+    /// units.
+    pub fn get(&self, key: &JsString) -> Option<&V> {
+        self.entries.get(key)
+    }
+
+    /// Return a mutable value associated with `key`.
+    pub fn get_mut(&mut self, key: &JsString) -> Option<&mut V> {
+        self.entries.get_mut(key)
+    }
+
+    /// Insert an exact key/value pair, returning the previous value when the
+    /// same exact code-unit sequence was already present.
+    pub fn insert(&mut self, key: JsString, value: V) -> Option<V> {
+        self.entries.insert(key, value)
+    }
+
+    /// Remove an exact key/value pair.
+    pub fn remove(&mut self, key: &JsString) -> Option<V> {
+        self.entries.remove(key)
+    }
+
+    /// Iterate entries in deterministic [`JsString`] order.
+    pub fn iter(&self) -> std::collections::btree_map::Iter<'_, JsString, V> {
+        self.entries.iter()
+    }
+
+    /// Iterate keys in deterministic [`JsString`] order.
+    pub fn keys(&self) -> std::collections::btree_map::Keys<'_, JsString, V> {
+        self.entries.keys()
+    }
+
+    /// Iterate values in deterministic key order.
+    pub fn values(&self) -> std::collections::btree_map::Values<'_, JsString, V> {
+        self.entries.values()
+    }
+
+    /// Iterate mutable values in deterministic key order.
+    pub fn values_mut(&mut self) -> std::collections::btree_map::ValuesMut<'_, JsString, V> {
+        self.entries.values_mut()
+    }
+}
+
+impl<V> From<BTreeMap<String, V>> for ExactPropertyMap<V> {
+    fn from(entries: BTreeMap<String, V>) -> Self {
+        Self {
+            entries: entries
+                .into_iter()
+                .map(|(key, value)| (JsString::from(key), value))
+                .collect(),
+        }
+    }
+}
+
+impl<V> FromIterator<(JsString, V)> for ExactPropertyMap<V> {
+    fn from_iter<T: IntoIterator<Item = (JsString, V)>>(iter: T) -> Self {
+        Self {
+            entries: iter.into_iter().collect(),
+        }
+    }
+}
+
+impl<'a, V> IntoIterator for &'a ExactPropertyMap<V> {
+    type Item = (&'a JsString, &'a V);
+    type IntoIter = std::collections::btree_map::Iter<'a, JsString, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.iter()
+    }
+}
+
+impl<V: Serialize> Serialize for ExactPropertyMap<V> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if self.entries.keys().all(JsString::is_well_formed) {
+            use serde::ser::Error as _;
+            use serde::ser::SerializeMap as _;
+
+            let mut map = serializer.serialize_map(Some(self.entries.len()))?;
+            for (key, value) in &self.entries {
+                let key = key.as_str().ok_or_else(|| {
+                    S::Error::custom("well-formed property key has no exact str view")
+                })?;
+                map.serialize_entry(key, value)?;
+            }
+            map.end()
+        } else {
+            use serde::ser::SerializeSeq as _;
+
+            let mut pairs = serializer.serialize_seq(Some(self.entries.len()))?;
+            for pair in &self.entries {
+                pairs.serialize_element(&pair)?;
+            }
+            pairs.end()
+        }
+    }
+}
+
+impl<'de, V: Deserialize<'de>> Deserialize<'de> for ExactPropertyMap<V> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct ExactPropertyMapVisitor<V>(PhantomData<fn() -> V>);
+
+        impl<'de, V: Deserialize<'de>> Visitor<'de> for ExactPropertyMapVisitor<V> {
+            type Value = ExactPropertyMap<V>;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a string-keyed property map or an exact JsString/value pair sequence")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut entries = BTreeMap::new();
+                while let Some((key, value)) = map.next_entry::<String, V>()? {
+                    let key = JsString::from(key);
+                    match entries.entry(key) {
+                        std::collections::btree_map::Entry::Occupied(_) => {
+                            return Err(de::Error::custom(
+                                "duplicate property key in exact property map",
+                            ));
+                        }
+                        std::collections::btree_map::Entry::Vacant(entry) => {
+                            entry.insert(value);
+                        }
+                    }
+                }
+                Ok(ExactPropertyMap { entries })
+            }
+
+            fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut entries = BTreeMap::new();
+                while let Some((key, value)) = sequence.next_element::<(JsString, V)>()? {
+                    match entries.entry(key) {
+                        std::collections::btree_map::Entry::Occupied(_) => {
+                            return Err(de::Error::custom(
+                                "duplicate property key in exact property map",
+                            ));
+                        }
+                        std::collections::btree_map::Entry::Vacant(entry) => {
+                            entry.insert(value);
+                        }
+                    }
+                }
+                Ok(ExactPropertyMap { entries })
+            }
+        }
+
+        deserializer.deserialize_any(ExactPropertyMapVisitor::<V>(PhantomData))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -732,6 +945,85 @@ mod tests {
         assert!(err.is_err());
         let err = serde_json::from_str::<JsString>("{\"$wtf16\":[1],\"x\":2}");
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn exact_property_map_preserves_legacy_well_formed_json_bytes() {
+        let legacy = BTreeMap::from([("b".to_string(), 2_u32), ("a".to_string(), 1_u32)]);
+        let exact = ExactPropertyMap::from(legacy.clone());
+
+        let legacy_json = serde_json::to_string(&legacy).expect("serialize legacy property map");
+        let exact_json = serde_json::to_string(&exact).expect("serialize exact property map");
+        assert_eq!(legacy_json, r#"{"a":1,"b":2}"#);
+        assert_eq!(exact_json, legacy_json);
+
+        let restored: ExactPropertyMap<u32> =
+            serde_json::from_str(&legacy_json).expect("deserialize legacy object shape");
+        assert_eq!(restored, exact);
+    }
+
+    #[test]
+    fn exact_property_map_lone_surrogates_use_deterministic_pair_sequence() {
+        let high_d800 = JsString::from_code_units(&[0xD800]);
+        let high_d801 = JsString::from_code_units(&[0xD801]);
+        let mut properties = ExactPropertyMap::new();
+        properties.insert(high_d801.clone(), 2_u32);
+        properties.insert(JsString::from("plain"), 3_u32);
+        properties.insert(high_d800.clone(), 1_u32);
+
+        let json = serde_json::to_string(&properties).expect("serialize exact property map");
+        assert_eq!(
+            json,
+            r#"[["plain",3],[{"$wtf16":[55296]},1],[{"$wtf16":[55297]},2]]"#
+        );
+
+        let restored: ExactPropertyMap<u32> =
+            serde_json::from_str(&json).expect("deserialize exact pair sequence");
+        assert_eq!(restored, properties);
+        assert_eq!(restored.get(&high_d800), Some(&1));
+        assert_eq!(restored.get(&high_d801), Some(&2));
+    }
+
+    #[test]
+    fn exact_property_map_accepts_pair_sequence_with_well_formed_keys() {
+        let restored: ExactPropertyMap<u32> =
+            serde_json::from_str(r#"[["b",2],["a",1]]"#).expect("deserialize pair sequence");
+        assert_eq!(restored.get(&JsString::from("a")), Some(&1));
+        assert_eq!(restored.get(&JsString::from("b")), Some(&2));
+        assert_eq!(
+            serde_json::to_string(&restored).expect("canonicalize well-formed map"),
+            r#"{"a":1,"b":2}"#
+        );
+    }
+
+    #[test]
+    fn exact_property_map_rejects_duplicate_keys_in_both_wire_shapes() {
+        let duplicate_object = serde_json::from_str::<ExactPropertyMap<u32>>(r#"{"a":1,"a":2}"#)
+            .expect_err("duplicate object keys must fail closed");
+        assert!(
+            duplicate_object
+                .to_string()
+                .contains("duplicate property key in exact property map")
+        );
+
+        let duplicate_sequence = serde_json::from_str::<ExactPropertyMap<u32>>(
+            r#"[[{"$wtf16":[55296]},1],[{"$wtf16":[55296]},2]]"#,
+        )
+        .expect_err("duplicate exact keys must fail closed");
+        assert!(
+            duplicate_sequence
+                .to_string()
+                .contains("duplicate property key in exact property map")
+        );
+
+        let duplicate_after_normalization =
+            serde_json::from_str::<ExactPropertyMap<u32>>(r#"[["a",1],[{"$wtf16":[97]},2]]"#)
+                .expect_err("non-canonical exact key aliases must fail closed");
+        assert!(
+            duplicate_after_normalization
+                .to_string()
+                .contains("duplicate property key in exact property map")
+        );
     }
 
     #[test]

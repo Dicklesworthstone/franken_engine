@@ -728,8 +728,15 @@ enum FinallyMode {
 /// consumed locally.
 #[derive(Debug, Clone)]
 enum AbruptCompletion {
-    Exception(Value),
+    Exception(LabeledException),
     Return(LabeledReturn),
+}
+
+/// Exception completion carried across calls, catches, and `finally` unwinding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct LabeledException {
+    value: Value,
+    label: crate::ifc_artifacts::Label,
 }
 
 /// Return completion carried while control unwinds through `finally`.
@@ -927,7 +934,7 @@ struct CallFrame {
     construct_this: Option<Value>,
     /// Caller exception state saved across the call so callee control flow
     /// cannot clobber an outer in-flight abrupt completion.
-    saved_pending_exception: Option<Value>,
+    saved_pending_exception: Option<LabeledException>,
     /// Caller return state saved for the same reason.
     saved_pending_return: Option<LabeledReturn>,
     /// Count of suspended abrupt completions before entering the callee.
@@ -1702,7 +1709,7 @@ struct ModuleExecutionSnapshot {
     ip: usize,
     register_base: usize,
     catch_frames: Vec<CatchFrame>,
-    pending_exception: Option<Value>,
+    pending_exception: Option<LabeledException>,
     pending_return: Option<LabeledReturn>,
     suspended_abrupt_completions: Vec<AbruptCompletion>,
     finally_modes: Vec<FinallyMode>,
@@ -1793,7 +1800,7 @@ pub struct InterpreterCore {
     catch_frames: Vec<CatchFrame>,
     /// A pending exception value during unwinding (set by `Throw`,
     /// consumed by `EnterCatch` or re-thrown by `EndFinally`).
-    pending_exception: Option<Value>,
+    pending_exception: Option<LabeledException>,
     /// A pending return value during unwinding through finally blocks.
     pending_return: Option<LabeledReturn>,
     /// Saved outer abrupt completion state that was temporarily suspended by a
@@ -3214,7 +3221,7 @@ impl InterpreterCore {
     fn unwind_call_stack_to(
         &mut self,
         target_depth: usize,
-    ) -> (Option<Value>, Option<LabeledReturn>) {
+    ) -> (Option<LabeledException>, Option<LabeledReturn>) {
         let mut restored_pending_exception = None;
         let mut restored_pending_return = None;
         let mut restored_suspended_abrupt_depth = None;
@@ -3272,7 +3279,7 @@ impl InterpreterCore {
 
     fn suspend_abrupt_completion(
         &mut self,
-        pending_exception: Option<Value>,
+        pending_exception: Option<LabeledException>,
         pending_return: Option<LabeledReturn>,
     ) {
         debug_assert!(
@@ -5661,9 +5668,13 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::Throw { value } => {
                     let thrown = self.read_reg(value)?;
+                    let thrown_label = self.read_reg_label(value)?;
                     self.suspend_current_abrupt_completion();
                     self.pending_return = None;
-                    self.pending_exception = Some(thrown.clone());
+                    self.pending_exception = Some(LabeledException {
+                        value: thrown.clone(),
+                        label: thrown_label,
+                    });
                     // Walk the catch frame stack to find the nearest valid handler.
                     // Use rposition to find the topmost matching frame by index,
                     // then truncate to remove it and any frames above it — but
@@ -5686,9 +5697,12 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::EnterCatch { dst } => {
                     // Load the pending exception into the catch binding register.
-                    let exception = self.pending_exception.take().unwrap_or(Value::Undefined);
+                    let exception = self.pending_exception.take().unwrap_or(LabeledException {
+                        value: Value::Undefined,
+                        label: crate::ifc_artifacts::Label::Public,
+                    });
                     self.restore_suspended_abrupt_completion();
-                    self.write_reg(dst, exception)?;
+                    self.write_reg_with_label(dst, exception.value, exception.label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::EnterFinally => {
@@ -5709,7 +5723,7 @@ impl InterpreterCore {
                         FinallyMode::Exception => {
                             // Re-throw the pending exception after finally completes.
                             if let Some(thrown) = self.pending_exception.clone() {
-                                let desc = match &thrown {
+                                let desc = match &thrown.value {
                                     Value::Str(s) => s.to_string(),
                                     Value::Int(n) => n.to_string(),
                                     Value::Bool(b) => b.to_string(),
@@ -9869,7 +9883,7 @@ impl InterpreterCore {
                 frame
                     .saved_pending_exception
                     .as_ref()
-                    .map(Self::estimate_value_bytes)
+                    .map(|pending| Self::estimate_value_bytes(&pending.value))
                     .unwrap_or(0),
             )
             .saturating_add(
@@ -13620,6 +13634,152 @@ mod tests {
         assert!(matches!(
             core.suspended_abrupt_completions.as_slice(),
             [AbruptCompletion::Return(restored)] if restored == &suspended
+        ));
+    }
+
+    #[test]
+    fn throw_to_catch_preserves_exact_label_bd_ur3tk_14() {
+        let module = test_module(vec![
+            Ir3Instruction::BeginTry {
+                catch_target: 2,
+                finally_target: None,
+            },
+            Ir3Instruction::Throw { value: 0 },
+            Ir3Instruction::EnterCatch { dst: 1 },
+            Ir3Instruction::Halt,
+        ]);
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(
+            0,
+            Value::str("secret-exception"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("thrown value should be writable");
+        core.write_reg_with_label(
+            1,
+            Value::str("stale-catch-value"),
+            crate::ifc_artifacts::Label::TopSecret,
+        )
+        .expect("catch destination should be seedable");
+
+        core.execute(&module)
+            .expect("throw should enter the catch handler");
+
+        assert_eq!(core.registers[1], Value::str("secret-exception"));
+        assert_eq!(
+            core.read_reg_label(1).expect("catch label should exist"),
+            crate::ifc_artifacts::Label::Secret,
+            "catch binding receives the thrown label rather than Public or a stale label"
+        );
+    }
+
+    #[test]
+    fn nested_catch_call_and_finally_restore_exception_label_bd_ur3tk_14() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::BeginTry {
+                    catch_target: 3,
+                    finally_target: None,
+                },
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 3 },
+                    dst: 4,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::EnterCatch { dst: 5 },
+                Ir3Instruction::Halt,
+                Ir3Instruction::BeginTry {
+                    catch_target: 8,
+                    finally_target: Some(8),
+                },
+                Ir3Instruction::Throw { value: 0 },
+                Ir3Instruction::Halt,
+                Ir3Instruction::EnterFinally,
+                Ir3Instruction::BeginTry {
+                    catch_target: 11,
+                    finally_target: None,
+                },
+                Ir3Instruction::Throw { value: 1 },
+                Ir3Instruction::EnterCatch { dst: 3 },
+                Ir3Instruction::Call {
+                    callee: 2,
+                    args: RegRange { start: 4, count: 0 },
+                    dst: 3,
+                },
+                Ir3Instruction::EndFinally,
+                Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 5,
+                    arity: 3,
+                    frame_size: 4,
+                    name: Some("exception_through_finally".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 14,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("helper_while_exception_pending".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+        core.write_reg_with_label(
+            1,
+            Value::str("outer-secret-exception"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("outer exception argument should be writable");
+        core.registers[2] = Value::str("inner-public-exception");
+        core.registers[3] = Value::Function(1);
+
+        core.execute(&module)
+            .expect("outer caller should catch the exception after finally");
+
+        assert_eq!(core.registers[5], Value::str("outer-secret-exception"));
+        assert_eq!(
+            core.read_reg_label(5)
+                .expect("caller catch label should exist"),
+            crate::ifc_artifacts::Label::Secret,
+            "inner catch consumption and helper call must restore the outer exception label"
+        );
+    }
+
+    #[test]
+    fn module_snapshot_round_trips_labeled_exceptions_bd_ur3tk_14() {
+        let mut core = quickjs_test_core();
+        let pending = LabeledException {
+            value: Value::str("pending-exception"),
+            label: crate::ifc_artifacts::Label::Secret,
+        };
+        let suspended = LabeledException {
+            value: Value::str("suspended-exception"),
+            label: crate::ifc_artifacts::Label::Custom {
+                name: "tenant-exception".to_string(),
+                level: 4,
+            },
+        };
+        core.pending_exception = Some(pending.clone());
+        core.suspended_abrupt_completions
+            .push(AbruptCompletion::Exception(suspended.clone()));
+        let snapshot = core.snapshot_module_execution();
+
+        core.pending_exception = None;
+        core.suspended_abrupt_completions.clear();
+        core.restore_module_execution(snapshot);
+
+        assert_eq!(core.pending_exception, Some(pending));
+        assert!(matches!(
+            core.suspended_abrupt_completions.as_slice(),
+            [AbruptCompletion::Exception(restored)] if restored == &suspended
         ));
     }
 

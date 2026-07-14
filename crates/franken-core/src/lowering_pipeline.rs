@@ -15030,6 +15030,32 @@ mod tests {
     }
 
     #[test]
+    fn whole_pattern_defaults_execute_bd_laab3() {
+        let source_prefix = "function objectDefault({ a = 5 } = {}) { return a; }\
+             let arrayDefault = ([a = 7] = []) => a;";
+
+        let (_, _, supplied) = lower_and_execute_deferred_source_bd_6pvhn(&format!(
+            "{source_prefix} objectDefault({{ a: 2 }}) + arrayDefault([3]);"
+        ));
+        assert_eq!(supplied, Value::Int(5));
+
+        let (_, _, explicit_undefined) = lower_and_execute_deferred_source_bd_6pvhn(&format!(
+            "{source_prefix} objectDefault(undefined) + arrayDefault(undefined);"
+        ));
+        assert_eq!(explicit_undefined, Value::Int(12));
+
+        let (_, _, omitted) = lower_and_execute_deferred_source_bd_6pvhn(&format!(
+            "{source_prefix} objectDefault() + arrayDefault();"
+        ));
+        assert_eq!(omitted, Value::Int(12));
+
+        let (_, _, empty_containers) = lower_and_execute_deferred_source_bd_6pvhn(&format!(
+            "{source_prefix} objectDefault({{}}) + arrayDefault([]);"
+        ));
+        assert_eq!(empty_containers, Value::Int(12));
+    }
+
+    #[test]
     fn patterned_prologues_execute_for_expression_and_class_shapes_bd_ur3tk_10() {
         let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
             "let expressed = function expressed({ value }, add = 1, ...tail) {\

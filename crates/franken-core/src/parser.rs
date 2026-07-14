@@ -3154,18 +3154,6 @@ fn parse_binding_pattern(
         return Ok(BindingPattern::Rest(Box::new(inner)));
     }
 
-    // Object pattern: `{ ... }`
-    if trimmed.starts_with('{') && trimmed.ends_with('}') {
-        let inner = &trimmed[1..trimmed.len() - 1];
-        return parse_object_binding_pattern(inner.trim(), span, context);
-    }
-
-    // Array pattern: `[ ... ]`
-    if trimmed.starts_with('[') && trimmed.ends_with(']') {
-        let inner = &trimmed[1..trimmed.len() - 1];
-        return parse_array_binding_pattern(inner.trim(), span, context);
-    }
-
     // Default value: `pattern = expr` (only at top level of a pattern element)
     // We need to be careful not to match `=` inside nested patterns.
     if let Some(eq_pos) = find_top_level_eq(trimmed) {
@@ -3179,6 +3167,18 @@ fn parse_binding_pattern(
                 right,
             });
         }
+    }
+
+    // Object pattern: `{ ... }`
+    if trimmed.starts_with('{') && trimmed.ends_with('}') {
+        let inner = &trimmed[1..trimmed.len() - 1];
+        return parse_object_binding_pattern(inner.trim(), span, context);
+    }
+
+    // Array pattern: `[ ... ]`
+    if trimmed.starts_with('[') && trimmed.ends_with(']') {
+        let inner = &trimmed[1..trimmed.len() - 1];
+        return parse_array_binding_pattern(inner.trim(), span, context);
     }
 
     // Simple identifier binding
@@ -9178,6 +9178,52 @@ mod tests {
         } else {
             panic!("expected variable declaration");
         }
+    }
+
+    #[test]
+    fn whole_pattern_defaults_parse_before_containers_bd_laab3() {
+        let parser = CanonicalEs2020Parser;
+        let tree = parser
+            .parse(
+                "function objectDefault({ a = 5 } = {}) { return a; }",
+                ParseGoal::Script,
+            )
+            .expect("whole object-pattern default should parse");
+        let Statement::FunctionDeclaration(function) = &tree.body[0] else {
+            panic!("expected function declaration");
+        };
+        let BindingPattern::AssignmentPattern { left, .. } = &function.params[0].pattern else {
+            panic!("expected outer assignment pattern");
+        };
+        let BindingPattern::ObjectPattern(properties) = left.as_ref() else {
+            panic!("expected object-pattern left side");
+        };
+        assert!(matches!(
+            &properties[0].value,
+            BindingPattern::AssignmentPattern { .. }
+        ));
+
+        let tree = parser
+            .parse("let arrayDefault = ([a = 7] = []) => a;", ParseGoal::Script)
+            .expect("whole array-pattern default should parse");
+        let Statement::VariableDeclaration(declaration) = &tree.body[0] else {
+            panic!("expected variable declaration");
+        };
+        let Some(Expression::ArrowFunction { params, .. }) =
+            declaration.declarations[0].initializer.as_ref()
+        else {
+            panic!("expected arrow initializer");
+        };
+        let BindingPattern::AssignmentPattern { left, .. } = &params[0].pattern else {
+            panic!("expected outer assignment pattern");
+        };
+        let BindingPattern::ArrayPattern(elements) = left.as_ref() else {
+            panic!("expected array-pattern left side");
+        };
+        assert!(matches!(
+            &elements[0],
+            Some(BindingPattern::AssignmentPattern { .. })
+        ));
     }
 
     #[test]

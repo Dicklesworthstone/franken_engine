@@ -146,10 +146,10 @@ fn is_internal_lowering_binding(name: &str) -> bool {
 /// default), so no ambient authority is reachable and every red-team scenario
 /// is rejected at lowering. A *trusted* top-level eval context
 /// (`QuickJsInspiredNativeEngine::eval`) runs under [`Self::TrustedProcessShape`],
-/// which grants only the benign [`EffectKind::ProcessShapeRead`] effect —
-/// `process.argv` and a bare `process` shape load — while env *values*
-/// (`process.env.X` → [`EffectKind::EnvRead`]), `eval`, fs, network, and spawn
-/// stay denied.
+/// which grants only the benign [`EffectKind::ProcessShapeRead`] effect. The
+/// grant is consumed only by statically allowlisted `process.<shape>` reads;
+/// bare, aliased, and computed `process` access stays denied, as do env *values*
+/// (`process.env.X` → [`EffectKind::EnvRead`]), `eval`, fs, network, and spawn.
 ///
 /// This is the seam bd-xewby threads so BOTH the minimal-`process`-global
 /// feature and every red-team rejection hold at once: trusted eval sees the
@@ -163,9 +163,9 @@ pub enum AmbientAuthorityGrant {
     /// fail-closed default for untrusted extension / red-team lowering.
     #[default]
     DenyAll,
-    /// Benign `process`-shape reads (`process.argv`, bare `process`) permitted;
-    /// env values / `eval` / fs / net / spawn remain denied. For trusted
-    /// top-level eval only.
+    /// Statically allowlisted `process.<shape>` reads are permitted; possession
+    /// of the bare object, aliases, computed access, env values, `eval`, fs,
+    /// network, and spawn remain denied. For trusted top-level eval only.
     TrustedProcessShape,
 }
 
@@ -669,8 +669,9 @@ pub fn lower_ir0_to_ir1(
 /// [`AmbientAuthorityGrant::TrustedProcessShape`] records the trusted
 /// process-shape grant as a `binding_lookup` sentinel
 /// ([`TRUSTED_PROCESS_SHAPE_GRANT_SENTINEL`]) that the ambient-authority gate
-/// consults so `process.argv` / bare-`process` shape reads lower in a trusted
-/// top-level eval while env values and every other ambient surface stay denied.
+/// consults so statically allowlisted `process.<shape>` reads lower in a trusted
+/// top-level eval while bare/computed access, env values, and every other
+/// ambient surface stay denied.
 fn lower_ir0_to_ir1_with_ambient_grant(
     ir0: &Ir0Module,
     ambient_grant: AmbientAuthorityGrant,
@@ -8650,13 +8651,11 @@ fn required_effect_for_ambient_authority(
             Some(prop) if is_benign_process_shape_member(prop) => {
                 Some(EffectKind::ProcessShapeRead)
             }
-            // Bare `process` object load. The object half of a benign
-            // `process.argv` read recurses through the checked identifier arm,
-            // so bare `process` must share the shape effect for the read to
-            // lower under the trusted grant. Untrusted lowering still rejects it
-            // (empty profile denies `ProcessShapeRead`), so the red-team
-            // bare-`process` / `process[computed]` scenarios stay contained.
-            None => Some(EffectKind::ProcessShapeRead),
+            // Possession of the raw object would launder the member allowlist
+            // through aliases, destructuring, or computed keys. Authorized
+            // static members load the injected receiver internally after their
+            // own ProcessShapeRead check; every ordinary bare load stays denied.
+            None => Some(EffectKind::Global),
             // Every other `process` member (`exit`, `kill`, `abort`, `chdir`,
             // `binding`, `dlopen`, `stdout`, …) is a non-benign authority
             // surface: keep `EnvRead` so it stays denied even under the trusted
@@ -8721,20 +8720,28 @@ fn lower_typeof_operand_suppressing_ambient(
 ) -> Result<bool, LoweringPipelineError> {
     match argument {
         Expression::Identifier(name)
-            if !is_lexically_shadowed(binding_lookup, name)
-                && required_effect_for_ambient_authority(name, None).is_some() =>
+            if (if name == "process" {
+                !has_source_lexical_binding(binding_lookup, name)
+            } else {
+                !is_lexically_shadowed(binding_lookup, name)
+            }) && required_effect_for_ambient_authority(name, None).is_some() =>
         {
             // Plain binding load (a forward-ref placeholder resolved later to the
             // runtime global), skipping the Identifier arm's ambient check.
-            let id = *binding_index;
-            *binding_index = binding_index.saturating_add(1);
-            bindings.push(ResolvedBinding {
-                name: name.clone(),
-                binding_id: id,
-                scope: root_scope_id,
-                kind: BindingKind::Let,
-            });
-            binding_lookup.insert(name.clone(), id);
+            let id = if let Some(existing) = binding_lookup.get(name.as_str()) {
+                *existing
+            } else {
+                let id = *binding_index;
+                *binding_index = binding_index.saturating_add(1);
+                bindings.push(ResolvedBinding {
+                    name: name.clone(),
+                    binding_id: id,
+                    scope: root_scope_id,
+                    kind: BindingKind::Let,
+                });
+                binding_lookup.insert(name.clone(), id);
+                id
+            };
             ops.push(Ir1Op::LoadBinding { binding_id: id });
             Ok(true)
         }
@@ -8751,7 +8758,12 @@ fn lower_typeof_operand_suppressing_ambient(
                 Expression::Identifier(p) | Expression::StringLiteral(p) => p.as_str(),
                 _ => return Ok(false),
             };
-            if is_lexically_shadowed(binding_lookup, obj_name)
+            let is_shadowed = if obj_name == "process" {
+                has_source_lexical_binding(binding_lookup, obj_name)
+            } else {
+                is_lexically_shadowed(binding_lookup, obj_name)
+            };
+            if is_shadowed
                 || required_effect_for_ambient_authority(obj_name, Some(prop_name)).is_none()
             {
                 return Ok(false);
@@ -8823,9 +8835,10 @@ const TRUSTED_PROCESS_SHAPE_GRANT_SENTINEL: &str = "\0ambient_grant\0trusted_pro
 /// the unit's `binding_lookup` carries [`TRUSTED_PROCESS_SHAPE_GRANT_SENTINEL`]
 /// (set only for a trusted top-level eval), the root profile is widened to the
 /// single benign [`EffectKind::ProcessShapeRead`] effect. That lets a trusted
-/// eval read `process.argv` / the bare `process` shape while env values, eval,
-/// fs, net, and spawn stay denied — and leaves untrusted extension lowering
-/// (no sentinel) at the empty deny-all baseline.
+/// eval read statically allowlisted `process.<shape>` members while raw-object,
+/// computed, env-value, eval, fs, net, and spawn access stays denied — and
+/// leaves untrusted extension lowering (no sentinel) at the empty deny-all
+/// baseline.
 ///
 /// `scope_id` is threaded through but the grant is unit-uniform (root scope)
 /// today; per-scope grants are a future extension of the same seam.
@@ -9149,7 +9162,8 @@ fn lower_expression_to_ir1_inner(
     match expression {
         Expression::Identifier(name) => {
             // Check for ambient authority violation on direct identifier access
-            if let Some(required_effect) = required_effect_for_ambient_authority(name, None)
+            if !(name == "process" && has_source_lexical_binding(binding_lookup, name))
+                && let Some(required_effect) = required_effect_for_ambient_authority(name, None)
                 && let Err(caller_profile) =
                     check_ambient_authority_allowed(required_effect, root_scope_id, binding_lookup)
             {
@@ -11676,6 +11690,8 @@ fn lower_expression_to_ir1_inner(
         } => {
             // Check for ambient authority violation on member access
             if let Expression::Identifier(object_name) = object.as_ref()
+                && !(object_name == "process"
+                    && has_source_lexical_binding(binding_lookup, object_name))
                 && !*computed
                 && let Expression::Identifier(prop_name) = property.as_ref()
                 && let Some(required_effect) =
@@ -11691,6 +11707,42 @@ fn lower_expression_to_ir1_inner(
                     // bd-fqlfw.1.1; the denial points at source.
                     span: *span,
                 });
+            }
+
+            // bd-y30zw: the trusted compatibility grant authorizes only a
+            // statically proven benign process-shape member. Load the injected
+            // receiver directly after that member check instead of recursively
+            // lowering a bare `process`: possession of the raw object would let
+            // aliases or computed keys escape the allowlist. Source bindings
+            // named `process` bypass this path and remain ordinary user data.
+            if let Expression::Identifier(object_name) = object.as_ref()
+                && object_name == "process"
+                && !has_source_lexical_binding(binding_lookup, object_name)
+                && !*computed
+                && let Expression::Identifier(prop_name) = property.as_ref()
+                && is_benign_process_shape_member(prop_name)
+            {
+                let process_binding = if let Some(existing) = binding_lookup.get(object_name) {
+                    *existing
+                } else {
+                    let id = *binding_index;
+                    *binding_index = binding_index.saturating_add(1);
+                    bindings.push(ResolvedBinding {
+                        name: object_name.clone(),
+                        binding_id: id,
+                        scope: root_scope_id,
+                        kind: BindingKind::Let,
+                    });
+                    binding_lookup.insert(object_name.clone(), id);
+                    id
+                };
+                ops.push(Ir1Op::LoadBinding {
+                    binding_id: process_binding,
+                });
+                ops.push(Ir1Op::GetProperty {
+                    key: Ir1PropertyKey::Static(prop_name.clone()),
+                });
+                return Ok(());
             }
 
             // bd-cue2u: unshadowed `Array.isArray` / `Array["isArray"]`
@@ -25404,11 +25456,11 @@ mod tests {
             required_effect_for_ambient_authority("process", Some("platform")),
             Some(EffectKind::ProcessShapeRead)
         );
-        // A bare `process` object load shares the shape effect (the object half of
-        // a benign `process.argv` read recurses through the identifier arm).
+        // A bare `process` object load stays Global: granting possession would
+        // launder the static-member allowlist through aliases/computed keys.
         assert_eq!(
             required_effect_for_ambient_authority("process", None),
-            Some(EffectKind::ProcessShapeRead)
+            Some(EffectKind::Global)
         );
         // Non-benign authority surfaces keep `EnvRead` (denied under the shape grant).
         assert_eq!(
@@ -25432,6 +25484,7 @@ mod tests {
         // env-value / eval / fs / net authority.
         assert_eq!(trusted.len(), 1);
         assert!(!trusted.contains(EffectKind::EnvRead));
+        assert!(!trusted.contains(EffectKind::Global));
         assert!(!trusted.contains(EffectKind::Eval));
         assert!(!trusted.contains(EffectKind::FsRead));
     }
@@ -25454,8 +25507,8 @@ mod tests {
 
     #[test]
     fn bd_xewby_trusted_eval_lowers_process_argv_shape_read() {
-        // A trusted top-level eval may lower `process.argv` (and the bare `process`
-        // object-load it recurses through) under the process-shape grant.
+        // A trusted top-level eval may lower an allowlisted static member without
+        // exposing a normally lowerable bare `process` object.
         lower_script_with_grant_bd_xewby(
             "process.argv.length;\n",
             AmbientAuthorityGrant::TrustedProcessShape,
@@ -25511,5 +25564,43 @@ mod tests {
             ),
             "expected EnvRead ambient-authority violation, got {error:?}"
         );
+    }
+
+    #[test]
+    fn bd_y30zw_trusted_process_shape_grant_is_static_member_only() {
+        for (label, source) in [
+            ("bare", "process;\n"),
+            ("alias", "const p = process; p.platform;\n"),
+            ("computed shape", "process['platform'];\n"),
+            ("computed env", "process['env']['PATH'];\n"),
+            ("computed exit", "process['exit'](0);\n"),
+            ("destructure", "const { platform } = process;\n"),
+            (
+                "grant laundering",
+                "process.platform;\nprocess['env']['PATH'];\n",
+            ),
+        ] {
+            let error = lower_script_with_grant_bd_xewby(
+                source,
+                AmbientAuthorityGrant::TrustedProcessShape,
+            )
+            .expect_err("trusted shape grant must not expose the process object");
+            assert!(
+                matches!(
+                    error,
+                    LoweringPipelineError::AmbientAuthorityViolation { .. }
+                ),
+                "{label} must fail at the ambient gate, got {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn bd_y30zw_source_process_binding_is_ordinary_user_data() {
+        lower_script_with_grant_bd_xewby(
+            "const process = { platform: 'local', pid: 7 };\nprocess.platform;\nprocess['pid'];\n",
+            AmbientAuthorityGrant::DenyAll,
+        )
+        .expect("a lexical process binding must not be treated as ambient authority");
     }
 }

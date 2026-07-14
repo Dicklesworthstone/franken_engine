@@ -8101,17 +8101,18 @@ impl InterpreterCore {
     fn inject_runtime_globals(&mut self) -> Result<(), InterpreterError> {
         let argv = Value::Object(self.alloc_array_from_values(&[])?);
         let env = Value::Object(self.alloc_object_with_properties(&[])?);
-        // bd-qmy52: `platform` is a benign process-SHAPE descriptor (readable
-        // under the trusted `ProcessShapeRead` grant, see
-        // `is_benign_process_shape_member`). It carries the same FIXED
-        // engine-contained value as the `os.platform()` builtin
-        // (`NODE_OS_PLATFORM`) so `os.platform() === process.platform` holds,
-        // matching Node on linux. No env VALUES are exposed (env stays empty
-        // and env reads stay denied at lowering).
+        // bd-qmy52/bd-y30zw: `platform` and `pid` are benign process-SHAPE
+        // descriptors readable only through a statically allowlisted member
+        // under the trusted `ProcessShapeRead` grant. Both are FIXED,
+        // engine-contained values: platform matches `os.platform()` and pid is
+        // a positive synthetic sentinel, never the nondeterministic host PID.
+        // No env VALUES are exposed (env stays empty and env reads stay denied
+        // at lowering).
         let process = Value::Object(self.alloc_object_with_properties(&[
             ("argv", argv),
             ("env", env),
             ("platform", Value::str(NODE_OS_PLATFORM)),
+            ("pid", Value::Int(1)),
         ])?);
         let console = Value::Object(self.alloc_object_with_properties(&[
             (

@@ -1964,8 +1964,9 @@ fn eval_via_native_pipeline(
 
     // bd-xewby: a direct `QuickJsInspiredNativeEngine::eval` is a TRUSTED
     // top-level eval context, so it is granted the benign process-shape ambient
-    // profile (`process.argv` / bare-`process` shape reads lower; env values and
-    // every other ambient surface stay denied). Untrusted extension execution
+    // profile (only statically allowlisted `process.<shape>` reads lower; bare,
+    // aliased, computed, env-value, and every other ambient access stays denied).
+    // Untrusted extension execution
     // goes through `ExecutionOrchestrator`, which builds its own deny-all
     // `LoweringContext`, so this grant never widens the extension lowering path.
     let lowering_context = LoweringContext::new(

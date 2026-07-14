@@ -32,11 +32,21 @@ fn test_process_global_minimal_shape_regression() {
     assert_eq!(eval_value("typeof process.env"), "object");
 
     // bd-xewby: a direct engine `eval` is a TRUSTED top-level eval context, so
-    // benign `process`-SHAPE reads are granted (`ProcessShapeRead`). `process.argv`
-    // resolves to the injected empty argv array, so `process.argv.length` is "0".
+    // benign static `process`-SHAPE reads are granted (`ProcessShapeRead`).
+    // `process.argv` resolves to the injected empty argv array, while `process.pid`
+    // is a fixed engine-contained value rather than the host process id.
     // (Untrusted extension lowering — via `lower_ir0_to_ir1` / the orchestrator —
     // still rejects the SAME read; see `ambient_authority_lowering_rejection_integration`.)
     assert_eq!(eval_value("process.argv.length"), "0");
+    assert_eq!(eval_value("process.pid"), "1");
+
+    // The grant is member-scoped: it never hands guest code the ambient object
+    // itself, which would make aliases and computed property access possible.
+    let mut engine = QuickJsInspiredNativeEngine;
+    assert!(
+        engine.eval("process").is_err(),
+        "a bare process object load must stay denied"
+    );
 
     // The trusted grant is NARROW: it confers only `ProcessShapeRead`, never
     // `EnvRead`. An environment VARIABLE VALUE read (`process.env.X`) stays denied

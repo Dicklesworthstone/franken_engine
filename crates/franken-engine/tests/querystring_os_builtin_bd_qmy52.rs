@@ -632,10 +632,13 @@ fn get_priority_returns_zero_for_every_pid_form() {
         console.log(os.getPriority() >= -20 && os.getPriority() <= 19);
         console.log(os.getPriority(0) === os.getPriority());
         console.log(os.getPriority(0) === os.getPriority(process.pid));
+        console.log(typeof process.pid, process.pid === 1);
     "#;
-    // `process.pid` is not part of the injected process shape: it reads as
-    // undefined, which takes getPriority's default pid — same result.
-    assert_eq!(eval_console(src), "number true\ntrue\ntrue\ntrue");
+    // The PID is a fixed engine-contained shape value, never the host process id.
+    assert_eq!(
+        eval_console(src),
+        "number true\ntrue\ntrue\ntrue\nnumber true"
+    );
 }
 
 #[test]

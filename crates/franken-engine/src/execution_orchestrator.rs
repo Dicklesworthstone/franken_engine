@@ -53,8 +53,8 @@ use crate::ifc_artifacts::{ClearanceClass, DeclassificationReceipt, Label};
 use crate::ifc_provenance_index::{FlowDecision, FlowEventRecord, IfcProvenanceIndex};
 use crate::ir_contract::{Ir0Module, Ir3Module};
 use crate::lowering_pipeline::{
-    Ir2FlowProofArtifact, LoweringContext, LoweringEvent, LoweringPipelineError,
-    LoweringPipelineOutput, PassWitness, lower_ir0_to_ir3,
+    AmbientAuthorityGrant, Ir2FlowProofArtifact, LoweringContext, LoweringEvent,
+    LoweringPipelineError, LoweringPipelineOutput, PassWitness, lower_ir0_to_ir3,
 };
 use crate::optimal_stopping::{
     EscalationPolicy, Observation as StoppingObservation, OptimalStoppingCertificate,
@@ -488,6 +488,9 @@ fn clearance_ceiling_label(clearance: &ClearanceClass) -> Label {
 
 pub struct ExecutionOrchestrator {
     config: OrchestratorConfig,
+    /// Explicit lowering-time ambient grant for the submitted top-level unit.
+    /// Defaults to deny-all; product policy must opt in deliberately.
+    ambient_authority_grant: AmbientAuthorityGrant,
     /// Centralized runtime configuration for all engine subsystems.
     runtime_config: RuntimeConfig,
     parser: CanonicalEs2020Parser,
@@ -546,6 +549,37 @@ impl ExecutionOrchestrator {
         config: OrchestratorConfig,
         runtime_config: RuntimeConfig,
     ) -> Result<Self, OrchestratorError> {
+        Self::try_new_with_runtime_config_and_ambient_authority_grant(
+            config,
+            runtime_config,
+            AmbientAuthorityGrant::DenyAll,
+        )
+    }
+
+    /// Create an orchestrator with both runtime configs and an explicit
+    /// lowering-time ambient-authority grant.
+    pub fn new_with_runtime_config_and_ambient_authority_grant(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+        ambient_authority_grant: AmbientAuthorityGrant,
+    ) -> Self {
+        Self::try_new_with_runtime_config_and_ambient_authority_grant(
+            config,
+            runtime_config,
+            ambient_authority_grant,
+        )
+        .expect("orchestrator configuration must be valid")
+    }
+
+    /// Fallible variant of
+    /// [`Self::new_with_runtime_config_and_ambient_authority_grant`]. Existing
+    /// constructors delegate here with deny-all, so compatibility authority is
+    /// impossible to acquire accidentally.
+    pub fn try_new_with_runtime_config_and_ambient_authority_grant(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+        ambient_authority_grant: AmbientAuthorityGrant,
+    ) -> Result<Self, OrchestratorError> {
         Self::validate_concurrency_envelope(config.max_concurrent_sagas)?;
         let loss_matrix = config.loss_matrix_preset.to_loss_matrix();
         let prior = Posterior::default_prior();
@@ -583,6 +617,7 @@ impl ExecutionOrchestrator {
             host_io_recorder: None,
             data_contract_ingress: None,
             data_contract_flow_events: Vec::new(),
+            ambient_authority_grant,
             config,
             runtime_config,
         })
@@ -989,7 +1024,8 @@ impl ExecutionOrchestrator {
             &source_label
         };
         let ir0 = Ir0Module::from_syntax_tree(syntax_tree, ir0_source_label);
-        let lowering_ctx = LoweringContext::new(trace_id, decision_id, &self.config.policy_id);
+        let lowering_ctx = LoweringContext::new(trace_id, decision_id, &self.config.policy_id)
+            .with_ambient_authority_grant(self.ambient_authority_grant);
         let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_ctx)?;
         Ok(PreparedLoweringOutput {
             source_label,
@@ -3043,6 +3079,74 @@ mod tests {
         assert_eq!(cfg.epoch, SecurityEpoch::from_raw(1));
         assert_eq!(cfg.trace_id_prefix, "orch");
         assert_eq!(cfg.policy_id, "default-policy");
+    }
+
+    #[test]
+    fn process_shape_grant_is_explicit_static_only_and_deny_by_default() {
+        fn assert_ambient_denial(
+            result: Result<PreparedLoweringOutput, OrchestratorError>,
+            label: &str,
+        ) {
+            match result {
+                Err(OrchestratorError::Lowering(error))
+                    if matches!(
+                        error.as_ref(),
+                        LoweringPipelineError::AmbientAuthorityViolation { .. }
+                    ) => {}
+                Err(error) => panic!("{label} produced an unexpected error: {error:?}"),
+                Ok(_) => panic!("{label} unexpectedly passed ambient lowering"),
+            }
+        }
+
+        let static_shape = package_with_source("process.platform;\nprocess.pid;\n");
+        let orchestrator = ExecutionOrchestrator::with_defaults();
+
+        assert_ambient_denial(
+            orchestrator.prepare_lowering_output(&static_shape, "trace-deny", "decision-deny"),
+            "default orchestrator process-shape read",
+        );
+        orchestrator
+            .prepare_lowering_output(
+                &package_with_source(
+                    "const process = { platform: 'local', pid: 7 };\nprocess.platform;\nprocess.pid;\n",
+                ),
+                "trace-shadow",
+                "decision-shadow",
+            )
+            .expect("a lexical process binding is ordinary user data");
+
+        let trusted_orchestrator =
+            ExecutionOrchestrator::new_with_runtime_config_and_ambient_authority_grant(
+                OrchestratorConfig::default(),
+                RuntimeConfig::default(),
+                AmbientAuthorityGrant::TrustedProcessShape,
+            );
+        trusted_orchestrator
+            .prepare_lowering_output(&static_shape, "trace-allow", "decision-allow")
+            .expect("explicit grant permits statically allowlisted process shape reads");
+
+        for (label, source) in [
+            ("bare", "process;\n"),
+            ("computed", "process['platform'];\n"),
+            ("alias", "const p = process; p.platform;\n"),
+            (
+                "grant laundering",
+                "process.platform;\nprocess['env']['PATH'];\n",
+            ),
+            ("destructure", "const { platform } = process;\n"),
+            ("static env", "process.env.PATH;\n"),
+            ("computed env", "process['env']['PATH'];\n"),
+            ("computed exit", "process['exit'](0);\n"),
+        ] {
+            assert_ambient_denial(
+                trusted_orchestrator.prepare_lowering_output(
+                    &package_with_source(source),
+                    &format!("trace-{label}"),
+                    &format!("decision-{label}"),
+                ),
+                label,
+            );
+        }
     }
 
     #[test]

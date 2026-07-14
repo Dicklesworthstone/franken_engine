@@ -299,6 +299,7 @@ pub enum BuiltinFunctionKind {
     StringPrototypeAt,
     StringPrototypeIsWellFormed,
     StringPrototypeToWellFormed,
+    ArrayIsArray,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -327,6 +328,15 @@ impl BuiltinFunction {
         }
     }
 
+    /// Receiver-independent `Array.isArray`, materialized by the dedicated
+    /// pure factory hostcall emitted for an unshadowed static member read.
+    fn array_is_array() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayIsArray,
+            module_specifier: String::new(),
+        }
+    }
+
     fn display_name(&self) -> &'static str {
         match self.kind {
             BuiltinFunctionKind::Require => "require",
@@ -336,6 +346,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StringPrototypeAt => "at",
             BuiltinFunctionKind::StringPrototypeIsWellFormed => "isWellFormed",
             BuiltinFunctionKind::StringPrototypeToWellFormed => "toWellFormed",
+            BuiltinFunctionKind::ArrayIsArray => "isArray",
         }
     }
 }
@@ -2687,6 +2698,14 @@ impl InterpreterCore {
                 self.current_module_specifier = previous_module_specifier;
                 result
             }
+            BuiltinFunctionKind::ArrayIsArray => {
+                let arg = if args.count > 0 {
+                    Some(self.read_reg(args.start)?)
+                } else {
+                    None
+                };
+                self.array_is_array_value(arg)
+            }
             BuiltinFunctionKind::StringPrototypeCharAt
             | BuiltinFunctionKind::StringPrototypeCharCodeAt
             | BuiltinFunctionKind::StringPrototypeCodePointAt
@@ -2722,9 +2741,30 @@ impl InterpreterCore {
                     BuiltinFunctionKind::StringPrototypeToWellFormed => {
                         Self::string_to_well_formed_value(&text)
                     }
-                    BuiltinFunctionKind::Require => unreachable!("handled above"),
+                    BuiltinFunctionKind::Require | BuiltinFunctionKind::ArrayIsArray => {
+                        unreachable!("handled above")
+                    }
                 })
             }
+        }
+    }
+
+    /// Single semantic implementation shared by the direct
+    /// `builtin:ArrayIsArray` hostcall and its first-class callable twin.
+    fn array_is_array_value(&self, arg: Option<Value>) -> Result<Value, InterpreterError> {
+        let Some(arg) = arg else {
+            return Ok(Value::Bool(false));
+        };
+        match arg {
+            Value::Object(object_id) => {
+                let is_array = self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
+                    .is_array;
+                Ok(Value::Bool(is_array))
+            }
+            _ => Ok(Value::Bool(false)),
         }
     }
 
@@ -8314,20 +8354,11 @@ impl InterpreterCore {
                 Ok(Value::Int(i64::from(new_len)))
             }
             "builtin:ArrayIsArray" => {
-                let Some(arg) = self.optional_arg(args, 0)? else {
-                    return Ok(Value::Bool(false));
-                };
-                match arg {
-                    Value::Object(object_id) => {
-                        let is_array = self
-                            .heap
-                            .get(object_id.0 as usize)
-                            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
-                            .is_array;
-                        Ok(Value::Bool(is_array))
-                    }
-                    _ => Ok(Value::Bool(false)),
-                }
+                let arg = self.optional_arg(args, 0)?;
+                self.array_is_array_value(arg)
+            }
+            "builtin:ArrayIsArrayFunction" => {
+                Ok(Value::BuiltinFunction(BuiltinFunction::array_is_array()))
             }
             "builtin:ArrayPrototypePop" => {
                 let this = self.required_arg(args, 0, "array object")?;

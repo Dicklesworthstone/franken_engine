@@ -1339,6 +1339,36 @@ fn static_builtin_call_capability(
     }
 }
 
+/// Recognize the one supported first-class static builtin member read.
+///
+/// Core has no materialized `Array` global object, so an unshadowed
+/// `Array.isArray` value read needs a dedicated pure factory hostcall. Keep
+/// this allowlist separate from direct-call interception: widening it to an
+/// arbitrary capability-backed callable would bypass the normal hostcall
+/// authority boundary when the returned value is invoked.
+fn static_builtin_member_factory_capability(
+    object: &Expression,
+    property: &Expression,
+    computed: bool,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Identifier(global) = object else {
+        return None;
+    };
+    if binding_lookup.contains_key(global.as_str()) {
+        return None;
+    }
+    let property_name = match (computed, property) {
+        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
+        (true, Expression::StringLiteral(name)) => name.as_str(),
+        _ => return None,
+    };
+    match (global.as_str(), property_name) {
+        ("Array", "isArray") => Some("builtin:ArrayIsArrayFunction"),
+        _ => None,
+    }
+}
+
 /// bd-qmy52: recognize an `os` property READ (`os.EOL`, `os.devNull`,
 /// `os.constants`) on a recognized os-module object and return its lowering.
 /// Accepts the same static/quoted property shapes as [`path_member_constant`].
@@ -8597,6 +8627,23 @@ fn lower_expression_to_ir1(
             property,
             computed,
         } => {
+            // bd-cue2u: unshadowed `Array.isArray` / `Array["isArray"]`
+            // member reads materialize a deterministic first-class builtin
+            // callable. Direct calls are still intercepted earlier as
+            // `builtin:ArrayIsArray`, while lexical `Array` bindings fall
+            // through to ordinary property access.
+            if let Some(capability) = static_builtin_member_factory_capability(
+                object,
+                property,
+                *computed,
+                binding_lookup,
+            ) {
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: 0,
+                });
+                return Ok(());
+            }
             // bd-tu0c3: `path.sep` / `path.delimiter` (and the
             // `.posix`/`.win32` namespace forms) on a confirmed path-module
             // alias are deterministic platform constants; lower them directly

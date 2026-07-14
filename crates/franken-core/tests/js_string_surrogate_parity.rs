@@ -330,6 +330,151 @@ fn executable_static_builtin_families_are_reachable_from_source() {
 }
 
 #[test]
+fn array_is_array_member_reads_are_first_class_and_shadow_aware() {
+    assert_eq!(
+        completion("let isArray = Array.isArray; isArray([1, 2]);"),
+        Value::Bool(true),
+        "a detached static member read must remain callable"
+    );
+    assert_eq!(
+        completion("let isArray = Array[\"isArray\"]; isArray({0: 1});"),
+        Value::Bool(false),
+        "computed-literal access must materialize the same callable"
+    );
+    assert_eq!(completion("typeof Array.isArray;"), Value::str("function"));
+    assert_eq!(
+        completion("Array.isArray === Array.isArray;"),
+        Value::Bool(true),
+        "repeated reads must have stable structural identity"
+    );
+    assert_eq!(
+        completion("Array.isArray === Array[\"isArray\"];"),
+        Value::Bool(true),
+        "static and computed reads must produce the same builtin value"
+    );
+    assert_eq!(completion("Array[\"isArray\"]([]);"), Value::Bool(true));
+    assert_eq!(completion("Array.isArray();"), Value::Bool(false));
+    assert_eq!(
+        completion("(function (predicate) { return predicate([1]); })(Array.isArray);"),
+        Value::Bool(true),
+        "the builtin value must survive ordinary argument passing"
+    );
+
+    assert_eq!(
+        completion(
+            "let Array = {isArray: function (value) { return value === 42; }}; \
+             let detached = Array.isArray; detached(42);"
+        ),
+        Value::Bool(true),
+        "a lexical Array binding must suppress builtin materialization"
+    );
+    assert_eq!(
+        completion(
+            "(function (Array) { let detached = Array.isArray; return detached(42); }) \
+             ({isArray: function (value) { return value === 42; }});"
+        ),
+        Value::Bool(true),
+        "a parameter named Array must suppress builtin materialization"
+    );
+    assert_eq!(
+        completion(
+            "let Array = {isArray: function (value) { return value === 42; }}; \
+             let outer = function () { \
+               return function () { let detached = Array.isArray; return detached(42); }; \
+             }; outer()();"
+        ),
+        Value::Bool(true),
+        "an outer lexical Array must remain shadowing through a non-referencing closure"
+    );
+}
+
+#[test]
+fn array_is_array_factory_capability_is_narrow_and_deterministic() {
+    fn collect_hostcalls<'a>(ops: &'a [Ir1Op], out: &mut Vec<(&'a str, u32)>) {
+        for op in ops {
+            match op {
+                Ir1Op::HostCall {
+                    capability,
+                    arg_count,
+                } => out.push((capability.as_str(), *arg_count)),
+                Ir1Op::DeclareFunction { body_ops, .. }
+                | Ir1Op::CreateFunction { body_ops, .. } => collect_hostcalls(body_ops, out),
+                _ => {}
+            }
+        }
+    }
+
+    let source = "let first = Array.isArray; let second = Array[\"isArray\"]; \
+                  Array.isArray([]); first === second;";
+    let lower = || {
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect("source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_cue2u_array_is_array_factory");
+        let context =
+            LoweringContext::new("bd-cue2u-trace", "bd-cue2u-decision", "bd-cue2u-policy");
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("source should lower to IR1")
+            .module;
+        let lowered = lower_ir0_to_ir3(&ir0, &context).expect("source should lower to IR3");
+        (ir1, lowered)
+    };
+
+    let (ir1, first) = lower();
+    let (_, second) = lower();
+    let mut hostcalls = Vec::new();
+    collect_hostcalls(&ir1.ops, &mut hostcalls);
+    assert_eq!(
+        hostcalls
+            .iter()
+            .filter(|(capability, _)| *capability == "builtin:ArrayIsArrayFunction")
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![
+            ("builtin:ArrayIsArrayFunction", 0),
+            ("builtin:ArrayIsArrayFunction", 0),
+        ],
+        "each member read must use the dedicated zero-argument factory"
+    );
+    assert!(hostcalls.contains(&("builtin:ArrayIsArray", 1)));
+    assert!(
+        !hostcalls
+            .iter()
+            .any(|(capability, _)| *capability == "hostcall.invoke"),
+        "first-class Array.isArray must not become a generic privileged callable"
+    );
+
+    let required = &first.ir3.required_capabilities;
+    assert!(
+        required
+            .iter()
+            .any(|capability| capability.0 == "builtin:ArrayIsArrayFunction")
+    );
+    assert_eq!(
+        required, &second.ir3.required_capabilities,
+        "factory capability accounting must be deterministic"
+    );
+
+    let shadowed = "let Array = {isArray: function (value) { return value; }}; \
+                    let detached = Array.isArray; detached(true);";
+    let tree = CanonicalEs2020Parser
+        .parse(shadowed, ParseGoal::Script)
+        .expect("shadowing source should parse");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "bd_cue2u_array_shadow");
+    let ir1 = lower_ir0_to_ir1(&ir0)
+        .expect("shadowing source should lower")
+        .module;
+    let mut shadowed_hostcalls = Vec::new();
+    collect_hostcalls(&ir1.ops, &mut shadowed_hostcalls);
+    assert!(
+        !shadowed_hostcalls
+            .iter()
+            .any(|(capability, _)| *capability == "builtin:ArrayIsArrayFunction"),
+        "lexical Array bindings must use ordinary property access"
+    );
+}
+
+#[test]
 fn static_builtin_interception_supports_literal_computed_names_and_shadowing() {
     assert_eq!(completion("Math[\"abs\"](-9);"), Value::Int(9));
     assert_eq!(

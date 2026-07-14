@@ -19,6 +19,10 @@ use crate::deterministic_serde::{self, CanonicalValue};
 use crate::hash_tiers::ContentHash;
 use crate::ifc_artifacts::Label;
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 // ---------------------------------------------------------------------------
 // Schema versioning
 // ---------------------------------------------------------------------------
@@ -529,6 +533,11 @@ pub enum Ir1Op {
         free_var_outer_ids: Vec<BindingId>,
         /// True when the source function is a generator (`function*`).
         is_generator: bool,
+        /// True when this expression is an arrow rather than an ordinary
+        /// function expression. Omitted for `false` to preserve legacy
+        /// artifact and canonical-hash shapes.
+        #[serde(default, skip_serializing_if = "is_false")]
+        is_arrow: bool,
         /// Index into `param_names` of the rest parameter (`...xs`), if any.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         rest_param_index: Option<u32>,
@@ -920,6 +929,7 @@ impl Ir1Op {
                 free_var_ids,
                 free_var_outer_ids,
                 is_generator,
+                is_arrow,
                 rest_param_index,
             } => {
                 map.insert(
@@ -975,6 +985,9 @@ impl Ir1Op {
                     "is_generator".to_string(),
                     CanonicalValue::Bool(*is_generator),
                 );
+                if *is_arrow {
+                    map.insert("is_arrow".to_string(), CanonicalValue::Bool(true));
+                }
                 if let Some(rest_param_index) = rest_param_index {
                     map.insert(
                         "rest_param_index".to_string(),
@@ -3379,6 +3392,7 @@ mod tests {
                 free_var_ids: vec![1],
                 free_var_outer_ids: vec![4],
                 is_generator: false,
+                is_arrow: false,
                 rest_param_index: Some(0),
             },
         ];

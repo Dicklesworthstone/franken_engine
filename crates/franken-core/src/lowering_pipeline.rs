@@ -2194,16 +2194,32 @@ fn lower_lexical_statement_sequence(
     result
 }
 
-/// Pre-reserve declarations in a function-like body and mark any shadowed
-/// static-builtin globals inherited from the outer scope as capture candidates.
-/// This makes interception lexical rather than statement-order dependent.
-fn prepare_function_body_bindings(
-    statements: Option<&[Statement]>,
+fn seed_function_outer_static_bindings(
     outer_lookup: &BTreeMap<String, BindingId>,
     body_lookup: &mut BTreeMap<String, BindingId>,
     body_binding_index: &mut BindingId,
+) {
+    for global in STATIC_BUILTIN_GLOBALS
+        .iter()
+        .chain(DIRECT_CALL_INTRINSIC_GLOBALS.iter())
+        .copied()
+    {
+        if !body_lookup.contains_key(global) && outer_lookup.contains_key(global) {
+            reserve_binding_id(body_lookup, body_binding_index, global);
+        }
+    }
+}
+
+/// Pre-reserve declarations in a function-like body. `declared_names` is
+/// captured immediately after formal bindings are allocated, so a declaration
+/// in the body can shadow a same-named capture used by a default expression
+/// without changing the parameter environment's binding identity.
+fn prepare_function_body_bindings(
+    statements: Option<&[Statement]>,
+    mut declared_names: BTreeSet<String>,
+    body_lookup: &mut BTreeMap<String, BindingId>,
+    body_binding_index: &mut BindingId,
 ) -> BTreeSet<String> {
-    let mut declared_names = body_lookup.keys().cloned().collect::<BTreeSet<_>>();
     if let Some(statements) = statements {
         declared_names.extend(reserve_root_scope_bindings(
             statements,
@@ -2216,25 +2232,21 @@ fn prepare_function_body_bindings(
             body_binding_index,
         ));
     }
-    for global in STATIC_BUILTIN_GLOBALS
-        .iter()
-        .chain(DIRECT_CALL_INTRINSIC_GLOBALS.iter())
-        .copied()
-    {
-        if !body_lookup.contains_key(global) && outer_lookup.contains_key(global) {
-            reserve_binding_id(body_lookup, body_binding_index, global);
-        }
-    }
     declared_names
 }
 
-/// Validate the subset of rest-parameter syntax whose positional ABI is
-/// represented exactly by the current core lowerer.
-///
-/// Non-rest destructuring remains on its pre-existing path, but combining a
-/// rest parameter with any non-identifier formal would compress
-/// `param_names` and make `rest_param_index` point at the wrong register. Fail
-/// closed until core ports the engine's synthetic parameter-slot prologue.
+fn merge_unshadowed_parameter_prologue_captures(
+    captures: &[(String, BindingId)],
+    body_lookup: &mut BTreeMap<String, BindingId>,
+) {
+    for (name, binding_id) in captures {
+        body_lookup.entry(name.clone()).or_insert(*binding_id);
+    }
+}
+
+/// Validate the rest-parameter syntax represented by the positional ABI.
+/// Every preceding formal occupies one slot, including default and
+/// destructuring patterns, so `rest_param_index` remains the source position.
 fn validate_rest_parameter_abi(
     params: &[FunctionParam],
 ) -> Result<Option<u32>, LoweringPipelineError> {
@@ -2247,23 +2259,16 @@ fn validate_rest_parameter_abi(
         return Ok(None);
     };
 
-    let prefix_is_positional = params[..rest_index]
-        .iter()
-        .all(|param| matches!(&param.pattern, BindingPattern::Identifier(_)));
     let rest_binds_identifier = matches!(
         &rest_param.pattern,
         BindingPattern::Rest(inner) if inner.as_identifier().is_some()
     );
-    if rest_params.len() != 1
-        || rest_index + 1 != params.len()
-        || !prefix_is_positional
-        || !rest_binds_identifier
-    {
+    if rest_params.len() != 1 || rest_index + 1 != params.len() || !rest_binds_identifier {
         return Err(unsupported_frontier_expression_error(
             "function_parameter_patterns_with_rest",
             "FE-LOWER-UNSUPPORTED-REST-PARAM-ABI-0001",
             "core.function_rest_parameter_abi",
-            "rest parameters currently require only identifier formals and one final identifier rest binding",
+            "rest parameters require one final identifier rest binding",
             Some(rest_param.span.clone()),
         ));
     }
@@ -2271,27 +2276,252 @@ fn validate_rest_parameter_abi(
     Ok(Some(rest_index as u32))
 }
 
-/// Allocate every identifier bound by a function parameter pattern before
-/// lowering the body. `param_names` remains the current positional IR3 ABI;
-/// an identifier rest parameter occupies its declared slot so the interpreter
-/// can replace that slot with the trailing-argument Array.
-fn allocate_function_parameter_bindings(
-    params: &[FunctionParam],
+/// Object-rest lowering needs an own-property clone/exclusion operation that
+/// FrankenCore does not yet expose. Reject it in parameter prologues instead
+/// of silently reading a property literally named after the rest binding.
+fn contains_unsupported_parameter_object_rest(pattern: &BindingPattern) -> bool {
+    match pattern {
+        BindingPattern::Identifier(_) => false,
+        BindingPattern::ObjectPattern(properties) => properties.iter().any(|property| {
+            matches!(&property.value, BindingPattern::Rest(_))
+                || contains_unsupported_parameter_object_rest(&property.value)
+        }),
+        BindingPattern::ArrayPattern(elements) => elements
+            .iter()
+            .flatten()
+            .any(contains_unsupported_parameter_object_rest),
+        BindingPattern::Rest(inner) => contains_unsupported_parameter_object_rest(inner),
+        BindingPattern::AssignmentPattern { left, .. } => {
+            contains_unsupported_parameter_object_rest(left)
+        }
+    }
+}
+
+fn contains_unsupported_parameter_nested_rest(pattern: &BindingPattern) -> bool {
+    match pattern {
+        BindingPattern::Identifier(_) => false,
+        BindingPattern::ObjectPattern(properties) => properties
+            .iter()
+            .any(|property| contains_unsupported_parameter_nested_rest(&property.value)),
+        BindingPattern::ArrayPattern(elements) => elements
+            .iter()
+            .flatten()
+            .any(contains_unsupported_parameter_nested_rest),
+        BindingPattern::Rest(inner) => {
+            inner.as_identifier().is_none() || contains_unsupported_parameter_nested_rest(inner)
+        }
+        BindingPattern::AssignmentPattern { left, .. } => {
+            contains_unsupported_parameter_nested_rest(left)
+        }
+    }
+}
+
+fn contains_unsupported_parameter_computed_key(pattern: &BindingPattern) -> bool {
+    match pattern {
+        BindingPattern::Identifier(_) => false,
+        BindingPattern::ObjectPattern(properties) => properties.iter().any(|property| {
+            property.computed || contains_unsupported_parameter_computed_key(&property.value)
+        }),
+        BindingPattern::ArrayPattern(elements) => elements
+            .iter()
+            .flatten()
+            .any(contains_unsupported_parameter_computed_key),
+        BindingPattern::Rest(inner) => contains_unsupported_parameter_computed_key(inner),
+        BindingPattern::AssignmentPattern { left, .. } => {
+            contains_unsupported_parameter_computed_key(left)
+        }
+    }
+}
+
+fn raw_static_property_key_needs_normalization(key: &str) -> bool {
+    let quoted = matches!(
+        (key.as_bytes().first(), key.as_bytes().last()),
+        (Some(b'\''), Some(b'\'')) | (Some(b'"'), Some(b'"'))
+    );
+    let numeric_like = key.as_bytes().first().is_some_and(u8::is_ascii_digit)
+        || (key.starts_with('.') && key.as_bytes().get(1).is_some_and(u8::is_ascii_digit))
+        || (matches!(key.as_bytes().first(), Some(b'+' | b'-'))
+            && key
+                .as_bytes()
+                .get(1)
+                .is_some_and(|byte| byte.is_ascii_digit() || *byte == b'.'));
+    let canonical_decimal = key.parse::<f64>().is_ok_and(|value| {
+        value.is_finite()
+            && value >= 0.0
+            && (value == 0.0 || value >= 1e-6)
+            && value < 1e21
+            && value.to_string() == key
+    });
+    quoted || key.contains('\\') || (numeric_like && !canonical_decimal)
+}
+
+fn contains_unsupported_parameter_raw_static_key(pattern: &BindingPattern) -> bool {
+    match pattern {
+        BindingPattern::Identifier(_) => false,
+        BindingPattern::ObjectPattern(properties) => properties.iter().any(|property| {
+            (!property.computed
+                && !property.shorthand
+                && matches!(
+                    &property.key,
+                    Expression::Identifier(key)
+                        if raw_static_property_key_needs_normalization(key)
+                ))
+                || contains_unsupported_parameter_raw_static_key(&property.value)
+        }),
+        BindingPattern::ArrayPattern(elements) => elements
+            .iter()
+            .flatten()
+            .any(contains_unsupported_parameter_raw_static_key),
+        BindingPattern::Rest(inner) => contains_unsupported_parameter_raw_static_key(inner),
+        BindingPattern::AssignmentPattern { left, .. } => {
+            contains_unsupported_parameter_raw_static_key(left)
+        }
+    }
+}
+
+/// Allocate one runtime slot per formal and every identifier introduced by a
+/// pattern. Non-identifier formals use an unforgeable synthetic source slot;
+/// their entry prologue copies/defaults/destructures that slot into user
+/// bindings before the body executes (bd-ur3tk.10).
+#[derive(Default)]
+struct FunctionParameterPlan<'a> {
+    param_names: Vec<String>,
+    destructure_params: Vec<(String, &'a BindingPattern, &'a SourceSpan)>,
+    rest_param_index: Option<u32>,
+}
+
+fn parameter_prologue_referenced_binding_ids(ops: &[Ir1Op]) -> BTreeSet<BindingId> {
+    let mut referenced = BTreeSet::new();
+    for op in ops {
+        match op {
+            Ir1Op::LoadBinding { binding_id }
+            | Ir1Op::StoreBinding { binding_id }
+            | Ir1Op::AssignOp { binding_id, .. }
+            | Ir1Op::ExportBinding { binding_id, .. } => {
+                referenced.insert(*binding_id);
+            }
+            Ir1Op::DeclareFunction {
+                body_ops,
+                free_var_ids,
+                free_var_outer_ids,
+                ..
+            }
+            | Ir1Op::CreateFunction {
+                body_ops,
+                free_var_ids,
+                free_var_outer_ids,
+                ..
+            } => {
+                let child_references = parameter_prologue_referenced_binding_ids(body_ops);
+                referenced.extend(free_var_ids.iter().zip(free_var_outer_ids).filter_map(
+                    |(body_id, outer_id)| child_references.contains(body_id).then_some(*outer_id),
+                ));
+            }
+            _ => {}
+        }
+    }
+    referenced
+}
+
+fn arrow_body_uses_lexical_call_context(ops: &[Ir1Op]) -> bool {
+    ops.iter().any(|op| match op {
+        Ir1Op::LoadThis | Ir1Op::LoadNewTarget | Ir1Op::LoadSuper => true,
+        Ir1Op::CreateFunction {
+            body_ops,
+            is_arrow: true,
+            ..
+        } => arrow_body_uses_lexical_call_context(body_ops),
+        _ => false,
+    })
+}
+
+fn allocate_function_parameter_bindings<'a>(
+    params: &'a [FunctionParam],
     body_bindings: &mut Vec<ResolvedBinding>,
     body_lookup: &mut BTreeMap<String, BindingId>,
     body_binding_index: &mut BindingId,
     body_scope: ScopeId,
-) -> Result<(Vec<String>, Option<u32>), LoweringPipelineError> {
+) -> Result<FunctionParameterPlan<'a>, LoweringPipelineError> {
     let rest_param_index = validate_rest_parameter_abi(params)?;
-    let param_names = params
+    if let Some(param) = params
         .iter()
-        .filter_map(|param| match &param.pattern {
-            BindingPattern::Rest(inner) => inner.as_identifier().map(String::from),
-            _ => param.name().map(String::from),
-        })
-        .collect::<Vec<_>>();
-    for param in params {
-        for bound_name in param.pattern.binding_names() {
+        .find(|param| contains_unsupported_parameter_object_rest(&param.pattern))
+    {
+        return Err(unsupported_frontier_expression_error(
+            "function_parameter_object_rest",
+            "FE-LOWER-UNSUPPORTED-OBJECT-REST-PARAM-0001",
+            "core.function_parameter_object_rest",
+            "object-rest parameter patterns require own-property exclusion lowering",
+            Some(param.span.clone()),
+        ));
+    }
+    if let Some(param) = params
+        .iter()
+        .find(|param| contains_unsupported_parameter_nested_rest(&param.pattern))
+    {
+        return Err(unsupported_frontier_expression_error(
+            "function_parameter_nested_rest",
+            "FE-LOWER-UNSUPPORTED-NESTED-REST-PARAM-0001",
+            "core.function_parameter_nested_rest",
+            "nested rest parameter targets require recursive slice destructuring",
+            Some(param.span.clone()),
+        ));
+    }
+    if let Some(param) = params
+        .iter()
+        .find(|param| contains_unsupported_parameter_computed_key(&param.pattern))
+    {
+        return Err(unsupported_frontier_expression_error(
+            "function_parameter_computed_destructuring_key",
+            "FE-LOWER-UNSUPPORTED-COMPUTED-PARAM-KEY-0001",
+            "core.function_parameter_computed_key",
+            "computed parameter-pattern keys require dynamic property-key lowering",
+            Some(param.span.clone()),
+        ));
+    }
+    if let Some(param) = params
+        .iter()
+        .find(|param| contains_unsupported_parameter_raw_static_key(&param.pattern))
+    {
+        return Err(unsupported_frontier_expression_error(
+            "function_parameter_raw_static_destructuring_key",
+            "FE-LOWER-UNSUPPORTED-RAW-PARAM-KEY-0001",
+            "core.function_parameter_raw_static_key",
+            "noncanonical parameter-pattern keys require exact property-key normalization",
+            Some(param.span.clone()),
+        ));
+    }
+    let mut param_names = Vec::with_capacity(params.len());
+    let mut destructure_params = Vec::with_capacity(params.len());
+    for (index, param) in params.iter().enumerate() {
+        if let BindingPattern::Rest(inner) = &param.pattern
+            && let Some(name) = inner.as_identifier()
+        {
+            param_names.push(name.to_string());
+            continue;
+        }
+        if let Some(name) = param.name() {
+            param_names.push(name.to_string());
+        } else {
+            let synthetic_name = format!("@@franken_internal_param_{index}");
+            param_names.push(synthetic_name.clone());
+            destructure_params.push((synthetic_name, &param.pattern, &param.span));
+        }
+    }
+
+    for param_name in &param_names {
+        let _ = alloc_binding(
+            body_bindings,
+            body_lookup,
+            body_binding_index,
+            body_scope,
+            param_name,
+            BindingKind::Parameter,
+        )
+        .map_err(LoweringPipelineError::SemanticViolation)?;
+    }
+    for (_, pattern, _) in &destructure_params {
+        for bound_name in pattern.binding_names() {
             let _ = alloc_binding(
                 body_bindings,
                 body_lookup,
@@ -2303,7 +2533,101 @@ fn allocate_function_parameter_bindings(
             .map_err(LoweringPipelineError::SemanticViolation)?;
         }
     }
-    Ok((param_names, rest_param_index))
+    Ok(FunctionParameterPlan {
+        param_names,
+        destructure_params,
+        rest_param_index,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_function_parameter_prologue(
+    destructure_params: &[(String, &BindingPattern, &SourceSpan)],
+    outer_lookup: &BTreeMap<String, BindingId>,
+    body_ops: &mut Vec<Ir1Op>,
+    body_bindings: &mut Vec<ResolvedBinding>,
+    parameter_lookup: &BTreeMap<String, BindingId>,
+    body_binding_index: &mut BindingId,
+    body_scope: ScopeId,
+    body_label_counter: &mut u32,
+) -> Result<Vec<(String, BindingId)>, LoweringPipelineError> {
+    if destructure_params.is_empty() {
+        return Ok(Vec::new());
+    }
+    let parameter_binding_names = parameter_lookup.keys().cloned().collect::<BTreeSet<_>>();
+    let mut prologue_lookup = parameter_lookup.clone();
+    seed_function_outer_static_bindings(outer_lookup, &mut prologue_lookup, body_binding_index);
+    let prologue_start = body_ops.len();
+    for (synthetic_name, pattern, span) in destructure_params {
+        let source_binding_id = *prologue_lookup.get(synthetic_name).ok_or(
+            LoweringPipelineError::InvariantViolation {
+                detail: "synthetic parameter source binding must be allocated before its prologue",
+            },
+        )?;
+        let prologue_op_start = body_ops.len();
+        lower_destructuring_to_ir1(
+            pattern,
+            source_binding_id,
+            body_ops,
+            body_bindings,
+            &mut prologue_lookup,
+            body_binding_index,
+            body_scope,
+            body_label_counter,
+        )?;
+        if body_ops[prologue_op_start..].iter().any(|op| match op {
+            Ir1Op::CreateFunction {
+                name,
+                body_ops,
+                free_var_ids,
+                is_arrow,
+                ..
+            } => {
+                let referenced = parameter_prologue_referenced_binding_ids(body_ops);
+                name.is_some()
+                    || (*is_arrow && arrow_body_uses_lexical_call_context(body_ops))
+                    || free_var_ids
+                        .iter()
+                        .any(|binding_id| referenced.contains(binding_id))
+            }
+            Ir1Op::DeclareFunction { .. } => true,
+            _ => false,
+        }) {
+            return Err(unsupported_frontier_expression_error(
+                "function_parameter_default_closure",
+                "FE-LOWER-UNSUPPORTED-PARAM-DEFAULT-CLOSURE-0001",
+                "core.function_parameter_default_closure",
+                "capturing, self-named, or lexical-context parameter-default closures require persistent environment cells",
+                Some((*span).clone()),
+            ));
+        }
+    }
+    let referenced_binding_ids =
+        parameter_prologue_referenced_binding_ids(&body_ops[prologue_start..]);
+    Ok(prologue_lookup
+        .into_iter()
+        .filter(|(name, _)| {
+            !parameter_binding_names.contains(name) && !is_internal_lowering_binding(name)
+        })
+        .filter(|(_, binding_id)| referenced_binding_ids.contains(binding_id))
+        .collect())
+}
+
+fn reject_self_referential_parameter_capture(
+    captures: &[(String, BindingId)],
+    self_name: &str,
+    span: SourceSpan,
+) -> Result<(), LoweringPipelineError> {
+    if captures.iter().any(|(name, _)| name == self_name) {
+        return Err(unsupported_frontier_expression_error(
+            "self_referential_parameter_default",
+            "FE-LOWER-UNSUPPORTED-SELF-PARAM-DEFAULT-0001",
+            "core.self_referential_parameter_default",
+            "self-referential parameter defaults require a live function-name environment",
+            Some(span),
+        ));
+    }
+    Ok(())
 }
 
 fn parse_named_export_clause_bindings(clause: &str) -> Vec<(String, String)> {
@@ -3784,7 +4108,11 @@ fn lower_statement_to_ir1_with_flow(
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
-            let (param_names, rest_param_index) = allocate_function_parameter_bindings(
+            let FunctionParameterPlan {
+                param_names,
+                destructure_params,
+                rest_param_index,
+            } = allocate_function_parameter_bindings(
                 &func.params,
                 &mut body_bindings,
                 &mut body_lookup,
@@ -3800,8 +4128,33 @@ fn lower_statement_to_ir1_with_flow(
                     Some(func.span.clone()),
                 ));
             }
+            let parameter_binding_names = body_lookup.keys().cloned().collect();
+            let parameter_prologue_captures = lower_function_parameter_prologue(
+                &destructure_params,
+                binding_lookup,
+                &mut body_ops,
+                &mut body_bindings,
+                &body_lookup,
+                &mut body_binding_index,
+                body_scope,
+                &mut body_label_counter,
+            )?;
+            reject_self_referential_parameter_capture(
+                &parameter_prologue_captures,
+                &name,
+                func.span.clone(),
+            )?;
             let pre_lower_names = prepare_function_body_bindings(
                 Some(&func.body.body),
+                parameter_binding_names,
+                &mut body_lookup,
+                &mut body_binding_index,
+            );
+            merge_unshadowed_parameter_prologue_captures(
+                &parameter_prologue_captures,
+                &mut body_lookup,
+            );
+            seed_function_outer_static_bindings(
                 binding_lookup,
                 &mut body_lookup,
                 &mut body_binding_index,
@@ -3829,9 +4182,19 @@ fn lower_statement_to_ir1_with_flow(
             // references that exist in the OUTER scope's lookup. Capture the
             // body binding-id alongside the name so the deferred IR3 pass can
             // resolve them exactly (bd-snlhk; mirrors the engine fix).
-            let (free_vars, free_var_ids, free_var_outer_ids) = collect_free_vars(
+            let (mut free_vars, mut free_var_ids, mut free_var_outer_ids) = collect_free_vars(
                 &body_lookup,
                 &pre_lower_names,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+            );
+            append_shadowed_parameter_prologue_captures(
+                &parameter_prologue_captures,
+                &mut free_vars,
+                &mut free_var_ids,
+                &mut free_var_outer_ids,
                 bindings,
                 binding_lookup,
                 binding_index,
@@ -3862,7 +4225,11 @@ fn lower_statement_to_ir1_with_flow(
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
-            let (param_names, rest_param_index) = if let Some(ctor) = constructor {
+            let FunctionParameterPlan {
+                param_names,
+                destructure_params,
+                rest_param_index,
+            } = if let Some(ctor) = constructor {
                 allocate_function_parameter_bindings(
                     &ctor.params,
                     &mut body_bindings,
@@ -3871,11 +4238,36 @@ fn lower_statement_to_ir1_with_flow(
                     body_scope,
                 )?
             } else {
-                (Vec::new(), None)
+                FunctionParameterPlan::default()
             };
+            let parameter_binding_names = body_lookup.keys().cloned().collect();
+            let parameter_prologue_captures = lower_function_parameter_prologue(
+                &destructure_params,
+                binding_lookup,
+                &mut body_ops,
+                &mut body_bindings,
+                &body_lookup,
+                &mut body_binding_index,
+                body_scope,
+                &mut body_label_counter,
+            )?;
+            reject_self_referential_parameter_capture(
+                &parameter_prologue_captures,
+                &class_name,
+                cls.span.clone(),
+            )?;
             let ctor_pre_lower_names = if let Some(ctor) = constructor {
                 let pre_lower_names = prepare_function_body_bindings(
                     Some(&ctor.body.body),
+                    parameter_binding_names,
+                    &mut body_lookup,
+                    &mut body_binding_index,
+                );
+                merge_unshadowed_parameter_prologue_captures(
+                    &parameter_prologue_captures,
+                    &mut body_lookup,
+                );
+                seed_function_outer_static_bindings(
                     binding_lookup,
                     &mut body_lookup,
                     &mut body_binding_index,
@@ -3901,9 +4293,20 @@ fn lower_statement_to_ir1_with_flow(
                 });
                 body_ops.push(Ir1Op::Return);
             }
-            let (ctor_free_vars, ctor_free_var_ids, ctor_free_var_outer_ids) = collect_free_vars(
-                &body_lookup,
-                &ctor_pre_lower_names,
+            let (mut ctor_free_vars, mut ctor_free_var_ids, mut ctor_free_var_outer_ids) =
+                collect_free_vars(
+                    &body_lookup,
+                    &ctor_pre_lower_names,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                );
+            append_shadowed_parameter_prologue_captures(
+                &parameter_prologue_captures,
+                &mut ctor_free_vars,
+                &mut ctor_free_var_ids,
+                &mut ctor_free_var_outer_ids,
                 bindings,
                 binding_lookup,
                 binding_index,
@@ -3994,7 +4397,11 @@ fn lower_statement_to_ir1_with_flow(
                 let mut m_binding_index: BindingId = 0;
                 let m_scope = ScopeId { depth: 0, index: 0 };
                 let mut m_label_counter: u32 = 0;
-                let (m_param_names, m_rest_param_index) = allocate_function_parameter_bindings(
+                let FunctionParameterPlan {
+                    param_names: m_param_names,
+                    destructure_params: m_destructure_params,
+                    rest_param_index: m_rest_param_index,
+                } = allocate_function_parameter_bindings(
                     &method.params,
                     &mut m_bindings,
                     &mut m_lookup,
@@ -4012,8 +4419,28 @@ fn lower_statement_to_ir1_with_flow(
                         Some(method.span.clone()),
                     ));
                 }
+                let parameter_binding_names = m_lookup.keys().cloned().collect();
+                let parameter_prologue_captures = lower_function_parameter_prologue(
+                    &m_destructure_params,
+                    binding_lookup,
+                    &mut m_body_ops,
+                    &mut m_bindings,
+                    &m_lookup,
+                    &mut m_binding_index,
+                    m_scope,
+                    &mut m_label_counter,
+                )?;
                 let method_pre_lower_names = prepare_function_body_bindings(
                     Some(&method.body.body),
+                    parameter_binding_names,
+                    &mut m_lookup,
+                    &mut m_binding_index,
+                );
+                merge_unshadowed_parameter_prologue_captures(
+                    &parameter_prologue_captures,
+                    &mut m_lookup,
+                );
+                seed_function_outer_static_bindings(
                     binding_lookup,
                     &mut m_lookup,
                     &mut m_binding_index,
@@ -4035,7 +4462,7 @@ fn lower_statement_to_ir1_with_flow(
                     });
                     m_body_ops.push(Ir1Op::Return);
                 }
-                let (method_free_vars, method_free_var_ids, method_free_var_outer_ids) =
+                let (mut method_free_vars, mut method_free_var_ids, mut method_free_var_outer_ids) =
                     collect_free_vars(
                         &m_lookup,
                         &method_pre_lower_names,
@@ -4044,6 +4471,16 @@ fn lower_statement_to_ir1_with_flow(
                         binding_index,
                         scope_id,
                     );
+                append_shadowed_parameter_prologue_captures(
+                    &parameter_prologue_captures,
+                    &mut method_free_vars,
+                    &mut method_free_var_ids,
+                    &mut method_free_var_outer_ids,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                );
                 let method_super_binding = if cls.super_class.is_some() {
                     Some(alloc_internal_binding(
                         bindings,
@@ -4074,6 +4511,7 @@ fn lower_statement_to_ir1_with_flow(
                     free_var_ids: method_free_var_ids,
                     free_var_outer_ids: method_free_var_outer_ids,
                     is_generator: false,
+                    is_arrow: false,
                     rest_param_index: m_rest_param_index,
                 });
                 if let Some(method_binding) = method_super_binding {
@@ -4297,6 +4735,46 @@ fn collect_free_vars(
         outer_ids.push(outer_id);
     }
     (names, body_ids, outer_ids)
+}
+
+/// Parameter defaults execute in a distinct environment. Most of their
+/// captures are also visible to the body and are collected normally; a body
+/// declaration with the same name deliberately hides one from `body_lookup`.
+/// Preserve those shadowed capture binding IDs explicitly so the prologue's
+/// `LoadBinding` still resolves to the outer environment.
+#[allow(clippy::too_many_arguments)]
+fn append_shadowed_parameter_prologue_captures(
+    captures: &[(String, BindingId)],
+    names: &mut Vec<String>,
+    body_ids: &mut Vec<BindingId>,
+    outer_ids: &mut Vec<BindingId>,
+    outer_bindings: &mut Vec<ResolvedBinding>,
+    outer_lookup: &mut BTreeMap<String, BindingId>,
+    outer_binding_index: &mut BindingId,
+    outer_scope: ScopeId,
+) {
+    for (name, body_id) in captures {
+        if body_ids.contains(body_id) {
+            continue;
+        }
+        let outer_id = if let Some(outer_id) = outer_lookup.get(name) {
+            *outer_id
+        } else {
+            let outer_id = *outer_binding_index;
+            *outer_binding_index = outer_binding_index.saturating_add(1);
+            outer_bindings.push(ResolvedBinding {
+                name: name.clone(),
+                binding_id: outer_id,
+                scope: outer_scope,
+                kind: BindingKind::Let,
+            });
+            outer_lookup.insert(name.clone(), outer_id);
+            outer_id
+        };
+        names.push(name.clone());
+        body_ids.push(*body_id);
+        outer_ids.push(outer_id);
+    }
 }
 
 fn binding_kind_for_variable_declaration(kind: VariableDeclarationKind) -> BindingKind {
@@ -5505,6 +5983,7 @@ pub fn lower_ir2_to_ir3(
                 free_var_outer_ids,
                 is_generator,
                 rest_param_index,
+                ..
             } => {
                 if free_vars.len() != free_var_ids.len()
                     || free_vars.len() != free_var_outer_ids.len()
@@ -5577,6 +6056,7 @@ pub fn lower_ir2_to_ir3(
                 free_var_outer_ids,
                 is_generator,
                 rest_param_index,
+                ..
             } => {
                 if free_vars.len() != free_var_ids.len()
                     || free_vars.len() != free_var_outer_ids.len()
@@ -6753,6 +7233,7 @@ pub fn lower_ir2_to_ir3(
                     free_var_outer_ids: inner_fv_outer_ids,
                     is_generator: inner_gen,
                     rest_param_index: inner_rest,
+                    ..
                 } => {
                     let dst = alloc_register(&mut fn_reg);
                     let function_index = deferred_functions.len() as u32 + 1;
@@ -7626,7 +8107,11 @@ fn lower_class_expression_to_ir1(
     let mut body_binding_index: BindingId = 0;
     let body_scope = ScopeId { depth: 0, index: 0 };
     let mut body_label_counter: u32 = 0;
-    let (param_names, rest_param_index) = if let Some(ctor) = constructor {
+    let FunctionParameterPlan {
+        param_names,
+        destructure_params,
+        rest_param_index,
+    } = if let Some(ctor) = constructor {
         allocate_function_parameter_bindings(
             &ctor.params,
             &mut body_bindings,
@@ -7635,11 +8120,38 @@ fn lower_class_expression_to_ir1(
             body_scope,
         )?
     } else {
-        (Vec::new(), None)
+        FunctionParameterPlan::default()
     };
+    let parameter_binding_names = body_lookup.keys().cloned().collect();
+    let parameter_prologue_captures = lower_function_parameter_prologue(
+        &destructure_params,
+        binding_lookup,
+        &mut body_ops,
+        &mut body_bindings,
+        &body_lookup,
+        &mut body_binding_index,
+        body_scope,
+        &mut body_label_counter,
+    )?;
+    if let (Some(self_name), Some(ctor)) = (name, constructor) {
+        reject_self_referential_parameter_capture(
+            &parameter_prologue_captures,
+            self_name,
+            ctor.span.clone(),
+        )?;
+    }
     let ctor_pre_lower_names = if let Some(ctor) = constructor {
         let pre_lower_names = prepare_function_body_bindings(
             Some(&ctor.body.body),
+            parameter_binding_names,
+            &mut body_lookup,
+            &mut body_binding_index,
+        );
+        merge_unshadowed_parameter_prologue_captures(
+            &parameter_prologue_captures,
+            &mut body_lookup,
+        );
+        seed_function_outer_static_bindings(
             binding_lookup,
             &mut body_lookup,
             &mut body_binding_index,
@@ -7665,9 +8177,20 @@ fn lower_class_expression_to_ir1(
         });
         body_ops.push(Ir1Op::Return);
     }
-    let (ctor_free_vars, ctor_free_var_ids, ctor_free_var_outer_ids) = collect_free_vars(
-        &body_lookup,
-        &ctor_pre_lower_names,
+    let (mut ctor_free_vars, mut ctor_free_var_ids, mut ctor_free_var_outer_ids) =
+        collect_free_vars(
+            &body_lookup,
+            &ctor_pre_lower_names,
+            bindings,
+            binding_lookup,
+            binding_index,
+            scope_id,
+        );
+    append_shadowed_parameter_prologue_captures(
+        &parameter_prologue_captures,
+        &mut ctor_free_vars,
+        &mut ctor_free_var_ids,
+        &mut ctor_free_var_outer_ids,
         bindings,
         binding_lookup,
         binding_index,
@@ -7689,6 +8212,7 @@ fn lower_class_expression_to_ir1(
         free_var_ids: ctor_free_var_ids,
         free_var_outer_ids: ctor_free_var_outer_ids,
         is_generator: false,
+        is_arrow: false,
         rest_param_index,
     });
     ops.push(Ir1Op::StoreBinding {
@@ -7753,7 +8277,11 @@ fn lower_class_expression_to_ir1(
         let mut method_binding_index: BindingId = 0;
         let method_scope = ScopeId { depth: 0, index: 0 };
         let mut method_label_counter: u32 = 0;
-        let (method_param_names, method_rest_param_index) = allocate_function_parameter_bindings(
+        let FunctionParameterPlan {
+            param_names: method_param_names,
+            destructure_params: method_destructure_params,
+            rest_param_index: method_rest_param_index,
+        } = allocate_function_parameter_bindings(
             &method.params,
             &mut method_bindings,
             &mut method_lookup,
@@ -7771,8 +8299,35 @@ fn lower_class_expression_to_ir1(
                 Some(method.span.clone()),
             ));
         }
+        let parameter_binding_names = method_lookup.keys().cloned().collect();
+        let parameter_prologue_captures = lower_function_parameter_prologue(
+            &method_destructure_params,
+            binding_lookup,
+            &mut method_body_ops,
+            &mut method_bindings,
+            &method_lookup,
+            &mut method_binding_index,
+            method_scope,
+            &mut method_label_counter,
+        )?;
+        if let Some(self_name) = name {
+            reject_self_referential_parameter_capture(
+                &parameter_prologue_captures,
+                self_name,
+                method.span.clone(),
+            )?;
+        }
         let method_pre_lower_names = prepare_function_body_bindings(
             Some(&method.body.body),
+            parameter_binding_names,
+            &mut method_lookup,
+            &mut method_binding_index,
+        );
+        merge_unshadowed_parameter_prologue_captures(
+            &parameter_prologue_captures,
+            &mut method_lookup,
+        );
+        seed_function_outer_static_bindings(
             binding_lookup,
             &mut method_lookup,
             &mut method_binding_index,
@@ -7794,9 +8349,20 @@ fn lower_class_expression_to_ir1(
             });
             method_body_ops.push(Ir1Op::Return);
         }
-        let (method_free_vars, method_free_var_ids, method_free_var_outer_ids) = collect_free_vars(
-            &method_lookup,
-            &method_pre_lower_names,
+        let (mut method_free_vars, mut method_free_var_ids, mut method_free_var_outer_ids) =
+            collect_free_vars(
+                &method_lookup,
+                &method_pre_lower_names,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+            );
+        append_shadowed_parameter_prologue_captures(
+            &parameter_prologue_captures,
+            &mut method_free_vars,
+            &mut method_free_var_ids,
+            &mut method_free_var_outer_ids,
             bindings,
             binding_lookup,
             binding_index,
@@ -7831,6 +8397,7 @@ fn lower_class_expression_to_ir1(
             free_var_ids: method_free_var_ids,
             free_var_outer_ids: method_free_var_outer_ids,
             is_generator: false,
+            is_arrow: false,
             rest_param_index: method_rest_param_index,
         });
         if let Some(method_binding) = method_super_binding {
@@ -9598,18 +10165,42 @@ fn lower_expression_to_ir1(
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
-            let (param_names, rest_param_index) = allocate_function_parameter_bindings(
+            let FunctionParameterPlan {
+                param_names,
+                destructure_params,
+                rest_param_index,
+            } = allocate_function_parameter_bindings(
                 params,
                 &mut body_bindings,
                 &mut body_lookup,
                 &mut body_binding_index,
                 body_scope,
             )?;
+            let parameter_binding_names = body_lookup.keys().cloned().collect();
+            let parameter_prologue_captures = lower_function_parameter_prologue(
+                &destructure_params,
+                binding_lookup,
+                &mut body_ops,
+                &mut body_bindings,
+                &body_lookup,
+                &mut body_binding_index,
+                body_scope,
+                &mut body_label_counter,
+            )?;
             let pre_lower_names = prepare_function_body_bindings(
                 match body {
                     ArrowBody::Block(block) => Some(block.body.as_slice()),
                     ArrowBody::Expression(_) => None,
                 },
+                parameter_binding_names,
+                &mut body_lookup,
+                &mut body_binding_index,
+            );
+            merge_unshadowed_parameter_prologue_captures(
+                &parameter_prologue_captures,
+                &mut body_lookup,
+            );
+            seed_function_outer_static_bindings(
                 binding_lookup,
                 &mut body_lookup,
                 &mut body_binding_index,
@@ -9644,9 +10235,20 @@ fn lower_expression_to_ir1(
             if !matches!(body_ops.last(), Some(Ir1Op::Return)) {
                 body_ops.push(Ir1Op::Return);
             }
-            let (arrow_free_vars, arrow_free_var_ids, arrow_free_var_outer_ids) = collect_free_vars(
-                &body_lookup,
-                &pre_lower_names,
+            let (mut arrow_free_vars, mut arrow_free_var_ids, mut arrow_free_var_outer_ids) =
+                collect_free_vars(
+                    &body_lookup,
+                    &pre_lower_names,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                );
+            append_shadowed_parameter_prologue_captures(
+                &parameter_prologue_captures,
+                &mut arrow_free_vars,
+                &mut arrow_free_var_ids,
+                &mut arrow_free_var_outer_ids,
                 bindings,
                 binding_lookup,
                 binding_index,
@@ -9660,6 +10262,7 @@ fn lower_expression_to_ir1(
                 free_var_ids: arrow_free_var_ids,
                 free_var_outer_ids: arrow_free_var_outer_ids,
                 is_generator: false,
+                is_arrow: true,
                 rest_param_index,
             });
         }
@@ -9677,7 +10280,11 @@ fn lower_expression_to_ir1(
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
-            let (param_names, rest_param_index) = allocate_function_parameter_bindings(
+            let FunctionParameterPlan {
+                param_names,
+                destructure_params,
+                rest_param_index,
+            } = allocate_function_parameter_bindings(
                 params,
                 &mut body_bindings,
                 &mut body_lookup,
@@ -9693,9 +10300,27 @@ fn lower_expression_to_ir1(
                     Some(body.span.clone()),
                 ));
             }
+            let parameter_binding_names = body_lookup.keys().cloned().collect();
+            let parameter_prologue_captures = lower_function_parameter_prologue(
+                &destructure_params,
+                binding_lookup,
+                &mut body_ops,
+                &mut body_bindings,
+                &body_lookup,
+                &mut body_binding_index,
+                body_scope,
+                &mut body_label_counter,
+            )?;
+            if let Some(function_name) = name {
+                reject_self_referential_parameter_capture(
+                    &parameter_prologue_captures,
+                    function_name,
+                    body.span.clone(),
+                )?;
+            }
             let mut pre_lower_names = prepare_function_body_bindings(
                 Some(&body.body),
-                binding_lookup,
+                parameter_binding_names,
                 &mut body_lookup,
                 &mut body_binding_index,
             );
@@ -9718,6 +10343,15 @@ fn lower_expression_to_ir1(
                 .map_err(LoweringPipelineError::SemanticViolation)?;
                 pre_lower_names.insert(function_name.clone());
             }
+            merge_unshadowed_parameter_prologue_captures(
+                &parameter_prologue_captures,
+                &mut body_lookup,
+            );
+            seed_function_outer_static_bindings(
+                binding_lookup,
+                &mut body_lookup,
+                &mut body_binding_index,
+            );
             for stmt in &body.body {
                 lower_statement_to_ir1(
                     stmt,
@@ -9735,9 +10369,20 @@ fn lower_expression_to_ir1(
                 });
                 body_ops.push(Ir1Op::Return);
             }
-            let (fn_free_vars, fn_free_var_ids, fn_free_var_outer_ids) = collect_free_vars(
-                &body_lookup,
-                &pre_lower_names,
+            let (mut fn_free_vars, mut fn_free_var_ids, mut fn_free_var_outer_ids) =
+                collect_free_vars(
+                    &body_lookup,
+                    &pre_lower_names,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                );
+            append_shadowed_parameter_prologue_captures(
+                &parameter_prologue_captures,
+                &mut fn_free_vars,
+                &mut fn_free_var_ids,
+                &mut fn_free_var_outer_ids,
                 bindings,
                 binding_lookup,
                 binding_index,
@@ -9751,6 +10396,7 @@ fn lower_expression_to_ir1(
                 free_var_ids: fn_free_var_ids,
                 free_var_outer_ids: fn_free_var_outer_ids,
                 is_generator: *is_generator,
+                is_arrow: false,
                 rest_param_index,
             });
         }
@@ -10902,6 +11548,7 @@ mod tests {
                 free_var_ids: Vec::new(),
                 free_var_outer_ids: vec![0],
                 is_generator: false,
+                is_arrow: false,
                 rest_param_index: None,
             },
             effect: EffectBoundary::Pure,
@@ -14295,17 +14942,346 @@ mod tests {
     }
 
     #[test]
-    fn mixed_destructured_and_rest_formals_fail_closed_bd_ur3tk_9() {
-        let error = lower_rest_source_to_ir3("function mixed({ value }, ...tail) { return tail; }")
-            .expect_err("compressed parameter slots must never reach IR3");
+    fn patterned_formals_keep_positional_slots_for_every_function_shape_bd_ur3tk_10() {
+        let ir3 = lower_rest_source_to_ir3(
+            "function mixed({ value }, ...tail) { return value; }\
+             function outer([head], ...outerTail) {\
+               function inner({ nested }, ...innerTail) { return nested; }\
+               return inner({ nested: head });\
+             }\
+             let arrow = ({ left }, ...arrowTail) => left;\
+             let expressed = function expressed({ right }, ...expressionTail) { return right; };\
+             class Bucket {\
+               constructor({ item }, ...ctorTail) {}\
+               collect([entry], ...methodTail) { return entry; }\
+             }\
+             let Crate = class Crate {\
+               constructor([item], ...exprCtorTail) {}\
+               collectExpr({ entry }, ...exprMethodTail) { return entry; }\
+             };",
+        )
+        .expect("patterned prefixes must retain their positional slots before rest");
+
+        for name in [
+            "mixed",
+            "outer",
+            "inner",
+            "expressed",
+            "Bucket",
+            "collect",
+            "Crate",
+            "collectExpr",
+        ] {
+            let desc = ir3
+                .function_table
+                .iter()
+                .find(|desc| desc.name.as_deref() == Some(name))
+                .unwrap_or_else(|| panic!("missing IR3 descriptor for {name}"));
+            assert_eq!(desc.arity, 2, "{name} must retain both formal slots");
+            assert_eq!(desc.rest_param_index, Some(1), "{name} rest slot");
+        }
+
+        let arrow = ir3
+            .function_table
+            .iter()
+            .find(|desc| desc.name.is_none())
+            .expect("anonymous patterned arrow descriptor");
+        assert_eq!(arrow.arity, 2);
+        assert_eq!(arrow.rest_param_index, Some(1));
+    }
+
+    #[test]
+    fn patterned_default_and_rest_formals_execute_bd_ur3tk_10() {
+        let (ir1, module, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function mixed({ value }, scale = 4, ...tail) {\
+                 return value * 10 + scale + tail.length;\
+             }\
+             mixed({ value: 3 }, undefined, 1, 2);",
+        );
+        let Ir1Op::DeclareFunction {
+            param_names,
+            rest_param_index,
+            ..
+        } = ir1
+            .ops
+            .iter()
+            .find(|op| matches!(op, Ir1Op::DeclareFunction { name, .. } if name == "mixed"))
+            .expect("mixed declaration")
+        else {
+            unreachable!("filtered declaration shape")
+        };
+        assert_eq!(param_names.len(), 3);
+        assert!(param_names[0].starts_with("@@franken_internal_param_"));
+        assert!(param_names[1].starts_with("@@franken_internal_param_"));
+        assert_eq!(param_names[2], "tail");
+        assert_eq!(*rest_param_index, Some(2));
+        assert!(
+            deferred_ir1_body_bd_6pvhn(&ir1, "mixed")
+                .iter()
+                .any(|op| matches!(op, Ir1Op::GetProperty { .. })),
+            "the object and default parameters must run their entry prologue"
+        );
+        assert!(
+            deferred_ir3_body_bd_6pvhn(&module, "mixed")
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::GetProperty { .. }))
+        );
+        assert_eq!(value, Value::Int(36));
+    }
+
+    #[test]
+    fn patterned_prologues_execute_for_expression_and_class_shapes_bd_ur3tk_10() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let expressed = function expressed({ value }, add = 1, ...tail) {\
+                 return value + add + tail.length;\
+             };\
+             class Declared {\
+                 constructor({ value }, add = 1, ...tail) {\
+                     this.total = value + add + tail.length;\
+                 }\
+                 collect([value], add = 1, ...tail) {\
+                     return value + add + tail.length;\
+                 }\
+             }\
+             let Expressed = class Expressed {\
+                 constructor([value], add = 1, ...tail) {\
+                     this.total = value + add + tail.length;\
+                 }\
+                 collect({ value }, add = 1, ...tail) {\
+                     return value + add + tail.length;\
+                 }\
+             };\
+             let declared = new Declared({ value: 2 }, undefined, 0);\
+             let classExpression = new Expressed([4], undefined, 0);\
+             expressed({ value: 1 }, undefined, 0)\
+                 + declared.total\
+                 + declared.collect([3], undefined, 0)\
+                 + classExpression.total\
+                 + classExpression.collect({ value: 5 }, undefined, 0);",
+        );
+        assert_eq!(value, Value::Int(25));
+    }
+
+    #[test]
+    fn nested_and_empty_pattern_formals_execute_bd_ur3tk_10() {
+        let (_, _, nested) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let combine = ([head, [nested]], scale = 2, ...tail) =>\
+                 head + nested * scale + tail.length;\
+             combine([1, [3]], undefined, 8, 9);",
+        );
+        assert_eq!(nested, Value::Int(9));
+
+        let (_, _, empty_rest) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function count({}, ...tail) { return tail.length; } count({});",
+        );
+        assert_eq!(empty_rest, Value::Int(0));
+
+        let (_, _, canonical_numeric_key) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function read({ 1: value }, ...tail) { return value + tail.length; }\
+             read({ 1: 3 });",
+        );
+        assert_eq!(canonical_numeric_key, Value::Int(3));
+
+        let (_, _, canonical_decimal_keys) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function decimal({ 1.5: value }, ...tail) { return value; }\
+             function wide({ 9007199254740992: value }, ...tail) { return value; }\
+             decimal({ '1.5': 3 }) + wide({ '9007199254740992': 4 });",
+        );
+        assert_eq!(canonical_decimal_keys, Value::Int(7));
+    }
+
+    #[test]
+    fn captureless_default_closure_executes_bd_ur3tk_10() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let Math = 11;\
+             function invoke(callback = () => 4, ...tail) {\
+                 return callback() + tail.length;\
+             }\
+             invoke(undefined, 9);",
+        );
+        assert_eq!(value, Value::Int(5));
+
+        let (_, _, ordinary_function_this) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function invoke(callback = function () { return this; }, ...tail) {\
+                 return tail.length;\
+             }\
+             invoke(undefined, 9);",
+        );
+        assert_eq!(ordinary_function_this, Value::Int(1));
+
+        let (_, _, arrow_with_ordinary_child) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function invoke(callback = () => function () { return this; }, ...tail) {\
+                 return tail.length;\
+             }\
+             invoke(undefined, 9);",
+        );
+        assert_eq!(arrow_with_ordinary_child, Value::Int(1));
+    }
+
+    #[test]
+    fn unused_static_spelled_self_name_is_not_a_capture_bd_ur3tk_10() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function Math(callback = () => 4, { value }, ...tail) {\
+                 return callback() + value + tail.length;\
+             }\
+             Math(undefined, { value: 3 });",
+        );
+        assert_eq!(value, Value::Int(7));
+    }
+
+    #[test]
+    fn synthetic_parameter_slots_cannot_collide_with_source_names_bd_ur3tk_10() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function add(__param_1, { value }) { return __param_1 + value; }\
+             add(2, { value: 3 });",
+        );
+        assert_eq!(value, Value::Int(5));
+    }
+
+    #[test]
+    fn default_parameter_environment_survives_body_shadowing_bd_ur3tk_10() {
+        let (_, _, ordinary) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let fallback = 7;\
+             function read(value = fallback) {\
+                 let fallback = 99;\
+                 return value;\
+             }\
+             read();",
+        );
+        assert_eq!(ordinary, Value::Int(7));
+
+        let (_, _, static_name) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let Math = 11;\
+             function readStatic(value = Math) {\
+                 let Math = 88;\
+                 return value;\
+             }\
+             readStatic();",
+        );
+        assert_eq!(static_name, Value::Int(11));
+
+        let (_, _, nested_var) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let fallback = 5;\
+             function readNested(value = fallback) {\
+                 if (true) { var fallback = 77; }\
+                 return value;\
+             }\
+             readNested();",
+        );
+        assert_eq!(nested_var, Value::Int(5));
+    }
+
+    #[test]
+    fn object_rest_parameter_patterns_fail_closed_bd_ur3tk_10() {
+        let error = lower_rest_source_to_ir3(
+            "function unsupported({ kept, ...rest }, ...tail) { return rest; }",
+        )
+        .expect_err("object rest must not silently lower as an ordinary property");
         let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
-            panic!("expected fail-closed unsupported syntax diagnostic");
+            panic!("expected fail-closed object-rest parameter diagnostic");
         };
         assert_eq!(
             diagnostic.diagnostic_code,
-            "FE-LOWER-UNSUPPORTED-REST-PARAM-ABI-0001"
+            "FE-LOWER-UNSUPPORTED-OBJECT-REST-PARAM-0001"
         );
-        assert_eq!(diagnostic.site_id, "core.function_rest_parameter_abi");
+        assert_eq!(diagnostic.site_id, "core.function_parameter_object_rest");
+    }
+
+    #[test]
+    fn nested_rest_parameter_targets_fail_closed_bd_ur3tk_10() {
+        let error = lower_rest_source_to_ir3(
+            "function unsupported([...[value]], ...tail) { return value; }",
+        )
+        .expect_err("nested rest targets must not receive the unsplit remainder array");
+        let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
+            panic!("expected fail-closed nested-rest parameter diagnostic");
+        };
+        assert_eq!(
+            diagnostic.diagnostic_code,
+            "FE-LOWER-UNSUPPORTED-NESTED-REST-PARAM-0001"
+        );
+        assert_eq!(diagnostic.site_id, "core.function_parameter_nested_rest");
+    }
+
+    #[test]
+    fn computed_parameter_pattern_keys_fail_closed_bd_ur3tk_10() {
+        let error = lower_rest_source_to_ir3(
+            "function unsupported({ ['value']: picked }, ...tail) { return picked; }",
+        )
+        .expect_err("computed keys must not silently fall back to the target binding name");
+        let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
+            panic!("expected fail-closed computed-key parameter diagnostic");
+        };
+        assert_eq!(
+            diagnostic.diagnostic_code,
+            "FE-LOWER-UNSUPPORTED-COMPUTED-PARAM-KEY-0001"
+        );
+        assert_eq!(diagnostic.site_id, "core.function_parameter_computed_key");
+    }
+
+    #[test]
+    fn noncanonical_static_parameter_keys_fail_closed_bd_ur3tk_10() {
+        for source in [
+            "function quoted({ 'value': picked }, ...tail) { return picked; }",
+            "function hexadecimal({ 0x10: picked }, ...tail) { return picked; }",
+        ] {
+            let error = lower_rest_source_to_ir3(source)
+                .expect_err("raw property spelling must not become the runtime property key");
+            let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
+                panic!("expected fail-closed raw-key parameter diagnostic");
+            };
+            assert_eq!(
+                diagnostic.diagnostic_code,
+                "FE-LOWER-UNSUPPORTED-RAW-PARAM-KEY-0001"
+            );
+            assert_eq!(diagnostic.site_id, "core.function_parameter_raw_static_key");
+        }
+    }
+
+    #[test]
+    fn parameter_default_closures_fail_closed_without_live_cells_bd_ur3tk_10() {
+        for source in [
+            "function captured(callback = () => later, later = 3) { return callback(); }",
+            "function lexical(callback = () => this) { return callback(); }",
+            "function nestedLexical(callback = () => () => this) { return callback(); }",
+        ] {
+            let error = lower_rest_source_to_ir3(source).expect_err(
+                "capturing defaults must not snapshot parameters or lexical call context",
+            );
+            let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
+                panic!("expected fail-closed parameter-default closure diagnostic");
+            };
+            assert_eq!(
+                diagnostic.diagnostic_code,
+                "FE-LOWER-UNSUPPORTED-PARAM-DEFAULT-CLOSURE-0001"
+            );
+            assert_eq!(
+                diagnostic.site_id,
+                "core.function_parameter_default_closure"
+            );
+        }
+    }
+
+    #[test]
+    fn self_referential_parameter_defaults_fail_closed_bd_ur3tk_10() {
+        for source in [
+            "let wrapped = function self(value = self) { return value === self; };",
+            "let Wrapped = class Self { method(value = Self) { return value === Self; } };",
+        ] {
+            let error = lower_rest_source_to_ir3(source)
+                .expect_err("self capture must not snapshot an uninitialized closure");
+            let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
+                panic!("expected fail-closed self-parameter diagnostic");
+            };
+            assert_eq!(
+                diagnostic.diagnostic_code,
+                "FE-LOWER-UNSUPPORTED-SELF-PARAM-DEFAULT-0001"
+            );
+            assert_eq!(
+                diagnostic.site_id,
+                "core.self_referential_parameter_default"
+            );
+        }
     }
 
     #[test]

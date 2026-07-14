@@ -925,9 +925,13 @@ struct CallFrame {
     /// The `new.target` value for this call frame. Constructor calls set this
     /// to the invoked constructor value; non-constructor calls use undefined.
     new_target_value: Value,
+    /// IFC label paired with `new_target_value`.
+    new_target_label: crate::ifc_artifacts::Label,
     /// The `super` value for this call frame. Constructors receive the parent
     /// constructor; methods receive the parent prototype.
     super_value: Value,
+    /// IFC label paired with `super_value`.
+    super_label: crate::ifc_artifacts::Label,
     /// For constructor calls (`new`): the `this` object allocated before
     /// entering the constructor body. If the constructor returns a non-object,
     /// this value is used as the result instead (ES2020 §9.2.2 step 13).
@@ -3105,7 +3109,9 @@ impl InterpreterCore {
             this_value,
             this_label,
             new_target_value: Value::Undefined,
+            new_target_label: crate::ifc_artifacts::Label::Public,
             super_value,
+            super_label: crate::ifc_artifacts::Label::Public,
             construct_this: None,
             saved_pending_exception: self.pending_exception.take(),
             saved_pending_return: self.pending_return.take(),
@@ -3659,7 +3665,9 @@ impl InterpreterCore {
             this_value,
             this_label: crate::ifc_artifacts::Label::Public,
             new_target_value: Value::Undefined,
+            new_target_label: crate::ifc_artifacts::Label::Public,
             super_value,
+            super_label: crate::ifc_artifacts::Label::Public,
             construct_this: None,
             saved_pending_exception: self.pending_exception.take(),
             saved_pending_return: self.pending_return.take(),
@@ -4638,7 +4646,9 @@ impl InterpreterCore {
                                 this_value: call_this,
                                 this_label: call_this_label,
                                 new_target_value: Value::Undefined,
+                                new_target_label: crate::ifc_artifacts::Label::Public,
                                 super_value,
+                                super_label: crate::ifc_artifacts::Label::Public,
                                 construct_this: None,
                                 saved_pending_exception: self.pending_exception.take(),
                                 saved_pending_return: self.pending_return.take(),
@@ -4819,7 +4829,9 @@ impl InterpreterCore {
                         this_value: receiver_val,
                         this_label: receiver_label,
                         new_target_value: Value::Undefined,
+                        new_target_label: crate::ifc_artifacts::Label::Public,
                         super_value,
+                        super_label: crate::ifc_artifacts::Label::Public,
                         construct_this: None,
                         saved_pending_exception: self.pending_exception.take(),
                         saved_pending_return: self.pending_return.take(),
@@ -5425,6 +5437,7 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::Construct { callee, args, dst } => {
                     let callee_val = self.read_reg(callee)?;
+                    let callee_label = self.read_reg_label(callee)?;
 
                     // Resolve function index and optional captured environment.
                     let (func_idx, captured_env, closure_id) = match &callee_val {
@@ -5532,9 +5545,11 @@ impl InterpreterCore {
                                 register_base: self.register_base,
                                 function_index: Some(func_idx),
                                 this_value: this_val.clone(),
-                                this_label: crate::ifc_artifacts::Label::Public,
+                                this_label: callee_label.clone(),
                                 new_target_value: callee_val.clone(),
+                                new_target_label: callee_label.clone(),
                                 super_value,
+                                super_label: callee_label,
                                 construct_this: Some(this_val.clone()),
                                 saved_pending_exception: self.pending_exception.take(),
                                 saved_pending_return: self.pending_return.take(),
@@ -5638,19 +5653,24 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::LoadNewTarget { dst } => {
-                    let new_target = self
-                        .call_stack
-                        .last()
-                        .map_or(Value::Undefined, |f| f.new_target_value.clone());
-                    self.write_reg(dst, new_target)?;
+                    let (new_target, new_target_label) = self.call_stack.last().map_or(
+                        (Value::Undefined, crate::ifc_artifacts::Label::Public),
+                        |frame| {
+                            (
+                                frame.new_target_value.clone(),
+                                frame.new_target_label.clone(),
+                            )
+                        },
+                    );
+                    self.write_reg_with_label(dst, new_target, new_target_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::LoadSuper { dst } => {
-                    let super_val = self
-                        .call_stack
-                        .last()
-                        .map_or(Value::Undefined, |f| f.super_value.clone());
-                    self.write_reg(dst, super_val)?;
+                    let (super_value, super_label) = self.call_stack.last().map_or(
+                        (Value::Undefined, crate::ifc_artifacts::Label::Public),
+                        |frame| (frame.super_value.clone(), frame.super_label.clone()),
+                    );
+                    self.write_reg_with_label(dst, super_value, super_label)?;
                     self.ip += 1;
                 }
                 // ---------------------------------------------------------
@@ -8194,7 +8214,9 @@ impl InterpreterCore {
             this_value: Value::Undefined,
             this_label: crate::ifc_artifacts::Label::Public,
             new_target_value: Value::Undefined,
+            new_target_label: crate::ifc_artifacts::Label::Public,
             super_value: self.function_super_value(&callee, IR_SUPER_PROTOTYPE_PROPERTY)?,
+            super_label: crate::ifc_artifacts::Label::Public,
             construct_this: None,
             saved_pending_exception: self.pending_exception.take(),
             saved_pending_return: self.pending_return.take(),
@@ -13805,6 +13827,179 @@ mod tests {
             core.suspended_abrupt_completions.as_slice(),
             [AbruptCompletion::Exception(restored)] if restored == &suspended
         ));
+    }
+
+    fn constructor_descriptor_bd_ur3tk_4(
+        entry: u32,
+        arity: u32,
+        frame_size: u32,
+    ) -> Ir3FunctionDesc {
+        Ir3FunctionDesc {
+            entry,
+            arity,
+            frame_size,
+            name: Some("labeled_constructor".to_string()),
+            is_generator: false,
+            rest_param_index: None,
+        }
+    }
+
+    #[test]
+    fn constructor_this_and_implicit_result_use_only_callee_label_bd_ur3tk_4() {
+        for return_explicit_this in [true, false] {
+            let mut instructions = vec![
+                Ir3Instruction::Construct {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 2,
+                },
+                Ir3Instruction::Halt,
+            ];
+            if return_explicit_this {
+                instructions.extend([
+                    Ir3Instruction::LoadThis { dst: 1 },
+                    Ir3Instruction::Return { value: 1 },
+                ]);
+            } else {
+                instructions.push(Ir3Instruction::Return { value: 0 });
+            }
+            let module = test_module_with_functions(
+                instructions,
+                vec![constructor_descriptor_bd_ur3tk_4(2, 1, 2)],
+            );
+            let mut core = quickjs_test_core();
+            core.write_reg_with_label(0, Value::Function(0), crate::ifc_artifacts::Label::Secret)
+                .expect("constructor should be writable");
+            core.write_reg_with_label(1, Value::Int(99), crate::ifc_artifacts::Label::TopSecret)
+                .expect("constructor argument should be writable");
+
+            core.execute(&module)
+                .expect("labeled constructor should execute");
+
+            assert!(matches!(core.registers[2], Value::Object(_)));
+            assert_eq!(
+                core.read_reg_label(2)
+                    .expect("constructed result label should exist"),
+                crate::ifc_artifacts::Label::Secret,
+                "constructor this provenance comes from the callee, not an ignored or discarded argument ({return_explicit_this=})"
+            );
+        }
+    }
+
+    #[test]
+    fn constructor_explicit_object_return_keeps_argument_label_bd_ur3tk_4() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Construct {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 2,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![constructor_descriptor_bd_ur3tk_4(2, 1, 1)],
+        );
+        let mut core = quickjs_test_core();
+        let explicit_object = core
+            .alloc_object_with_prototype(None)
+            .expect("explicit object should allocate");
+        core.write_reg_with_label(0, Value::Function(0), crate::ifc_artifacts::Label::Secret)
+            .expect("constructor should be writable");
+        core.write_reg_with_label(
+            1,
+            Value::Object(explicit_object),
+            crate::ifc_artifacts::Label::Confidential,
+        )
+        .expect("explicit object argument should be writable");
+
+        core.execute(&module)
+            .expect("explicit object constructor should execute");
+
+        assert_eq!(core.registers[2], Value::Object(explicit_object));
+        assert_eq!(
+            core.read_reg_label(2).expect("explicit result label"),
+            crate::ifc_artifacts::Label::Confidential,
+            "an explicit object return keeps its own label instead of the constructor label"
+        );
+    }
+
+    #[test]
+    fn constructor_new_target_throw_preserves_callee_label_bd_ur3tk_4() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::BeginTry {
+                    catch_target: 3,
+                    finally_target: None,
+                },
+                Ir3Instruction::Construct {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 0 },
+                    dst: 2,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::EnterCatch { dst: 3 },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadNewTarget { dst: 0 },
+                Ir3Instruction::Throw { value: 0 },
+            ],
+            vec![constructor_descriptor_bd_ur3tk_4(5, 0, 1)],
+        );
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(0, Value::Function(0), crate::ifc_artifacts::Label::Secret)
+            .expect("constructor should be writable");
+
+        core.execute(&module)
+            .expect("caller should catch the thrown new.target");
+
+        assert_eq!(core.registers[3], Value::Function(0));
+        assert_eq!(
+            core.read_reg_label(3).expect("new.target catch label"),
+            crate::ifc_artifacts::Label::Secret
+        );
+    }
+
+    #[test]
+    fn constructor_super_value_preserves_callee_label_bd_ur3tk_4() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Construct {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 0 },
+                    dst: 2,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadSuper { dst: 0 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![constructor_descriptor_bd_ur3tk_4(2, 0, 1)],
+        );
+        let mut core = quickjs_test_core();
+        let super_object = core
+            .alloc_object_with_prototype(None)
+            .expect("super object should allocate");
+        let constructor = Value::Function(0);
+        let function_object = core
+            .ensure_function_object(&constructor)
+            .expect("function metadata object should allocate")
+            .expect("Function should have metadata storage");
+        core.set_object_property(
+            function_object,
+            IR_SUPER_CONSTRUCTOR_PROPERTY.to_string(),
+            Value::Object(super_object),
+        )
+        .expect("super metadata should be writable");
+        core.write_reg_with_label(0, constructor, crate::ifc_artifacts::Label::Secret)
+            .expect("constructor should be writable");
+
+        core.execute(&module)
+            .expect("constructor should return its super metadata object");
+
+        assert_eq!(core.registers[2], Value::Object(super_object));
+        assert_eq!(
+            core.read_reg_label(2).expect("super result label"),
+            crate::ifc_artifacts::Label::Secret
+        );
     }
 
     fn lower_source_and_find_unresolved_argument_seed_bd_ur3tk_11(

@@ -1736,6 +1736,12 @@ enum PromiseCombinatorState {
     Any(crate::promise_model::PromiseAnyTracker),
 }
 
+#[derive(Debug, Clone)]
+struct LabeledPromiseCombinatorState {
+    tracker: PromiseCombinatorState,
+    accumulated_label: crate::ifc_artifacts::Label,
+}
+
 #[derive(Debug, Clone, Copy)]
 enum PromiseCombinatorKind {
     All,
@@ -1833,7 +1839,7 @@ pub struct InterpreterCore {
     /// Deterministic event loop state (microtasks + macrotasks + virtual clock).
     event_loop: crate::promise_model::EventLoop,
     /// Active promise combinator trackers keyed by combinator id.
-    promise_combinators: BTreeMap<u64, PromiseCombinatorState>,
+    promise_combinators: BTreeMap<u64, LabeledPromiseCombinatorState>,
     /// Watchers keyed by promise handle for combinator updates.
     promise_combinator_watchers:
         BTreeMap<crate::promise_model::PromiseHandle, Vec<PromiseCombinatorWatcher>>,
@@ -7248,16 +7254,21 @@ impl InterpreterCore {
     fn collect_promise_combinator_inputs(
         &self,
         args: RegRange,
-    ) -> Result<Vec<Value>, InterpreterError> {
+    ) -> Result<Vec<(Value, crate::ifc_artifacts::Label)>, InterpreterError> {
         if args.count == 0 {
             return Ok(Vec::new());
         }
         let first = self.read_reg(args.start)?;
+        let first_label = self.read_reg_label(args.start)?;
         if args.count == 1 {
             if let Value::Object(id) = first {
-                return Ok(self.read_array_like_values(id));
+                return Ok(self
+                    .read_array_like_values(id)
+                    .into_iter()
+                    .map(|value| (value, first_label.clone()))
+                    .collect());
             }
-            return Ok(vec![first]);
+            return Ok(vec![(first, first_label)]);
         }
         let mut values = Vec::with_capacity(args.count as usize);
         for i in 0..args.count {
@@ -7268,7 +7279,7 @@ impl InterpreterCore {
                     register: args.start,
                     max: self.config.max_registers,
                 })?;
-            values.push(self.read_reg(reg)?);
+            values.push((self.read_reg(reg)?, self.read_reg_label(reg)?));
         }
         Ok(values)
     }
@@ -7488,7 +7499,7 @@ impl InterpreterCore {
         Ok(Self::value_to_js_value(&Value::Object(error_id)))
     }
 
-    fn register_combinator(&mut self, state: PromiseCombinatorState) -> u64 {
+    fn register_combinator(&mut self, state: LabeledPromiseCombinatorState) -> u64 {
         let id = self.next_promise_combinator_id;
         self.next_promise_combinator_id = self.next_promise_combinator_id.saturating_add(1);
         self.promise_combinators.insert(id, state);
@@ -7602,7 +7613,8 @@ impl InterpreterCore {
 
         let mut resolution: Option<ResolutionData> = None;
         if let Some(state) = self.promise_combinators.get_mut(&combinator_id) {
-            match state {
+            state.accumulated_label = state.accumulated_label.join(&label);
+            match &mut state.tracker {
                 PromiseCombinatorState::All(tracker) => {
                     if tracker.settled {
                         return Ok(());
@@ -7641,6 +7653,11 @@ impl InterpreterCore {
         }
 
         if let Some(resolution) = resolution {
+            let resolution_label = self
+                .promise_combinators
+                .get(&combinator_id)
+                .map(|state| state.accumulated_label.clone())
+                .unwrap_or(label);
             let (handle, value) = match resolution {
                 ResolutionData::Fulfill(handle, value) => (handle, value),
                 ResolutionData::FulfillAll(handle, values) => {
@@ -7652,7 +7669,7 @@ impl InterpreterCore {
                     (handle, value)
                 }
             };
-            self.fulfill_promise(handle, value, label)?;
+            self.fulfill_promise(handle, value, resolution_label)?;
             self.promise_combinators.remove(&combinator_id);
         }
         Ok(())
@@ -7683,7 +7700,8 @@ impl InterpreterCore {
 
         let mut resolution: Option<ResolutionData> = None;
         if let Some(state) = self.promise_combinators.get_mut(&combinator_id) {
-            match state {
+            state.accumulated_label = state.accumulated_label.join(&label);
+            match &mut state.tracker {
                 PromiseCombinatorState::All(tracker) => {
                     if tracker.settled {
                         return Ok(());
@@ -7720,17 +7738,22 @@ impl InterpreterCore {
         }
 
         if let Some(resolution) = resolution {
+            let resolution_label = self
+                .promise_combinators
+                .get(&combinator_id)
+                .map(|state| state.accumulated_label.clone())
+                .unwrap_or(label);
             match resolution {
                 ResolutionData::FulfillAllSettled(handle, outcomes, total) => {
                     let value = self.build_promise_all_settled_result(outcomes, total)?;
-                    self.fulfill_promise(handle, value, label)?;
+                    self.fulfill_promise(handle, value, resolution_label)?;
                 }
                 ResolutionData::Reject(handle, reason) => {
-                    self.reject_promise(handle, reason, label)?;
+                    self.reject_promise(handle, reason, resolution_label)?;
                 }
                 ResolutionData::RejectAny(handle, errors) => {
                     let aggregate = self.build_aggregate_error(errors)?;
-                    self.reject_promise(handle, aggregate, label)?;
+                    self.reject_promise(handle, aggregate, resolution_label)?;
                 }
             }
             self.promise_combinators.remove(&combinator_id);
@@ -7742,25 +7765,38 @@ impl InterpreterCore {
         &mut self,
         kind: PromiseCombinatorKind,
         args: RegRange,
-    ) -> Result<Value, InterpreterError> {
-        let label = crate::ifc_artifacts::Label::Public;
+    ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
         let inputs = self.collect_promise_combinator_inputs(args)?;
+        let mut accumulated_label = self.promise_hostcall_registration_label(args)?;
+        for (input, input_label) in &inputs {
+            accumulated_label = accumulated_label.join(input_label);
+            if let Value::Promise(handle) = input {
+                let record = self
+                    .promise_store
+                    .get(crate::promise_model::PromiseHandle(*handle))
+                    .map_err(|e| InterpreterError::TypeError {
+                        expected: "promise".to_string(),
+                        got: e.to_string(),
+                    })?;
+                accumulated_label = accumulated_label.join(&record.label);
+            }
+        }
         let total = inputs.len() as u32;
         let result_promise = self.promise_store.create();
 
         match kind {
             PromiseCombinatorKind::All | PromiseCombinatorKind::AllSettled if total == 0 => {
                 let empty = self.build_promise_all_result(Vec::new())?;
-                self.fulfill_promise(result_promise, empty, label)?;
-                return Ok(Value::Promise(result_promise.0));
+                self.fulfill_promise(result_promise, empty, accumulated_label.clone())?;
+                return Ok((Value::Promise(result_promise.0), accumulated_label));
             }
             PromiseCombinatorKind::Any if total == 0 => {
                 let aggregate = self.build_aggregate_error(Vec::new())?;
-                self.reject_promise(result_promise, aggregate, label)?;
-                return Ok(Value::Promise(result_promise.0));
+                self.reject_promise(result_promise, aggregate, accumulated_label.clone())?;
+                return Ok((Value::Promise(result_promise.0), accumulated_label));
             }
             PromiseCombinatorKind::Race if total == 0 => {
-                return Ok(Value::Promise(result_promise.0));
+                return Ok((Value::Promise(result_promise.0), accumulated_label));
             }
             _ => {}
         }
@@ -7800,9 +7836,12 @@ impl InterpreterCore {
             }
         };
 
-        let combinator_id = self.register_combinator(state);
+        let combinator_id = self.register_combinator(LabeledPromiseCombinatorState {
+            tracker: state,
+            accumulated_label: accumulated_label.clone(),
+        });
 
-        for (index, input) in inputs.into_iter().enumerate() {
+        for (index, (input, input_label)) in inputs.into_iter().enumerate() {
             if !self.promise_combinators.contains_key(&combinator_id) {
                 break;
             }
@@ -7846,17 +7885,12 @@ impl InterpreterCore {
                 }
                 other => {
                     let js_val = Self::value_to_js_value(&other);
-                    self.update_combinator_fulfillment(
-                        combinator_id,
-                        index,
-                        js_val,
-                        label.clone(),
-                    )?;
+                    self.update_combinator_fulfillment(combinator_id, index, js_val, input_label)?;
                 }
             }
         }
 
-        Ok(Value::Promise(result_promise.0))
+        Ok((Value::Promise(result_promise.0), accumulated_label))
     }
 
     /// Dispatch a `promise:*` hostcall to the internal promise subsystem.
@@ -8021,22 +8055,12 @@ impl InterpreterCore {
                     })?;
                 Ok((Value::Promise(result.0), registration_label))
             }
-            "promise:all" => Ok((
-                self.dispatch_promise_combinator(PromiseCombinatorKind::All, args)?,
-                crate::ifc_artifacts::Label::Public,
-            )),
-            "promise:race" => Ok((
-                self.dispatch_promise_combinator(PromiseCombinatorKind::Race, args)?,
-                crate::ifc_artifacts::Label::Public,
-            )),
-            "promise:allSettled" => Ok((
-                self.dispatch_promise_combinator(PromiseCombinatorKind::AllSettled, args)?,
-                crate::ifc_artifacts::Label::Public,
-            )),
-            "promise:any" => Ok((
-                self.dispatch_promise_combinator(PromiseCombinatorKind::Any, args)?,
-                crate::ifc_artifacts::Label::Public,
-            )),
+            "promise:all" => self.dispatch_promise_combinator(PromiseCombinatorKind::All, args),
+            "promise:race" => self.dispatch_promise_combinator(PromiseCombinatorKind::Race, args),
+            "promise:allSettled" => {
+                self.dispatch_promise_combinator(PromiseCombinatorKind::AllSettled, args)
+            }
+            "promise:any" => self.dispatch_promise_combinator(PromiseCombinatorKind::Any, args),
             _ => {
                 // Unknown promise sub-capability — return undefined.
                 Ok((Value::Undefined, crate::ifc_artifacts::Label::Public))
@@ -14604,6 +14628,512 @@ mod tests {
                 result.label, expected_label,
                 "{capability} result settlement joins registration provenance"
             );
+        }
+    }
+
+    fn promise_combinator_module_bd_ur3tk_19(
+        capability: &str,
+        args: RegRange,
+        dst: Reg,
+    ) -> Ir3Module {
+        test_module(vec![
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag(capability.to_string()),
+                args,
+                dst,
+            },
+            Ir3Instruction::Halt,
+        ])
+    }
+
+    fn execute_promise_combinator_bd_ur3tk_19(
+        core: &mut InterpreterCore,
+        capability: &str,
+        args: RegRange,
+        dst: Reg,
+    ) -> crate::promise_model::PromiseHandle {
+        core.execute(&promise_combinator_module_bd_ur3tk_19(
+            capability, args, dst,
+        ))
+        .unwrap_or_else(|error| panic!("{capability} should execute: {error}"));
+        let Value::Promise(handle) = core.registers[dst as usize] else {
+            panic!("{capability} should return a Promise handle");
+        };
+        crate::promise_model::PromiseHandle(handle)
+    }
+
+    #[test]
+    fn combinators_join_direct_inputs_in_both_orders_bd_ur3tk_19() {
+        for capability in [
+            "promise:all",
+            "promise:allSettled",
+            "promise:race",
+            "promise:any",
+        ] {
+            for secret_first in [true, false] {
+                let mut core = quickjs_test_core();
+                let (first_label, second_label) = if secret_first {
+                    (
+                        crate::ifc_artifacts::Label::Secret,
+                        crate::ifc_artifacts::Label::Public,
+                    )
+                } else {
+                    (
+                        crate::ifc_artifacts::Label::Public,
+                        crate::ifc_artifacts::Label::Secret,
+                    )
+                };
+                core.write_reg_with_label(0, Value::Int(10), first_label)
+                    .expect("first input should be writable");
+                core.write_reg_with_label(1, Value::Int(20), second_label)
+                    .expect("second input should be writable");
+
+                let result = execute_promise_combinator_bd_ur3tk_19(
+                    &mut core,
+                    capability,
+                    RegRange { start: 0, count: 2 },
+                    2,
+                );
+
+                assert_eq!(
+                    core.read_reg_label(2).expect("result label should exist"),
+                    crate::ifc_artifacts::Label::Secret,
+                    "{capability} returned handle must join every direct input ({secret_first=})"
+                );
+                let record = core
+                    .promise_store
+                    .get(result)
+                    .expect("aggregate Promise should exist");
+                assert_eq!(
+                    record.label,
+                    crate::ifc_artifacts::Label::Secret,
+                    "{capability} settlement must be independent of input order ({secret_first=})"
+                );
+                assert!(record.state.is_settled());
+            }
+        }
+    }
+
+    #[test]
+    fn combinators_join_already_settled_promise_labels_bd_ur3tk_19() {
+        for capability in [
+            "promise:all",
+            "promise:allSettled",
+            "promise:race",
+            "promise:any",
+        ] {
+            for secret_first in [true, false] {
+                let mut core = quickjs_test_core();
+                let first = core.promise_store.create();
+                let second = core.promise_store.create();
+                let (first_label, second_label) = if secret_first {
+                    (
+                        crate::ifc_artifacts::Label::Secret,
+                        crate::ifc_artifacts::Label::Public,
+                    )
+                } else {
+                    (
+                        crate::ifc_artifacts::Label::Public,
+                        crate::ifc_artifacts::Label::Secret,
+                    )
+                };
+                core.fulfill_promise(first, crate::object_model::JsValue::Int(10), first_label)
+                    .expect("first Promise should fulfill");
+                core.fulfill_promise(second, crate::object_model::JsValue::Int(20), second_label)
+                    .expect("second Promise should fulfill");
+                core.registers[0] = Value::Promise(first.0);
+                core.registers[1] = Value::Promise(second.0);
+
+                let result = execute_promise_combinator_bd_ur3tk_19(
+                    &mut core,
+                    capability,
+                    RegRange { start: 0, count: 2 },
+                    2,
+                );
+
+                assert_eq!(
+                    core.read_reg_label(2).expect("result label should exist"),
+                    crate::ifc_artifacts::Label::Secret,
+                    "{capability} handle must include known settlement provenance ({secret_first=})"
+                );
+                let record = core
+                    .promise_store
+                    .get(result)
+                    .expect("aggregate Promise should exist");
+                assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+            }
+        }
+    }
+
+    #[test]
+    fn combinator_array_inputs_inherit_iterable_carrier_label_bd_ur3tk_19() {
+        let mut core = quickjs_test_core();
+        let settled = core.promise_store.create();
+        core.fulfill_promise(
+            settled,
+            crate::object_model::JsValue::Int(20),
+            crate::ifc_artifacts::Label::Public,
+        )
+        .expect("nested Promise should fulfill");
+        let inputs = core
+            .alloc_array_from_values(&[Value::Int(10), Value::Promise(settled.0)])
+            .expect("input array should allocate");
+        core.write_reg_with_label(
+            0,
+            Value::Object(inputs),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("input array carrier should be writable");
+
+        let result = execute_promise_combinator_bd_ur3tk_19(
+            &mut core,
+            "promise:all",
+            RegRange { start: 0, count: 1 },
+            1,
+        );
+
+        assert_eq!(
+            core.read_reg_label(1).expect("result label should exist"),
+            crate::ifc_artifacts::Label::Secret
+        );
+        let record = core
+            .promise_store
+            .get(result)
+            .expect("Promise.all aggregate should exist");
+        assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+    }
+
+    #[test]
+    fn pending_all_variants_join_settlements_in_both_orders_bd_ur3tk_19() {
+        for capability in ["promise:all", "promise:allSettled"] {
+            for secret_first in [true, false] {
+                let mut core = quickjs_test_core();
+                let first = core.promise_store.create();
+                let second = core.promise_store.create();
+                core.write_reg_with_label(
+                    0,
+                    Value::Promise(first.0),
+                    crate::ifc_artifacts::Label::Public,
+                )
+                .expect("first pending Promise should be writable");
+                core.write_reg_with_label(
+                    1,
+                    Value::Promise(second.0),
+                    crate::ifc_artifacts::Label::Public,
+                )
+                .expect("second pending Promise should be writable");
+                let result = execute_promise_combinator_bd_ur3tk_19(
+                    &mut core,
+                    capability,
+                    RegRange { start: 0, count: 2 },
+                    2,
+                );
+
+                if capability == "promise:all" {
+                    let (first_label, second_label) = if secret_first {
+                        (
+                            crate::ifc_artifacts::Label::Secret,
+                            crate::ifc_artifacts::Label::Public,
+                        )
+                    } else {
+                        (
+                            crate::ifc_artifacts::Label::Public,
+                            crate::ifc_artifacts::Label::Secret,
+                        )
+                    };
+                    core.fulfill_promise(first, crate::object_model::JsValue::Int(10), first_label)
+                        .expect("first Promise should fulfill");
+                    core.fulfill_promise(
+                        second,
+                        crate::object_model::JsValue::Int(20),
+                        second_label,
+                    )
+                    .expect("second Promise should fulfill");
+                } else if secret_first {
+                    core.reject_promise(
+                        first,
+                        crate::object_model::JsValue::Str("secret-first".to_string()),
+                        crate::ifc_artifacts::Label::Secret,
+                    )
+                    .expect("first Promise should reject");
+                    core.fulfill_promise(
+                        second,
+                        crate::object_model::JsValue::Int(20),
+                        crate::ifc_artifacts::Label::Public,
+                    )
+                    .expect("second Promise should fulfill");
+                } else {
+                    core.fulfill_promise(
+                        first,
+                        crate::object_model::JsValue::Int(10),
+                        crate::ifc_artifacts::Label::Public,
+                    )
+                    .expect("first Promise should fulfill");
+                    core.reject_promise(
+                        second,
+                        crate::object_model::JsValue::Str("secret-last".to_string()),
+                        crate::ifc_artifacts::Label::Secret,
+                    )
+                    .expect("second Promise should reject");
+                }
+
+                let record = core
+                    .promise_store
+                    .get(result)
+                    .expect("aggregate Promise should exist");
+                assert_eq!(
+                    record.label,
+                    crate::ifc_artifacts::Label::Secret,
+                    "{capability} must retain the earlier settlement label ({secret_first=})"
+                );
+                assert!(matches!(
+                    &record.state,
+                    crate::promise_model::PromiseState::Fulfilled(_)
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn promise_any_rejections_join_labels_in_both_orders_bd_ur3tk_19() {
+        for secret_first in [true, false] {
+            let mut core = quickjs_test_core();
+            let first = core.promise_store.create();
+            let second = core.promise_store.create();
+            core.registers[0] = Value::Promise(first.0);
+            core.registers[1] = Value::Promise(second.0);
+            let result = execute_promise_combinator_bd_ur3tk_19(
+                &mut core,
+                "promise:any",
+                RegRange { start: 0, count: 2 },
+                2,
+            );
+            let (first_label, second_label) = if secret_first {
+                (
+                    crate::ifc_artifacts::Label::Secret,
+                    crate::ifc_artifacts::Label::Public,
+                )
+            } else {
+                (
+                    crate::ifc_artifacts::Label::Public,
+                    crate::ifc_artifacts::Label::Secret,
+                )
+            };
+            core.reject_promise(
+                first,
+                crate::object_model::JsValue::Str("first".to_string()),
+                first_label,
+            )
+            .expect("first Promise should reject");
+            core.reject_promise(
+                second,
+                crate::object_model::JsValue::Str("second".to_string()),
+                second_label,
+            )
+            .expect("second Promise should reject");
+
+            let record = core
+                .promise_store
+                .get(result)
+                .expect("Promise.any aggregate should exist");
+            assert_eq!(
+                record.label,
+                crate::ifc_artifacts::Label::Secret,
+                "Promise.any AggregateError label must not depend on rejection order"
+            );
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Rejected(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn combinator_cross_branch_short_circuits_retain_prior_label_bd_ur3tk_19() {
+        for capability in ["promise:all", "promise:any"] {
+            let mut core = quickjs_test_core();
+            let first = core.promise_store.create();
+            let second = core.promise_store.create();
+            core.registers[0] = Value::Promise(first.0);
+            core.registers[1] = Value::Promise(second.0);
+            let result = execute_promise_combinator_bd_ur3tk_19(
+                &mut core,
+                capability,
+                RegRange { start: 0, count: 2 },
+                2,
+            );
+
+            if capability == "promise:all" {
+                core.fulfill_promise(
+                    first,
+                    crate::object_model::JsValue::Int(10),
+                    crate::ifc_artifacts::Label::Secret,
+                )
+                .expect("first Promise should fulfill");
+                core.reject_promise(
+                    second,
+                    crate::object_model::JsValue::Str("public-rejection".to_string()),
+                    crate::ifc_artifacts::Label::Public,
+                )
+                .expect("second Promise should reject");
+            } else {
+                core.reject_promise(
+                    first,
+                    crate::object_model::JsValue::Str("secret-rejection".to_string()),
+                    crate::ifc_artifacts::Label::Secret,
+                )
+                .expect("first Promise should reject");
+                core.fulfill_promise(
+                    second,
+                    crate::object_model::JsValue::Int(20),
+                    crate::ifc_artifacts::Label::Public,
+                )
+                .expect("second Promise should fulfill");
+            }
+
+            let record = core
+                .promise_store
+                .get(result)
+                .expect("aggregate Promise should exist");
+            assert_eq!(
+                record.label,
+                crate::ifc_artifacts::Label::Secret,
+                "{capability} must retain a prior Secret settlement when a Public input short-circuits"
+            );
+            assert_eq!(
+                matches!(
+                    &record.state,
+                    crate::promise_model::PromiseState::Rejected(_)
+                ),
+                capability == "promise:all"
+            );
+        }
+    }
+
+    #[test]
+    fn combinator_short_circuits_join_all_input_references_bd_ur3tk_19() {
+        for (capability, reject_winner) in [
+            ("promise:all", true),
+            ("promise:race", false),
+            ("promise:race", true),
+            ("promise:any", false),
+        ] {
+            let mut core = quickjs_test_core();
+            let winner = core.promise_store.create();
+            let pending = core.promise_store.create();
+            core.write_reg_with_label(
+                0,
+                Value::Promise(winner.0),
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect("winner should be writable");
+            core.write_reg_with_label(
+                1,
+                Value::Promise(pending.0),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("pending competitor should be writable");
+            let result = execute_promise_combinator_bd_ur3tk_19(
+                &mut core,
+                capability,
+                RegRange { start: 0, count: 2 },
+                2,
+            );
+            assert_eq!(
+                core.read_reg_label(2).expect("result label should exist"),
+                crate::ifc_artifacts::Label::Secret,
+                "{capability} returned handle must include every input reference"
+            );
+
+            if reject_winner {
+                core.reject_promise(
+                    winner,
+                    crate::object_model::JsValue::Str("public-winner".to_string()),
+                    crate::ifc_artifacts::Label::Public,
+                )
+                .expect("winner should reject");
+            } else {
+                core.fulfill_promise(
+                    winner,
+                    crate::object_model::JsValue::Int(7),
+                    crate::ifc_artifacts::Label::Public,
+                )
+                .expect("winner should fulfill");
+            }
+
+            let record = core
+                .promise_store
+                .get(result)
+                .expect("short-circuit aggregate should exist");
+            assert_eq!(
+                record.label,
+                crate::ifc_artifacts::Label::Secret,
+                "{capability} winner must retain the pending competitor reference label"
+            );
+            assert!(record.state.is_settled());
+        }
+    }
+
+    #[test]
+    fn empty_combinators_preserve_carrier_labels_bd_ur3tk_19() {
+        for capability in [
+            "promise:all",
+            "promise:allSettled",
+            "promise:race",
+            "promise:any",
+        ] {
+            let mut core = quickjs_test_core();
+            let result = execute_promise_combinator_bd_ur3tk_19(
+                &mut core,
+                capability,
+                RegRange { start: 0, count: 0 },
+                0,
+            );
+            assert_eq!(
+                core.read_reg_label(0)
+                    .expect("empty result label should exist"),
+                crate::ifc_artifacts::Label::Public
+            );
+            let record = core
+                .promise_store
+                .get(result)
+                .expect("empty aggregate should exist");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Public);
+            assert_eq!(
+                record.state.is_settled(),
+                capability != "promise:race",
+                "only an empty Promise.race remains pending"
+            );
+
+            let mut core = quickjs_test_core();
+            let empty_array = core
+                .alloc_array_from_values(&[])
+                .expect("empty array should allocate");
+            core.write_reg_with_label(
+                0,
+                Value::Object(empty_array),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("empty array carrier should be writable");
+            let result = execute_promise_combinator_bd_ur3tk_19(
+                &mut core,
+                capability,
+                RegRange { start: 0, count: 1 },
+                1,
+            );
+            assert_eq!(
+                core.read_reg_label(1)
+                    .expect("empty result label should exist"),
+                crate::ifc_artifacts::Label::Secret,
+                "{capability} must preserve a labeled empty iterable carrier"
+            );
+            let record = core
+                .promise_store
+                .get(result)
+                .expect("empty aggregate should exist");
+            if capability != "promise:race" {
+                assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+            }
         }
     }
 

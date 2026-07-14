@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use ed25519_dalek::{
-    Signature as Ed25519Signature, Signer, SigningKey as Ed25519SigningKey, Verifier,
+    Signature as Ed25519Signature, Signer, SigningKey as Ed25519SigningKey,
     VerifyingKey as Ed25519VerifyingKey,
 };
 use rand::Rng;
@@ -105,10 +105,24 @@ impl std::fmt::Debug for SigningKey {
 }
 
 /// A verification key (Ed25519 public key).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct VerificationKey {
     #[serde(with = "serde_bytes")]
     inner: [u8; VERIFICATION_KEY_LEN],
+}
+
+impl<'de> Deserialize<'de> for VerificationKey {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename = "VerificationKey")]
+        struct WireVerificationKey {
+            #[serde(with = "serde_bytes")]
+            inner: [u8; VERIFICATION_KEY_LEN],
+        }
+
+        let wire = WireVerificationKey::deserialize(deserializer)?;
+        Self::from_bytes(wire.inner).map_err(serde::de::Error::custom)
+    }
 }
 
 impl SigningKey {
@@ -152,11 +166,15 @@ impl VerificationKey {
         if bytes == [0u8; VERIFICATION_KEY_LEN] {
             return Err(SignatureError::InvalidVerificationKey);
         }
-        // Validate that this is a valid Ed25519 public key
-        match Ed25519VerifyingKey::from_bytes(&bytes) {
-            Ok(_) => Ok(Self { inner: bytes }),
-            Err(_) => Err(SignatureError::InvalidVerificationKey),
+        // Decompression-valid low-order points are still unsafe: one weak
+        // public key can validate a signature for almost every message.
+        // Reject them at the authority boundary, not only at call sites.
+        let key = Ed25519VerifyingKey::from_bytes(&bytes)
+            .map_err(|_| SignatureError::InvalidVerificationKey)?;
+        if key.is_weak() {
+            return Err(SignatureError::InvalidVerificationKey);
         }
+        Ok(Self { inner: bytes })
     }
 
     /// Raw bytes.
@@ -172,8 +190,12 @@ impl VerificationKey {
 
     /// Create the internal Ed25519 verifying key.
     fn to_ed25519(&self) -> Result<Ed25519VerifyingKey, SignatureError> {
-        Ed25519VerifyingKey::from_bytes(&self.inner)
-            .map_err(|_| SignatureError::InvalidVerificationKey)
+        let key = Ed25519VerifyingKey::from_bytes(&self.inner)
+            .map_err(|_| SignatureError::InvalidVerificationKey)?;
+        if key.is_weak() {
+            return Err(SignatureError::InvalidVerificationKey);
+        }
+        Ok(key)
     }
 }
 
@@ -254,7 +276,7 @@ pub enum SignatureError {
     PreimageError { detail: String },
     /// Signing key is all zeros (invalid).
     InvalidSigningKey,
-    /// Verification key is all zeros (invalid).
+    /// Verification key is malformed, all zeros, or weak.
     InvalidVerificationKey,
 }
 
@@ -271,7 +293,7 @@ impl fmt::Display for SignatureError {
                 write!(f, "preimage error: {detail}")
             }
             Self::InvalidSigningKey => write!(f, "signing key is all zeros"),
-            Self::InvalidVerificationKey => write!(f, "verification key is all zeros"),
+            Self::InvalidVerificationKey => write!(f, "verification key is invalid or weak"),
         }
     }
 }
@@ -365,7 +387,7 @@ pub fn verify_signature(
     let ed25519_sig = Ed25519Signature::from_bytes(&sig_bytes);
 
     ed25519_vk
-        .verify(preimage, &ed25519_sig)
+        .verify_strict(preimage, &ed25519_sig)
         .map_err(|_| SignatureError::VerificationFailed {
             signer: verification_key.clone(),
             reason: "Ed25519 signature verification failed".to_string(),
@@ -475,12 +497,12 @@ impl PreparedVerificationKey {
         };
         let sig_bytes = signature.to_bytes();
         let ed25519_sig = Ed25519Signature::from_bytes(&sig_bytes);
-        parsed
-            .verify(preimage, &ed25519_sig)
-            .map_err(|_| SignatureError::VerificationFailed {
+        parsed.verify_strict(preimage, &ed25519_sig).map_err(|_| {
+            SignatureError::VerificationFailed {
                 signer: self.raw.clone(),
                 reason: "Ed25519 signature verification failed".to_string(),
-            })
+            }
+        })
     }
 }
 
@@ -802,6 +824,26 @@ mod tests {
     use crate::deterministic_serde::SchemaHash;
     use crate::epoch_barrier::{BarrierConfig, EpochBarrier};
     use crate::security_epoch::{SecurityEpoch, TransitionReason};
+
+    // curve25519-dalek::constants::EIGHT_TORSION[4], also used by
+    // ed25519-dalek's strict-verification repudiation regression.
+    const WEAK_PUBLIC_KEY: [u8; VERIFICATION_KEY_LEN] = [
+        236, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 127,
+    ];
+
+    // C2SP CCTV ed25519vectors case 304: the public key is strong, but the
+    // signature has a low-order R. Permissive `verify` accepts this vector;
+    // `verify_strict` rejects it.
+    const CCTV_LOW_ORDER_R_PUBLIC_KEY: [u8; VERIFICATION_KEY_LEN] = [
+        239, 117, 178, 14, 117, 64, 227, 223, 247, 116, 4, 25, 54, 82, 186, 43, 209, 61, 249, 156,
+        21, 8, 238, 225, 81, 94, 39, 174, 37, 242, 128, 118,
+    ];
+    const CCTV_LOW_ORDER_R_SIGNATURE: [u8; SIGNATURE_LEN] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 51, 11, 48, 214, 193, 240, 117, 17, 226, 32, 141, 35, 59, 106, 52, 212, 237, 113, 9,
+        218, 45, 234, 97, 91, 205, 151, 218, 238, 58, 132, 39, 4,
+    ];
 
     // -- Test signable object --
 
@@ -1393,6 +1435,56 @@ mod tests {
     fn zero_verification_key_rejected() {
         let err = VerificationKey::from_bytes([0u8; VERIFICATION_KEY_LEN]).unwrap_err();
         assert_eq!(err, SignatureError::InvalidVerificationKey);
+    }
+
+    #[test]
+    fn weak_verification_key_and_deserialization_are_rejected() {
+        assert_eq!(
+            VerificationKey::from_bytes(WEAK_PUBLIC_KEY),
+            Err(SignatureError::InvalidVerificationKey)
+        );
+
+        // Preserve the legacy wire shape while validating on restoration.
+        let serialized = serde_json::to_string(&VerificationKey {
+            inner: WEAK_PUBLIC_KEY,
+        })
+        .expect("serialize weak-key regression fixture");
+        assert!(serde_json::from_str::<VerificationKey>(&serialized).is_err());
+
+        // Defense in depth: even a key constructed inside this module cannot
+        // bypass validation at the verification call.
+        let weak = VerificationKey {
+            inner: WEAK_PUBLIC_KEY,
+        };
+        let signature = sign_preimage(&test_signing_key(), b"strict-message")
+            .expect("sign strict-verification regression message");
+        assert_eq!(
+            verify_signature(&weak, b"strict-message", &signature),
+            Err(SignatureError::InvalidVerificationKey)
+        );
+        let prepared = PreparedVerificationKey::prepare(weak);
+        assert_eq!(
+            prepared
+                .verify(b"strict-message", &signature)
+                .expect_err("prepared verifier must reject weak keys"),
+            SignatureError::InvalidVerificationKey
+        );
+    }
+
+    #[test]
+    fn strict_verification_rejects_cctv_low_order_r_vector() {
+        let key = VerificationKey::from_bytes(CCTV_LOW_ORDER_R_PUBLIC_KEY)
+            .expect("CCTV case 304 uses a strong public key");
+        let signature = Signature::from_bytes(CCTV_LOW_ORDER_R_SIGNATURE);
+        assert!(matches!(
+            verify_signature(&key, b"ed25519vectors 7", &signature),
+            Err(SignatureError::VerificationFailed { .. })
+        ));
+        let prepared = PreparedVerificationKey::prepare(key);
+        assert!(matches!(
+            prepared.verify(b"ed25519vectors 7", &signature),
+            Err(SignatureError::VerificationFailed { .. })
+        ));
     }
 
     // -- Signature sentinel --

@@ -10,7 +10,8 @@
 //! - **Reflect**: mirrors of each Proxy trap as ordinary functions
 //! - **Symbol keys**: property keys that are either strings or symbols
 //!
-//! `BTreeMap`/`BTreeSet` for deterministic ordering.
+//! `BTreeMap`/`BTreeSet` for deterministic lookup plus explicit property
+//! insertion order where ECMAScript makes that order observable.
 //! `#![forbid(unsafe_code)]` — no unsafe anywhere.
 //!
 //! Plan reference: Section 10.2 item 10, bd-1m9.
@@ -21,30 +22,6 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::js_string::JsString;
-
-/// Serialize/deserialize `BTreeMap<PropertyKey, PropertyDescriptor>` as a
-/// sorted sequence of `[key, descriptor]` pairs.  serde_json requires string
-/// keys for JSON maps but `PropertyKey` is an enum, so we use a vec-of-pairs
-/// representation to preserve full round-trip fidelity.
-mod properties_as_seq {
-    use super::{BTreeMap, PropertyDescriptor, PropertyKey};
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn serialize<S: Serializer>(
-        map: &BTreeMap<PropertyKey, PropertyDescriptor>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        let pairs: Vec<(&PropertyKey, &PropertyDescriptor)> = map.iter().collect();
-        pairs.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<BTreeMap<PropertyKey, PropertyDescriptor>, D::Error> {
-        let pairs: Vec<(PropertyKey, PropertyDescriptor)> = Vec::deserialize(deserializer)?;
-        Ok(pairs.into_iter().collect())
-    }
-}
 
 // ---------------------------------------------------------------------------
 // PropertyKey — string or symbol
@@ -81,6 +58,176 @@ impl From<&str> for PropertyKey {
 impl From<String> for PropertyKey {
     fn from(s: String) -> Self {
         Self::String(s)
+    }
+}
+
+/// Deterministic property storage with logarithmic lookup and stable creation
+/// order.
+///
+/// The serialized representation intentionally remains the historical
+/// sequence of `[PropertyKey, PropertyDescriptor]` pairs. Legacy payloads are
+/// therefore still readable; their encoded pair order becomes the recovered
+/// insertion order. Updating an existing key keeps its position, while
+/// deleting and later re-inserting it appends it at the end.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OrderedProperties {
+    by_key: BTreeMap<PropertyKey, PropertyDescriptor>,
+    insertion_order: Vec<PropertyKey>,
+}
+
+impl OrderedProperties {
+    /// Create empty property storage.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Return the number of stored properties.
+    pub fn len(&self) -> usize {
+        self.by_key.len()
+    }
+
+    /// Return whether no properties are stored.
+    pub fn is_empty(&self) -> bool {
+        self.by_key.is_empty()
+    }
+
+    /// Return a shared descriptor for `key`.
+    pub fn get(&self, key: &PropertyKey) -> Option<&PropertyDescriptor> {
+        self.by_key.get(key)
+    }
+
+    /// Return a mutable descriptor for `key` without changing its position.
+    pub fn get_mut(&mut self, key: &PropertyKey) -> Option<&mut PropertyDescriptor> {
+        self.by_key.get_mut(key)
+    }
+
+    /// Return whether `key` is present.
+    pub fn contains_key(&self, key: &PropertyKey) -> bool {
+        self.by_key.contains_key(key)
+    }
+
+    /// Insert or replace a descriptor.
+    ///
+    /// A new key is appended to the observable creation order. Replacing an
+    /// existing key leaves that order unchanged.
+    pub fn insert(
+        &mut self,
+        key: PropertyKey,
+        descriptor: PropertyDescriptor,
+    ) -> Option<PropertyDescriptor> {
+        if !self.by_key.contains_key(&key) {
+            self.insertion_order.push(key.clone());
+        }
+        self.by_key.insert(key, descriptor)
+    }
+
+    /// Remove `key` and its creation-order entry.
+    pub fn remove(&mut self, key: &PropertyKey) -> Option<PropertyDescriptor> {
+        let removed = self.by_key.remove(key);
+        if removed.is_some() {
+            self.insertion_order.retain(|candidate| candidate != key);
+        }
+        removed
+    }
+
+    /// Iterate keys in property creation order.
+    pub fn keys(&self) -> impl Iterator<Item = &PropertyKey> {
+        self.insertion_order.iter()
+    }
+
+    /// Iterate descriptors in property creation order.
+    pub fn values(&self) -> impl Iterator<Item = &PropertyDescriptor> {
+        self.iter().map(|(_, descriptor)| descriptor)
+    }
+
+    /// Iterate mutable descriptors in deterministic key order.
+    ///
+    /// Callers use this for order-insensitive bulk descriptor updates such as
+    /// freeze and seal.
+    pub fn values_mut(
+        &mut self,
+    ) -> std::collections::btree_map::ValuesMut<'_, PropertyKey, PropertyDescriptor> {
+        self.by_key.values_mut()
+    }
+
+    /// Iterate key/descriptor pairs in property creation order.
+    pub fn iter(&self) -> OrderedPropertiesIter<'_> {
+        OrderedPropertiesIter {
+            keys: self.insertion_order.iter(),
+            by_key: &self.by_key,
+        }
+    }
+}
+
+impl From<BTreeMap<PropertyKey, PropertyDescriptor>> for OrderedProperties {
+    fn from(by_key: BTreeMap<PropertyKey, PropertyDescriptor>) -> Self {
+        let insertion_order = by_key.keys().cloned().collect();
+        Self {
+            by_key,
+            insertion_order,
+        }
+    }
+}
+
+impl FromIterator<(PropertyKey, PropertyDescriptor)> for OrderedProperties {
+    fn from_iter<T: IntoIterator<Item = (PropertyKey, PropertyDescriptor)>>(iter: T) -> Self {
+        let mut properties = Self::new();
+        for (key, descriptor) in iter {
+            properties.insert(key, descriptor);
+        }
+        properties
+    }
+}
+
+impl Serialize for OrderedProperties {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.iter().collect::<Vec<_>>().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for OrderedProperties {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+
+        let pairs = Vec::<(PropertyKey, PropertyDescriptor)>::deserialize(deserializer)?;
+        let mut properties = Self::new();
+        for (key, descriptor) in pairs {
+            if properties.contains_key(&key) {
+                return Err(D::Error::custom(
+                    "duplicate property key in ordered property sequence",
+                ));
+            }
+            properties.insert(key, descriptor);
+        }
+        Ok(properties)
+    }
+}
+
+/// Iterator over ordered property entries.
+pub struct OrderedPropertiesIter<'a> {
+    keys: std::slice::Iter<'a, PropertyKey>,
+    by_key: &'a BTreeMap<PropertyKey, PropertyDescriptor>,
+}
+
+impl<'a> Iterator for OrderedPropertiesIter<'a> {
+    type Item = (&'a PropertyKey, &'a PropertyDescriptor);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        for key in self.keys.by_ref() {
+            if let Some(descriptor) = self.by_key.get(key) {
+                return Some((key, descriptor));
+            }
+        }
+        None
+    }
+}
+
+impl<'a> IntoIterator for &'a OrderedProperties {
+    type Item = (&'a PropertyKey, &'a PropertyDescriptor);
+    type IntoIter = OrderedPropertiesIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
     }
 }
 
@@ -428,9 +575,9 @@ pub struct OrdinaryObject {
     pub prototype: Option<ObjectHandle>,
     /// `[[Extensible]]` internal slot.
     pub extensible: bool,
-    /// Own properties with descriptors, keyed by PropertyKey.
-    #[serde(with = "properties_as_seq")]
-    pub properties: BTreeMap<PropertyKey, PropertyDescriptor>,
+    /// Own properties with descriptors, keyed by PropertyKey and retaining
+    /// ECMAScript-observable creation order.
+    pub properties: OrderedProperties,
     /// `[[Class]]` tag for intrinsic identification.
     pub class_tag: Option<String>,
     /// Is this object callable (i.e. a function)?
@@ -444,7 +591,7 @@ impl Default for OrdinaryObject {
         Self {
             prototype: None,
             extensible: true,
-            properties: BTreeMap::new(),
+            properties: OrderedProperties::new(),
             class_tag: None,
             callable: false,
             constructable: false,
@@ -577,8 +724,8 @@ impl OrdinaryObject {
     // -- [[OwnPropertyKeys]] (§9.1.11) -------------------------------------
 
     /// `[[OwnPropertyKeys]]()` — returns own keys in ES2020 order:
-    /// integer indices (sorted numerically), then string keys (insertion order
-    /// approximated by BTreeMap order), then symbol keys.
+    /// integer indices (sorted numerically), then string keys (in insertion
+    /// order), then symbol keys (in insertion order).
     pub fn own_property_keys(&self) -> Vec<PropertyKey> {
         let mut int_keys: Vec<(u64, PropertyKey)> = Vec::new();
         let mut str_keys: Vec<PropertyKey> = Vec::new();
@@ -589,6 +736,7 @@ impl OrdinaryObject {
                 PropertyKey::String(s) => {
                     if let Ok(n) = s.parse::<u32>()
                         && n < u32::MAX
+                        && n.to_string() == *s
                     {
                         int_keys.push((u64::from(n), key.clone()));
                     } else {
@@ -2450,13 +2598,80 @@ mod tests {
             .expect("operation should succeed for valid inputs");
 
         let keys = obj.own_property_keys();
-        // Integer indices first (sorted numerically), then strings, then symbols.
+        // Integer indices first (sorted numerically), then strings and symbols
+        // in their respective insertion orders.
         assert_eq!(keys[0], str_key("0"));
         assert_eq!(keys[1], str_key("2"));
         assert_eq!(keys[2], str_key("10"));
-        assert_eq!(keys[3], str_key("a"));
-        assert_eq!(keys[4], str_key("b"));
+        assert_eq!(keys[3], str_key("b"));
+        assert_eq!(keys[4], str_key("a"));
         assert_eq!(keys[5], PropertyKey::Symbol(SymbolId(100)));
+    }
+
+    #[test]
+    fn own_property_keys_update_delete_and_symbol_order() {
+        let mut obj = OrdinaryObject::default();
+        obj.define_own_property(str_key("a"), PropertyDescriptor::data(int_val(1)))
+            .expect("operation should succeed for valid inputs");
+        obj.define_own_property(str_key("b"), PropertyDescriptor::data(int_val(2)))
+            .expect("operation should succeed for valid inputs");
+        obj.define_own_property(
+            PropertyKey::Symbol(SymbolId(20)),
+            PropertyDescriptor::data(int_val(3)),
+        )
+        .expect("operation should succeed for valid inputs");
+        obj.define_own_property(
+            PropertyKey::Symbol(SymbolId(10)),
+            PropertyDescriptor::data(int_val(4)),
+        )
+        .expect("operation should succeed for valid inputs");
+
+        // Updating an existing property must not move it.
+        obj.define_own_property(str_key("a"), PropertyDescriptor::data(int_val(5)))
+            .expect("operation should succeed for valid inputs");
+        assert_eq!(
+            obj.own_property_keys(),
+            vec![
+                str_key("a"),
+                str_key("b"),
+                PropertyKey::Symbol(SymbolId(20)),
+                PropertyKey::Symbol(SymbolId(10)),
+            ]
+        );
+
+        // Deleting and re-creating a key gives it a new creation position.
+        assert!(obj.delete(&str_key("a")));
+        obj.define_own_property(str_key("a"), PropertyDescriptor::data(int_val(6)))
+            .expect("operation should succeed for valid inputs");
+        assert_eq!(
+            obj.own_property_keys(),
+            vec![
+                str_key("b"),
+                str_key("a"),
+                PropertyKey::Symbol(SymbolId(20)),
+                PropertyKey::Symbol(SymbolId(10)),
+            ]
+        );
+    }
+
+    #[test]
+    fn own_property_keys_only_hoists_canonical_array_indices() {
+        let mut obj = OrdinaryObject::default();
+        for key in ["01", "2", "4294967295", "1", "+3"] {
+            obj.define_own_property(str_key(key), PropertyDescriptor::data(int_val(1)))
+                .expect("operation should succeed for valid inputs");
+        }
+
+        assert_eq!(
+            obj.own_property_keys(),
+            vec![
+                str_key("1"),
+                str_key("2"),
+                str_key("01"),
+                str_key("4294967295"),
+                str_key("+3"),
+            ]
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -4484,17 +4699,77 @@ mod tests {
     #[allow(clippy::field_reassign_with_default)]
     fn ordinary_object_serde_roundtrip() {
         let mut obj = OrdinaryObject::default();
-        obj.define_own_property(str_key("x"), PropertyDescriptor::data(int_val(42)))
+        obj.define_own_property(str_key("b"), PropertyDescriptor::data(int_val(42)))
             .expect("operation should succeed for valid inputs");
+        obj.define_own_property(str_key("a"), PropertyDescriptor::data(int_val(43)))
+            .expect("operation should succeed for valid inputs");
+        obj.define_own_property(
+            PropertyKey::Symbol(SymbolId(20)),
+            PropertyDescriptor::data(int_val(44)),
+        )
+        .expect("operation should succeed for valid inputs");
+        obj.define_own_property(
+            PropertyKey::Symbol(SymbolId(10)),
+            PropertyDescriptor::data(int_val(45)),
+        )
+        .expect("operation should succeed for valid inputs");
         obj.prototype = Some(ObjectHandle(5));
         obj.class_tag = Some("TestObj".to_string());
 
-        let json = serde_json::to_string(&obj).expect("serialization should succeed");
+        let encoded = serde_json::to_value(&obj).expect("serialization should succeed");
+        let encoded_object = encoded
+            .as_object()
+            .expect("ordinary object serializes as map");
+        assert!(encoded_object["properties"].is_array());
+        assert!(!encoded_object.contains_key("by_key"));
+        assert!(!encoded_object.contains_key("insertion_order"));
+
         let deser: OrdinaryObject =
-            serde_json::from_str(&json).expect("deserialization should succeed");
+            serde_json::from_value(encoded.clone()).expect("deserialization should succeed");
         assert_eq!(deser.prototype, Some(ObjectHandle(5)));
         assert_eq!(deser.class_tag.as_deref(), Some("TestObj"));
-        assert!(deser.has_own_property(&str_key("x")));
+        assert_eq!(
+            deser.own_property_keys(),
+            vec![
+                str_key("b"),
+                str_key("a"),
+                PropertyKey::Symbol(SymbolId(20)),
+                PropertyKey::Symbol(SymbolId(10)),
+            ]
+        );
+
+        // Exact bytes produced by the pre-bd-n8eta.1 properties_as_seq
+        // serializer remain readable and stable after a round trip.
+        const LEGACY_SORTED_OBJECT_JSON: &str = r#"{"prototype":null,"extensible":true,"properties":[[{"String":"a"},{"Data":{"value":{"Int":1},"writable":true,"enumerable":true,"configurable":true}}],[{"String":"b"},{"Data":{"value":{"Int":2},"writable":true,"enumerable":true,"configurable":true}}]],"class_tag":null,"callable":false,"constructable":false}"#;
+        let legacy_deser: OrdinaryObject = serde_json::from_str(LEGACY_SORTED_OBJECT_JSON)
+            .expect("deserialize legacy sorted pair sequence");
+        assert_eq!(
+            legacy_deser.own_property_keys(),
+            vec![str_key("a"), str_key("b")]
+        );
+        assert_eq!(
+            serde_json::to_string(&legacy_deser).expect("re-serialize legacy object"),
+            LEGACY_SORTED_OBJECT_JSON
+        );
+
+        let mut duplicate: serde_json::Value = serde_json::from_str(LEGACY_SORTED_OBJECT_JSON)
+            .expect("parse legacy fixture as generic JSON");
+        let duplicate_pair = duplicate["properties"]
+            .as_array()
+            .and_then(|pairs| pairs.first())
+            .cloned()
+            .expect("legacy fixture has a property pair");
+        duplicate["properties"]
+            .as_array_mut()
+            .expect("properties remain a pair sequence")
+            .push(duplicate_pair);
+        let error = serde_json::from_value::<OrdinaryObject>(duplicate)
+            .expect_err("duplicate property keys must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate property key in ordered property sequence")
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -5748,7 +6023,7 @@ mod tests {
     fn property_key_ordering() {
         let string_key = str_key("z");
         let symbol_key = PropertyKey::Symbol(SymbolId(1));
-        // In BTreeMap, String comes before Symbol due to enum discriminant ordering.
+        // Derived ordering keeps String before Symbol for deterministic keyed lookup.
         assert!(string_key < symbol_key);
     }
 

@@ -263,35 +263,38 @@ test reports, not buried in const sets (see DISC-005 below).
 - **Reviewed:** 2026-05-29
 - **Next review:** 2026-06-28
 
-### DISC-013: Own-property string-key enumeration uses deterministic `BTreeMap` order instead of insertion order
+### DISC-013: Baseline-interpreter own-property enumeration still uses deterministic `BTreeMap` order
 
-- **Status:** ACCEPTED
+- **Status:** PARTIALLY RESOLVED; ACCEPTED only for the remaining baseline-interpreter lane
 - **ES2020 ref:** §9.1.11 (`[[OwnPropertyKeys]]`), plus callers such as
   `Object.keys`, `Object.values`, `Object.entries`, `Reflect.ownKeys`,
   `for...in`, and `JSON.stringify`
-- **Affected harnesses:** `tests/youtube_botguard_js_conformance.rs`,
-  `tests/object_model_integration.rs`
-- **Affected tests:** `ytbg-spike-object-keys-values-order`,
-  `ordinary_object_own_property_keys_es2020_order`
-- **Symptom:** Ordinary object storage is deterministic, but non-index string
-  keys are enumerated in `BTreeMap` lexical order rather than ECMAScript
-  insertion order. Integer-index keys still sort numerically before string
-  keys. This means `Object.keys({b:2,a:1})` can observe `a,b` from the current
-  storage model even though donor order is `b,a`.
-- **Test verdict expression:** The BotGuard spike case records donor expectation
-  `b,a|2,1`; the object-model integration test currently pins the deterministic
-  storage behavior by expecting non-index string keys `a,b` after numeric keys.
-  The pin is intentional for the current deterministic lane, not conformance
-  evidence.
-- **Rationale for ACCEPTED rather than immediate repair:** A donor-equivalent
-  fix requires deterministic insertion-order-preserving object storage across
-  both `franken-engine` and `franken-core`, plus updates to object statics,
-  `for...in`, `Reflect.ownKeys`, JSON serialization, persisted/replay shapes,
-  and goldens that froze sorted order. The current docs decision keeps the gap
-  enumerable while avoiding a broad storage redesign in a docs-only session.
-- **Tracking bead:** bd-qporw
-- **Reviewed:** 2026-06-14
-- **Next review:** 2026-09-12
+- **Affected harnesses:** `tests/youtube_botguard_js_conformance.rs` and the
+  querystring/JSON/for-in baseline-interpreter surfaces.
+- **Resolved surface:** `bd-n8eta.1` replaced the public descriptor-property
+  maps in both `franken-engine::object_model` and `franken-core::object_model`
+  with deterministic ordered storage. Canonically spelled integer indices sort
+  numerically; strings and symbols retain creation order; updates keep
+  position; delete plus re-create appends. The existing JSON pair-sequence
+  schema remains readable, and ambiguous duplicate-key sequences fail closed.
+- **Remaining symptom:** The separate `baseline_interpreter::HeapObject`
+  storage is still a `BTreeMap<String, Value>`. Consequently HybridRouter
+  `Object.keys`, querystring, JSON serialization, for-in, and ordinary Proxy
+  fallback enumeration can still return lexical rather than donor insertion
+  order. For example, `Object.keys({b:2,a:1})` can still observe `a,b` there.
+- **Test verdict expression:** The descriptor-model integration test now proves
+  the donor order `b,a` after numeric keys. The BotGuard and product-path
+  compatibility cases continue to expose the baseline-interpreter residual.
+- **Rationale for the remaining ACCEPTED scope:** The baseline heap is a
+  separate serialized runtime carrier. Its repair must update object statics,
+  `for...in`, ordinary Proxy fallback, querystring, JSON serialization,
+  persisted/replay shapes, memory accounting, and goldens together in later
+  `bd-n8eta` children. Keeping that residual explicit avoids overstating the
+  descriptor-model slice as product-path conformance.
+- **Tracking beads:** bd-qporw (original decision), bd-n8eta (runtime repair),
+  bd-n8eta.1 (descriptor-model slice)
+- **Reviewed:** 2026-07-14
+- **Next review:** 2026-08-13
 
 ## Resolved divergences
 

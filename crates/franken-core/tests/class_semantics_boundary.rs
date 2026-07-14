@@ -898,13 +898,17 @@ fn property_key_ordering_in_class() {
     .unwrap();
 
     let names = heap.get_own_property_names(obj).unwrap();
-    // Integer indices come first (sorted), then strings (insertion/BTreeMap order)
+    // Integer indices come first (sorted), then strings in insertion order.
     assert!(
         names.iter().position(|x| x == "1").unwrap()
             < names.iter().position(|x| x == "10").unwrap()
     );
     assert!(
         names.iter().position(|x| x == "10").unwrap()
+            < names.iter().position(|x| x == "zebra").unwrap()
+    );
+    assert!(
+        names.iter().position(|x| x == "zebra").unwrap()
             < names.iter().position(|x| x == "alpha").unwrap()
     );
 }

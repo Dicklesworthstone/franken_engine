@@ -298,9 +298,10 @@ run_receipt_scenario() {
   local exit_code="$3"
   local fixture_state="$4"
   local reason_override="${5:-}"
+  local exercise_supporting_artifacts="${6:-false}"
   local scenario_dir="${run_dir}/scenarios/${scenario_name}"
 
-  commands_run+=("scenario:${scenario_name}:${mode_value}:${fixture_state}:${reason_override:-auto}")
+  commands_run+=("scenario:${scenario_name}:${mode_value}:${fixture_state}:${reason_override:-auto}:${exercise_supporting_artifacts}")
   mkdir -p "${scenario_dir}"
 
   ROOT_DIR="${root_dir}" \
@@ -309,6 +310,7 @@ run_receipt_scenario() {
   SCENARIO_EXIT_CODE="${exit_code}" \
   SCENARIO_FIXTURE_STATE="${fixture_state}" \
   SCENARIO_REASON_OVERRIDE="${reason_override}" \
+  SCENARIO_EXERCISE_SUPPORTING_ARTIFACTS="${exercise_supporting_artifacts}" \
     bash <<'EOF'
 set -euo pipefail
 
@@ -368,6 +370,12 @@ else
 fi
 
 write_missing_artifact_receipt "${SCENARIO_EXIT_CODE}"
+
+if [[ "${SCENARIO_EXERCISE_SUPPORTING_ARTIFACTS}" == "true" ]]; then
+  rustc() { printf '%s\n' 'rustc parser-oracle-writer-test-stub'; }
+  cargo() { printf '%s\n' 'cargo parser-oracle-writer-test-stub'; }
+  write_supporting_artifacts 2>"${run_dir}/write_supporting_artifacts.stderr"
+fi
 EOF
 
   printf '%s\n' "${scenario_dir}"
@@ -388,6 +396,7 @@ record_scenario_result() {
   local expected_missing_json actual_missing_json
   local receipt_present legacy_baseline legacy_relation_report legacy_relation_events legacy_evidence legacy_digest
   local receipt_json result_json
+  local supporting_stderr_path supporting_proof_note_path
 
   step_logs+=("${scenario_log_path}")
   step_log_index=$((step_log_index + 1))
@@ -427,6 +436,37 @@ record_scenario_result() {
       errors+=("missing_artifacts mismatch")
     fi
   fi
+
+  case "${scenario_name}" in
+    missing_unexpected_absence | all_artifacts_present)
+      supporting_stderr_path="${scenario_dir}/write_supporting_artifacts.stderr"
+      supporting_proof_note_path="${scenario_dir}/proof_note.md"
+
+      if [[ ! -f "${supporting_stderr_path}" ]]; then
+        errors+=("supporting-artifact branch was not exercised")
+      elif [[ -s "${supporting_stderr_path}" ]]; then
+        errors+=("supporting-artifact branch wrote unexpected stderr")
+      fi
+
+      if [[ ! -s "${supporting_proof_note_path}" ]]; then
+        errors+=("supporting-artifact branch did not write proof_note.md")
+      elif [[ "${scenario_name}" == "missing_unexpected_absence" ]]; then
+        if ! rg -q --fixed-strings '## Missing-Artifact Receipt' "${supporting_proof_note_path}"; then
+          errors+=("receipt-present branch did not write the missing-artifact proof note")
+        fi
+        if rg -q --fixed-strings '## Drift Summary' "${supporting_proof_note_path}"; then
+          errors+=("receipt-present branch incorrectly wrote a drift summary")
+        fi
+      else
+        if ! rg -q --fixed-strings '## Drift Summary' "${supporting_proof_note_path}"; then
+          errors+=("receipt-absent branch did not write the drift-summary proof note")
+        fi
+        if rg -q --fixed-strings '## Missing-Artifact Receipt' "${supporting_proof_note_path}"; then
+          errors+=("receipt-absent branch incorrectly wrote a missing-artifact note")
+        fi
+      fi
+      ;;
+  esac
 
   if [[ "${receipt_present}" == true ]]; then
     receipt_json="$(jq -c '.' "${receipt_path}")"
@@ -604,7 +644,7 @@ run_local_scenarios() {
     "fail_closed" \
     "baseline.json,relation_report.json,relation_events.jsonl,metamorphic_evidence.jsonl,drift_digest.md"
 
-  scenario_dir="$(run_receipt_scenario "missing_unexpected_absence" "ci" "0" "relation_only")"
+  scenario_dir="$(run_receipt_scenario "missing_unexpected_absence" "ci" "0" "relation_only" "" "true")"
   record_scenario_result \
     "missing_unexpected_absence" \
     "${scenario_dir}" \
@@ -620,7 +660,7 @@ run_local_scenarios() {
     "${scenario_dir}" \
     "baseline.json,relation_report.json,relation_events.jsonl,metamorphic_evidence.jsonl,drift_digest.md"
 
-  scenario_dir="$(run_receipt_scenario "all_artifacts_present" "ci" "0" "all_artifacts")"
+  scenario_dir="$(run_receipt_scenario "all_artifacts_present" "ci" "0" "all_artifacts" "" "true")"
   record_scenario_result \
     "all_artifacts_present" \
     "${scenario_dir}" \

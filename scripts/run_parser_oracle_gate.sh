@@ -718,7 +718,8 @@ write_supporting_artifacts() {
   local outputs_json checksum_path checksum_value
   outputs_json='[]'
 
-  if covered_artifact_is_present_and_not_placeholder "$relation_report_path" "relation_report.json" && ! -f "$missing_artifact_receipt_path"; then
+  if covered_artifact_is_present_and_not_placeholder "$relation_report_path" "relation_report.json" \
+    && [[ ! -f "$missing_artifact_receipt_path" ]]; then
     equivalent="$(read_relation_report_field '.summary.equivalent_count // 0')"
     minor="$(read_relation_report_field '.summary.minor_drift_count // 0')"
     critical="$(read_relation_report_field '.summary.critical_drift_count // 0')"

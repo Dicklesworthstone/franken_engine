@@ -1303,6 +1303,12 @@ pub enum HostIoReplayMode {
 
 /// Deterministic-replay recorder for host I/O.
 pub trait HostIoRecorder: core::fmt::Debug + Send + Sync {
+    /// Begin one orchestrated execution before any host effect can run.
+    ///
+    /// Implementations use this boundary to reject unsupported lifecycle
+    /// semantics before a live provider can perform an irreversible effect.
+    fn begin_execution(&self) -> Result<(), HostIoError>;
+
     /// In replay mode, return the recorded outcome for the next matching
     /// request. In record mode, return `None` so the live provider runs.
     fn replay(&self, request: &HostIoRequest) -> Option<HostIoOutcome>;
@@ -1310,10 +1316,24 @@ pub trait HostIoRecorder: core::fmt::Debug + Send + Sync {
     /// In record mode, append a completed host I/O request and outcome.
     fn record(&self, request: &HostIoRequest, outcome: &HostIoOutcome);
 
+    /// Finish the current execution and return exactly the transcript belonging
+    /// to that execution.
+    ///
+    /// The execution orchestrator calls this after every interpreter attempt,
+    /// before it derives risk, evidence, or receipts. Replay implementations
+    /// must reject a prior divergence and every unused suffix. Recording
+    /// implementations must return only entries appended since the matching
+    /// [`Self::begin_execution`] call.
+    ///
+    /// Both lifecycle methods are required: a custom recorder cannot opt into
+    /// preflight while accidentally inheriting a late, post-effect failure.
+    fn finish_execution(&self) -> Result<Vec<(HostIoRequest, HostIoOutcome)>, HostIoError>;
+
     /// Snapshot the recorded `(request, outcome)` transcript so callers (e.g. the
-    /// execution orchestrator) can surface the host effects a run performed and
-    /// was denied (bd-f5b04.2.7). Recorders that do not retain a transcript
-    /// return an empty vec by default.
+    /// diagnostics can inspect the recorder's complete lifetime history.
+    /// Per-execution attestation must use [`Self::finish_execution`], never this
+    /// cumulative snapshot. Recorders that do not retain history return an empty
+    /// vec by default.
     fn recorded_entries(&self) -> Vec<(HostIoRequest, HostIoOutcome)> {
         Vec::new()
     }
@@ -1324,7 +1344,21 @@ pub trait HostIoRecorder: core::fmt::Debug + Send + Sync {
 pub struct InMemoryHostIoTranscript {
     mode: HostIoReplayMode,
     entries: std::sync::Mutex<Vec<(HostIoRequest, HostIoOutcome)>>,
-    cursor: std::sync::Mutex<usize>,
+    execution_state: std::sync::Mutex<HostIoExecutionState>,
+}
+
+#[derive(Debug, Default)]
+enum HostIoExecutionState {
+    #[default]
+    Idle,
+    Recording {
+        start: usize,
+    },
+    Replaying {
+        cursor: usize,
+    },
+    Finalized,
+    Poisoned(HostIoError),
 }
 
 impl InMemoryHostIoTranscript {
@@ -1333,16 +1367,21 @@ impl InMemoryHostIoTranscript {
         Self {
             mode: HostIoReplayMode::Record,
             entries: std::sync::Mutex::new(Vec::new()),
-            cursor: std::sync::Mutex::new(0),
+            execution_state: std::sync::Mutex::new(HostIoExecutionState::default()),
         }
     }
 
+    /// Construct a single-execution replay transcript.
+    ///
+    /// Replay state is intentionally not resettable: after exact finalization it
+    /// remains exhausted, and after failed finalization it remains poisoned.
+    /// Callers that execute again must install a fresh replay transcript.
     #[must_use]
     pub fn replaying(entries: Vec<(HostIoRequest, HostIoOutcome)>) -> Self {
         Self {
             mode: HostIoReplayMode::Replay,
             entries: std::sync::Mutex::new(entries),
-            cursor: std::sync::Mutex::new(0),
+            execution_state: std::sync::Mutex::new(HostIoExecutionState::default()),
         }
     }
 
@@ -1377,32 +1416,95 @@ impl InMemoryHostIoTranscript {
 }
 
 impl HostIoRecorder for InMemoryHostIoTranscript {
+    fn begin_execution(&self) -> Result<(), HostIoError> {
+        let mut state = self
+            .execution_state
+            .lock()
+            .expect("host I/O execution state mutex");
+        match &*state {
+            HostIoExecutionState::Idle => {
+                *state = match self.mode {
+                    HostIoReplayMode::Record => {
+                        let start = self
+                            .entries
+                            .lock()
+                            .expect("host I/O transcript mutex")
+                            .len();
+                        HostIoExecutionState::Recording { start }
+                    }
+                    HostIoReplayMode::Replay => HostIoExecutionState::Replaying { cursor: 0 },
+                };
+                Ok(())
+            }
+            HostIoExecutionState::Poisoned(error) => Err(error.clone()),
+            HostIoExecutionState::Finalized => Err(HostIoError::Denied {
+                reason: "host I/O replay transcript already finalized".to_string(),
+            }),
+            HostIoExecutionState::Recording { .. } | HostIoExecutionState::Replaying { .. } => {
+                Err(HostIoError::Denied {
+                    reason: "host I/O transcript execution already active".to_string(),
+                })
+            }
+        }
+    }
+
     fn replay(&self, request: &HostIoRequest) -> Option<HostIoOutcome> {
         if self.mode != HostIoReplayMode::Replay {
             return None;
         }
 
-        let entries = self.entries.lock().expect("host I/O transcript mutex");
-        let mut cursor = self.cursor.lock().expect("host I/O cursor mutex");
-        let idx = *cursor;
-        match entries.get(idx) {
-            Some((recorded_request, outcome)) => {
-                *cursor += 1;
-                if recorded_request == request {
-                    Some(outcome.clone())
-                } else {
-                    Some(Err(HostIoError::SandboxViolation {
-                        detail: format!(
-                            "host I/O replay divergence at index {idx}: live {} != recorded {}",
-                            request.kind(),
-                            recorded_request.kind()
-                        ),
-                    }))
-                }
+        let mut state = self
+            .execution_state
+            .lock()
+            .expect("host I/O execution state mutex");
+        let idx = match &*state {
+            HostIoExecutionState::Replaying { cursor } => *cursor,
+            HostIoExecutionState::Poisoned(error) => return Some(Err(error.clone())),
+            HostIoExecutionState::Finalized => {
+                return Some(Err(HostIoError::Denied {
+                    reason: "host I/O replay transcript already finalized".to_string(),
+                }));
             }
-            None => Some(Err(HostIoError::Denied {
-                reason: format!("host I/O replay transcript exhausted at index {idx}"),
-            })),
+            HostIoExecutionState::Idle => {
+                let error = HostIoError::Denied {
+                    reason: "host I/O replay attempted before begin_execution".to_string(),
+                };
+                *state = HostIoExecutionState::Poisoned(error.clone());
+                return Some(Err(error));
+            }
+            HostIoExecutionState::Recording { .. } => {
+                let error = HostIoError::Denied {
+                    reason: "host I/O replay state is inconsistent with recorder mode".to_string(),
+                };
+                *state = HostIoExecutionState::Poisoned(error.clone());
+                return Some(Err(error));
+            }
+        };
+
+        let entries = self.entries.lock().expect("host I/O transcript mutex");
+        match entries.get(idx) {
+            Some((recorded_request, outcome)) if recorded_request == request => {
+                *state = HostIoExecutionState::Replaying { cursor: idx + 1 };
+                Some(outcome.clone())
+            }
+            Some((recorded_request, _)) => {
+                let error = HostIoError::SandboxViolation {
+                    detail: format!(
+                        "host I/O replay divergence at index {idx}: live {} != recorded {}",
+                        request.kind(),
+                        recorded_request.kind()
+                    ),
+                };
+                *state = HostIoExecutionState::Poisoned(error.clone());
+                Some(Err(error))
+            }
+            None => {
+                let error = HostIoError::Denied {
+                    reason: format!("host I/O replay transcript exhausted at index {idx}"),
+                };
+                *state = HostIoExecutionState::Poisoned(error.clone());
+                Some(Err(error))
+            }
         }
     }
 
@@ -1415,6 +1517,47 @@ impl HostIoRecorder for InMemoryHostIoTranscript {
             .lock()
             .expect("host I/O transcript mutex")
             .push((request.clone(), outcome.clone()));
+    }
+
+    fn finish_execution(&self) -> Result<Vec<(HostIoRequest, HostIoOutcome)>, HostIoError> {
+        let mut state = self
+            .execution_state
+            .lock()
+            .expect("host I/O execution state mutex");
+        let entries = self.entries.lock().expect("host I/O transcript mutex");
+        match &*state {
+            HostIoExecutionState::Recording { start } => {
+                let current = entries.get(*start..).ok_or_else(|| HostIoError::Denied {
+                    reason: "host I/O recording boundary exceeds transcript length".to_string(),
+                })?;
+                let current = current.to_vec();
+                *state = HostIoExecutionState::Idle;
+                Ok(current)
+            }
+            HostIoExecutionState::Replaying { cursor } if *cursor == entries.len() => {
+                let current = entries.clone();
+                *state = HostIoExecutionState::Finalized;
+                Ok(current)
+            }
+            HostIoExecutionState::Replaying { cursor } => {
+                let error = HostIoError::Denied {
+                    reason: format!(
+                        "host I/O replay finished with {} unused transcript entries starting at index {}",
+                        entries.len() - *cursor,
+                        cursor
+                    ),
+                };
+                *state = HostIoExecutionState::Poisoned(error.clone());
+                Err(error)
+            }
+            HostIoExecutionState::Poisoned(error) => Err(error.clone()),
+            HostIoExecutionState::Finalized => Err(HostIoError::Denied {
+                reason: "host I/O replay transcript already finalized".to_string(),
+            }),
+            HostIoExecutionState::Idle => Err(HostIoError::Denied {
+                reason: "host I/O transcript execution was not begun".to_string(),
+            }),
+        }
     }
 
     fn recorded_entries(&self) -> Vec<(HostIoRequest, HostIoOutcome)> {
@@ -1616,6 +1759,7 @@ mod tests {
         ];
         let replay = InMemoryHostIoTranscript::replaying(entries);
         assert_eq!(replay.mode(), HostIoReplayMode::Replay);
+        replay.begin_execution().expect("begin replay");
         let first = replay
             .replay(&HostIoRequest::FsRead {
                 path: "a.txt".to_string(),
@@ -1634,30 +1778,208 @@ mod tests {
             })
             .expect("second replay");
         assert_eq!(second, Ok(HostIoResponse::FsWrite { bytes_written: 3 }));
+        assert_eq!(replay.finish_execution().unwrap(), replay.entries());
+        assert!(replay.finish_execution().is_err());
     }
 
     #[test]
-    fn replay_divergence_and_exhaustion_fail_closed() {
-        let replay = InMemoryHostIoTranscript::replaying(vec![(
-            HostIoRequest::FsRead {
-                path: "expected.txt".to_string(),
-            },
-            Ok(HostIoResponse::FsRead { bytes: vec![1] }),
-        )]);
-        let out = replay
+    fn replay_finish_rejects_and_poisons_an_unused_suffix() {
+        let first_request = HostIoRequest::FsRead {
+            path: "first.txt".to_string(),
+        };
+        let second_request = HostIoRequest::FsWrite {
+            path: "second.txt".to_string(),
+            data: vec![2],
+        };
+        let replay = InMemoryHostIoTranscript::replaying(vec![
+            (
+                first_request.clone(),
+                Ok(HostIoResponse::FsRead { bytes: vec![1] }),
+            ),
+            (
+                second_request.clone(),
+                Ok(HostIoResponse::FsWrite { bytes_written: 1 }),
+            ),
+        ]);
+
+        replay.begin_execution().expect("begin replay");
+        assert!(matches!(replay.replay(&first_request), Some(Ok(_))));
+        let error = replay
+            .finish_execution()
+            .expect_err("unused replay suffix must fail finalization");
+        assert!(matches!(
+            &error,
+            HostIoError::Denied { reason }
+                if reason.contains("1 unused transcript entries starting at index 1")
+        ));
+        assert_eq!(
+            replay
+                .replay(&second_request)
+                .expect("poisoned replay outcome"),
+            Err(error.clone()),
+            "finalization is terminal and must not permit suffix consumption"
+        );
+        assert_eq!(replay.finish_execution(), Err(error));
+    }
+
+    #[test]
+    fn replay_mismatch_never_advances_and_permanently_prevents_resynchronization() {
+        let expected_first = HostIoRequest::FsRead {
+            path: "first.txt".to_string(),
+        };
+        let expected_second = HostIoRequest::FsWrite {
+            path: "second.txt".to_string(),
+            data: vec![2],
+        };
+        let replay = InMemoryHostIoTranscript::replaying(vec![
+            (
+                expected_first.clone(),
+                Ok(HostIoResponse::FsRead { bytes: vec![1] }),
+            ),
+            (
+                expected_second.clone(),
+                Ok(HostIoResponse::FsWrite { bytes_written: 1 }),
+            ),
+        ]);
+
+        replay.begin_execution().expect("begin replay");
+        let mismatch = replay
             .replay(&HostIoRequest::FsWrite {
-                path: "expected.txt".to_string(),
+                path: "wrong.txt".to_string(),
                 data: vec![],
             })
-            .expect("divergence outcome");
-        assert!(matches!(out, Err(HostIoError::SandboxViolation { .. })));
+            .expect("mismatch outcome")
+            .expect_err("mismatch must fail closed");
+        assert!(matches!(&mismatch, HostIoError::SandboxViolation { .. }));
+        assert!(matches!(
+            &*replay
+                .execution_state
+                .lock()
+                .expect("host I/O execution state mutex"),
+            HostIoExecutionState::Poisoned(_)
+        ));
 
-        let exhausted = replay
-            .replay(&HostIoRequest::FsRead {
-                path: "anything.txt".to_string(),
+        for request in [&expected_first, &expected_second] {
+            assert_eq!(
+                replay.replay(request).expect("poisoned replay outcome"),
+                Err(mismatch.clone()),
+                "a later matching request must not resynchronize poisoned replay"
+            );
+        }
+        assert_eq!(replay.finish_execution(), Err(mismatch));
+    }
+
+    #[test]
+    fn replay_exhaustion_permanently_fails_closed() {
+        let replay = InMemoryHostIoTranscript::replaying(Vec::new());
+        let request = HostIoRequest::FsRead {
+            path: "extra.txt".to_string(),
+        };
+        replay.begin_execution().expect("begin replay");
+        let error = replay
+            .replay(&request)
+            .expect("exhaustion outcome")
+            .expect_err("a request beyond the transcript must fail closed");
+        assert!(matches!(&error, HostIoError::Denied { .. }));
+        assert_eq!(replay.replay(&request), Some(Err(error.clone())));
+        assert_eq!(replay.finish_execution(), Err(error));
+    }
+
+    #[derive(Debug)]
+    struct ExplicitlyRejectingRecorder;
+
+    impl HostIoRecorder for ExplicitlyRejectingRecorder {
+        fn begin_execution(&self) -> Result<(), HostIoError> {
+            Err(HostIoError::NotImplemented {
+                what: "test recorder has no execution lifecycle".to_string(),
             })
-            .expect("exhausted outcome");
-        assert!(matches!(exhausted, Err(HostIoError::Denied { .. })));
+        }
+
+        fn replay(&self, _request: &HostIoRequest) -> Option<HostIoOutcome> {
+            None
+        }
+
+        fn record(&self, _request: &HostIoRequest, _outcome: &HostIoOutcome) {}
+
+        fn finish_execution(&self) -> Result<Vec<(HostIoRequest, HostIoOutcome)>, HostIoError> {
+            Err(HostIoError::NotImplemented {
+                what: "test recorder has no execution lifecycle".to_string(),
+            })
+        }
+    }
+
+    #[test]
+    fn custom_recorder_must_explicitly_reject_unsupported_boundaries() {
+        assert!(matches!(
+            ExplicitlyRejectingRecorder.begin_execution(),
+            Err(HostIoError::NotImplemented { .. })
+        ));
+        assert!(matches!(
+            ExplicitlyRejectingRecorder.finish_execution(),
+            Err(HostIoError::NotImplemented { .. })
+        ));
+    }
+
+    #[test]
+    fn recording_boundaries_return_only_the_current_execution() {
+        let recorder = InMemoryHostIoTranscript::recording();
+        let first = HostIoRequest::FsRead {
+            path: "first.txt".to_string(),
+        };
+        let second = HostIoRequest::FsRead {
+            path: "second.txt".to_string(),
+        };
+
+        recorder.begin_execution().expect("begin first recording");
+        recorder.record(&first, &Ok(HostIoResponse::FsRead { bytes: vec![1] }));
+        assert_eq!(recorder.finish_execution().unwrap().len(), 1);
+
+        recorder.begin_execution().expect("begin second recording");
+        recorder.record(&second, &Ok(HostIoResponse::FsRead { bytes: vec![2] }));
+        let current = recorder.finish_execution().unwrap();
+        assert_eq!(current.len(), 1);
+        assert_eq!(current[0].0, second);
+        assert_eq!(recorder.recorded_entries().len(), 2);
+    }
+
+    #[test]
+    fn concurrent_recording_begin_is_rejected_without_poisoning_active_execution() {
+        let recorder = InMemoryHostIoTranscript::recording();
+        let request = HostIoRequest::FsRead {
+            path: "active.txt".to_string(),
+        };
+
+        recorder.begin_execution().expect("begin active recording");
+        assert!(matches!(
+            recorder.begin_execution(),
+            Err(HostIoError::Denied { reason }) if reason.contains("already active")
+        ));
+        recorder.record(
+            &request,
+            &Ok(HostIoResponse::FsRead {
+                bytes: b"active".to_vec(),
+            }),
+        );
+        let current = recorder
+            .finish_execution()
+            .expect("active execution remains valid");
+        assert_eq!(current.len(), 1);
+        assert_eq!(current[0].0, request);
+    }
+
+    #[test]
+    fn exactly_finalized_replay_is_single_use() {
+        let replay = InMemoryHostIoTranscript::replaying(Vec::new());
+        replay.begin_execution().expect("begin replay");
+        assert!(replay.finish_execution().unwrap().is_empty());
+        assert!(replay.begin_execution().is_err());
+        assert!(replay.finish_execution().is_err());
+        assert!(matches!(
+            replay.replay(&HostIoRequest::FsRead {
+                path: "late.txt".to_string(),
+            }),
+            Some(Err(HostIoError::Denied { .. }))
+        ));
     }
 
     /// Self-contained scratch directory (avoids a `tempfile` dev-dependency).

@@ -647,6 +647,10 @@ impl ExecutionOrchestrator {
     /// host effects perform and record real I/O (bd-f5b04.2.7). The recorder's
     /// transcript is surfaced on [`OrchestratorResult::host_effect_transcript`].
     /// With no provider installed the run stays fail-closed (no host effects).
+    /// A replaying recorder represents one execution and is never reset; callers
+    /// that reuse this orchestrator must install a fresh replay recorder before
+    /// each subsequent `execute`. Recording recorders may be reused: explicit
+    /// execution boundaries keep each result's transcript isolated.
     pub fn set_host_io(
         &mut self,
         provider: Arc<dyn HostIoProvider>,
@@ -804,9 +808,37 @@ impl ExecutionOrchestrator {
         self.phase_enforce_data_contract_ingress(&trace_id, &decision_id)?;
         let ir3_schedule_cost = Self::estimate_ir3_schedule_cost(&lowering_output.ir3)?;
 
-        // Step 6: Execute IR3.
-        let (routed, guardplane_report) =
-            self.phase_execute(package, &lowering_output.ir3, &trace_id)?;
+        // Step 6: Execute IR3. Establish the recorder boundary before the
+        // interpreter can perform any live host effect. Unsupported recorders
+        // fail here, not after an irreversible provider call.
+        if let Some(recorder) = self.host_io_recorder.as_deref() {
+            recorder.begin_execution().map_err(|error| {
+                OrchestratorError::Interpreter(InterpreterError::InternalError {
+                    details: format!("host I/O execution setup failed: {error}"),
+                })
+            })?;
+        }
+        let execution = self.phase_execute(package, &lowering_output.ir3, &trace_id);
+        // Finalize after every interpreter attempt, including failures. Otherwise
+        // a valid prefix could be resumed by a later run and falsely certified as
+        // one exact replay.
+        let host_effect_transcript = if let Some(recorder) = self.host_io_recorder.as_deref() {
+            recorder.finish_execution().map_err(|error| {
+                let phase_context = execution
+                    .as_ref()
+                    .err()
+                    .map(|phase_error| format!("; phase execution also failed: {phase_error}"))
+                    .unwrap_or_default();
+                OrchestratorError::Interpreter(InterpreterError::InternalError {
+                    details: format!(
+                        "host I/O execution finalization failed: {error}{phase_context}"
+                    ),
+                })
+            })?
+        } else {
+            Vec::new()
+        };
+        let (routed, guardplane_report) = execution?;
         let lane = routed.lane;
         let lane_reason = routed.reason;
         let exec_result = routed.result;
@@ -909,13 +941,9 @@ impl ExecutionOrchestrator {
             saga_id,
             cell_events,
             finalize_result,
-            // bd-f5b04.2.7: surface the host effects this run performed/was denied,
-            // harvested from the installed recorder (empty when none installed).
-            host_effect_transcript: self
-                .host_io_recorder
-                .as_ref()
-                .map(|recorder| recorder.recorded_entries())
-                .unwrap_or_default(),
+            // bd-f5b04.2.7: the atomic recorder boundary returns only effects
+            // performed or replayed by this execution.
+            host_effect_transcript,
             nondeterminism_trace: exec_result.nondeterminism_trace.clone(),
             epoch: self.config.epoch,
         })
@@ -3197,16 +3225,11 @@ mod tests {
         assert_eq!(policy.cusum.reference_millionths, 200_000);
     }
 
-    /// bd-f5b04.2.7: an orchestrated run surfaces the installed host-I/O recorder's
-    /// transcript on `OrchestratorResult.host_effect_transcript`, the source
-    /// bd-5r99w.12 renders as a signed effect ledger in `franken-node run`. Uses
-    /// the REAL `InMemoryHostIoTranscript` + `SandboxedHostIo` (no mocks): a real
-    /// `(request, outcome)` is recorded into the installed recorder and the run
-    /// must surface exactly it. With no provider installed the transcript is empty
-    /// (fail-closed baseline). The interpreter-side perform+record path is proven
-    /// by `hostcall_fs_dispatch_performs_real_io_through_provider_bd_f5b04_2_7`.
+    /// bd-eou2o: entries recorded before an orchestrated execution belong to the
+    /// recorder's lifetime history, not to the new run's signed effect ledger.
+    /// The explicit begin/finish boundary must exclude that stale prefix.
     #[test]
-    fn run_surfaces_host_effect_transcript_from_installed_recorder_bd_f5b04_2_7() {
+    fn run_excludes_preexisting_recording_history_bd_eou2o() {
         use frankenengine_extension_host::host_io::{
             HostIoError, InMemoryHostIoTranscript, SandboxedHostIo,
         };
@@ -3235,11 +3258,11 @@ mod tests {
         let result = orch
             .execute(&simple_package())
             .expect("execute with host io installed");
-        assert_eq!(
-            result.host_effect_transcript,
-            vec![(request, outcome)],
-            "the run must surface exactly the installed recorder's transcript"
+        assert!(
+            result.host_effect_transcript.is_empty(),
+            "a no-hostcall run must not attest the recorder's stale prefix"
         );
+        assert_eq!(recorder.recorded_entries(), vec![(request, outcome)]);
 
         let _ = std::fs::remove_dir_all(&root);
 
@@ -3252,6 +3275,215 @@ mod tests {
             bare_result.host_effect_transcript.is_empty(),
             "no provider installed => empty host-effect transcript"
         );
+    }
+
+    #[test]
+    fn run_rejects_unused_host_io_replay_before_evidence_bd_eou2o() {
+        use frankenengine_extension_host::host_io::{
+            DenyAllHostIo, HostIoResponse, InMemoryHostIoTranscript,
+        };
+
+        let replay = Arc::new(InMemoryHostIoTranscript::replaying(vec![(
+            HostIoRequest::FsRead {
+                path: "unused.txt".to_string(),
+            },
+            Ok(HostIoResponse::FsRead {
+                bytes: b"recorded".to_vec(),
+            }),
+        )]));
+        let recorder: Arc<dyn HostIoRecorder> = replay;
+        let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        orchestrator.set_host_io(Arc::new(DenyAllHostIo), Some(recorder));
+
+        let error = orchestrator
+            .execute(&simple_package())
+            .expect_err("an unused replay suffix must abort the run");
+        assert!(matches!(
+            error,
+            OrchestratorError::Interpreter(InterpreterError::InternalError { details })
+                if details.contains("host I/O execution finalization failed")
+                    && details.contains("1 unused transcript entries starting at index 0")
+        ));
+        assert_eq!(
+            orchestrator.execution_count(),
+            0,
+            "replay finalization must fail before evidence/result completion"
+        );
+    }
+
+    #[test]
+    fn exactly_finalized_replay_cannot_certify_a_second_run_bd_eou2o() {
+        use frankenengine_extension_host::host_io::{DenyAllHostIo, InMemoryHostIoTranscript};
+
+        let replay = Arc::new(InMemoryHostIoTranscript::replaying(Vec::new()));
+        let recorder: Arc<dyn HostIoRecorder> = replay;
+        let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        orchestrator.set_host_io(Arc::new(DenyAllHostIo), Some(recorder));
+
+        let first = orchestrator
+            .execute(&simple_package())
+            .expect("empty replay exactly certifies one no-hostcall run");
+        assert!(first.host_effect_transcript.is_empty());
+        assert_eq!(orchestrator.execution_count(), 1);
+
+        let second = orchestrator
+            .execute(&simple_package())
+            .expect_err("a finalized replay transcript is single-use");
+        assert!(matches!(
+            second,
+            OrchestratorError::Interpreter(InterpreterError::InternalError { details })
+                if details.contains("host I/O execution setup failed")
+                    && details.contains("already finalized")
+        ));
+        assert_eq!(orchestrator.execution_count(), 1);
+    }
+
+    #[test]
+    fn phase_error_still_poisons_unused_replay_suffix_bd_eou2o() {
+        use frankenengine_extension_host::host_io::{
+            DenyAllHostIo, HostIoError, HostIoResponse, InMemoryHostIoTranscript,
+        };
+
+        let first_request = HostIoRequest::FsRead {
+            path: "input.txt".to_string(),
+        };
+        let replay = Arc::new(InMemoryHostIoTranscript::replaying(vec![
+            (
+                first_request,
+                Err(HostIoError::Io {
+                    detail: "recorded read failure".to_string(),
+                }),
+            ),
+            (
+                HostIoRequest::FsRead {
+                    path: "must-not-resume.txt".to_string(),
+                },
+                Ok(HostIoResponse::FsRead { bytes: vec![1] }),
+            ),
+        ]));
+        let recorder: Arc<dyn HostIoRecorder> = replay;
+        let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        orchestrator.set_host_io(Arc::new(DenyAllHostIo), Some(recorder));
+        let package = ExtensionPackage {
+            extension_id: "host-error-finalization".to_string(),
+            source: "require('fs').readFileSync('input.txt');".to_string(),
+            source_file: None,
+            capabilities: vec![
+                "vm_dispatch".to_string(),
+                "heap_allocate".to_string(),
+                "fs_read".to_string(),
+            ],
+            version: "1.0.0".to_string(),
+            metadata: BTreeMap::new(),
+        };
+
+        let first = orchestrator
+            .execute(&package)
+            .expect_err("recorded host failure aborts and finalizes replay");
+        assert!(matches!(
+            first,
+            OrchestratorError::Interpreter(InterpreterError::InternalError { details })
+                if details.contains("host I/O execution finalization failed")
+                    && details.contains("1 unused transcript entries starting at index 1")
+                    && details.contains("phase execution also failed")
+        ));
+        let second = orchestrator
+            .execute(&package)
+            .expect_err("poisoned replay cannot resume the suffix");
+        assert!(second.to_string().contains("unused transcript entries"));
+        assert_eq!(orchestrator.execution_count(), 0);
+    }
+
+    #[derive(Debug)]
+    struct RecorderWithoutExecutionBoundaries;
+
+    impl HostIoRecorder for RecorderWithoutExecutionBoundaries {
+        fn begin_execution(
+            &self,
+        ) -> Result<(), frankenengine_extension_host::host_io::HostIoError> {
+            Err(
+                frankenengine_extension_host::host_io::HostIoError::NotImplemented {
+                    what: "test recorder has no execution lifecycle".to_string(),
+                },
+            )
+        }
+
+        fn replay(&self, _request: &HostIoRequest) -> Option<HostIoOutcome> {
+            None
+        }
+
+        fn record(&self, _request: &HostIoRequest, _outcome: &HostIoOutcome) {}
+
+        fn finish_execution(
+            &self,
+        ) -> Result<
+            Vec<(HostIoRequest, HostIoOutcome)>,
+            frankenengine_extension_host::host_io::HostIoError,
+        > {
+            Err(
+                frankenengine_extension_host::host_io::HostIoError::NotImplemented {
+                    what: "test recorder has no execution lifecycle".to_string(),
+                },
+            )
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct CountingHostIoProvider {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl HostIoProvider for CountingHostIoProvider {
+        fn name(&self) -> &str {
+            "counting-host-io"
+        }
+
+        fn perform(
+            &self,
+            _request: &HostIoRequest,
+            _granted: &[frankenengine_extension_host::host_io::HostIoCapability],
+        ) -> HostIoOutcome {
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Err(frankenengine_extension_host::host_io::HostIoError::Denied {
+                reason: "counting provider".to_string(),
+            })
+        }
+    }
+
+    #[test]
+    fn unsupported_recorder_fails_before_live_host_effect_bd_eou2o() {
+        let provider = Arc::new(CountingHostIoProvider::default());
+        let recorder: Arc<dyn HostIoRecorder> = Arc::new(RecorderWithoutExecutionBoundaries);
+        let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        orchestrator.set_host_io(provider.clone(), Some(recorder));
+        let package = ExtensionPackage {
+            extension_id: "unsupported-recorder".to_string(),
+            source: "require('fs').writeFileSync('out.txt', 'must not run');".to_string(),
+            source_file: None,
+            capabilities: vec![
+                "vm_dispatch".to_string(),
+                "heap_allocate".to_string(),
+                "fs_write".to_string(),
+            ],
+            version: "1.0.0".to_string(),
+            metadata: BTreeMap::new(),
+        };
+
+        let error = orchestrator
+            .execute(&package)
+            .expect_err("unsupported recorder must fail before interpreter entry");
+        assert!(
+            error
+                .to_string()
+                .contains("host I/O execution setup failed")
+        );
+        assert_eq!(
+            provider.calls.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "provider must not run before recorder lifecycle preflight"
+        );
+        assert_eq!(orchestrator.execution_count(), 0);
     }
 
     /// bd-1xl17 (end-to-end keystone): a REAL JS program — compiled+executed from
@@ -3313,6 +3545,21 @@ mod tests {
             kinds,
             vec!["fs_write", "fs_read"],
             "real JS fs ops must surface fs_write then fs_read host effects, got {kinds:?}"
+        );
+
+        let second = orch
+            .execute(&pkg)
+            .expect("recording recorder may be reused with a fresh run boundary");
+        let second_kinds: Vec<&str> = second
+            .host_effect_transcript
+            .iter()
+            .map(|(request, _)| request.kind())
+            .collect();
+        assert_eq!(second_kinds, vec!["fs_write", "fs_read"]);
+        assert_eq!(
+            recorder.recorded_entries().len(),
+            4,
+            "lifetime history retains both runs while each result carries only its own two effects"
         );
 
         let _ = std::fs::remove_dir_all(&root);

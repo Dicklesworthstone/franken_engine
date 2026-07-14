@@ -1424,6 +1424,7 @@ mod tests {
         let provider = Arc::new(RecordingHostIo::default());
         let recorder = Arc::new(InMemoryHostIoTranscript::recording());
         let record_handler = FullCapsHandler::with_host_io_recorded(provider, recorder.clone());
+        recorder.begin_execution().expect("begin recording");
         let network = NetworkHostcallEffect {
             url: "https://host:443".to_string(),
             method: "POST".to_string(),
@@ -1431,12 +1432,15 @@ mod tests {
             body: Some(b"hi".to_vec()),
         };
         assert!(record_handler.handle(&network).is_ok());
-        assert_eq!(recorder.entries().len(), 1);
+        let recorded = recorder.finish_execution().expect("finish recording");
+        assert_eq!(recorded.len(), 1);
 
-        let replay = Arc::new(InMemoryHostIoTranscript::replaying(recorder.entries()));
+        let replay = Arc::new(InMemoryHostIoTranscript::replaying(recorded));
+        replay.begin_execution().expect("begin replay");
         let replay_handler =
-            FullCapsHandler::with_host_io_recorded(Arc::new(NeverCalledHostIo), replay);
+            FullCapsHandler::with_host_io_recorded(Arc::new(NeverCalledHostIo), replay.clone());
         assert!(replay_handler.handle(&network).is_ok());
+        replay.finish_execution().expect("finish replay");
     }
 
     #[test]

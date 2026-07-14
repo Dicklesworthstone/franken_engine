@@ -623,6 +623,18 @@ fn nested_static_builtin_authority_is_consistent_across_ir2_proof_and_ir3() {
 }
 
 #[test]
+fn json_parse_preserves_raw_lone_surrogate_units() {
+    assert_eq!(
+        completion(
+            "let quote = String.fromCharCode(34); \
+             let lone = String.fromCharCode(55296); \
+             JSON.parse(quote + lone + quote).charCodeAt(0);"
+        ),
+        Value::Int(55296)
+    );
+}
+
+#[test]
 fn repeated_nested_flows_have_distinct_deterministic_body_paths() {
     let source = "(function () { Math.abs(-1); return Math.abs(-2); })();";
     let lower = || {

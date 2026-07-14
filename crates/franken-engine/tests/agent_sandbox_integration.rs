@@ -8,8 +8,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::agent_sandbox::{
-    AGENT_SANDBOX_MANIFEST_SCHEMA_VERSION, AgentSandboxManifest, AgentSandboxReport,
-    AgentToolGrant, DEFAULT_AGENT_TRUST_LEVEL,
+    AGENT_SANDBOX_MANIFEST_SCHEMA_VERSION, AgentSandboxError, AgentSandboxManifest,
+    AgentSandboxReport, AgentToolGrant, DEFAULT_AGENT_TRUST_LEVEL,
 };
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::data_contract::{
@@ -255,6 +255,25 @@ fn sandbox_report_reflects_tool_authority_and_execution() {
     );
     assert!(report.instructions_executed > 0);
     assert_eq!(report.trace_id, run.result.trace_id);
+}
+
+/// A report (and therefore the certificate capability input derived through
+/// the same method) must refuse a manifest whose deny list contradicts the
+/// VM capabilities forced by the execution context.
+#[test]
+fn sandbox_report_rejects_denied_forced_runtime_capability() {
+    let run = sandbox_run();
+    let mut contradictory = run.manifest.clone();
+    contradictory
+        .denied_capability_tags
+        .push("vm_dispatch".to_string());
+
+    assert!(matches!(
+        AgentSandboxReport::from_run(&contradictory, &run.result, false),
+        Err(AgentSandboxError::DeniedCapabilityAlsoGranted {
+            capability_tag
+        }) if capability_tag == "vm_dispatch"
+    ));
 }
 
 /// Two sandbox runs of the same fixed inputs produce identical reports

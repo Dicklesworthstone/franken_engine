@@ -130,8 +130,9 @@ impl fmt::Display for AgentSandboxError {
             ),
             Self::DeniedCapabilityAlsoGranted { capability_tag } => write!(
                 f,
-                "capability tag `{capability_tag}` appears in both tool_grants and \
-                 denied_capability_tags; refusing the ambiguous manifest fail-closed"
+                "capability tag `{capability_tag}` appears in both the effective \
+                 runtime-granted set and denied_capability_tags; refusing the \
+                 contradictory manifest fail-closed"
             ),
             Self::InvalidTrustLevel { trust_level } => write!(
                 f,
@@ -170,8 +171,9 @@ pub struct AgentSandboxManifest {
     #[serde(default)]
     pub tool_grants: Vec<AgentToolGrant>,
     /// Capability tags the framework explicitly denies (surfaced to the
-    /// guardplane as denied capabilities; a tag both granted and denied is a
-    /// manifest error).
+    /// guardplane as denied capabilities; a tag both runtime-granted and
+    /// denied is a manifest error, including capabilities forced by the
+    /// execution context).
     #[serde(default)]
     pub denied_capability_tags: Vec<String>,
     /// Guardplane trust level for the agent (defaults to `provisional`).
@@ -256,21 +258,13 @@ impl AgentSandboxManifest {
             }
         }
 
-        let granted = self.granted_capabilities()?;
-        for tag in &self.denied_capability_tags {
-            if tag.trim().is_empty() {
-                return Err(AgentSandboxError::EmptyField {
-                    field: "denied_capability_tags[]",
-                });
-            }
-            if let Some(capability) = RuntimeCapability::from_tag_str(tag)
-                && granted.contains(&capability)
-            {
-                return Err(AgentSandboxError::DeniedCapabilityAlsoGranted {
-                    capability_tag: tag.clone(),
-                });
-            }
-        }
+        // Every sandbox run receives the VM baseline whether or not those
+        // capabilities appear in tool_grants. Treat that execution-context
+        // authority as granted during validation so a deny cannot be silently
+        // overridden later by the lane router.
+        let mut always_granted = self.granted_capabilities()?;
+        always_granted.extend(FORCED_VM_CAPABILITIES);
+        self.reject_denied_capability_overlap(&always_granted)?;
 
         if let Some(trust_level) = self.trust_level.as_deref()
             && !KNOWN_TRUST_LEVELS.contains(&trust_level)
@@ -302,6 +296,31 @@ impl AgentSandboxManifest {
         Ok(granted)
     }
 
+    /// Reject a deny-list entry that resolves to any capability the run will
+    /// actually receive. Unknown deny tags remain conservative metadata, but
+    /// empty entries and recognized contradictions fail closed.
+    fn reject_denied_capability_overlap(
+        &self,
+        granted: &BTreeSet<RuntimeCapability>,
+    ) -> Result<(), AgentSandboxError> {
+        for tag in &self.denied_capability_tags {
+            let normalized_tag = tag.trim();
+            if normalized_tag.is_empty() {
+                return Err(AgentSandboxError::EmptyField {
+                    field: "denied_capability_tags[]",
+                });
+            }
+            if let Some(capability) = RuntimeCapability::from_tag_str(normalized_tag)
+                && granted.contains(&capability)
+            {
+                return Err(AgentSandboxError::DeniedCapabilityAlsoGranted {
+                    capability_tag: normalized_tag.to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// The effective runtime-granted set for this sandbox run: the manifest's
     /// tool-grant capabilities plus the interpreter's forced VM capabilities
     /// (and `ModuleLoad` when the run parses as a module). This is the set
@@ -311,11 +330,16 @@ impl AgentSandboxManifest {
         &self,
         module_goal: bool,
     ) -> Result<BTreeSet<RuntimeCapability>, AgentSandboxError> {
+        // Report and certificate construction call this method directly, so
+        // it must enforce the complete manifest contract rather than assume a
+        // package was validated earlier in the process.
+        self.validate()?;
         let mut granted = self.granted_capabilities()?;
         granted.extend(FORCED_VM_CAPABILITIES);
         if module_goal {
             granted.insert(RuntimeCapability::ModuleLoad);
         }
+        self.reject_denied_capability_overlap(&granted)?;
         Ok(granted)
     }
 
@@ -369,7 +393,10 @@ impl AgentSandboxManifest {
         engine_version: &str,
         module_goal: bool,
     ) -> Result<ExtensionPackage, AgentSandboxError> {
-        self.validate()?;
+        // Validate against context-injected authority before publishing the
+        // package. In particular, a module goal may not override an explicit
+        // module_load denial.
+        self.effective_runtime_capabilities(module_goal)?;
         let mut capabilities: Vec<String> = self
             .granted_capabilities()?
             .iter()
@@ -627,6 +654,25 @@ mod tests {
     }
 
     #[test]
+    fn denied_forced_vm_capability_fails_closed() {
+        for capability in FORCED_VM_CAPABILITIES {
+            let mut bad = manifest();
+            bad.tool_grants
+                .retain(|grant| grant.capability_tag != "console");
+            bad.denied_capability_tags = vec![capability.to_string()];
+            assert!(
+                matches!(
+                    bad.validate(),
+                    Err(AgentSandboxError::DeniedCapabilityAlsoGranted {
+                        capability_tag
+                    }) if capability_tag == capability.to_string()
+                ),
+                "forced capability {capability} must not override an explicit deny"
+            );
+        }
+    }
+
+    #[test]
     fn unknown_trust_level_fails_closed() {
         let mut bad = manifest();
         bad.trust_level = Some("galactic".to_string());
@@ -663,6 +709,30 @@ mod tests {
             .effective_runtime_capabilities(true)
             .expect("effective set derives");
         assert!(effective.contains(&RuntimeCapability::ModuleLoad));
+    }
+
+    #[test]
+    fn module_goal_cannot_override_module_load_denial() {
+        let mut denied = manifest();
+        denied
+            .denied_capability_tags
+            .push("  module:import  ".to_string());
+
+        denied
+            .effective_runtime_capabilities(false)
+            .expect("script goal does not inject module_load");
+        assert!(matches!(
+            denied.effective_runtime_capabilities(true),
+            Err(AgentSandboxError::DeniedCapabilityAlsoGranted {
+                capability_tag
+            }) if capability_tag == "module:import"
+        ));
+        assert!(matches!(
+            denied.to_extension_package("export {};".to_string(), None, "0.1.0", true),
+            Err(AgentSandboxError::DeniedCapabilityAlsoGranted {
+                capability_tag
+            }) if capability_tag == "module:import"
+        ));
     }
 
     #[test]

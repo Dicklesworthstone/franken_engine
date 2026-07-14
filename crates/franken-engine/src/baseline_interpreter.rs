@@ -232,6 +232,9 @@ const MEMORY_ESTIMATE_EVENT_PROMISE_WAITER_BASE_BYTES: u64 = 48;
 /// Conservative base charge for one finite `Readable.from` side-table entry.
 /// A retained string source and custom IFC label are charged separately.
 const MEMORY_ESTIMATE_READABLE_FROM_BASE_BYTES: u64 = 64;
+/// Additional retained side-table charge while `Readable.toArray()` waits for
+/// the stream's terminal close phase before settling its Promise.
+const MEMORY_ESTIMATE_READABLE_TO_ARRAY_WAITER_BYTES: u64 = 48;
 /// BotGuard typed-array v1 per-buffer cap from bd-8enww.2.1.
 const MAX_ARRAY_BUFFER_BYTE_LENGTH: u64 = 8 * 1024 * 1024;
 /// Approximate metadata footprint for an ArrayBuffer-backed typed-array view.
@@ -2001,6 +2004,18 @@ pub enum BuiltinFunctionKind {
     /// Receiver-independent `Array.isArray`, materialized by a dedicated pure
     /// factory hostcall for unshadowed static member reads (bd-cue2u).
     ArrayIsArray,
+    /// `Readable.prototype.pause()` over the finite stream kernel (bd-fw7zd).
+    /// Stream variants are appended at the true enum tail because the
+    /// discriminant feeds deterministic register hashing.
+    StreamReadablePause,
+    /// `Readable.prototype.resume()`.
+    StreamReadableResume,
+    /// `Readable.prototype.isPaused()`.
+    StreamReadableIsPaused,
+    /// The deliberately narrow `Readable.prototype.push(null)` terminal path.
+    StreamReadablePush,
+    /// `Readable.from(...).toArray()` Promise consumption.
+    StreamReadableToArray,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -3178,6 +3193,11 @@ impl BuiltinFunction {
             BuiltinFunctionKind::NumberValueOf => "valueOf",
             BuiltinFunctionKind::ProxyRevoke => "revoke",
             BuiltinFunctionKind::ArrayIsArray => "isArray",
+            BuiltinFunctionKind::StreamReadablePause => "pause",
+            BuiltinFunctionKind::StreamReadableResume => "resume",
+            BuiltinFunctionKind::StreamReadableIsPaused => "isPaused",
+            BuiltinFunctionKind::StreamReadablePush => "push",
+            BuiltinFunctionKind::StreamReadableToArray => "toArray",
             BuiltinFunctionKind::ArrayPush => "push",
             BuiltinFunctionKind::ArrayPop => "pop",
             BuiltinFunctionKind::ArrayShift => "shift",
@@ -5673,6 +5693,16 @@ enum ReadableFromPumpPhase {
     Close,
 }
 
+/// Deferred result for `Readable.from(...).toArray()`. The result array is
+/// materialized when consumption begins, but the Promise is intentionally not
+/// fulfilled until the Close pump phase has emitted `close`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReadableToArrayWaiter {
+    promise: crate::promise_model::PromiseHandle,
+    result: ObjectId,
+    label: Label,
+}
+
 /// Finite pure-compute readable state. The cursor and flow-control bit stay
 /// outside the JS heap so guest property writes cannot forge stream progress.
 /// Within the supported array subset, own indexed elements and length are read
@@ -5681,10 +5711,16 @@ enum ReadableFromPumpPhase {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReadableFromState {
     source: Value,
+    /// Generic `new Readable(...)` instances accept only explicit `push(null)`
+    /// termination in this slice; they must not treat their placeholder source
+    /// as an already-exhausted finite iterable when resumed.
+    push_only: bool,
     next_index: usize,
     phase: ReadableFromPumpPhase,
     flowing: bool,
+    paused: bool,
     lifecycle_label: Label,
+    to_array_waiter: Option<ReadableToArrayWaiter>,
 }
 
 /// One listener in the interpreter-wide EventEmitter side table (bd-2dmnn).
@@ -7219,15 +7255,131 @@ impl InterpreterCore {
         };
         let state = ReadableFromState {
             source,
+            push_only: false,
             next_index: 0,
             phase: ReadableFromPumpPhase::Data,
             flowing: false,
+            paused: false,
             lifecycle_label: source_label,
+            to_array_waiter: None,
         };
-        let state_bytes = Self::estimate_readable_from_state_bytes(&state);
-        let object_properties = Self::readable_from_object_properties(object_mode);
+        let object_properties = Self::readable_object_properties(object_mode, 1);
+        self.allocate_readable_with_state(state, &object_properties, true)
+    }
+
+    fn stream_constructor_options(
+        &self,
+        args: RegRange,
+        byte_mode_default: i64,
+    ) -> Result<(bool, i64, Label), InterpreterError> {
+        if args.count == 0 || matches!(self.read_reg(args.start)?, Value::Undefined | Value::Null) {
+            return Ok((false, byte_mode_default, Label::Public));
+        }
+        let options = self.read_reg(args.start)?;
+        let Value::Object(options_id) = options else {
+            return Err(InterpreterError::TypeError {
+                expected: "stream constructor options object".to_string(),
+                got: options.type_name().to_string(),
+            });
+        };
+        let object = self
+            .heap
+            .get(options_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: options_id.0 })?;
+        let object_mode = object
+            .properties
+            .get("objectMode")
+            .is_some_and(Value::is_truthy);
+        let default = if object_mode { 16 } else { byte_mode_default };
+        let high_water_mark = match object.properties.get("highWaterMark") {
+            None | Some(Value::Undefined) => default,
+            Some(Value::Int(value)) if (0..=i64::from(u32::MAX)).contains(value) => *value,
+            Some(Value::Float(value))
+                if value.inner().is_finite()
+                    && value.inner() >= 0.0
+                    && value.inner().fract() == 0.0
+                    && value.inner() <= f64::from(u32::MAX) =>
+            {
+                value.inner() as i64
+            }
+            Some(value) => {
+                return Err(InterpreterError::RangeError {
+                    message: format!(
+                        "stream highWaterMark must be a finite non-negative integer (got {})",
+                        value.type_name()
+                    ),
+                });
+            }
+        };
+        Ok((
+            object_mode,
+            high_water_mark,
+            self.get_register_label(args.start)?.clone(),
+        ))
+    }
+
+    fn construct_stream_readable(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        // Bun 1.3.x, the reference runtime for the compatibility corpus, uses
+        // 64 KiB as the byte-mode Readable default. Object mode uses 16.
+        let (object_mode, high_water_mark, lifecycle_label) =
+            self.stream_constructor_options(args, 65_536)?;
+        let state = ReadableFromState {
+            source: Value::Undefined,
+            push_only: true,
+            next_index: 0,
+            phase: ReadableFromPumpPhase::Data,
+            flowing: false,
+            paused: false,
+            lifecycle_label,
+            to_array_waiter: None,
+        };
+        let properties = Self::readable_object_properties(object_mode, high_water_mark);
+        self.allocate_readable_with_state(state, &properties, false)
+    }
+
+    fn construct_stream_writable(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        let (object_mode, high_water_mark, _) = self.stream_constructor_options(args, 65_536)?;
+        let properties = [
+            ("__type", Value::str("Writable")),
+            ("__maxListeners", Value::Int(10)),
+            ("writable", Value::Bool(true)),
+            ("writableEnded", Value::Bool(false)),
+            ("writableFinished", Value::Bool(false)),
+            ("writableLength", Value::Int(0)),
+            ("writableNeedDrain", Value::Bool(false)),
+            ("writableObjectMode", Value::Bool(object_mode)),
+            ("writableHighWaterMark", Value::Int(high_water_mark)),
+            ("destroyed", Value::Bool(false)),
+            ("closed", Value::Bool(false)),
+        ];
         let mut projected_object = HeapObject::new();
-        for (key, value) in &object_properties {
+        for (key, value) in &properties {
+            projected_object
+                .properties
+                .insert((*key).to_string(), value.clone());
+        }
+        let object_bytes = Self::estimate_heap_object_bytes(&projected_object);
+        let requested_bytes = self.estimated_memory_bytes.saturating_add(object_bytes);
+        if requested_bytes > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(
+                requested_bytes,
+                self.heap_object_count_u32().saturating_add(1),
+            ));
+        }
+        Ok(Value::Object(
+            self.alloc_object_with_properties(&properties)?,
+        ))
+    }
+
+    fn allocate_readable_with_state(
+        &mut self,
+        state: ReadableFromState,
+        object_properties: &[(&str, Value)],
+        schedule_pump: bool,
+    ) -> Result<Value, InterpreterError> {
+        let state_bytes = Self::estimate_readable_from_state_bytes(&state);
+        let mut projected_object = HeapObject::new();
+        for (key, value) in object_properties {
             projected_object
                 .properties
                 .insert((*key).to_string(), value.clone());
@@ -7245,7 +7397,7 @@ impl InterpreterCore {
         }
         self.apply_memory_component_delta(0, state_bytes)?;
 
-        let object_id = match self.alloc_object_with_properties(&object_properties) {
+        let object_id = match self.alloc_object_with_properties(object_properties) {
             Ok(object_id) => object_id,
             Err(error) => {
                 self.estimated_memory_bytes =
@@ -7254,11 +7406,16 @@ impl InterpreterCore {
             }
         };
         self.readable_from_streams.insert(object_id, state);
-        self.schedule_readable_from_pump(object_id);
+        if schedule_pump {
+            self.schedule_readable_from_pump(object_id);
+        }
         Ok(Value::Object(object_id))
     }
 
-    fn readable_from_object_properties(object_mode: bool) -> [(&'static str, Value); 10] {
+    fn readable_object_properties(
+        object_mode: bool,
+        high_water_mark: i64,
+    ) -> [(&'static str, Value); 10] {
         [
             ("__type", Value::str("Readable")),
             ("__maxListeners", Value::Int(10)),
@@ -7267,7 +7424,7 @@ impl InterpreterCore {
             ("readableFlowing", Value::Null),
             ("readableLength", Value::Int(0)),
             ("readableObjectMode", Value::Bool(object_mode)),
-            ("readableHighWaterMark", Value::Int(1)),
+            ("readableHighWaterMark", Value::Int(high_water_mark)),
             ("destroyed", Value::Bool(false)),
             ("closed", Value::Bool(false)),
         ]
@@ -7302,6 +7459,9 @@ impl InterpreterCore {
         let Some(state) = self.readable_from_streams.get_mut(&object_id) else {
             return;
         };
+        if state.paused {
+            return;
+        }
         state.flowing = true;
         let key = "readableFlowing";
         let previous_bytes = self
@@ -7324,6 +7484,221 @@ impl InterpreterCore {
                 .saturating_add(Self::estimate_property_entry_bytes(key, &Value::Bool(true)));
         }
         self.schedule_readable_from_pump(object_id);
+    }
+
+    fn readable_receiver_id(&self, receiver: Value) -> Result<ObjectId, InterpreterError> {
+        let Value::Object(object_id) = receiver else {
+            return Err(InterpreterError::TypeError {
+                expected: "Readable receiver".to_string(),
+                got: receiver.type_name().to_string(),
+            });
+        };
+        let is_readable = self.readable_from_streams.contains_key(&object_id);
+        if !is_readable {
+            return Err(InterpreterError::TypeError {
+                expected: "Readable receiver".to_string(),
+                got: "non-Readable object".to_string(),
+            });
+        }
+        Ok(object_id)
+    }
+
+    fn readable_pause(&mut self, receiver: Value) -> Result<Value, InterpreterError> {
+        let object_id = self.readable_receiver_id(receiver)?;
+        self.set_object_property(object_id, "readableFlowing".to_string(), Value::Bool(false))?;
+        if let Some(state) = self.readable_from_streams.get_mut(&object_id) {
+            state.flowing = false;
+            state.paused = true;
+        }
+        Ok(Value::Object(object_id))
+    }
+
+    fn readable_resume(&mut self, receiver: Value) -> Result<Value, InterpreterError> {
+        let object_id = self.readable_receiver_id(receiver)?;
+        self.set_object_property(object_id, "readableFlowing".to_string(), Value::Bool(true))?;
+        if let Some(state) = self.readable_from_streams.get_mut(&object_id) {
+            state.flowing = true;
+            state.paused = false;
+            self.schedule_readable_from_pump(object_id);
+        }
+        Ok(Value::Object(object_id))
+    }
+
+    fn readable_is_paused(&self, receiver: Value) -> Result<Value, InterpreterError> {
+        let object_id = self.readable_receiver_id(receiver)?;
+        let paused = self
+            .readable_from_streams
+            .get(&object_id)
+            .is_some_and(|state| state.paused);
+        Ok(Value::Bool(paused))
+    }
+
+    fn readable_push(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let object_id = self.readable_receiver_id(receiver)?;
+        let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        if value != Value::Null {
+            return Err(InterpreterError::TypeError {
+                expected: "null as the supported Readable.push argument".to_string(),
+                got: value.type_name().to_string(),
+            });
+        }
+        let trigger_label = if args.count > 0 {
+            self.get_register_label(args.start)?.clone()
+        } else {
+            Label::Public
+        };
+        let Some(state) = self.readable_from_streams.get(&object_id) else {
+            return Ok(Value::Bool(false));
+        };
+        if state.phase != ReadableFromPumpPhase::Data {
+            return Ok(Value::Bool(false));
+        }
+        let previous_state_bytes = Self::estimate_readable_from_state_bytes(state);
+        let lifecycle_label = state.lifecycle_label.join(&trigger_label);
+        let mut projected_state = state.clone();
+        projected_state.phase = ReadableFromPumpPhase::End;
+        projected_state.lifecycle_label = lifecycle_label.clone();
+        let new_state_bytes = Self::estimate_readable_from_state_bytes(&projected_state);
+        self.apply_memory_component_delta(previous_state_bytes, new_state_bytes)?;
+        let state = self
+            .readable_from_streams
+            .get_mut(&object_id)
+            .expect("Readable brand was checked before EOF transition");
+        state.phase = ReadableFromPumpPhase::End;
+        state.lifecycle_label = lifecycle_label;
+        self.schedule_readable_from_pump(object_id);
+        // Node/Bun report false once EOF has been requested. `readableEnded`
+        // remains false until the later End pump turn begins.
+        Ok(Value::Bool(false))
+    }
+
+    fn readable_to_array(&mut self, receiver: Value) -> Result<Value, InterpreterError> {
+        let object_id = self.readable_receiver_id(receiver)?;
+        let Some((source, next_index, phase, lifecycle_label, push_only, already_waiting)) =
+            self.readable_from_streams.get(&object_id).map(|state| {
+                (
+                    state.source.clone(),
+                    state.next_index,
+                    state.phase,
+                    state.lifecycle_label.clone(),
+                    state.push_only,
+                    state.to_array_waiter.is_some(),
+                )
+            })
+        else {
+            return Err(InterpreterError::TypeError {
+                expected: "live finite Readable.from receiver".to_string(),
+                got: "closed Readable".to_string(),
+            });
+        };
+        if push_only || already_waiting || phase != ReadableFromPumpPhase::Data {
+            return Err(InterpreterError::TypeError {
+                expected: "one pre-terminal toArray consumption on Readable.from".to_string(),
+                got: if push_only {
+                    "generic Readable".to_string()
+                } else if phase != ReadableFromPumpPhase::Data {
+                    "terminating Readable".to_string()
+                } else {
+                    "duplicate toArray".to_string()
+                },
+            });
+        }
+
+        let source_length = match &source {
+            Value::Str(_) => 1,
+            Value::Object(source_id) => self.array_like_length(*source_id)?,
+            _ => 0,
+        };
+        let remaining = source_length.saturating_sub(next_index);
+        let waiter_bytes = Self::estimate_readable_to_array_waiter_bytes(&lifecycle_label);
+        let mut projected_empty_array = HeapObject::new();
+        projected_empty_array.is_array = true;
+        projected_empty_array.cached_dense_length = Some(0);
+        projected_empty_array
+            .properties
+            .insert("length".to_string(), Value::Int(0));
+        let fixed_result_bytes = Self::estimate_heap_object_bytes(&projected_empty_array);
+        let minimum_element_bytes = Self::estimate_property_entry_bytes("0", &Value::Undefined);
+        let minimum_result_bytes = fixed_result_bytes.saturating_add(
+            u64::try_from(remaining)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(minimum_element_bytes),
+        );
+        let minimum_requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_add(waiter_bytes)
+            .saturating_add(minimum_result_bytes);
+        let requested_heap_objects = self.heap_object_count_u32().saturating_add(1);
+        if minimum_requested_bytes > self.config.max_total_memory_bytes
+            || requested_heap_objects > self.config.max_heap_objects
+        {
+            return Err(self.memory_budget_error(minimum_requested_bytes, requested_heap_objects));
+        }
+
+        let mut values = Vec::new();
+        values.try_reserve_exact(remaining).map_err(|_| {
+            self.memory_budget_error(minimum_requested_bytes, requested_heap_objects)
+        })?;
+        match source {
+            Value::Str(text) if next_index == 0 => values.push(Value::Str(text)),
+            Value::Str(_) => {}
+            Value::Object(source_id) => {
+                for index in next_index..source_length {
+                    values.push(
+                        self.array_index_value(source_id, index)?
+                            .unwrap_or(Value::Undefined),
+                    );
+                }
+            }
+            _ => {}
+        }
+
+        let result_bytes = fixed_result_bytes.saturating_add(
+            values
+                .iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    Self::estimate_property_entry_bytes(&index.to_string(), value)
+                })
+                .sum::<u64>(),
+        );
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_add(result_bytes)
+            .saturating_add(waiter_bytes);
+        if requested_bytes > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(
+                requested_bytes,
+                self.heap_object_count_u32().saturating_add(1),
+            ));
+        }
+
+        let result = self.alloc_array_from_values(&values)?;
+        let promise = self.promise_store.create();
+        let previous_state_bytes = self
+            .readable_from_streams
+            .get(&object_id)
+            .map(Self::estimate_readable_from_state_bytes)
+            .unwrap_or(0);
+        let state = self
+            .readable_from_streams
+            .get_mut(&object_id)
+            .expect("live state was checked before allocation");
+        state.next_index = next_index.saturating_add(values.len());
+        state.phase = ReadableFromPumpPhase::End;
+        state.to_array_waiter = Some(ReadableToArrayWaiter {
+            promise,
+            result,
+            label: lifecycle_label,
+        });
+        let new_state_bytes = Self::estimate_readable_from_state_bytes(state);
+        self.apply_memory_component_delta(previous_state_bytes, new_state_bytes)?;
+        self.schedule_readable_from_pump(object_id);
+        Ok(Value::Promise(promise.0))
     }
 
     /// Execute one finite-readable phase without holding the stream-state or
@@ -7352,6 +7727,13 @@ impl InterpreterCore {
                     .get(&object_id)
                     .is_some_and(|state| state.flowing);
                 if !flowing {
+                    return Ok(());
+                }
+                if self
+                    .readable_from_streams
+                    .get(&object_id)
+                    .is_some_and(|state| state.push_only)
+                {
                     return Ok(());
                 }
 
@@ -7435,16 +7817,16 @@ impl InterpreterCore {
             ReadableFromPumpPhase::Close => {
                 self.set_object_property(object_id, "destroyed".to_string(), Value::Bool(true))?;
                 self.set_object_property(object_id, "closed".to_string(), Value::Bool(true))?;
-                let lifecycle_label = self
+                let (lifecycle_label, to_array_waiter) = self
                     .readable_from_streams
                     .remove(&object_id)
                     .map(|state| {
                         self.estimated_memory_bytes = self
                             .estimated_memory_bytes
                             .saturating_sub(Self::estimate_readable_from_state_bytes(&state));
-                        state.lifecycle_label
+                        (state.lifecycle_label, state.to_array_waiter)
                     })
-                    .unwrap_or(Label::Public);
+                    .unwrap_or((Label::Public, None));
                 let emission = self.emit_event_listener_records(
                     module,
                     object_id,
@@ -7453,7 +7835,20 @@ impl InterpreterCore {
                     lifecycle_label,
                 );
                 self.clear_event_listeners(object_id, None);
+                // Promise reactions are enqueued only after every close
+                // listener has run. Even a throwing close listener must not
+                // strand the already-consumed toArray Promise.
+                let settlement = if let Some(waiter) = to_array_waiter {
+                    self.fulfill_promise(
+                        waiter.promise,
+                        Self::value_to_js_value(&Value::Object(waiter.result)),
+                        waiter.label,
+                    )
+                } else {
+                    Ok(())
+                };
                 emission?;
+                settlement?;
             }
         }
         Ok(())
@@ -10046,6 +10441,21 @@ impl InterpreterCore {
             BuiltinFunctionKind::ArrayIsArray => {
                 let arg = self.builtin_arg(args, 0)?;
                 Ok(self.array_is_array_value(arg))
+            }
+            BuiltinFunctionKind::StreamReadablePause => {
+                self.readable_pause(receiver.unwrap_or(Value::Undefined))
+            }
+            BuiltinFunctionKind::StreamReadableResume => {
+                self.readable_resume(receiver.unwrap_or(Value::Undefined))
+            }
+            BuiltinFunctionKind::StreamReadableIsPaused => {
+                self.readable_is_paused(receiver.unwrap_or(Value::Undefined))
+            }
+            BuiltinFunctionKind::StreamReadablePush => {
+                self.readable_push(receiver.unwrap_or(Value::Undefined), args)
+            }
+            BuiltinFunctionKind::StreamReadableToArray => {
+                self.readable_to_array(receiver.unwrap_or(Value::Undefined))
             }
             BuiltinFunctionKind::ArrayPush => {
                 // ES2020 23.1.3.20: append each argument to `this` at the
@@ -18615,12 +19025,16 @@ impl InterpreterCore {
         // access (bd-juodx). Like arrays, own/inherited data properties walked
         // above win first — so `m.size` resolves to the `size` data property,
         // and a user-assigned `m.set = …` shadows the builtin.
-        let root_type_tag = self.heap.get(object_id.0 as usize).and_then(|object| {
-            match object.properties.get("__type") {
-                Some(Value::Str(s)) => Some(s.to_string()),
-                _ => None,
-            }
-        });
+        let root_type_tag = if self.readable_from_streams.contains_key(&object_id) {
+            Some("Readable".to_string())
+        } else {
+            self.heap.get(object_id.0 as usize).and_then(|object| {
+                match object.properties.get("__type") {
+                    Some(Value::Str(s)) => Some(s.to_string()),
+                    _ => None,
+                }
+            })
+        };
         let root_is_buffer = self.heap.get(object_id.0 as usize).is_some_and(|object| {
             object
                 .typed_array
@@ -18732,69 +19146,88 @@ impl InterpreterCore {
             // deferred egress.
             ("ClientRequest", "write") => Some(BuiltinFunction::client_request_write()),
             ("ClientRequest", "end") => Some(BuiltinFunction::client_request_end()),
+            ("Readable", "pause") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::StreamReadablePause,
+            )),
+            ("Readable", "resume") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::StreamReadableResume,
+            )),
+            ("Readable", "isPaused") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::StreamReadableIsPaused,
+            )),
+            ("Readable", "push") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::StreamReadablePush,
+            )),
+            ("Readable", "toArray") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::StreamReadableToArray,
+            )),
             // bd-3894s / bd-2dmnn: standalone EventEmitter objects and both HTTP
             // stream tags resolve against one receiver-aware EventEmitter method
             // surface and one listener side table.
             (
-                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable",
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable",
                 "on" | "addListener",
             ) => Some(BuiltinFunction::emitter_on()),
-            ("ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable", "once") => {
-                Some(BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterOnce))
-            }
             (
-                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable",
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable",
+                "once",
+            ) => Some(BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterOnce)),
+            (
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable",
                 "off" | "removeListener",
             ) => Some(BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterOff)),
             (
-                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable",
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable",
                 "removeAllListeners",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterRemoveAllListeners,
             )),
             (
-                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable",
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable",
                 "listenerCount",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterListenerCount,
             )),
-            ("ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable", "eventNames") => {
-                Some(BuiltinFunction::new_kind(
-                    BuiltinFunctionKind::EmitterEventNames,
-                ))
-            }
             (
-                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable",
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable",
+                "eventNames",
+            ) => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::EmitterEventNames,
+            )),
+            (
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable",
                 "prependListener",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterPrependListener,
             )),
             (
-                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable",
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable",
                 "prependOnceListener",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterPrependOnceListener,
             )),
-            ("ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable", "emit") => {
-                Some(BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterEmit))
-            }
             (
-                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable",
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable",
+                "emit",
+            ) => Some(BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterEmit)),
+            (
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable",
                 "getMaxListeners",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterGetMaxListeners,
             )),
             (
-                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable",
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable",
                 "setMaxListeners",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterSetMaxListeners,
             )),
-            ("ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable", "listeners") => {
-                Some(BuiltinFunction::new_kind(
-                    BuiltinFunctionKind::EmitterListeners,
-                ))
-            }
+            (
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable",
+                "listeners",
+            ) => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::EmitterListeners,
+            )),
             ("RegExp", "test") => Some(BuiltinFunction::regexp_test()),
             ("DataView", "getUint8") => Some(BuiltinFunction::data_view_get_uint8()),
             ("DataView", "setUint8") => Some(BuiltinFunction::data_view_set_uint8()),
@@ -26711,6 +27144,16 @@ impl InterpreterCore {
                 // engine-contained finite stream. No module object or host
                 // authority is materialized by this dispatch.
                 self.construct_readable_from(args)
+            }
+            "builtin:StreamReadable" => {
+                // bd-fw7zd: statically proven `new Readable(options)` exposes
+                // deterministic state and explicit push(null) termination.
+                self.construct_stream_readable(args)
+            }
+            "builtin:StreamWritable" => {
+                // Constructor-observable Writable state only; write/finish
+                // behavior stays fail-closed until its later stream slice.
+                self.construct_stream_writable(args)
             }
             "builtin:ImportMeta" => {
                 if args.count != 0 {
@@ -35558,6 +36001,14 @@ impl InterpreterCore {
             .saturating_add(label_bytes)
     }
 
+    fn estimate_readable_to_array_waiter_bytes(label: &Label) -> u64 {
+        let label_bytes = match label {
+            Label::Custom { name, .. } => Self::estimate_string_bytes(name),
+            _ => 0,
+        };
+        MEMORY_ESTIMATE_READABLE_TO_ARRAY_WAITER_BYTES.saturating_add(label_bytes)
+    }
+
     fn estimate_readable_from_state_bytes(state: &ReadableFromState) -> u64 {
         let label_bytes = match &state.lifecycle_label {
             Label::Custom { name, .. } => Self::estimate_string_bytes(name),
@@ -35566,6 +36017,13 @@ impl InterpreterCore {
         MEMORY_ESTIMATE_READABLE_FROM_BASE_BYTES
             .saturating_add(Self::estimate_value_bytes(&state.source))
             .saturating_add(label_bytes)
+            .saturating_add(
+                state
+                    .to_array_waiter
+                    .as_ref()
+                    .map(|waiter| Self::estimate_readable_to_array_waiter_bytes(&waiter.label))
+                    .unwrap_or(0),
+            )
     }
 
     fn estimate_scope_frame_bytes(frame: &ScopeFrame) -> u64 {
@@ -43879,10 +44337,13 @@ mod async_runtime_tests_current {
         let baseline_heap_len = core.heap.len();
         let state = ReadableFromState {
             source: Value::Object(source),
+            push_only: false,
             next_index: 0,
             phase: ReadableFromPumpPhase::Data,
             flowing: false,
+            paused: false,
             lifecycle_label: Label::Public,
+            to_array_waiter: None,
         };
         let state_bytes = InterpreterCore::estimate_readable_from_state_bytes(&state);
         core.config.max_total_memory_bytes =
@@ -43904,7 +44365,7 @@ mod async_runtime_tests_current {
             core.recompute_estimated_memory_bytes()
         );
 
-        let properties = InterpreterCore::readable_from_object_properties(true);
+        let properties = InterpreterCore::readable_object_properties(true, 1);
         let mut projected_object = HeapObject::new();
         for (key, value) in properties {
             projected_object.properties.insert(key.to_string(), value);
@@ -43929,6 +44390,335 @@ mod async_runtime_tests_current {
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn stream_constructor_high_water_marks_and_validation_bd_fw7zd() {
+        let mut core = test_interpreter();
+        let readable_options = core
+            .alloc_object_with_properties(&[("highWaterMark", Value::Int(4))])
+            .expect("readable options");
+        core.write_reg(0, Value::Object(readable_options))
+            .expect("readable options register");
+        let Value::Object(readable) = core
+            .construct_stream_readable(RegRange { start: 0, count: 1 })
+            .expect("configured Readable")
+        else {
+            panic!("Readable constructor must return an object");
+        };
+        assert_eq!(
+            core.heap[readable.0 as usize]
+                .properties
+                .get("readableHighWaterMark"),
+            Some(&Value::Int(4))
+        );
+
+        let writable_options = core
+            .alloc_object_with_properties(&[("highWaterMark", Value::Int(8))])
+            .expect("writable options");
+        core.write_reg(0, Value::Object(writable_options))
+            .expect("writable options register");
+        let Value::Object(writable) = core
+            .construct_stream_writable(RegRange { start: 0, count: 1 })
+            .expect("configured Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        assert_eq!(
+            core.heap[writable.0 as usize]
+                .properties
+                .get("writableHighWaterMark"),
+            Some(&Value::Int(8))
+        );
+
+        let object_options = core
+            .alloc_object_with_properties(&[("objectMode", Value::Bool(true))])
+            .expect("object-mode options");
+        core.write_reg(0, Value::Object(object_options))
+            .expect("object-mode options register");
+        let Value::Object(objects) = core
+            .construct_stream_readable(RegRange { start: 0, count: 1 })
+            .expect("object-mode Readable")
+        else {
+            panic!("Readable constructor must return an object");
+        };
+        assert_eq!(
+            core.heap[objects.0 as usize]
+                .properties
+                .get("readableHighWaterMark"),
+            Some(&Value::Int(16))
+        );
+        assert_eq!(
+            core.heap[objects.0 as usize]
+                .properties
+                .get("readableObjectMode"),
+            Some(&Value::Bool(true))
+        );
+
+        let zero_options = core
+            .alloc_object_with_properties(&[("highWaterMark", Value::Int(0))])
+            .expect("zero-HWM options");
+        core.write_reg(0, Value::Object(zero_options))
+            .expect("zero-HWM options register");
+        let Value::Object(zero) = core
+            .construct_stream_readable(RegRange { start: 0, count: 1 })
+            .expect("zero-HWM Readable")
+        else {
+            panic!("Readable constructor must return an object");
+        };
+        assert_eq!(
+            core.heap[zero.0 as usize]
+                .properties
+                .get("readableHighWaterMark"),
+            Some(&Value::Int(0))
+        );
+
+        for invalid in [
+            Value::Int(-1),
+            Value::Float(Float64::new(1.5)),
+            Value::Float(Float64::new(f64::NAN)),
+            Value::Float(Float64::new(f64::INFINITY)),
+            Value::str("4"),
+        ] {
+            let mut invalid_core = test_interpreter();
+            let options = invalid_core
+                .alloc_object_with_properties(&[("highWaterMark", invalid)])
+                .expect("invalid options object");
+            invalid_core
+                .write_reg(0, Value::Object(options))
+                .expect("invalid options register");
+            assert!(matches!(
+                invalid_core.construct_stream_readable(RegRange { start: 0, count: 1 }),
+                Err(InterpreterError::RangeError { .. })
+            ));
+            assert!(invalid_core.readable_from_streams.is_empty());
+        }
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn readable_pause_resume_and_push_null_are_synchronous_bd_fw7zd() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let Value::Object(readable) = core
+            .construct_stream_readable(RegRange { start: 0, count: 0 })
+            .expect("generic Readable")
+        else {
+            panic!("Readable constructor must return an object");
+        };
+        assert_eq!(
+            core.readable_is_paused(Value::Object(readable))
+                .expect("initial isPaused"),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            core.readable_pause(Value::Object(readable)).expect("pause"),
+            Value::Object(readable)
+        );
+        assert_eq!(
+            core.readable_is_paused(Value::Object(readable))
+                .expect("paused isPaused"),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            core.readable_resume(Value::Object(readable))
+                .expect("resume"),
+            Value::Object(readable)
+        );
+        assert_eq!(
+            core.readable_is_paused(Value::Object(readable))
+                .expect("resumed isPaused"),
+            Value::Bool(false)
+        );
+        core.write_reg(0, Value::Null).expect("push null register");
+        core.set_register_label(0, Label::Secret)
+            .expect("push null label");
+        assert_eq!(
+            core.readable_push(Value::Object(readable), RegRange { start: 0, count: 1 })
+                .expect("push null"),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            core.heap[readable.0 as usize]
+                .properties
+                .get("readableEnded"),
+            Some(&Value::Bool(false)),
+            "EOF request must not forge synchronous readableEnded"
+        );
+        assert_eq!(
+            core.readable_from_streams
+                .get(&readable)
+                .expect("live generic state")
+                .lifecycle_label,
+            Label::Secret,
+            "EOF trigger taint must join terminal lifecycle emissions"
+        );
+        core.drive_readable_from_pump(readable, Some(&module))
+            .expect("end phase");
+        assert_eq!(
+            core.heap[readable.0 as usize]
+                .properties
+                .get("readableEnded"),
+            Some(&Value::Bool(true))
+        );
+        core.drive_readable_from_pump(readable, Some(&module))
+            .expect("close phase");
+        assert!(!core.readable_from_streams.contains_key(&readable));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn readable_to_array_settles_only_after_close_with_source_label_bd_fw7zd() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let source = core
+            .alloc_array_from_values(&[Value::str("left"), Value::str("right")])
+            .expect("source array");
+        core.write_reg(0, Value::Object(source))
+            .expect("source register");
+        core.set_register_label(0, Label::Secret)
+            .expect("source label");
+        let Value::Object(readable) = core
+            .construct_readable_from(RegRange { start: 0, count: 1 })
+            .expect("finite Readable")
+        else {
+            panic!("Readable.from must return an object");
+        };
+        let Value::Promise(promise_id) = core
+            .readable_to_array(Value::Object(readable))
+            .expect("toArray")
+        else {
+            panic!("toArray must return a Promise");
+        };
+        let promise = crate::promise_model::PromiseHandle(promise_id);
+        assert!(matches!(
+            core.promise_store.get(promise).map(|record| &record.state),
+            Ok(crate::promise_model::PromiseState::Pending)
+        ));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.drive_readable_from_pump(readable, Some(&module))
+            .expect("end phase");
+        assert!(matches!(
+            core.promise_store.get(promise).map(|record| &record.state),
+            Ok(crate::promise_model::PromiseState::Pending)
+        ));
+        assert_eq!(
+            core.heap[readable.0 as usize]
+                .properties
+                .get("readableEnded"),
+            Some(&Value::Bool(true))
+        );
+
+        core.drive_readable_from_pump(readable, Some(&module))
+            .expect("close phase");
+        let record = core.promise_store.get(promise).expect("settled Promise");
+        let crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Object(
+            result,
+        )) = &record.state
+        else {
+            panic!("toArray Promise must fulfill with an array object");
+        };
+        assert_eq!(record.label, Label::Secret);
+        assert_eq!(
+            core.read_array_like_values(ObjectId(result.0)),
+            vec![Value::str("left"), Value::str("right")]
+        );
+        assert!(!core.readable_from_streams.contains_key(&readable));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn readable_state_guards_reentrancy_brand_and_sparse_to_array_bd_fw7zd() {
+        let mut core = test_interpreter();
+        let Value::Object(readable) = core
+            .construct_stream_readable(RegRange { start: 0, count: 0 })
+            .expect("generic Readable")
+        else {
+            panic!("Readable constructor must return an object");
+        };
+        core.readable_pause(Value::Object(readable)).expect("pause");
+        core.set_object_property(readable, "readableFlowing".to_string(), Value::Bool(true))
+            .expect("forge public mirror");
+        assert_eq!(
+            core.readable_is_paused(Value::Object(readable))
+                .expect("internal isPaused"),
+            Value::Bool(true),
+            "guest writes must not forge the internal paused slot"
+        );
+
+        let forged = core
+            .alloc_object_with_properties(&[("__type", Value::str("Readable"))])
+            .expect("forged object");
+        assert!(matches!(
+            core.readable_pause(Value::Object(forged)),
+            Err(InterpreterError::TypeError { .. })
+        ));
+
+        core.write_reg(0, Value::Null).expect("EOF register");
+        core.readable_from_streams
+            .get_mut(&readable)
+            .expect("live generic state")
+            .phase = ReadableFromPumpPhase::Close;
+        core.readable_push(Value::Object(readable), RegRange { start: 0, count: 1 })
+            .expect("reentrant push(null) is an idempotent false");
+        assert_eq!(
+            core.readable_from_streams
+                .get(&readable)
+                .expect("live generic state")
+                .phase,
+            ReadableFromPumpPhase::Close,
+            "push(null) must not rewind Close to End"
+        );
+
+        let mut sparse_core = test_interpreter();
+        let source = sparse_core
+            .alloc_array_from_values(&[])
+            .expect("sparse source");
+        sparse_core
+            .set_object_property(
+                source,
+                "length".to_string(),
+                Value::Int(i64::from(u32::MAX)),
+            )
+            .expect("huge sparse length");
+        sparse_core
+            .write_reg(0, Value::Object(source))
+            .expect("sparse source register");
+        let Value::Object(sparse_readable) = sparse_core
+            .construct_readable_from(RegRange { start: 0, count: 1 })
+            .expect("sparse finite Readable")
+        else {
+            panic!("Readable.from must return an object");
+        };
+        let heap_len = sparse_core.heap.len();
+        assert!(matches!(
+            sparse_core.readable_to_array(Value::Object(sparse_readable)),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(sparse_core.heap.len(), heap_len);
+        let state = sparse_core
+            .readable_from_streams
+            .get(&sparse_readable)
+            .expect("failed toArray must retain source state");
+        assert_eq!(state.phase, ReadableFromPumpPhase::Data);
+        assert!(state.to_array_waiter.is_none());
+        assert_eq!(
+            sparse_core.estimated_memory_bytes(),
+            sparse_core.recompute_estimated_memory_bytes()
         );
     }
 

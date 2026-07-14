@@ -895,15 +895,22 @@ fn lower_ir0_to_ir1_with_ambient_grant(
         binding_lookup.insert(events_module_alias_sentinel(&alias), 0);
     }
     // bd-fw7zd: `stream` is likewise a lowering-only builtin surface. The
-    // first vertical slice recognizes only a statically proven `Readable.from`
-    // call reached through a CJS destructure or ESM named import. The sentinel
-    // never materializes a module/constructor object; unsupported possession,
-    // computed access, and dynamic loading remain on the ambient-denial path.
+    // supported vertical slices recognize statically proven `Readable.from`
+    // calls and `new Readable` / `new Writable` constructors reached through a
+    // CJS destructure or ESM named import. The sentinels never materialize a
+    // module/constructor object; unsupported possession, computed access, and
+    // dynamic loading remain on the ambient-denial path.
     for local in confirmed_stream_readable_destructured_requires(&ir0.tree.body, &binding_lookup) {
-        binding_lookup.insert(stream_readable_binding_sentinel(&local), 0);
+        binding_lookup.insert(pending_stream_readable_binding_sentinel(&local), 0);
+    }
+    for local in confirmed_stream_writable_destructured_requires(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(pending_stream_writable_binding_sentinel(&local), 0);
     }
     for local in confirmed_stream_readable_named_imports(&ir0.tree.body) {
         binding_lookup.insert(stream_readable_binding_sentinel(&local), 0);
+    }
+    for local in confirmed_stream_writable_named_imports(&ir0.tree.body) {
+        binding_lookup.insert(stream_writable_binding_sentinel(&local), 0);
     }
     let mut synthetic_export_index = 0u32;
     let mut synthetic_import_index = 0u32;
@@ -1062,12 +1069,17 @@ fn lower_ir0_to_ir1_with_ambient_grant(
                         let complete_stream_named_import =
                             is_stream_module_specifier(&import.source)
                                 && !specifiers.is_empty()
-                                && specifiers.iter().all(|spec| {
-                                    spec.import_name == "Readable"
-                                        && binding_lookup.contains_key(
+                                && specifiers
+                                    .iter()
+                                    .all(|spec| match spec.import_name.as_str() {
+                                        "Readable" => binding_lookup.contains_key(
                                             &stream_readable_binding_sentinel(&spec.local_name),
-                                        )
-                                });
+                                        ),
+                                        "Writable" => binding_lookup.contains_key(
+                                            &stream_writable_binding_sentinel(&spec.local_name),
+                                        ),
+                                        _ => false,
+                                    });
                         let named_builtin_import = (is_fs_module_specifier(&import.source)
                             && specifiers.iter().any(|spec| {
                                 binding_lookup.contains_key(&fs_named_import_sentinel(
@@ -1111,8 +1123,10 @@ fn lower_ir0_to_ir1_with_ambient_grant(
                             && !complete_stream_named_import
                         {
                             for spec in specifiers {
-                                binding_lookup
-                                    .remove(&stream_readable_binding_sentinel(&spec.local_name));
+                                suppress_stream_module_sentinel(
+                                    &mut binding_lookup,
+                                    &spec.local_name,
+                                );
                             }
                         }
                         if named_builtin_import {
@@ -2076,11 +2090,29 @@ fn binding_entry_snapshot(
         .iter()
         .flat_map(|name| {
             let origin = capture_origin_sentinel(name);
-            let stream = stream_readable_binding_sentinel(name);
+            let stream_readable = stream_readable_binding_sentinel(name);
+            let stream_writable = stream_writable_binding_sentinel(name);
+            let pending_stream_readable = pending_stream_readable_binding_sentinel(name);
+            let pending_stream_writable = pending_stream_writable_binding_sentinel(name);
             [
                 (name.clone(), binding_lookup.get(name).copied()),
                 (origin.clone(), binding_lookup.get(&origin).copied()),
-                (stream.clone(), binding_lookup.get(&stream).copied()),
+                (
+                    stream_readable.clone(),
+                    binding_lookup.get(&stream_readable).copied(),
+                ),
+                (
+                    stream_writable.clone(),
+                    binding_lookup.get(&stream_writable).copied(),
+                ),
+                (
+                    pending_stream_readable.clone(),
+                    binding_lookup.get(&pending_stream_readable).copied(),
+                ),
+                (
+                    pending_stream_writable.clone(),
+                    binding_lookup.get(&pending_stream_writable).copied(),
+                ),
             ]
         })
         .collect()
@@ -2133,7 +2165,7 @@ fn prepare_function_body_bindings(
     // lexical shadowing cannot rewrite `Readable.from` into the engine builtin
     // (bd-fw7zd fresh-eyes audit).
     for name in &local_names {
-        body_lookup.remove(&stream_readable_binding_sentinel(name));
+        suppress_stream_module_sentinel(body_lookup, name);
     }
     for name in &local_names {
         body_lookup.insert(lexical_binding_sentinel(name), 0);
@@ -2142,7 +2174,7 @@ fn prepare_function_body_bindings(
         }
     }
     if let Some(name) = self_name {
-        body_lookup.remove(&stream_readable_binding_sentinel(name));
+        suppress_stream_module_sentinel(body_lookup, name);
         body_lookup.insert(lexical_binding_sentinel(name), 0);
     }
 
@@ -2652,7 +2684,7 @@ fn allocate_destructure_param_bindings(
                 BindingKind::Var,
             )
             .map_err(LoweringPipelineError::SemanticViolation)?;
-            binding_lookup.remove(&stream_readable_binding_sentinel(inner_name));
+            suppress_stream_module_sentinel(binding_lookup, inner_name);
         }
     }
     Ok(())
@@ -2957,6 +2989,18 @@ fn lower_statement_to_ir1_with_flow(
                             })
                 {
                     for local in &locals {
+                        if binding_lookup
+                            .remove(&pending_stream_readable_binding_sentinel(local))
+                            .is_some()
+                        {
+                            binding_lookup.insert(stream_readable_binding_sentinel(local), 0);
+                        }
+                        if binding_lookup
+                            .remove(&pending_stream_writable_binding_sentinel(local))
+                            .is_some()
+                        {
+                            binding_lookup.insert(stream_writable_binding_sentinel(local), 0);
+                        }
                         if let Some(&local_bid) = binding_lookup.get(local) {
                             ops.push(Ir1Op::LoadLiteral {
                                 value: Ir1Literal::Undefined,
@@ -4274,7 +4318,7 @@ fn lower_statement_to_ir1_with_flow(
                     BindingKind::Parameter,
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
-                body_lookup.remove(&stream_readable_binding_sentinel(pname));
+                suppress_stream_module_sentinel(&mut body_lookup, pname);
             }
             // For destructuring-pattern params, allocate inner identifier
             // bindings and emit destructuring ops that copy from each
@@ -4415,7 +4459,7 @@ fn lower_statement_to_ir1_with_flow(
                     BindingKind::Parameter,
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
-                body_lookup.remove(&stream_readable_binding_sentinel(pname));
+                suppress_stream_module_sentinel(&mut body_lookup, pname);
             }
             // Destructure non-identifier ctor params (applies defaults) before the body.
             allocate_destructure_param_bindings(
@@ -4599,7 +4643,7 @@ fn lower_statement_to_ir1_with_flow(
                         BindingKind::Parameter,
                     )
                     .map_err(LoweringPipelineError::SemanticViolation)?;
-                    m_lookup.remove(&stream_readable_binding_sentinel(pname));
+                    suppress_stream_module_sentinel(&mut m_lookup, pname);
                 }
                 // Destructure non-identifier params (applies defaults) before the body.
                 allocate_destructure_param_bindings(
@@ -12514,7 +12558,7 @@ fn lower_expression_to_ir1_inner(
                     BindingKind::Parameter,
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
-                body_lookup.remove(&stream_readable_binding_sentinel(pname));
+                suppress_stream_module_sentinel(&mut body_lookup, pname);
             }
             // Destructure non-identifier params (applies defaults) before the body.
             allocate_destructure_param_bindings(
@@ -12637,7 +12681,7 @@ fn lower_expression_to_ir1_inner(
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
             if let Some(self_name) = name {
-                body_lookup.remove(&stream_readable_binding_sentinel(self_name));
+                suppress_stream_module_sentinel(&mut body_lookup, self_name);
             }
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
@@ -12664,7 +12708,7 @@ fn lower_expression_to_ir1_inner(
                     BindingKind::Parameter,
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
-                body_lookup.remove(&stream_readable_binding_sentinel(pname));
+                suppress_stream_module_sentinel(&mut body_lookup, pname);
             }
             allocate_destructure_param_bindings(
                 &destructure_params,
@@ -12764,6 +12808,36 @@ fn lower_expression_to_ir1_inner(
             });
         }
         Expression::New { callee, arguments } => {
+            // bd-fw7zd: proven Readable/Writable named exports are lowering-only
+            // constructor bindings. Route construction directly to the finite
+            // stream kernel without materializing a stream module or callable
+            // constructor value.
+            if let Some(capability) = stream_constructor_capability(callee, binding_lookup) {
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
             // bd-2dmnn: a confirmed destructured `EventEmitter` export is a
             // lowering-only constructor binding (the `events` module itself is
             // never materialized). Route `new EventEmitter(...)` directly to
@@ -13155,7 +13229,7 @@ fn lower_expression_to_ir1_inner(
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
             if let Some(self_name) = name {
-                body_lookup.remove(&stream_readable_binding_sentinel(self_name));
+                suppress_stream_module_sentinel(&mut body_lookup, self_name);
             }
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
@@ -13170,7 +13244,7 @@ fn lower_expression_to_ir1_inner(
                     BindingKind::Parameter,
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
-                body_lookup.remove(&stream_readable_binding_sentinel(pname));
+                suppress_stream_module_sentinel(&mut body_lookup, pname);
             }
             // Destructure non-identifier ctor params (applies defaults) before the body.
             allocate_destructure_param_bindings(
@@ -13320,7 +13394,7 @@ fn lower_expression_to_ir1_inner(
                 seed_events_module_sentinels(&mut m_lookup, binding_lookup);
                 seed_stream_module_sentinels(&mut m_lookup, binding_lookup);
                 if let Some(self_name) = name {
-                    m_lookup.remove(&stream_readable_binding_sentinel(self_name));
+                    suppress_stream_module_sentinel(&mut m_lookup, self_name);
                 }
                 let mut m_binding_index: BindingId = 0;
                 let m_scope = ScopeId { depth: 0, index: 0 };
@@ -13335,7 +13409,7 @@ fn lower_expression_to_ir1_inner(
                         BindingKind::Parameter,
                     )
                     .map_err(LoweringPipelineError::SemanticViolation)?;
-                    m_lookup.remove(&stream_readable_binding_sentinel(pname));
+                    suppress_stream_module_sentinel(&mut m_lookup, pname);
                 }
                 // Destructure non-identifier params (applies defaults) before the body.
                 allocate_destructure_param_bindings(
@@ -15217,10 +15291,11 @@ fn confirmed_timers_promises_module_aliases(
 // Node `stream` builtin recognition (bd-fw7zd)
 //
 // The stream kernel is exposed only through statically proven exports. This
-// first slice recognizes `Readable.from(...)` through either
-// `const { Readable } = require('stream')` or an ESM named import. It does not
-// materialize the stream module, the Readable constructor, namespace imports,
-// computed properties, or dynamic module names.
+// supported slices recognize `Readable.from(...)`, `new Readable(...)`, and
+// `new Writable(...)` through either a const CJS destructure or an ESM named
+// import. They do not materialize the stream module or constructor values;
+// namespace imports, computed properties, and dynamic module names remain
+// unsupported.
 
 fn is_stream_module_specifier(specifier: &str) -> bool {
     specifier == "stream" || specifier == "node:stream"
@@ -15230,12 +15305,31 @@ fn stream_readable_binding_sentinel(name: &str) -> String {
     format!("\0stream-readable\0{name}")
 }
 
+fn stream_writable_binding_sentinel(name: &str) -> String {
+    format!("\0stream-writable\0{name}")
+}
+
+fn pending_stream_readable_binding_sentinel(name: &str) -> String {
+    format!("\0stream-readable-pending\0{name}")
+}
+
+fn pending_stream_writable_binding_sentinel(name: &str) -> String {
+    format!("\0stream-writable-pending\0{name}")
+}
+
+fn suppress_stream_module_sentinel(binding_lookup: &mut BTreeMap<String, BindingId>, name: &str) {
+    binding_lookup.remove(&stream_readable_binding_sentinel(name));
+    binding_lookup.remove(&stream_writable_binding_sentinel(name));
+    binding_lookup.remove(&pending_stream_readable_binding_sentinel(name));
+    binding_lookup.remove(&pending_stream_writable_binding_sentinel(name));
+}
+
 fn suppress_stream_module_sentinels(
     binding_lookup: &mut BTreeMap<String, BindingId>,
     names: &BTreeSet<String>,
 ) {
     for name in names {
-        binding_lookup.remove(&stream_readable_binding_sentinel(name));
+        suppress_stream_module_sentinel(binding_lookup, name);
     }
 }
 
@@ -15272,6 +15366,16 @@ fn is_stream_readable_from_direct_call(expr: &Expression, local: &str) -> bool {
                 && matches!(property.as_ref(),
                     Expression::Identifier(name) | Expression::StringLiteral(name)
                         if name == "from")))
+}
+
+fn is_stream_constructor_use(expr: &Expression, local: &str) -> bool {
+    matches!(expr,
+        Expression::New { callee, .. }
+            if matches!(callee.as_ref(), Expression::Identifier(name) if name == local))
+}
+
+fn is_stream_readable_usage(expr: &Expression, local: &str) -> bool {
+    is_stream_readable_from_direct_call(expr, local) || is_stream_constructor_use(expr, local)
 }
 
 fn confirmed_stream_readable_destructured_requires(
@@ -15313,9 +15417,52 @@ fn confirmed_stream_readable_destructured_requires(
         .into_iter()
         .filter(|local| {
             body.iter().any(|stmt| {
-                timers_scan_statement_deep(stmt, &|expr| {
-                    is_stream_readable_from_direct_call(expr, local)
-                })
+                timers_scan_statement_deep(stmt, &|expr| is_stream_readable_usage(expr, local))
+            })
+        })
+        .collect()
+}
+
+fn confirmed_stream_writable_destructured_requires(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for stmt in body {
+        if let Statement::VariableDeclaration(vd) = stmt {
+            if vd.kind != VariableDeclarationKind::Const {
+                continue;
+            }
+            for declaration in &vd.declarations {
+                let (Some(init), BindingPattern::ObjectPattern(properties)) =
+                    (&declaration.initializer, &declaration.pattern)
+                else {
+                    continue;
+                };
+                if !is_require_stream_module_initializer(init, binding_lookup) {
+                    continue;
+                }
+                for property in properties {
+                    if property.computed
+                        || !matches!(&property.key,
+                            Expression::Identifier(name) | Expression::StringLiteral(name)
+                                if name == "Writable")
+                    {
+                        continue;
+                    }
+                    if let BindingPattern::Identifier(local) = &property.value {
+                        candidates.insert(local.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    candidates
+        .into_iter()
+        .filter(|local| {
+            body.iter().any(|stmt| {
+                timers_scan_statement_deep(stmt, &|expr| is_stream_constructor_use(expr, local))
             })
         })
         .collect()
@@ -15340,9 +15487,32 @@ fn confirmed_stream_readable_named_imports(body: &[Statement]) -> BTreeSet<Strin
         .into_iter()
         .filter(|local| {
             body.iter().any(|stmt| {
-                timers_scan_statement_deep(stmt, &|expr| {
-                    is_stream_readable_from_direct_call(expr, local)
-                })
+                timers_scan_statement_deep(stmt, &|expr| is_stream_readable_usage(expr, local))
+            })
+        })
+        .collect()
+}
+
+fn confirmed_stream_writable_named_imports(body: &[Statement]) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for stmt in body {
+        if let Statement::Import(import) = stmt
+            && is_stream_module_specifier(&import.source)
+            && let ImportClause::Named { specifiers } = &import.clause
+        {
+            for specifier in specifiers {
+                if specifier.import_name == "Writable" {
+                    candidates.insert(specifier.local_name.clone());
+                }
+            }
+        }
+    }
+
+    candidates
+        .into_iter()
+        .filter(|local| {
+            body.iter().any(|stmt| {
+                timers_scan_statement_deep(stmt, &|expr| is_stream_constructor_use(expr, local))
             })
         })
         .collect()
@@ -15362,17 +15532,26 @@ fn confirmed_stream_destructure_locals(
 
     let mut locals = Vec::new();
     for property in properties {
-        if property.computed
-            || !matches!(&property.key,
-                Expression::Identifier(name) | Expression::StringLiteral(name)
-                    if name == "Readable")
-        {
+        if property.computed {
             return None;
         }
+        let constructor = match &property.key {
+            Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
+            _ => return None,
+        };
         let BindingPattern::Identifier(local) = &property.value else {
             return None;
         };
-        if !binding_lookup.contains_key(&stream_readable_binding_sentinel(local)) {
+        let confirmed = match constructor {
+            "Readable" => {
+                binding_lookup.contains_key(&pending_stream_readable_binding_sentinel(local))
+            }
+            "Writable" => {
+                binding_lookup.contains_key(&pending_stream_writable_binding_sentinel(local))
+            }
+            _ => false,
+        };
+        if !confirmed {
             return None;
         }
         locals.push(local.clone());
@@ -15385,9 +15564,25 @@ fn seed_stream_module_sentinels(
     outer_lookup: &BTreeMap<String, BindingId>,
 ) {
     for key in outer_lookup.keys() {
-        if key.starts_with("\0stream-readable\0") {
+        if key.starts_with("\0stream-readable\0") || key.starts_with("\0stream-writable\0") {
             body_lookup.insert(key.clone(), 0);
         }
+    }
+}
+
+fn stream_constructor_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Identifier(name) = callee else {
+        return None;
+    };
+    if binding_lookup.contains_key(&stream_readable_binding_sentinel(name)) {
+        Some("builtin:StreamReadable")
+    } else if binding_lookup.contains_key(&stream_writable_binding_sentinel(name)) {
+        Some("builtin:StreamWritable")
+    } else {
+        None
     }
 }
 
@@ -19868,6 +20063,86 @@ mod tests {
                         | Ir1Op::CreateFunction { body_ops, .. }
                     if ops_deep_match(body_ops, predicate))
         })
+    }
+
+    fn count_hostcall_deep(ops: &[Ir1Op], expected: &str) -> usize {
+        ops.iter()
+            .map(|op| match op {
+                Ir1Op::HostCall { capability, .. } if capability == expected => 1,
+                Ir1Op::DeclareFunction { body_ops, .. }
+                | Ir1Op::CreateFunction { body_ops, .. } => count_hostcall_deep(body_ops, expected),
+                _ => 0,
+            })
+            .sum()
+    }
+
+    #[test]
+    fn stream_destructured_constructors_lower_to_distinct_builtins_bd_fw7zd() {
+        let ops = lower_script_source_ops(
+            "const { Readable, Writable } = require('node:stream');\n\
+             const readable = new Readable({ highWaterMark: 4, read() {} });\n\
+             const writable = new Writable({ highWaterMark: 8, write(c, e, cb) { cb(); } });\n",
+            "stream_constructors_bd_fw7zd.js",
+        );
+        assert_eq!(count_hostcall_deep(&ops, "builtin:StreamReadable"), 1);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:StreamWritable"), 1);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:StreamReadableFrom"), 0);
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, Ir1Op::ImportModule { .. }))
+        );
+    }
+
+    #[test]
+    fn stream_constructor_sentinels_do_not_cross_parameter_shadows_bd_fw7zd() {
+        let ops = lower_script_source_ops(
+            "const { Readable, Writable } = require('stream');\n\
+             new Readable({ read() {} });\n\
+             new Writable({ write(c, e, cb) { cb(); } });\n\
+             function shadowed(Readable, Writable) {\n\
+               new Readable();\n\
+               new Writable();\n\
+             }\n",
+            "stream_constructor_shadows_bd_fw7zd.js",
+        );
+        assert_eq!(count_hostcall_deep(&ops, "builtin:StreamReadable"), 1);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:StreamWritable"), 1);
+    }
+
+    #[test]
+    fn stream_constructor_sentinels_activate_only_at_cjs_declaration_bd_fw7zd() {
+        let ops = lower_script_source_ops(
+            "new Readable({ read() {} });\n\
+             const { Readable, Writable } = require('stream');\n\
+             new Readable({ read() {} });\n\
+             new Writable({ write(c, e, cb) { cb(); } });\n",
+            "stream_constructor_tdz_bd_fw7zd.js",
+        );
+        assert_eq!(count_hostcall_deep(&ops, "builtin:StreamReadable"), 1);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:StreamWritable"), 1);
+        assert!(
+            ops.iter().any(|op| matches!(op, Ir1Op::Construct { .. })),
+            "the pre-declaration constructor must retain ordinary TDZ-aware lowering"
+        );
+    }
+
+    #[test]
+    fn stream_unsupported_or_mutable_constructor_bindings_are_not_elided_bd_fw7zd() {
+        for source in [
+            "let { Readable } = require('stream'); new Readable();",
+            "var { Writable } = require('stream'); new Writable();",
+            "const { Duplex } = require('stream'); new Duplex();",
+            "const stream = require('stream'); new stream.Readable();",
+        ] {
+            let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
+            let ir0 = Ir0Module::from_syntax_tree(tree, "unsupported_stream_constructor.js");
+            let error = lower_ir0_to_ir1(&ir0)
+                .expect_err("unsupported stream possession must preserve ambient denial");
+            assert!(matches!(
+                error,
+                LoweringPipelineError::AmbientAuthorityViolation { .. }
+            ));
+        }
     }
 
     #[test]

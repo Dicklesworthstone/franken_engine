@@ -121,6 +121,12 @@ const IMPLEMENTED_FIXTURE_IDS: &[&str] = &[
     "tc::stream::0002",
     "tc::stream::0004",
     "tc::stream::0007",
+    "tc::stream::0008",
+    "tc::stream::0009",
+    "tc::stream::0030",
+    "tc::stream::0032",
+    "tc::stream::0035",
+    "tc::stream::0036",
     "tc::stream::0037",
     "tc::stream::0046",
     "tc::stream::0049",
@@ -137,7 +143,7 @@ fn target_and_implemented_inventories_are_explicit() {
         .iter()
         .copied()
         .collect::<BTreeSet<_>>();
-    assert_eq!(IMPLEMENTED_FIXTURE_IDS.len(), 7);
+    assert_eq!(IMPLEMENTED_FIXTURE_IDS.len(), 13);
     assert_eq!(implemented.len(), IMPLEMENTED_FIXTURE_IDS.len());
     assert!(IMPLEMENTED_FIXTURE_IDS.iter().all(|id| unique.contains(id)));
 }
@@ -384,6 +390,30 @@ fn stream_provenance_is_suppressed_before_defaults_and_self_bindings() {
 }
 
 #[test]
+fn stream_constructor_provenance_does_not_bypass_cjs_tdz() {
+    for source in [
+        r#"
+            new Readable({ read() {} });
+            const { Readable } = require('stream');
+        "#,
+        r#"
+            const make = () => new Writable({ write(c, e, cb) { cb(); } });
+            make();
+            const { Writable } = require('stream');
+        "#,
+    ] {
+        let error = eval_error(source);
+        assert!(
+            error.contains("ReferenceError")
+                || error.contains("uninitialized")
+                || error.contains("temporal dead zone")
+                || error.contains("type error"),
+            "pre-declaration stream constructor use must not become a builtin: {error:?}",
+        );
+    }
+}
+
+#[test]
 #[ignore = "bd-fw7zd: custom Readable slice not implemented yet"]
 fn readable_custom_push_paused_read_and_encoding() {
     assert_cases(&[
@@ -476,7 +506,6 @@ fn readable_custom_push_paused_read_and_encoding() {
 }
 
 #[test]
-#[ignore = "bd-fw7zd: Readable constructor/state-method slice not implemented yet"]
 fn readable_state_flags_high_water_marks_and_to_array() {
     assert_cases(&[
         EvalCase {

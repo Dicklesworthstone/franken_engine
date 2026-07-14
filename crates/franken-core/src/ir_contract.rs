@@ -507,6 +507,10 @@ pub enum Ir1Op {
         free_var_outer_ids: Vec<BindingId>,
         /// True when the source function is a generator (`function*`).
         is_generator: bool,
+        /// Index into `param_names` of the rest parameter (`...xs`), if any.
+        /// The interpreter binds this slot to an Array of trailing arguments.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rest_param_index: Option<u32>,
     },
     /// Create a function value (expression position — arrow functions and
     /// function expressions).  The resulting value is pushed onto the stack.
@@ -525,6 +529,9 @@ pub enum Ir1Op {
         free_var_outer_ids: Vec<BindingId>,
         /// True when the source function is a generator (`function*`).
         is_generator: bool,
+        /// Index into `param_names` of the rest parameter (`...xs`), if any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rest_param_index: Option<u32>,
     },
     /// Begin a try block; on exception, jump to catch_label.
     /// If a finally block exists, `finally_label` points to its entry.
@@ -840,6 +847,7 @@ impl Ir1Op {
                 free_var_ids,
                 free_var_outer_ids,
                 is_generator,
+                rest_param_index,
             } => {
                 map.insert(
                     "op".to_string(),
@@ -894,6 +902,12 @@ impl Ir1Op {
                     "is_generator".to_string(),
                     CanonicalValue::Bool(*is_generator),
                 );
+                if let Some(rest_param_index) = rest_param_index {
+                    map.insert(
+                        "rest_param_index".to_string(),
+                        CanonicalValue::U64(u64::from(*rest_param_index)),
+                    );
+                }
             }
             Self::CreateFunction {
                 name,
@@ -903,6 +917,7 @@ impl Ir1Op {
                 free_var_ids,
                 free_var_outer_ids,
                 is_generator,
+                rest_param_index,
             } => {
                 map.insert(
                     "op".to_string(),
@@ -957,6 +972,12 @@ impl Ir1Op {
                     "is_generator".to_string(),
                     CanonicalValue::Bool(*is_generator),
                 );
+                if let Some(rest_param_index) = rest_param_index {
+                    map.insert(
+                        "rest_param_index".to_string(),
+                        CanonicalValue::U64(u64::from(*rest_param_index)),
+                    );
+                }
             }
             Self::BeginTry {
                 catch_label,
@@ -2499,6 +2520,12 @@ pub struct Ir3FunctionDesc {
     pub name: Option<String>,
     /// Whether this function is a generator (function*).
     pub is_generator: bool,
+    /// Index into the parameter list of the rest parameter (`...xs`), if any.
+    /// Omitted from serialization and canonical encoding when absent so
+    /// non-rest IR3 descriptors remain byte-identical. Present values are
+    /// canonicalized because they change call semantics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rest_param_index: Option<u32>,
 }
 
 impl Ir3FunctionDesc {
@@ -2527,6 +2554,12 @@ impl Ir3FunctionDesc {
                 None => CanonicalValue::Null,
             },
         );
+        if let Some(rest_param_index) = self.rest_param_index {
+            map.insert(
+                "rest_param_index".to_string(),
+                CanonicalValue::U64(u64::from(rest_param_index)),
+            );
+        }
         CanonicalValue::Map(map)
     }
 }
@@ -3319,6 +3352,7 @@ mod tests {
                 free_var_ids: vec![0],
                 free_var_outer_ids: vec![3],
                 is_generator: false,
+                rest_param_index: Some(0),
             },
             Ir1Op::CreateFunction {
                 name: Some("g".to_string()),
@@ -3328,10 +3362,18 @@ mod tests {
                 free_var_ids: vec![1],
                 free_var_outer_ids: vec![4],
                 is_generator: false,
+                rest_param_index: Some(0),
             },
         ];
 
         for op in legacy_shapes {
+            let CanonicalValue::Map(canonical) = op.canonical_value() else {
+                panic!("function op canonical form should be a map");
+            };
+            assert_eq!(
+                canonical.get("rest_param_index"),
+                Some(&CanonicalValue::U64(0))
+            );
             let mut encoded = serde_json::to_value(op).expect("function op should serialize");
             let payload = encoded
                 .as_object_mut()
@@ -3339,6 +3381,7 @@ mod tests {
                 .and_then(serde_json::Value::as_object_mut)
                 .expect("externally tagged function op payload");
             assert!(payload.remove("free_var_outer_ids").is_some());
+            assert!(payload.remove("rest_param_index").is_some());
 
             let restored: Ir1Op =
                 serde_json::from_value(encoded).expect("legacy function op should deserialize");
@@ -3346,15 +3389,18 @@ mod tests {
                 Ir1Op::DeclareFunction {
                     free_vars,
                     free_var_outer_ids,
+                    rest_param_index,
                     ..
                 }
                 | Ir1Op::CreateFunction {
                     free_vars,
                     free_var_outer_ids,
+                    rest_param_index,
                     ..
                 } => {
                     assert_eq!(free_vars.len(), 1);
                     assert!(free_var_outer_ids.is_empty());
+                    assert_eq!(rest_param_index, None);
                 }
                 other => panic!("expected a function op, got {other:?}"),
             }
@@ -3660,6 +3706,7 @@ mod tests {
                 arity: 0,
                 frame_size: 3,
                 name: Some("main".to_string()),
+                rest_param_index: None,
             });
             ir3
         };
@@ -4453,10 +4500,35 @@ mod tests {
             frame_size: 8,
             name: Some("myFunc".to_string()),
             is_generator: false,
+            rest_param_index: None,
         };
         let json = serde_json::to_string(&desc).unwrap();
+        assert!(!json.contains("rest_param_index"));
         let restored: Ir3FunctionDesc = serde_json::from_str(&json).unwrap();
         assert_eq!(desc, restored);
+
+        let legacy_json =
+            r#"{"entry":1,"arity":1,"frame_size":2,"name":"legacy","is_generator":false}"#;
+        let legacy: Ir3FunctionDesc = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(legacy.rest_param_index, None);
+        assert_eq!(serde_json::to_string(&legacy).unwrap(), legacy_json);
+
+        let mut rest_desc = desc.clone();
+        rest_desc.rest_param_index = Some(1);
+        assert_ne!(rest_desc.canonical_value(), desc.canonical_value());
+        let CanonicalValue::Map(rest_canonical) = rest_desc.canonical_value() else {
+            panic!("function descriptor canonical form should be a map");
+        };
+        assert_eq!(
+            rest_canonical.get("rest_param_index"),
+            Some(&CanonicalValue::U64(1))
+        );
+        let rest_json = serde_json::to_string(&rest_desc).unwrap();
+        assert!(rest_json.contains("\"rest_param_index\":1"));
+        assert_eq!(
+            serde_json::from_str::<Ir3FunctionDesc>(&rest_json).unwrap(),
+            rest_desc
+        );
 
         // Test with None name
         let desc_anon = Ir3FunctionDesc { name: None, ..desc };
@@ -5190,12 +5262,14 @@ mod tests {
             frame_size: 8,
             name: Some("main".to_string()),
             is_generator: false,
+            rest_param_index: None,
         };
         let cv = desc.canonical_value();
         if let CanonicalValue::Map(m) = cv {
             assert_eq!(m.get("entry"), Some(&CanonicalValue::U64(10)));
             assert_eq!(m.get("arity"), Some(&CanonicalValue::U64(2)));
             assert_eq!(m.get("frame_size"), Some(&CanonicalValue::U64(8)));
+            assert!(!m.contains_key("rest_param_index"));
             assert_eq!(
                 m.get("name"),
                 Some(&CanonicalValue::String("main".to_string()))
@@ -5213,6 +5287,7 @@ mod tests {
             frame_size: 4,
             name: None,
             is_generator: false,
+            rest_param_index: None,
         };
         let cv = desc.canonical_value();
         if let CanonicalValue::Map(m) = cv {
@@ -5657,6 +5732,7 @@ mod tests {
             frame_size: 8,
             name: Some("myFunc".to_string()),
             is_generator: false,
+            rest_param_index: None,
         };
         let cv = desc.canonical_value();
         if let CanonicalValue::Map(m) = cv {
@@ -5680,6 +5756,7 @@ mod tests {
             frame_size: 1,
             name: None,
             is_generator: false,
+            rest_param_index: None,
         };
         let cv = desc.canonical_value();
         if let CanonicalValue::Map(m) = cv {

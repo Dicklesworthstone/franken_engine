@@ -2228,20 +2228,67 @@ fn prepare_function_body_bindings(
     declared_names
 }
 
+/// Validate the subset of rest-parameter syntax whose positional ABI is
+/// represented exactly by the current core lowerer.
+///
+/// Non-rest destructuring remains on its pre-existing path, but combining a
+/// rest parameter with any non-identifier formal would compress
+/// `param_names` and make `rest_param_index` point at the wrong register. Fail
+/// closed until core ports the engine's synthetic parameter-slot prologue.
+fn validate_rest_parameter_abi(
+    params: &[FunctionParam],
+) -> Result<Option<u32>, LoweringPipelineError> {
+    let rest_params = params
+        .iter()
+        .enumerate()
+        .filter(|(_, param)| matches!(&param.pattern, BindingPattern::Rest(_)))
+        .collect::<Vec<_>>();
+    let Some((rest_index, rest_param)) = rest_params.first().copied() else {
+        return Ok(None);
+    };
+
+    let prefix_is_positional = params[..rest_index]
+        .iter()
+        .all(|param| matches!(&param.pattern, BindingPattern::Identifier(_)));
+    let rest_binds_identifier = matches!(
+        &rest_param.pattern,
+        BindingPattern::Rest(inner) if inner.as_identifier().is_some()
+    );
+    if rest_params.len() != 1
+        || rest_index + 1 != params.len()
+        || !prefix_is_positional
+        || !rest_binds_identifier
+    {
+        return Err(unsupported_frontier_expression_error(
+            "function_parameter_patterns_with_rest",
+            "FE-LOWER-UNSUPPORTED-REST-PARAM-ABI-0001",
+            "core.function_rest_parameter_abi",
+            "rest parameters currently require only identifier formals and one final identifier rest binding",
+            Some(rest_param.span.clone()),
+        ));
+    }
+
+    Ok(Some(rest_index as u32))
+}
+
 /// Allocate every identifier bound by a function parameter pattern before
-/// lowering the body. `param_names` remains the current positional IR3 ABI
-/// (simple identifiers only), but destructured names must still participate
-/// in lexical lookup so they cannot be mistaken for synthetic globals.
+/// lowering the body. `param_names` remains the current positional IR3 ABI;
+/// an identifier rest parameter occupies its declared slot so the interpreter
+/// can replace that slot with the trailing-argument Array.
 fn allocate_function_parameter_bindings(
     params: &[FunctionParam],
     body_bindings: &mut Vec<ResolvedBinding>,
     body_lookup: &mut BTreeMap<String, BindingId>,
     body_binding_index: &mut BindingId,
     body_scope: ScopeId,
-) -> Result<Vec<String>, LoweringPipelineError> {
+) -> Result<(Vec<String>, Option<u32>), LoweringPipelineError> {
+    let rest_param_index = validate_rest_parameter_abi(params)?;
     let param_names = params
         .iter()
-        .filter_map(|param| param.name().map(String::from))
+        .filter_map(|param| match &param.pattern {
+            BindingPattern::Rest(inner) => inner.as_identifier().map(String::from),
+            _ => param.name().map(String::from),
+        })
         .collect::<Vec<_>>();
     for param in params {
         for bound_name in param.pattern.binding_names() {
@@ -2256,7 +2303,7 @@ fn allocate_function_parameter_bindings(
             .map_err(LoweringPipelineError::SemanticViolation)?;
         }
     }
-    Ok(param_names)
+    Ok((param_names, rest_param_index))
 }
 
 fn parse_named_export_clause_bindings(clause: &str) -> Vec<(String, String)> {
@@ -3594,13 +3641,22 @@ fn lower_statement_to_ir1_with_flow(
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
-            let param_names = allocate_function_parameter_bindings(
+            let (param_names, rest_param_index) = allocate_function_parameter_bindings(
                 &func.params,
                 &mut body_bindings,
                 &mut body_lookup,
                 &mut body_binding_index,
                 body_scope,
             )?;
+            if rest_param_index.is_some() && func.is_generator {
+                return Err(unsupported_frontier_expression_error(
+                    "generator_rest_parameters",
+                    "FE-LOWER-UNSUPPORTED-GENERATOR-REST-0001",
+                    "core.generator_rest_parameter_runtime",
+                    "generator rest parameters require suspended-frame argument persistence",
+                    Some(func.span.clone()),
+                ));
+            }
             let pre_lower_names = prepare_function_body_bindings(
                 Some(&func.body.body),
                 binding_lookup,
@@ -3648,6 +3704,7 @@ fn lower_statement_to_ir1_with_flow(
                 free_var_ids,
                 free_var_outer_ids,
                 is_generator: func.is_generator,
+                rest_param_index,
             });
             ops.push(Ir1Op::Pop);
         }
@@ -3662,7 +3719,7 @@ fn lower_statement_to_ir1_with_flow(
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
-            let param_names = if let Some(ctor) = constructor {
+            let (param_names, rest_param_index) = if let Some(ctor) = constructor {
                 allocate_function_parameter_bindings(
                     &ctor.params,
                     &mut body_bindings,
@@ -3671,7 +3728,7 @@ fn lower_statement_to_ir1_with_flow(
                     body_scope,
                 )?
             } else {
-                Vec::new()
+                (Vec::new(), None)
             };
             let ctor_pre_lower_names = if let Some(ctor) = constructor {
                 let pre_lower_names = prepare_function_body_bindings(
@@ -3727,6 +3784,7 @@ fn lower_statement_to_ir1_with_flow(
                 free_var_ids: ctor_free_var_ids,
                 free_var_outer_ids: ctor_free_var_outer_ids,
                 is_generator: false,
+                rest_param_index,
             });
 
             // Set up inheritance if this class extends another
@@ -3793,13 +3851,24 @@ fn lower_statement_to_ir1_with_flow(
                 let mut m_binding_index: BindingId = 0;
                 let m_scope = ScopeId { depth: 0, index: 0 };
                 let mut m_label_counter: u32 = 0;
-                let m_param_names = allocate_function_parameter_bindings(
+                let (m_param_names, m_rest_param_index) = allocate_function_parameter_bindings(
                     &method.params,
                     &mut m_bindings,
                     &mut m_lookup,
                     &mut m_binding_index,
                     m_scope,
                 )?;
+                if m_rest_param_index.is_some()
+                    && matches!(method.kind, MethodKind::Get | MethodKind::Set)
+                {
+                    return Err(unsupported_frontier_expression_error(
+                        "accessor_rest_parameters",
+                        "FE-LOWER-UNSUPPORTED-ACCESSOR-REST-0001",
+                        "core.accessor_rest_parameter_runtime",
+                        "getter and setter functions cannot declare rest parameters",
+                        Some(method.span.clone()),
+                    ));
+                }
                 let method_pre_lower_names = prepare_function_body_bindings(
                     Some(&method.body.body),
                     binding_lookup,
@@ -3862,6 +3931,7 @@ fn lower_statement_to_ir1_with_flow(
                     free_var_ids: method_free_var_ids,
                     free_var_outer_ids: method_free_var_outer_ids,
                     is_generator: false,
+                    rest_param_index: m_rest_param_index,
                 });
                 if let Some(method_binding) = method_super_binding {
                     ops.push(Ir1Op::StoreBinding {
@@ -4421,6 +4491,25 @@ fn emit_exact_nested_capture_scope(
     Ok(true)
 }
 
+fn validate_deferred_rest_parameter_abi(
+    param_count: usize,
+    rest_param_index: Option<u32>,
+) -> Result<(), LoweringPipelineError> {
+    let Some(rest_index) = rest_param_index else {
+        return Ok(());
+    };
+    let arity =
+        u32::try_from(param_count).map_err(|_| LoweringPipelineError::InvariantViolation {
+            detail: "Function parameter count exceeds the IR3 positional ABI",
+        })?;
+    if rest_index.checked_add(1) != Some(arity) {
+        return Err(LoweringPipelineError::InvariantViolation {
+            detail: "Function rest metadata must identify the final positional parameter",
+        });
+    }
+    Ok(())
+}
+
 pub fn lower_ir2_to_ir3(
     ir2: &Ir2Module,
 ) -> Result<LoweringPassResult<Ir3Module>, LoweringPipelineError> {
@@ -4470,7 +4559,8 @@ pub fn lower_ir2_to_ir3(
     let mut pending_jumps = Vec::<PendingJump>::new();
     let mut catch_entry_labels = BTreeSet::<u32>::new();
     // Deferred function bodies:
-    // (body_ir1_ops, param_names, name, free_vars, free_var_ids, is_generator).
+    // (body_ir1_ops, param_names, name, free_vars, free_var_ids,
+    //  is_generator, rest_param_index).
     // After the main code + Halt, each body is lowered into the instruction
     // stream and registered in function_table.  Index 0 is reserved for main.
     #[allow(clippy::type_complexity)]
@@ -4481,6 +4571,7 @@ pub fn lower_ir2_to_ir3(
         Vec<String>,
         Vec<BindingId>,
         bool,
+        Option<u32>,
     )> = Vec::new();
 
     // Build name→BindingId lookup from the module's scope tree so the
@@ -5266,6 +5357,7 @@ pub fn lower_ir2_to_ir3(
                 free_var_ids,
                 free_var_outer_ids,
                 is_generator,
+                rest_param_index,
             } => {
                 if free_vars.len() != free_var_ids.len()
                     || free_vars.len() != free_var_outer_ids.len()
@@ -5308,6 +5400,7 @@ pub fn lower_ir2_to_ir3(
                         free_vars.clone(),
                         free_var_ids.clone(),
                         *is_generator,
+                        *rest_param_index,
                     ));
                     if *is_generator {
                         ir3.instructions.push(Ir3Instruction::CreateGenerator {
@@ -5336,6 +5429,7 @@ pub fn lower_ir2_to_ir3(
                 free_var_ids,
                 free_var_outer_ids,
                 is_generator,
+                rest_param_index,
             } => {
                 if free_vars.len() != free_var_ids.len()
                     || free_vars.len() != free_var_outer_ids.len()
@@ -5371,6 +5465,7 @@ pub fn lower_ir2_to_ir3(
                     free_vars.clone(),
                     free_var_ids.clone(),
                     *is_generator,
+                    *rest_param_index,
                 ));
                 if *is_generator {
                     ir3.instructions.push(Ir3Instruction::CreateGenerator {
@@ -5713,6 +5808,7 @@ pub fn lower_ir2_to_ir3(
         frame_size: register_cursor.max(1),
         name: Some("main".to_string()),
         is_generator: false,
+        rest_param_index: None,
     });
 
     // ── Deferred function bodies ──────────────────────────────────────
@@ -5722,9 +5818,17 @@ pub fn lower_ir2_to_ir3(
     // body can push new entries without conflicting with the borrow.
     let mut deferred_idx = 0;
     while deferred_idx < deferred_functions.len() {
-        let (body_ops, param_names, fn_name, free_vars, free_var_ids, fn_is_generator) =
-            deferred_functions[deferred_idx].clone();
+        let (
+            body_ops,
+            param_names,
+            fn_name,
+            free_vars,
+            free_var_ids,
+            fn_is_generator,
+            fn_rest_param_index,
+        ) = deferred_functions[deferred_idx].clone();
         deferred_idx += 1;
+        validate_deferred_rest_parameter_abi(param_names.len(), fn_rest_param_index)?;
         let (body_ops, param_names, fn_name, free_vars, free_var_ids) =
             (&body_ops, &param_names, &fn_name, &free_vars, &free_var_ids);
         let entry = ir3.instructions.len() as u32;
@@ -6342,6 +6446,7 @@ pub fn lower_ir2_to_ir3(
                     free_var_ids: inner_fv_ids,
                     free_var_outer_ids: inner_fv_outer_ids,
                     is_generator: inner_gen,
+                    rest_param_index: inner_rest,
                 } if !inner_body.is_empty() => {
                     let dst = *fn_binding_regs
                         .entry(*inner_bid)
@@ -6354,6 +6459,7 @@ pub fn lower_ir2_to_ir3(
                         inner_fv.clone(),
                         inner_fv_ids.clone(),
                         *inner_gen,
+                        *inner_rest,
                     ));
                     let pushed_capture_scope = emit_exact_nested_capture_scope(
                         &mut ir3,
@@ -6390,6 +6496,7 @@ pub fn lower_ir2_to_ir3(
                     free_var_ids: inner_fv_ids,
                     free_var_outer_ids: inner_fv_outer_ids,
                     is_generator: inner_gen,
+                    rest_param_index: inner_rest,
                 } => {
                     let dst = alloc_register(&mut fn_reg);
                     let function_index = deferred_functions.len() as u32 + 1;
@@ -6400,6 +6507,7 @@ pub fn lower_ir2_to_ir3(
                         inner_fv.clone(),
                         inner_fv_ids.clone(),
                         *inner_gen,
+                        *inner_rest,
                     ));
                     let pushed_capture_scope = emit_exact_nested_capture_scope(
                         &mut ir3,
@@ -6639,6 +6747,7 @@ pub fn lower_ir2_to_ir3(
             frame_size: fn_reg.max(1),
             name: fn_name.clone(),
             is_generator: fn_is_generator,
+            rest_param_index: fn_rest_param_index,
         });
     }
 
@@ -7115,7 +7224,7 @@ fn lower_class_expression_to_ir1(
     let mut body_binding_index: BindingId = 0;
     let body_scope = ScopeId { depth: 0, index: 0 };
     let mut body_label_counter: u32 = 0;
-    let param_names = if let Some(ctor) = constructor {
+    let (param_names, rest_param_index) = if let Some(ctor) = constructor {
         allocate_function_parameter_bindings(
             &ctor.params,
             &mut body_bindings,
@@ -7124,7 +7233,7 @@ fn lower_class_expression_to_ir1(
             body_scope,
         )?
     } else {
-        Vec::new()
+        (Vec::new(), None)
     };
     let ctor_pre_lower_names = if let Some(ctor) = constructor {
         let pre_lower_names = prepare_function_body_bindings(
@@ -7178,6 +7287,7 @@ fn lower_class_expression_to_ir1(
         free_var_ids: ctor_free_var_ids,
         free_var_outer_ids: ctor_free_var_outer_ids,
         is_generator: false,
+        rest_param_index,
     });
     ops.push(Ir1Op::StoreBinding {
         binding_id: class_binding,
@@ -7241,13 +7351,24 @@ fn lower_class_expression_to_ir1(
         let mut method_binding_index: BindingId = 0;
         let method_scope = ScopeId { depth: 0, index: 0 };
         let mut method_label_counter: u32 = 0;
-        let method_param_names = allocate_function_parameter_bindings(
+        let (method_param_names, method_rest_param_index) = allocate_function_parameter_bindings(
             &method.params,
             &mut method_bindings,
             &mut method_lookup,
             &mut method_binding_index,
             method_scope,
         )?;
+        if method_rest_param_index.is_some()
+            && matches!(method.kind, MethodKind::Get | MethodKind::Set)
+        {
+            return Err(unsupported_frontier_expression_error(
+                "accessor_rest_parameters",
+                "FE-LOWER-UNSUPPORTED-ACCESSOR-REST-0001",
+                "core.accessor_rest_parameter_runtime",
+                "getter and setter functions cannot declare rest parameters",
+                Some(method.span.clone()),
+            ));
+        }
         let method_pre_lower_names = prepare_function_body_bindings(
             Some(&method.body.body),
             binding_lookup,
@@ -7308,6 +7429,7 @@ fn lower_class_expression_to_ir1(
             free_var_ids: method_free_var_ids,
             free_var_outer_ids: method_free_var_outer_ids,
             is_generator: false,
+            rest_param_index: method_rest_param_index,
         });
         if let Some(method_binding) = method_super_binding {
             ops.push(Ir1Op::StoreBinding {
@@ -9074,7 +9196,7 @@ fn lower_expression_to_ir1(
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
-            let param_names = allocate_function_parameter_bindings(
+            let (param_names, rest_param_index) = allocate_function_parameter_bindings(
                 params,
                 &mut body_bindings,
                 &mut body_lookup,
@@ -9136,6 +9258,7 @@ fn lower_expression_to_ir1(
                 free_var_ids: arrow_free_var_ids,
                 free_var_outer_ids: arrow_free_var_outer_ids,
                 is_generator: false,
+                rest_param_index,
             });
         }
         Expression::Function {
@@ -9152,13 +9275,22 @@ fn lower_expression_to_ir1(
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
-            let param_names = allocate_function_parameter_bindings(
+            let (param_names, rest_param_index) = allocate_function_parameter_bindings(
                 params,
                 &mut body_bindings,
                 &mut body_lookup,
                 &mut body_binding_index,
                 body_scope,
             )?;
+            if rest_param_index.is_some() && *is_generator {
+                return Err(unsupported_frontier_expression_error(
+                    "generator_rest_parameters",
+                    "FE-LOWER-UNSUPPORTED-GENERATOR-REST-0001",
+                    "core.generator_rest_parameter_runtime",
+                    "generator rest parameters require suspended-frame argument persistence",
+                    Some(body.span.clone()),
+                ));
+            }
             let mut pre_lower_names = prepare_function_body_bindings(
                 Some(&body.body),
                 binding_lookup,
@@ -9217,6 +9349,7 @@ fn lower_expression_to_ir1(
                 free_var_ids: fn_free_var_ids,
                 free_var_outer_ids: fn_free_var_outer_ids,
                 is_generator: *is_generator,
+                rest_param_index,
             });
         }
         Expression::New { callee, arguments } => {
@@ -9707,6 +9840,7 @@ mod tests {
         UnaryOperator, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
         WhileStatement,
     };
+    use crate::parser::{CanonicalEs2020Parser, Es2020Parser};
     use crate::parser_gap_inventory::{ParserGapSiteId, UnsupportedSyntaxDiagnostic};
 
     fn span() -> SourceSpan {
@@ -9723,6 +9857,18 @@ mod tests {
             span: span(),
         };
         Ir0Module::from_syntax_tree(tree, "fixture.js")
+    }
+
+    fn lower_rest_source_to_ir3(source: &str) -> Result<Ir3Module, LoweringPipelineError> {
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect("rest-parameter regression source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "rest_params.js");
+        lower_ir0_to_ir3(
+            &ir0,
+            &LoweringContext::new("trace-rest", "decision-rest", "policy-rest"),
+        )
+        .map(|output| output.ir3)
     }
 
     #[test]
@@ -10111,6 +10257,7 @@ mod tests {
             free_var_ids: Vec::new(),
             free_var_outer_ids: Vec::new(),
             is_generator: false,
+            rest_param_index: None,
         });
         ir1.ops.push(Ir1Op::Pop);
         ir1.ops.push(Ir1Op::Return);
@@ -10185,6 +10332,7 @@ mod tests {
             free_var_ids: Vec::new(),
             free_var_outer_ids: Vec::new(),
             is_generator: false,
+            rest_param_index: None,
         });
         ir1.ops.push(Ir1Op::Pop);
         ir1.ops.push(Ir1Op::Return);
@@ -10246,6 +10394,7 @@ mod tests {
                 free_var_ids: Vec::new(),
                 free_var_outer_ids: vec![0],
                 is_generator: false,
+                rest_param_index: None,
             },
             effect: EffectBoundary::Pure,
             required_capability: None,
@@ -13595,6 +13744,129 @@ mod tests {
             op,
             Ir1Op::DeclareFunction { name, .. } if name == "myFunc"
         )));
+    }
+
+    #[test]
+    fn rest_parameter_metadata_reaches_ir3_for_function_shapes_bd_ur3tk_9() {
+        let ir3 = lower_rest_source_to_ir3(
+            "let arrow = (head, ...arrowTail) => arrowTail.length;\
+             function outer(head, ...outerTail) {\
+               function inner(head, ...innerTail) { return innerTail.length; }\
+               return inner(head);\
+             }\
+             class Bucket {\
+               constructor(head, ...ctorTail) {}\
+               collect(head, ...methodTail) { return methodTail.length; }\
+             }",
+        )
+        .expect("supported identifier rest parameters should lower");
+
+        for name in ["outer", "inner", "Bucket", "collect"] {
+            let desc = ir3
+                .function_table
+                .iter()
+                .find(|desc| desc.name.as_deref() == Some(name))
+                .unwrap_or_else(|| panic!("missing IR3 descriptor for {name}"));
+            assert_eq!(desc.arity, 2, "{name} positional arity");
+            assert_eq!(desc.rest_param_index, Some(1), "{name} rest slot");
+        }
+
+        let arrow = ir3
+            .function_table
+            .iter()
+            .find(|desc| desc.name.is_none())
+            .expect("anonymous arrow descriptor");
+        assert_eq!(arrow.arity, 2);
+        assert_eq!(arrow.rest_param_index, Some(1));
+        let main = ir3
+            .function_table
+            .iter()
+            .find(|desc| desc.name.as_deref() == Some("main"))
+            .expect("main descriptor");
+        assert_eq!(main.rest_param_index, None);
+    }
+
+    #[test]
+    fn mixed_destructured_and_rest_formals_fail_closed_bd_ur3tk_9() {
+        let error = lower_rest_source_to_ir3("function mixed({ value }, ...tail) { return tail; }")
+            .expect_err("compressed parameter slots must never reach IR3");
+        let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
+            panic!("expected fail-closed unsupported syntax diagnostic");
+        };
+        assert_eq!(
+            diagnostic.diagnostic_code,
+            "FE-LOWER-UNSUPPORTED-REST-PARAM-ABI-0001"
+        );
+        assert_eq!(diagnostic.site_id, "core.function_rest_parameter_abi");
+    }
+
+    #[test]
+    fn generator_rest_fails_closed_until_arguments_are_persisted_bd_ur3tk_9() {
+        let error = lower_rest_source_to_ir3("function* generated(...tail) { yield tail; }")
+            .expect_err("generator creation currently discards invocation arguments");
+        let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
+            panic!("expected fail-closed generator-rest diagnostic");
+        };
+        assert_eq!(
+            diagnostic.diagnostic_code,
+            "FE-LOWER-UNSUPPORTED-GENERATOR-REST-0001"
+        );
+        assert_eq!(diagnostic.site_id, "core.generator_rest_parameter_runtime");
+    }
+
+    #[test]
+    fn malformed_ir1_rest_metadata_fails_ir3_lowering_bd_ur3tk_9() {
+        let mut ir1 = Ir1Module::new(ContentHash::compute(b"malformed-rest-ir0"), "rest_ir1.js");
+        ir1.ops.push(Ir1Op::DeclareFunction {
+            name: "malformedRest".to_string(),
+            binding_id: 0,
+            param_names: vec!["head".to_string(), "tail".to_string()],
+            body_ops: vec![
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Undefined,
+                },
+                Ir1Op::Return,
+            ],
+            free_vars: Vec::new(),
+            free_var_ids: Vec::new(),
+            free_var_outer_ids: Vec::new(),
+            is_generator: false,
+            rest_param_index: Some(0),
+        });
+        ir1.ops.push(Ir1Op::Pop);
+        ir1.ops.push(Ir1Op::Return);
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("IR1->IR2 should preserve hand-built metadata for validation")
+            .module;
+
+        assert_eq!(
+            lower_ir2_to_ir3(&ir2).expect_err("non-final rest metadata must fail closed"),
+            LoweringPipelineError::InvariantViolation {
+                detail: "Function rest metadata must identify the final positional parameter",
+            }
+        );
+    }
+
+    #[test]
+    fn rest_only_function_and_class_expressions_reach_ir3_bd_ur3tk_9() {
+        let ir3 = lower_rest_source_to_ir3(
+            "let expressed = function expressed(...expressionTail) { return expressionTail; };\
+             let BucketExpression = class BucketExpression {\
+               constructor(...ctorTail) {}\
+               collectExpression(...methodTail) { return methodTail; }\
+             };",
+        )
+        .expect("rest-only expression forms should lower");
+
+        for name in ["expressed", "BucketExpression", "collectExpression"] {
+            let desc = ir3
+                .function_table
+                .iter()
+                .find(|desc| desc.name.as_deref() == Some(name))
+                .unwrap_or_else(|| panic!("missing IR3 descriptor for {name}"));
+            assert_eq!(desc.arity, 1, "{name} positional arity");
+            assert_eq!(desc.rest_param_index, Some(0), "{name} rest slot");
+        }
     }
 
     #[test]

@@ -3491,6 +3491,12 @@ impl InterpreterCore {
                 table_size: module.function_table.len() as u32,
             },
         )?;
+        if func.rest_param_index.is_some() {
+            return Err(InterpreterError::TypeError {
+                expected: "accessor function without a rest parameter".to_string(),
+                got: "rest-parameter descriptor on getter/setter invocation".to_string(),
+            });
+        }
         arg_vals.truncate(func.arity as usize);
 
         if self.call_stack.len() >= self.config.max_call_depth {
@@ -4268,6 +4274,7 @@ impl InterpreterCore {
                                 table_size: module.function_table.len() as u32,
                             },
                         )?;
+                        self.validate_function_rest_param(func)?;
 
                         if self.call_stack.len() >= self.config.max_call_depth {
                             return Err(InterpreterError::StackOverflow {
@@ -4278,7 +4285,7 @@ impl InterpreterCore {
 
                         let mut arg_vals = Vec::new();
                         let mut arg_labels = Vec::new();
-                        for i in 0..args.count.min(func.arity) {
+                        for i in 0..args.count {
                             let reg = args.start.checked_add(i).ok_or(
                                 InterpreterError::RegisterOutOfBounds {
                                     register: args.start,
@@ -4288,7 +4295,21 @@ impl InterpreterCore {
                             arg_vals.push(self.read_reg(reg)?);
                             arg_labels.push(self.read_reg_label(reg)?);
                         }
-
+                        arg_vals.truncate(func.arity as usize);
+                        arg_labels.truncate(func.arity as usize);
+                        self.apply_rest_param(
+                            module,
+                            &mut arg_vals,
+                            func.rest_param_index,
+                            func.arity,
+                            args,
+                        )?;
+                        self.apply_rest_param_labels(
+                            &mut arg_labels,
+                            func.rest_param_index,
+                            func.arity,
+                            args,
+                        )?;
                         self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
                         let promise_handle = self.promise_store.create();
@@ -4380,6 +4401,19 @@ impl InterpreterCore {
 
                     // Generator function call: create a suspended GeneratorObject.
                     if let Value::GeneratorFunction(cid) = &callee_val {
+                        let func = module.function_table.get(func_idx as usize).ok_or(
+                            InterpreterError::FunctionNotFound {
+                                index: func_idx,
+                                table_size: module.function_table.len() as u32,
+                            },
+                        )?;
+                        if func.rest_param_index.is_some() {
+                            return Err(InterpreterError::TypeError {
+                                expected: "generator call without unsupported rest metadata"
+                                    .to_string(),
+                                got: "generator rest parameters are not implemented".to_string(),
+                            });
+                        }
                         let gen_id = u32::try_from(self.generators.len()).map_err(|_| {
                             InterpreterError::TypeError {
                                 expected: "generator table capacity".into(),
@@ -4402,6 +4436,20 @@ impl InterpreterCore {
 
                     // Async generator function call: create a suspended AsyncGeneratorObject.
                     if let Value::AsyncGeneratorFunction(cid) = &callee_val {
+                        let func = module.function_table.get(func_idx as usize).ok_or(
+                            InterpreterError::FunctionNotFound {
+                                index: func_idx,
+                                table_size: module.function_table.len() as u32,
+                            },
+                        )?;
+                        if func.rest_param_index.is_some() {
+                            return Err(InterpreterError::TypeError {
+                                expected: "async-generator call without unsupported rest metadata"
+                                    .to_string(),
+                                got: "async-generator rest parameters are not implemented"
+                                    .to_string(),
+                            });
+                        }
                         let async_gen_id =
                             u32::try_from(self.async_generators.len()).map_err(|_| {
                                 InterpreterError::TypeError {
@@ -4453,6 +4501,7 @@ impl InterpreterCore {
                                     });
                                 }
                             };
+                            self.validate_function_rest_param(func)?;
 
                             if self.call_stack.len() >= self.config.max_call_depth {
                                 return Err(InterpreterError::StackOverflow {
@@ -4463,7 +4512,7 @@ impl InterpreterCore {
 
                             let mut arg_vals = Vec::new();
                             let mut arg_labels = Vec::new();
-                            for i in 0..args.count.min(func.arity) {
+                            for i in 0..args.count {
                                 let reg = args.start.checked_add(i).ok_or(
                                     InterpreterError::RegisterOutOfBounds {
                                         register: args.start,
@@ -4473,7 +4522,21 @@ impl InterpreterCore {
                                 arg_vals.push(self.read_reg(reg)?);
                                 arg_labels.push(self.read_reg_label(reg)?);
                             }
-
+                            arg_vals.truncate(func.arity as usize);
+                            arg_labels.truncate(func.arity as usize);
+                            self.apply_rest_param(
+                                module,
+                                &mut arg_vals,
+                                func.rest_param_index,
+                                func.arity,
+                                args,
+                            )?;
+                            self.apply_rest_param_labels(
+                                &mut arg_labels,
+                                func.rest_param_index,
+                                func.arity,
+                                args,
+                            )?;
                             self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
                             // Push frame. For closure calls, save the
@@ -4624,6 +4687,7 @@ impl InterpreterCore {
                             table_size: module.function_table.len() as u32,
                         },
                     )?;
+                    self.validate_function_rest_param(func)?;
 
                     if self.call_stack.len() >= self.config.max_call_depth {
                         return Err(InterpreterError::StackOverflow {
@@ -4634,7 +4698,7 @@ impl InterpreterCore {
 
                     let mut arg_vals = Vec::new();
                     let mut arg_labels = Vec::new();
-                    for i in 0..args.count.min(func.arity) {
+                    for i in 0..args.count {
                         let reg = args.start.checked_add(i).ok_or(
                             InterpreterError::RegisterOutOfBounds {
                                 register: args.start,
@@ -4644,7 +4708,21 @@ impl InterpreterCore {
                         arg_vals.push(self.read_reg(reg)?);
                         arg_labels.push(self.read_reg_label(reg)?);
                     }
-
+                    arg_vals.truncate(func.arity as usize);
+                    arg_labels.truncate(func.arity as usize);
+                    self.apply_rest_param(
+                        module,
+                        &mut arg_vals,
+                        func.rest_param_index,
+                        func.arity,
+                        args,
+                    )?;
+                    self.apply_rest_param_labels(
+                        &mut arg_labels,
+                        func.rest_param_index,
+                        func.arity,
+                        args,
+                    )?;
                     self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
                     let scope_depth = self.scope_chain.depth();
@@ -5296,6 +5374,7 @@ impl InterpreterCore {
                                     table_size: module.function_table.len() as u32,
                                 },
                             )?;
+                            self.validate_function_rest_param(func)?;
 
                             if self.call_stack.len() >= self.config.max_call_depth {
                                 return Err(InterpreterError::StackOverflow {
@@ -5304,16 +5383,9 @@ impl InterpreterCore {
                                 });
                             }
 
-                            // Allocate the `this` object for the constructor.
-                            let prototype = self.ensure_function_prototype(func_idx)?;
-                            let this_id = self.alloc_object_with_prototype(Some(prototype))?;
-                            if let Some(this_obj) = self.heap.get_mut(this_id.0 as usize) {
-                                this_obj.constructor_function = Some(func_idx);
-                            }
-                            let this_val = Value::Object(this_id);
-
                             let mut arg_vals = Vec::new();
-                            for i in 0..args.count.min(func.arity) {
+                            let mut arg_labels = Vec::new();
+                            for i in 0..args.count {
                                 let reg = args.start.checked_add(i).ok_or(
                                     InterpreterError::RegisterOutOfBounds {
                                         register: args.start,
@@ -5321,8 +5393,34 @@ impl InterpreterCore {
                                     },
                                 )?;
                                 arg_vals.push(self.read_reg(reg)?);
+                                arg_labels.push(self.read_reg_label(reg)?);
                             }
+                            arg_vals.truncate(func.arity as usize);
+                            arg_labels.truncate(func.arity as usize);
+                            self.apply_rest_param(
+                                module,
+                                &mut arg_vals,
+                                func.rest_param_index,
+                                func.arity,
+                                args,
+                            )?;
+                            self.apply_rest_param_labels(
+                                &mut arg_labels,
+                                func.rest_param_index,
+                                func.arity,
+                                args,
+                            )?;
 
+                            // Materializing the implicit rest Array is policy-
+                            // guarded. Allocate the constructor receiver only
+                            // after that guard succeeds so a denied rest
+                            // allocation leaves no constructor setup behind.
+                            let prototype = self.ensure_function_prototype(func_idx)?;
+                            let this_id = self.alloc_object_with_prototype(Some(prototype))?;
+                            if let Some(this_obj) = self.heap.get_mut(this_id.0 as usize) {
+                                this_obj.constructor_function = Some(func_idx);
+                            }
+                            let this_val = Value::Object(this_id);
                             self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
                             // Push constructor frame with `construct_this`.
@@ -5383,13 +5481,15 @@ impl InterpreterCore {
                             let req_len = self.register_base + self.config.max_registers as usize;
                             self.clear_register_range(self.register_base, req_len);
 
-                            // Register 0 = `this` for the constructor body.
-                            self.write_reg(0, this_val)?;
-                            // Arguments start at register 1.
-                            for (i, val) in arg_vals.into_iter().enumerate() {
-                                let reg = (i + 1) as u32;
+                            // Parameters occupy r0..rN-1, matching deferred
+                            // function lowering. `this` is carried by the call
+                            // frame and recovered through `LoadThis`.
+                            for (i, (val, label)) in
+                                arg_vals.into_iter().zip(arg_labels).enumerate()
+                            {
+                                let reg = i as u32;
                                 if reg < self.config.max_registers {
-                                    self.write_reg(reg, val)?;
+                                    self.write_reg_with_label(reg, val, label)?;
                                 }
                             }
 
@@ -7100,6 +7200,105 @@ impl InterpreterCore {
         Ok(id)
     }
 
+    /// Replace a declared rest-parameter slot with an Array containing every
+    /// trailing argument. Fixed parameters retain their positional values and
+    /// an omitted rest tail becomes an empty Array.
+    fn apply_rest_param(
+        &mut self,
+        module: &Ir3Module,
+        arg_vals: &mut Vec<Value>,
+        rest_param_index: Option<u32>,
+        arity: u32,
+        args: RegRange,
+    ) -> Result<(), InterpreterError> {
+        let Some(rest_index) = rest_param_index else {
+            return Ok(());
+        };
+        self.validate_rest_param_index(rest_index, arity)?;
+
+        let mut elements = Vec::new();
+        for offset in rest_index..args.count {
+            let reg =
+                args.start
+                    .checked_add(offset)
+                    .ok_or(InterpreterError::RegisterOutOfBounds {
+                        register: args.start,
+                        max: self.config.max_registers,
+                    })?;
+            elements.push(self.read_reg(reg)?);
+        }
+        self.run_pre_allocation_hook(module, AllocKind::Array, elements.len())?;
+        let array_id = self.alloc_array_from_values(&elements)?;
+        let rest_slot = rest_index as usize;
+        if arg_vals.len() <= rest_slot {
+            arg_vals.resize(rest_slot + 1, Value::Undefined);
+        }
+        arg_vals.truncate(rest_slot + 1);
+        arg_vals[rest_slot] = Value::Object(array_id);
+        Ok(())
+    }
+
+    /// Label-file twin of [`Self::apply_rest_param`]. The rest Array depends
+    /// on every trailing argument, so its register receives their lattice join.
+    fn apply_rest_param_labels(
+        &self,
+        arg_labels: &mut Vec<crate::ifc_artifacts::Label>,
+        rest_param_index: Option<u32>,
+        arity: u32,
+        args: RegRange,
+    ) -> Result<(), InterpreterError> {
+        let Some(rest_index) = rest_param_index else {
+            return Ok(());
+        };
+        self.validate_rest_param_index(rest_index, arity)?;
+
+        let mut rest_label = crate::ifc_artifacts::Label::Public;
+        for offset in rest_index..args.count {
+            let reg =
+                args.start
+                    .checked_add(offset)
+                    .ok_or(InterpreterError::RegisterOutOfBounds {
+                        register: args.start,
+                        max: self.config.max_registers,
+                    })?;
+            rest_label = rest_label.join(&self.read_reg_label(reg)?);
+        }
+        let rest_slot = rest_index as usize;
+        if arg_labels.len() <= rest_slot {
+            arg_labels.resize(rest_slot + 1, crate::ifc_artifacts::Label::Public);
+        }
+        arg_labels.truncate(rest_slot + 1);
+        arg_labels[rest_slot] = rest_label;
+        Ok(())
+    }
+
+    fn validate_rest_param_index(
+        &self,
+        rest_index: u32,
+        arity: u32,
+    ) -> Result<(), InterpreterError> {
+        if rest_index.checked_add(1) == Some(arity) && rest_index < self.config.max_registers {
+            return Ok(());
+        }
+        Err(InterpreterError::TypeError {
+            expected: format!(
+                "final rest parameter index for arity {arity} below register limit {}",
+                self.config.max_registers
+            ),
+            got: rest_index.to_string(),
+        })
+    }
+
+    fn validate_function_rest_param(
+        &self,
+        function: &Ir3FunctionDesc,
+    ) -> Result<(), InterpreterError> {
+        if let Some(rest_index) = function.rest_param_index {
+            self.validate_rest_param_index(rest_index, function.arity)?;
+        }
+        Ok(())
+    }
+
     fn alloc_object_with_properties(
         &mut self,
         props: &[(&str, Value)],
@@ -7808,13 +8007,14 @@ impl InterpreterCore {
                     got: format!("closure#{closure_id} not found"),
                 })?;
         let func_idx = closure.function_index;
-        let captured_env = self.clone_scope_frames_with_budget(&closure.captured_env)?;
         let func = module.function_table.get(func_idx as usize).ok_or(
             InterpreterError::FunctionNotFound {
                 index: func_idx,
                 table_size: module.function_table.len() as u32,
             },
         )?;
+        self.validate_function_rest_param(func)?;
+        let captured_env = self.clone_scope_frames_with_budget(&closure.captured_env)?;
 
         if self.call_stack.len() >= self.config.max_call_depth {
             return Err(InterpreterError::StackOverflow {
@@ -7824,7 +8024,23 @@ impl InterpreterCore {
         }
 
         let callee = Value::Closure(closure_id);
-        self.run_pre_call_hook(module, &callee, func_idx, &[])?;
+        let mut arg_vals = Vec::new();
+        let mut arg_labels = Vec::new();
+        let empty_args = RegRange { start: 0, count: 0 };
+        self.apply_rest_param(
+            module,
+            &mut arg_vals,
+            func.rest_param_index,
+            func.arity,
+            empty_args,
+        )?;
+        self.apply_rest_param_labels(
+            &mut arg_labels,
+            func.rest_param_index,
+            func.arity,
+            empty_args,
+        )?;
+        self.run_pre_call_hook(module, &callee, func_idx, &arg_vals)?;
 
         let initial_call_depth = self.call_stack.len();
         let saved_ip = self.ip;
@@ -7868,6 +8084,12 @@ impl InterpreterCore {
         self.register_base += self.config.max_registers as usize;
         let req_len = self.register_base + self.config.max_registers as usize;
         self.clear_register_range(self.register_base, req_len);
+        for (index, (value, label)) in arg_vals.into_iter().zip(arg_labels).enumerate() {
+            let reg = index as u32;
+            if reg < self.config.max_registers {
+                self.write_reg_with_label(reg, value, label)?;
+            }
+        }
 
         self.ip = func.entry as usize;
         let result = self.run_loop(module);
@@ -11727,6 +11949,7 @@ mod tests {
             frame_size: 4,
             name: Some(name.to_string()),
             is_generator: false,
+            rest_param_index: None,
         }
     }
 
@@ -12081,6 +12304,7 @@ mod tests {
         let mut core = InterpreterCore::new(config, "test-trace");
         core.set_hook(hook.clone());
         core.registers[1] = Value::Int(5);
+        core.registers[2] = Value::Int(99);
         core.registers[3] = Value::Function(0);
 
         let result = core
@@ -12088,7 +12312,7 @@ mod tests {
                 vec![
                     Ir3Instruction::Call {
                         callee: 3,
-                        args: RegRange { start: 1, count: 1 },
+                        args: RegRange { start: 1, count: 2 },
                         dst: 0,
                     },
                     Ir3Instruction::Halt,
@@ -12100,6 +12324,7 @@ mod tests {
                     frame_size: 2,
                     name: Some("identity".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             ))
             .unwrap();
@@ -12148,6 +12373,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("return_this".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             ))
             .unwrap();
@@ -12178,6 +12404,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("return_this".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             ))
             .unwrap();
@@ -12237,6 +12464,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("closure_target".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             ))
             .unwrap();
@@ -12686,6 +12914,7 @@ mod tests {
                 frame_size: 3,
                 name: Some("add_ten".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
 
@@ -12717,6 +12946,7 @@ mod tests {
                 frame_size: 1,
                 name: Some("identity".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
         let mut core = quickjs_test_core();
@@ -12756,6 +12986,7 @@ mod tests {
                 frame_size: 8,
                 name: Some("return_fresh_r7".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
         let mut core = quickjs_test_core();
@@ -12813,6 +13044,7 @@ mod tests {
                     frame_size: 3,
                     name: Some("outer_identity".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 },
                 Ir3FunctionDesc {
                     entry: 4,
@@ -12820,6 +13052,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("inner_identity".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 },
             ],
         );
@@ -12863,6 +13096,7 @@ mod tests {
                 frame_size: 1,
                 name: Some("return_this".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
         let mut core = quickjs_test_core();
@@ -12903,6 +13137,7 @@ mod tests {
                 frame_size: 1,
                 name: Some("return_argument".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
         let mut core = quickjs_test_core();
@@ -12924,6 +13159,342 @@ mod tests {
             core.read_reg_label(3).expect("method result label"),
             crate::ifc_artifacts::Label::Secret
         );
+    }
+
+    fn assert_rest_array_result_bd_ur3tk_9(
+        core: &InterpreterCore,
+        result: Value,
+        destination: Reg,
+    ) {
+        let Value::Object(array_id) = result else {
+            panic!("rest parameter should return an Array object");
+        };
+        assert_eq!(
+            core.read_array_like_values(array_id),
+            vec![Value::Int(20), Value::Int(30)]
+        );
+        assert_eq!(
+            core.read_reg_label(destination)
+                .expect("rest return label should remain readable"),
+            crate::ifc_artifacts::Label::Secret
+        );
+    }
+
+    fn rest_return_descriptor_bd_ur3tk_9() -> Ir3FunctionDesc {
+        Ir3FunctionDesc {
+            entry: 2,
+            arity: 2,
+            frame_size: 2,
+            name: Some("return_rest".to_string()),
+            is_generator: false,
+            rest_param_index: Some(1),
+        }
+    }
+
+    #[test]
+    fn plain_call_rest_joins_only_trailing_argument_labels_bd_ur3tk_9() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 3 },
+                    dst: 4,
+                },
+                Ir3Instruction::Return { value: 4 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![rest_return_descriptor_bd_ur3tk_9()],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+        core.write_reg_with_label(1, Value::Int(10), crate::ifc_artifacts::Label::TopSecret)
+            .expect("fixed argument should be writable");
+        core.write_reg_with_label(2, Value::Int(20), crate::ifc_artifacts::Label::Confidential)
+            .expect("first rest argument should be writable");
+        core.write_reg_with_label(3, Value::Int(30), crate::ifc_artifacts::Label::Secret)
+            .expect("second rest argument should be writable");
+
+        let result = core.run_loop(&module).expect("rest call should return");
+        assert_rest_array_result_bd_ur3tk_9(&core, result, 4);
+    }
+
+    #[test]
+    fn method_call_rest_joins_trailing_argument_labels_bd_ur3tk_9() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 1,
+                    args: RegRange { start: 2, count: 3 },
+                    dst: 5,
+                },
+                Ir3Instruction::Return { value: 5 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![rest_return_descriptor_bd_ur3tk_9()],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::str("receiver");
+        core.registers[1] = Value::Function(0);
+        core.write_reg_with_label(2, Value::Int(10), crate::ifc_artifacts::Label::TopSecret)
+            .expect("fixed argument should be writable");
+        core.write_reg_with_label(3, Value::Int(20), crate::ifc_artifacts::Label::Confidential)
+            .expect("first rest argument should be writable");
+        core.write_reg_with_label(4, Value::Int(30), crate::ifc_artifacts::Label::Secret)
+            .expect("second rest argument should be writable");
+
+        let result = core.run_loop(&module).expect("rest method should return");
+        assert_rest_array_result_bd_ur3tk_9(&core, result, 5);
+    }
+
+    #[test]
+    fn constructor_rest_uses_r0_formal_abi_and_joins_labels_bd_ur3tk_9() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Construct {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 3 },
+                    dst: 4,
+                },
+                Ir3Instruction::Return { value: 4 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![rest_return_descriptor_bd_ur3tk_9()],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+        core.write_reg_with_label(1, Value::Int(10), crate::ifc_artifacts::Label::TopSecret)
+            .expect("fixed argument should be writable");
+        core.write_reg_with_label(2, Value::Int(20), crate::ifc_artifacts::Label::Confidential)
+            .expect("first rest argument should be writable");
+        core.write_reg_with_label(3, Value::Int(30), crate::ifc_artifacts::Label::Secret)
+            .expect("second rest argument should be writable");
+
+        let result = core
+            .run_loop(&module)
+            .expect("rest constructor should return its explicit Array");
+        assert_rest_array_result_bd_ur3tk_9(&core, result, 4);
+    }
+
+    #[test]
+    fn empty_rest_materializes_empty_public_array_bd_ur3tk_9() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 2,
+                },
+                Ir3Instruction::Return { value: 2 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![rest_return_descriptor_bd_ur3tk_9()],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+        core.write_reg_with_label(1, Value::Int(10), crate::ifc_artifacts::Label::TopSecret)
+            .expect("fixed argument should be writable");
+
+        let result = core.run_loop(&module).expect("empty rest should return");
+        let Value::Object(array_id) = result else {
+            panic!("empty rest parameter should return an Array object");
+        };
+        assert!(core.read_array_like_values(array_id).is_empty());
+        assert_eq!(
+            core.read_reg_label(2).expect("empty rest result label"),
+            crate::ifc_artifacts::Label::Public
+        );
+    }
+
+    #[test]
+    fn malformed_nonfinal_rest_descriptor_is_rejected_bd_ur3tk_9() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 3 },
+                    dst: 4,
+                },
+                Ir3Instruction::Return { value: 4 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 3,
+                frame_size: 3,
+                name: Some("malformed_rest".to_string()),
+                is_generator: false,
+                rest_param_index: Some(1),
+            }],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+
+        let error = core
+            .run_loop(&module)
+            .expect_err("non-final rest metadata must fail closed");
+        assert!(matches!(error, InterpreterError::TypeError { .. }));
+    }
+
+    #[test]
+    fn malformed_constructor_rest_is_rejected_before_allocation_bd_ur3tk_9() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Construct {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 3 },
+                    dst: 4,
+                },
+                Ir3Instruction::Return { value: 4 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 3,
+                frame_size: 3,
+                name: Some("malformed_constructor_rest".to_string()),
+                is_generator: false,
+                rest_param_index: Some(1),
+            }],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+        let heap_len = core.heap.len();
+        let estimated_memory_bytes = core.estimated_memory_bytes;
+        let function_prototypes = core.function_prototypes.clone();
+
+        core.run_loop(&module)
+            .expect_err("malformed constructor metadata must fail before setup");
+        assert_eq!(core.heap.len(), heap_len);
+        assert_eq!(core.estimated_memory_bytes, estimated_memory_bytes);
+        assert_eq!(core.function_prototypes, function_prototypes);
+    }
+
+    #[test]
+    fn rest_policy_hooks_observe_guarded_materialized_carrier_bd_ur3tk_9() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 3 },
+                    dst: 4,
+                },
+                Ir3Instruction::Return { value: 4 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![rest_return_descriptor_bd_ur3tk_9()],
+        );
+        let hook = Arc::new(RecordingHook::allow_all());
+        let mut core = quickjs_test_core();
+        core.set_hook(hook.clone());
+        core.registers[0] = Value::Function(0);
+        core.registers[1] = Value::Int(10);
+        core.registers[2] = Value::Int(20);
+        core.registers[3] = Value::Int(30);
+
+        core.run_loop(&module)
+            .expect("guarded rest call should execute");
+        let records = hook.records_without_startup_module_record();
+        assert_eq!(records.len(), 2);
+        assert!(matches!(
+            records.first(),
+            Some(HookRecord::Allocation {
+                kind: AllocKind::Array,
+                size_hint: 2,
+                ..
+            })
+        ));
+        let HookRecord::Call { args, .. } = &records[1] else {
+            panic!("pre-call hook must run after rest allocation");
+        };
+        assert_eq!(args.first(), Some(&Value::Int(10)));
+        let Some(Value::Object(rest_array)) = args.get(1) else {
+            panic!("pre-call hook must receive the materialized rest Array");
+        };
+        assert_eq!(
+            core.read_array_like_values(*rest_array),
+            vec![Value::Int(20), Value::Int(30)]
+        );
+    }
+
+    #[test]
+    fn denied_rest_allocation_leaves_heap_unchanged_bd_ur3tk_9() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::Return { value: 3 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![rest_return_descriptor_bd_ur3tk_9()],
+        );
+        let hook = Arc::new(RecordingHook::with_allocation_action(
+            HookAction::Terminate("rest allocation denied".to_string()),
+        ));
+        let mut core = quickjs_test_core();
+        core.set_hook(hook.clone());
+        core.registers[0] = Value::Function(0);
+        core.registers[1] = Value::Int(10);
+        core.registers[2] = Value::Int(20);
+        let heap_len = core.heap.len();
+        let estimated_memory_bytes = core.estimated_memory_bytes;
+
+        core.run_loop(&module)
+            .expect_err("allocation policy must deny the implicit rest Array");
+        assert_eq!(core.heap.len(), heap_len);
+        assert_eq!(core.estimated_memory_bytes, estimated_memory_bytes);
+        assert!(matches!(
+            hook.records_without_startup_module_record().as_slice(),
+            [HookRecord::Allocation {
+                kind: AllocKind::Array,
+                size_hint: 1,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn denied_constructor_rest_allocation_leaves_setup_unchanged_bd_ur3tk_9() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Construct {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::Return { value: 3 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![rest_return_descriptor_bd_ur3tk_9()],
+        );
+        let hook = Arc::new(RecordingHook::with_allocation_action(
+            HookAction::Terminate("constructor rest allocation denied".to_string()),
+        ));
+        let mut core = quickjs_test_core();
+        core.set_hook(hook.clone());
+        core.registers[0] = Value::Function(0);
+        core.registers[1] = Value::Int(10);
+        core.registers[2] = Value::Int(20);
+        let heap_len = core.heap.len();
+        let estimated_memory_bytes = core.estimated_memory_bytes;
+        let function_prototypes = core.function_prototypes.clone();
+
+        core.run_loop(&module)
+            .expect_err("rest allocation policy must deny constructor setup");
+        assert_eq!(core.heap.len(), heap_len);
+        assert_eq!(core.estimated_memory_bytes, estimated_memory_bytes);
+        assert_eq!(core.function_prototypes, function_prototypes);
+        assert!(matches!(
+            hook.records_without_startup_module_record().as_slice(),
+            [HookRecord::Allocation {
+                kind: AllocKind::Array,
+                size_hint: 1,
+                ..
+            }]
+        ));
     }
 
     #[test]
@@ -12950,6 +13521,7 @@ mod tests {
                 frame_size: 3,
                 name: Some("add_ten".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
 
@@ -12984,6 +13556,7 @@ mod tests {
                 frame_size: 1,
                 name: Some("recurse".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
 
@@ -14444,6 +15017,7 @@ mod tests {
             frame_size: 4,
             name: Some("capturing_generator".to_string()),
             is_generator: true,
+            rest_param_index: None,
         });
 
         let mut core = InterpreterCore::new(test_quickjs_config(), "generator");
@@ -14549,6 +15123,7 @@ mod tests {
             frame_size: 4,
             name: Some("increment".to_string()),
             is_generator: false,
+            rest_param_index: None,
         });
 
         let result = quickjs_execute(&module).unwrap();
@@ -15118,6 +15693,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("Foo".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             ))
             .unwrap();
@@ -15182,6 +15758,7 @@ mod tests {
                         frame_size: 1,
                         name: Some("Foo".to_string()),
                         is_generator: false,
+                        rest_param_index: None,
                     },
                     Ir3FunctionDesc {
                         entry: 6,
@@ -15189,6 +15766,7 @@ mod tests {
                         frame_size: 1,
                         name: Some("method".to_string()),
                         is_generator: false,
+                        rest_param_index: None,
                     },
                 ],
             ))
@@ -15702,6 +16280,7 @@ mod tests {
             frame_size: 1,
             name: Some(name.to_string()),
             is_generator: false,
+            rest_param_index: None,
         }
     }
 
@@ -15770,6 +16349,52 @@ mod tests {
                 .iter()
                 .any(|event| event.kind == WitnessEventKind::HostcallDispatched)
         );
+    }
+
+    #[test]
+    fn timer_callback_materializes_empty_rest_array_bd_ur3tk_9() {
+        let top_level = vec![
+            Ir3Instruction::CreateClosure {
+                dst: 0,
+                function_index: 0,
+                capture_count: 0,
+            },
+            Ir3Instruction::LoadInt { dst: 1, value: 0 },
+            timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 2),
+            Ir3Instruction::Halt,
+        ];
+        let callback_entry = top_level.len() as u32;
+        let mut instructions = top_level;
+        instructions.extend([
+            Ir3Instruction::LoadStr {
+                dst: 1,
+                pool_index: 0,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 0,
+                key: 1,
+                dst: 2,
+            },
+            timer_hostcall("console:log", RegRange { start: 2, count: 1 }, 3),
+            Ir3Instruction::Return { value: 3 },
+        ]);
+        let module = test_module_with_pool_and_functions(
+            instructions,
+            vec!["length".to_string()],
+            vec![Ir3FunctionDesc {
+                entry: callback_entry,
+                arity: 1,
+                frame_size: 4,
+                name: Some("rest_timer_callback".to_string()),
+                is_generator: false,
+                rest_param_index: Some(0),
+            }],
+        );
+
+        let mut core = quickjs_test_core();
+        let result = core.execute(&module).expect("rest timer should execute");
+        assert_eq!(result.console_output.len(), 1);
+        assert_eq!(result.console_output[0].message, "0");
     }
 
     #[test]
@@ -16293,6 +16918,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("test_async".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             );
 
@@ -16330,6 +16956,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("test_async".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             );
 
@@ -16387,6 +17014,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("throw_async".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             );
             module.constant_pool.push("boom".to_string());
@@ -16441,6 +17069,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("await_async".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             );
             let handle = core.promise_store.create();
@@ -16505,6 +17134,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("await_secret_async".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             );
             let handle = core.promise_store.create();
@@ -16566,6 +17196,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("await_labeled_value_async".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             );
             core.write_reg_with_label(
@@ -16622,6 +17253,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("pending_async".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             );
             let handle = core.promise_store.create();
@@ -16760,6 +17392,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("test_async_gen".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             );
 
@@ -16801,6 +17434,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("test_async_gen".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             );
 
@@ -16875,6 +17509,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("test_async_gen".to_string()),
                     is_generator: true,
+                    rest_param_index: None,
                 }],
             );
 
@@ -16937,6 +17572,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("test_async_gen".to_string()),
                     is_generator: true,
+                    rest_param_index: None,
                 }],
             );
 

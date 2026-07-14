@@ -498,6 +498,13 @@ pub enum Ir1Op {
         /// (bd-snlhk): carries the exact id->name mapping so the deferred
         /// IR3 pass never reconstructs it heuristically.
         free_var_ids: Vec<BindingId>,
+        /// Enclosing-scope binding ids paired index-wise with `free_vars`.
+        /// These identify the exact captured binding when multiple lexical
+        /// scopes contain the same name. Legacy IR1 artifacts predate this
+        /// additive field and deserialize it as empty; lowering then rejects
+        /// captured functions whose parallel metadata vectors do not match.
+        #[serde(default)]
+        free_var_outer_ids: Vec<BindingId>,
         /// True when the source function is a generator (`function*`).
         is_generator: bool,
     },
@@ -512,6 +519,10 @@ pub enum Ir1Op {
         /// Body-scope binding ids paired index-wise with `free_vars`
         /// (see DeclareFunction; bd-snlhk).
         free_var_ids: Vec<BindingId>,
+        /// Exact enclosing-scope binding ids paired with `free_vars` (see
+        /// DeclareFunction). See that variant for the legacy-artifact posture.
+        #[serde(default)]
+        free_var_outer_ids: Vec<BindingId>,
         /// True when the source function is a generator (`function*`).
         is_generator: bool,
     },
@@ -827,6 +838,7 @@ impl Ir1Op {
                 body_ops,
                 free_vars,
                 free_var_ids,
+                free_var_outer_ids,
                 is_generator,
             } => {
                 map.insert(
@@ -870,6 +882,15 @@ impl Ir1Op {
                     ),
                 );
                 map.insert(
+                    "free_var_outer_ids".to_string(),
+                    CanonicalValue::Array(
+                        free_var_outer_ids
+                            .iter()
+                            .map(|id| CanonicalValue::U64(u64::from(*id)))
+                            .collect(),
+                    ),
+                );
+                map.insert(
                     "is_generator".to_string(),
                     CanonicalValue::Bool(*is_generator),
                 );
@@ -880,6 +901,7 @@ impl Ir1Op {
                 body_ops,
                 free_vars,
                 free_var_ids,
+                free_var_outer_ids,
                 is_generator,
             } => {
                 map.insert(
@@ -917,6 +939,15 @@ impl Ir1Op {
                     "free_var_ids".to_string(),
                     CanonicalValue::Array(
                         free_var_ids
+                            .iter()
+                            .map(|id| CanonicalValue::U64(u64::from(*id)))
+                            .collect(),
+                    ),
+                );
+                map.insert(
+                    "free_var_outer_ids".to_string(),
+                    CanonicalValue::Array(
+                        free_var_outer_ids
                             .iter()
                             .map(|id| CanonicalValue::U64(u64::from(*id)))
                             .collect(),
@@ -3274,6 +3305,60 @@ mod tests {
         let a = IrSchemaVersion::CURRENT.canonical_value();
         let b = IrSchemaVersion::CURRENT.canonical_value();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn legacy_function_ops_default_missing_outer_capture_ids() {
+        let legacy_shapes = [
+            Ir1Op::DeclareFunction {
+                name: "f".to_string(),
+                binding_id: 7,
+                param_names: Vec::new(),
+                body_ops: Vec::new(),
+                free_vars: vec!["x".to_string()],
+                free_var_ids: vec![0],
+                free_var_outer_ids: vec![3],
+                is_generator: false,
+            },
+            Ir1Op::CreateFunction {
+                name: Some("g".to_string()),
+                param_names: Vec::new(),
+                body_ops: Vec::new(),
+                free_vars: vec!["y".to_string()],
+                free_var_ids: vec![1],
+                free_var_outer_ids: vec![4],
+                is_generator: false,
+            },
+        ];
+
+        for op in legacy_shapes {
+            let mut encoded = serde_json::to_value(op).expect("function op should serialize");
+            let payload = encoded
+                .as_object_mut()
+                .and_then(|root| root.values_mut().next())
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("externally tagged function op payload");
+            assert!(payload.remove("free_var_outer_ids").is_some());
+
+            let restored: Ir1Op =
+                serde_json::from_value(encoded).expect("legacy function op should deserialize");
+            match restored {
+                Ir1Op::DeclareFunction {
+                    free_vars,
+                    free_var_outer_ids,
+                    ..
+                }
+                | Ir1Op::CreateFunction {
+                    free_vars,
+                    free_var_outer_ids,
+                    ..
+                } => {
+                    assert_eq!(free_vars.len(), 1);
+                    assert!(free_var_outer_ids.is_empty());
+                }
+                other => panic!("expected a function op, got {other:?}"),
+            }
+        }
     }
 
     // -- IR Level --

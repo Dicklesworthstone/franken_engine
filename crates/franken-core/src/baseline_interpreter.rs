@@ -8518,6 +8518,7 @@ impl InterpreterCore {
                 if args.count > 0 {
                     let arg = self.read_reg(args.start)?;
                     match arg {
+                        Value::Int(i64::MIN) => Ok(Value::Float(Float64::new(-(i64::MIN as f64)))),
                         Value::Int(n) => Ok(Value::Int(n.abs())),
                         Value::Float(f) => Ok(Value::Float(Float64::new(f.inner().abs()))),
                         _ => Ok(Value::Float(Float64::new(f64::NAN))),
@@ -8589,6 +8590,43 @@ impl InterpreterCore {
                     Value::BuiltinFunction(_) => "undefined".to_string(),
                 };
                 Ok(Value::str(json_str))
+            }
+            "builtin:JsonParse" => {
+                // Full recursive JSON values, including exact UTF-16 units
+                // contributed by `\uXXXX` escapes (bd-zql4d). Invalid JSON and
+                // non-string inputs preserve core's existing simplified
+                // posture by yielding undefined instead of a SyntaxError.
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+                let json_str = match self.read_reg(args.start)? {
+                    Value::Str(text) => text,
+                    _ => return Ok(Value::Undefined),
+                };
+                let chars: Vec<char> = json_str.chars().collect();
+                let mut pos = 0usize;
+                let heap_checkpoint = self.heap.len();
+                let memory_checkpoint = self.estimated_memory_bytes;
+                Self::json_skip_ws(&chars, &mut pos);
+                match self.json_parse_value(&chars, &mut pos, 0) {
+                    Ok(Some(value)) => {
+                        Self::json_skip_ws(&chars, &mut pos);
+                        if pos == chars.len() {
+                            Ok(value)
+                        } else {
+                            self.rollback_json_parse(heap_checkpoint, memory_checkpoint);
+                            Ok(Value::Undefined)
+                        }
+                    }
+                    Ok(None) => {
+                        self.rollback_json_parse(heap_checkpoint, memory_checkpoint);
+                        Ok(Value::Undefined)
+                    }
+                    Err(err) => {
+                        self.rollback_json_parse(heap_checkpoint, memory_checkpoint);
+                        Err(err)
+                    }
+                }
             }
 
             // Node `path` builtins (bd-tu0c3): pure-compute posix semantics
@@ -9895,6 +9933,43 @@ impl InterpreterCore {
         Ok(())
     }
 
+    /// Insert an ordinary own data property without interpreting the private
+    /// accessor-definition prefixes used by IR class lowering. External data
+    /// formats such as JSON must preserve those strings as literal keys.
+    fn set_plain_data_property(
+        &mut self,
+        object_id: ObjectId,
+        key: String,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
+        let (previous_data, previous_accessor) = {
+            let object = self
+                .heap
+                .get_mut(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+            let previous_accessor = object.accessors.remove(&key);
+            let previous_data = object.properties.insert(key.clone(), value);
+            (previous_data, previous_accessor)
+        };
+        if let Err(err) = self.sync_estimated_memory_bytes() {
+            let object = self
+                .heap
+                .get_mut(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+            if let Some(previous) = previous_data {
+                object.properties.insert(key.clone(), previous);
+            } else {
+                object.properties.remove(&key);
+            }
+            if let Some(previous) = previous_accessor {
+                object.accessors.insert(key, previous);
+            }
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Err(err);
+        }
+        Ok(())
+    }
+
     fn remove_object_property(
         &mut self,
         object_id: ObjectId,
@@ -10046,6 +10121,238 @@ impl InterpreterCore {
             return Ok(None);
         };
         self.ensure_function_prototype(func_idx).map(Some)
+    }
+
+    // -- JSON.parse recursive-descent parser (bd-zql4d) --------------------
+
+    fn json_skip_ws(chars: &[char], pos: &mut usize) {
+        while matches!(chars.get(*pos), Some(' ' | '\t' | '\n' | '\r')) {
+            *pos += 1;
+        }
+    }
+
+    /// Parse a JSON string token into exact UTF-16 code units. A `\uXXXX`
+    /// escape contributes its raw unit: paired escapes heal into one scalar,
+    /// while a lone surrogate remains representable in [`JsString`].
+    fn json_parse_string(chars: &[char], pos: &mut usize) -> Option<JsString> {
+        if chars.get(*pos) != Some(&'"') {
+            return None;
+        }
+        *pos += 1;
+        let mut units = Vec::new();
+        let push_char = |units: &mut Vec<u16>, ch: char| {
+            let mut buf = [0u16; 2];
+            units.extend_from_slice(ch.encode_utf16(&mut buf));
+        };
+        while let Some(&ch) = chars.get(*pos) {
+            *pos += 1;
+            match ch {
+                '"' => return Some(JsString::from_code_units(&units)),
+                '\\' => {
+                    let &escaped = chars.get(*pos)?;
+                    *pos += 1;
+                    match escaped {
+                        '"' => push_char(&mut units, '"'),
+                        '\\' => push_char(&mut units, '\\'),
+                        '/' => push_char(&mut units, '/'),
+                        'b' => push_char(&mut units, '\u{08}'),
+                        'f' => push_char(&mut units, '\u{0C}'),
+                        'n' => push_char(&mut units, '\n'),
+                        'r' => push_char(&mut units, '\r'),
+                        't' => push_char(&mut units, '\t'),
+                        'u' => {
+                            if *pos + 4 > chars.len() {
+                                return None;
+                            }
+                            let hex: String = chars[*pos..*pos + 4].iter().collect();
+                            *pos += 4;
+                            let code = u16::from_str_radix(&hex, 16).ok()?;
+                            units.push(code);
+                        }
+                        _ => return None,
+                    }
+                }
+                ch if ch <= '\u{1F}' => return None,
+                _ => push_char(&mut units, ch),
+            }
+        }
+        None
+    }
+
+    fn json_parse_number(chars: &[char], pos: &mut usize) -> Option<Value> {
+        let start = *pos;
+        if chars.get(*pos) == Some(&'-') {
+            *pos += 1;
+        }
+        match chars.get(*pos) {
+            Some('0') => {
+                *pos += 1;
+                // JSON does not allow a leading zero before another digit.
+                if matches!(chars.get(*pos), Some(ch) if ch.is_ascii_digit()) {
+                    return None;
+                }
+            }
+            Some('1'..='9') => {
+                *pos += 1;
+                while matches!(chars.get(*pos), Some(ch) if ch.is_ascii_digit()) {
+                    *pos += 1;
+                }
+            }
+            _ => return None,
+        }
+        let mut is_float = false;
+        if chars.get(*pos) == Some(&'.') {
+            is_float = true;
+            *pos += 1;
+            let fraction_start = *pos;
+            while matches!(chars.get(*pos), Some(ch) if ch.is_ascii_digit()) {
+                *pos += 1;
+            }
+            if *pos == fraction_start {
+                return None;
+            }
+        }
+        if matches!(chars.get(*pos), Some('e' | 'E')) {
+            is_float = true;
+            *pos += 1;
+            if matches!(chars.get(*pos), Some('+' | '-')) {
+                *pos += 1;
+            }
+            let exponent_start = *pos;
+            while matches!(chars.get(*pos), Some(ch) if ch.is_ascii_digit()) {
+                *pos += 1;
+            }
+            if *pos == exponent_start {
+                return None;
+            }
+        }
+        let token: String = chars[start..*pos].iter().collect();
+        if token == "-0" {
+            return Some(Value::Float(Float64::new(-0.0)));
+        }
+        if !is_float && let Ok(value) = token.parse::<i64>() {
+            return Some(Value::Int(value));
+        }
+        token
+            .parse::<f64>()
+            .ok()
+            .map(|value| Value::Float(Float64::new(value)))
+    }
+
+    fn json_parse_value(
+        &mut self,
+        chars: &[char],
+        pos: &mut usize,
+        depth: usize,
+    ) -> Result<Option<Value>, InterpreterError> {
+        if depth > 200 {
+            return Ok(None);
+        }
+        Self::json_skip_ws(chars, pos);
+        let Some(&ch) = chars.get(*pos) else {
+            return Ok(None);
+        };
+        match ch {
+            '{' => self.json_parse_object(chars, pos, depth),
+            '[' => self.json_parse_array(chars, pos, depth),
+            '"' => Ok(Self::json_parse_string(chars, pos).map(Value::str)),
+            't' if chars[*pos..].starts_with(&['t', 'r', 'u', 'e']) => {
+                *pos += 4;
+                Ok(Some(Value::Bool(true)))
+            }
+            'f' if chars[*pos..].starts_with(&['f', 'a', 'l', 's', 'e']) => {
+                *pos += 5;
+                Ok(Some(Value::Bool(false)))
+            }
+            'n' if chars[*pos..].starts_with(&['n', 'u', 'l', 'l']) => {
+                *pos += 4;
+                Ok(Some(Value::Null))
+            }
+            '-' | '0'..='9' => Ok(Self::json_parse_number(chars, pos)),
+            _ => Ok(None),
+        }
+    }
+
+    fn json_parse_object(
+        &mut self,
+        chars: &[char],
+        pos: &mut usize,
+        depth: usize,
+    ) -> Result<Option<Value>, InterpreterError> {
+        *pos += 1;
+        let object_id = self.alloc_object_with_prototype(None)?;
+        Self::json_skip_ws(chars, pos);
+        if chars.get(*pos) == Some(&'}') {
+            *pos += 1;
+            return Ok(Some(Value::Object(object_id)));
+        }
+        loop {
+            Self::json_skip_ws(chars, pos);
+            let Some(key) = Self::json_parse_string(chars, pos) else {
+                return Ok(None);
+            };
+            Self::json_skip_ws(chars, pos);
+            if chars.get(*pos) != Some(&':') {
+                return Ok(None);
+            }
+            *pos += 1;
+            let Some(value) = self.json_parse_value(chars, pos, depth + 1)? else {
+                return Ok(None);
+            };
+            self.set_plain_data_property(object_id, key.to_string(), value)?;
+            Self::json_skip_ws(chars, pos);
+            match chars.get(*pos) {
+                Some(&',') => *pos += 1,
+                Some(&'}') => {
+                    *pos += 1;
+                    return Ok(Some(Value::Object(object_id)));
+                }
+                _ => return Ok(None),
+            }
+        }
+    }
+
+    fn json_parse_array(
+        &mut self,
+        chars: &[char],
+        pos: &mut usize,
+        depth: usize,
+    ) -> Result<Option<Value>, InterpreterError> {
+        *pos += 1;
+        let array_id = self.alloc_array_with_prototype(None)?;
+        Self::json_skip_ws(chars, pos);
+        if chars.get(*pos) == Some(&']') {
+            *pos += 1;
+            self.set_plain_data_property(array_id, "length".to_string(), Value::Int(0))?;
+            return Ok(Some(Value::Object(array_id)));
+        }
+        let mut length = 0u32;
+        loop {
+            let Some(value) = self.json_parse_value(chars, pos, depth + 1)? else {
+                return Ok(None);
+            };
+            self.set_plain_data_property(array_id, length.to_string(), value)?;
+            length = length.saturating_add(1);
+            Self::json_skip_ws(chars, pos);
+            match chars.get(*pos) {
+                Some(&',') => *pos += 1,
+                Some(&']') => {
+                    *pos += 1;
+                    self.set_plain_data_property(
+                        array_id,
+                        "length".to_string(),
+                        Value::Int(i64::from(length)),
+                    )?;
+                    return Ok(Some(Value::Object(array_id)));
+                }
+                _ => return Ok(None),
+            }
+        }
+    }
+
+    fn rollback_json_parse(&mut self, heap_len: usize, estimated_memory_bytes: u64) {
+        self.heap.truncate(heap_len);
+        self.estimated_memory_bytes = estimated_memory_bytes;
     }
 
     /// Get the number of objects on the heap.
@@ -12688,6 +12995,36 @@ mod tests {
             core.read_array_like_values(values_id),
             vec![Value::Int(1), Value::Int(2)]
         );
+    }
+
+    #[test]
+    fn builtin_json_parse_rolls_back_late_invalid_allocations() {
+        let mut core = quickjs_test_core();
+        core.registers[4] = Value::str(r#"{"a":[1,2]} trailing"#);
+        let heap_before = core.heap_size();
+        let memory_before = core.estimated_memory_bytes();
+
+        let result = core
+            .dispatch_builtin_hostcall("builtin:JsonParse", RegRange { start: 4, count: 1 })
+            .unwrap();
+
+        assert_eq!(result, Value::Undefined);
+        assert_eq!(core.heap_size(), heap_before);
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+    }
+
+    #[test]
+    fn builtin_math_abs_promotes_i64_minimum_magnitude_to_float() {
+        let mut core = quickjs_test_core();
+        core.registers[4] = Value::Int(i64::MIN);
+
+        let result = core
+            .dispatch_builtin_hostcall("builtin:MathAbs", RegRange { start: 4, count: 1 })
+            .unwrap();
+        let Value::Float(result) = result else {
+            panic!("Math.abs(i64::MIN) must promote the positive magnitude to Float");
+        };
+        assert_eq!(result.inner(), -(i64::MIN as f64));
     }
 
     #[test]

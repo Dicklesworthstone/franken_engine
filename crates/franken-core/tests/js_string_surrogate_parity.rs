@@ -15,9 +15,9 @@ use frankenengine_core::baseline_interpreter::{
     ExecutionResult, InterpreterConfig, InterpreterError, QuickJsLane, Value,
 };
 use frankenengine_core::capability::RuntimeCapability;
-use frankenengine_core::ir_contract::Ir0Module;
+use frankenengine_core::ir_contract::{Ir0Module, Ir1Op, Ir3Instruction};
 use frankenengine_core::js_string::JsString;
-use frankenengine_core::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+use frankenengine_core::lowering_pipeline::{LoweringContext, lower_ir0_to_ir1, lower_ir0_to_ir3};
 use frankenengine_core::parser::{CanonicalEs2020Parser, Es2020Parser};
 
 use std::collections::BTreeSet;
@@ -43,7 +43,7 @@ fn run(source: &str) -> ExecutionResult {
     ]);
     QuickJsLane::with_config(config)
         .execute(&module, "bd-2vzgi-trace")
-        .expect("execution should succeed")
+        .unwrap_or_else(|error| panic!("execution should succeed for {source:?}: {error:?}"))
 }
 
 /// Completion value of a script whose final statement is an expression.
@@ -313,6 +313,415 @@ fn json_stringify_is_reachable_from_source_and_escapes_lone_surrogates() {
     };
     assert_eq!(s.as_str(), Some("\"\\ud800\""));
     assert_eq!(completion("JSON.stringify(\"hi\");"), Value::str("\"hi\""));
+}
+
+// --- bd-zql4d: core unbound-global static builtin reachability ----------------
+
+#[test]
+fn executable_static_builtin_families_are_reachable_from_source() {
+    assert_eq!(completion("Math.abs(-7);"), Value::Int(7));
+    assert_eq!(
+        completion("Object.keys({b: 2, a: 1}).length;"),
+        Value::Int(2)
+    );
+    assert_eq!(completion("Object.values({a: 11})[0];"), Value::Int(11));
+    assert_eq!(completion("Array.isArray([1, 2]);"), Value::Bool(true));
+    assert_eq!(completion("Array.isArray({0: 1});"), Value::Bool(false));
+}
+
+#[test]
+fn static_builtin_interception_supports_literal_computed_names_and_shadowing() {
+    assert_eq!(completion("Math[\"abs\"](-9);"), Value::Int(9));
+    assert_eq!(
+        completion("let Math = {abs: function (x) { return x + 40; }}; Math.abs(2);"),
+        Value::Int(42)
+    );
+    assert_eq!(
+        completion("let JSON = {parse: function (x) { return x; }}; JSON.parse(17);"),
+        Value::Int(17)
+    );
+    assert_eq!(completion("Math; Math.abs(-7);"), Value::Int(7));
+    assert_eq!(
+        completion("(function () { Math; return Math.abs(-8); })();"),
+        Value::Int(8)
+    );
+    assert_eq!(
+        completion(
+            "let Math = {abs: function (x) { return x + 40; }}; \
+             (function () { return Math.abs(2); })();"
+        ),
+        Value::Int(42)
+    );
+
+    let err = completion_err(
+        "(function () { return Math.abs(-7); let Math = {abs: function () { return 99; }}; })();",
+    );
+    assert!(
+        matches!(err, InterpreterError::TypeError { .. }),
+        "a later lexical Math declaration must shadow the synthetic global, got {err:?}"
+    );
+
+    let err = completion_err("(function () { { return Math.abs(-7); let Math; } })();");
+    assert!(
+        matches!(err, InterpreterError::TypeError { .. }),
+        "a block lexical Math declaration must shadow the synthetic global before initialization, got {err:?}"
+    );
+    assert_eq!(
+        completion("{ let Math = {abs: function () { return 99; }}; }; Math.abs(-7);"),
+        Value::Int(7),
+        "a block lexical binding must not shadow the global after its block"
+    );
+
+    let assert_math_abs_not_intercepted = |source: &str| {
+        fn contains_math_abs(ops: &[Ir1Op]) -> bool {
+            ops.iter().any(|op| match op {
+                Ir1Op::HostCall { capability, .. } => capability == "builtin:MathAbs",
+                Ir1Op::DeclareFunction { body_ops, .. }
+                | Ir1Op::CreateFunction { body_ops, .. } => contains_math_abs(body_ops),
+                _ => false,
+            })
+        }
+
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect("shadowing source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_zql4d_container_shadow");
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("shadowing source should lower")
+            .module;
+        assert!(
+            !contains_math_abs(&ir1.ops),
+            "container-local Math must suppress static interception for {source}"
+        );
+    };
+
+    for source in [
+        "(function () { try { return Math.abs(-7); let Math; } finally {} })();",
+        "(function () { try { throw 1; } catch (e) { return Math.abs(-7); let Math; } })();",
+        "(function () { try {} finally { return Math.abs(-7); let Math; } })();",
+        "(function () { switch (0) { case 0: return Math.abs(-7); case 1: let Math; } })();",
+    ] {
+        assert_math_abs_not_intercepted(source);
+    }
+
+    assert_math_abs_not_intercepted(
+        "(function () { try { throw {abs: function (x) { return x + 40; }}; } \
+         catch (Math) { return Math.abs(2); } })();",
+    );
+    assert_math_abs_not_intercepted("for (let Math of [Math.abs(-1)]) {}");
+    assert_math_abs_not_intercepted("(function Math() { return Math.abs(-2); })();");
+    assert_math_abs_not_intercepted(
+        "(function ({Math}) { return Math.abs(2); })({Math: {abs: function (x) { return x + 40; }}});",
+    );
+    let err = completion_err("(function Math() { return Math.abs(-2); })();");
+    assert!(
+        matches!(err, InterpreterError::TypeError { .. }),
+        "a named function expression must shadow the synthetic Math global, got {err:?}"
+    );
+    assert_eq!(
+        completion(
+            "(function Math() { \
+               let Math = {abs: function (x) { return x + 40; }}; \
+               return Math.abs(2); \
+             })();"
+        ),
+        Value::Int(42),
+        "a function-body lexical declaration must shadow its named-expression self binding"
+    );
+    assert_eq!(
+        completion(
+            "(function () { while (true) { try { break; } finally { let Math; } } return 7; })();"
+        ),
+        Value::Int(7),
+        "duplicated finalizer control-flow paths need independent lexical bindings"
+    );
+    assert_eq!(
+        completion("for (let Math = 0; Math < 1; Math = Math + 1) {} Math.abs(-2);"),
+        Value::Int(2),
+        "a C-style loop lexical binding must not leak after the loop"
+    );
+    assert_eq!(
+        completion(
+            "let Math = {abs: function (x) { return x + 40; }}; \
+             for (let Math of [1]) {} Math.abs(2);"
+        ),
+        Value::Int(42),
+        "for-of must restore an outer same-name lexical binding"
+    );
+    let err = completion_err("let x = [1]; for (let x of x) {}");
+    assert!(
+        matches!(err, InterpreterError::TypeError { .. }),
+        "the lexical for-of head must shadow its RHS during the TDZ, got {err:?}"
+    );
+    let err = completion_err("let obj = {a: 1}; for (let obj in obj) {}");
+    assert!(
+        matches!(err, InterpreterError::TypeError { .. }),
+        "the lexical for-in head must shadow its RHS during the TDZ, got {err:?}"
+    );
+    assert_eq!(
+        completion("let x = 0; for (x of [1]) {} x;"),
+        Value::Int(1),
+        "a bare for-of target must assign the existing binding"
+    );
+    assert_eq!(
+        completion("let k = ''; for (k in {a: 1}) {} k;"),
+        Value::str("a"),
+        "a bare for-in target must assign the existing binding"
+    );
+
+    let err = completion_err("(function () { return Math.abs(-7); if (false) { var Math; } })();");
+    assert!(
+        matches!(err, InterpreterError::TypeError { .. }),
+        "a nested hoisted var must shadow Math across the function, got {err:?}"
+    );
+
+    assert_eq!(
+        completion(
+            "let Math = {abs: function (x) { return x + 40; }}; \
+             class C { m() { return Math.abs(2); } } \
+             (new C()).m();"
+        ),
+        Value::Int(42)
+    );
+    assert_eq!(
+        completion(
+            "let Math = {abs: function () { return 1; }}; let f; \
+             { let Math = {abs: function () { return 2; }}; \
+               f = function () { return Math.abs(0); }; }; f();"
+        ),
+        Value::Int(2),
+        "a closure must capture the exact active same-name block binding"
+    );
+    assert_eq!(
+        completion(
+            "(function () { let Math = {abs: function () { return 1; }}; let f; \
+               { let Math = {abs: function () { return 2; }}; \
+                 f = function () { return Math.abs(0); }; }; \
+               let g = function () { return Math.abs(0); }; \
+               return f() * 10 + g(); })();"
+        ),
+        Value::Int(21),
+        "nested closures created on opposite sides of a block boundary must capture distinct bindings"
+    );
+}
+
+#[test]
+fn block_lexical_shadow_is_removed_before_later_static_builtin_lowering() {
+    let source = "{ let Math = {abs: function () { return 99; }}; }; Math.abs(-7);";
+    let tree = CanonicalEs2020Parser
+        .parse(source, ParseGoal::Script)
+        .expect("source should parse");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "bd_zql4d_block_scope");
+    let ir1 = lower_ir0_to_ir1(&ir0)
+        .expect("source should lower to IR1")
+        .module;
+    assert!(
+        ir1.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::HostCall { capability, .. } if capability == "builtin:MathAbs"
+        )),
+        "IR1 ops and scopes: {ir1:#?}"
+    );
+}
+
+#[test]
+fn nested_class_capture_metadata_names_the_exact_enclosing_local() {
+    let source = "(function () { let x = 1; \
+           let Math = {abs: function (n) { return n + 40; }}; \
+           class C { m() { return Math.abs(2); } } \
+           return (new C()).m(); })();";
+    let tree = CanonicalEs2020Parser
+        .parse(source, ParseGoal::Script)
+        .expect("source should parse");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "bd_zql4d_nested_class_capture");
+    let ir1 = lower_ir0_to_ir1(&ir0)
+        .expect("source should lower to IR1")
+        .module;
+    let outer_body = ir1
+        .ops
+        .iter()
+        .find_map(|op| match op {
+            Ir1Op::CreateFunction { body_ops, .. } => Some(body_ops),
+            _ => None,
+        })
+        .expect("outer function body");
+    let (names, outer_ids) = outer_body
+        .iter()
+        .find_map(|op| match op {
+            Ir1Op::CreateFunction {
+                name: Some(name),
+                free_vars,
+                free_var_outer_ids,
+                ..
+            } if name == "m" => Some((free_vars, free_var_outer_ids)),
+            _ => None,
+        })
+        .expect("class method closure metadata");
+
+    assert_eq!(names, &["Math"]);
+    assert_eq!(outer_ids, &[1]);
+    assert_ne!(
+        outer_ids,
+        &[0],
+        "the earlier non-captured x binding is id 0"
+    );
+}
+
+#[test]
+fn nested_static_builtin_authority_is_consistent_across_ir2_proof_and_ir3() {
+    let source = "(function () { return (function () { return Math.abs(-4); })(); })();";
+    let lower = || {
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect("source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_zql4d_nested_authority");
+        let context = LoweringContext::new(
+            "bd-zql4d-nested-trace",
+            "bd-zql4d-nested-decision",
+            "bd-zql4d-nested-policy",
+        );
+        lower_ir0_to_ir3(&ir0, &context).expect("source should lower")
+    };
+    let first = lower();
+    let second = lower();
+    let capability = "builtin:MathAbs";
+
+    assert!(
+        first
+            .ir2
+            .required_capabilities
+            .iter()
+            .any(|candidate| candidate.0 == capability),
+        "function-only capability must be represented in IR2"
+    );
+    assert!(
+        first
+            .ir3
+            .required_capabilities
+            .iter()
+            .any(|candidate| candidate.0 == capability),
+        "function-only capability must survive into IR3"
+    );
+    assert!(first.ir3.instructions.iter().any(|instruction| matches!(
+        instruction,
+        Ir3Instruction::HostCall { capability: candidate, .. } if candidate.0 == capability
+    )));
+    let proof_entry = first
+        .ir2_flow_proof_artifact
+        .proved_flows
+        .iter()
+        .find(|entry| entry.capability.as_deref() == Some(capability))
+        .expect("function-only capability must have an IR2 flow proof entry");
+    assert!(
+        proof_entry.op_index < first.ir2.ops.len() as u64,
+        "nested proof sites must retain the top-level authority index namespace"
+    );
+    assert_eq!(
+        first.ir2_flow_proof_artifact, second.ir2_flow_proof_artifact,
+        "nested proof-site analysis must be deterministic"
+    );
+}
+
+#[test]
+fn repeated_nested_flows_have_distinct_deterministic_body_paths() {
+    let source = "(function () { Math.abs(-1); return Math.abs(-2); })();";
+    let lower = || {
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect("source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_zql4d_nested_flow_sites");
+        let context = LoweringContext::new(
+            "bd-zql4d-site-trace",
+            "bd-zql4d-site-decision",
+            "bd-zql4d-site-policy",
+        );
+        lower_ir0_to_ir3(&ir0, &context).expect("source should lower")
+    };
+    let first = lower();
+    let second = lower();
+    let entries = first
+        .ir2_flow_proof_artifact
+        .proved_flows
+        .iter()
+        .filter(|entry| entry.capability.as_deref() == Some("builtin:MathAbs"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].op_index, entries[1].op_index);
+    assert!(!entries[0].body_path.is_empty());
+    assert!(!entries[1].body_path.is_empty());
+    assert_ne!(entries[0].body_path, entries[1].body_path);
+    assert_eq!(
+        first.ir2_flow_proof_artifact, second.ir2_flow_proof_artifact,
+        "nested body paths and artifact hashes must be deterministic"
+    );
+}
+
+#[test]
+fn json_parse_builds_nested_core_heap_values() {
+    assert_eq!(
+        completion(r#"JSON.parse('{"a":[1,true,null]}').a[0];"#),
+        Value::Int(1)
+    );
+    assert_eq!(
+        completion(r#"JSON.parse('{"a":[1,true,null]}').a.length;"#),
+        Value::Int(3)
+    );
+    assert_eq!(
+        completion(r#"JSON.parse('{"a":[1,true,null]}').a[1];"#),
+        Value::Bool(true)
+    );
+    assert_eq!(completion("JSON.parse(\"42\");"), Value::Int(42));
+    assert_eq!(completion("JSON.parse(\"42 trailing\");"), Value::Undefined);
+    for invalid in ["01", "-01", "1.", "1e", "1e+"] {
+        assert_eq!(
+            completion(&format!("JSON.parse('{invalid}');")),
+            Value::Undefined,
+            "invalid JSON number {invalid:?} must be rejected"
+        );
+    }
+    let negative_zero = completion("JSON.parse('-0');");
+    let Value::Float(negative_zero) = negative_zero else {
+        panic!("JSON.parse('-0') must retain a floating negative zero");
+    };
+    assert!(negative_zero.is_negative_zero());
+}
+
+#[test]
+fn json_parse_treats_internal_accessor_prefixes_as_literal_data_keys() {
+    let key = "__franken_ir_accessor_get__:x";
+    assert_eq!(
+        completion(
+            r#"let o = JSON.parse('{"__franken_ir_accessor_get__:x":1}');
+               Object.keys(o)[0];"#
+        ),
+        Value::str(key)
+    );
+    assert_eq!(
+        completion(
+            r#"let o = JSON.parse('{"__franken_ir_accessor_get__:x":1}');
+               o["__franken_ir_accessor_get__:x"];"#
+        ),
+        Value::Int(1)
+    );
+    assert_eq!(
+        completion(r#"let o = JSON.parse('{"__franken_ir_accessor_get__:x":1}'); o.x;"#),
+        Value::Undefined
+    );
+}
+
+#[test]
+fn json_parse_preserves_lone_surrogate_escape_units() {
+    let parsed = completion("JSON.parse(JSON.stringify(String.fromCharCode(55296)));");
+    assert_eq!(parsed, lone(&[0xD800]));
+    assert_eq!(
+        completion("JSON.parse(JSON.stringify(String.fromCharCode(55296))).charCodeAt(0);"),
+        Value::Int(0xD800)
+    );
+    assert_eq!(
+        completion(r#"JSON.parse('"' + '\uD83D' + '\uDE00' + '"');"#),
+        Value::str("\u{1F600}")
+    );
 }
 
 #[test]

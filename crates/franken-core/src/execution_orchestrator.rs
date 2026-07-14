@@ -2133,6 +2133,7 @@ mod tests {
         artifact.required_declassifications.push(
             crate::lowering_pipeline::RequiredDeclassificationArtifactEntry {
                 op_index: 7,
+                body_path: Vec::new(),
                 source_label: crate::ifc_artifacts::Label::Secret,
                 sink_clearance: crate::ifc_artifacts::Label::Public,
                 capability: Some("declassify.audit".to_string()),
@@ -2225,6 +2226,7 @@ mod tests {
         artifact.runtime_checkpoints.push(
             crate::lowering_pipeline::RuntimeCheckpointArtifactEntry {
                 op_index: 4,
+                body_path: Vec::new(),
                 source_label: crate::ifc_artifacts::Label::Secret,
                 sink_clearance: crate::ifc_artifacts::Label::Internal,
                 capability: Some("hostcall.invoke".to_string()),
@@ -2342,6 +2344,7 @@ mod tests {
         artifact.runtime_checkpoints.push(
             crate::lowering_pipeline::RuntimeCheckpointArtifactEntry {
                 op_index: 9,
+                body_path: Vec::new(),
                 source_label: crate::ifc_artifacts::Label::Secret,
                 sink_clearance: crate::ifc_artifacts::Label::Internal,
                 capability: Some("hostcall.invoke".to_string()),

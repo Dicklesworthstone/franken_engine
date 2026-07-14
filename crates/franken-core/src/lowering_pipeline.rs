@@ -3377,27 +3377,53 @@ fn lower_statement_to_ir1_with_flow(
             ops.push(Ir1Op::Throw);
         }
         Statement::TryCatch(tc) => {
+            let has_handler = tc.handler.is_some();
+            let has_finalizer = tc.finalizer.is_some();
             let end_label = alloc_label(label_counter);
-            let finally_label = if tc.finalizer.is_some() {
+            let finally_label = if has_finalizer {
                 Some(alloc_label(label_counter))
             } else {
                 None
             };
-            let break_via_finally_label = if tc.finalizer.is_some() {
+            // Abrupt exits from a try body must pop its handler frame even
+            // when there is no finalizer. Otherwise a later throw/return can
+            // re-enter the stale handler after control has left the try.
+            let try_needs_abrupt_forwarders = has_handler || has_finalizer;
+            let try_break_forwarder = if try_needs_abrupt_forwarders {
                 control_flow.break_label.map(|_| alloc_label(label_counter))
             } else {
                 None
             };
-            let continue_via_finally_label = if tc.finalizer.is_some() {
+            let try_continue_forwarder = if try_needs_abrupt_forwarders {
                 control_flow
                     .continue_label
                     .map(|_| alloc_label(label_counter))
             } else {
                 None
             };
-            let inner_control_flow = ControlFlowTargets {
-                break_label: break_via_finally_label.or(control_flow.break_label),
-                continue_label: continue_via_finally_label.or(control_flow.continue_label),
+            let try_control_flow = ControlFlowTargets {
+                break_label: try_break_forwarder.or(control_flow.break_label),
+                continue_label: try_continue_forwarder.or(control_flow.continue_label),
+            };
+            // A catch body has no live frame unless it is guarded by the
+            // nested try/finally used to route rethrows through `finally`.
+            // Give that guard its own forwarders so each exit pops exactly
+            // the frame that is active on its path.
+            let catch_break_forwarder = if has_handler && has_finalizer {
+                control_flow.break_label.map(|_| alloc_label(label_counter))
+            } else {
+                None
+            };
+            let catch_continue_forwarder = if has_handler && has_finalizer {
+                control_flow
+                    .continue_label
+                    .map(|_| alloc_label(label_counter))
+            } else {
+                None
+            };
+            let catch_control_flow = ControlFlowTargets {
+                break_label: catch_break_forwarder.or(control_flow.break_label),
+                continue_label: catch_continue_forwarder.or(control_flow.continue_label),
             };
             // When there is a catch handler, allocate a distinct catch label.
             // When there is only a finally (no catch), route exceptions
@@ -3423,11 +3449,69 @@ fn lower_statement_to_ir1_with_flow(
                     binding_index,
                     scope_id,
                     label_counter,
-                    inner_control_flow,
+                    try_control_flow,
                 )
             });
             restore_block_lexical_bindings(binding_lookup, try_enclosing_bindings);
             try_result?;
+            let has_try_abrupt_forwarders =
+                try_break_forwarder.is_some() || try_continue_forwarder.is_some();
+            let normal_try_complete_label =
+                has_try_abrupt_forwarders.then(|| alloc_label(label_counter));
+            if let Some(normal_try_complete_label) = normal_try_complete_label {
+                ops.push(Ir1Op::Jump {
+                    label_id: normal_try_complete_label,
+                });
+                if let (Some(via_break_label), Some(actual_break_label)) =
+                    (try_break_forwarder, control_flow.break_label)
+                {
+                    ops.push(Ir1Op::Label {
+                        id: via_break_label,
+                    });
+                    ops.push(Ir1Op::EndTry);
+                    if let Some(finalizer) = &tc.finalizer {
+                        lower_lexical_statement_sequence(
+                            &finalizer.body,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            label_counter,
+                            control_flow,
+                        )?;
+                    }
+                    ops.push(Ir1Op::Jump {
+                        label_id: actual_break_label,
+                    });
+                }
+                if let (Some(via_continue_label), Some(actual_continue_label)) =
+                    (try_continue_forwarder, control_flow.continue_label)
+                {
+                    ops.push(Ir1Op::Label {
+                        id: via_continue_label,
+                    });
+                    ops.push(Ir1Op::EndTry);
+                    if let Some(finalizer) = &tc.finalizer {
+                        lower_lexical_statement_sequence(
+                            &finalizer.body,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            label_counter,
+                            control_flow,
+                        )?;
+                    }
+                    ops.push(Ir1Op::Jump {
+                        label_id: actual_continue_label,
+                    });
+                }
+                ops.push(Ir1Op::Label {
+                    id: normal_try_complete_label,
+                });
+            }
             ops.push(Ir1Op::EndTry);
             // Normal completion: jump past catch to finally (or end).
             let after_try_target = finally_label.unwrap_or(end_label);
@@ -3485,7 +3569,7 @@ fn lower_statement_to_ir1_with_flow(
                                 binding_index,
                                 scope_id,
                                 label_counter,
-                                inner_control_flow,
+                                catch_control_flow,
                             )?;
                         }
                         Ok(())
@@ -3494,6 +3578,64 @@ fn lower_statement_to_ir1_with_flow(
                     catch_result?;
                 }
                 if catch_requires_finally_guard {
+                    let has_catch_abrupt_forwarders =
+                        catch_break_forwarder.is_some() || catch_continue_forwarder.is_some();
+                    let normal_catch_complete_label =
+                        has_catch_abrupt_forwarders.then(|| alloc_label(label_counter));
+                    if let Some(normal_catch_complete_label) = normal_catch_complete_label {
+                        ops.push(Ir1Op::Jump {
+                            label_id: normal_catch_complete_label,
+                        });
+                        if let (Some(via_break_label), Some(actual_break_label)) =
+                            (catch_break_forwarder, control_flow.break_label)
+                        {
+                            ops.push(Ir1Op::Label {
+                                id: via_break_label,
+                            });
+                            ops.push(Ir1Op::EndTry);
+                            if let Some(finalizer) = &tc.finalizer {
+                                lower_lexical_statement_sequence(
+                                    &finalizer.body,
+                                    ops,
+                                    bindings,
+                                    binding_lookup,
+                                    binding_index,
+                                    scope_id,
+                                    label_counter,
+                                    control_flow,
+                                )?;
+                            }
+                            ops.push(Ir1Op::Jump {
+                                label_id: actual_break_label,
+                            });
+                        }
+                        if let (Some(via_continue_label), Some(actual_continue_label)) =
+                            (catch_continue_forwarder, control_flow.continue_label)
+                        {
+                            ops.push(Ir1Op::Label {
+                                id: via_continue_label,
+                            });
+                            ops.push(Ir1Op::EndTry);
+                            if let Some(finalizer) = &tc.finalizer {
+                                lower_lexical_statement_sequence(
+                                    &finalizer.body,
+                                    ops,
+                                    bindings,
+                                    binding_lookup,
+                                    binding_index,
+                                    scope_id,
+                                    label_counter,
+                                    control_flow,
+                                )?;
+                            }
+                            ops.push(Ir1Op::Jump {
+                                label_id: actual_continue_label,
+                            });
+                        }
+                        ops.push(Ir1Op::Label {
+                            id: normal_catch_complete_label,
+                        });
+                    }
                     ops.push(Ir1Op::EndTry);
                     // After catch: enter the same finally block used by the
                     // surrounding try. The nested guard ensures abrupt exits
@@ -3503,15 +3645,23 @@ fn lower_statement_to_ir1_with_flow(
                     });
                 }
             }
-            // The IR duplicates the finalizer body for normal, break, and
-            // continue completion. Each mutually exclusive copy needs a fresh
-            // lexical binding map, just as each runtime scope instantiation
-            // would; reusing one ID would look like a duplicate declaration
-            // when the source body is lowered again.
+            // The forwarder copies above run after EndTry and therefore have
+            // no in-flight completion. The canonical finalizer below is
+            // different: break/continue issued after EnterFinally must discard
+            // the completion that caused entry before leaving the block.
             if let Some(finalizer) = &tc.finalizer {
                 let fl = finally_label.ok_or(LoweringPipelineError::InvariantViolation {
                     detail: "Finalizer missing lowering label",
                 })?;
+                let finalizer_break_forwarder =
+                    control_flow.break_label.map(|_| alloc_label(label_counter));
+                let finalizer_continue_forwarder = control_flow
+                    .continue_label
+                    .map(|_| alloc_label(label_counter));
+                let finalizer_control_flow = ControlFlowTargets {
+                    break_label: finalizer_break_forwarder.or(control_flow.break_label),
+                    continue_label: finalizer_continue_forwarder.or(control_flow.continue_label),
+                };
                 ops.push(Ir1Op::Label { id: fl });
                 ops.push(Ir1Op::EnterFinally);
                 lower_lexical_statement_sequence(
@@ -3522,53 +3672,46 @@ fn lower_statement_to_ir1_with_flow(
                     binding_index,
                     scope_id,
                     label_counter,
-                    control_flow,
+                    finalizer_control_flow,
                 )?;
+                let has_finalizer_abrupt_forwarders =
+                    finalizer_break_forwarder.is_some() || finalizer_continue_forwarder.is_some();
+                let normal_finally_complete_label =
+                    has_finalizer_abrupt_forwarders.then(|| alloc_label(label_counter));
+                if let Some(normal_finally_complete_label) = normal_finally_complete_label {
+                    ops.push(Ir1Op::Jump {
+                        label_id: normal_finally_complete_label,
+                    });
+                    if let (Some(via_break_label), Some(actual_break_label)) =
+                        (finalizer_break_forwarder, control_flow.break_label)
+                    {
+                        ops.push(Ir1Op::Label {
+                            id: via_break_label,
+                        });
+                        ops.push(Ir1Op::DiscardAbruptCompletion);
+                        ops.push(Ir1Op::Jump {
+                            label_id: actual_break_label,
+                        });
+                    }
+                    if let (Some(via_continue_label), Some(actual_continue_label)) =
+                        (finalizer_continue_forwarder, control_flow.continue_label)
+                    {
+                        ops.push(Ir1Op::Label {
+                            id: via_continue_label,
+                        });
+                        ops.push(Ir1Op::DiscardAbruptCompletion);
+                        ops.push(Ir1Op::Jump {
+                            label_id: actual_continue_label,
+                        });
+                    }
+                    ops.push(Ir1Op::Label {
+                        id: normal_finally_complete_label,
+                    });
+                }
                 ops.push(Ir1Op::EndFinally);
                 ops.push(Ir1Op::Jump {
                     label_id: end_label,
                 });
-
-                if let (Some(via_break_label), Some(actual_break_label)) =
-                    (break_via_finally_label, control_flow.break_label)
-                {
-                    ops.push(Ir1Op::Label {
-                        id: via_break_label,
-                    });
-                    lower_lexical_statement_sequence(
-                        &finalizer.body,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        scope_id,
-                        label_counter,
-                        control_flow,
-                    )?;
-                    ops.push(Ir1Op::Jump {
-                        label_id: actual_break_label,
-                    });
-                }
-                if let (Some(via_continue_label), Some(actual_continue_label)) =
-                    (continue_via_finally_label, control_flow.continue_label)
-                {
-                    ops.push(Ir1Op::Label {
-                        id: via_continue_label,
-                    });
-                    lower_lexical_statement_sequence(
-                        &finalizer.body,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        scope_id,
-                        label_counter,
-                        control_flow,
-                    )?;
-                    ops.push(Ir1Op::Jump {
-                        label_id: actual_continue_label,
-                    });
-                }
             }
             ops.push(Ir1Op::Label { id: end_label });
         }
@@ -4910,6 +5053,10 @@ pub fn lower_ir2_to_ir3(
             }
             Ir1Op::EndFinally => {
                 ir3.instructions.push(Ir3Instruction::EndFinally);
+            }
+            Ir1Op::DiscardAbruptCompletion => {
+                ir3.instructions
+                    .push(Ir3Instruction::DiscardAbruptCompletion);
             }
             Ir1Op::BinaryOp { operator } => {
                 let rhs = value_stack.pop().unwrap_or(0);
@@ -6468,6 +6615,10 @@ pub fn lower_ir2_to_ir3(
                 }
                 Ir1Op::EndFinally => {
                     ir3.instructions.push(Ir3Instruction::EndFinally);
+                }
+                Ir1Op::DiscardAbruptCompletion => {
+                    ir3.instructions
+                        .push(Ir3Instruction::DiscardAbruptCompletion);
                 }
                 // Nested function definitions inside function bodies.
                 Ir1Op::DeclareFunction {
@@ -9578,7 +9729,8 @@ fn classify_ir1_op(
         | Ir1Op::BeginTry { .. }
         | Ir1Op::EndTry
         | Ir1Op::EnterFinally
-        | Ir1Op::EndFinally => (
+        | Ir1Op::EndFinally
+        | Ir1Op::DiscardAbruptCompletion => (
             EffectBoundary::ReadEffect,
             None,
             Some(FlowAnnotation {
@@ -14212,6 +14364,158 @@ mod tests {
             1
         );
         assert_eq!(execute_exception_module_bd_47p8z(&module), Value::Int(2));
+    }
+
+    fn execute_exception_source_bd_kfxwe(source: &str) -> Value {
+        let module = lower_exception_source_to_ir3_bd_47p8z(source);
+        execute_exception_module_bd_47p8z(&module)
+    }
+
+    #[test]
+    fn break_through_finally_pops_handler_before_later_throw_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "let hits=0; try { while(true) { try { break; } finally { hits=hits+1; } } throw 0; } catch(e) {} hits;",
+            ),
+            Value::Int(1)
+        );
+    }
+
+    #[test]
+    fn continue_through_finally_does_not_accumulate_handlers_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "let hits=0; let i=0; try { while(i<2) { i=i+1; try { continue; } finally { hits=hits+1; } } throw 0; } catch(e) {} hits;",
+            ),
+            Value::Int(2)
+        );
+    }
+
+    #[test]
+    fn break_through_try_catch_without_finally_pops_handler_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "let caught=0; try { while(true) { try { break; } catch(e) { caught=99; } } throw 1; } catch(e) { caught=caught+1; } caught;",
+            ),
+            Value::Int(1)
+        );
+    }
+
+    #[test]
+    fn break_from_catch_pops_finally_guard_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "let hits=0; try { while(true) { try { throw 1; } catch(e) { break; } finally { hits=hits+1; } } throw 2; } catch(e) { hits=hits+10; } hits;",
+            ),
+            Value::Int(11)
+        );
+    }
+
+    #[test]
+    fn return_from_break_forwarder_does_not_replay_finalizer_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "let hits=0; function f(){ while(true) { try { break; } finally { hits=hits+1; return 7; } } return 0; } let value=f(); hits*10+value;",
+            ),
+            Value::Int(17)
+        );
+    }
+
+    #[test]
+    fn throw_from_break_forwarder_does_not_replay_finalizer_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "let hits=0; try { while(true) { try { break; } finally { hits=hits+1; throw \"new\"; } } } catch(e) { hits=hits+10; } hits;",
+            ),
+            Value::Int(11)
+        );
+    }
+
+    #[test]
+    fn continue_inside_finally_discards_overridden_exception_bd_kfxwe() {
+        let module = lower_exception_source_to_ir3_bd_47p8z(
+            "let log=\"\"; let i=0; while(i<1) { i=i+1; try { throw \"old\"; } finally { log=log+\"f\"; continue; } } try { log=log+\"n\"; } finally { log=log+\"g\"; } log;",
+        );
+        assert!(
+            module
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::DiscardAbruptCompletion))
+        );
+        assert_eq!(
+            execute_exception_module_bd_47p8z(&module),
+            Value::str("fng")
+        );
+    }
+
+    #[test]
+    fn local_finally_break_restores_suspended_outer_throw_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "let log=\"\"; try { try { throw \"outer\"; } finally { while(true) { try { throw \"inner\"; } finally { break; } } log=log+\"after;\"; } } catch(e) { log=log+\"caught:\"+e; } log;",
+            ),
+            Value::str("after;caught:outer")
+        );
+    }
+
+    #[test]
+    fn local_finally_continue_restores_suspended_outer_return_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "function f(){ try { return \"outer\"; } finally { let i=0; while(i<1) { i=i+1; try { throw \"inner\"; } finally { continue; } } } } f();",
+            ),
+            Value::str("outer")
+        );
+    }
+
+    #[test]
+    fn normal_nested_finally_break_preserves_outer_throw_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "let log=\"\"; try { try { throw \"outer\"; } finally { while(true) { try {} finally { break; } } log=log+\"after;\"; } } catch(e) { log=log+\"caught:\"+e; } log;",
+            ),
+            Value::str("after;caught:outer")
+        );
+    }
+
+    #[test]
+    fn normal_nested_finally_break_preserves_outer_return_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "function f(){ try { return \"outer\"; } finally { while(true) { try {} finally { break; } } } } f();",
+            ),
+            Value::str("outer")
+        );
+    }
+
+    #[test]
+    fn escaping_throw_discards_inner_return_but_preserves_outer_return_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "function f(){ try { return \"outer\"; } finally { try { try { return \"inner\"; } finally { throw \"new\"; } } catch(e) {} } } f();",
+            ),
+            Value::str("outer")
+        );
+    }
+
+    #[test]
+    fn throw_caught_inside_same_finally_resumes_owned_return_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "function f(){ try { return \"outer\"; } finally { try { throw \"new\"; } catch(e) {} } } f();",
+            ),
+            Value::str("outer")
+        );
+    }
+
+    #[test]
+    fn throw_caught_inside_same_finally_resumes_owned_exception_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "let log=\"\"; try { try { throw \"outer\"; } finally { try { throw \"new\"; } catch(e) { log=e+\";\"; } log=log+\"after;\"; } } catch(e) { log=log+e; } log;",
+            ),
+            Value::str("new;after;outer")
+        );
     }
 
     // ================================================================

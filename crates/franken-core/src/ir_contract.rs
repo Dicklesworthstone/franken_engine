@@ -545,6 +545,9 @@ pub enum Ir1Op {
     EnterFinally,
     /// End a finally block.  Lowered to `Ir3Instruction::EndFinally`.
     EndFinally,
+    /// Discard the completion record owned by a finally block whose own
+    /// break/continue overrides that completion.
+    DiscardAbruptCompletion,
     /// Pop/discard top-of-stack value.
     Pop,
     /// Initialize a for..in enumeration: pop object from stack, push internal
@@ -1015,6 +1018,12 @@ impl Ir1Op {
                 map.insert(
                     "op".to_string(),
                     CanonicalValue::String("end_finally".to_string()),
+                );
+            }
+            Self::DiscardAbruptCompletion => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("discard_abrupt_completion".to_string()),
                 );
             }
             Self::Pop => {
@@ -1593,9 +1602,11 @@ pub enum Ir3Instruction {
     /// Mark entry into a finally block.  The runtime records whether
     /// execution arrived via normal completion or exception propagation.
     EnterFinally,
-    /// End a finally block.  If a pending exception exists, re-throw it;
-    /// otherwise continue to the next instruction.
+    /// End a finally block and propagate its owned completion record, if any.
     EndFinally,
+    /// Discard the owned completion record when a break/continue issued from
+    /// inside a finally body overrides it.
+    DiscardAbruptCompletion,
 
     // ── Closure / scope-chain instructions ────────────────────────────
     /// Create a closure from a function index and the current environment.
@@ -2086,6 +2097,12 @@ impl Ir3Instruction {
                 map.insert(
                     "op".to_string(),
                     CanonicalValue::String("end_finally".to_string()),
+                );
+            }
+            Self::DiscardAbruptCompletion => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("discard_abrupt_completion".to_string()),
                 );
             }
             Self::Mod { dst, lhs, rhs } => {
@@ -3591,6 +3608,7 @@ mod tests {
             },
             Ir1Op::Await,
             Ir1Op::ArraySlice,
+            Ir1Op::DiscardAbruptCompletion,
             Ir1Op::Nop,
         ];
         for op in &ops {
@@ -3837,6 +3855,7 @@ mod tests {
             Ir3Instruction::EnterCatch { dst: 0 },
             Ir3Instruction::EnterFinally,
             Ir3Instruction::EndFinally,
+            Ir3Instruction::DiscardAbruptCompletion,
         ];
         for instr in &instructions {
             let cv = instr.canonical_value();
@@ -4779,6 +4798,7 @@ mod tests {
                 binding_id: 0,
             },
             Ir1Op::Await,
+            Ir1Op::DiscardAbruptCompletion,
             Ir1Op::Nop,
             Ir1Op::ForInInit,
             Ir1Op::ForInNext { done_label: 10 },
@@ -5020,6 +5040,7 @@ mod tests {
             Ir3Instruction::EnterCatch { dst: 5 },
             Ir3Instruction::EnterFinally,
             Ir3Instruction::EndFinally,
+            Ir3Instruction::DiscardAbruptCompletion,
         ];
         for instr in &instrs {
             let json = serde_json::to_string(instr).unwrap();

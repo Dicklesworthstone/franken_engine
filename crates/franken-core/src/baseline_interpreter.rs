@@ -709,20 +709,39 @@ struct CatchFrame {
     /// Call stack depth when the try block was entered.  Used to validate
     /// that the catch frame is still in scope during unwinding.
     call_depth: usize,
+    /// Active finally-frame depth at `BeginTry`. Abrupt transfer to this
+    /// handler exits and discards every finally completion above this depth.
+    finally_frame_depth: usize,
 }
 
-/// Tracks how a finally block was entered so `EndFinally` knows whether to
-/// re-throw a pending exception or continue normally.
+/// Classifies the completion record captured when a finally block is entered.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 enum FinallyMode {
     /// Entered via normal control flow (try body completed, or catch body completed).
     Normal,
-    /// Entered because an exception was in flight.  The pending exception is
-    /// stored in `InterpreterCore::pending_exception`.
+    /// Entered because an exception was in flight. `EnterFinally` moves it
+    /// from interpreter pending state into the new `FinallyFrame`.
     Exception,
-    /// Entered because a return was in flight.  The pending value is stored
-    /// in `InterpreterCore::pending_return`.
+    /// Entered because a return was in flight. `EnterFinally` moves it into
+    /// the new `FinallyFrame`.
     Return,
+}
+
+/// One-shot ownership record for the exact `EnterFinally` instruction chosen
+/// by an unwind edge. This must survive instruction-boundary cancellation or
+/// budget exhaustion before the target instruction executes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingFinallyEntry {
+    target: usize,
+    mode: FinallyMode,
+}
+
+/// Completion record owned by one actively executing finally body. Keeping
+/// the completion in the frame prevents a nested abrupt completion from
+/// suspending and later resurrecting a completion that it overrides.
+#[derive(Debug, Clone)]
+struct FinallyFrame {
+    completion: Option<AbruptCompletion>,
 }
 
 /// A suspended abrupt completion that should resume if a newer one is later
@@ -944,7 +963,7 @@ struct CallFrame {
     saved_pending_return: Option<LabeledReturn>,
     /// Count of suspended abrupt completions before entering the callee.
     saved_suspended_abrupt_depth: usize,
-    /// Count of active finally modes before entering the callee.
+    /// Count of active finally completion frames before entering the callee.
     saved_finally_mode_depth: usize,
     /// Scope chain depth before entering the callee, restored on return.
     saved_scope_depth: usize,
@@ -1717,7 +1736,8 @@ struct ModuleExecutionSnapshot {
     pending_exception: Option<LabeledException>,
     pending_return: Option<LabeledReturn>,
     suspended_abrupt_completions: Vec<AbruptCompletion>,
-    finally_modes: Vec<FinallyMode>,
+    finally_frames: Vec<FinallyFrame>,
+    pending_finally_entry: Option<PendingFinallyEntry>,
     scope_chain: ScopeChain,
     pending_captures: Vec<u32>,
     current_module_specifier: Option<String>,
@@ -1809,20 +1829,24 @@ pub struct InterpreterCore {
     register_base: usize,
     /// Stack of active try/catch frames for exception unwinding.
     catch_frames: Vec<CatchFrame>,
-    /// A pending exception value during unwinding (set by `Throw`,
-    /// consumed by `EnterCatch` or re-thrown by `EndFinally`).
+    /// A pending exception value during an unwind edge, consumed by
+    /// `EnterCatch` or moved into an owned `FinallyFrame` by `EnterFinally`.
     pending_exception: Option<LabeledException>,
-    /// A pending return value during unwinding through finally blocks.
+    /// A pending return value before `EnterFinally` captures it or the return
+    /// completes.
     pending_return: Option<LabeledReturn>,
     /// Saved outer abrupt completion state that was temporarily suspended by a
     /// newer local throw/return or by exception unwinding across nested calls
     /// or intermediary finally blocks. If the newer abrupt completion is
     /// consumed locally, the most recent suspended completion resumes.
     suspended_abrupt_completions: Vec<AbruptCompletion>,
-    /// Stack of finally-entry modes.  Pushed by `EnterFinally`, popped by
-    /// `EndFinally`.  When `Exception`, `EndFinally` re-throws the pending
-    /// exception.
-    finally_modes: Vec<FinallyMode>,
+    /// Stack of completion records owned by active finally bodies. Pushed by
+    /// `EnterFinally` and consumed by `EndFinally` or an overriding abrupt
+    /// transfer.
+    finally_frames: Vec<FinallyFrame>,
+    /// One-shot entry ownership set by an unwind edge and consumed by the
+    /// exact `EnterFinally` instruction it targets.
+    pending_finally_entry: Option<PendingFinallyEntry>,
     /// Pre-run caller-visible seed used for the most recent execute().
     last_pre_run_seed: Option<ExecutionSeed>,
     /// Caller-visible state immediately after the most recent execute().
@@ -1910,7 +1934,8 @@ impl InterpreterCore {
             pending_exception: None,
             pending_return: None,
             suspended_abrupt_completions: Vec::new(),
-            finally_modes: Vec::new(),
+            finally_frames: Vec::new(),
+            pending_finally_entry: None,
             last_pre_run_seed: None,
             last_post_run_seed: None,
             scope_chain: ScopeChain::new(),
@@ -2106,7 +2131,8 @@ impl InterpreterCore {
         self.pending_exception = None;
         self.pending_return = None;
         self.suspended_abrupt_completions.clear();
-        self.finally_modes.clear();
+        self.finally_frames.clear();
+        self.pending_finally_entry = None;
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         self.module_state = ModuleState::new();
         self.active_cjs_context = None;
@@ -2208,7 +2234,8 @@ impl InterpreterCore {
         self.pending_exception = None;
         self.pending_return = None;
         self.suspended_abrupt_completions.clear();
-        self.finally_modes.clear();
+        self.finally_frames.clear();
+        self.pending_finally_entry = None;
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         self.module_state = ModuleState::new();
         self.active_cjs_context = None;
@@ -2229,7 +2256,8 @@ impl InterpreterCore {
             pending_exception: self.pending_exception.clone(),
             pending_return: self.pending_return.clone(),
             suspended_abrupt_completions: self.suspended_abrupt_completions.clone(),
-            finally_modes: self.finally_modes.clone(),
+            finally_frames: self.finally_frames.clone(),
+            pending_finally_entry: self.pending_finally_entry.clone(),
             scope_chain: self.scope_chain.clone(),
             pending_captures: self.pending_captures.clone(),
             current_module_specifier: self.current_module_specifier.clone(),
@@ -2248,7 +2276,8 @@ impl InterpreterCore {
         self.pending_exception = snapshot.pending_exception;
         self.pending_return = snapshot.pending_return;
         self.suspended_abrupt_completions = snapshot.suspended_abrupt_completions;
-        self.finally_modes = snapshot.finally_modes;
+        self.finally_frames = snapshot.finally_frames;
+        self.pending_finally_entry = snapshot.pending_finally_entry;
         self.scope_chain = snapshot.scope_chain;
         self.pending_captures = snapshot.pending_captures;
         self.current_module_specifier = snapshot.current_module_specifier;
@@ -2266,7 +2295,8 @@ impl InterpreterCore {
         self.pending_exception = None;
         self.pending_return = None;
         self.suspended_abrupt_completions.clear();
-        self.finally_modes.clear();
+        self.finally_frames.clear();
+        self.pending_finally_entry = None;
         self.scope_chain = ScopeChain::new();
         self.pending_captures.clear();
         self.current_module_specifier = Some(module_specifier.to_string());
@@ -3118,7 +3148,7 @@ impl InterpreterCore {
             saved_pending_exception: self.pending_exception.take(),
             saved_pending_return: self.pending_return.take(),
             saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
-            saved_finally_mode_depth: self.finally_modes.len(),
+            saved_finally_mode_depth: self.finally_frames.len(),
             saved_scope_depth: scope_depth,
             saved_scope_chain: saved_chain,
             closure_id: closure_index,
@@ -3167,7 +3197,7 @@ impl InterpreterCore {
             self.register_base = frame.register_base;
             self.suspended_abrupt_completions
                 .truncate(frame.saved_suspended_abrupt_depth);
-            self.finally_modes.truncate(frame.saved_finally_mode_depth);
+            self.finally_frames.truncate(frame.saved_finally_mode_depth);
             self.persist_closure_capture_updates(&frame);
             self.restore_scope_chain_for_frame(&frame);
             self.pending_exception = frame.saved_pending_exception;
@@ -3191,7 +3221,8 @@ impl InterpreterCore {
             self.pending_exception = None;
             self.pending_return = None;
             self.suspended_abrupt_completions.clear();
-            self.finally_modes.clear();
+            self.finally_frames.clear();
+            self.pending_finally_entry = None;
             self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
             Ok(Some(return_val))
         }
@@ -3243,7 +3274,7 @@ impl InterpreterCore {
             if let Some(frame) = self.call_stack.pop() {
                 self.persist_closure_capture_updates(&frame);
                 self.register_base = frame.register_base;
-                self.finally_modes.truncate(frame.saved_finally_mode_depth);
+                self.finally_frames.truncate(frame.saved_finally_mode_depth);
                 self.restore_scope_chain_for_frame(&frame);
                 restored_pending_exception = frame.saved_pending_exception;
                 restored_pending_return = frame.saved_pending_return;
@@ -3276,6 +3307,7 @@ impl InterpreterCore {
             .rposition(|f| f.call_depth <= current_depth)?;
         let frame = self.catch_frames[idx].clone();
         self.catch_frames.truncate(idx);
+        self.finally_frames.truncate(frame.finally_frame_depth);
         let (restored_pending_exception, restored_pending_return) =
             self.unwind_call_stack_to(frame.call_depth);
         self.suspend_abrupt_completion(restored_pending_exception, restored_pending_return);
@@ -3349,6 +3381,7 @@ impl InterpreterCore {
             .rposition(|f| f.call_depth == current_depth && f.finally_target.is_some())?;
         let frame = self.catch_frames[idx].clone();
         self.catch_frames.truncate(idx);
+        self.finally_frames.truncate(frame.finally_frame_depth);
         frame.finally_target
     }
 
@@ -3674,7 +3707,7 @@ impl InterpreterCore {
             saved_pending_exception: self.pending_exception.take(),
             saved_pending_return: self.pending_return.take(),
             saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
-            saved_finally_mode_depth: self.finally_modes.len(),
+            saved_finally_mode_depth: self.finally_frames.len(),
             saved_scope_depth: scope_depth,
             saved_scope_chain: saved_chain,
             closure_id,
@@ -4162,7 +4195,6 @@ impl InterpreterCore {
         } else {
             None
         };
-
         loop {
             if self.ip >= module.instructions.len() {
                 // Fell off the end of the instruction stream.
@@ -4659,7 +4691,7 @@ impl InterpreterCore {
                                 saved_suspended_abrupt_depth: self
                                     .suspended_abrupt_completions
                                     .len(),
-                                saved_finally_mode_depth: self.finally_modes.len(),
+                                saved_finally_mode_depth: self.finally_frames.len(),
                                 saved_scope_depth: scope_depth,
                                 saved_scope_chain: saved_chain,
                                 closure_id,
@@ -4842,7 +4874,7 @@ impl InterpreterCore {
                         saved_pending_exception: self.pending_exception.take(),
                         saved_pending_return: self.pending_return.take(),
                         saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
-                        saved_finally_mode_depth: self.finally_modes.len(),
+                        saved_finally_mode_depth: self.finally_frames.len(),
                         saved_scope_depth: scope_depth,
                         saved_scope_chain: saved_chain,
                         closure_id,
@@ -4889,6 +4921,10 @@ impl InterpreterCore {
                         label: return_label.clone(),
                     });
                     if let Some(finally_target) = self.pop_current_finally_target() {
+                        self.pending_finally_entry = Some(PendingFinallyEntry {
+                            target: finally_target,
+                            mode: FinallyMode::Return,
+                        });
                         self.ip = finally_target;
                     } else {
                         self.pending_return = None;
@@ -5562,7 +5598,7 @@ impl InterpreterCore {
                                 saved_suspended_abrupt_depth: self
                                     .suspended_abrupt_completions
                                     .len(),
-                                saved_finally_mode_depth: self.finally_modes.len(),
+                                saved_finally_mode_depth: self.finally_frames.len(),
                                 saved_scope_depth: scope_depth,
                                 saved_scope_chain: saved_chain,
                                 closure_id,
@@ -5690,6 +5726,7 @@ impl InterpreterCore {
                         catch_target: catch_target as usize,
                         finally_target: finally_target.map(|t| t as usize),
                         call_depth: self.call_stack.len(),
+                        finally_frame_depth: self.finally_frames.len(),
                     });
                     self.ip += 1;
                 }
@@ -5712,6 +5749,12 @@ impl InterpreterCore {
                     // then truncate to remove it and any frames above it — but
                     // NOT frames below it (which belong to outer try blocks).
                     if let Some(frame) = self.pop_exception_target_frame() {
+                        self.pending_finally_entry = (frame.finally_target
+                            == Some(frame.catch_target))
+                        .then_some(PendingFinallyEntry {
+                            target: frame.catch_target,
+                            mode: FinallyMode::Exception,
+                        });
                         self.ip = frame.catch_target;
                     } else {
                         // No catch handler found — uncaught exception.
@@ -5724,6 +5767,9 @@ impl InterpreterCore {
                             Value::Null => "null".to_string(),
                             _ => "[object]".to_string(),
                         };
+                        self.pending_exception = None;
+                        self.pending_finally_entry = None;
+                        self.finally_frames.clear();
                         return Err(InterpreterError::UncaughtException { value: desc });
                     }
                 }
@@ -5738,67 +5784,88 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::EnterFinally => {
-                    // Track whether we entered the finally block via normal
-                    // control flow, exception unwinding, or return unwinding.
-                    if self.pending_exception.is_some() {
-                        self.finally_modes.push(FinallyMode::Exception);
-                    } else if self.pending_return.is_some() {
-                        self.finally_modes.push(FinallyMode::Return);
+                    // Only the unwind edge that selected this target owns the
+                    // pending completion. Normal nested entry may observe an
+                    // outer pending completion without consuming it.
+                    let mode = if self
+                        .pending_finally_entry
+                        .as_ref()
+                        .is_some_and(|entry| entry.target == self.ip)
+                    {
+                        self.pending_finally_entry
+                            .take()
+                            .map_or(FinallyMode::Normal, |entry| entry.mode)
                     } else {
-                        self.finally_modes.push(FinallyMode::Normal);
-                    }
+                        FinallyMode::Normal
+                    };
+                    let completion = match mode {
+                        FinallyMode::Exception => self
+                            .pending_exception
+                            .take()
+                            .map(AbruptCompletion::Exception),
+                        FinallyMode::Return => {
+                            self.pending_return.take().map(AbruptCompletion::Return)
+                        }
+                        FinallyMode::Normal => None,
+                    };
+                    self.finally_frames.push(FinallyFrame { completion });
                     self.ip += 1;
                 }
                 Ir3Instruction::EndFinally => {
-                    let mode = self.finally_modes.pop().unwrap_or(FinallyMode::Normal);
-                    match mode {
-                        FinallyMode::Exception => {
-                            // Re-throw the pending exception after finally completes.
-                            if let Some(thrown) = self.pending_exception.clone() {
-                                let desc = match &thrown.value {
-                                    Value::Str(s) => s.to_string(),
-                                    Value::Int(n) => n.to_string(),
-                                    Value::Bool(b) => b.to_string(),
-                                    Value::Undefined => "undefined".to_string(),
-                                    Value::Null => "null".to_string(),
-                                    _ => "[object]".to_string(),
-                                };
-                                // Look for another catch frame to propagate to.
-                                if let Some(frame) = self.pop_exception_target_frame() {
-                                    self.ip = frame.catch_target;
-                                } else {
-                                    self.suspended_abrupt_completions.clear();
-                                    return Err(InterpreterError::UncaughtException {
-                                        value: desc,
-                                    });
-                                }
+                    match self.finally_frames.pop().and_then(|frame| frame.completion) {
+                        Some(AbruptCompletion::Exception(thrown)) => {
+                            self.pending_return = None;
+                            self.pending_exception = Some(thrown.clone());
+                            let desc = match &thrown.value {
+                                Value::Str(s) => s.to_string(),
+                                Value::Int(n) => n.to_string(),
+                                Value::Bool(b) => b.to_string(),
+                                Value::Undefined => "undefined".to_string(),
+                                Value::Null => "null".to_string(),
+                                _ => "[object]".to_string(),
+                            };
+                            // Look for another catch frame to propagate to.
+                            if let Some(frame) = self.pop_exception_target_frame() {
+                                self.pending_finally_entry = (frame.finally_target
+                                    == Some(frame.catch_target))
+                                .then_some(PendingFinallyEntry {
+                                    target: frame.catch_target,
+                                    mode: FinallyMode::Exception,
+                                });
+                                self.ip = frame.catch_target;
                             } else {
-                                // Exception was consumed (shouldn't happen, but safe fallthrough).
-                                self.ip += 1;
+                                self.suspended_abrupt_completions.clear();
+                                self.pending_exception = None;
+                                self.pending_finally_entry = None;
+                                self.finally_frames.clear();
+                                return Err(InterpreterError::UncaughtException { value: desc });
                             }
                         }
-                        FinallyMode::Return => {
-                            if let Some(pending_return) = self.pending_return.take() {
-                                if let Some(finally_target) = self.pop_current_finally_target() {
-                                    self.pending_return = Some(pending_return);
-                                    self.ip = finally_target;
-                                } else {
-                                    if let Some(final_value) = self.complete_return(
-                                        pending_return.value,
-                                        pending_return.label,
-                                    )? {
-                                        return Ok(final_value);
-                                    }
-                                }
-                            } else {
-                                self.ip += 1;
+                        Some(AbruptCompletion::Return(pending_return)) => {
+                            self.pending_exception = None;
+                            if let Some(finally_target) = self.pop_current_finally_target() {
+                                self.pending_return = Some(pending_return);
+                                self.pending_finally_entry = Some(PendingFinallyEntry {
+                                    target: finally_target,
+                                    mode: FinallyMode::Return,
+                                });
+                                self.ip = finally_target;
+                            } else if let Some(final_value) =
+                                self.complete_return(pending_return.value, pending_return.label)?
+                            {
+                                return Ok(final_value);
                             }
                         }
-                        FinallyMode::Normal => {
+                        None => {
                             // Normal completion — just continue.
                             self.ip += 1;
                         }
                     }
+                }
+                Ir3Instruction::DiscardAbruptCompletion => {
+                    let _ = self.finally_frames.pop();
+                    self.restore_suspended_abrupt_completion();
+                    self.ip += 1;
                 }
 
                 // ���─ Closure / scope-chain instructions ────────────────
@@ -8227,7 +8294,7 @@ impl InterpreterCore {
             saved_pending_exception: self.pending_exception.take(),
             saved_pending_return: self.pending_return.take(),
             saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
-            saved_finally_mode_depth: self.finally_modes.len(),
+            saved_finally_mode_depth: self.finally_frames.len(),
             saved_scope_depth: scope_depth,
             saved_scope_chain: Some(saved_chain),
             closure_id: Some(closure_id),
@@ -10134,7 +10201,7 @@ impl InterpreterCore {
             self.pending_return = frame.saved_pending_return;
             self.suspended_abrupt_completions
                 .truncate(frame.saved_suspended_abrupt_depth);
-            self.finally_modes.truncate(frame.saved_finally_mode_depth);
+            self.finally_frames.truncate(frame.saved_finally_mode_depth);
             if let Some(saved) = frame.saved_scope_chain {
                 self.scope_chain.frames = saved;
             } else {
@@ -13833,6 +13900,224 @@ mod tests {
             core.suspended_abrupt_completions.as_slice(),
             [AbruptCompletion::Exception(restored)] if restored == &suspended
         ));
+    }
+
+    #[test]
+    fn discard_abrupt_completion_preserves_outer_frame_label_bd_kfxwe() {
+        let module = test_module(vec![Ir3Instruction::DiscardAbruptCompletion]);
+        let mut core = quickjs_test_core();
+        let outer = LabeledException {
+            value: Value::str("outer"),
+            label: crate::ifc_artifacts::Label::Secret,
+        };
+        core.finally_frames.push(FinallyFrame {
+            completion: Some(AbruptCompletion::Exception(outer.clone())),
+        });
+        core.finally_frames.push(FinallyFrame {
+            completion: Some(AbruptCompletion::Exception(LabeledException {
+                value: Value::str("inner"),
+                label: crate::ifc_artifacts::Label::Public,
+            })),
+        });
+        let snapshot = core.snapshot_module_execution();
+        core.finally_frames.clear();
+        core.restore_module_execution(snapshot);
+
+        core.run_loop(&module)
+            .expect("discard should resume after the local finally completion");
+
+        assert!(core.pending_exception.is_none());
+        assert!(core.pending_return.is_none());
+        assert_eq!(core.finally_frames.len(), 1);
+        match &core.finally_frames[0].completion {
+            Some(AbruptCompletion::Exception(restored)) => assert_eq!(restored, &outer),
+            other => panic!("expected outer exception frame, got {other:?}"),
+        }
+        assert!(core.suspended_abrupt_completions.is_empty());
+
+        let mut normal_nested_core = quickjs_test_core();
+        let outer_normal_entry = LabeledException {
+            value: Value::str("outer-normal-entry"),
+            label: crate::ifc_artifacts::Label::TopSecret,
+        };
+        normal_nested_core.finally_frames.push(FinallyFrame {
+            completion: Some(AbruptCompletion::Exception(outer_normal_entry.clone())),
+        });
+        normal_nested_core
+            .finally_frames
+            .push(FinallyFrame { completion: None });
+
+        normal_nested_core
+            .run_loop(&module)
+            .expect("normal nested finally must not discard an outer completion");
+
+        assert!(normal_nested_core.pending_exception.is_none());
+        assert_eq!(normal_nested_core.finally_frames.len(), 1);
+        match &normal_nested_core.finally_frames[0].completion {
+            Some(AbruptCompletion::Exception(restored)) => {
+                assert_eq!(restored, &outer_normal_entry);
+            }
+            other => panic!("expected preserved outer normal-entry frame, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn finally_entry_survives_budget_boundary_and_snapshot_bd_kfxwe() {
+        let module = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 7 },
+            Ir3Instruction::BeginTry {
+                catch_target: 3,
+                finally_target: Some(3),
+            },
+            Ir3Instruction::Return { value: 0 },
+            Ir3Instruction::EnterFinally,
+            Ir3Instruction::EndFinally,
+        ]);
+        let mut core = quickjs_test_core();
+        core.config.instruction_budget = 3;
+
+        assert!(matches!(
+            core.run_loop(&module),
+            Err(InterpreterError::BudgetExhausted {
+                executed: 3,
+                budget: 3,
+            })
+        ));
+        assert_eq!(core.ip, 3);
+        assert_eq!(
+            core.pending_finally_entry,
+            Some(PendingFinallyEntry {
+                target: 3,
+                mode: FinallyMode::Return,
+            })
+        );
+
+        let snapshot = core.snapshot_module_execution();
+        core.pending_finally_entry = None;
+        core.restore_module_execution(snapshot);
+        core.config.instruction_budget = 10;
+
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("resumed finally must complete the pending return"),
+            Value::Int(7)
+        );
+        assert!(core.pending_return.is_none());
+        assert!(core.pending_finally_entry.is_none());
+        assert!(core.finally_frames.is_empty());
+    }
+
+    #[test]
+    fn finally_entry_survives_cancellation_boundary_bd_kfxwe() {
+        let module = test_module(vec![
+            Ir3Instruction::BeginTry {
+                catch_target: 2,
+                finally_target: Some(2),
+            },
+            Ir3Instruction::Throw { value: 0 },
+            Ir3Instruction::EnterFinally,
+            Ir3Instruction::EndFinally,
+        ]);
+        let token = CancellationToken::new();
+        token.cancel();
+        let mut config = test_quickjs_config();
+        config.cancellation_token = Some(token.clone());
+        config.checkpoint_density = 3;
+        let mut core = InterpreterCore::new(config, "bd-kfxwe-cancel");
+        core.write_reg_with_label(0, Value::str("boom"), crate::ifc_artifacts::Label::Secret)
+            .expect("throw value should fit in r0");
+
+        assert_eq!(core.run_loop(&module), Err(InterpreterError::Cancelled));
+        assert_eq!(core.ip, 2);
+        assert_eq!(
+            core.pending_finally_entry,
+            Some(PendingFinallyEntry {
+                target: 2,
+                mode: FinallyMode::Exception,
+            })
+        );
+
+        token.reset();
+        assert_eq!(
+            core.run_loop(&module),
+            Err(InterpreterError::UncaughtException {
+                value: "boom".to_string(),
+            })
+        );
+        assert!(core.pending_exception.is_none());
+        assert!(core.pending_finally_entry.is_none());
+        assert!(core.finally_frames.is_empty());
+    }
+
+    fn execute_exception_source_with_core_bd_kfxwe(source: &str) -> (Value, InterpreterCore) {
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect("finally ownership regression source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_kfxwe_runtime.js");
+        let module = lower_ir0_to_ir3(
+            &ir0,
+            &LoweringContext::new(
+                "trace-bd-kfxwe-runtime",
+                "decision-bd-kfxwe-runtime",
+                "policy-bd-kfxwe-runtime",
+            ),
+        )
+        .expect("finally ownership regression source should lower")
+        .ir3;
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = std::collections::BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
+        let mut core = InterpreterCore::new(config, "bd-kfxwe-runtime");
+        let value = core
+            .execute(&module)
+            .expect("finally ownership regression should execute")
+            .value;
+        (value, core)
+    }
+
+    #[test]
+    fn escaped_finally_completion_records_are_balanced_bd_kfxwe() {
+        let (value, core) = execute_exception_source_with_core_bd_kfxwe(
+            "function f(){ try { return \"outer\"; } finally { try { try { return \"inner\"; } finally { throw \"new\"; } } catch(e) {} } } f();",
+        );
+
+        assert_eq!(value, Value::str("outer"));
+        assert!(core.pending_exception.is_none());
+        assert!(core.pending_return.is_none());
+        assert!(core.pending_finally_entry.is_none());
+        assert!(core.finally_frames.is_empty());
+        assert!(core.suspended_abrupt_completions.is_empty());
+    }
+
+    #[test]
+    fn uncaught_throw_from_finally_clears_completion_records_bd_kfxwe() {
+        let module = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 1 },
+            Ir3Instruction::BeginTry {
+                catch_target: 3,
+                finally_target: Some(3),
+            },
+            Ir3Instruction::Return { value: 0 },
+            Ir3Instruction::EnterFinally,
+            Ir3Instruction::Throw { value: 1 },
+        ]);
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(1, Value::str("new"), crate::ifc_artifacts::Label::Secret)
+            .expect("throw value should fit in r1");
+
+        assert_eq!(
+            core.run_loop(&module),
+            Err(InterpreterError::UncaughtException {
+                value: "new".to_string(),
+            })
+        );
+        assert!(core.pending_exception.is_none());
+        assert!(core.pending_return.is_none());
+        assert!(core.pending_finally_entry.is_none());
+        assert!(core.finally_frames.is_empty());
+        assert!(core.suspended_abrupt_completions.is_empty());
     }
 
     fn constructor_descriptor_bd_ur3tk_4(

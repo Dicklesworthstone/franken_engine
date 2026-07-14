@@ -14550,8 +14550,8 @@ mod tests {
             "function Empty() { this.value = 1; }\
              function Pair(left, right) { this.value = left + right; }\
              function make(EmptyConstructor, PairConstructor) {\
-                 return new EmptyConstructor().value * 10\
-                     + new PairConstructor(3, 4).value;\
+                 return (new EmptyConstructor()).value * 10\
+                     + (new PairConstructor(3, 4)).value;\
              }\
              make(Empty, Pair);",
         );
@@ -14965,7 +14965,7 @@ mod tests {
     fn return_from_break_forwarder_does_not_replay_finalizer_bd_kfxwe() {
         assert_eq!(
             execute_exception_source_bd_kfxwe(
-                "let hits=0; function f(){ while(true) { try { break; } finally { hits=hits+1; return 7; } } return 0; } let value=f(); hits*10+value;",
+                "function f(){ let hits=0; while(true) { try { break; } finally { hits=hits+1; return hits*10+7; } } return 0; } f();",
             ),
             Value::Int(17)
         );

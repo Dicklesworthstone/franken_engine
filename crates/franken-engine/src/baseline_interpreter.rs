@@ -225,6 +225,10 @@ const MEMORY_ESTIMATE_GENERATOR_BASE_BYTES: u64 = 48;
 /// Conservative per-record charge for the emitter listener side table. The
 /// event name and any string-backed listener payload are charged separately.
 const MEMORY_ESTIMATE_EVENT_LISTENER_BASE_BYTES: u64 = 48;
+/// Conservative per-link charge for a Promise-backed `events.once` waiter.
+/// A non-`error` wait registers two linked records (the awaited event and the
+/// implicit rejection-on-`error` observer), both accounted independently.
+const MEMORY_ESTIMATE_EVENT_PROMISE_WAITER_BASE_BYTES: u64 = 48;
 /// BotGuard typed-array v1 per-buffer cap from bd-8enww.2.1.
 const MAX_ARRAY_BUFFER_BYTE_LENGTH: u64 = 8 * 1024 * 1024;
 /// Approximate metadata footprint for an ArrayBuffer-backed typed-array view.
@@ -5654,6 +5658,24 @@ struct EventListenerRecord {
     once: bool,
 }
 
+/// One link in the Promise-backed static `events.once` waiter table
+/// (bd-asw4m.1). Non-error waits install a Resolve link under the requested
+/// event and a Reject link under `error`, sharing `waiter_id`; settling either
+/// link removes both before queuing the Promise reaction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EventPromiseWaiterRecord {
+    waiter_id: u64,
+    promise: crate::promise_model::PromiseHandle,
+    action: EventPromiseWaiterAction,
+    registration_label: Label,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EventPromiseWaiterAction {
+    Resolve,
+    Reject,
+}
+
 /// The core interpreter loop shared between both lanes.
 /// One register's value and IFC label as observed at a capture tick
 /// (bd-fqlfw.3.5.5 / E3.T5d). Only registers holding a non-`Undefined`
@@ -5848,6 +5870,11 @@ pub struct InterpreterCore {
     /// `once` state; holding them outside the heap keeps listeners live across
     /// deferred HTTP event-loop turns (bd-3894s, bd-2dmnn).
     event_listeners: BTreeMap<ObjectId, BTreeMap<String, Vec<EventListenerRecord>>>,
+    /// Promise-backed static `events.once` waiters. Linked Resolve/Reject
+    /// records share a waiter id so settling either event removes every sibling
+    /// link before its Promise reaction becomes observable (bd-asw4m.1).
+    event_promise_waiters: BTreeMap<ObjectId, BTreeMap<String, Vec<EventPromiseWaiterRecord>>>,
+    next_event_promise_waiter_id: u64,
     /// bd-3894s slice (2d): deferred readable-stream emissions (`'data'`/`'end'`),
     /// keyed by the `IoCompletion` macrotask registration sequence (parallel to
     /// `pending_io_callbacks`, which carries closure callbacks). Drained by
@@ -5990,6 +6017,8 @@ impl InterpreterCore {
             event_loop: crate::promise_model::EventLoop::new(),
             pending_io_callbacks: BTreeMap::new(),
             event_listeners: BTreeMap::new(),
+            event_promise_waiters: BTreeMap::new(),
+            next_event_promise_waiter_id: 0,
             pending_stream_emissions: BTreeMap::new(),
             promise_combinators: BTreeMap::new(),
             promise_combinator_watchers: BTreeMap::new(),
@@ -6687,6 +6716,170 @@ impl InterpreterCore {
         .expect("test listener registration fits the memory budget");
     }
 
+    /// Register the Promise returned by static `events.once(emitter, event)`.
+    /// The requested event resolves with an array of every emitted argument.
+    /// Unless the requested event is itself `error`, a linked `error` record
+    /// rejects with the original first emitted value. Both records are removed
+    /// before settlement so a later event cannot observe a stale sibling link.
+    fn register_event_promise_once(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        if args.count != 2 {
+            return Err(InterpreterError::TypeError {
+                expected: "events.once(emitter, event)".to_string(),
+                got: format!("{} argument(s)", args.count),
+            });
+        }
+        let target = self.read_reg(args.start)?;
+        let Value::Object(target_id) = target else {
+            return Err(InterpreterError::TypeError {
+                expected: "EventEmitter object".to_string(),
+                got: target.type_name().to_string(),
+            });
+        };
+        let event_reg = args
+            .start
+            .checked_add(1)
+            .ok_or(InterpreterError::RegisterOutOfBounds {
+                register: args.start,
+                max: self.config.max_registers,
+            })?;
+        let event_value = self.read_reg(event_reg)?;
+        let Value::Str(event) = event_value else {
+            return Err(InterpreterError::TypeError {
+                expected: "string event name".to_string(),
+                got: event_value.type_name().to_string(),
+            });
+        };
+        let event = event.to_string();
+        let registration_label = self.join_arg_range_label(args)?;
+        let next_waiter_id = self
+            .next_event_promise_waiter_id
+            .checked_add(1)
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "events.once waiter id space exhausted".to_string(),
+            })?;
+        let link_count = if event == "error" { 1 } else { 2 };
+        let added_bytes = (0..link_count).fold(0u64, |total, index| {
+            let link_event = if index == 0 { event.as_str() } else { "error" };
+            total.saturating_add(Self::estimate_event_promise_waiter_record_bytes(
+                link_event,
+                &registration_label,
+            ))
+        });
+        self.apply_memory_component_delta(0, added_bytes)?;
+
+        let waiter_id = self.next_event_promise_waiter_id;
+        self.next_event_promise_waiter_id = next_waiter_id;
+        let promise = self.promise_store.create();
+        let resolve_record = EventPromiseWaiterRecord {
+            waiter_id,
+            promise,
+            action: EventPromiseWaiterAction::Resolve,
+            registration_label: registration_label.clone(),
+        };
+        self.event_promise_waiters
+            .entry(target_id)
+            .or_default()
+            .entry(event.clone())
+            .or_default()
+            .push(resolve_record);
+        if event != "error" {
+            self.event_promise_waiters
+                .entry(target_id)
+                .or_default()
+                .entry("error".to_string())
+                .or_default()
+                .push(EventPromiseWaiterRecord {
+                    waiter_id,
+                    promise,
+                    action: EventPromiseWaiterAction::Reject,
+                    registration_label,
+                });
+        }
+        Ok(Value::Promise(promise.0))
+    }
+
+    /// Remove every event/error link belonging to one static-once waiter and
+    /// release the exact conservative charge applied at registration.
+    fn remove_event_promise_waiter_links(&mut self, target_id: ObjectId, waiter_id: u64) {
+        let mut released_bytes = 0u64;
+        let mut empty_events = Vec::new();
+        if let Some(by_event) = self.event_promise_waiters.get_mut(&target_id) {
+            for (event, records) in by_event.iter_mut() {
+                records.retain(|record| {
+                    if record.waiter_id == waiter_id {
+                        released_bytes = released_bytes.saturating_add(
+                            Self::estimate_event_promise_waiter_record_bytes(
+                                event,
+                                &record.registration_label,
+                            ),
+                        );
+                        false
+                    } else {
+                        true
+                    }
+                });
+                if records.is_empty() {
+                    empty_events.push(event.clone());
+                }
+            }
+            for event in empty_events {
+                by_event.remove(&event);
+            }
+        }
+        if self
+            .event_promise_waiters
+            .get(&target_id)
+            .is_some_and(BTreeMap::is_empty)
+        {
+            self.event_promise_waiters.remove(&target_id);
+        }
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
+    }
+
+    /// Settle every static `events.once` waiter linked to this emission. Promise
+    /// reactions remain microtasks: settlement occurs during synchronous emit,
+    /// while awaiting continuations run only at the normal checkpoint.
+    fn settle_event_promise_waiters(
+        &mut self,
+        target_id: ObjectId,
+        event: &str,
+        arguments: &[Value],
+        emission_label: &Label,
+    ) -> Result<bool, InterpreterError> {
+        let records = self
+            .event_promise_waiters
+            .get(&target_id)
+            .and_then(|by_event| by_event.get(event))
+            .cloned()
+            .unwrap_or_default();
+        if records.is_empty() {
+            return Ok(false);
+        }
+
+        for record in records {
+            let settlement_label = record.registration_label.join(emission_label);
+            let settlement: Result<crate::object_model::JsValue, crate::object_model::JsValue> =
+                match record.action {
+                    EventPromiseWaiterAction::Resolve => {
+                        let array = self.alloc_array_from_values(arguments)?;
+                        Ok(crate::object_model::JsValue::Object(
+                            crate::object_model::ObjectHandle(array.0),
+                        ))
+                    }
+                    EventPromiseWaiterAction::Reject => Err(arguments
+                        .first()
+                        .map(Self::value_to_js_value)
+                        .unwrap_or(crate::object_model::JsValue::Undefined)),
+                };
+            self.remove_event_promise_waiter_links(target_id, record.waiter_id);
+            match settlement {
+                Ok(value) => self.fulfill_promise(record.promise, value, settlement_label)?,
+                Err(reason) => self.reject_promise(record.promise, reason, settlement_label)?,
+            }
+        }
+        Ok(true)
+    }
+
     /// Insert one listener record at the front or back of the shared emitter
     /// table. Meta-event delivery is handled by the receiver-aware builtin
     /// dispatch before this mutation, so the helper is also safe for the legacy
@@ -6866,10 +7059,13 @@ impl InterpreterCore {
         target_id: ObjectId,
         event: &str,
         arguments: Vec<Value>,
+        emission_label: Label,
     ) -> Result<bool, InterpreterError> {
+        let settled_waiter =
+            self.settle_event_promise_waiters(target_id, event, &arguments, &emission_label)?;
         let records = self.event_listener_records_for(target_id, event);
         if records.is_empty() {
-            if event == "error" {
+            if event == "error" && !settled_waiter {
                 let thrown = if let Some(value) = arguments.first() {
                     value.clone()
                 } else {
@@ -6888,7 +7084,7 @@ impl InterpreterCore {
                     value: Self::uncaught_exception_description(&thrown),
                 });
             }
-            return Ok(false);
+            return Ok(settled_waiter);
         }
 
         for record in records {
@@ -10880,6 +11076,7 @@ impl InterpreterCore {
                 };
                 let event = self.event_name_arg(args, 0)?;
                 let listener = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                let listener_label = self.join_arg_range_label(args)?;
                 if let Some(event) = event
                     && listener.is_callable()
                 {
@@ -10888,6 +11085,7 @@ impl InterpreterCore {
                         target_id,
                         "newListener",
                         vec![Value::str(event.as_str()), listener.clone()],
+                        listener_label,
                     )?;
                     self.insert_event_listener(
                         target_id,
@@ -10913,6 +11111,7 @@ impl InterpreterCore {
                 };
                 let event = self.event_name_arg(args, 0)?;
                 let listener = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                let listener_label = self.join_arg_range_label(args)?;
                 if let Some(event) = event
                     && listener.is_callable()
                 {
@@ -10921,6 +11120,7 @@ impl InterpreterCore {
                         target_id,
                         "newListener",
                         vec![Value::str(event.as_str()), listener.clone()],
+                        listener_label,
                     )?;
                     self.insert_event_listener(
                         target_id,
@@ -10952,6 +11152,7 @@ impl InterpreterCore {
                 };
                 let event = self.event_name_arg(args, 0)?;
                 let listener = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                let listener_label = self.join_arg_range_label(args)?;
                 if let Some(event) = event
                     && listener.is_callable()
                     && let Some(removed) =
@@ -10962,6 +11163,7 @@ impl InterpreterCore {
                         target_id,
                         "removeListener",
                         vec![Value::str(event.as_str()), removed.listener],
+                        listener_label,
                     )?;
                 }
                 Ok(Value::Object(target_id))
@@ -11044,8 +11246,13 @@ impl InterpreterCore {
                             .unwrap_or(Value::Undefined),
                     );
                 }
+                let emission_label = self.join_arg_range_label(args)?;
                 Ok(Value::Bool(self.emit_event_listener_records(
-                    module, target_id, &event, arguments,
+                    module,
+                    target_id,
+                    &event,
+                    arguments,
+                    emission_label,
                 )?))
             }
             BuiltinFunctionKind::EmitterGetMaxListeners => {
@@ -25925,6 +26132,13 @@ impl InterpreterCore {
                 ])?;
                 Ok(Value::Object(object_id))
             }
+            "builtin:EventsOnce" => {
+                // bd-asw4m.1: static `events.once(emitter, event)` is pure
+                // runtime bookkeeping. It creates a pending Promise plus linked
+                // event/error waiter records; no module or host authority is
+                // materialized by this dispatch.
+                self.register_event_promise_once(args)
+            }
             "builtin:ImportMeta" => {
                 if args.count != 0 {
                     return Err(InterpreterError::TypeError {
@@ -34729,6 +34943,16 @@ impl InterpreterCore {
             .saturating_add(Self::estimate_value_bytes(&record.listener))
     }
 
+    fn estimate_event_promise_waiter_record_bytes(event: &str, label: &Label) -> u64 {
+        let label_bytes = match label {
+            Label::Custom { name, .. } => Self::estimate_string_bytes(name),
+            _ => 0,
+        };
+        MEMORY_ESTIMATE_EVENT_PROMISE_WAITER_BASE_BYTES
+            .saturating_add(Self::estimate_string_bytes(event))
+            .saturating_add(label_bytes)
+    }
+
     fn estimate_scope_frame_bytes(frame: &ScopeFrame) -> u64 {
         let bindings = frame
             .bindings
@@ -34903,6 +35127,21 @@ impl InterpreterCore {
             .sum()
     }
 
+    fn event_promise_waiters_memory_bytes(&self) -> u64 {
+        self.event_promise_waiters
+            .values()
+            .flat_map(|by_event| by_event.iter())
+            .flat_map(|(event, records)| {
+                records.iter().map(move |record| {
+                    Self::estimate_event_promise_waiter_record_bytes(
+                        event,
+                        &record.registration_label,
+                    )
+                })
+            })
+            .sum()
+    }
+
     fn release_event_listener_memory(&mut self, event: &str, record: &EventListenerRecord) {
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
@@ -34960,6 +35199,7 @@ impl InterpreterCore {
             )
             .saturating_add(Self::estimate_generators_bytes(&self.generators))
             .saturating_add(self.event_listeners_memory_bytes())
+            .saturating_add(self.event_promise_waiters_memory_bytes())
     }
 
     #[cfg(test)]

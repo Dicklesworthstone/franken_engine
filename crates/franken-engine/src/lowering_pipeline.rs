@@ -885,6 +885,12 @@ fn lower_ir0_to_ir1_with_ambient_grant(
     for local in confirmed_event_emitter_destructured_requires(&ir0.tree.body, &binding_lookup) {
         binding_lookup.insert(event_emitter_binding_sentinel(&local), 0);
     }
+    for local in confirmed_events_once_destructured_requires(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(events_once_binding_sentinel(&local), 0);
+    }
+    for local in confirmed_events_once_named_imports(&ir0.tree.body) {
+        binding_lookup.insert(events_once_binding_sentinel(&local), 0);
+    }
     for alias in confirmed_events_module_aliases(&ir0.tree.body, &binding_lookup) {
         binding_lookup.insert(events_module_alias_sentinel(&alias), 0);
     }
@@ -1072,6 +1078,12 @@ fn lower_ir0_to_ir1_with_ambient_grant(
                                     )) || binding_lookup.contains_key(&http_named_import_sentinel(
                                         &spec.local_name,
                                         "net:client_request",
+                                    ))
+                                }))
+                            || (is_events_module_specifier(&import.source)
+                                && specifiers.iter().any(|spec| {
+                                    binding_lookup.contains_key(&events_once_binding_sentinel(
+                                        &spec.local_name,
                                     ))
                                 }));
                         if named_builtin_import {
@@ -7442,6 +7454,12 @@ pub fn lower_ir2_to_ir3(
                     let dst = alloc_register(&mut fn_reg);
                     ir3.instructions
                         .push(Ir3Instruction::Move { dst, src: current });
+                    ir3.instructions
+                        .push(Ir3Instruction::AwaitValue { promise_reg: dst });
+                    // AwaitValue overwrites `dst` with the fulfillment value
+                    // when execution resumes. The old Move-only path made
+                    // source-level async functions treat every await as a
+                    // synchronous identity operation (bd-asw4m.1).
                     fn_value_stack.push(dst);
                 }
                 // Operations that should not appear in function bodies
@@ -10556,6 +10574,12 @@ fn lower_expression_to_ir1_inner(
                 // (`tp.setTimeout(ms, value)`, `tp.setInterval(ms)`) share
                 // the slot-0 no-receiver convention with querystring/os.
                 .or_else(|| timers_promises_builtin_call_capability(callee, binding_lookup))
+                // bd-asw4m.1: Promise-backed static `events.once` is also a
+                // lowering-only pure builtin. Both a confirmed direct binding
+                // (`const { once } = require('events')` / ESM named import)
+                // and a confirmed CJS module alias (`events.once(...)`) route
+                // here without materializing the ambient module object.
+                .or_else(|| events_once_call_capability(callee, binding_lookup))
             {
                 let arg_count = arguments.len();
                 if arg_count > u32::MAX as usize {
@@ -15112,15 +15136,17 @@ fn confirmed_timers_promises_module_aliases(
 // ---------------------------------------------------------------------------
 // Node `events` builtin recognition (bd-2dmnn)
 //
-// The engine does not materialize a CommonJS `events` module object. Instead,
-// a pre-scan confirms only the two supported CJS export shapes and records
-// provenance sentinels in the lowering lookup:
+// The engine does not materialize a Node `events` module object. Instead, a
+// pre-scan confirms only supported static export shapes and records provenance
+// sentinels in the lowering lookup:
 //   * `const { EventEmitter } = require('events')`, when the local is used by
 //     `new EventEmitter(...)` or `EventEmitter.defaultMaxListeners`;
+//   * `const { once } = require('events')` or `import { once } from
+//     'node:events'`, when the local is called;
 //   * `const events = require('events')`, when the alias is read as
-//     `events.captureRejections`.
-// Bare/unused requires and the deliberately deferred `events.once` export do
-// not get a sentinel, so they preserve the ambient-authority denial.
+//     `events.captureRejections` or called as `events.once(...)`.
+// Bare/unused requires/imports and unsupported exports do not get a sentinel,
+// so they preserve the ambient-authority denial/module-load failure.
 
 fn is_events_module_specifier(specifier: &str) -> bool {
     specifier == "events" || specifier == "node:events"
@@ -15128,6 +15154,10 @@ fn is_events_module_specifier(specifier: &str) -> bool {
 
 fn event_emitter_binding_sentinel(name: &str) -> String {
     format!("\0eventemitter\0{name}")
+}
+
+fn events_once_binding_sentinel(name: &str) -> String {
+    format!("\0eventsonce\0{name}")
 }
 
 fn events_module_alias_sentinel(name: &str) -> String {
@@ -15232,6 +15262,26 @@ fn is_events_alias_capture_rejections_read(expr: &Expression, alias: &str) -> bo
                     if name == "captureRejections"))
 }
 
+fn is_events_once_direct_call(expr: &Expression, local: &str) -> bool {
+    matches!(expr,
+        Expression::Call { callee, .. }
+            if matches!(callee.as_ref(), Expression::Identifier(name) if name == local))
+}
+
+fn is_events_alias_once_call(expr: &Expression, alias: &str) -> bool {
+    matches!(expr,
+        Expression::Call { callee, .. }
+            if matches!(callee.as_ref(), Expression::Member {
+                object,
+                property,
+                computed: false,
+                ..
+            } if matches!(object.as_ref(), Expression::Identifier(name) if name == alias)
+                && matches!(property.as_ref(),
+                    Expression::Identifier(name) | Expression::StringLiteral(name)
+                        if name == "once")))
+}
+
 fn confirmed_event_emitter_destructured_requires(
     body: &[Statement],
     binding_lookup: &BTreeMap<String, BindingId>,
@@ -15274,6 +15324,73 @@ fn confirmed_event_emitter_destructured_requires(
         .collect()
 }
 
+fn confirmed_events_once_destructured_requires(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for stmt in body {
+        if let Statement::VariableDeclaration(vd) = stmt {
+            for declaration in &vd.declarations {
+                let (Some(init), BindingPattern::ObjectPattern(properties)) =
+                    (&declaration.initializer, &declaration.pattern)
+                else {
+                    continue;
+                };
+                if !is_require_events_module_initializer(init, binding_lookup) {
+                    continue;
+                }
+                for property in properties {
+                    if property.computed
+                        || !matches!(&property.key,
+                            Expression::Identifier(name) | Expression::StringLiteral(name)
+                                if name == "once")
+                    {
+                        continue;
+                    }
+                    if let BindingPattern::Identifier(local) = &property.value {
+                        candidates.insert(local.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    candidates
+        .into_iter()
+        .filter(|local| {
+            body.iter().any(|stmt| {
+                timers_scan_statement_deep(stmt, &|expr| is_events_once_direct_call(expr, local))
+            })
+        })
+        .collect()
+}
+
+fn confirmed_events_once_named_imports(body: &[Statement]) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for stmt in body {
+        if let Statement::Import(import) = stmt
+            && is_events_module_specifier(&import.source)
+            && let ImportClause::Named { specifiers } = &import.clause
+        {
+            for specifier in specifiers {
+                if specifier.import_name == "once" {
+                    candidates.insert(specifier.local_name.clone());
+                }
+            }
+        }
+    }
+
+    candidates
+        .into_iter()
+        .filter(|local| {
+            body.iter().any(|stmt| {
+                timers_scan_statement_deep(stmt, &|expr| is_events_once_direct_call(expr, local))
+            })
+        })
+        .collect()
+}
+
 fn confirmed_events_module_aliases(
     body: &[Statement],
     binding_lookup: &BTreeMap<String, BindingId>,
@@ -15298,6 +15415,7 @@ fn confirmed_events_module_aliases(
             body.iter().any(|stmt| {
                 timers_scan_statement_deep(stmt, &|expr| {
                     is_events_alias_capture_rejections_read(expr, alias)
+                        || is_events_alias_once_call(expr, alias)
                 })
             })
         })
@@ -15321,16 +15439,21 @@ fn confirmed_events_destructure_locals(
         if property.computed {
             return None;
         }
-        if !matches!(&property.key,
-            Expression::Identifier(name) | Expression::StringLiteral(name)
-                if name == "EventEmitter")
-        {
-            return None;
-        }
         let BindingPattern::Identifier(local) = &property.value else {
             return None;
         };
-        if !binding_lookup.contains_key(&event_emitter_binding_sentinel(local)) {
+        let confirmed = match &property.key {
+            Expression::Identifier(name) | Expression::StringLiteral(name)
+                if name == "EventEmitter" =>
+            {
+                binding_lookup.contains_key(&event_emitter_binding_sentinel(local))
+            }
+            Expression::Identifier(name) | Expression::StringLiteral(name) if name == "once" => {
+                binding_lookup.contains_key(&events_once_binding_sentinel(local))
+            }
+            _ => false,
+        };
+        if !confirmed {
             return None;
         }
         locals.push(local.clone());
@@ -15343,9 +15466,39 @@ fn seed_events_module_sentinels(
     outer_lookup: &BTreeMap<String, BindingId>,
 ) {
     for key in outer_lookup.keys() {
-        if key.starts_with("\0eventemitter\0") || key.starts_with("\0eventsmod\0") {
+        if key.starts_with("\0eventemitter\0")
+            || key.starts_with("\0eventsonce\0")
+            || key.starts_with("\0eventsmod\0")
+        {
             body_lookup.insert(key.clone(), 0);
         }
+    }
+}
+
+fn events_once_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    match callee {
+        Expression::Identifier(name)
+            if binding_lookup.contains_key(&events_once_binding_sentinel(name)) =>
+        {
+            Some("builtin:EventsOnce")
+        }
+        Expression::Member {
+            object,
+            property,
+            computed: false,
+            ..
+        } if matches!(object.as_ref(), Expression::Identifier(name)
+            if binding_lookup.contains_key(&events_module_alias_sentinel(name)))
+            && matches!(property.as_ref(),
+                Expression::Identifier(name) | Expression::StringLiteral(name)
+                    if name == "once") =>
+        {
+            Some("builtin:EventsOnce")
+        }
+        _ => None,
     }
 }
 

@@ -5842,6 +5842,7 @@ pub fn lower_ir2_to_ir3(
         let mut fn_last_popped: Option<Reg> = None;
         let mut fn_label_targets = BTreeMap::<u32, u32>::new();
         let mut fn_pending_jumps = Vec::<PendingJump>::new();
+        let mut fn_catch_entry_labels = BTreeSet::<u32>::new();
         // Iterator registers to drop from the value stack when their loop's
         // done-label lands (bd-ddloz; mirrors the top-level pass).
         let mut fn_iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
@@ -6179,6 +6180,11 @@ pub fn lower_ir2_to_ir3(
                 Ir1Op::Label { id } => {
                     let target = ir3.instructions.len() as u32;
                     fn_label_targets.insert(*id, target);
+                    if fn_catch_entry_labels.contains(id) {
+                        let dst = alloc_register(&mut fn_reg);
+                        ir3.instructions.push(Ir3Instruction::EnterCatch { dst });
+                        fn_value_stack.push(dst);
+                    }
                     // A for..in/of done-label lands with the iterator
                     // register still on the value stack; drop it so the
                     // stack stays balanced (bd-ddloz; mirrors the
@@ -6435,6 +6441,33 @@ pub fn lower_ir2_to_ir3(
                 Ir1Op::Throw => {
                     let value = fn_value_stack.pop().unwrap_or(0);
                     ir3.instructions.push(Ir3Instruction::Throw { value });
+                }
+                Ir1Op::BeginTry {
+                    catch_label,
+                    finally_label,
+                } => {
+                    if finally_label.as_ref() != Some(catch_label) {
+                        fn_catch_entry_labels.insert(*catch_label);
+                    }
+                    let instruction_index = ir3.instructions.len();
+                    ir3.instructions.push(Ir3Instruction::BeginTry {
+                        catch_target: 0,
+                        finally_target: None,
+                    });
+                    fn_pending_jumps.push(PendingJump::TryCatch {
+                        instruction_index,
+                        catch_label_id: *catch_label,
+                        finally_label_id: *finally_label,
+                    });
+                }
+                Ir1Op::EndTry => {
+                    ir3.instructions.push(Ir3Instruction::EndTry);
+                }
+                Ir1Op::EnterFinally => {
+                    ir3.instructions.push(Ir3Instruction::EnterFinally);
+                }
+                Ir1Op::EndFinally => {
+                    ir3.instructions.push(Ir3Instruction::EndFinally);
                 }
                 // Nested function definitions inside function bodies.
                 Ir1Op::DeclareFunction {
@@ -6737,7 +6770,30 @@ pub fn lower_ir2_to_ir3(
                         }
                     }
                 }
-                _ => {}
+                PendingJump::TryCatch {
+                    instruction_index,
+                    catch_label_id,
+                    finally_label_id,
+                } => {
+                    let catch_target = *fn_label_targets.get(&catch_label_id).ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail: "function try/catch lowering references missing catch label",
+                        },
+                    )?;
+                    let finally_target = if let Some(finally_label_id) = finally_label_id {
+                        Some(*fn_label_targets.get(&finally_label_id).ok_or(
+                            LoweringPipelineError::InvariantViolation {
+                                detail: "function try/finally lowering references missing finally label",
+                            },
+                        )?)
+                    } else {
+                        None
+                    };
+                    ir3.instructions[instruction_index] = Ir3Instruction::BeginTry {
+                        catch_target,
+                        finally_target,
+                    };
+                }
             }
         }
 
@@ -9840,6 +9896,8 @@ mod tests {
         UnaryOperator, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
         WhileStatement,
     };
+    use crate::baseline_interpreter::{InterpreterConfig, QuickJsLane, Value};
+    use crate::capability::RuntimeCapability;
     use crate::parser::{CanonicalEs2020Parser, Es2020Parser};
     use crate::parser_gap_inventory::{ParserGapSiteId, UnsupportedSyntaxDiagnostic};
 
@@ -9869,6 +9927,31 @@ mod tests {
             &LoweringContext::new("trace-rest", "decision-rest", "policy-rest"),
         )
         .map(|output| output.ir3)
+    }
+
+    fn lower_exception_source_to_ir3_bd_47p8z(source: &str) -> Ir3Module {
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect("exception-lowering regression source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_47p8z.js");
+        lower_ir0_to_ir3(
+            &ir0,
+            &LoweringContext::new("trace-bd-47p8z", "decision-bd-47p8z", "policy-bd-47p8z"),
+        )
+        .expect("exception-lowering regression source should lower")
+        .ir3
+    }
+
+    fn execute_exception_module_bd_47p8z(module: &Ir3Module) -> Value {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
+        QuickJsLane::with_config(config)
+            .execute(module, "trace-bd-47p8z")
+            .expect("exception-lowering regression should execute")
+            .value
     }
 
     #[test]
@@ -13984,6 +14067,151 @@ mod tests {
                 .any(|instruction| matches!(instruction, Ir3Instruction::Return { .. })),
             "deferred function body should lower to executable IR3"
         );
+    }
+
+    #[test]
+    fn deferred_function_try_catch_relocates_and_executes_bd_47p8z() {
+        let module = lower_exception_source_to_ir3_bd_47p8z(
+            "function f(){ try { throw 7; } catch(e){ return e; } } f();",
+        );
+        let entry = module
+            .function_table
+            .iter()
+            .find(|desc| desc.name.as_deref() == Some("f"))
+            .expect("deferred function descriptor should exist")
+            .entry as usize;
+
+        assert!(matches!(
+            module.instructions[entry],
+            Ir3Instruction::BeginTry {
+                catch_target,
+                finally_target: None,
+            } if catch_target == (entry + 5) as u32
+        ));
+        assert!(matches!(
+            module.instructions[entry + 3],
+            Ir3Instruction::EndTry
+        ));
+        assert!(matches!(
+            module.instructions[entry + 5],
+            Ir3Instruction::EnterCatch { .. }
+        ));
+        assert_eq!(execute_exception_module_bd_47p8z(&module), Value::Int(7));
+    }
+
+    #[test]
+    fn deferred_function_finally_overrides_pending_return_bd_47p8z() {
+        let module = lower_exception_source_to_ir3_bd_47p8z(
+            "function f(){ try { return 1; } finally { return 2; } } f();",
+        );
+        let function = module
+            .function_table
+            .iter()
+            .find(|desc| desc.name.as_deref() == Some("f"))
+            .expect("deferred function descriptor should exist");
+        let entry = function.entry as usize;
+        let body = &module.instructions[entry..];
+
+        assert!(matches!(
+            module.instructions[entry],
+            Ir3Instruction::BeginTry {
+                catch_target,
+                finally_target: Some(finally_target),
+            } if catch_target == (entry + 5) as u32
+                && finally_target == (entry + 5) as u32
+        ));
+        assert!(matches!(
+            module.instructions[entry + 5],
+            Ir3Instruction::EnterFinally
+        ));
+        assert!(
+            !body
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::EnterCatch { .. })),
+            "a finally-only handler must not consume the pending abrupt completion"
+        );
+        assert_eq!(execute_exception_module_bd_47p8z(&module), Value::Int(2));
+    }
+
+    #[test]
+    fn deferred_nested_catch_finally_targets_stay_in_function_bd_47p8z() {
+        let module = lower_exception_source_to_ir3_bd_47p8z(
+            "function f(){ try { try { throw 1; } catch(inner){ throw 2; } finally {} } catch(outer){ return outer; } } f();",
+        );
+        let entry = module
+            .function_table
+            .iter()
+            .find(|desc| desc.name.as_deref() == Some("f"))
+            .expect("deferred function descriptor should exist")
+            .entry as usize;
+        let body = &module.instructions[entry..];
+
+        assert!(matches!(
+            module.instructions[entry],
+            Ir3Instruction::BeginTry {
+                catch_target,
+                finally_target: None,
+            } if catch_target == (entry + 18) as u32
+        ));
+        assert!(matches!(
+            module.instructions[entry + 1],
+            Ir3Instruction::BeginTry {
+                catch_target,
+                finally_target: Some(finally_target),
+            } if catch_target == (entry + 6) as u32
+                && finally_target == (entry + 13) as u32
+        ));
+        assert!(matches!(
+            module.instructions[entry + 7],
+            Ir3Instruction::BeginTry {
+                catch_target,
+                finally_target: Some(finally_target),
+            } if catch_target == (entry + 13) as u32
+                && finally_target == (entry + 13) as u32
+        ));
+        assert!(matches!(
+            module.instructions[entry + 6],
+            Ir3Instruction::EnterCatch { .. }
+        ));
+        assert!(matches!(
+            module.instructions[entry + 13],
+            Ir3Instruction::EnterFinally
+        ));
+        assert!(matches!(
+            module.instructions[entry + 18],
+            Ir3Instruction::EnterCatch { .. }
+        ));
+        assert_eq!(
+            body.iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::BeginTry { .. }))
+                .count(),
+            3
+        );
+        assert_eq!(
+            body.iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::EndTry))
+                .count(),
+            3
+        );
+        assert_eq!(
+            body.iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::EnterCatch { .. }))
+                .count(),
+            2
+        );
+        assert_eq!(
+            body.iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::EnterFinally))
+                .count(),
+            1
+        );
+        assert_eq!(
+            body.iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::EndFinally))
+                .count(),
+            1
+        );
+        assert_eq!(execute_exception_module_bd_47p8z(&module), Value::Int(2));
     }
 
     // ================================================================

@@ -660,6 +660,19 @@ struct AsyncFunctionObject {
     result_promise: u32,
 }
 
+/// Fully validated state needed to enter an async function call frame.
+struct AsyncCallSetup {
+    function_index: u32,
+    function_entry: u32,
+    closure_index: Option<u32>,
+    captured_env: Option<Vec<ScopeFrame>>,
+    arguments: Vec<(Value, crate::ifc_artifacts::Label)>,
+    this_value: Value,
+    this_label: crate::ifc_artifacts::Label,
+    super_value: Value,
+    result_register: u32,
+}
+
 /// An async generator object combines generator suspension with promise wrapping.
 /// Each yield creates a promise-wrapped value, and can use await inside the body.
 #[allow(dead_code)]
@@ -3028,6 +3041,96 @@ impl InterpreterCore {
         Ok(())
     }
 
+    fn enter_async_function_call(&mut self, setup: AsyncCallSetup) -> Result<(), InterpreterError> {
+        let AsyncCallSetup {
+            function_index,
+            function_entry,
+            closure_index,
+            captured_env,
+            arguments,
+            this_value,
+            this_label,
+            super_value,
+            result_register,
+        } = setup;
+
+        let promise_handle = self.promise_store.create();
+        let async_func_id =
+            u32::try_from(self.async_functions.len()).map_err(|_| InterpreterError::TypeError {
+                expected: "async function table capacity".into(),
+                got: format!("exceeded u32::MAX ({})", self.async_functions.len()),
+            })?;
+        self.async_functions.push(AsyncFunctionObject {
+            function_index,
+            closure_index,
+            saved_ip: 0,
+            saved_registers: Vec::new(),
+            saved_register_labels: Vec::new(),
+            saved_register_base: 0,
+            phase: AsyncFunctionPhase::Executing,
+            result_promise: promise_handle.0,
+        });
+        self.write_reg(result_register, Value::Promise(promise_handle.0))?;
+
+        let scope_depth = self.scope_chain.depth();
+        let captured_env_bytes = captured_env
+            .as_ref()
+            .map(|env| Self::estimate_scope_chain_bytes(env))
+            .unwrap_or(0);
+        let captured_scope_depth = captured_env.as_ref().map_or(0, Vec::len);
+        let saved_chain = if captured_env.is_some() {
+            Some(self.snapshot_scope_chain_with_temporary_budget(captured_env_bytes)?)
+        } else {
+            None
+        };
+
+        self.call_stack.push(CallFrame {
+            return_ip: self.ip + 1,
+            return_reg: None,
+            register_base: self.register_base,
+            function_index: Some(function_index),
+            this_value,
+            this_label,
+            new_target_value: Value::Undefined,
+            super_value,
+            construct_this: None,
+            saved_pending_exception: self.pending_exception.take(),
+            saved_pending_return: self.pending_return.take(),
+            saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
+            saved_finally_mode_depth: self.finally_modes.len(),
+            saved_scope_depth: scope_depth,
+            saved_scope_chain: saved_chain,
+            closure_id: closure_index,
+            captured_scope_depth,
+            async_function_id: Some(async_func_id),
+        });
+
+        if let Some(env) = captured_env {
+            self.scope_chain.frames = env;
+        }
+        if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
+            self.rollback_call_setup();
+            return Err(err);
+        }
+        if let Err(err) = self.sync_estimated_memory_bytes() {
+            self.rollback_call_setup();
+            return Err(err);
+        }
+
+        self.register_base += self.config.max_registers as usize;
+        let req_len = self.register_base + self.config.max_registers as usize;
+        self.clear_register_range(self.register_base, req_len);
+        for (index, (value, label)) in arguments.into_iter().enumerate() {
+            let register = index as u32;
+            if register < self.config.max_registers {
+                self.write_reg_with_label(register, value, label)?;
+            }
+        }
+
+        self.ip = function_entry as usize;
+        Ok(())
+    }
+
     fn complete_return(
         &mut self,
         return_val: Value,
@@ -4328,90 +4431,17 @@ impl InterpreterCore {
                         )?;
                         self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
-                        let promise_handle = self.promise_store.create();
-                        let async_func_id =
-                            u32::try_from(self.async_functions.len()).map_err(|_| {
-                                InterpreterError::TypeError {
-                                    expected: "async function table capacity".into(),
-                                    got: format!(
-                                        "exceeded u32::MAX ({})",
-                                        self.async_functions.len()
-                                    ),
-                                }
-                            })?;
-                        self.async_functions.push(AsyncFunctionObject {
+                        self.enter_async_function_call(AsyncCallSetup {
                             function_index: func_idx,
+                            function_entry: func.entry,
                             closure_index: closure_id,
-                            saved_ip: 0,
-                            saved_registers: Vec::new(),
-                            saved_register_labels: Vec::new(),
-                            saved_register_base: 0,
-                            phase: AsyncFunctionPhase::Executing,
-                            result_promise: promise_handle.0,
-                        });
-                        self.write_reg(dst, Value::Promise(promise_handle.0))?;
-
-                        let scope_depth = self.scope_chain.depth();
-                        let captured_env_bytes = captured_env
-                            .as_ref()
-                            .map(|env| Self::estimate_scope_chain_bytes(env))
-                            .unwrap_or(0);
-                        let captured_scope_depth = captured_env.as_ref().map_or(0, Vec::len);
-                        let saved_chain =
-                            if captured_env.is_some() {
-                                Some(self.snapshot_scope_chain_with_temporary_budget(
-                                    captured_env_bytes,
-                                )?)
-                            } else {
-                                None
-                            };
-
-                        self.call_stack.push(CallFrame {
-                            return_ip: self.ip + 1,
-                            return_reg: None,
-                            register_base: self.register_base,
-                            function_index: Some(func_idx),
+                            captured_env,
+                            arguments: arg_vals.into_iter().zip(arg_labels).collect(),
                             this_value: Value::Undefined,
                             this_label: crate::ifc_artifacts::Label::Public,
-                            new_target_value: Value::Undefined,
                             super_value: Value::Undefined,
-                            construct_this: None,
-                            saved_pending_exception: self.pending_exception.take(),
-                            saved_pending_return: self.pending_return.take(),
-                            saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
-                            saved_finally_mode_depth: self.finally_modes.len(),
-                            saved_scope_depth: scope_depth,
-                            saved_scope_chain: saved_chain,
-                            closure_id,
-                            captured_scope_depth,
-                            async_function_id: Some(async_func_id),
-                        });
-
-                        if let Some(env) = captured_env {
-                            self.scope_chain.frames = env;
-                        }
-
-                        if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
-                            self.rollback_call_setup();
-                            return Err(err);
-                        }
-                        if let Err(err) = self.sync_estimated_memory_bytes() {
-                            self.rollback_call_setup();
-                            return Err(err);
-                        }
-
-                        self.register_base += self.config.max_registers as usize;
-                        let req_len = self.register_base + self.config.max_registers as usize;
-                        self.clear_register_range(self.register_base, req_len);
-
-                        for (i, (val, label)) in arg_vals.into_iter().zip(arg_labels).enumerate() {
-                            let reg = i as u32;
-                            if reg < self.config.max_registers {
-                                self.write_reg_with_label(reg, val, label)?;
-                            }
-                        }
-
-                        self.ip = func.entry as usize;
+                            result_register: dst,
+                        })?;
                         continue;
                     }
 
@@ -4675,7 +4705,7 @@ impl InterpreterCore {
 
                     let (func_idx, captured_env, closure_id) = match &callee_val {
                         Value::Function(idx) => (*idx, None, None),
-                        Value::Closure(closure_id) => {
+                        Value::Closure(closure_id) | Value::AsyncFunction(closure_id) => {
                             let closure =
                                 self.closures.get(*closure_id as usize).ok_or_else(|| {
                                     InterpreterError::TypeError {
@@ -4741,6 +4771,22 @@ impl InterpreterCore {
                     )?;
                     self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
+                    let super_value = self.method_super_value(&callee_val, &receiver_val)?;
+                    if matches!(&callee_val, Value::AsyncFunction(_)) {
+                        self.enter_async_function_call(AsyncCallSetup {
+                            function_index: func_idx,
+                            function_entry: func.entry,
+                            closure_index: closure_id,
+                            captured_env,
+                            arguments: arg_vals.into_iter().zip(arg_labels).collect(),
+                            this_value: receiver_val,
+                            this_label: receiver_label,
+                            super_value,
+                            result_register: dst,
+                        })?;
+                        continue;
+                    }
+
                     let scope_depth = self.scope_chain.depth();
                     let captured_env_bytes = captured_env
                         .as_ref()
@@ -4752,7 +4798,6 @@ impl InterpreterCore {
                     } else {
                         None
                     };
-                    let super_value = self.method_super_value(&callee_val, &receiver_val)?;
                     self.call_stack.push(CallFrame {
                         return_ip: self.ip + 1,
                         return_reg: Some(dst),
@@ -5860,7 +5905,7 @@ impl InterpreterCore {
                             // await non-promise: create a resolved promise with the value
                             let js_val = Self::value_to_js_value(&awaited_value);
                             let handle = self.promise_store.create();
-                            self.fulfill_promise(handle, js_val, awaited_label)?;
+                            self.fulfill_promise(handle, js_val, awaited_label.clone())?;
                             handle
                         }
                     };
@@ -5874,6 +5919,7 @@ impl InterpreterCore {
                     })?;
                     let promise_state = promise_record.state.clone();
                     let promise_label = promise_record.label.clone();
+                    let effective_label = awaited_label.join(&promise_label);
 
                     if promise_state.is_settled() {
                         // Promise already settled - continue execution synchronously
@@ -5883,7 +5929,7 @@ impl InterpreterCore {
                                 self.write_reg_with_label(
                                     promise_reg,
                                     result_value,
-                                    promise_label,
+                                    effective_label,
                                 )?;
                                 self.ip += 1;
                                 continue;
@@ -5908,7 +5954,11 @@ impl InterpreterCore {
                                         async_func.result_promise,
                                     );
                                     let js_reason = Self::value_to_js_value(&error_value);
-                                    self.reject_promise(promise_handle, js_reason, promise_label)?;
+                                    self.reject_promise(
+                                        promise_handle,
+                                        js_reason,
+                                        effective_label,
+                                    )?;
                                     if let Some(func) =
                                         self.async_functions.get_mut(async_func_id as usize)
                                     {
@@ -17748,6 +17798,361 @@ mod tests {
                 crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Str(
                     value
                 )) if value == "secret"
+            ));
+        }
+
+        #[test]
+        fn async_await_joins_handle_and_settlement_labels_bd_ur3tk_3() {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "async-await-handle-label");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateAsyncFunction {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::Call {
+                        callee: 0,
+                        args: RegRange {
+                            start: 10,
+                            count: 1,
+                        },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::AwaitValue { promise_reg: 0 },
+                    Ir3Instruction::AsyncReturn { value_reg: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("await_labeled_handle".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            let handle = core.promise_store.create();
+            core.promise_store
+                .fulfill(
+                    handle,
+                    crate::object_model::JsValue::Str("public-payload".into()),
+                    crate::ifc_artifacts::Label::Public,
+                    &mut core.event_loop.microtasks,
+                )
+                .expect("seed promise should be fulfillable");
+            core.write_reg_with_label(
+                10,
+                Value::Promise(handle.0),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("Promise handle should accept its external label");
+
+            core.execute(&module)
+                .expect("settled await should preserve the handle label");
+
+            let Value::Promise(result_handle) = core.registers[1] else {
+                panic!("async call should leave its result Promise");
+            };
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("result Promise exists");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Str(
+                    value
+                )) if value == "public-payload"
+            ));
+        }
+
+        #[test]
+        fn async_rejected_await_joins_handle_label_bd_ur3tk_3() {
+            let mut core =
+                InterpreterCore::new(test_quickjs_config(), "async-rejected-handle-label");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateAsyncFunction {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::Call {
+                        callee: 0,
+                        args: RegRange {
+                            start: 10,
+                            count: 1,
+                        },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::AwaitValue { promise_reg: 0 },
+                    Ir3Instruction::AsyncReturn { value_reg: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("await_labeled_rejection".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            let handle = core.promise_store.create();
+            core.promise_store
+                .reject(
+                    handle,
+                    crate::object_model::JsValue::Str("public-reason".into()),
+                    crate::ifc_artifacts::Label::Public,
+                    &mut core.event_loop.microtasks,
+                )
+                .expect("seed promise should be rejectable");
+            core.write_reg_with_label(
+                10,
+                Value::Promise(handle.0),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("rejected Promise handle should accept its external label");
+
+            core.execute(&module)
+                .expect("rejected settled await should reject the result Promise");
+
+            let Value::Promise(result_handle) = core.registers[1] else {
+                panic!("async call should leave its result Promise");
+            };
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("result Promise exists");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Rejected(crate::object_model::JsValue::Str(
+                    value
+                )) if value == "public-reason"
+            ));
+        }
+
+        #[test]
+        fn async_method_preserves_receiver_label_bd_ur3tk_3() {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "async-method-receiver");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateAsyncFunction {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::CallMethod {
+                        receiver: 2,
+                        callee: 0,
+                        args: RegRange {
+                            start: 10,
+                            count: 0,
+                        },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadThis { dst: 0 },
+                    Ir3Instruction::AsyncReturn { value_reg: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("async_method_this".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            core.write_reg_with_label(
+                2,
+                Value::str("secret-receiver"),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("receiver should be writable");
+
+            core.execute(&module)
+                .expect("async method should dispatch and resolve");
+
+            let Value::Promise(result_handle) = core.registers[1] else {
+                panic!("async method should leave its result Promise");
+            };
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("result Promise exists");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Str(
+                    value
+                )) if value == "secret-receiver"
+            ));
+        }
+
+        #[test]
+        fn async_method_preserves_argument_label_bd_ur3tk_3() {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "async-method-argument");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateAsyncFunction {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::CallMethod {
+                        receiver: 2,
+                        callee: 0,
+                        args: RegRange {
+                            start: 10,
+                            count: 1,
+                        },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::AsyncReturn { value_reg: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("async_method_argument".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            core.registers[2] = Value::str("public-receiver");
+            core.write_reg_with_label(
+                10,
+                Value::str("secret-argument"),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("method argument should be writable");
+
+            core.execute(&module)
+                .expect("async method should preserve argument labels");
+
+            let Value::Promise(result_handle) = core.registers[1] else {
+                panic!("async method should leave its result Promise");
+            };
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("result Promise exists");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Str(
+                    value
+                )) if value == "secret-argument"
+            ));
+        }
+
+        #[test]
+        fn async_direct_return_preserves_argument_label_bd_ur3tk_3() {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "async-direct-return-label");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateAsyncFunction {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::Call {
+                        callee: 0,
+                        args: RegRange {
+                            start: 10,
+                            count: 1,
+                        },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::AsyncReturn { value_reg: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("direct_async_return".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            core.write_reg_with_label(
+                10,
+                Value::str("secret-return"),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("async argument should be writable");
+
+            core.execute(&module)
+                .expect("direct async return should resolve");
+
+            let Value::Promise(result_handle) = core.registers[1] else {
+                panic!("async call should leave its result Promise");
+            };
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("result Promise exists");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+        }
+
+        #[test]
+        fn async_direct_throw_preserves_argument_label_bd_ur3tk_3() {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "async-direct-throw-label");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateAsyncFunction {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::Call {
+                        callee: 0,
+                        args: RegRange {
+                            start: 10,
+                            count: 1,
+                        },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::AsyncThrow { error_reg: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("direct_async_throw".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            core.write_reg_with_label(
+                10,
+                Value::str("secret-rejection"),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("async rejection argument should be writable");
+
+            core.execute(&module)
+                .expect("direct async throw should reject its Promise");
+
+            let Value::Promise(result_handle) = core.registers[1] else {
+                panic!("async call should leave its result Promise");
+            };
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("result Promise exists");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Rejected(crate::object_model::JsValue::Str(
+                    value
+                )) if value == "secret-rejection"
             ));
         }
 

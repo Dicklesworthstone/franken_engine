@@ -465,9 +465,15 @@ pub enum Ir1Op {
         binding_id: BindingId,
         param_names: Vec<String>,
         body_ops: Vec<Ir1Op>,
-        /// Names of variables from enclosing scopes referenced inside
-        /// the function body (free variables / upvalues).  The IR3
-        /// lowering uses these to emit scope-chain capture instructions.
+        /// Deterministic runtime capture-cell names for variables from
+        /// enclosing scopes referenced inside the function body (free
+        /// variables / upvalues). Ordinary captures use an internal,
+        /// collision-proof name derived from the exact defining binding ID so
+        /// disjoint same-named lexical bindings remain distinct; the named
+        /// function-expression self binding retains its source name for the
+        /// closure self-bind seam. IR3 lowering uses these names to emit
+        /// scope-chain capture instructions. Because exact capture-cell
+        /// identity changes execution semantics, this vector is canonical.
         free_vars: Vec<String>,
         /// Body binding-ids of each free variable, aligned 1:1 with
         /// `free_vars`. Captured at emission time (where the body lookup is
@@ -489,11 +495,11 @@ pub enum Ir1Op {
         /// declares or shadows them (bd-ylpdp).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         runtime_global_loads: Vec<(String, BindingId)>,
-        /// Body-local bindings (name + body binding-id) that CHILD closures
-        /// capture, computed at emission time where the body lookup is still
-        /// available. The deferred IR3 pass mirrors stores of exactly these
-        /// bindings onto the scope chain (DeclareBinding + StoreScoped) so
-        /// child captures resolve. Replaces the former positional
+        /// Body-local bindings (runtime capture-cell name + body binding-id)
+        /// that CHILD closures capture, computed at emission time where the
+        /// body lookup is still available. The deferred IR3 pass routes reads
+        /// and writes of exactly these bindings through the scope chain so
+        /// child and parent share one live cell. Replaces the former positional
         /// `nth(binding_id - param_count)` heuristic, which could mirror an
         /// internal temp (e.g. a method-call receiver) under a captured
         /// variable's name — shadowing the real captured binding with

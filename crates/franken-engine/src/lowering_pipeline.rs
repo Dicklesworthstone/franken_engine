@@ -74,12 +74,68 @@ const COMPONENT: &str = "lowering_pipeline";
 const IFC_RUNTIME_GUARD_CAPABILITY: &str = "ifc.check_flow";
 const IFC_FLOW_PROOF_ERROR_CODE: &str = "FE-LOWER-IFC-0001";
 const IFC_FLOW_PROOF_SCHEMA_VERSION: &str = "frankenengine.ir2_flow_proof_witness.v1";
+const LEXICAL_BINDING_SENTINEL_PREFIX: &str = "\0lexical\0";
+const CAPTURE_ORIGIN_SENTINEL_PREFIX: &str = "\0capture-origin\0";
+const CAPTURE_CELL_NAME_PREFIX: &str = "\0capture-cell\0";
+const CHILD_CAPTURE_BINDING_SENTINEL_PREFIX: &str = "\0child-capture\0";
 
 /// Maximum number of IR1 ops to preallocate based on AST size (prevents pathological growth).
 const MAX_PREALLOC_OPS: usize = 1_000_000; // 1M ops max
 
 /// Maximum number of bindings to preallocate based on AST size (prevents pathological growth).
 const MAX_PREALLOC_BINDINGS: usize = 250_000; // 250K bindings max
+
+fn lexical_binding_sentinel(name: &str) -> String {
+    format!("{LEXICAL_BINDING_SENTINEL_PREFIX}{name}")
+}
+
+fn capture_origin_sentinel(name: &str) -> String {
+    format!("{CAPTURE_ORIGIN_SENTINEL_PREFIX}{name}")
+}
+
+fn capture_cell_name(name: &str, origin_id: BindingId) -> String {
+    format!("{CAPTURE_CELL_NAME_PREFIX}{origin_id}\0{name}")
+}
+
+fn parse_capture_cell_name(name: &str) -> Option<(BindingId, &str)> {
+    let encoded = name.strip_prefix(CAPTURE_CELL_NAME_PREFIX)?;
+    let (origin_id, source_name) = encoded.split_once('\0')?;
+    Some((origin_id.parse().ok()?, source_name))
+}
+
+fn child_capture_binding_sentinel(binding_id: BindingId, runtime_name: &str) -> String {
+    format!("{CHILD_CAPTURE_BINDING_SENTINEL_PREFIX}{binding_id}\0{runtime_name}")
+}
+
+fn parse_child_capture_binding_sentinel(name: &str) -> Option<(BindingId, &str)> {
+    let encoded = name.strip_prefix(CHILD_CAPTURE_BINDING_SENTINEL_PREFIX)?;
+    let (binding_id, runtime_name) = encoded.split_once('\0')?;
+    Some((binding_id.parse().ok()?, runtime_name))
+}
+
+fn runtime_scope_binding_name(
+    binding_id: BindingId,
+    capture_names: &BTreeMap<BindingId, String>,
+    source_names: &BTreeMap<BindingId, String>,
+) -> String {
+    capture_names
+        .get(&binding_id)
+        .or_else(|| source_names.get(&binding_id))
+        .cloned()
+        .unwrap_or_else(|| format!("__binding_{binding_id}"))
+}
+
+fn has_source_lexical_binding(binding_lookup: &BTreeMap<String, BindingId>, name: &str) -> bool {
+    binding_lookup.contains_key(&lexical_binding_sentinel(name))
+}
+
+fn is_lexically_shadowed(binding_lookup: &BTreeMap<String, BindingId>, name: &str) -> bool {
+    binding_lookup.contains_key(name) || has_source_lexical_binding(binding_lookup, name)
+}
+
+fn is_internal_lowering_binding(name: &str) -> bool {
+    name.starts_with('<') || name.starts_with("@@franken_internal_") || name.starts_with('\0')
+}
 
 /// Ambient-authority grant applied to a whole lowering unit at its root scope.
 ///
@@ -666,8 +722,20 @@ fn lower_ir0_to_ir1_with_ambient_grant(
     if ambient_grant == AmbientAuthorityGrant::TrustedProcessShape {
         binding_lookup.insert(TRUSTED_PROCESS_SHAPE_GRANT_SENTINEL.to_string(), 0);
     }
-    let declared_root_bindings =
+    let mut declared_root_bindings =
         reserve_root_scope_bindings(&ir0.tree.body, &mut binding_lookup, &mut binding_index);
+    declared_root_bindings.extend(reserve_hoisted_var_bindings(
+        &ir0.tree.body,
+        &mut binding_lookup,
+        &mut binding_index,
+    ));
+    for name in &declared_root_bindings {
+        binding_lookup.insert(lexical_binding_sentinel(name), 0);
+        let binding_id = *binding_lookup
+            .get(name)
+            .expect("reserved root source binding must have an exact id");
+        binding_lookup.insert(capture_origin_sentinel(name), binding_id);
+    }
     // bd-1xl17.a: record fs-module binding aliases (`const fs = require('fs')`
     // that are actually used as `fs.readFileSync/writeFileSync`) as NUL-sentinels
     // in binding_lookup, so the binding form lowers to fs: HostCalls just like the
@@ -1671,6 +1739,21 @@ fn reserve_binding_id(
     binding_id
 }
 
+/// Reserve a binding ID that shadows any same-named binding in an enclosing
+/// lexical scope. The real declaration later claims this pure reservation via
+/// `alloc_binding`, preserving the existing conflict checks within the new
+/// scope while never reusing the outer binding's ID.
+fn reserve_fresh_binding_id(
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    name: &str,
+) -> BindingId {
+    let binding_id = *binding_index;
+    *binding_index = binding_index.saturating_add(1);
+    binding_lookup.insert(name.to_string(), binding_id);
+    binding_id
+}
+
 fn reserve_root_scope_bindings(
     statements: &[Statement],
     binding_lookup: &mut BTreeMap<String, BindingId>,
@@ -1732,6 +1815,289 @@ fn reserve_root_scope_bindings(
     }
 
     declared
+}
+
+/// Reserve every function-scoped `var` before lowering nested closures. A
+/// nested block does not create a new `var` scope, while function/class bodies
+/// do and are intentionally opaque to this walk.
+fn reserve_hoisted_var_bindings(
+    statements: &[Statement],
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+) -> BTreeSet<String> {
+    fn visit(
+        statement: &Statement,
+        binding_lookup: &mut BTreeMap<String, BindingId>,
+        binding_index: &mut BindingId,
+        declared: &mut BTreeSet<String>,
+    ) {
+        match statement {
+            Statement::VariableDeclaration(declaration)
+                if declaration.kind == VariableDeclarationKind::Var =>
+            {
+                for declarator in &declaration.declarations {
+                    for name in declarator.pattern.binding_names() {
+                        reserve_binding_id(binding_lookup, binding_index, name);
+                        declared.insert(name.to_string());
+                    }
+                }
+            }
+            Statement::Block(block) => {
+                for nested in &block.body {
+                    visit(nested, binding_lookup, binding_index, declared);
+                }
+            }
+            Statement::If(if_statement) => {
+                visit(
+                    &if_statement.consequent,
+                    binding_lookup,
+                    binding_index,
+                    declared,
+                );
+                if let Some(alternate) = &if_statement.alternate {
+                    visit(alternate, binding_lookup, binding_index, declared);
+                }
+            }
+            Statement::For(for_statement) => {
+                if let Some(initializer) = &for_statement.init {
+                    visit(initializer, binding_lookup, binding_index, declared);
+                }
+                visit(&for_statement.body, binding_lookup, binding_index, declared);
+            }
+            Statement::ForIn(for_in) => {
+                if for_in.binding_kind == Some(VariableDeclarationKind::Var) {
+                    for name in for_in.binding.binding_names() {
+                        reserve_binding_id(binding_lookup, binding_index, name);
+                        declared.insert(name.to_string());
+                    }
+                }
+                visit(&for_in.body, binding_lookup, binding_index, declared);
+            }
+            Statement::ForOf(for_of) => {
+                if for_of.binding_kind == Some(VariableDeclarationKind::Var) {
+                    for name in for_of.binding.binding_names() {
+                        reserve_binding_id(binding_lookup, binding_index, name);
+                        declared.insert(name.to_string());
+                    }
+                }
+                visit(&for_of.body, binding_lookup, binding_index, declared);
+            }
+            Statement::While(while_statement) => visit(
+                &while_statement.body,
+                binding_lookup,
+                binding_index,
+                declared,
+            ),
+            Statement::DoWhile(do_while) => {
+                visit(&do_while.body, binding_lookup, binding_index, declared);
+            }
+            Statement::With(with_statement) => {
+                visit(
+                    &with_statement.body,
+                    binding_lookup,
+                    binding_index,
+                    declared,
+                );
+            }
+            Statement::TryCatch(try_catch) => {
+                for nested in &try_catch.block.body {
+                    visit(nested, binding_lookup, binding_index, declared);
+                }
+                if let Some(handler) = &try_catch.handler {
+                    for nested in &handler.body.body {
+                        visit(nested, binding_lookup, binding_index, declared);
+                    }
+                }
+                if let Some(finalizer) = &try_catch.finalizer {
+                    for nested in &finalizer.body {
+                        visit(nested, binding_lookup, binding_index, declared);
+                    }
+                }
+            }
+            Statement::Switch(switch_statement) => {
+                for case in &switch_statement.cases {
+                    for nested in &case.consequent {
+                        visit(nested, binding_lookup, binding_index, declared);
+                    }
+                }
+            }
+            Statement::Labeled(labeled) => {
+                visit(&labeled.body, binding_lookup, binding_index, declared);
+            }
+            Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => {}
+            _ => {}
+        }
+    }
+
+    let mut declared = BTreeSet::new();
+    for statement in statements {
+        visit(statement, binding_lookup, binding_index, &mut declared);
+    }
+    declared
+}
+
+fn source_lexical_marker_snapshot(
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    binding_lookup
+        .keys()
+        .filter(|name| name.starts_with(LEXICAL_BINDING_SENTINEL_PREFIX))
+        .cloned()
+        .collect()
+}
+
+fn restore_source_lexical_markers(
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    snapshot: &BTreeSet<String>,
+) {
+    binding_lookup.retain(|name, _| {
+        !name.starts_with(LEXICAL_BINDING_SENTINEL_PREFIX) || snapshot.contains(name)
+    });
+}
+
+fn reserve_and_mark_source_scope_bindings(
+    statements: &[Statement],
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+) {
+    for name in direct_lexical_binding_names(statements) {
+        reserve_fresh_binding_id(binding_lookup, binding_index, &name);
+    }
+    for name in reserve_root_scope_bindings(statements, binding_lookup, binding_index) {
+        binding_lookup.insert(lexical_binding_sentinel(&name), 0);
+        let binding_id = *binding_lookup
+            .get(&name)
+            .expect("reserved source binding must have an exact id");
+        binding_lookup.insert(capture_origin_sentinel(&name), binding_id);
+    }
+}
+
+fn mark_pre_reserved_source_scope_bindings(
+    statements: &[Statement],
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+) {
+    for name in reserve_root_scope_bindings(statements, binding_lookup, binding_index) {
+        binding_lookup.insert(lexical_binding_sentinel(&name), 0);
+        let binding_id = *binding_lookup
+            .get(&name)
+            .expect("reserved source binding must have an exact id");
+        binding_lookup.insert(capture_origin_sentinel(&name), binding_id);
+    }
+}
+
+fn direct_lexical_binding_names(statements: &[Statement]) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for statement in statements {
+        match statement {
+            Statement::VariableDeclaration(declaration)
+                if matches!(
+                    declaration.kind,
+                    VariableDeclarationKind::Let | VariableDeclarationKind::Const
+                ) =>
+            {
+                for declarator in &declaration.declarations {
+                    names.extend(
+                        declarator
+                            .pattern
+                            .binding_names()
+                            .into_iter()
+                            .map(str::to_string),
+                    );
+                }
+            }
+            Statement::FunctionDeclaration(function) => {
+                if let Some(name) = &function.name {
+                    names.insert(name.clone());
+                }
+            }
+            Statement::ClassDeclaration(class) => {
+                if let Some(name) = &class.name {
+                    names.insert(name.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    names
+}
+
+fn binding_entry_snapshot(
+    binding_lookup: &BTreeMap<String, BindingId>,
+    names: &BTreeSet<String>,
+) -> Vec<(String, Option<BindingId>)> {
+    names
+        .iter()
+        .flat_map(|name| {
+            let origin = capture_origin_sentinel(name);
+            [
+                (name.clone(), binding_lookup.get(name).copied()),
+                (origin.clone(), binding_lookup.get(&origin).copied()),
+            ]
+        })
+        .collect()
+}
+
+fn restore_binding_entries(
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    snapshot: Vec<(String, Option<BindingId>)>,
+) {
+    for (name, previous) in snapshot {
+        if let Some(binding_id) = previous {
+            binding_lookup.insert(name, binding_id);
+        } else {
+            binding_lookup.remove(&name);
+        }
+    }
+}
+
+/// Prepare a fresh function-like lookup without eagerly materializing every
+/// inherited name. NUL markers carry source-lexical visibility only; an exact
+/// normal bridge binding is allocated later, and only when a descendant
+/// actually references that name.
+fn prepare_function_body_bindings(
+    statements: Option<&[Statement]>,
+    self_name: Option<&str>,
+    outer_lookup: &BTreeMap<String, BindingId>,
+    body_lookup: &mut BTreeMap<String, BindingId>,
+    body_binding_index: &mut BindingId,
+) -> BTreeSet<String> {
+    let mut local_names = body_lookup
+        .keys()
+        .filter(|name| !is_internal_lowering_binding(name))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if let Some(statements) = statements {
+        local_names.extend(reserve_root_scope_bindings(
+            statements,
+            body_lookup,
+            body_binding_index,
+        ));
+        local_names.extend(reserve_hoisted_var_bindings(
+            statements,
+            body_lookup,
+            body_binding_index,
+        ));
+    }
+    for name in &local_names {
+        body_lookup.insert(lexical_binding_sentinel(name), 0);
+        if let Some(&binding_id) = body_lookup.get(name) {
+            body_lookup.insert(capture_origin_sentinel(name), binding_id);
+        }
+    }
+    if let Some(name) = self_name {
+        body_lookup.insert(lexical_binding_sentinel(name), 0);
+    }
+
+    let pre_lower_names = body_lookup.keys().cloned().collect::<BTreeSet<_>>();
+    for (key, binding_id) in outer_lookup {
+        if key.starts_with(LEXICAL_BINDING_SENTINEL_PREFIX)
+            || key.starts_with(CAPTURE_ORIGIN_SENTINEL_PREFIX)
+        {
+            body_lookup.entry(key.clone()).or_insert(*binding_id);
+        }
+    }
+    pre_lower_names
 }
 
 fn parse_named_export_clause_bindings(clause: &str) -> Vec<(String, String)> {
@@ -2373,12 +2739,11 @@ fn lower_finalizer_body_isolated(
     control_flow: ControlFlowTargets,
     label_ctx: &LabelContext,
 ) -> Result<(), LoweringPipelineError> {
+    let lexical_marker_snapshot = source_lexical_marker_snapshot(binding_lookup);
     let mut lexical_names = BTreeSet::new();
     collect_finalizer_lexical_names(&finalizer.body, &mut lexical_names);
-    let saved: Vec<(String, Option<BindingId>)> = lexical_names
-        .iter()
-        .map(|name| (name.clone(), binding_lookup.get(name).copied()))
-        .collect();
+    let saved = binding_entry_snapshot(binding_lookup, &lexical_names);
+    reserve_and_mark_source_scope_bindings(&finalizer.body, binding_lookup, binding_index);
     for inner in &finalizer.body {
         lower_statement_to_ir1_with_flow(
             inner,
@@ -2393,16 +2758,8 @@ fn lower_finalizer_body_isolated(
             label_ctx,
         )?;
     }
-    for (name, previous) in saved {
-        match previous {
-            Some(id) => {
-                binding_lookup.insert(name, id);
-            }
-            None => {
-                binding_lookup.remove(&name);
-            }
-        }
-    }
+    restore_binding_entries(binding_lookup, saved);
+    restore_source_lexical_markers(binding_lookup, &lexical_marker_snapshot);
     Ok(())
 }
 
@@ -2451,6 +2808,9 @@ fn lower_statement_to_ir1_with_flow(
                 }
             }
             for d in &vd.declarations {
+                for name in d.pattern.binding_names() {
+                    binding_lookup.insert(lexical_binding_sentinel(name), 0);
+                }
                 // bd-8enww.4.3 (YTBG-D3): a `let`/`const` name read earlier in
                 // this scope created a read-only forward-reference placeholder
                 // (a temporal-dead-zone access like `x; let x = 1;`). Demote that
@@ -2672,6 +3032,10 @@ fn lower_statement_to_ir1_with_flow(
             }
         }
         Statement::Block(block) => {
+            let lexical_marker_snapshot = source_lexical_marker_snapshot(binding_lookup);
+            let lexical_names = direct_lexical_binding_names(&block.body);
+            let lexical_binding_snapshot = binding_entry_snapshot(binding_lookup, &lexical_names);
+            reserve_and_mark_source_scope_bindings(&block.body, binding_lookup, binding_index);
             for inner in &block.body {
                 lower_statement_to_ir1_with_flow(
                     inner,
@@ -2686,6 +3050,8 @@ fn lower_statement_to_ir1_with_flow(
                     label_ctx,
                 )?;
             }
+            restore_binding_entries(binding_lookup, lexical_binding_snapshot);
+            restore_source_lexical_markers(binding_lookup, &lexical_marker_snapshot);
         }
         Statement::If(if_stmt) => {
             lower_expression_to_ir1(
@@ -2737,6 +3103,20 @@ fn lower_statement_to_ir1_with_flow(
             ops.push(Ir1Op::Label { id: end_label });
         }
         Statement::For(for_stmt) => {
+            let lexical_marker_snapshot = source_lexical_marker_snapshot(binding_lookup);
+            let lexical_names = for_stmt
+                .init
+                .as_deref()
+                .map(|initializer| direct_lexical_binding_names(std::slice::from_ref(initializer)))
+                .unwrap_or_default();
+            let lexical_binding_snapshot = binding_entry_snapshot(binding_lookup, &lexical_names);
+            if let Some(initializer) = for_stmt.init.as_deref() {
+                reserve_and_mark_source_scope_bindings(
+                    std::slice::from_ref(initializer),
+                    binding_lookup,
+                    binding_index,
+                );
+            }
             if let Some(init) = &for_stmt.init {
                 lower_statement_to_ir1_with_flow(
                     init,
@@ -2804,6 +3184,8 @@ fn lower_statement_to_ir1_with_flow(
                 label_id: loop_label,
             });
             ops.push(Ir1Op::Label { id: end_label });
+            restore_binding_entries(binding_lookup, lexical_binding_snapshot);
+            restore_source_lexical_markers(binding_lookup, &lexical_marker_snapshot);
         }
         Statement::ForIn(for_in_stmt) => {
             // Lowering: for (let k in obj) { body }
@@ -2828,6 +3210,28 @@ fn lower_statement_to_ir1_with_flow(
                 span_table,
             )?;
             ops.push(Ir1Op::ForInInit);
+
+            let lexical_marker_snapshot = source_lexical_marker_snapshot(binding_lookup);
+            let lexical_names = if for_in_stmt.binding_kind != Some(VariableDeclarationKind::Var) {
+                for_in_stmt
+                    .binding
+                    .binding_names()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect()
+            } else {
+                BTreeSet::new()
+            };
+            let lexical_binding_snapshot = binding_entry_snapshot(binding_lookup, &lexical_names);
+            for name in for_in_stmt.binding.binding_names() {
+                let binding_id = if for_in_stmt.binding_kind == Some(VariableDeclarationKind::Var) {
+                    reserve_binding_id(binding_lookup, binding_index, name)
+                } else {
+                    reserve_fresh_binding_id(binding_lookup, binding_index, name)
+                };
+                binding_lookup.insert(lexical_binding_sentinel(name), 0);
+                binding_lookup.insert(capture_origin_sentinel(name), binding_id);
+            }
 
             let loop_label = alloc_label(label_counter);
             let continue_label = alloc_label(label_counter);
@@ -2910,6 +3314,8 @@ fn lower_statement_to_ir1_with_flow(
                 label_id: loop_label,
             });
             ops.push(Ir1Op::Label { id: end_label });
+            restore_binding_entries(binding_lookup, lexical_binding_snapshot);
+            restore_source_lexical_markers(binding_lookup, &lexical_marker_snapshot);
         }
         Statement::ForOf(for_of_stmt) => {
             // Lowering: for (let v of iterable) { body }
@@ -2933,6 +3339,28 @@ fn lower_statement_to_ir1_with_flow(
                 span_table,
             )?;
             ops.push(Ir1Op::ForOfInit);
+
+            let lexical_marker_snapshot = source_lexical_marker_snapshot(binding_lookup);
+            let lexical_names = if for_of_stmt.binding_kind != Some(VariableDeclarationKind::Var) {
+                for_of_stmt
+                    .binding
+                    .binding_names()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect()
+            } else {
+                BTreeSet::new()
+            };
+            let lexical_binding_snapshot = binding_entry_snapshot(binding_lookup, &lexical_names);
+            for name in for_of_stmt.binding.binding_names() {
+                let binding_id = if for_of_stmt.binding_kind == Some(VariableDeclarationKind::Var) {
+                    reserve_binding_id(binding_lookup, binding_index, name)
+                } else {
+                    reserve_fresh_binding_id(binding_lookup, binding_index, name)
+                };
+                binding_lookup.insert(lexical_binding_sentinel(name), 0);
+                binding_lookup.insert(capture_origin_sentinel(name), binding_id);
+            }
 
             let loop_label = alloc_label(label_counter);
             let continue_label = alloc_label(label_counter);
@@ -3021,6 +3449,8 @@ fn lower_statement_to_ir1_with_flow(
                 reason: IteratorCloseReason::Break,
             });
             ops.push(Ir1Op::Label { id: end_label });
+            restore_binding_entries(binding_lookup, lexical_binding_snapshot);
+            restore_source_lexical_markers(binding_lookup, &lexical_marker_snapshot);
         }
         Statement::With(with_stmt) => {
             return Err(unsupported_frontier_expression_error(
@@ -3247,6 +3677,10 @@ fn lower_statement_to_ir1_with_flow(
             } else {
                 finally_label.unwrap_or_else(|| alloc_label(label_counter))
             };
+            let try_lexical_marker_snapshot = source_lexical_marker_snapshot(binding_lookup);
+            let try_lexical_names = direct_lexical_binding_names(&tc.block.body);
+            let try_binding_snapshot = binding_entry_snapshot(binding_lookup, &try_lexical_names);
+            reserve_and_mark_source_scope_bindings(&tc.block.body, binding_lookup, binding_index);
             ops.push(Ir1Op::BeginTry {
                 catch_label,
                 finally_label,
@@ -3265,6 +3699,8 @@ fn lower_statement_to_ir1_with_flow(
                     &try_label_ctx,
                 )?;
             }
+            restore_binding_entries(binding_lookup, try_binding_snapshot);
+            restore_source_lexical_markers(binding_lookup, &try_lexical_marker_snapshot);
             let has_try_abrupt_exit_forwarders = !try_break_finally_forwarders.is_empty()
                 || !try_continue_finally_forwarders.is_empty();
             let normal_try_complete_label =
@@ -3347,11 +3783,21 @@ fn lower_statement_to_ir1_with_flow(
                     });
                 }
                 if let Some(handler) = &tc.handler {
-                    let catch_binding_restore = handler
-                        .parameter
-                        .as_ref()
-                        .map(|param| (param.clone(), binding_lookup.get(param.as_str()).copied()));
+                    let catch_lexical_marker_snapshot =
+                        source_lexical_marker_snapshot(binding_lookup);
+                    let mut catch_lexical_names = direct_lexical_binding_names(&handler.body.body);
+                    if let Some(parameter) = &handler.parameter {
+                        catch_lexical_names.insert(parameter.clone());
+                    }
+                    let catch_binding_snapshot =
+                        binding_entry_snapshot(binding_lookup, &catch_lexical_names);
+                    reserve_and_mark_source_scope_bindings(
+                        &handler.body.body,
+                        binding_lookup,
+                        binding_index,
+                    );
                     if let Some(param) = &handler.parameter {
+                        binding_lookup.insert(lexical_binding_sentinel(param), 0);
                         let bid = alloc_shadow_binding(
                             bindings,
                             binding_lookup,
@@ -3360,6 +3806,7 @@ fn lower_statement_to_ir1_with_flow(
                             param,
                             BindingKind::Let,
                         );
+                        binding_lookup.insert(capture_origin_sentinel(param), bid);
                         ops.push(Ir1Op::StoreBinding { binding_id: bid });
                         ops.push(Ir1Op::Pop);
                     } else {
@@ -3381,13 +3828,8 @@ fn lower_statement_to_ir1_with_flow(
                             &catch_label_ctx,
                         )?;
                     }
-                    if let Some((param, previous)) = catch_binding_restore {
-                        if let Some(previous) = previous {
-                            binding_lookup.insert(param, previous);
-                        } else {
-                            binding_lookup.remove(param.as_str());
-                        }
-                    }
+                    restore_binding_entries(binding_lookup, catch_binding_snapshot);
+                    restore_source_lexical_markers(binding_lookup, &catch_lexical_marker_snapshot);
                 }
                 if catch_requires_finally_guard {
                     let has_catch_finally_forwarders = !catch_break_finally_forwarders.is_empty()
@@ -3682,6 +4124,9 @@ fn lower_statement_to_ir1_with_flow(
             }
         }
         Statement::FunctionDeclaration(func) => {
+            if let Some(source_name) = &func.name {
+                binding_lookup.insert(lexical_binding_sentinel(source_name), 0);
+            }
             let name = func.name.clone().unwrap_or_else(|| "anonymous".to_string());
             let bid = alloc_binding(
                 bindings,
@@ -3769,11 +4214,13 @@ fn lower_statement_to_ir1_with_flow(
                     &mut Vec::new(),
                 )?;
             }
-            // Snapshot which binding names already exist before body lowering
-            // (parameter slots + any inner names just allocated for
-            // destructuring patterns). Anything new in the lookup after this
-            // point is treated as a free variable below.
-            let pre_lower_names: BTreeSet<String> = body_lookup.keys().cloned().collect();
+            let pre_lower_names = prepare_function_body_bindings(
+                Some(&func.body.body),
+                None,
+                binding_lookup,
+                &mut body_lookup,
+                &mut body_binding_index,
+            );
             for stmt in &func.body.body {
                 lower_statement_to_ir1(
                     stmt,
@@ -3793,6 +4240,18 @@ fn lower_statement_to_ir1_with_flow(
                 });
                 body_ops.push(Ir1Op::Return);
             }
+            // Identify free variables: bindings created as forward
+            // references that exist in the OUTER scope's lookup. Capture the
+            // body binding-id alongside the name so the deferred IR3 pass can
+            // resolve them exactly (bd-g0aok).
+            let (free_vars, free_var_ids) = collect_free_vars(
+                &body_lookup,
+                &pre_lower_names,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+            );
             let runtime_global_loads = rewrite_unresolved_function_body_loads(
                 &mut body_ops,
                 &body_lookup,
@@ -3800,15 +4259,8 @@ fn lower_statement_to_ir1_with_flow(
                 binding_lookup,
                 None,
             );
-
-            // Identify free variables: bindings created as forward
-            // references that exist in the OUTER scope's lookup. Capture the
-            // body binding-id alongside the name so the deferred IR3 pass can
-            // resolve them exactly (bd-g0aok).
-            let (free_vars, free_var_ids) =
-                collect_free_vars(&body_lookup, &pre_lower_names, binding_lookup);
             let child_captured_locals =
-                collect_child_captured_locals(&body_ops, &body_lookup, &free_vars, &param_names);
+                collect_child_captured_locals(&body_lookup, &free_vars, &free_var_ids);
 
             ops.push(Ir1Op::DeclareFunction {
                 name,
@@ -3826,6 +4278,9 @@ fn lower_statement_to_ir1_with_flow(
             ops.push(Ir1Op::Pop);
         }
         Statement::ClassDeclaration(cls) => {
+            if let Some(source_name) = &cls.name {
+                binding_lookup.insert(lexical_binding_sentinel(source_name), 0);
+            }
             let class_name = cls.name.clone().unwrap_or_else(|| "anonymous".to_string());
             // Find the constructor method, if any.
             let constructor = cls.body.iter().find(|m| m.kind == MethodKind::Constructor);
@@ -3899,6 +4354,14 @@ fn lower_statement_to_ir1_with_flow(
                     &mut Vec::new(),
                 )?;
             }
+            let ctor_statements = constructor.map(|ctor| ctor.body.body.as_slice());
+            let ctor_pre_lower_names = prepare_function_body_bindings(
+                ctor_statements,
+                Some(&class_name),
+                binding_lookup,
+                &mut body_lookup,
+                &mut body_binding_index,
+            );
             if let Some(ctor) = constructor {
                 for stmt in &ctor.body.body {
                     lower_statement_to_ir1(
@@ -3928,16 +4391,31 @@ fn lower_statement_to_ir1_with_flow(
                 BindingKind::Let,
             )
             .map_err(LoweringPipelineError::SemanticViolation)?;
+            let (ctor_free_vars, ctor_free_var_ids) = collect_free_vars(
+                &body_lookup,
+                &ctor_pre_lower_names,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+            );
+            let ctor_runtime_global_loads = rewrite_unresolved_function_body_loads(
+                &mut body_ops,
+                &body_lookup,
+                &ctor_pre_lower_names,
+                binding_lookup,
+                Some(&class_name),
+            );
             let ctor_child_captured_locals =
-                collect_child_captured_locals(&body_ops, &body_lookup, &[], &param_names);
+                collect_child_captured_locals(&body_lookup, &ctor_free_vars, &ctor_free_var_ids);
             ops.push(Ir1Op::DeclareFunction {
                 name: class_name,
                 binding_id: bid,
                 param_names,
                 body_ops,
-                free_vars: Vec::new(),
-                free_var_ids: Vec::new(),
-                runtime_global_loads: Vec::new(),
+                free_vars: ctor_free_vars,
+                free_var_ids: ctor_free_var_ids,
+                runtime_global_loads: ctor_runtime_global_loads,
                 child_captured_locals: ctor_child_captured_locals,
                 is_generator: false,
                 is_async: false,
@@ -4062,6 +4540,13 @@ fn lower_statement_to_ir1_with_flow(
                         &mut Vec::new(),
                     )?;
                 }
+                let method_pre_lower_names = prepare_function_body_bindings(
+                    Some(&method.body.body),
+                    None,
+                    binding_lookup,
+                    &mut m_lookup,
+                    &mut m_binding_index,
+                );
                 for stmt in &method.body.body {
                     lower_statement_to_ir1(
                         stmt,
@@ -4091,15 +4576,33 @@ fn lower_statement_to_ir1_with_flow(
                 }
 
                 // Push the method function value.
-                let m_child_captured_locals =
-                    collect_child_captured_locals(&m_body_ops, &m_lookup, &[], &m_param_names);
+                let (method_free_vars, method_free_var_ids) = collect_free_vars(
+                    &m_lookup,
+                    &method_pre_lower_names,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                );
+                let method_runtime_global_loads = rewrite_unresolved_function_body_loads(
+                    &mut m_body_ops,
+                    &m_lookup,
+                    &method_pre_lower_names,
+                    binding_lookup,
+                    None,
+                );
+                let m_child_captured_locals = collect_child_captured_locals(
+                    &m_lookup,
+                    &method_free_vars,
+                    &method_free_var_ids,
+                );
                 ops.push(Ir1Op::CreateFunction {
                     name: Some(method_name.clone()),
                     param_names: m_param_names,
                     body_ops: m_body_ops,
-                    free_vars: Vec::new(),
-                    free_var_ids: Vec::new(),
-                    runtime_global_loads: Vec::new(),
+                    free_vars: method_free_vars,
+                    free_var_ids: method_free_var_ids,
+                    runtime_global_loads: method_runtime_global_loads,
                     child_captured_locals: m_child_captured_locals,
                     is_generator: false,
                     is_async: false,
@@ -4160,6 +4663,20 @@ fn lower_switch_to_ir1(
         label_counter,
         span_table,
     )?;
+    let lexical_marker_snapshot = source_lexical_marker_snapshot(binding_lookup);
+    let mut lexical_names = BTreeSet::new();
+    for case in &switch_stmt.cases {
+        lexical_names.extend(direct_lexical_binding_names(&case.consequent));
+    }
+    let lexical_binding_snapshot = binding_entry_snapshot(binding_lookup, &lexical_names);
+    for name in &lexical_names {
+        let binding_id = reserve_fresh_binding_id(binding_lookup, binding_index, name);
+        binding_lookup.insert(lexical_binding_sentinel(name), 0);
+        binding_lookup.insert(capture_origin_sentinel(name), binding_id);
+    }
+    for case in &switch_stmt.cases {
+        mark_pre_reserved_source_scope_bindings(&case.consequent, binding_lookup, binding_index);
+    }
     let discriminant_binding_name =
         make_internal_binding_name("switch_discriminant", *binding_index);
     let discriminant_binding = alloc_binding(
@@ -4242,6 +4759,8 @@ fn lower_switch_to_ir1(
     }
 
     ops.push(Ir1Op::Label { id: end_label });
+    restore_binding_entries(binding_lookup, lexical_binding_snapshot);
+    restore_source_lexical_markers(binding_lookup, &lexical_marker_snapshot);
     Ok(())
 }
 
@@ -4632,15 +5151,7 @@ pub fn lower_ir2_to_ir3(
         }
     }
 
-    let top_level_function_decl_names: BTreeSet<String> = ir2
-        .ops
-        .iter()
-        .filter_map(|op| match &op.inner {
-            Ir1Op::DeclareFunction { name, .. } => Some(name.clone()),
-            _ => None,
-        })
-        .collect();
-    let shared_top_level_capture_names: BTreeSet<String> =
+    let shared_top_level_capture_names_by_id: BTreeMap<BindingId, String> =
         ir2.ops
             .iter()
             .flat_map(|op| match &op.inner {
@@ -4648,12 +5159,18 @@ pub fn lower_ir2_to_ir3(
                 | Ir1Op::DeclareFunction { free_vars, .. } => free_vars.clone(),
                 _ => Vec::new(),
             })
-            .filter(|name| name_to_binding_id.contains_key(name))
+            .filter_map(|runtime_name| {
+                let (binding_id, source_name) = parse_capture_cell_name(&runtime_name)?;
+                (binding_id_to_name.get(&binding_id).map(String::as_str) == Some(source_name))
+                    .then_some((binding_id, runtime_name))
+            })
             .collect();
-    for name in &shared_top_level_capture_names {
-        if let Some(binding_id) = name_to_binding_id.get(name) {
-            scoped_runtime_binding_ids.insert(*binding_id);
-        }
+    let shared_top_level_capture_names: BTreeSet<String> = shared_top_level_capture_names_by_id
+        .values()
+        .cloned()
+        .collect();
+    for binding_id in shared_top_level_capture_names_by_id.keys() {
+        scoped_runtime_binding_ids.insert(*binding_id);
     }
 
     // bd-8enww.4.3 (YTBG-D3): temporal-dead-zone tracking. A lexical
@@ -4699,27 +5216,35 @@ pub fn lower_ir2_to_ir3(
     for id in &tdz_binding_ids {
         scoped_runtime_binding_ids.insert(*id);
     }
-    let tdz_decl_names: Vec<String> = tdz_binding_ids
+    let tdz_decl_names: Vec<(BindingId, String)> = tdz_binding_ids
         .iter()
-        .filter_map(|id| binding_id_to_name.get(id).cloned())
+        .map(|id| {
+            (
+                *id,
+                runtime_scope_binding_name(
+                    *id,
+                    &shared_top_level_capture_names_by_id,
+                    &binding_id_to_name,
+                ),
+            )
+        })
         .collect();
 
-    if !shared_top_level_capture_names.is_empty() || !tdz_decl_names.is_empty() {
+    let main_scope_pushed =
+        !shared_top_level_capture_names.is_empty() || !tdz_decl_names.is_empty();
+    if main_scope_pushed {
         ir3.instructions.push(Ir3Instruction::PushScope);
-        for name in &shared_top_level_capture_names {
-            // A capture that is also TDZ-tracked is declared just below as an
-            // uninitialized `let`; declaring it here (kind=var, initialized)
-            // would defeat its dead-zone check.
-            if tdz_decl_names.contains(name) {
-                continue;
-            }
+        for (binding_id, name) in &shared_top_level_capture_names_by_id {
             let pool_idx = push_constant_optimized(&mut constant_pool, name);
             ir3.instructions.push(Ir3Instruction::DeclareBinding {
                 name_pool_index: pool_idx,
-                kind: 0,
+                kind: u8::from(tdz_binding_ids.contains(binding_id)),
             });
         }
-        for name in &tdz_decl_names {
+        for (binding_id, name) in &tdz_decl_names {
+            if shared_top_level_capture_names_by_id.contains_key(binding_id) {
+                continue;
+            }
             let pool_idx = push_constant_optimized(&mut constant_pool, name);
             ir3.instructions.push(Ir3Instruction::DeclareBinding {
                 name_pool_index: pool_idx,
@@ -4834,10 +5359,11 @@ pub fn lower_ir2_to_ir3(
             }
             Ir1Op::LoadBinding { binding_id } => {
                 if scoped_runtime_binding_ids.contains(binding_id) {
-                    let name = binding_id_to_name
-                        .get(binding_id)
-                        .cloned()
-                        .unwrap_or_else(|| format!("__binding_{binding_id}"));
+                    let name = runtime_scope_binding_name(
+                        *binding_id,
+                        &shared_top_level_capture_names_by_id,
+                        &binding_id_to_name,
+                    );
                     let dst = alloc_register(&mut register_cursor);
                     let pool_index = push_constant_optimized(&mut constant_pool, &name);
                     ir3.instructions.push(Ir3Instruction::LoadScoped {
@@ -4865,10 +5391,11 @@ pub fn lower_ir2_to_ir3(
                     // InitBinding (StoreScoped rejects a still-uninitialized
                     // binding). `BTreeSet::insert` returns true only on the first
                     // store, so later assignments fall through to StoreScoped.
-                    let name = binding_id_to_name
-                        .get(binding_id)
-                        .cloned()
-                        .unwrap_or_else(|| format!("__binding_{binding_id}"));
+                    let name = runtime_scope_binding_name(
+                        *binding_id,
+                        &shared_top_level_capture_names_by_id,
+                        &binding_id_to_name,
+                    );
                     let pool_index = push_constant_optimized(&mut constant_pool, &name);
                     ir3.instructions.push(Ir3Instruction::InitBinding {
                         name_pool_index: pool_index,
@@ -4876,10 +5403,11 @@ pub fn lower_ir2_to_ir3(
                     });
                     value_stack.push(src);
                 } else if scoped_runtime_binding_ids.contains(binding_id) {
-                    let name = binding_id_to_name
-                        .get(binding_id)
-                        .cloned()
-                        .unwrap_or_else(|| format!("__binding_{binding_id}"));
+                    let name = runtime_scope_binding_name(
+                        *binding_id,
+                        &shared_top_level_capture_names_by_id,
+                        &binding_id_to_name,
+                    );
                     let pool_index = push_constant_optimized(&mut constant_pool, &name);
                     ir3.instructions.push(Ir3Instruction::StoreScoped {
                         src,
@@ -5140,10 +5668,11 @@ pub fn lower_ir2_to_ir3(
                 // Mirror the deferred-function-body `AssignOp` handler.
                 if scoped_runtime_binding_ids.contains(binding_id) {
                     let src = pop_lowering_value(&mut value_stack)?;
-                    let name = binding_id_to_name
-                        .get(binding_id)
-                        .cloned()
-                        .unwrap_or_else(|| format!("__binding_{binding_id}"));
+                    let name = runtime_scope_binding_name(
+                        *binding_id,
+                        &shared_top_level_capture_names_by_id,
+                        &binding_id_to_name,
+                    );
                     match operator {
                         AssignmentOperator::Assign => {
                             let pool_index = push_constant_optimized(&mut constant_pool, &name);
@@ -5678,10 +6207,9 @@ pub fn lower_ir2_to_ir3(
                             capture_count: free_vars.len() as u32,
                         });
                     }
-                    if top_level_function_decl_names.contains(name)
-                        && shared_top_level_capture_names.contains(name)
+                    if let Some(runtime_name) = shared_top_level_capture_names_by_id.get(binding_id)
                     {
-                        let pool_idx = push_constant_optimized(&mut constant_pool, name);
+                        let pool_idx = push_constant_optimized(&mut constant_pool, runtime_name);
                         ir3.instructions.push(Ir3Instruction::StoreScoped {
                             src: dst,
                             name_pool_index: pool_idx,
@@ -6067,7 +6595,7 @@ pub fn lower_ir2_to_ir3(
         }
     }
 
-    if !shared_top_level_capture_names.is_empty() {
+    if main_scope_pushed {
         ir3.instructions.push(Ir3Instruction::PopScope);
     }
 
@@ -6119,9 +6647,18 @@ pub fn lower_ir2_to_ir3(
         let mut fn_catch_entry_labels = BTreeSet::<u32>::new();
         let mut fn_iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
 
-        // Allocate parameter registers r0..rN-1.
-        for (i, _pname) in param_names.iter().enumerate() {
-            fn_binding_regs.insert(i as BindingId, i as Reg);
+        // Reconstruct the exact body binding IDs allocated for parameters.
+        // Duplicate parameter names reuse one binding ID but the final
+        // positional register supplies its value.
+        let mut param_binding_ids = BTreeMap::<&str, BindingId>::new();
+        let mut next_param_binding_id: BindingId = 0;
+        for (i, pname) in param_names.iter().enumerate() {
+            let binding_id = *param_binding_ids.entry(pname).or_insert_with(|| {
+                let binding_id = next_param_binding_id;
+                next_param_binding_id = next_param_binding_id.saturating_add(1);
+                binding_id
+            });
+            fn_binding_regs.insert(binding_id, i as Reg);
             fn_reg = fn_reg.max(i as Reg + 1);
         }
 
@@ -6154,7 +6691,6 @@ pub fn lower_ir2_to_ir3(
         // captured-`let` write-back (bd-p89tp), and was the root fragility the
         // bd-ut6ku `AssignOp` patch worked around. Resolving by exact id needs
         // no body_ops scan and is order-independent.
-        let _free_var_binding_ids: BTreeSet<BindingId> = free_var_ids.iter().copied().collect();
         let fv_id_to_name: BTreeMap<BindingId, String> = free_var_ids
             .iter()
             .copied()
@@ -6174,55 +6710,48 @@ pub fn lower_ir2_to_ir3(
             .map(|(name, id)| (*id, name.clone()))
             .collect();
 
-        // Pre-scan: detect if any child function captures free variables.
-        // If so, this function must mirror its local bindings to the scope
-        // chain so those captures resolve at runtime.
-        let has_capturing_children = body_ops.iter().any(|bop| match bop {
-            Ir1Op::CreateFunction { free_vars: fv, .. }
-            | Ir1Op::DeclareFunction { free_vars: fv, .. } => !fv.is_empty(),
-            _ => false,
-        });
-
-        // Names of variables that child closures capture from THIS function.
-        // Used for the entry-time parameter mirror below.
-        let child_captured_names: BTreeSet<String> = body_ops
-            .iter()
-            .flat_map(|bop| match bop {
-                Ir1Op::CreateFunction { free_vars: fv, .. }
-                | Ir1Op::DeclareFunction { free_vars: fv, .. } => fv.clone(),
-                _ => Vec::new(),
-            })
-            .collect();
-
-        // bd-suwvw: exact body-binding-id → name map of the LOCALS child
-        // closures capture, threaded from the emission site (where the body
-        // lookup was available). Stores of these ids are mirrored to the
-        // scope chain below. Replaces the former positional
-        // `nth(binding_id - param_count)` heuristic, which could mirror an
-        // unrelated binding (e.g. an internal method-call receiver temp)
-        // under a captured variable's name — declaring a shadowing scope
-        // binding holding garbage that broke the child's LoadScoped (the
-        // nested-closure `arr.join is not a function on undefined` family).
+        // Exact body-binding-id → canonical runtime capture-cell name for
+        // bindings demanded by direct children. Canonical aliases preserve one
+        // cell across non-referencing intermediates, while the ID keeps
+        // disjoint same-named lexical bindings separate.
         let child_capture_id_to_name: BTreeMap<BindingId, String> = fn_child_captured_locals
             .iter()
             .map(|(name, id)| (*id, name.clone()))
             .collect();
+        let has_capturing_children = !child_capture_id_to_name.is_empty();
 
-        // If children capture our locals, push a scope frame at the
-        // beginning of this function body.
+        // Child closures snapshot the current scope chain when created. Put
+        // every exact local capture cell in one function-entry frame before
+        // lowering any child, initializing parameters immediately and bridging
+        // the named-function-expression self seam when its inherited alias is
+        // intentionally source-named rather than canonical.
         if has_capturing_children {
             ir3.instructions.push(Ir3Instruction::PushScope);
-            // Put parameters on the scope chain too (children may capture them).
-            for (i, pname) in param_names.iter().enumerate() {
-                if child_captured_names.contains(pname) {
-                    let pool_idx = push_constant_optimized(&mut constant_pool, pname);
-                    ir3.instructions.push(Ir3Instruction::DeclareBinding {
-                        name_pool_index: pool_idx,
-                        kind: 0,
-                    });
+            for (binding_id, name) in &child_capture_id_to_name {
+                let pool_idx = push_constant_optimized(&mut constant_pool, name);
+                ir3.instructions.push(Ir3Instruction::DeclareBinding {
+                    name_pool_index: pool_idx,
+                    kind: 0,
+                });
+                let initial_value = if let Some(own_name) = fv_id_to_name.get(binding_id) {
+                    if own_name == name {
+                        None
+                    } else {
+                        let src = alloc_register(&mut fn_reg);
+                        let own_pool_idx = push_constant_optimized(&mut constant_pool, own_name);
+                        ir3.instructions.push(Ir3Instruction::LoadScoped {
+                            dst: src,
+                            name_pool_index: own_pool_idx,
+                        });
+                        Some(src)
+                    }
+                } else {
+                    fn_binding_regs.get(binding_id).copied()
+                };
+                if let Some(src) = initial_value {
                     ir3.instructions.push(Ir3Instruction::InitBinding {
                         name_pool_index: pool_idx,
-                        src: i as Reg,
+                        src,
                     });
                 }
             }
@@ -6276,8 +6805,12 @@ pub fn lower_ir2_to_ir3(
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::LoadBinding { binding_id } => {
-                    if let Some(name) = fv_id_to_name.get(binding_id) {
-                        // Free variable: load from scope chain by name.
+                    if let Some(name) = fv_id_to_name
+                        .get(binding_id)
+                        .or_else(|| child_capture_id_to_name.get(binding_id))
+                    {
+                        // Free variables and locals shared with a child both
+                        // live in an exact runtime capture cell.
                         let dst = alloc_register(&mut fn_reg);
                         let pool_idx = push_constant_optimized(&mut constant_pool, name);
                         ir3.instructions.push(Ir3Instruction::LoadScoped {
@@ -6320,35 +6853,34 @@ pub fn lower_ir2_to_ir3(
                             src,
                             name_pool_index: pool_idx,
                         });
+                        if let Some(child_name) = child_capture_id_to_name.get(binding_id)
+                            && child_name != name
+                        {
+                            let child_pool_idx =
+                                push_constant_optimized(&mut constant_pool, child_name);
+                            ir3.instructions.push(Ir3Instruction::StoreScoped {
+                                src,
+                                name_pool_index: child_pool_idx,
+                            });
+                        }
                         fn_value_stack.push(src);
                         continue;
                     }
-                    let is_first_store = !fn_binding_regs.contains_key(binding_id);
+                    if let Some(name) = child_capture_id_to_name.get(binding_id) {
+                        let src = pop_lowering_value(&mut fn_value_stack)?;
+                        let pool_idx = push_constant_optimized(&mut constant_pool, name);
+                        ir3.instructions.push(Ir3Instruction::StoreScoped {
+                            src,
+                            name_pool_index: pool_idx,
+                        });
+                        fn_value_stack.push(src);
+                        continue;
+                    }
                     let dst = *fn_binding_regs
                         .entry(*binding_id)
                         .or_insert_with(|| alloc_register(&mut fn_reg));
                     let src = pop_lowering_value(&mut fn_value_stack)?;
                     ir3.instructions.push(Ir3Instruction::Move { dst, src });
-                    // If a child closure captures this binding, also put it
-                    // on the scope chain so the capture resolves via
-                    // LoadScoped. The name comes from the EXACT
-                    // emission-time map (bd-suwvw) — never from the old
-                    // positional heuristic, which could alias an internal
-                    // temp to a captured variable's name and shadow the real
-                    // binding with garbage.
-                    if let Some(name) = child_capture_id_to_name.get(binding_id) {
-                        let pool_idx = push_constant_optimized(&mut constant_pool, name);
-                        if is_first_store {
-                            ir3.instructions.push(Ir3Instruction::DeclareBinding {
-                                name_pool_index: pool_idx,
-                                kind: 0,
-                            });
-                        }
-                        ir3.instructions.push(Ir3Instruction::StoreScoped {
-                            src: dst,
-                            name_pool_index: pool_idx,
-                        });
-                    }
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::BinaryOp { operator } => {
@@ -6493,14 +7025,17 @@ pub fn lower_ir2_to_ir3(
                     operator,
                 } => {
                     let src = pop_lowering_value(&mut fn_value_stack)?;
-                    if let Some(name) = fv_id_to_name.get(binding_id) {
+                    if let Some(name) = fv_id_to_name
+                        .get(binding_id)
+                        .or_else(|| child_capture_id_to_name.get(binding_id))
+                    {
                         let pool_idx = push_constant_optimized(&mut constant_pool, name);
-                        if *operator == AssignmentOperator::Assign {
+                        let result = if *operator == AssignmentOperator::Assign {
                             ir3.instructions.push(Ir3Instruction::StoreScoped {
                                 src,
                                 name_pool_index: pool_idx,
                             });
-                            fn_value_stack.push(src);
+                            src
                         } else if matches!(
                             operator,
                             AssignmentOperator::LogicalAndAssign
@@ -6523,8 +7058,19 @@ pub fn lower_ir2_to_ir3(
                                 src: result,
                                 name_pool_index: pool_idx,
                             });
-                            fn_value_stack.push(result);
+                            result
+                        };
+                        if let Some(child_name) = child_capture_id_to_name.get(binding_id)
+                            && child_name != name
+                        {
+                            let child_pool_idx =
+                                push_constant_optimized(&mut constant_pool, child_name);
+                            ir3.instructions.push(Ir3Instruction::StoreScoped {
+                                src: result,
+                                name_pool_index: child_pool_idx,
+                            });
                         }
+                        fn_value_stack.push(result);
                         continue;
                     }
                     let dst = *fn_binding_regs
@@ -6790,6 +7336,19 @@ pub fn lower_ir2_to_ir3(
                             capture_count: inner_fv.len() as u32,
                         });
                     }
+                    // bd-x0ld5: the function-entry capture prologue declares
+                    // locals before any child closure snapshots the scope.
+                    // Function/class declarations write their value directly
+                    // to a register rather than through StoreBinding, so mirror
+                    // the created callable explicitly when a sibling captures
+                    // this exact declaration binding.
+                    if let Some(name) = child_capture_id_to_name.get(inner_bid) {
+                        let pool_idx = push_constant_optimized(&mut constant_pool, name);
+                        ir3.instructions.push(Ir3Instruction::StoreScoped {
+                            src: dst,
+                            name_pool_index: pool_idx,
+                        });
+                    }
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::CreateFunction {
@@ -6805,6 +7364,25 @@ pub fn lower_ir2_to_ir3(
                     rest_param_index: inner_rest,
                 } => {
                     let dst = alloc_register(&mut fn_reg);
+                    let available_capture_names: BTreeSet<&str> = fv_id_to_name
+                        .values()
+                        .chain(child_capture_id_to_name.values())
+                        .map(String::as_str)
+                        .collect();
+                    let temp_free_vars: Vec<&String> = inner_fv
+                        .iter()
+                        .filter(|name| !available_capture_names.contains(name.as_str()))
+                        .collect();
+                    if !temp_free_vars.is_empty() {
+                        ir3.instructions.push(Ir3Instruction::PushScope);
+                        for name in &temp_free_vars {
+                            let pool_idx = push_constant_optimized(&mut constant_pool, name);
+                            ir3.instructions.push(Ir3Instruction::DeclareBinding {
+                                name_pool_index: pool_idx,
+                                kind: 0,
+                            });
+                        }
+                    }
                     let function_index = deferred_functions.len() as u32 + 1;
                     deferred_functions.push((
                         inner_body.clone(),
@@ -6842,6 +7420,9 @@ pub fn lower_ir2_to_ir3(
                             function_index,
                             capture_count: inner_fv.len() as u32,
                         });
+                    }
+                    if !temp_free_vars.is_empty() {
+                        ir3.instructions.push(Ir3Instruction::PopScope);
                     }
                     fn_value_stack.push(dst);
                 }
@@ -7797,62 +8378,86 @@ fn alloc_shadow_binding(
     binding_id
 }
 
-/// Identify a function body's free variables (names referenced in the body that
-/// resolve to an enclosing-scope binding) together with their EXACT body
-/// binding-ids. Names and ids are produced from the same `body_lookup`
-/// iteration, so the returned vectors are aligned 1:1 — the deferred IR3 pass
-/// uses this to resolve free-var references to scope-chain access precisely,
-/// without the former fragile `binding_id >= param_count` + appearance-order
-/// heuristic (bd-g0aok / bd-p89tp).
+/// Identify a function body's free variables together with their exact body
+/// binding IDs. Source-lexical visibility is carried by NUL markers rather than
+/// arbitrary lookup entries: ordinary entries may be unresolved/runtime
+/// placeholders and must not turn a truly missing name into a capture.
+///
+/// When the immediate outer function does not reference an inherited binding,
+/// allocate one deterministic bridge ID there. Recursive lowering then unwinds
+/// the same demand one scope at a time, so a grandchild capture reaches the
+/// actual source binding without eagerly capturing every visible name
+/// (bd-x0ld5).
 fn collect_free_vars(
     body_lookup: &BTreeMap<String, BindingId>,
     pre_lower_names: &BTreeSet<String>,
-    outer_lookup: &BTreeMap<String, BindingId>,
+    outer_bindings: &mut Vec<ResolvedBinding>,
+    outer_lookup: &mut BTreeMap<String, BindingId>,
+    outer_binding_index: &mut BindingId,
+    outer_scope: ScopeId,
 ) -> (Vec<String>, Vec<BindingId>) {
     let mut names = Vec::new();
     let mut ids = Vec::new();
     for (name, id) in body_lookup.iter() {
-        if !pre_lower_names.contains(name.as_str()) && outer_lookup.contains_key(name.as_str()) {
-            names.push(name.clone());
-            ids.push(*id);
+        if pre_lower_names.contains(name.as_str())
+            || is_internal_lowering_binding(name)
+            || !has_source_lexical_binding(outer_lookup, name)
+        {
+            continue;
         }
+        if !outer_lookup.contains_key(name.as_str()) {
+            let outer_id = *outer_binding_index;
+            *outer_binding_index = outer_binding_index.saturating_add(1);
+            outer_bindings.push(ResolvedBinding {
+                name: name.clone(),
+                binding_id: outer_id,
+                scope: outer_scope,
+                kind: BindingKind::Let,
+            });
+            outer_lookup.insert(name.clone(), outer_id);
+        }
+        let outer_id = *outer_lookup
+            .get(name.as_str())
+            .expect("source-lexical capture bridge must exist");
+        let origin_id = outer_lookup
+            .get(&capture_origin_sentinel(name))
+            .copied()
+            .unwrap_or(outer_id);
+        let runtime_name = capture_cell_name(name, origin_id);
+        outer_lookup.insert(
+            child_capture_binding_sentinel(outer_id, &runtime_name),
+            outer_id,
+        );
+        names.push(runtime_name);
+        ids.push(*id);
     }
     (names, ids)
 }
 
-/// bd-suwvw: compute the `(name, body binding-id)` pairs of THIS function's
-/// body-local bindings that a DIRECT child closure captures (its `free_vars`),
-/// so the deferred IR3 body pass mirrors stores of exactly those bindings to
-/// the scope chain. Names that are this function's own free vars or params are
-/// excluded — the child resolves those through the captured outer frames /
-/// the entry param mirror, and re-mirroring them here would shadow the real
-/// binding. Grandchildren are handled at their own parent's level (child
-/// `free_vars` are transitively propagated by `collect_free_vars`).
+/// Compute the exact runtime capture-cell name and body binding ID demanded by
+/// direct children. Demand markers are keyed by `(BindingId, runtime-name)`, so
+/// disjoint lexical scopes may each contribute the same source name without
+/// overwriting one another. An inherited binding whose canonical capture alias
+/// is already this function's own free-var alias needs no local bridge.
 fn collect_child_captured_locals(
-    body_ops: &[Ir1Op],
     body_lookup: &BTreeMap<String, BindingId>,
     own_free_vars: &[String],
-    param_names: &[String],
+    own_free_var_ids: &[BindingId],
 ) -> Vec<(String, BindingId)> {
-    let mut child_names = BTreeSet::new();
-    for op in body_ops {
-        if let Ir1Op::CreateFunction { free_vars, .. } | Ir1Op::DeclareFunction { free_vars, .. } =
-            op
-        {
-            child_names.extend(free_vars.iter().cloned());
-        }
-    }
-    child_names
-        .into_iter()
-        .filter_map(|name| {
-            if own_free_vars.contains(&name) {
-                return None;
-            }
-            if param_names.contains(&name) {
-                return None;
-            }
-            body_lookup.get(&name).map(|id| (name, *id))
+    let own_alias_by_id: BTreeMap<BindingId, &str> = own_free_var_ids
+        .iter()
+        .copied()
+        .zip(own_free_vars.iter().map(String::as_str))
+        .collect();
+    body_lookup
+        .keys()
+        .filter_map(|key| parse_child_capture_binding_sentinel(key))
+        .filter(|(binding_id, runtime_name)| {
+            own_alias_by_id.get(binding_id).copied() != Some(*runtime_name)
         })
+        .map(|(binding_id, runtime_name)| (runtime_name.to_string(), binding_id))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .collect()
 }
 
@@ -7928,8 +8533,9 @@ fn rewrite_unresolved_function_body_loads(
     let unresolved_by_id: BTreeMap<BindingId, String> = body_lookup
         .iter()
         .filter(|(name, binding_id)| {
-            !pre_lower_names.contains(name.as_str())
-                && !outer_lookup.contains_key(name.as_str())
+            !is_internal_lowering_binding(name)
+                && !pre_lower_names.contains(name.as_str())
+                && !has_source_lexical_binding(outer_lookup, name)
                 && !locally_defined_ids.contains(binding_id)
         })
         .map(|(name, binding_id)| (*binding_id, name.clone()))
@@ -8115,7 +8721,7 @@ fn lower_typeof_operand_suppressing_ambient(
 ) -> Result<bool, LoweringPipelineError> {
     match argument {
         Expression::Identifier(name)
-            if !binding_lookup.contains_key(name.as_str())
+            if !is_lexically_shadowed(binding_lookup, name)
                 && required_effect_for_ambient_authority(name, None).is_some() =>
         {
             // Plain binding load (a forward-ref placeholder resolved later to the
@@ -8145,7 +8751,7 @@ fn lower_typeof_operand_suppressing_ambient(
                 Expression::Identifier(p) | Expression::StringLiteral(p) => p.as_str(),
                 _ => return Ok(false),
             };
-            if binding_lookup.contains_key(obj_name.as_str())
+            if is_lexically_shadowed(binding_lookup, obj_name)
                 || required_effect_for_ambient_authority(obj_name, Some(prop_name)).is_none()
             {
                 return Ok(false);
@@ -8765,7 +9371,7 @@ fn lower_expression_to_ir1_inner(
 
             if *operator == BinaryOperator::Instanceof
                 && matches!(right.as_ref(), Expression::Identifier(name) if name == "Array")
-                && !binding_lookup.contains_key("Array")
+                && !is_lexically_shadowed(binding_lookup, "Array")
             {
                 // `Array` is not a scope binding on the eval path, but the
                 // runtime already has the canonical `Array.isArray` predicate.
@@ -8895,7 +9501,7 @@ fn lower_expression_to_ir1_inner(
             if *operator == UnaryOperator::Typeof
                 && let Expression::Identifier(name) = argument.as_ref()
                 && known_constructor_typeof_name(name)
-                && !binding_lookup.contains_key(name.as_str())
+                && !is_lexically_shadowed(binding_lookup, name)
             {
                 ops.push(Ir1Op::LoadLiteral {
                     value: Ir1Literal::String("function".to_string()),
@@ -10624,7 +11230,7 @@ fn lower_expression_to_ir1_inner(
             }
             if let Expression::Identifier(name) = callee.as_ref()
                 && name == "require"
-                && !binding_lookup.contains_key(name.as_str())
+                && !is_lexically_shadowed(binding_lookup, name)
             {
                 // Ambient-authority gate (bd-1lw7r.12): `require` is an ambient
                 // filesystem-authority surface (FsRead). It must be rejected at
@@ -10679,7 +11285,7 @@ fn lower_expression_to_ir1_inner(
             }
             if let Expression::Identifier(name) = callee.as_ref()
                 && name == "hostcall"
-                && !binding_lookup.contains_key(name.as_str())
+                && !is_lexically_shadowed(binding_lookup, name)
             {
                 for arg in arguments {
                     lower_expression_to_ir1(
@@ -10708,7 +11314,7 @@ fn lower_expression_to_ir1_inner(
             }
             if let Expression::Identifier(name) = callee.as_ref()
                 && name == "sink"
-                && !binding_lookup.contains_key(name.as_str())
+                && !is_lexically_shadowed(binding_lookup, name)
             {
                 let arg_count = arguments.len();
                 if arg_count > u32::MAX as usize {
@@ -11715,9 +12321,17 @@ fn lower_expression_to_ir1_inner(
                     &mut Vec::new(),
                 )?;
             }
-            // Snapshot all param-introduced names (synthetics + destructured inner
-            // names) so the free-var scan below does not misclassify them.
-            let pre_lower_names: BTreeSet<String> = body_lookup.keys().cloned().collect();
+            let body_statements = match body {
+                ArrowBody::Block(block) => Some(block.body.as_slice()),
+                ArrowBody::Expression(_) => None,
+            };
+            let pre_lower_names = prepare_function_body_bindings(
+                body_statements,
+                None,
+                binding_lookup,
+                &mut body_lookup,
+                &mut body_binding_index,
+            );
             match body {
                 ArrowBody::Expression(expr) => {
                     lower_expression_to_ir1(
@@ -11755,6 +12369,14 @@ fn lower_expression_to_ir1_inner(
                 }
                 body_ops.push(Ir1Op::Return);
             }
+            let (arrow_free_vars, arrow_free_var_ids) = collect_free_vars(
+                &body_lookup,
+                &pre_lower_names,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+            );
             let arrow_runtime_global_loads = rewrite_unresolved_function_body_loads(
                 &mut body_ops,
                 &body_lookup,
@@ -11762,14 +12384,8 @@ fn lower_expression_to_ir1_inner(
                 binding_lookup,
                 None,
             );
-            let (arrow_free_vars, arrow_free_var_ids) =
-                collect_free_vars(&body_lookup, &pre_lower_names, binding_lookup);
-            let arrow_child_captured_locals = collect_child_captured_locals(
-                &body_ops,
-                &body_lookup,
-                &arrow_free_vars,
-                &param_names,
-            );
+            let arrow_child_captured_locals =
+                collect_child_captured_locals(&body_lookup, &arrow_free_vars, &arrow_free_var_ids);
             ops.push(Ir1Op::CreateFunction {
                 name: None,
                 param_names,
@@ -11853,7 +12469,13 @@ fn lower_expression_to_ir1_inner(
                     &mut Vec::new(),
                 )?;
             }
-            let pre_lower_names: BTreeSet<String> = body_lookup.keys().cloned().collect();
+            let pre_lower_names = prepare_function_body_bindings(
+                Some(&body.body),
+                name.as_deref(),
+                binding_lookup,
+                &mut body_lookup,
+                &mut body_binding_index,
+            );
             for stmt in &body.body {
                 lower_statement_to_ir1(
                     stmt,
@@ -11872,6 +12494,14 @@ fn lower_expression_to_ir1_inner(
                 });
                 body_ops.push(Ir1Op::Return);
             }
+            let (mut fn_free_vars, mut fn_free_var_ids) = collect_free_vars(
+                &body_lookup,
+                &pre_lower_names,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+            );
             let fn_runtime_global_loads = rewrite_unresolved_function_body_loads(
                 &mut body_ops,
                 &body_lookup,
@@ -11879,8 +12509,6 @@ fn lower_expression_to_ir1_inner(
                 binding_lookup,
                 name.as_deref(),
             );
-            let (mut fn_free_vars, mut fn_free_var_ids) =
-                collect_free_vars(&body_lookup, &pre_lower_names, binding_lookup);
             // bd-g8blf: a NAMED function expression may reference its own name
             // inside its body (`let f = function g(n){ ... g(n-1) }`). Unlike a
             // function declaration, the name `g` is NOT bound in the enclosing
@@ -11901,7 +12529,7 @@ fn lower_expression_to_ir1_inner(
                 fn_free_var_ids.push(self_id);
             }
             let fn_child_captured_locals =
-                collect_child_captured_locals(&body_ops, &body_lookup, &fn_free_vars, &param_names);
+                collect_child_captured_locals(&body_lookup, &fn_free_vars, &fn_free_var_ids);
             ops.push(Ir1Op::CreateFunction {
                 name: name.clone(),
                 param_names,
@@ -12347,6 +12975,14 @@ fn lower_expression_to_ir1_inner(
                     &mut Vec::new(),
                 )?;
             }
+            let ctor_statements = constructor.map(|ctor| ctor.body.body.as_slice());
+            let ctor_pre_lower_names = prepare_function_body_bindings(
+                ctor_statements,
+                Some(&class_name),
+                binding_lookup,
+                &mut body_lookup,
+                &mut body_binding_index,
+            );
             if let Some(ctor) = constructor {
                 for stmt in &ctor.body.body {
                     lower_statement_to_ir1(
@@ -12368,16 +13004,31 @@ fn lower_expression_to_ir1_inner(
                 body_ops.push(Ir1Op::Return);
             }
 
+            let (ctor_free_vars, ctor_free_var_ids) = collect_free_vars(
+                &body_lookup,
+                &ctor_pre_lower_names,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+            );
+            let ctor_runtime_global_loads = rewrite_unresolved_function_body_loads(
+                &mut body_ops,
+                &body_lookup,
+                &ctor_pre_lower_names,
+                binding_lookup,
+                Some(&class_name),
+            );
             let ctor_child_captured_locals =
-                collect_child_captured_locals(&body_ops, &body_lookup, &[], &param_names);
+                collect_child_captured_locals(&body_lookup, &ctor_free_vars, &ctor_free_var_ids);
             ops.push(Ir1Op::DeclareFunction {
                 name: class_name,
                 binding_id: bid,
                 param_names,
                 body_ops,
-                free_vars: Vec::new(),
-                free_var_ids: Vec::new(),
-                runtime_global_loads: Vec::new(),
+                free_vars: ctor_free_vars,
+                free_var_ids: ctor_free_var_ids,
+                runtime_global_loads: ctor_runtime_global_loads,
                 child_captured_locals: ctor_child_captured_locals,
                 is_generator: false,
                 is_async: false,
@@ -12488,6 +13139,13 @@ fn lower_expression_to_ir1_inner(
                         &mut Vec::new(),
                     )?;
                 }
+                let method_pre_lower_names = prepare_function_body_bindings(
+                    Some(&method.body.body),
+                    None,
+                    binding_lookup,
+                    &mut m_lookup,
+                    &mut m_binding_index,
+                );
                 for stmt in &method.body.body {
                     lower_statement_to_ir1(
                         stmt,
@@ -12513,15 +13171,33 @@ fn lower_expression_to_ir1_inner(
                         key: Ir1PropertyKey::Static("prototype".to_string()),
                     });
                 }
-                let m_child_captured_locals =
-                    collect_child_captured_locals(&m_body_ops, &m_lookup, &[], &m_param_names);
+                let (method_free_vars, method_free_var_ids) = collect_free_vars(
+                    &m_lookup,
+                    &method_pre_lower_names,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                );
+                let method_runtime_global_loads = rewrite_unresolved_function_body_loads(
+                    &mut m_body_ops,
+                    &m_lookup,
+                    &method_pre_lower_names,
+                    binding_lookup,
+                    None,
+                );
+                let m_child_captured_locals = collect_child_captured_locals(
+                    &m_lookup,
+                    &method_free_vars,
+                    &method_free_var_ids,
+                );
                 ops.push(Ir1Op::CreateFunction {
                     name: Some(method_name.clone()),
                     param_names: m_param_names,
                     body_ops: m_body_ops,
-                    free_vars: Vec::new(),
-                    free_var_ids: Vec::new(),
-                    runtime_global_loads: Vec::new(),
+                    free_vars: method_free_vars,
+                    free_var_ids: method_free_var_ids,
+                    runtime_global_loads: method_runtime_global_loads,
                     child_captured_locals: m_child_captured_locals,
                     is_generator: false,
                     is_async: false,
@@ -12559,7 +13235,7 @@ fn math_object_property_name<'a>(
     binding_lookup: &BTreeMap<String, BindingId>,
 ) -> Option<&'a str> {
     if !matches!(object, Expression::Identifier(name) if name == "Math")
-        || binding_lookup.contains_key("Math")
+        || is_lexically_shadowed(binding_lookup, "Math")
     {
         return None;
     }
@@ -12586,7 +13262,7 @@ fn symbol_iterator_member(
     binding_lookup: &BTreeMap<String, BindingId>,
 ) -> bool {
     if !matches!(object, Expression::Identifier(name) if name == "Symbol")
-        || binding_lookup.contains_key("Symbol")
+        || is_lexically_shadowed(binding_lookup, "Symbol")
     {
         return false;
     }
@@ -12626,7 +13302,7 @@ fn builtin_constructor_name(
     let Expression::Identifier(name) = expression else {
         return None;
     };
-    if binding_lookup.contains_key(name.as_str()) {
+    if is_lexically_shadowed(binding_lookup, name) {
         return None;
     }
     match name.as_str() {
@@ -12658,7 +13334,7 @@ fn error_constructor_capability(
     let Expression::Identifier(name) = callee else {
         return None;
     };
-    if binding_lookup.contains_key(name.as_str()) {
+    if is_lexically_shadowed(binding_lookup, name) {
         return None;
     }
     match name.as_str() {
@@ -12685,7 +13361,7 @@ fn collection_constructor_capability(
     let Expression::Identifier(name) = callee else {
         return None;
     };
-    if binding_lookup.contains_key(name.as_str()) {
+    if is_lexically_shadowed(binding_lookup, name) {
         return None;
     }
     match name.as_str() {
@@ -12709,7 +13385,7 @@ fn date_constructor_capability(
     let Expression::Identifier(name) = callee else {
         return None;
     };
-    if binding_lookup.contains_key(name.as_str()) {
+    if is_lexically_shadowed(binding_lookup, name) {
         return None;
     }
     match name.as_str() {
@@ -12728,7 +13404,7 @@ fn array_buffer_constructor_capability(
     let Expression::Identifier(name) = callee else {
         return None;
     };
-    if binding_lookup.contains_key(name.as_str()) {
+    if is_lexically_shadowed(binding_lookup, name) {
         return None;
     }
     match name.as_str() {
@@ -12744,7 +13420,7 @@ fn typed_array_constructor_capability(
     let Expression::Identifier(name) = callee else {
         return None;
     };
-    if binding_lookup.contains_key(name.as_str()) {
+    if is_lexically_shadowed(binding_lookup, name) {
         return None;
     }
     match name.as_str() {
@@ -12762,7 +13438,7 @@ fn data_view_constructor_capability(
     let Expression::Identifier(name) = callee else {
         return None;
     };
-    if binding_lookup.contains_key(name.as_str()) {
+    if is_lexically_shadowed(binding_lookup, name) {
         return None;
     }
     match name.as_str() {
@@ -12796,7 +13472,7 @@ fn date_builtin_call_capability(
         return None;
     };
     if !matches!(object.as_ref(), Expression::Identifier(name) if name == "Date")
-        || binding_lookup.contains_key("Date")
+        || is_lexically_shadowed(binding_lookup, "Date")
     {
         return None;
     }
@@ -12829,7 +13505,7 @@ fn promise_builtin_call_capability(
         return None;
     };
     if !matches!(object.as_ref(), Expression::Identifier(name) if name == "Promise")
-        || binding_lookup.contains_key("Promise")
+        || is_lexically_shadowed(binding_lookup, "Promise")
     {
         return None;
     }
@@ -12863,7 +13539,7 @@ fn console_builtin_call_capability(
         return None;
     };
     if !matches!(object.as_ref(), Expression::Identifier(name) if name == "console")
-        || binding_lookup.contains_key("console")
+        || is_lexically_shadowed(binding_lookup, "console")
     {
         return None;
     }
@@ -12914,7 +13590,7 @@ fn is_require_fs_module_initializer(
         return false;
     };
     if !matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !binding_lookup.contains_key(name.as_str()))
+        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
     {
         return false;
     }
@@ -13307,7 +13983,7 @@ fn is_require_path_module_initializer(
         return false;
     };
     if !matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !binding_lookup.contains_key(name.as_str()))
+        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
     {
         return false;
     }
@@ -13415,7 +14091,7 @@ fn is_path_module_object(expr: &Expression, binding_lookup: &BTreeMap<String, Bi
             callee, arguments, ..
         } => {
             matches!(callee.as_ref(), Expression::Identifier(name)
-                if name == "require" && !binding_lookup.contains_key(name.as_str()))
+                if name == "require" && !is_lexically_shadowed(binding_lookup, name))
                 && matches!(
                     arguments.as_slice(),
                     [Expression::StringLiteral(spec)] if is_path_module_specifier(spec)
@@ -13764,7 +14440,7 @@ fn is_require_querystring_module_initializer(
         return false;
     };
     if !matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !binding_lookup.contains_key(name.as_str()))
+        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
     {
         return false;
     }
@@ -13804,7 +14480,7 @@ fn is_querystring_module_object(
             callee, arguments, ..
         } => {
             matches!(callee.as_ref(), Expression::Identifier(name)
-                if name == "require" && !binding_lookup.contains_key(name.as_str()))
+                if name == "require" && !is_lexically_shadowed(binding_lookup, name))
                 && matches!(
                     arguments.as_slice(),
                     [Expression::StringLiteral(spec)] if is_querystring_module_specifier(spec)
@@ -13938,7 +14614,7 @@ fn is_require_timers_module_initializer(
         return false;
     };
     if !matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !binding_lookup.contains_key(name.as_str()))
+        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
     {
         return false;
     }
@@ -13961,7 +14637,7 @@ fn is_require_timers_promises_module_initializer(
         return false;
     };
     if !matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !binding_lookup.contains_key(name.as_str()))
+        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
     {
         return false;
     }
@@ -14351,7 +15027,7 @@ fn is_require_events_module_initializer(
         return false;
     };
     if !matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !binding_lookup.contains_key(name.as_str()))
+        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
     {
         return false;
     }
@@ -14581,7 +15257,7 @@ fn is_require_os_module_initializer(
         return false;
     };
     if !matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !binding_lookup.contains_key(name.as_str()))
+        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
     {
         return false;
     }
@@ -14654,7 +15330,7 @@ fn is_os_module_object(expr: &Expression, binding_lookup: &BTreeMap<String, Bind
             callee, arguments, ..
         } => {
             matches!(callee.as_ref(), Expression::Identifier(name)
-                if name == "require" && !binding_lookup.contains_key(name.as_str()))
+                if name == "require" && !is_lexically_shadowed(binding_lookup, name))
                 && matches!(
                     arguments.as_slice(),
                     [Expression::StringLiteral(spec)] if is_os_module_specifier(spec)
@@ -14831,7 +15507,7 @@ fn is_require_http_module_initializer(
         return false;
     };
     if !matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !binding_lookup.contains_key(name.as_str()))
+        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
     {
         return false;
     }
@@ -15109,7 +15785,7 @@ fn fetch_builtin_call_capability(
     let Expression::Identifier(name) = callee else {
         return None;
     };
-    if binding_lookup.contains_key(name.as_str()) {
+    if is_lexically_shadowed(binding_lookup, name) {
         return None;
     }
     match name.as_str() {
@@ -15494,7 +16170,7 @@ fn is_require_fs_promises_module_initializer(
         return false;
     };
     if !matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !binding_lookup.contains_key(name.as_str()))
+        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
     {
         return false;
     }
@@ -15895,7 +16571,7 @@ fn promise_static_member_capability(
     binding_lookup: &BTreeMap<String, BindingId>,
 ) -> Option<&'static str> {
     if !matches!(object, Expression::Identifier(name) if name == "Promise")
-        || binding_lookup.contains_key("Promise")
+        || is_lexically_shadowed(binding_lookup, "Promise")
     {
         return None;
     }
@@ -15928,7 +16604,7 @@ fn proxy_constructor_capability(
     let Expression::Identifier(name) = callee else {
         return None;
     };
-    if binding_lookup.contains_key(name.as_str()) {
+    if is_lexically_shadowed(binding_lookup, name) {
         return None;
     }
     match name.as_str() {
@@ -15957,7 +16633,7 @@ fn reflect_builtin_call_capability(
         return None;
     };
     if !matches!(object.as_ref(), Expression::Identifier(name) if name == "Reflect")
-        || binding_lookup.contains_key("Reflect")
+        || is_lexically_shadowed(binding_lookup, "Reflect")
     {
         return None;
     }
@@ -16027,7 +16703,7 @@ fn timer_builtin_call_capability(
 ) -> Option<&'static str> {
     match callee {
         Expression::Identifier(name) => {
-            if binding_lookup.contains_key(name.as_str()) {
+            if is_lexically_shadowed(binding_lookup, name) {
                 return None;
             }
             timer_global_capability(name)
@@ -16069,7 +16745,7 @@ fn global_function_call_capability(
     let Expression::Identifier(name) = callee else {
         return None;
     };
-    if binding_lookup.contains_key(name.as_str()) {
+    if is_lexically_shadowed(binding_lookup, name) {
         return None;
     }
     match name.as_str() {
@@ -16176,7 +16852,7 @@ fn object_json_builtin_call_capability(
     let Expression::Identifier(global) = object.as_ref() else {
         return None;
     };
-    if binding_lookup.contains_key(global.as_str()) {
+    if is_lexically_shadowed(binding_lookup, global) {
         return None;
     }
     let property_name = match (*computed, property.as_ref()) {
@@ -16254,7 +16930,7 @@ fn object_receiver_static_call_capability(
     let Expression::Identifier(global) = object.as_ref() else {
         return None;
     };
-    if global.as_str() != "Object" || binding_lookup.contains_key(global.as_str()) {
+    if global.as_str() != "Object" || is_lexically_shadowed(binding_lookup, global) {
         return None;
     }
     let property_name = match (*computed, property.as_ref()) {
@@ -16297,7 +16973,7 @@ fn number_static_builtin_call_capability(
     let Expression::Identifier(global) = object.as_ref() else {
         return None;
     };
-    if global.as_str() != "Number" || binding_lookup.contains_key(global.as_str()) {
+    if global.as_str() != "Number" || is_lexically_shadowed(binding_lookup, global) {
         return None;
     }
     let property_name = match (*computed, property.as_ref()) {

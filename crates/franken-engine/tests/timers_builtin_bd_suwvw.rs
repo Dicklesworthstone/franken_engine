@@ -34,6 +34,10 @@
 //!   internal temp's value, breaking nested closures like corpus 0026).
 
 use frankenengine_engine::HybridRouter;
+use frankenengine_engine::ast::ParseGoal;
+use frankenengine_engine::ir_contract::Ir0Module;
+use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
 
 /// Evaluate `src` and return the console output messages joined by newlines
 /// (one line per `console.log`, args joined by single spaces — matching bun).
@@ -593,4 +597,398 @@ fn sync_nested_closure_method_call_on_captured_binding() {
         outer();
     "#;
     assert_eq!(eval_console(src), "outer:q\ninner:q");
+}
+
+// -------------------------------------------------------------------------
+// bd-x0ld5: transitive captures through non-referencing intermediates
+// -------------------------------------------------------------------------
+
+#[test]
+fn transitive_capture_bubbles_through_one_and_two_intermediates() {
+    let one_hop = r#"
+        const x = 41;
+        const outer = function () { return function () { return x + 1; }; };
+        console.log(outer()());
+    "#;
+    assert_eq!(eval_console(one_hop), "42");
+
+    let two_hops = r#"
+        const x = 7;
+        const outer = function () {
+          return function () { return function () { return x; }; };
+        };
+        console.log(outer()()());
+    "#;
+    assert_eq!(eval_console(two_hops), "7");
+}
+
+#[test]
+fn transitive_capture_covers_declarations_arrows_and_nearest_shadow() {
+    let declarations = r#"
+        const x = 11;
+        function outer() {
+          function middle() { return function () { return x; }; }
+          return middle();
+        }
+        console.log(outer()());
+    "#;
+    assert_eq!(eval_console(declarations), "11");
+
+    let arrows = r#"
+        const x = 12;
+        const outer = () => () => () => x;
+        console.log(outer()()());
+    "#;
+    assert_eq!(eval_console(arrows), "12");
+
+    let shadow = r#"
+        const x = 1;
+        function outer() {
+          const x = 2;
+          function middle() { return () => x; }
+          return middle();
+        }
+        console.log(outer()());
+    "#;
+    assert_eq!(eval_console(shadow), "2");
+}
+
+#[test]
+fn transitive_capture_covers_class_declaration_constructor_and_method() {
+    let constructor = r#"
+        const x = 40;
+        class C {
+          constructor() {
+            function middle() { return () => x + 2; }
+            console.log(middle()());
+          }
+        }
+        new C();
+    "#;
+    assert_eq!(eval_console(constructor), "42");
+
+    let method = r#"
+        const x = 40;
+        class C {
+          value() {
+            function middle() { return () => x + 2; }
+            return middle();
+          }
+        }
+        console.log(new C().value()());
+    "#;
+    assert_eq!(eval_console(method), "42");
+}
+
+#[test]
+fn transitive_capture_covers_class_expression_constructor_and_method() {
+    let constructor = r#"
+        const x = 40;
+        let C = class {
+          constructor() {
+            function middle() { return () => x + 2; }
+            console.log(middle()());
+          }
+        };
+        new C();
+    "#;
+    assert_eq!(eval_console(constructor), "42");
+
+    let method = r#"
+        const x = 40;
+        let C = class {
+          value() {
+            function middle() { return () => x + 2; }
+            return middle();
+          }
+        };
+        console.log(new C().value()());
+    "#;
+    assert_eq!(eval_console(method), "42");
+}
+
+#[test]
+fn transitive_capture_preserves_nested_lexical_scope_bindings() {
+    let block = r#"
+        function outer() {
+          let f;
+          { const x = 42; f = () => x; }
+          return f();
+        }
+        console.log(outer());
+    "#;
+    assert_eq!(eval_console(block), "42");
+
+    let catch = r#"
+        function outer() {
+          try { throw 42; } catch (e) { return () => e; }
+        }
+        console.log(outer()());
+    "#;
+    assert_eq!(eval_console(catch), "42");
+
+    let loop_binding = r#"
+        function outer() {
+          for (let x = 42;;) { return () => x; }
+        }
+        console.log(outer()());
+    "#;
+    assert_eq!(eval_console(loop_binding), "42");
+
+    let root_hoisted_var = r#"
+        if (true) { var x = 42; }
+        function outer() { return () => x; }
+        console.log(outer()());
+    "#;
+    assert_eq!(eval_console(root_hoisted_var), "42");
+
+    let block_shadow_does_not_leak = r#"
+        function outer() {
+          { const Math = { abs: () => 99 }; }
+          return () => Math.abs(-3);
+        }
+        console.log(outer()());
+    "#;
+    assert_eq!(eval_console(block_shadow_does_not_leak), "3");
+}
+
+#[test]
+fn transitive_capture_uses_exact_live_cells_for_shadowed_bindings() {
+    let nested_shadow = r#"
+        function outer() {
+          const x = 1;
+          let f;
+          { const x = 2; f = () => x; }
+          return x + ':' + f();
+        }
+        console.log(outer());
+    "#;
+    assert_eq!(eval_console(nested_shadow), "1:2");
+
+    let disjoint_same_name = r#"
+        function outer() {
+          let f;
+          let g;
+          { let x = 1; f = () => x; }
+          { let x = 2; g = () => x; }
+          return f() + ':' + g();
+        }
+        console.log(outer());
+    "#;
+    assert_eq!(eval_console(disjoint_same_name), "1:2");
+
+    let child_write_is_visible_to_parent = r#"
+        function outer() {
+          let x = 1;
+          const bump = () => { x = x + 1; };
+          bump();
+          return x;
+        }
+        console.log(outer());
+    "#;
+    assert_eq!(eval_console(child_write_is_visible_to_parent), "2");
+
+    let parent_compound_write_is_visible_to_child = r#"
+        function outer() {
+          let x = 1;
+          const get = () => x;
+          x += 2;
+          return get();
+        }
+        console.log(outer());
+    "#;
+    assert_eq!(eval_console(parent_compound_write_is_visible_to_child), "3");
+
+    let transitive_write_through_intermediate_params = r#"
+        let x = 1;
+        function outer(p) {
+          function middle(q) { return () => { x += 1; return x; }; }
+          return middle(p);
+        }
+        const f = outer(0);
+        console.log(f());
+        console.log(x);
+    "#;
+    assert_eq!(
+        eval_console(transitive_write_through_intermediate_params),
+        "2\n2"
+    );
+
+    let nested_named_function_expression_self = r#"
+        function outer() {
+          const f = function g(n) { return n ? g(n - 1) : 42; };
+          return f(2);
+        }
+        console.log(outer());
+    "#;
+    assert_eq!(eval_console(nested_named_function_expression_self), "42");
+}
+
+#[test]
+fn captured_nested_function_and_class_declarations_are_initialized() {
+    let function = r#"
+        function outer() {
+          function later() { return 42; }
+          function inner() { return later(); }
+          return inner();
+        }
+        console.log(outer());
+    "#;
+    assert_eq!(eval_console(function), "42");
+
+    let class = r#"
+        function outer() {
+          class Later {}
+          function inner() { return Later; }
+          return inner() === Later;
+        }
+        console.log(outer());
+    "#;
+    assert_eq!(eval_console(class), "true");
+}
+
+#[test]
+fn transitive_capture_preserves_multiple_exact_names() {
+    let src = r#"
+        const a = 20;
+        const b = 2;
+        function outer() {
+          function middle() { return () => a + b + a; }
+          return middle();
+        }
+        console.log(outer()());
+    "#;
+    assert_eq!(eval_console(src), "42");
+}
+
+#[test]
+fn transitive_capture_keeps_missing_identifier_semantics() {
+    let missing = r#"
+        function outer() {
+          return function () { return () => missing_x0ld5; };
+        }
+        try { outer()()(); } catch (_) { console.log('caught'); }
+    "#;
+    assert_eq!(eval_console(missing), "caught");
+
+    let missing_typeof = r#"
+        function outer() {
+          return function () { return () => typeof missing_x0ld5; };
+        }
+        console.log(outer()()());
+    "#;
+    assert_eq!(eval_console(missing_typeof), "undefined");
+}
+
+#[test]
+fn transitive_discovery_does_not_poison_lowering_only_globals() {
+    let require_then_timers = r#"
+        function probeRequire() {
+          return function () { return () => typeof require; };
+        }
+        const timers = require('timers');
+        console.log(typeof timers.setTimeout);
+        console.log(probeRequire()()());
+    "#;
+    assert_eq!(eval_console(require_then_timers), "function\nundefined");
+
+    let math = r#"
+        function probeMath() {
+          return function () { return () => typeof Math; };
+        }
+        console.log(Math.abs(-3));
+        console.log(probeMath()()());
+    "#;
+    assert_eq!(eval_console(math), "3\nundefined");
+}
+
+#[test]
+fn transitive_capture_preserves_two_hop_static_global_shadow() {
+    let src = r#"
+        function outer() {
+          const Math = { abs: (n) => n + 40 };
+          function middle() { return () => Math.abs(2); }
+          return middle();
+        }
+        console.log(outer()());
+    "#;
+    assert_eq!(eval_console(src), "42");
+}
+
+#[test]
+fn transitive_capture_preserves_hoisted_static_global_shadow() {
+    let src = r#"
+        function outer() {
+          function middle() { return () => Math.abs(2); }
+          if (true) {
+            var Math = { abs: (n) => n + 40 };
+          }
+          return middle();
+        }
+        console.log(outer()());
+    "#;
+    assert_eq!(eval_console(src), "42");
+}
+
+#[test]
+fn transitive_lexical_require_keeps_engine_ambient_denial() {
+    let err = eval_err(
+        r#"
+            function outer() {
+              const require = () => 21;
+              function middle() { return () => require('x'); }
+              return middle();
+            }
+            console.log(outer()());
+        "#,
+    );
+    assert!(
+        err.contains("ambient authority violation"),
+        "lexically shadowed require must retain engine ambient denial, got: {err}"
+    );
+}
+
+#[test]
+fn transitive_capture_does_not_shadow_runtime_global() {
+    let src = r#"
+        function outer() {
+          return function () { return () => typeof performance; };
+        }
+        console.log(outer()()());
+    "#;
+    assert_eq!(eval_console(src), "object");
+}
+
+#[test]
+fn transitive_capture_lowering_is_deterministic() {
+    let source = r#"
+        const a = 20;
+        const b = 2;
+        function outer() {
+          function middle() { return () => a + b + a; }
+          return middle();
+        }
+        outer()();
+    "#;
+    let lower = || {
+        let tree = CanonicalEs2020Parser
+            .parse_with_options(source, ParseGoal::Script, &ParserOptions::default())
+            .expect("capture fixture should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_x0ld5_engine_capture.js");
+        lower_ir0_to_ir3(
+            &ir0,
+            &LoweringContext::new("bd-x0ld5-trace", "bd-x0ld5-decision", "bd-x0ld5-policy"),
+        )
+        .expect("capture fixture should lower")
+    };
+
+    let first = lower();
+    let second = lower();
+    assert_eq!(first.ir1, second.ir1);
+    assert_eq!(first.ir2, second.ir2);
+    assert_eq!(first.ir3, second.ir3);
+    assert_eq!(
+        first.ir2_flow_proof_artifact,
+        second.ir2_flow_proof_artifact
+    );
 }

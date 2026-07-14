@@ -670,6 +670,7 @@ struct AsyncCallSetup {
     this_value: Value,
     this_label: crate::ifc_artifacts::Label,
     super_value: Value,
+    super_label: crate::ifc_artifacts::Label,
     result_register: u32,
 }
 
@@ -3068,6 +3069,7 @@ impl InterpreterCore {
             this_value,
             this_label,
             super_value,
+            super_label,
             result_register,
         } = setup;
 
@@ -3111,7 +3113,7 @@ impl InterpreterCore {
             new_target_value: Value::Undefined,
             new_target_label: crate::ifc_artifacts::Label::Public,
             super_value,
-            super_label: crate::ifc_artifacts::Label::Public,
+            super_label,
             construct_this: None,
             saved_pending_exception: self.pending_exception.take(),
             saved_pending_return: self.pending_return.take(),
@@ -4355,6 +4357,7 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::Call { callee, args, dst } => {
                     let callee_val = self.read_reg(callee)?;
+                    let callee_label = self.read_reg_label(callee)?;
 
                     // Generator .next() call: step the generator.
                     if let Value::Generator(gen_id) = &callee_val {
@@ -4461,6 +4464,7 @@ impl InterpreterCore {
                             this_value: Value::Undefined,
                             this_label: crate::ifc_artifacts::Label::Public,
                             super_value: Value::Undefined,
+                            super_label: callee_label,
                             result_register: dst,
                         })?;
                         continue;
@@ -4648,7 +4652,7 @@ impl InterpreterCore {
                                 new_target_value: Value::Undefined,
                                 new_target_label: crate::ifc_artifacts::Label::Public,
                                 super_value,
-                                super_label: crate::ifc_artifacts::Label::Public,
+                                super_label: callee_label,
                                 construct_this: None,
                                 saved_pending_exception: self.pending_exception.take(),
                                 saved_pending_return: self.pending_return.take(),
@@ -4713,6 +4717,7 @@ impl InterpreterCore {
                     let receiver_val = self.read_reg(receiver)?;
                     let receiver_label = self.read_reg_label(receiver)?;
                     let callee_val = self.read_reg(callee)?;
+                    let callee_label = self.read_reg_label(callee)?;
 
                     if let Value::BuiltinFunction(builtin) = &callee_val {
                         let result = self.dispatch_builtin_function(
@@ -4805,6 +4810,7 @@ impl InterpreterCore {
                             this_value: receiver_val,
                             this_label: receiver_label,
                             super_value,
+                            super_label: callee_label,
                             result_register: dst,
                         })?;
                         continue;
@@ -4831,7 +4837,7 @@ impl InterpreterCore {
                         new_target_value: Value::Undefined,
                         new_target_label: crate::ifc_artifacts::Label::Public,
                         super_value,
-                        super_label: crate::ifc_artifacts::Label::Public,
+                        super_label: callee_label,
                         construct_this: None,
                         saved_pending_exception: self.pending_exception.take(),
                         saved_pending_return: self.pending_return.take(),
@@ -14002,6 +14008,117 @@ mod tests {
         );
     }
 
+    #[test]
+    fn plain_call_super_metadata_uses_only_callee_label_bd_ur3tk_20() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 2,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadSuper { dst: 1 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 2,
+                name: Some("plain_super_reader".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = quickjs_test_core();
+        let super_object = core
+            .alloc_object_with_prototype(None)
+            .expect("super object should allocate");
+        let callee = Value::Function(0);
+        let function_object = core
+            .ensure_function_object(&callee)
+            .expect("function metadata object should allocate")
+            .expect("Function should have metadata storage");
+        core.set_object_property(
+            function_object,
+            IR_SUPER_PROTOTYPE_PROPERTY.to_string(),
+            Value::Object(super_object),
+        )
+        .expect("super metadata should be writable");
+        core.write_reg_with_label(0, callee, crate::ifc_artifacts::Label::Secret)
+            .expect("callee should be writable");
+        core.write_reg_with_label(1, Value::Int(41), crate::ifc_artifacts::Label::TopSecret)
+            .expect("argument should be writable");
+
+        core.execute(&module).expect("plain call should execute");
+
+        assert_eq!(core.registers[2], Value::Object(super_object));
+        assert_eq!(
+            core.read_reg_label(2).expect("plain super result label"),
+            crate::ifc_artifacts::Label::Secret,
+            "super provenance comes from the callee without overjoining its argument"
+        );
+    }
+
+    #[test]
+    fn call_method_super_metadata_uses_only_callee_label_bd_ur3tk_20() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 1,
+                    args: RegRange { start: 2, count: 1 },
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadSuper { dst: 1 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 2,
+                name: Some("method_super_reader".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = quickjs_test_core();
+        let super_object = core
+            .alloc_object_with_prototype(None)
+            .expect("super object should allocate");
+        let callee = Value::Function(0);
+        let function_object = core
+            .ensure_function_object(&callee)
+            .expect("function metadata object should allocate")
+            .expect("Function should have metadata storage");
+        core.set_object_property(
+            function_object,
+            IR_SUPER_PROTOTYPE_PROPERTY.to_string(),
+            Value::Object(super_object),
+        )
+        .expect("super metadata should be writable");
+        core.write_reg_with_label(
+            0,
+            Value::str("receiver"),
+            crate::ifc_artifacts::Label::Confidential,
+        )
+        .expect("receiver should be writable");
+        core.write_reg_with_label(1, callee, crate::ifc_artifacts::Label::Secret)
+            .expect("callee should be writable");
+        core.write_reg_with_label(2, Value::Int(42), crate::ifc_artifacts::Label::TopSecret)
+            .expect("argument should be writable");
+
+        core.execute(&module).expect("method call should execute");
+
+        assert_eq!(core.registers[3], Value::Object(super_object));
+        assert_eq!(
+            core.read_reg_label(3).expect("method super result label"),
+            crate::ifc_artifacts::Label::Secret,
+            "super provenance comes from the callee without overjoining its argument"
+        );
+    }
+
     fn lower_source_and_find_unresolved_argument_seed_bd_ur3tk_11(
         source: &str,
     ) -> (Ir3Module, Reg) {
@@ -19239,6 +19356,144 @@ mod tests {
                 crate::promise_model::PromiseState::Rejected(crate::object_model::JsValue::Str(
                     value
                 )) if value == "secret-rejection"
+            ));
+        }
+
+        #[test]
+        fn async_plain_call_super_uses_only_callee_label_bd_ur3tk_20() {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "async-plain-super-label");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::Call {
+                        callee: 0,
+                        args: RegRange {
+                            start: 10,
+                            count: 1,
+                        },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadSuper { dst: 0 },
+                    Ir3Instruction::AsyncReturn { value_reg: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("async_plain_super_reader".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            let captured_env = core.scope_chain.snapshot();
+            core.closures.push(ClosureValue {
+                function_index: 0,
+                captured_env,
+            });
+            core.write_reg_with_label(
+                0,
+                Value::AsyncFunction(0),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("async callee should be writable");
+            core.write_reg_with_label(10, Value::Int(43), crate::ifc_artifacts::Label::TopSecret)
+                .expect("async argument should be writable");
+
+            core.execute(&module)
+                .expect("async plain call should resolve");
+
+            let Value::Promise(result_handle) = core.registers[1] else {
+                panic!("async plain call should leave its result Promise");
+            };
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("result Promise exists");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Fulfilled(
+                    crate::object_model::JsValue::Undefined
+                )
+            ));
+        }
+
+        #[test]
+        fn async_method_super_uses_only_callee_label_bd_ur3tk_20() {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "async-method-super-label");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CallMethod {
+                        receiver: 2,
+                        callee: 0,
+                        args: RegRange {
+                            start: 10,
+                            count: 1,
+                        },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadSuper { dst: 1 },
+                    Ir3Instruction::AsyncReturn { value_reg: 1 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 1,
+                    frame_size: 2,
+                    name: Some("async_method_super_reader".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            let parent_prototype = core
+                .alloc_object_with_prototype(None)
+                .expect("parent prototype should allocate");
+            let method_prototype = core
+                .alloc_object_with_prototype(Some(parent_prototype))
+                .expect("method prototype should allocate");
+            let receiver = core
+                .alloc_object_with_prototype(Some(method_prototype))
+                .expect("receiver should allocate");
+            let captured_env = core.scope_chain.snapshot();
+            core.closures.push(ClosureValue {
+                function_index: 0,
+                captured_env,
+            });
+            core.write_reg_with_label(
+                0,
+                Value::AsyncFunction(0),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("async method should be writable");
+            core.write_reg_with_label(
+                2,
+                Value::Object(receiver),
+                crate::ifc_artifacts::Label::TopSecret,
+            )
+            .expect("receiver should be writable");
+            core.write_reg_with_label(
+                10,
+                Value::Int(44),
+                crate::ifc_artifacts::Label::Confidential,
+            )
+            .expect("method argument should be writable");
+
+            core.execute(&module)
+                .expect("async method call should resolve");
+
+            let Value::Promise(result_handle) = core.registers[1] else {
+                panic!("async method call should leave its result Promise");
+            };
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("result Promise exists");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Fulfilled(
+                    crate::object_model::JsValue::Object(handle)
+                ) if handle.0 == parent_prototype.0
             ));
         }
 

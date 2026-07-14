@@ -416,11 +416,12 @@ impl PromiseStore {
         // Enqueue only the fulfill reactions for a fulfilled promise.
         for reaction in reactions {
             if reaction.kind == ReactionKind::Fulfill {
+                let effective_label = label.join(&reaction.label);
                 queue.enqueue(Microtask::PromiseReaction {
                     handler: reaction.handler,
                     argument: value.clone(),
                     result_promise: reaction.result_promise,
-                    label: label.clone(),
+                    label: effective_label,
                 });
             }
         }
@@ -459,18 +460,19 @@ impl PromiseStore {
         // Enqueue only the reject reactions for a rejected promise.
         for reaction in reactions {
             if reaction.kind == ReactionKind::Reject {
+                let effective_label = label.join(&reaction.label);
                 if reaction.handler.is_some() {
                     queue.enqueue(Microtask::PromiseReaction {
                         handler: reaction.handler,
                         argument: reason.clone(),
                         result_promise: reaction.result_promise,
-                        label: label.clone(),
+                        label: effective_label,
                     });
                 } else {
                     queue.enqueue(Microtask::PromiseRejection {
                         reason: reason.clone(),
                         result_promise: reaction.result_promise,
-                        label: label.clone(),
+                        label: effective_label,
                     });
                 }
             }
@@ -493,6 +495,7 @@ impl PromiseStore {
     ) -> Result<PromiseHandle, PromiseError> {
         let record = self.get(handle)?;
         let state = record.state.clone();
+        let settlement_label = record.label.clone();
         let result_promise = self.create();
 
         match state {
@@ -512,11 +515,12 @@ impl PromiseStore {
                 });
             }
             PromiseState::Fulfilled(value) => {
+                let effective_label = settlement_label.join(&label);
                 queue.enqueue(Microtask::PromiseReaction {
                     handler: on_fulfilled,
                     argument: value,
                     result_promise,
-                    label,
+                    label: effective_label,
                 });
             }
             PromiseState::Rejected(reason) => {
@@ -525,18 +529,19 @@ impl PromiseStore {
                     let record = self.get_mut(handle)?;
                     record.rejection_handled = true;
                 }
+                let effective_label = settlement_label.join(&label);
                 if on_rejected.is_some() {
                     queue.enqueue(Microtask::PromiseReaction {
                         handler: on_rejected,
                         argument: reason,
                         result_promise,
-                        label,
+                        label: effective_label,
                     });
                 } else {
                     queue.enqueue(Microtask::PromiseRejection {
                         reason,
                         result_promise,
-                        label,
+                        label: effective_label,
                     });
                 }
             }
@@ -2039,6 +2044,79 @@ mod tests {
             .get(h)
             .expect("operation should succeed for valid inputs");
         assert_eq!(p.label, Label::Secret);
+    }
+
+    #[test]
+    fn settled_then_joins_settlement_and_registration_labels_bd_ur3tk_13() {
+        let mut store = PromiseStore::new();
+        let mut queue = MicrotaskQueue::new();
+
+        let fulfilled = store.create();
+        store
+            .fulfill(fulfilled, js_str("secret-value"), Label::Secret, &mut queue)
+            .expect("source Promise should settle");
+        store
+            .then(fulfilled, None, None, Label::Public, &mut queue)
+            .expect("settled Promise should accept a reaction");
+        assert!(matches!(
+            queue.dequeue(),
+            Some(Microtask::PromiseReaction {
+                label: Label::Secret,
+                ..
+            })
+        ));
+
+        let rejected = store.create();
+        store
+            .reject(rejected, js_str("secret-reason"), Label::Secret, &mut queue)
+            .expect("source Promise should reject");
+        store
+            .then(rejected, None, None, Label::Public, &mut queue)
+            .expect("rejected Promise should accept a reaction");
+        assert!(matches!(
+            queue.dequeue(),
+            Some(Microtask::PromiseRejection {
+                label: Label::Secret,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn pending_then_joins_registration_and_later_settlement_labels_bd_ur3tk_13() {
+        let mut store = PromiseStore::new();
+        let mut queue = MicrotaskQueue::new();
+        let custom = Label::Custom {
+            name: "tenant-promise".to_string(),
+            level: 4,
+        };
+
+        let fulfilled = store.create();
+        store
+            .then(fulfilled, None, None, custom.clone(), &mut queue)
+            .expect("pending Promise should accept a reaction");
+        store
+            .fulfill(fulfilled, js_int(7), Label::Public, &mut queue)
+            .expect("pending Promise should fulfill");
+        assert!(matches!(
+            queue.dequeue(),
+            Some(Microtask::PromiseReaction { label, .. }) if label == custom
+        ));
+
+        let rejected = store.create();
+        store
+            .then(rejected, None, None, Label::Secret, &mut queue)
+            .expect("pending Promise should accept a rejection reaction");
+        store
+            .reject(rejected, js_str("public-reason"), Label::Public, &mut queue)
+            .expect("pending Promise should reject");
+        assert!(matches!(
+            queue.dequeue(),
+            Some(Microtask::PromiseRejection {
+                label: Label::Secret,
+                ..
+            })
+        ));
     }
 
     // ----- Witness events -----

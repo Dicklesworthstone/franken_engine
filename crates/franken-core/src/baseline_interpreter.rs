@@ -4909,10 +4909,18 @@ impl InterpreterCore {
                         instruction_index: self.ip as u32,
                     });
 
-                    // Dispatch promise hostcalls to the promise subsystem.
-                    let result = if is_promise_cap {
-                        self.dispatch_promise_hostcall(&capability.0, args)?
-                    } else if capability.0 == "module:require" {
+                    // Promise hostcalls return an explicit label for their
+                    // Promise-handle result.  Keep this separate from generic
+                    // hostcalls, whose current contract remains Public.
+                    if is_promise_cap {
+                        let (result, result_label) =
+                            self.dispatch_promise_hostcall(&capability.0, args)?;
+                        self.write_reg_with_label(dst, result, result_label)?;
+                        self.ip += 1;
+                        continue;
+                    }
+
+                    let result = if capability.0 == "module:require" {
                         let spec_val = if args.count > 0 {
                             self.read_reg(args.start)?
                         } else {
@@ -7193,6 +7201,36 @@ impl InterpreterCore {
         }
     }
 
+    fn promise_hostcall_argument(
+        &self,
+        args: RegRange,
+        index: u32,
+    ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
+        if index >= args.count {
+            return Ok((Value::Undefined, crate::ifc_artifacts::Label::Public));
+        }
+        let register =
+            args.start
+                .checked_add(index)
+                .ok_or(InterpreterError::RegisterOutOfBounds {
+                    register: args.start,
+                    max: self.config.max_registers,
+                })?;
+        Ok((self.read_reg(register)?, self.read_reg_label(register)?))
+    }
+
+    fn promise_hostcall_registration_label(
+        &self,
+        args: RegRange,
+    ) -> Result<crate::ifc_artifacts::Label, InterpreterError> {
+        let mut label = crate::ifc_artifacts::Label::Public;
+        for index in 0..args.count {
+            let (_, argument_label) = self.promise_hostcall_argument(args, index)?;
+            label = label.join(&argument_label);
+        }
+        Ok(label)
+    }
+
     fn collect_promise_combinator_inputs(
         &self,
         args: RegRange,
@@ -7829,94 +7867,63 @@ impl InterpreterCore {
         &mut self,
         cap: &str,
         args: RegRange,
-    ) -> Result<Value, InterpreterError> {
-        let label = crate::ifc_artifacts::Label::Public;
+    ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
         match cap {
             "promise:constructor" => {
                 // Create a new pending promise and return its handle.
                 let handle = self.promise_store.create();
-                Ok(Value::Promise(handle.0))
+                Ok((
+                    Value::Promise(handle.0),
+                    crate::ifc_artifacts::Label::Public,
+                ))
             }
             "promise:resolve" => {
                 // If arg0 is a Promise, resolve it with arg1.
                 // Otherwise create a pre-resolved promise with arg0 as the value.
-                let arg0 = if args.count > 0 {
-                    self.read_reg(args.start)?
-                } else {
-                    Value::Undefined
-                };
+                let (arg0, arg0_label) = self.promise_hostcall_argument(args, 0)?;
                 match arg0 {
                     Value::Promise(h) => {
                         // Resolve the existing promise with the given value.
-                        let val = if args.count > 1 {
-                            let reg = args.start.checked_add(1).ok_or(
-                                InterpreterError::RegisterOutOfBounds {
-                                    register: args.start,
-                                    max: self.config.max_registers,
-                                },
-                            )?;
-                            self.read_reg(reg)?
-                        } else {
-                            Value::Undefined
-                        };
+                        let (val, value_label) = self.promise_hostcall_argument(args, 1)?;
                         let js_val = Self::value_to_js_value(&val);
                         let handle = crate::promise_model::PromiseHandle(h);
-                        self.fulfill_promise(handle, js_val, label.clone())?;
-                        Ok(Value::Promise(h))
+                        let settlement_label = arg0_label.join(&value_label);
+                        self.fulfill_promise(handle, js_val, settlement_label.clone())?;
+                        Ok((Value::Promise(h), settlement_label))
                     }
                     _ => {
                         // Promise.resolve(value) — create a pre-resolved promise.
                         let js_val = Self::value_to_js_value(&arg0);
                         let handle = self.promise_store.create();
-                        self.fulfill_promise(handle, js_val, label.clone())?;
-                        Ok(Value::Promise(handle.0))
+                        self.fulfill_promise(handle, js_val, arg0_label.clone())?;
+                        Ok((Value::Promise(handle.0), arg0_label))
                     }
                 }
             }
             "promise:reject" => {
-                let arg0 = if args.count > 0 {
-                    self.read_reg(args.start)?
-                } else {
-                    Value::Undefined
-                };
+                let (arg0, arg0_label) = self.promise_hostcall_argument(args, 0)?;
                 match arg0 {
                     Value::Promise(h) => {
-                        let reason = if args.count > 1 {
-                            let reg = args.start.checked_add(1).ok_or(
-                                InterpreterError::RegisterOutOfBounds {
-                                    register: args.start,
-                                    max: self.config.max_registers,
-                                },
-                            )?;
-                            self.read_reg(reg)?
-                        } else {
-                            Value::Undefined
-                        };
+                        let (reason, reason_label) = self.promise_hostcall_argument(args, 1)?;
                         let js_reason = Self::value_to_js_value(&reason);
                         let handle = crate::promise_model::PromiseHandle(h);
-                        self.reject_promise(handle, js_reason, label.clone())?;
-                        Ok(Value::Promise(h))
+                        let settlement_label = arg0_label.join(&reason_label);
+                        self.reject_promise(handle, js_reason, settlement_label.clone())?;
+                        Ok((Value::Promise(h), settlement_label))
                     }
                     _ => {
                         // Promise.reject(reason) — create a pre-rejected promise.
                         let js_reason = Self::value_to_js_value(&arg0);
                         let handle = self.promise_store.create();
-                        self.reject_promise(handle, js_reason, label.clone())?;
-                        Ok(Value::Promise(handle.0))
+                        self.reject_promise(handle, js_reason, arg0_label.clone())?;
+                        Ok((Value::Promise(handle.0), arg0_label))
                     }
                 }
             }
             "promise:then" => {
                 // arg0 = promise handle, arg1 = onFulfilled (optional),
                 // arg2 = onRejected (optional).
-                let arg0 = if args.count > 0 {
-                    self.read_reg(args.start)?
-                } else {
-                    return Err(InterpreterError::TypeError {
-                        expected: "promise".to_string(),
-                        got: "undefined".to_string(),
-                    });
-                };
+                let (arg0, _) = self.promise_hostcall_argument(args, 0)?;
                 let handle = match arg0 {
                     Value::Promise(h) => crate::promise_model::PromiseHandle(h),
                     _ => {
@@ -7926,27 +7933,27 @@ impl InterpreterCore {
                         });
                     }
                 };
+                let registration_label = self.promise_hostcall_registration_label(args)?;
                 // In the baseline interpreter, .then() callbacks are simplified:
                 // we register reactions with no closure handlers (identity propagation).
                 let result = self
                     .promise_store
-                    .then(handle, None, None, label, &mut self.event_loop.microtasks)
+                    .then(
+                        handle,
+                        None,
+                        None,
+                        registration_label.clone(),
+                        &mut self.event_loop.microtasks,
+                    )
                     .map_err(|e| InterpreterError::TypeError {
                         expected: "valid promise handle".to_string(),
                         got: e.to_string(),
                     })?;
-                Ok(Value::Promise(result.0))
+                Ok((Value::Promise(result.0), registration_label))
             }
             "promise:catch" => {
                 // Sugar for .then(undefined, onRejected).
-                let arg0 = if args.count > 0 {
-                    self.read_reg(args.start)?
-                } else {
-                    return Err(InterpreterError::TypeError {
-                        expected: "promise".to_string(),
-                        got: "undefined".to_string(),
-                    });
-                };
+                let (arg0, _) = self.promise_hostcall_argument(args, 0)?;
                 let handle = match arg0 {
                     Value::Promise(h) => crate::promise_model::PromiseHandle(h),
                     _ => {
@@ -7956,25 +7963,25 @@ impl InterpreterCore {
                         });
                     }
                 };
+                let registration_label = self.promise_hostcall_registration_label(args)?;
                 let result = self
                     .promise_store
-                    .then(handle, None, None, label, &mut self.event_loop.microtasks)
+                    .then(
+                        handle,
+                        None,
+                        None,
+                        registration_label.clone(),
+                        &mut self.event_loop.microtasks,
+                    )
                     .map_err(|e| InterpreterError::TypeError {
                         expected: "valid promise handle".to_string(),
                         got: e.to_string(),
                     })?;
-                Ok(Value::Promise(result.0))
+                Ok((Value::Promise(result.0), registration_label))
             }
             "promise:finally" => {
                 // Similar to .then(handler, handler) for finally semantics.
-                let arg0 = if args.count > 0 {
-                    self.read_reg(args.start)?
-                } else {
-                    return Err(InterpreterError::TypeError {
-                        expected: "promise".to_string(),
-                        got: "undefined".to_string(),
-                    });
-                };
+                let (arg0, _) = self.promise_hostcall_argument(args, 0)?;
                 let handle = match arg0 {
                     Value::Promise(h) => crate::promise_model::PromiseHandle(h),
                     _ => {
@@ -7984,24 +7991,41 @@ impl InterpreterCore {
                         });
                     }
                 };
+                let registration_label = self.promise_hostcall_registration_label(args)?;
                 let result = self
                     .promise_store
-                    .then(handle, None, None, label, &mut self.event_loop.microtasks)
+                    .then(
+                        handle,
+                        None,
+                        None,
+                        registration_label.clone(),
+                        &mut self.event_loop.microtasks,
+                    )
                     .map_err(|e| InterpreterError::TypeError {
                         expected: "valid promise handle".to_string(),
                         got: e.to_string(),
                     })?;
-                Ok(Value::Promise(result.0))
+                Ok((Value::Promise(result.0), registration_label))
             }
-            "promise:all" => self.dispatch_promise_combinator(PromiseCombinatorKind::All, args),
-            "promise:race" => self.dispatch_promise_combinator(PromiseCombinatorKind::Race, args),
-            "promise:allSettled" => {
-                self.dispatch_promise_combinator(PromiseCombinatorKind::AllSettled, args)
-            }
-            "promise:any" => self.dispatch_promise_combinator(PromiseCombinatorKind::Any, args),
+            "promise:all" => Ok((
+                self.dispatch_promise_combinator(PromiseCombinatorKind::All, args)?,
+                crate::ifc_artifacts::Label::Public,
+            )),
+            "promise:race" => Ok((
+                self.dispatch_promise_combinator(PromiseCombinatorKind::Race, args)?,
+                crate::ifc_artifacts::Label::Public,
+            )),
+            "promise:allSettled" => Ok((
+                self.dispatch_promise_combinator(PromiseCombinatorKind::AllSettled, args)?,
+                crate::ifc_artifacts::Label::Public,
+            )),
+            "promise:any" => Ok((
+                self.dispatch_promise_combinator(PromiseCombinatorKind::Any, args)?,
+                crate::ifc_artifacts::Label::Public,
+            )),
             _ => {
                 // Unknown promise sub-capability — return undefined.
-                Ok(Value::Undefined)
+                Ok((Value::Undefined, crate::ifc_artifacts::Label::Public))
             }
         }
     }
@@ -14244,6 +14268,183 @@ mod tests {
         let lane = QuickJsLane::with_config(config);
         let result = lane.execute(&m, "test").unwrap();
         assert_eq!(result.value, Value::Undefined);
+    }
+
+    #[test]
+    fn promise_resolve_wrapper_preserves_source_label_bd_ur3tk_13() {
+        let module = test_module(vec![
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("promise:resolve".to_string()),
+                args: RegRange { start: 0, count: 1 },
+                dst: 1,
+            },
+            Ir3Instruction::Halt,
+        ]);
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(
+            0,
+            Value::str("secret-resolution"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("resolution source should be writable");
+
+        core.execute(&module)
+            .expect("Promise.resolve hostcall should execute");
+
+        let Value::Promise(handle) = core.registers[1] else {
+            panic!("Promise.resolve should return a Promise handle");
+        };
+        assert_eq!(
+            core.read_reg_label(1).expect("result label should exist"),
+            crate::ifc_artifacts::Label::Secret
+        );
+        let record = core
+            .promise_store
+            .get(crate::promise_model::PromiseHandle(handle))
+            .expect("resolved Promise should exist");
+        assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+    }
+
+    #[test]
+    fn promise_existing_reject_joins_target_and_reason_labels_bd_ur3tk_13() {
+        let module = test_module(vec![
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("promise:reject".to_string()),
+                args: RegRange { start: 0, count: 2 },
+                dst: 2,
+            },
+            Ir3Instruction::Halt,
+        ]);
+        let cases = [
+            (
+                crate::ifc_artifacts::Label::Secret,
+                crate::ifc_artifacts::Label::Custom {
+                    name: "tenant-rejection".to_string(),
+                    level: 2,
+                },
+                "target-dominant",
+            ),
+            (
+                crate::ifc_artifacts::Label::Public,
+                crate::ifc_artifacts::Label::Secret,
+                "reason-dominant",
+            ),
+        ];
+
+        for (target_label, reason_label, reason) in cases {
+            let expected_label = target_label.join(&reason_label);
+            let mut core = quickjs_test_core();
+            let target = core.promise_store.create();
+            core.write_reg_with_label(0, Value::Promise(target.0), target_label)
+                .expect("target Promise should be writable");
+            core.write_reg_with_label(1, Value::str(reason), reason_label)
+                .expect("rejection reason should be writable");
+
+            core.execute(&module)
+                .expect("existing-target Promise.reject hostcall should execute");
+
+            assert_eq!(core.registers[2], Value::Promise(target.0));
+            assert_eq!(
+                core.read_reg_label(2).expect("result label should exist"),
+                expected_label,
+                "returned handle joins the target-handle and reason labels"
+            );
+            let record = core
+                .promise_store
+                .get(target)
+                .expect("rejected Promise should exist");
+            assert_eq!(
+                record.label, expected_label,
+                "settlement joins target-reference and reason provenance"
+            );
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Rejected(
+                    crate::object_model::JsValue::Str(value)
+                ) if value == reason
+            ));
+        }
+    }
+
+    #[test]
+    fn pending_promise_reactions_preserve_registration_labels_bd_ur3tk_13() {
+        let custom = crate::ifc_artifacts::Label::Custom {
+            name: "tenant-reaction".to_string(),
+            level: 4,
+        };
+        let cases = [
+            (
+                "promise:then",
+                3,
+                crate::ifc_artifacts::Label::Public,
+                crate::ifc_artifacts::Label::Public,
+                crate::ifc_artifacts::Label::Secret,
+                crate::ifc_artifacts::Label::Secret,
+            ),
+            (
+                "promise:catch",
+                2,
+                crate::ifc_artifacts::Label::Public,
+                custom.clone(),
+                crate::ifc_artifacts::Label::Public,
+                custom,
+            ),
+            (
+                "promise:finally",
+                2,
+                crate::ifc_artifacts::Label::Secret,
+                crate::ifc_artifacts::Label::Public,
+                crate::ifc_artifacts::Label::Public,
+                crate::ifc_artifacts::Label::Secret,
+            ),
+        ];
+
+        for (capability, count, source_label, handler_label, reject_label, expected_label) in cases
+        {
+            let module = test_module(vec![
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag(capability.to_string()),
+                    args: RegRange { start: 0, count },
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+            ]);
+            let mut core = quickjs_test_core();
+            let source = core.promise_store.create();
+            core.write_reg_with_label(0, Value::Promise(source.0), source_label)
+                .expect("source Promise should be writable");
+            core.write_reg_with_label(1, Value::Undefined, handler_label)
+                .expect("fulfillment handler slot should be writable");
+            core.write_reg_with_label(2, Value::Undefined, reject_label)
+                .expect("rejection handler slot should be writable");
+
+            core.execute(&module)
+                .expect("Promise reaction hostcall should execute");
+
+            let Value::Promise(result_handle) = core.registers[3] else {
+                panic!("{capability} should return a Promise handle");
+            };
+            assert_eq!(
+                core.read_reg_label(3).expect("result label should exist"),
+                expected_label,
+                "{capability} result handle carries registration provenance"
+            );
+            core.fulfill_promise(
+                source,
+                crate::object_model::JsValue::Int(7),
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect("source Promise should fulfill");
+            core.drain_microtasks();
+            let result = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("reaction result Promise should exist");
+            assert_eq!(
+                result.label, expected_label,
+                "{capability} result settlement joins registration provenance"
+            );
+        }
     }
 
     #[test]

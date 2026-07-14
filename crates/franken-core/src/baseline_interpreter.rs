@@ -716,7 +716,14 @@ enum FinallyMode {
 #[derive(Debug, Clone)]
 enum AbruptCompletion {
     Exception(Value),
-    Return(Value),
+    Return(LabeledReturn),
+}
+
+/// Return completion carried while control unwinds through `finally`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct LabeledReturn {
+    value: Value,
+    label: crate::ifc_artifacts::Label,
 }
 
 // ---------------------------------------------------------------------------
@@ -909,7 +916,7 @@ struct CallFrame {
     /// cannot clobber an outer in-flight abrupt completion.
     saved_pending_exception: Option<Value>,
     /// Caller return state saved for the same reason.
-    saved_pending_return: Option<Value>,
+    saved_pending_return: Option<LabeledReturn>,
     /// Count of suspended abrupt completions before entering the callee.
     saved_suspended_abrupt_depth: usize,
     /// Count of active finally modes before entering the callee.
@@ -1683,7 +1690,7 @@ struct ModuleExecutionSnapshot {
     register_base: usize,
     catch_frames: Vec<CatchFrame>,
     pending_exception: Option<Value>,
-    pending_return: Option<Value>,
+    pending_return: Option<LabeledReturn>,
     suspended_abrupt_completions: Vec<AbruptCompletion>,
     finally_modes: Vec<FinallyMode>,
     scope_chain: ScopeChain,
@@ -1775,7 +1782,7 @@ pub struct InterpreterCore {
     /// consumed by `EnterCatch` or re-thrown by `EndFinally`).
     pending_exception: Option<Value>,
     /// A pending return value during unwinding through finally blocks.
-    pending_return: Option<Value>,
+    pending_return: Option<LabeledReturn>,
     /// Saved outer abrupt completion state that was temporarily suspended by a
     /// newer local throw/return or by exception unwinding across nested calls
     /// or intermediary finally blocks. If the newer abrupt completion is
@@ -3101,7 +3108,10 @@ impl InterpreterCore {
         }
     }
 
-    fn unwind_call_stack_to(&mut self, target_depth: usize) -> (Option<Value>, Option<Value>) {
+    fn unwind_call_stack_to(
+        &mut self,
+        target_depth: usize,
+    ) -> (Option<Value>, Option<LabeledReturn>) {
         let mut restored_pending_exception = None;
         let mut restored_pending_return = None;
         let mut restored_suspended_abrupt_depth = None;
@@ -3160,7 +3170,7 @@ impl InterpreterCore {
     fn suspend_abrupt_completion(
         &mut self,
         pending_exception: Option<Value>,
-        pending_return: Option<Value>,
+        pending_return: Option<LabeledReturn>,
     ) {
         debug_assert!(
             pending_exception.is_none() || pending_return.is_none(),
@@ -4798,7 +4808,10 @@ impl InterpreterCore {
                     // complete.
                     self.suspend_current_abrupt_completion();
                     self.pending_exception = None;
-                    self.pending_return = Some(return_val.clone());
+                    self.pending_return = Some(LabeledReturn {
+                        value: return_val.clone(),
+                        label: return_label.clone(),
+                    });
                     if let Some(finally_target) = self.pop_current_finally_target() {
                         self.ip = finally_target;
                     } else {
@@ -5666,14 +5679,14 @@ impl InterpreterCore {
                             }
                         }
                         FinallyMode::Return => {
-                            if let Some(return_val) = self.pending_return.take() {
+                            if let Some(pending_return) = self.pending_return.take() {
                                 if let Some(finally_target) = self.pop_current_finally_target() {
-                                    self.pending_return = Some(return_val);
+                                    self.pending_return = Some(pending_return);
                                     self.ip = finally_target;
                                 } else {
                                     if let Some(final_value) = self.complete_return(
-                                        return_val,
-                                        crate::ifc_artifacts::Label::Public,
+                                        pending_return.value,
+                                        pending_return.label,
                                     )? {
                                         return Ok(final_value);
                                     }
@@ -9789,7 +9802,7 @@ impl InterpreterCore {
                 frame
                     .saved_pending_return
                     .as_ref()
-                    .map(Self::estimate_value_bytes)
+                    .map(|pending| Self::estimate_value_bytes(&pending.value))
                     .unwrap_or(0),
             )
             .saturating_add(
@@ -13330,6 +13343,210 @@ mod tests {
             core.read_reg_label(5).expect("overwritten binding label"),
             crate::ifc_artifacts::Label::Public
         );
+    }
+
+    #[test]
+    fn return_label_survives_finally_nested_call_bd_ur3tk_2() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::Return { value: 3 },
+                Ir3Instruction::BeginTry {
+                    catch_target: 4,
+                    finally_target: Some(4),
+                },
+                Ir3Instruction::Return { value: 0 },
+                Ir3Instruction::EnterFinally,
+                Ir3Instruction::Call {
+                    callee: 1,
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 2,
+                },
+                Ir3Instruction::EndFinally,
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 2,
+                    frame_size: 3,
+                    name: Some("return_through_finally".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 7,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("finally_helper".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+        core.write_reg_with_label(
+            1,
+            Value::str("secret-through-finally"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("secret return argument should be writable");
+        core.registers[2] = Value::Function(1);
+
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("finally return should survive nested helper call"),
+            Value::str("secret-through-finally")
+        );
+        assert_eq!(
+            core.read_reg_label(3).expect("caller return label"),
+            crate::ifc_artifacts::Label::Secret
+        );
+    }
+
+    #[test]
+    fn nested_finally_return_override_keeps_new_label_bd_ur3tk_2() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::Return { value: 3 },
+                Ir3Instruction::BeginTry {
+                    catch_target: 8,
+                    finally_target: Some(8),
+                },
+                Ir3Instruction::BeginTry {
+                    catch_target: 5,
+                    finally_target: Some(5),
+                },
+                Ir3Instruction::Return { value: 1 },
+                Ir3Instruction::EnterFinally,
+                Ir3Instruction::Return { value: 0 },
+                Ir3Instruction::EndFinally,
+                Ir3Instruction::EnterFinally,
+                Ir3Instruction::EndFinally,
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 2,
+                frame_size: 2,
+                name: Some("nested_finally_override".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+        core.write_reg_with_label(
+            1,
+            Value::str("secret-override"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("secret overriding return should be writable");
+        core.registers[2] = Value::str("public-initial-return");
+
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("inner finally return should override outer completion"),
+            Value::str("secret-override")
+        );
+        assert_eq!(
+            core.read_reg_label(3).expect("overriding return label"),
+            crate::ifc_artifacts::Label::Secret
+        );
+    }
+
+    #[test]
+    fn caught_throw_restores_suspended_return_label_bd_ur3tk_2() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::Return { value: 3 },
+                Ir3Instruction::BeginTry {
+                    catch_target: 4,
+                    finally_target: Some(4),
+                },
+                Ir3Instruction::Return { value: 0 },
+                Ir3Instruction::EnterFinally,
+                Ir3Instruction::BeginTry {
+                    catch_target: 7,
+                    finally_target: None,
+                },
+                Ir3Instruction::Throw { value: 1 },
+                Ir3Instruction::EnterCatch { dst: 2 },
+                Ir3Instruction::EndFinally,
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 2,
+                frame_size: 3,
+                name: Some("caught_throw_during_finally".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+        core.write_reg_with_label(
+            1,
+            Value::str("secret-suspended-return"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("secret pending return should be writable");
+        core.registers[2] = Value::str("public-local-throw");
+
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("caught throw should restore the suspended return"),
+            Value::str("secret-suspended-return")
+        );
+        assert_eq!(
+            core.read_reg_label(3)
+                .expect("restored suspended return label"),
+            crate::ifc_artifacts::Label::Secret
+        );
+    }
+
+    #[test]
+    fn module_snapshot_round_trips_labeled_returns_bd_ur3tk_2() {
+        let mut core = quickjs_test_core();
+        let pending = LabeledReturn {
+            value: Value::str("pending"),
+            label: crate::ifc_artifacts::Label::Secret,
+        };
+        let suspended = LabeledReturn {
+            value: Value::str("suspended"),
+            label: crate::ifc_artifacts::Label::Custom {
+                name: "tenant-return".to_string(),
+                level: 4,
+            },
+        };
+        core.pending_return = Some(pending.clone());
+        core.suspended_abrupt_completions
+            .push(AbruptCompletion::Return(suspended.clone()));
+        let snapshot = core.snapshot_module_execution();
+
+        core.pending_return = None;
+        core.suspended_abrupt_completions.clear();
+        core.restore_module_execution(snapshot);
+
+        assert_eq!(core.pending_return, Some(pending));
+        assert!(matches!(
+            core.suspended_abrupt_completions.as_slice(),
+            [AbruptCompletion::Return(restored)] if restored == &suspended
+        ));
     }
 
     fn lower_source_and_find_unresolved_argument_seed_bd_ur3tk_11(

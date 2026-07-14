@@ -2021,6 +2021,8 @@ pub enum BuiltinFunctionKind {
     StreamReadableRead,
     /// UTF-8 decoding for subsequent custom-Readable Buffer pushes.
     StreamReadableSetEncoding,
+    /// `Readable.prototype.destroy([error])` lifecycle teardown.
+    StreamReadableDestroy,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -3205,6 +3207,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StreamReadableToArray => "toArray",
             BuiltinFunctionKind::StreamReadableRead => "read",
             BuiltinFunctionKind::StreamReadableSetEncoding => "setEncoding",
+            BuiltinFunctionKind::StreamReadableDestroy => "destroy",
             BuiltinFunctionKind::ArrayPush => "push",
             BuiltinFunctionKind::ArrayPop => "pop",
             BuiltinFunctionKind::ArrayShift => "shift",
@@ -5697,6 +5700,7 @@ struct PendingStreamEmission {
 enum ReadableFromPumpPhase {
     Data,
     End,
+    DestroyError,
     Close,
 }
 
@@ -5744,6 +5748,8 @@ struct ReadableFromState {
     read_callback_active: bool,
     decode_utf8: bool,
     utf8_pending: Vec<u8>,
+    destroy_requested: bool,
+    destroy_error: Option<Value>,
     next_index: usize,
     phase: ReadableFromPumpPhase,
     flowing: bool,
@@ -7296,6 +7302,8 @@ impl InterpreterCore {
             read_callback_active: false,
             decode_utf8: false,
             utf8_pending: Vec::new(),
+            destroy_requested: false,
+            destroy_error: None,
             next_index: 0,
             phase: ReadableFromPumpPhase::Data,
             flowing: false,
@@ -7400,6 +7408,8 @@ impl InterpreterCore {
             read_callback_active: false,
             decode_utf8: false,
             utf8_pending: Vec::new(),
+            destroy_requested: false,
+            destroy_error: None,
             next_index: 0,
             phase: ReadableFromPumpPhase::Data,
             flowing: false,
@@ -7652,6 +7662,32 @@ impl InterpreterCore {
     fn mirror_readable_length(&mut self, object_id: ObjectId, length: usize) {
         let key = "readableLength";
         let value = Value::Int(i64::try_from(length).unwrap_or(i64::MAX));
+        let previous_bytes = self
+            .heap
+            .get(object_id.0 as usize)
+            .and_then(|object| object.properties.get(key))
+            .map(|previous| Self::estimate_property_entry_bytes(key, previous));
+        self.mutate_heap(|heap| {
+            if let Some(slot) = heap
+                .get_mut(object_id.0 as usize)
+                .and_then(|object| object.properties.get_mut(key))
+            {
+                *slot = value.clone();
+            }
+        });
+        if let Some(previous_bytes) = previous_bytes {
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(previous_bytes)
+                .saturating_add(Self::estimate_property_entry_bytes(key, &value));
+        }
+    }
+
+    /// Update an existing public boolean mirror after its authoritative
+    /// engine-owned state transition has committed. Guest deletion remains
+    /// deletion, and no fallible property insertion can split the transition.
+    fn mirror_readable_bool(&mut self, object_id: ObjectId, key: &'static str, value: bool) {
+        let value = Value::Bool(value);
         let previous_bytes = self
             .heap
             .get(object_id.0 as usize)
@@ -8179,6 +8215,92 @@ impl InterpreterCore {
         Ok(receiver)
     }
 
+    fn readable_destroy(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let object_id = self.readable_receiver_id(receiver.clone())?;
+        let error = match self.builtin_arg(args, 0)? {
+            None | Some(Value::Undefined | Value::Null) => None,
+            Some(error) => Some(error),
+        };
+        let trigger_label = if args.count > 0 {
+            self.get_register_label(args.start)?
+                .clone()
+                .join(&match &error {
+                    Some(Value::Object(error_id)) => self.binary_storage_label(*error_id),
+                    _ => Label::Public,
+                })
+        } else {
+            Label::Public
+        };
+        let Some(current) = self.readable_from_streams.get(&object_id) else {
+            return Ok(receiver);
+        };
+        if current.destroy_requested {
+            return Ok(receiver);
+        }
+
+        let lifecycle_label = current.lifecycle_label.join(&trigger_label);
+        let label_bytes = match &lifecycle_label {
+            Label::Custom { name, .. } => Self::estimate_string_bytes(name),
+            _ => 0,
+        };
+        let previous_bytes = Self::estimate_readable_from_state_bytes(current);
+        let destroyed_state_bytes = MEMORY_ESTIMATE_READABLE_FROM_BASE_BYTES
+            .saturating_add(error.as_ref().map(Self::estimate_value_bytes).unwrap_or(0))
+            .saturating_add(label_bytes)
+            .saturating_add(
+                current
+                    .to_array_waiter
+                    .as_ref()
+                    .map(|waiter| Self::estimate_readable_to_array_waiter_bytes(&waiter.label))
+                    .unwrap_or(0),
+            );
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_bytes)
+            .saturating_add(destroyed_state_bytes);
+        if requested_bytes > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
+        let mut projected = self
+            .readable_from_streams
+            .remove(&object_id)
+            .expect("live Readable state was checked before owned teardown");
+
+        projected.destroy_requested = true;
+        projected.lifecycle_label = lifecycle_label;
+        projected.destroy_error = error;
+        projected.phase = if projected.destroy_error.is_some() {
+            ReadableFromPumpPhase::DestroyError
+        } else {
+            ReadableFromPumpPhase::Close
+        };
+        projected.source = Value::Undefined;
+        projected.read_callback = None;
+        projected.buffer = VecDeque::new();
+        projected.buffered_length = 0;
+        projected.utf8_pending = Vec::new();
+        projected.eof_requested = true;
+        projected.data_readable_pending = false;
+        projected.eof_readable_pending = false;
+        projected.read_callback_active = false;
+        debug_assert_eq!(
+            Self::estimate_readable_from_state_bytes(&projected),
+            destroyed_state_bytes
+        );
+        self.estimated_memory_bytes = requested_bytes;
+        self.readable_from_streams.insert(object_id, projected);
+
+        self.mirror_readable_bool(object_id, "destroyed", true);
+        self.mirror_readable_bool(object_id, "closed", true);
+        self.mirror_readable_bool(object_id, "readable", false);
+        self.schedule_readable_from_pump(object_id);
+        Ok(receiver)
+    }
+
     fn readable_to_array(&mut self, receiver: Value) -> Result<Value, InterpreterError> {
         let object_id = self.readable_receiver_id(receiver)?;
         let Some(snapshot) = self.clone_readable_state_with_budget(object_id)? else {
@@ -8509,6 +8631,24 @@ impl InterpreterCore {
                 self.schedule_readable_from_pump(object_id);
                 emission?;
             }
+            ReadableFromPumpPhase::DestroyError => {
+                let Some(projected) = self.readable_from_streams.get_mut(&object_id) else {
+                    return Ok(());
+                };
+                let error = projected.destroy_error.clone();
+                let lifecycle_label = projected.lifecycle_label.clone();
+                projected.phase = ReadableFromPumpPhase::Close;
+                self.schedule_readable_from_pump(object_id);
+                if let Some(error) = error {
+                    self.emit_event_listener_records(
+                        module,
+                        object_id,
+                        "error",
+                        vec![error],
+                        lifecycle_label,
+                    )?;
+                }
+            }
             ReadableFromPumpPhase::End => {
                 let Some(lifecycle_label) =
                     self.readable_from_streams.get_mut(&object_id).map(|state| {
@@ -8537,33 +8677,48 @@ impl InterpreterCore {
             ReadableFromPumpPhase::Close => {
                 self.set_object_property(object_id, "destroyed".to_string(), Value::Bool(true))?;
                 self.set_object_property(object_id, "closed".to_string(), Value::Bool(true))?;
-                let (lifecycle_label, to_array_waiter) = self
+                let (lifecycle_label, to_array_waiter, destroy_requested, destroy_error) = self
                     .readable_from_streams
                     .remove(&object_id)
                     .map(|state| {
                         self.estimated_memory_bytes = self
                             .estimated_memory_bytes
                             .saturating_sub(Self::estimate_readable_from_state_bytes(&state));
-                        (state.lifecycle_label, state.to_array_waiter)
+                        (
+                            state.lifecycle_label,
+                            state.to_array_waiter,
+                            state.destroy_requested,
+                            state.destroy_error,
+                        )
                     })
-                    .unwrap_or((Label::Public, None));
+                    .unwrap_or((Label::Public, None, false, None));
                 let emission = self.emit_event_listener_records(
                     module,
                     object_id,
                     "close",
                     Vec::new(),
-                    lifecycle_label,
+                    lifecycle_label.clone(),
                 );
                 self.clear_event_listeners(object_id, None);
                 // Promise reactions are enqueued only after every close
                 // listener has run. Even a throwing close listener must not
                 // strand the already-consumed toArray Promise.
                 let settlement = if let Some(waiter) = to_array_waiter {
-                    self.fulfill_promise(
-                        waiter.promise,
-                        Self::value_to_js_value(&Value::Object(waiter.result)),
-                        waiter.label,
-                    )
+                    if destroy_requested {
+                        self.reject_promise(
+                            waiter.promise,
+                            Self::value_to_js_value(
+                                &destroy_error.unwrap_or_else(|| Value::str("Premature close")),
+                            ),
+                            lifecycle_label.join(&waiter.label),
+                        )
+                    } else {
+                        self.fulfill_promise(
+                            waiter.promise,
+                            Self::value_to_js_value(&Value::Object(waiter.result)),
+                            waiter.label,
+                        )
+                    }
                 } else {
                     Ok(())
                 };
@@ -11189,6 +11344,9 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::StreamReadableSetEncoding => {
                 self.readable_set_encoding(receiver.unwrap_or(Value::Undefined), args)
+            }
+            BuiltinFunctionKind::StreamReadableDestroy => {
+                self.readable_destroy(receiver.unwrap_or(Value::Undefined), args)
             }
             BuiltinFunctionKind::ArrayPush => {
                 // ES2020 23.1.3.20: append each argument to `this` at the
@@ -19909,6 +20067,9 @@ impl InterpreterCore {
             )),
             ("Readable", "setEncoding") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamReadableSetEncoding,
+            )),
+            ("Readable", "destroy") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::StreamReadableDestroy,
             )),
             // bd-3894s / bd-2dmnn: standalone EventEmitter objects and both HTTP
             // stream tags resolve against one receiver-aware EventEmitter method
@@ -36787,6 +36948,13 @@ impl InterpreterCore {
                     .saturating_add(label_bytes)
             }))
             .saturating_add(u64::try_from(state.utf8_pending.capacity()).unwrap_or(u64::MAX))
+            .saturating_add(
+                state
+                    .destroy_error
+                    .as_ref()
+                    .map(Self::estimate_value_bytes)
+                    .unwrap_or(0),
+            )
             .saturating_add(label_bytes)
             .saturating_add(
                 state
@@ -45120,6 +45288,8 @@ mod async_runtime_tests_current {
             read_callback_active: false,
             decode_utf8: false,
             utf8_pending: Vec::new(),
+            destroy_requested: false,
+            destroy_error: None,
             next_index: 0,
             phase: ReadableFromPumpPhase::Data,
             flowing: false,
@@ -45786,6 +45956,193 @@ mod async_runtime_tests_current {
             sparse_core.estimated_memory_bytes(),
             sparse_core.recompute_estimated_memory_bytes()
         );
+    }
+
+    #[test]
+    fn readable_destroy_is_synchronous_idempotent_and_memory_exact_bd_fw7zd() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let Value::Object(readable) = core
+            .construct_stream_readable(RegRange { start: 0, count: 0 })
+            .expect("generic Readable")
+        else {
+            panic!("Readable constructor must return an object");
+        };
+        core.write_reg(0, Value::str("queued"))
+            .expect("queued chunk register");
+        core.readable_push(Value::Object(readable), RegRange { start: 0, count: 1 })
+            .expect("queue byte chunk");
+        assert_eq!(
+            core.heap[readable.0 as usize]
+                .properties
+                .get("readableLength"),
+            Some(&Value::Int(6))
+        );
+
+        core.write_reg(1, Value::str("classified failure"))
+            .expect("destroy error register");
+        core.set_register_label(1, Label::Secret)
+            .expect("destroy error label");
+        assert_eq!(
+            core.readable_destroy(Value::Object(readable), RegRange { start: 1, count: 1 },)
+                .expect("destroy(error)"),
+            Value::Object(readable)
+        );
+        let destroyed = core
+            .readable_from_streams
+            .get(&readable)
+            .expect("destroy waits for deferred error/close");
+        assert_eq!(destroyed.phase, ReadableFromPumpPhase::DestroyError);
+        assert!(destroyed.destroy_requested);
+        assert!(destroyed.buffer.is_empty());
+        assert_eq!(destroyed.lifecycle_label, Label::Secret);
+        assert_eq!(
+            destroyed.destroy_error,
+            Some(Value::str("classified failure"))
+        );
+        assert_eq!(
+            core.heap[readable.0 as usize]
+                .properties
+                .get("readableLength"),
+            Some(&Value::Int(6)),
+            "destroy releases the internal queue without rewriting Bun's retained diagnostic"
+        );
+        for (key, expected) in [
+            ("destroyed", Value::Bool(true)),
+            ("closed", Value::Bool(true)),
+            ("readable", Value::Bool(false)),
+            ("readableEnded", Value::Bool(false)),
+        ] {
+            assert_eq!(
+                core.heap[readable.0 as usize].properties.get(key),
+                Some(&expected),
+                "synchronous destroy mirror {key}"
+            );
+        }
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.write_reg(1, Value::str("ignored second error"))
+            .expect("second destroy register");
+        core.readable_destroy(Value::Object(readable), RegRange { start: 1, count: 1 })
+            .expect("duplicate destroy is idempotent");
+        assert_eq!(
+            core.readable_from_streams
+                .get(&readable)
+                .expect("still waiting")
+                .destroy_error,
+            Some(Value::str("classified failure"))
+        );
+
+        assert!(matches!(
+            core.drive_readable_from_pump(readable, Some(&module)),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert_eq!(
+            core.readable_from_streams
+                .get(&readable)
+                .expect("close remains scheduled after unhandled error")
+                .phase,
+            ReadableFromPumpPhase::Close
+        );
+        core.drive_readable_from_pump(readable, Some(&module))
+            .expect("close still releases state after error");
+        assert!(!core.readable_from_streams.contains_key(&readable));
+
+        let mut ceiling_core = test_interpreter();
+        let Value::Object(ceiling_readable) = ceiling_core
+            .construct_stream_readable(RegRange { start: 0, count: 0 })
+            .expect("memory-ceiling Readable")
+        else {
+            panic!("Readable constructor must return an object");
+        };
+        ceiling_core
+            .write_reg(0, Value::str("full queue"))
+            .expect("ceiling chunk register");
+        ceiling_core
+            .readable_push(
+                Value::Object(ceiling_readable),
+                RegRange { start: 0, count: 1 },
+            )
+            .expect("ceiling chunk push");
+        ceiling_core.config.max_total_memory_bytes = ceiling_core.estimated_memory_bytes();
+        ceiling_core
+            .readable_destroy(
+                Value::Object(ceiling_readable),
+                RegRange { start: 0, count: 0 },
+            )
+            .expect("teardown must not clone a full queue at the memory ceiling");
+        assert!(
+            ceiling_core
+                .readable_from_streams
+                .get(&ceiling_readable)
+                .expect("close is deferred")
+                .buffer
+                .is_empty()
+        );
+        assert_eq!(
+            ceiling_core.estimated_memory_bytes(),
+            ceiling_core.recompute_estimated_memory_bytes()
+        );
+        ceiling_core.run_event_loop_until_idle_with_module(Some(&module));
+        assert!(
+            !ceiling_core
+                .readable_from_streams
+                .contains_key(&ceiling_readable)
+        );
+        assert!(ceiling_core.pending_readable_from_pumps.is_empty());
+        assert_eq!(
+            ceiling_core.estimated_memory_bytes(),
+            ceiling_core.recompute_estimated_memory_bytes()
+        );
+
+        let mut array_core = test_interpreter();
+        let source = array_core
+            .alloc_array_from_values(&[Value::str("partial")])
+            .expect("toArray source");
+        array_core
+            .write_reg(0, Value::Object(source))
+            .expect("source register");
+        let Value::Object(array_readable) = array_core
+            .construct_readable_from(RegRange { start: 0, count: 1 })
+            .expect("finite Readable")
+        else {
+            panic!("Readable.from must return an object");
+        };
+        let Value::Promise(promise_id) = array_core
+            .readable_to_array(Value::Object(array_readable))
+            .expect("pending toArray")
+        else {
+            panic!("toArray must return a Promise");
+        };
+        array_core
+            .write_reg(1, Value::str("abort"))
+            .expect("destroy reason register");
+        array_core
+            .readable_destroy(
+                Value::Object(array_readable),
+                RegRange { start: 1, count: 1 },
+            )
+            .expect("destroy pending toArray");
+        assert!(matches!(
+            array_core.drive_readable_from_pump(array_readable, Some(&module)),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        array_core
+            .drive_readable_from_pump(array_readable, Some(&module))
+            .expect("destroyed toArray close");
+        assert!(matches!(
+            &array_core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(promise_id))
+                .expect("settled toArray Promise")
+                .state,
+            crate::promise_model::PromiseState::Rejected(crate::object_model::JsValue::Str(
+                reason
+            )) if reason == "abort"
+        ));
     }
 
     #[test]

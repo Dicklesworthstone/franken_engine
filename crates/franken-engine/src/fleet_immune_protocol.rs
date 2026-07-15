@@ -1419,6 +1419,7 @@ impl FleetVerificationRegistry {
     ///
     /// Revoked node histories remain tombstoned in the registry but are not
     /// included in this count.
+    #[cfg(test)]
     fn active_node_count(&self) -> usize {
         self.active_sequences.len()
     }

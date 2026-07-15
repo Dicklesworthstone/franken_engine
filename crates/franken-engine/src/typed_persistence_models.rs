@@ -1528,7 +1528,7 @@ impl TypedStoreRecord for FleetTrustStateEntry {
             }
         }
         if self.anchor_advance_permit_hex.is_empty()
-            || self.anchor_advance_permit_hex.len() % 2 != 0
+            || !self.anchor_advance_permit_hex.len().is_multiple_of(2)
             || !self
                 .anchor_advance_permit_hex
                 .as_bytes()

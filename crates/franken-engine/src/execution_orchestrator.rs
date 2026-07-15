@@ -2220,14 +2220,9 @@ impl ExecutionOrchestrator {
         let compressed = coder
             .encode(&symbols)
             .map_err(Self::evidence_compression_encode_error)?;
-        let kraft_sum = coder
-            .verify_kraft_inequality()
-            .map_err(Self::evidence_compression_kraft_error)?;
-        Ok(Some(CompressionCertificate::build(
-            &estimator,
-            &compressed,
-            kraft_sum,
-        )))
+        let certificate = CompressionCertificate::build_verified(&estimator, &coder, &compressed)
+            .map_err(Self::evidence_compression_encode_error)?;
+        Ok(Some(certificate))
     }
 
     fn evidence_compression_coder_error(err: EntropyError) -> OrchestratorError {
@@ -2238,12 +2233,6 @@ impl ExecutionOrchestrator {
 
     fn evidence_compression_encode_error(err: EntropyError) -> OrchestratorError {
         OrchestratorError::EvidenceCompressionEncode {
-            detail: err.to_string(),
-        }
-    }
-
-    fn evidence_compression_kraft_error(err: EntropyError) -> OrchestratorError {
-        OrchestratorError::EvidenceCompressionKraft {
             detail: err.to_string(),
         }
     }

@@ -146,24 +146,36 @@ run_step() {
 run_mode() {
   case "$mode" in
     check)
-      run_step "cargo check -p frankenengine-engine --test observability_channel_model" \
-        cargo check -p frankenengine-engine --test observability_channel_model || return $?
+      run_step "cargo check -p frankenengine-engine --test observability_channel_model --test entropy_evidence_compressor_integration --test entropy_evidence_compressor_enrichment_integration" \
+        cargo check -p frankenengine-engine --test observability_channel_model \
+          --test entropy_evidence_compressor_integration \
+          --test entropy_evidence_compressor_enrichment_integration || return $?
       ;;
     test)
-      run_step "cargo test -p frankenengine-engine --test observability_channel_model" \
-        cargo test -p frankenengine-engine --test observability_channel_model || return $?
+      run_step "cargo test -p frankenengine-engine --test observability_channel_model --test entropy_evidence_compressor_integration --test entropy_evidence_compressor_enrichment_integration" \
+        cargo test -p frankenengine-engine --test observability_channel_model \
+          --test entropy_evidence_compressor_integration \
+          --test entropy_evidence_compressor_enrichment_integration || return $?
       ;;
     clippy)
-      run_step "cargo clippy -p frankenengine-engine --test observability_channel_model -- -D warnings" \
-        cargo clippy -p frankenengine-engine --test observability_channel_model -- -D warnings || return $?
+      run_step "cargo clippy -p frankenengine-engine --test observability_channel_model --test entropy_evidence_compressor_integration --test entropy_evidence_compressor_enrichment_integration -- -D warnings" \
+        cargo clippy -p frankenengine-engine --test observability_channel_model \
+          --test entropy_evidence_compressor_integration \
+          --test entropy_evidence_compressor_enrichment_integration -- -D warnings || return $?
       ;;
     ci)
-      run_step "cargo check -p frankenengine-engine --test observability_channel_model" \
-        cargo check -p frankenengine-engine --test observability_channel_model || return $?
-      run_step "cargo test -p frankenengine-engine --test observability_channel_model" \
-        cargo test -p frankenengine-engine --test observability_channel_model || return $?
-      run_step "cargo clippy -p frankenengine-engine --test observability_channel_model -- -D warnings" \
-        cargo clippy -p frankenengine-engine --test observability_channel_model -- -D warnings || return $?
+      run_step "cargo check -p frankenengine-engine --test observability_channel_model --test entropy_evidence_compressor_integration --test entropy_evidence_compressor_enrichment_integration" \
+        cargo check -p frankenengine-engine --test observability_channel_model \
+          --test entropy_evidence_compressor_integration \
+          --test entropy_evidence_compressor_enrichment_integration || return $?
+      run_step "cargo test -p frankenengine-engine --test observability_channel_model --test entropy_evidence_compressor_integration --test entropy_evidence_compressor_enrichment_integration" \
+        cargo test -p frankenengine-engine --test observability_channel_model \
+          --test entropy_evidence_compressor_integration \
+          --test entropy_evidence_compressor_enrichment_integration || return $?
+      run_step "cargo clippy -p frankenengine-engine --test observability_channel_model --test entropy_evidence_compressor_integration --test entropy_evidence_compressor_enrichment_integration -- -D warnings" \
+        cargo clippy -p frankenengine-engine --test observability_channel_model \
+          --test entropy_evidence_compressor_integration \
+          --test entropy_evidence_compressor_enrichment_integration -- -D warnings || return $?
       ;;
     *)
       echo "usage: $0 [check|test|clippy|ci]" >&2
@@ -238,7 +250,11 @@ write_manifest() {
     echo "    \"events\": \"${events_path}\","
     echo "    \"commands\": \"${commands_path}\","
     echo '    "contract_doc": "docs/OBSERVABILITY_INFORMATION_THEORETIC_CHANNEL.md",'
-    echo '    "integration_tests": "crates/franken-engine/tests/observability_channel_model.rs"'
+    echo '    "integration_tests": ['
+    echo '      "crates/franken-engine/tests/observability_channel_model.rs",'
+    echo '      "crates/franken-engine/tests/entropy_evidence_compressor_integration.rs",'
+    echo '      "crates/franken-engine/tests/entropy_evidence_compressor_enrichment_integration.rs"'
+    echo '    ]'
     echo "  },"
     echo '  "operator_verification": ['
     echo "    \"cat ${manifest_path}\","

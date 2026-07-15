@@ -557,10 +557,9 @@ fn enrichment_compressed_evidence_bytes_positive() {
         compressed.compressed_bytes,
         compressed.compressed_data.len()
     );
-    assert_eq!(
-        compressed.compressed_bits,
-        compressed.compressed_bytes as i64 * 8
-    );
+    assert!(compressed.compressed_bits > 0);
+    assert!(compressed.compressed_bits <= compressed.compressed_bytes as i64 * 8);
+    assert!(compressed.compressed_bits > (compressed.compressed_bytes as i64 - 1) * 8);
 }
 
 // -----------------------------------------------------------------------

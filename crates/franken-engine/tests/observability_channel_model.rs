@@ -166,17 +166,15 @@ fn entropy_certificate_and_quality_sentinel_fail_closed_in_fidelity_emergency() 
 
     let coder = ArithmeticCoder::from_estimator(&estimator).expect("build arithmetic coder");
     let compressed = coder.encode(&symbols).expect("encode symbols");
-    let kraft_sum = coder
-        .verify_kraft_inequality()
-        .expect("verify kraft inequality");
-    let certificate = CompressionCertificate::build(&estimator, &compressed, kraft_sum);
+    let certificate = CompressionCertificate::build_verified(&estimator, &coder, &compressed)
+        .expect("decode and verify compressed evidence before certification");
 
     assert!(certificate.kraft_satisfied);
     assert!(certificate.shannon_lower_bound_bits > 0);
     assert!(certificate.achieved_bits > 0);
     assert!(
         certificate.is_within_factor(8_000_000),
-        "compression should remain within an 8x bound of the Shannon lower bound",
+        "compression should remain within an 8x empirical entropy comparison",
     );
 
     let policy = canonical_demotion_policy(SecurityEpoch::from_raw(23));

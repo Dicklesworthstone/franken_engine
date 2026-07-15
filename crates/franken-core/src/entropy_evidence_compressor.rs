@@ -1,18 +1,19 @@
 //! Information-theoretic evidence compression with Shannon lower bounds.
 //!
 //! Evidence streams grow linearly with runtime operations.  This module
-//! provides **entropy-optimal** compression:
+//! provides deterministic empirical-entropy diagnostics and compression:
 //!
 //! - **Empirical entropy estimation** over `ActionCategory` and `DecisionType`
 //!   distributions using streaming histogram updates.
-//! - **Arithmetic coding** (ANS variant) with adaptive symbol probabilities
-//!   for near-optimal compression ratio.
-//! - **Sufficient statistic extraction** preserving Fisher information for
-//!   deterministic replay — ensures that compressed evidence retains all
-//!   information needed for exact posterior reconstruction.
-//! - **Shannon lower bound certificate**: `compressed_bits ≥ n · H(X) - O(log n)`,
-//!   proving that the compression is within a provable factor of optimal.
-//! - **Kraft inequality verification** for prefix-free encoding correctness.
+//! - **Arithmetic coding** with a deterministic static frequency model for
+//!   near-optimal compression ratio and exact symbol-stream restoration.
+//! - **Sufficient statistic extraction** for deterministic empirical
+//!   diagnostics. This summary is separate from the codec's exact restoration
+//!   of its derived symbol stream and is not a full-evidence replay claim.
+//! - **Empirical Shannon comparison certificate** for tracking achieved size
+//!   against the module's deterministic entropy estimate.
+//! - **Frequency-mass normalization checks** retained under the legacy Kraft
+//!   field name.
 //!
 //! All arithmetic is integer-only.  No floating point.  Deterministic
 //! encoding and certificate generation.
@@ -36,10 +37,25 @@ use crate::hash_tiers::ContentHash;
 
 const MILLION: i64 = 1_000_000;
 /// Schema version for compressed evidence artifacts.
-pub const ENTROPY_SCHEMA_VERSION: &str = "franken-engine.entropy-evidence-compressor.v1";
+pub const ENTROPY_SCHEMA_VERSION: &str = "franken-engine.entropy-evidence-compressor.v2";
 
 /// Maximum alphabet size for the compressor.
 const MAX_ALPHABET_SIZE: usize = 256;
+
+/// Arithmetic-coder state width. A 32-bit interval leaves ample headroom for
+/// deterministic `u128` scaling while keeping the decoder portable.
+const CODE_VALUE_BITS: usize = 32;
+const CODE_MAX: u64 = (1u64 << CODE_VALUE_BITS) - 1;
+const HALF: u64 = 1u64 << (CODE_VALUE_BITS - 1);
+const FIRST_QUARTER: u64 = HALF >> 1;
+const THIRD_QUARTER: u64 = FIRST_QUARTER * 3;
+
+/// Cumulative frequencies must remain well below the coding interval so every
+/// admitted symbol retains a non-empty sub-interval after renormalization.
+const MAX_TOTAL_FREQUENCY: u64 = (1u64 << 24) - 1;
+
+/// Bound allocation and CPU work before trusting serialized symbol counts.
+const MAX_DECODED_SYMBOLS: usize = 1 << 20;
 
 /// Minimum symbol count before entropy estimate is reliable.
 const MIN_SAMPLES_FOR_ENTROPY: u64 = 10;
@@ -61,7 +77,7 @@ pub enum EntropyError {
     DecodeError { message: String },
     /// Insufficient samples for reliable entropy estimate.
     InsufficientSamples { count: u64, min: u64 },
-    /// Kraft inequality violated (encoding is not prefix-free).
+    /// Canonical model frequency mass is not normalized (legacy Kraft name).
     KraftViolation { kraft_sum_millionths: i64 },
 }
 
@@ -84,7 +100,10 @@ impl fmt::Display for EntropyError {
             Self::KraftViolation {
                 kraft_sum_millionths,
             } => {
-                write!(f, "Kraft inequality violated: sum = {kraft_sum_millionths}")
+                write!(
+                    f,
+                    "model frequency mass is not normalized: sum = {kraft_sum_millionths}"
+                )
             }
         }
     }
@@ -308,10 +327,11 @@ impl SufficientStatistic {
 
 /// Integer arithmetic coder for evidence symbol streams.
 ///
-/// Uses scaled-integer arithmetic with `PRECISION_BITS`-bit state.
-/// This is a simplified ANS (Asymmetric Numeral Systems) variant
-/// that operates entirely in integer arithmetic.
+/// Uses a canonical static model and a 32-bit E1/E2/E3 interval. The matching
+/// decoder verifies framing, model identity, content identity, and canonical
+/// re-encoding before returning symbols.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ArithmeticCoder {
     /// Cumulative frequency table: symbol → (cum_freq, freq).
     /// Frequencies are counts, not probabilities — scaled by total.
@@ -325,46 +345,93 @@ pub struct ArithmeticCoder {
 impl ArithmeticCoder {
     /// Build a coder from an entropy estimator.
     pub fn from_estimator(estimator: &EntropyEstimator) -> Result<Self, EntropyError> {
-        if estimator.alphabet_size == 0 {
+        let observed_frequencies: Vec<(u32, u64)> = estimator
+            .frequencies
+            .iter()
+            .filter(|(_, frequency)| **frequency > 0)
+            .map(|(&symbol, &frequency)| (symbol, frequency))
+            .collect();
+        let alphabet_size = observed_frequencies.len();
+        if alphabet_size == 0 {
             return Err(EntropyError::EmptyInput);
         }
-        if estimator.alphabet_size > MAX_ALPHABET_SIZE {
+        if alphabet_size > MAX_ALPHABET_SIZE {
             return Err(EntropyError::AlphabetTooLarge {
-                size: estimator.alphabet_size,
+                size: alphabet_size,
                 max: MAX_ALPHABET_SIZE,
             });
         }
 
+        let raw_total = observed_frequencies
+            .iter()
+            .try_fold(0u64, |total, (_, frequency)| {
+                total
+                    .checked_add(*frequency)
+                    .ok_or_else(|| decode_error("frequency table overflow"))
+            })?;
+        if raw_total == 0 {
+            return Err(EntropyError::EmptyInput);
+        }
+
+        let alphabet_reserve = u64::try_from(alphabet_size).map_err(|_| {
+            decode_error("alphabet size cannot be represented by the frequency model")
+        })?;
+        let proportional_budget = MAX_TOTAL_FREQUENCY
+            .checked_sub(alphabet_reserve)
+            .ok_or_else(|| decode_error("alphabet exceeds the arithmetic coding budget"))?;
+
         let mut cum_freq_table = BTreeMap::new();
         let mut cumulative = 0u64;
-        for (&symbol, &freq) in &estimator.frequencies {
-            let adjusted_freq = freq.max(1); // Laplace smoothing: min freq = 1
+        for (symbol, frequency) in observed_frequencies {
+            let adjusted_freq = if raw_total <= MAX_TOTAL_FREQUENCY {
+                frequency
+            } else {
+                // Preserve every observed symbol while scaling the table into
+                // the arithmetic interval. The sorted BTreeMap traversal makes
+                // this model canonical across platforms and crate mirrors.
+                1u64.saturating_add(u64_from_u128_saturating(
+                    u128::from(frequency).saturating_mul(u128::from(proportional_budget))
+                        / u128::from(raw_total),
+                ))
+            };
             cum_freq_table.insert(symbol, (cumulative, adjusted_freq));
-            cumulative += adjusted_freq;
+            cumulative = cumulative
+                .checked_add(adjusted_freq)
+                .ok_or_else(|| decode_error("frequency table overflow"))?;
         }
 
         if cumulative == 0 {
             return Err(EntropyError::EmptyInput);
         }
 
-        Ok(Self {
+        let coder = Self {
             frequency_table: cum_freq_table,
             total_frequency: cumulative,
-            alphabet_size: estimator.alphabet_size,
-        })
+            alphabet_size,
+        };
+        coder.validate_model()?;
+        Ok(coder)
     }
 
     /// Encode a sequence of symbols into a compressed byte vector.
     ///
     /// Uses range-based arithmetic coding with integer arithmetic.
     pub fn encode(&self, symbols: &[u32]) -> Result<CompressedEvidence, EntropyError> {
-        if symbols.is_empty() || self.total_frequency == 0 {
+        self.validate_model()?;
+        if symbols.is_empty() {
             return Err(EntropyError::EmptyInput);
+        }
+        if symbols.len() > MAX_DECODED_SYMBOLS {
+            return Err(decode_error(format!(
+                "symbol count {} exceeds decode limit {MAX_DECODED_SYMBOLS}",
+                symbols.len()
+            )));
         }
 
         let mut low: u64 = 0;
-        let mut range: u64 = u64::MAX;
-        let mut output_bytes = Vec::new();
+        let mut high: u64 = CODE_MAX;
+        let mut pending_underflow_bits = 0usize;
+        let mut writer = BitWriter::new();
 
         for &sym in symbols {
             let (cum_freq, freq) = self
@@ -372,36 +439,44 @@ impl ArithmeticCoder {
                 .get(&sym)
                 .ok_or(EntropyError::UnknownSymbol { symbol: sym })?;
 
-            let step = range / self.total_frequency;
-            if step == 0 {
-                // Output accumulated bits and reset.
-                output_bytes.extend_from_slice(&low.to_be_bytes());
-                low = 0;
-                range = u64::MAX;
-                let step = range / self.total_frequency;
-                // Use u128 to avoid overflow in step * cum_freq.
-                low = low.wrapping_add((step as u128 * *cum_freq as u128) as u64);
-                range = (step as u128 * *freq as u128).min(u64::MAX as u128) as u64;
-            } else {
-                low = low.wrapping_add((step as u128 * *cum_freq as u128) as u64);
-                range = (step as u128 * *freq as u128).min(u64::MAX as u128) as u64;
-            }
+            update_interval(&mut low, &mut high, *cum_freq, *freq, self.total_frequency)?;
 
-            // Normalize: emit bytes when top byte is determined.
-            while range < (1u64 << 56) {
-                output_bytes.push((low >> 56) as u8);
-                low <<= 8;
-                range <<= 8;
+            loop {
+                if high < HALF {
+                    emit_bit_with_follow(&mut writer, false, &mut pending_underflow_bits);
+                } else if low >= HALF {
+                    emit_bit_with_follow(&mut writer, true, &mut pending_underflow_bits);
+                    low -= HALF;
+                    high -= HALF;
+                } else if low >= FIRST_QUARTER && high < THIRD_QUARTER {
+                    pending_underflow_bits =
+                        pending_underflow_bits.checked_add(1).ok_or_else(|| {
+                            decode_error("arithmetic coder underflow counter overflow")
+                        })?;
+                    low -= FIRST_QUARTER;
+                    high -= FIRST_QUARTER;
+                } else {
+                    break;
+                }
+
+                low <<= 1;
+                high = (high << 1) | 1;
             }
         }
 
-        // Flush remaining state.
-        output_bytes.extend_from_slice(&low.to_be_bytes());
+        pending_underflow_bits = pending_underflow_bits
+            .checked_add(1)
+            .ok_or_else(|| decode_error("arithmetic coder finalization overflow"))?;
+        emit_bit_with_follow(
+            &mut writer,
+            low >= FIRST_QUARTER,
+            &mut pending_underflow_bits,
+        );
+        let (output_bytes, valid_bits) = writer.finish();
 
-        let original_bits =
-            symbols.len() as i64 * integer_log2_millionths(self.alphabet_size as u64) / MILLION;
+        let original_bits = original_bits_estimate(symbols.len(), self.alphabet_size);
         let compressed_bytes = output_bytes.len();
-        let compressed_bits = output_bytes.len() as i64 * 8;
+        let compressed_bits = i64_from_i128_saturating(i128_from_usize_saturating(valid_bits));
 
         Ok(CompressedEvidence {
             schema: ENTROPY_SCHEMA_VERSION.to_string(),
@@ -410,38 +485,175 @@ impl ArithmeticCoder {
             compressed_bytes,
             original_bits_estimate: original_bits,
             compressed_bits,
-            compression_ratio_millionths: if original_bits > 0 {
-                compressed_bits * MILLION / original_bits
-            } else {
-                MILLION
-            },
-            content_hash: ContentHash::compute(
-                &symbols
-                    .iter()
-                    .flat_map(|s| s.to_be_bytes())
-                    .collect::<Vec<_>>(),
-            ),
+            compression_ratio_millionths: compression_ratio(compressed_bits, original_bits),
+            content_hash: content_hash_for_symbols(symbols),
+            model_hash: content_hash_for_model(self),
         })
     }
 
-    /// Verify the Kraft inequality: Σ 2^(-l_i) ≤ 1.
+    /// Decode and verify a compressed evidence artifact.
     ///
-    /// For a valid prefix-free code, the sum of 2^(-codeword_length) over
-    /// all symbols must not exceed 1.  This verifies encoding correctness.
+    /// Verification is deliberately stronger than merely producing symbols:
+    /// the decoded count and original content hash must match, and re-encoding
+    /// must reproduce the complete artifact byte-for-byte. This rejects
+    /// corrupted, truncated, overlong, and otherwise non-canonical streams.
+    pub fn decode(&self, compressed: &CompressedEvidence) -> Result<Vec<u32>, EntropyError> {
+        self.validate_model()?;
+        compressed.validate_metadata(self)?;
+
+        let valid_bits = usize::try_from(compressed.compressed_bits)
+            .map_err(|_| decode_error("compressed bit length cannot be represented"))?;
+        let mut reader = BitReader::new(&compressed.compressed_data, valid_bits);
+        let mut low = 0u64;
+        let mut high = CODE_MAX;
+        let mut code = 0u64;
+        for _ in 0..CODE_VALUE_BITS {
+            code = (code << 1) | u64::from(reader.read_bit_or_zero());
+        }
+
+        let model_intervals: Vec<(u32, u64, u64)> = self
+            .frequency_table
+            .iter()
+            .map(|(&symbol, &(cumulative, frequency))| (symbol, cumulative, frequency))
+            .collect();
+        let mut symbols = Vec::with_capacity(compressed.original_symbol_count);
+        for _ in 0..compressed.original_symbol_count {
+            let interval = high
+                .checked_sub(low)
+                .and_then(|value| value.checked_add(1))
+                .ok_or_else(|| decode_error("invalid arithmetic decoder interval"))?;
+            let code_offset = code
+                .checked_sub(low)
+                .ok_or_else(|| decode_error("arithmetic code fell below its interval"))?;
+            if code > high {
+                return Err(decode_error("arithmetic code exceeded its interval"));
+            }
+            let scaled = u64_from_u128_saturating(
+                (u128::from(code_offset).saturating_add(1))
+                    .saturating_mul(u128::from(self.total_frequency))
+                    .saturating_sub(1)
+                    / u128::from(interval),
+            );
+
+            let selected_index = model_intervals
+                .partition_point(|&(_, cumulative, frequency)| cumulative + frequency <= scaled);
+            let &(symbol, cum_freq, frequency) = model_intervals
+                .get(selected_index)
+                .filter(|&&(_, cumulative, frequency)| {
+                    (cumulative..cumulative + frequency).contains(&scaled)
+                })
+                .ok_or_else(|| decode_error("arithmetic code selects no model symbol"))?;
+            symbols.push(symbol);
+
+            update_interval(
+                &mut low,
+                &mut high,
+                cum_freq,
+                frequency,
+                self.total_frequency,
+            )?;
+
+            loop {
+                if high < HALF {
+                    // Interval already lies in the lower half.
+                } else if low >= HALF {
+                    low -= HALF;
+                    high -= HALF;
+                    code = code
+                        .checked_sub(HALF)
+                        .ok_or_else(|| decode_error("decoder half-range underflow"))?;
+                } else if low >= FIRST_QUARTER && high < THIRD_QUARTER {
+                    low -= FIRST_QUARTER;
+                    high -= FIRST_QUARTER;
+                    code = code
+                        .checked_sub(FIRST_QUARTER)
+                        .ok_or_else(|| decode_error("decoder quarter-range underflow"))?;
+                } else {
+                    break;
+                }
+
+                low <<= 1;
+                high = (high << 1) | 1;
+                code = ((code << 1) & CODE_MAX) | u64::from(reader.read_bit_or_zero());
+            }
+        }
+
+        if content_hash_for_symbols(&symbols) != compressed.content_hash {
+            return Err(decode_error("decoded content hash mismatch"));
+        }
+
+        let canonical = self.encode(&symbols)?;
+        if canonical != *compressed {
+            return Err(decode_error("non-canonical compressed evidence artifact"));
+        }
+
+        Ok(symbols)
+    }
+
+    fn validate_model(&self) -> Result<(), EntropyError> {
+        let actual_alphabet_size = self.frequency_table.len();
+        if actual_alphabet_size == 0 || self.total_frequency == 0 {
+            return Err(EntropyError::EmptyInput);
+        }
+        if actual_alphabet_size > MAX_ALPHABET_SIZE {
+            return Err(EntropyError::AlphabetTooLarge {
+                size: actual_alphabet_size,
+                max: MAX_ALPHABET_SIZE,
+            });
+        }
+        if self.alphabet_size != actual_alphabet_size {
+            return Err(decode_error("arithmetic coder alphabet metadata mismatch"));
+        }
+        if self.total_frequency > MAX_TOTAL_FREQUENCY {
+            return Err(decode_error(
+                "arithmetic coder frequency total exceeds limit",
+            ));
+        }
+
+        let mut expected_cumulative = 0u64;
+        for &(cumulative, frequency) in self.frequency_table.values() {
+            if frequency == 0 {
+                return Err(decode_error("arithmetic coder contains a zero frequency"));
+            }
+            if cumulative != expected_cumulative {
+                return Err(decode_error(
+                    "arithmetic coder cumulative table is not canonical",
+                ));
+            }
+            expected_cumulative = expected_cumulative
+                .checked_add(frequency)
+                .ok_or_else(|| decode_error("arithmetic coder frequency table overflow"))?;
+        }
+        if expected_cumulative != self.total_frequency {
+            return Err(decode_error("arithmetic coder frequency total mismatch"));
+        }
+        Ok(())
+    }
+
+    /// Verify that the canonical model frequencies normalize to unit mass.
+    ///
+    /// The method retains its legacy public name, but it does not prove that a
+    /// framed block stream is prefix-free and is not a substitute for decode
+    /// plus canonical re-encode verification.
     pub fn verify_kraft_inequality(&self) -> Result<i64, EntropyError> {
         // For arithmetic coding with frequencies, effective codeword length
         // l_i = -log₂(freq_i / total) = log₂(total) - log₂(freq_i).
-        // Kraft sum = Σ 2^(-l_i) = Σ freq_i / total = 1 (by construction).
-        // This is always satisfied for arithmetic coding, but we verify.
+        // The legacy Kraft-named value is Σ freq_i / total = 1 for a valid
+        // canonical model.
 
-        if self.total_frequency == 0 {
-            return Err(EntropyError::EmptyInput);
+        self.validate_model()?;
+
+        let mut sum: u64 = 0;
+        for &(_, freq) in self.frequency_table.values() {
+            sum = sum.checked_add(freq).ok_or(EntropyError::KraftViolation {
+                kraft_sum_millionths: i64::MAX,
+            })?;
         }
-
-        let sum: u64 = self.frequency_table.values().map(|(_, f)| *f).sum();
         // Use i128 to prevent overflow when sum * MILLION exceeds i64::MAX.
-        let kraft_sum_millionths =
-            (sum as i128 * MILLION as i128 / self.total_frequency.max(1) as i128) as i64;
+        let kraft_sum_millionths = i64_from_i128_saturating(
+            i128::from(sum).saturating_mul(i128::from(MILLION))
+                / i128::from(self.total_frequency.max(1)),
+        );
 
         if kraft_sum_millionths > MILLION + 1000 {
             // Allow tiny rounding tolerance.
@@ -461,16 +673,18 @@ impl ArithmeticCoder {
         let mut sum_fi_log2_fi: i128 = 0;
         for &(_, freq) in self.frequency_table.values() {
             if freq > 0 {
-                sum_fi_log2_fi += freq as i128 * integer_log2_millionths(freq) as i128;
+                sum_fi_log2_fi += i128::from(freq) * i128::from(integer_log2_millionths(freq));
             }
         }
-        let expected = log2_total as i128 - sum_fi_log2_fi / self.total_frequency.max(1) as i128;
-        expected.max(0) as i64
+        let expected =
+            i128::from(log2_total) - sum_fi_log2_fi / i128::from(self.total_frequency.max(1));
+        i64_from_i128_saturating(expected.max(0))
     }
 }
 
 /// Compressed evidence artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CompressedEvidence {
     /// Schema version.
     pub schema: String,
@@ -488,22 +702,102 @@ pub struct CompressedEvidence {
     pub compression_ratio_millionths: i64,
     /// Content hash of original symbol sequence.
     pub content_hash: ContentHash,
+    /// Hash of the exact canonical arithmetic model used for this artifact.
+    pub model_hash: ContentHash,
+}
+
+impl CompressedEvidence {
+    fn validate_metadata(&self, coder: &ArithmeticCoder) -> Result<(), EntropyError> {
+        if self.schema != ENTROPY_SCHEMA_VERSION {
+            return Err(decode_error(format!(
+                "unsupported compressed evidence schema: {}",
+                self.schema
+            )));
+        }
+        if self.original_symbol_count == 0 {
+            return Err(EntropyError::EmptyInput);
+        }
+        if self.original_symbol_count > MAX_DECODED_SYMBOLS {
+            return Err(decode_error(format!(
+                "declared symbol count {} exceeds decode limit {MAX_DECODED_SYMBOLS}",
+                self.original_symbol_count
+            )));
+        }
+        if self.compressed_bytes != self.compressed_data.len() {
+            return Err(decode_error("compressed byte-length metadata mismatch"));
+        }
+        if self.model_hash != content_hash_for_model(coder) {
+            return Err(decode_error("arithmetic model hash mismatch"));
+        }
+
+        let valid_bits = usize::try_from(self.compressed_bits)
+            .map_err(|_| decode_error("compressed bit length must be positive"))?;
+        let maximum_canonical_bits = self
+            .original_symbol_count
+            .checked_mul(CODE_VALUE_BITS)
+            .and_then(|bits| bits.checked_add(2))
+            .ok_or_else(|| decode_error("declared symbol count exceeds codec framing limit"))?;
+        if valid_bits > maximum_canonical_bits {
+            return Err(decode_error(
+                "compressed payload exceeds codec framing limit",
+            ));
+        }
+        let maximum_bits = self
+            .compressed_data
+            .len()
+            .checked_mul(8)
+            .ok_or_else(|| decode_error("compressed byte length overflow"))?;
+        let minimum_bits = self
+            .compressed_data
+            .len()
+            .saturating_sub(1)
+            .saturating_mul(8)
+            .saturating_add(1);
+        if valid_bits == 0 || valid_bits < minimum_bits || valid_bits > maximum_bits {
+            return Err(decode_error("compressed bit-length metadata mismatch"));
+        }
+
+        let remainder = valid_bits % 8;
+        if remainder != 0 {
+            let padding_mask = (1u8 << (8 - remainder)) - 1;
+            let final_byte = self
+                .compressed_data
+                .last()
+                .copied()
+                .ok_or_else(|| decode_error("compressed payload is empty"))?;
+            if final_byte & padding_mask != 0 {
+                return Err(decode_error("compressed payload has non-zero padding bits"));
+            }
+        }
+
+        let expected_original_bits =
+            original_bits_estimate(self.original_symbol_count, coder.alphabet_size);
+        if self.original_bits_estimate != expected_original_bits {
+            return Err(decode_error("original bit-estimate metadata mismatch"));
+        }
+        let expected_ratio = compression_ratio(self.compressed_bits, expected_original_bits);
+        if self.compression_ratio_millionths != expected_ratio {
+            return Err(decode_error("compression-ratio metadata mismatch"));
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
 // CompressionCertificate — Shannon bound proof
 // ---------------------------------------------------------------------------
 
-/// Machine-checkable certificate proving compression quality.
+/// Deterministic certificate recording empirical compression diagnostics.
 ///
-/// Verifies that the achieved compression ratio is within a provable
-/// bound of the Shannon entropy (information-theoretic optimal).
+/// `build_verified` establishes codec restoration and estimator association.
+/// The Shannon- and Kraft-named fields are empirical comparison and model-mass
+/// diagnostics, not a source-distribution or prefix-freeness proof.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompressionCertificate {
     pub schema: String,
     /// Empirical entropy H(X) in millionths of bits per symbol.
     pub entropy_millibits_per_symbol: i64,
-    /// Shannon lower bound (total bits, raw integer bits).
+    /// Module-specific empirical Shannon comparison (raw integer bits).
     pub shannon_lower_bound_bits: i64,
     /// Achieved compressed size (bits).
     pub achieved_bits: i64,
@@ -511,9 +805,9 @@ pub struct CompressionCertificate {
     pub overhead_bits_millionths: i64,
     /// Overhead ratio (millionths): achieved / lower_bound.
     pub overhead_ratio_millionths: i64,
-    /// Kraft inequality sum (millionths, should be ≤ 1_000_000).
+    /// Canonical model frequency-mass sum (legacy Kraft name, millionths).
     pub kraft_sum_millionths: i64,
-    /// Whether the Kraft inequality is satisfied.
+    /// Whether the canonical model mass is normalized within tolerance.
     pub kraft_satisfied: bool,
     /// Redundancy (millionths of bits): H_max - H(X).
     pub redundancy_millibits: i64,
@@ -524,6 +818,27 @@ pub struct CompressionCertificate {
 }
 
 impl CompressionCertificate {
+    /// Build a certificate only after the artifact has been decoded and shown
+    /// to reproduce the exact estimator histogram.
+    pub fn build_verified(
+        estimator: &EntropyEstimator,
+        coder: &ArithmeticCoder,
+        compressed: &CompressedEvidence,
+    ) -> Result<Self, EntropyError> {
+        let restored = coder.decode(compressed)?;
+        let mut restored_estimator = EntropyEstimator::new();
+        for symbol in restored {
+            restored_estimator.observe(symbol);
+        }
+        if restored_estimator != *estimator {
+            return Err(decode_error(
+                "decoded symbol histogram does not match certificate estimator",
+            ));
+        }
+        let kraft_sum = coder.verify_kraft_inequality()?;
+        Ok(Self::build(estimator, compressed, kraft_sum))
+    }
+
     /// Build a certificate from compression results.
     pub fn build(
         estimator: &EntropyEstimator,
@@ -533,12 +848,13 @@ impl CompressionCertificate {
         let entropy = estimator.entropy_millibits();
         let lower_bound = estimator.shannon_lower_bound_bits();
         let achieved = compressed.compressed_bits;
-        let achieved_bits_millionths = achieved as i128 * MILLION as i128;
-        let lower_bound_millionths = lower_bound as i128 * MILLION as i128;
+        let achieved_bits_millionths = i128::from(achieved).saturating_mul(i128::from(MILLION));
+        let lower_bound_millionths = i128::from(lower_bound).saturating_mul(i128::from(MILLION));
         let overhead = (achieved_bits_millionths - lower_bound_millionths).max(0);
         let overhead_ratio = if lower_bound_millionths > 0 {
-            let ratio = achieved_bits_millionths * MILLION as i128 / lower_bound_millionths;
-            ratio.min(i64::MAX as i128) as i64
+            let ratio = achieved_bits_millionths.saturating_mul(i128::from(MILLION))
+                / lower_bound_millionths;
+            i64_from_i128_saturating(ratio)
         } else if achieved <= 0 {
             // Degenerate zero/zero case: treat as exact.
             MILLION
@@ -558,7 +874,7 @@ impl CompressionCertificate {
             entropy_millibits_per_symbol: entropy,
             shannon_lower_bound_bits: lower_bound,
             achieved_bits: achieved,
-            overhead_bits_millionths: overhead.min(i64::MAX as i128) as i64,
+            overhead_bits_millionths: i64_from_i128_saturating(overhead),
             overhead_ratio_millionths: overhead_ratio,
             kraft_sum_millionths: kraft_sum,
             kraft_satisfied: kraft_sum <= MILLION + 1000,
@@ -568,7 +884,7 @@ impl CompressionCertificate {
         }
     }
 
-    /// Verify: is the compression within `factor` of Shannon optimal?
+    /// Compare the stored empirical overhead ratio with `factor`.
     pub fn is_within_factor(&self, factor_millionths: i64) -> bool {
         self.overhead_ratio_millionths <= factor_millionths
     }
@@ -588,7 +904,7 @@ fn integer_log2_millionths(n: u64) -> i64 {
         return 0;
     }
     let bits = 64 - n.leading_zeros();
-    let integer_part = (bits - 1) as i64 * MILLION;
+    let integer_part = i64::from(bits - 1) * MILLION;
 
     let power_of_two = 1u64 << (bits - 1);
     if n == power_of_two {
@@ -610,7 +926,9 @@ fn integer_log2_millionths(n: u64) -> i64 {
 
     for _ in 0..20 {
         // Square mantissa: (m * 2^32)^2 / 2^32 = m^2 * 2^32
-        mantissa = ((mantissa as u128 * mantissa as u128) >> 32) as u64;
+        mantissa = u64_from_u128_saturating(
+            (u128::from(mantissa).saturating_mul(u128::from(mantissa))) >> 32,
+        );
         if mantissa >= threshold {
             frac += bit_value;
             mantissa >>= 1; // divide by 2
@@ -622,6 +940,195 @@ fn integer_log2_millionths(n: u64) -> i64 {
     }
 
     integer_part + frac
+}
+
+fn i128_from_usize_saturating(value: usize) -> i128 {
+    u64::try_from(value).map(i128::from).unwrap_or(i128::MAX)
+}
+
+fn decode_error(message: impl Into<String>) -> EntropyError {
+    EntropyError::DecodeError {
+        message: message.into(),
+    }
+}
+
+fn update_interval(
+    low: &mut u64,
+    high: &mut u64,
+    cumulative: u64,
+    frequency: u64,
+    total: u64,
+) -> Result<(), EntropyError> {
+    let upper = cumulative
+        .checked_add(frequency)
+        .ok_or_else(|| decode_error("arithmetic model upper bound overflow"))?;
+    if frequency == 0 || upper > total || total == 0 {
+        return Err(decode_error("invalid arithmetic model interval"));
+    }
+
+    let interval = high
+        .checked_sub(*low)
+        .and_then(|value| value.checked_add(1))
+        .ok_or_else(|| decode_error("invalid arithmetic coding interval"))?;
+    let scaled_low = u64_from_u128_saturating(
+        u128::from(interval).saturating_mul(u128::from(cumulative)) / u128::from(total),
+    );
+    let scaled_high = u64_from_u128_saturating(
+        u128::from(interval).saturating_mul(u128::from(upper)) / u128::from(total),
+    );
+    if scaled_high == 0 {
+        return Err(decode_error("arithmetic model interval collapsed"));
+    }
+
+    let next_low = (*low)
+        .checked_add(scaled_low)
+        .ok_or_else(|| decode_error("arithmetic coding low bound overflow"))?;
+    let next_high = (*low)
+        .checked_add(scaled_high - 1)
+        .ok_or_else(|| decode_error("arithmetic coding high bound overflow"))?;
+    if next_low > next_high {
+        return Err(decode_error("arithmetic model interval collapsed"));
+    }
+    *low = next_low;
+    *high = next_high;
+    Ok(())
+}
+
+#[derive(Debug, Default)]
+struct BitWriter {
+    bytes: Vec<u8>,
+    current_byte: u8,
+    used_bits: u8,
+    bit_len: usize,
+}
+
+impl BitWriter {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn write_bit(&mut self, bit: bool) {
+        if bit {
+            self.current_byte |= 1u8 << (7 - self.used_bits);
+        }
+        self.used_bits += 1;
+        self.bit_len = self.bit_len.saturating_add(1);
+        if self.used_bits == 8 {
+            self.bytes.push(self.current_byte);
+            self.current_byte = 0;
+            self.used_bits = 0;
+        }
+    }
+
+    fn finish(mut self) -> (Vec<u8>, usize) {
+        if self.used_bits > 0 {
+            self.bytes.push(self.current_byte);
+        }
+        (self.bytes, self.bit_len)
+    }
+}
+
+fn emit_bit_with_follow(writer: &mut BitWriter, bit: bool, pending: &mut usize) {
+    writer.write_bit(bit);
+    for _ in 0..*pending {
+        writer.write_bit(!bit);
+    }
+    *pending = 0;
+}
+
+#[derive(Debug)]
+struct BitReader<'a> {
+    bytes: &'a [u8],
+    valid_bits: usize,
+    position: usize,
+}
+
+impl<'a> BitReader<'a> {
+    fn new(bytes: &'a [u8], valid_bits: usize) -> Self {
+        Self {
+            bytes,
+            valid_bits,
+            position: 0,
+        }
+    }
+
+    fn read_bit_or_zero(&mut self) -> u8 {
+        if self.position >= self.valid_bits {
+            return 0;
+        }
+        let byte = self.bytes[self.position / 8];
+        let bit = (byte >> (7 - (self.position % 8))) & 1;
+        self.position += 1;
+        bit
+    }
+}
+
+fn original_bits_estimate(symbol_count: usize, alphabet_size: usize) -> i64 {
+    i64_from_i128_saturating(
+        i128_from_usize_saturating(symbol_count).saturating_mul(i128::from(
+            integer_log2_millionths(u64_from_usize_saturating(alphabet_size)),
+        )) / i128::from(MILLION),
+    )
+}
+
+fn compression_ratio(compressed_bits: i64, original_bits: i64) -> i64 {
+    if original_bits > 0 {
+        i64_from_i128_saturating(
+            i128::from(compressed_bits).saturating_mul(i128::from(MILLION))
+                / i128::from(original_bits),
+        )
+    } else {
+        MILLION
+    }
+}
+
+fn content_hash_for_symbols(symbols: &[u32]) -> ContentHash {
+    const DOMAIN: &[u8] = b"franken-engine.entropy-symbol-stream.v2\0";
+    let mut bytes = Vec::with_capacity(
+        DOMAIN
+            .len()
+            .saturating_add(symbols.len().saturating_mul(std::mem::size_of::<u32>())),
+    );
+    bytes.extend_from_slice(DOMAIN);
+    for symbol in symbols {
+        bytes.extend_from_slice(&symbol.to_be_bytes());
+    }
+    ContentHash::compute(&bytes)
+}
+
+fn content_hash_for_model(coder: &ArithmeticCoder) -> ContentHash {
+    const DOMAIN: &[u8] = b"franken-engine.arithmetic-model.v2\0";
+    let entry_bytes = std::mem::size_of::<u32>() + 2 * std::mem::size_of::<u64>();
+    let mut bytes = Vec::with_capacity(
+        DOMAIN.len()
+            + 2 * std::mem::size_of::<u64>()
+            + coder.frequency_table.len().saturating_mul(entry_bytes),
+    );
+    bytes.extend_from_slice(DOMAIN);
+    bytes.extend_from_slice(&u64_from_usize_saturating(coder.alphabet_size).to_be_bytes());
+    bytes.extend_from_slice(&coder.total_frequency.to_be_bytes());
+    for (&symbol, &(cumulative, frequency)) in &coder.frequency_table {
+        bytes.extend_from_slice(&symbol.to_be_bytes());
+        bytes.extend_from_slice(&cumulative.to_be_bytes());
+        bytes.extend_from_slice(&frequency.to_be_bytes());
+    }
+    ContentHash::compute(&bytes)
+}
+
+fn i64_from_i128_saturating(value: i128) -> i64 {
+    i64::try_from(value).unwrap_or(if value.is_negative() {
+        i64::MIN
+    } else {
+        i64::MAX
+    })
+}
+
+fn u64_from_u128_saturating(value: u128) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+fn u64_from_usize_saturating(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 // ---------------------------------------------------------------------------
@@ -843,6 +1350,45 @@ mod tests {
     }
 
     #[test]
+    fn coder_decode_roundtrip_carry_e3_and_corruption() {
+        let mut uniform = EntropyEstimator::new();
+        uniform.observe(0);
+        uniform.observe(1);
+        let uniform_coder = ArithmeticCoder::from_estimator(&uniform).unwrap();
+        let carry_symbols = [0, 0, 0, 0, 0, 0, 0, 1, 1];
+        let carry = uniform_coder.encode(&carry_symbols).unwrap();
+        assert_eq!(carry.compressed_data, vec![0x01, 0xa0]);
+        assert_eq!(carry.compressed_bits, 11);
+        assert_eq!(uniform_coder.decode(&carry).unwrap(), carry_symbols);
+
+        let mut e3_estimator = EntropyEstimator::new();
+        e3_estimator.observe(0);
+        e3_estimator.observe(1);
+        e3_estimator.observe(1);
+        let e3_coder = ArithmeticCoder::from_estimator(&e3_estimator).unwrap();
+        let e3 = e3_coder.encode(&[1, 0]).unwrap();
+        assert_eq!(e3.compressed_data, vec![0x60]);
+        assert_eq!(e3.compressed_bits, 3);
+        assert_eq!(e3_coder.decode(&e3).unwrap(), vec![1, 0]);
+
+        for bit_index in 0..carry.compressed_data.len() * 8 {
+            let mut tampered = carry.clone();
+            tampered.compressed_data[bit_index / 8] ^= 1 << (7 - bit_index % 8);
+            assert!(uniform_coder.decode(&tampered).is_err());
+        }
+    }
+
+    #[test]
+    fn coder_decode_rejects_malformed_model() {
+        let coder = ArithmeticCoder {
+            frequency_table: BTreeMap::from([(0, (0, 0))]),
+            total_frequency: 1,
+            alphabet_size: 1,
+        };
+        assert!(coder.encode(&[0]).is_err());
+    }
+
+    #[test]
     fn coder_encode_empty_rejected() {
         let mut est = EntropyEstimator::new();
         est.observe(0);
@@ -918,6 +1464,7 @@ mod tests {
             compressed_bits: 32,
             compression_ratio_millionths: 160_000,
             content_hash: ContentHash::compute(b"test"),
+            model_hash: ContentHash::compute(b"test-model"),
         };
         // SAFETY: CompressedEvidence derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
@@ -1059,7 +1606,7 @@ mod tests {
         let err = EntropyError::KraftViolation {
             kraft_sum_millionths: 1_100_000,
         };
-        assert!(format!("{err}").contains("Kraft"));
+        assert!(format!("{err}").contains("frequency mass"));
     }
 
     // === Edge cases ===
@@ -1397,6 +1944,7 @@ mod tests {
             compressed_bits: 24,
             compression_ratio_millionths: 240_000,
             content_hash: ContentHash::compute(b"clone_test"),
+            model_hash: ContentHash::compute(b"clone-model"),
         };
         let cloned = ce.clone();
         assert_eq!(ce, cloned);
@@ -1612,6 +2160,7 @@ mod tests {
             compressed_bits: 8,
             compression_ratio_millionths: MILLION,
             content_hash: ContentHash::compute(b"da"),
+            model_hash: ContentHash::compute(b"model-a"),
         };
         let ce_b = CompressedEvidence {
             schema: ENTROPY_SCHEMA_VERSION.to_string(),
@@ -1622,6 +2171,7 @@ mod tests {
             compressed_bits: 8,
             compression_ratio_millionths: MILLION,
             content_hash: ContentHash::compute(b"db"),
+            model_hash: ContentHash::compute(b"model-b"),
         };
         assert_ne!(format!("{ce_a:?}"), format!("{ce_b:?}"));
     }
@@ -1698,6 +2248,7 @@ mod tests {
             compressed_bits: 24,
             compression_ratio_millionths: MILLION,
             content_hash: ContentHash::compute(b"ci_ce"),
+            model_hash: ContentHash::compute(b"ci-model"),
         };
         let original = ce.clone();
         ce.compressed_data.push(4);
@@ -1733,6 +2284,7 @@ mod tests {
             compressed_bits: 8,
             compression_ratio_millionths: 200_000,
             content_hash: ContentHash::compute(b"fs"),
+            model_hash: ContentHash::compute(b"fs-model"),
         };
         let json = serde_json::to_string(&ce).unwrap();
         for field in &[
@@ -1744,6 +2296,7 @@ mod tests {
             "compressed_bits",
             "compression_ratio_millionths",
             "content_hash",
+            "model_hash",
         ] {
             assert!(
                 json.contains(&format!("\"{field}\"")),
@@ -2169,7 +2722,10 @@ mod tests {
         let err = EntropyError::KraftViolation {
             kraft_sum_millionths: 1_200_000,
         };
-        assert_eq!(format!("{err}"), "Kraft inequality violated: sum = 1200000");
+        assert_eq!(
+            format!("{err}"),
+            "model frequency mass is not normalized: sum = 1200000"
+        );
     }
 
     // -----------------------------------------------------------------------

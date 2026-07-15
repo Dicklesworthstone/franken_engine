@@ -1815,12 +1815,7 @@ impl ExecutionOrchestrator {
         }
         let coder = ArithmeticCoder::from_estimator(&estimator).ok()?;
         let compressed = coder.encode(&symbols).ok()?;
-        let kraft_sum = coder.verify_kraft_inequality().ok()?;
-        Some(CompressionCertificate::build(
-            &estimator,
-            &compressed,
-            kraft_sum,
-        ))
+        CompressionCertificate::build_verified(&estimator, &coder, &compressed).ok()
     }
 
     #[allow(clippy::too_many_arguments)]

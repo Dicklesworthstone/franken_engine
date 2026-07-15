@@ -2171,7 +2171,7 @@ mod tests {
         migrated
             .ledger_entry
             .top_features
-            .insert("invalid-migration-value".to_string(), f64::INFINITY);
+            .push(("invalid-migration-value".to_string(), f64::INFINITY));
         Ok(migrated)
     }
 

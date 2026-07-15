@@ -1165,7 +1165,7 @@ mod tests {
         entry
             .ledger_entry
             .top_features
-            .insert("non-finite".to_string(), f64::NAN);
+            .push(("non-finite".to_string(), f64::NAN));
 
         assert!(matches!(
             entry.compute_artifact_hash(),
@@ -2002,11 +2002,10 @@ mod tests {
     /// serializes NaN / +Inf / -Inf all to JSON `null`, so without this guard the
     /// three distinct entries below would each serialize identically and collide
     /// to one `artifact_hash` (and thus `chain_hash`), breaking the injectivity
-    /// the tamper-evidence chain relies on. The underlying EvidenceLedger
-    /// validator (default `franken-evidence` crate path) checks posterior /
-    /// expected-loss / calibration finiteness but not `top_features`, so the guard
-    /// lives at the engine emission boundary. Sign is unconstrained: a negative
-    /// feature contribution is valid.
+    /// the tamper-evidence chain relies on. The underlying `EvidenceLedger`
+    /// validator also checks `top_features`, while this request guard rejects the
+    /// value at the engine emission boundary before ledger construction or hash
+    /// minting. Sign is unconstrained: a negative feature contribution is valid.
     #[test]
     fn non_finite_top_feature_weight_is_rejected_fail_closed() {
         for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {

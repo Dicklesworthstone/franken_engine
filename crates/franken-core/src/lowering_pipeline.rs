@@ -2450,52 +2450,6 @@ fn contains_unsupported_parameter_computed_key(pattern: &BindingPattern) -> bool
     }
 }
 
-fn raw_static_property_key_needs_normalization(key: &str) -> bool {
-    let quoted = matches!(
-        (key.as_bytes().first(), key.as_bytes().last()),
-        (Some(b'\''), Some(b'\'')) | (Some(b'"'), Some(b'"'))
-    );
-    let numeric_like = key.as_bytes().first().is_some_and(u8::is_ascii_digit)
-        || (key.starts_with('.') && key.as_bytes().get(1).is_some_and(u8::is_ascii_digit))
-        || (matches!(key.as_bytes().first(), Some(b'+' | b'-'))
-            && key
-                .as_bytes()
-                .get(1)
-                .is_some_and(|byte| byte.is_ascii_digit() || *byte == b'.'));
-    let canonical_decimal = key.parse::<f64>().is_ok_and(|value| {
-        value.is_finite()
-            && value >= 0.0
-            && (value == 0.0 || value >= 1e-6)
-            && value < 1e21
-            && value.to_string() == key
-    });
-    quoted || key.contains('\\') || (numeric_like && !canonical_decimal)
-}
-
-fn contains_unsupported_parameter_raw_static_key(pattern: &BindingPattern) -> bool {
-    match pattern {
-        BindingPattern::Identifier(_) => false,
-        BindingPattern::ObjectPattern(properties) => properties.iter().any(|property| {
-            (!property.computed
-                && !property.shorthand
-                && matches!(
-                    &property.key,
-                    Expression::Identifier(key)
-                        if raw_static_property_key_needs_normalization(key)
-                ))
-                || contains_unsupported_parameter_raw_static_key(&property.value)
-        }),
-        BindingPattern::ArrayPattern(elements) => elements
-            .iter()
-            .flatten()
-            .any(contains_unsupported_parameter_raw_static_key),
-        BindingPattern::Rest(inner) => contains_unsupported_parameter_raw_static_key(inner),
-        BindingPattern::AssignmentPattern { left, .. } => {
-            contains_unsupported_parameter_raw_static_key(left)
-        }
-    }
-}
-
 /// Allocate one runtime slot per formal and every identifier introduced by a
 /// pattern. Non-identifier formals use an unforgeable synthetic source slot;
 /// their entry prologue copies/defaults/destructures that slot into user
@@ -2593,18 +2547,6 @@ fn allocate_function_parameter_bindings<'a>(
             "FE-LOWER-UNSUPPORTED-COMPUTED-PARAM-KEY-0001",
             "core.function_parameter_computed_key",
             "computed parameter-pattern keys require dynamic property-key lowering",
-            Some(param.span.clone()),
-        ));
-    }
-    if let Some(param) = params
-        .iter()
-        .find(|param| contains_unsupported_parameter_raw_static_key(&param.pattern))
-    {
-        return Err(unsupported_frontier_expression_error(
-            "function_parameter_raw_static_destructuring_key",
-            "FE-LOWER-UNSUPPORTED-RAW-PARAM-KEY-0001",
-            "core.function_parameter_raw_static_key",
-            "noncanonical parameter-pattern keys require exact property-key normalization",
             Some(param.span.clone()),
         ));
     }
@@ -15493,21 +15435,55 @@ mod tests {
     }
 
     #[test]
-    fn noncanonical_static_parameter_keys_fail_closed_bd_ur3tk_10() {
-        for source in [
-            "function quoted({ 'value': picked }, ...tail) { return picked; }",
-            "function hexadecimal({ 0x10: picked }, ...tail) { return picked; }",
+    fn static_object_binding_keys_execute_with_canonical_property_names_bd_h4esx() {
+        for (binding_key, canonical_key) in [
+            (r#""value""#, "value"),
+            (r"'v\x61lue'", "value"),
+            (r"'v\u0061lue'", "value"),
+            (r"'\uD83D\uDE00'", "😀"),
+            (r"'\u{1F600}'", "😀"),
+            ("'a\\\nb'", "ab"),
+            ("'a\\\r\nb'", "ab"),
+            ("'a\\\rb'", "ab"),
+            ("'a\\\u{2028}b'", "ab"),
+            ("'a\\\u{2029}b'", "ab"),
+            (r"\u0076alue", "value"),
+            ("π", "π"),
+            (r"\u03C0", "π"),
+            (r"\u037A", "ͺ"),
+            (r"a\u037A", "aͺ"),
+            ("0x10", "16"),
+            ("0b10", "2"),
+            ("0o10", "8"),
+            ("1_000", "1000"),
+            ("1e3", "1000"),
+            ("1.5", "1.5"),
+            (".5", "0.5"),
+            ("1e-6", "0.000001"),
+            ("1e-7", "1e-7"),
+            ("1e20", "100000000000000000000"),
+            ("1e21", "1e+21"),
+            ("667082108456853.2", "667082108456853.2"),
+            ("9007199254740993", "9007199254740992"),
+            ("18446744073709551615", "18446744073709552000"),
+            ("0x10n", "16"),
+            ("1_000n", "1000"),
+            (
+                "123456789012345678901234567890n",
+                "123456789012345678901234567890",
+            ),
         ] {
-            let error = lower_rest_source_to_ir3(source)
-                .expect_err("raw property spelling must not become the runtime property key");
-            let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
-                panic!("expected fail-closed raw-key parameter diagnostic");
-            };
-            assert_eq!(
-                diagnostic.diagnostic_code,
-                "FE-LOWER-UNSUPPORTED-RAW-PARAM-KEY-0001"
+            let source = format!(
+                "function pick({{{binding_key}: parameter}}) {{ return parameter; }}\
+                 let {{{binding_key}: variable}} = {{'{canonical_key}': 7}};\
+                 pick({{'{canonical_key}': 5}}) * 10 + variable;"
             );
-            assert_eq!(diagnostic.site_id, "core.function_parameter_raw_static_key");
+            let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(&source);
+            assert_eq!(
+                value,
+                Value::Int(57),
+                "binding key `{binding_key}` must resolve canonical property `{canonical_key}`"
+            );
         }
     }
 

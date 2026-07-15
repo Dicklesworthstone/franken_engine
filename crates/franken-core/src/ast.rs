@@ -567,7 +567,7 @@ impl ExportDeclaration {
 /// A property in an object destructuring pattern: `{ key: pattern = default }`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObjectPatternProperty {
-    /// The property key (Identifier or computed expression).
+    /// The property key (identifier, cooked static literal, or computed expression).
     pub key: Expression,
     /// The target pattern (may differ from key for `{ a: b }`).
     pub value: BindingPattern,

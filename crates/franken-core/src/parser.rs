@@ -2208,6 +2208,21 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             current_start_line = line_no;
             last_significant = None;
             trailing_identifier.clear();
+        } else if in_quote.is_some() {
+            if escaped {
+                // A backslash immediately followed by a physical line ending
+                // is a string/template LineContinuation. Both disappear from
+                // the cooked source; leaving the backslash would reinterpret
+                // the first character of the next line as an escape.
+                let continuation = current_text.pop();
+                debug_assert_eq!(continuation, Some('\\'));
+                escaped = false;
+            } else {
+                // Preserve an unescaped line ending so the literal parser can
+                // reject it (or retain it for a template) instead of silently
+                // changing an invalid string into one containing a space.
+                current_text.push('\n');
+            }
         } else {
             current_text.push(' ');
         }
@@ -3323,7 +3338,7 @@ fn parse_object_binding_pattern(
         if let Some(colon_pos) = find_top_level_colon_in_pattern(seg) {
             let key_src = seg[..colon_pos].trim();
             let value_src = seg[colon_pos + 1..].trim();
-            let key = Expression::Identifier(key_src.to_string());
+            let key = parse_static_binding_property_key(key_src, span, context)?;
             let value = parse_binding_pattern(value_src, span, context)?;
             properties.push(ObjectPatternProperty {
                 key,
@@ -3351,6 +3366,352 @@ fn parse_object_binding_pattern(
     }
 
     Ok(BindingPattern::ObjectPattern(properties))
+}
+
+/// Parse a non-computed object-binding property name into its semantic form.
+///
+/// Keeping the source spelling in an `Identifier` is observably wrong for
+/// quoted, escaped, numeric, and BigInt names: lowering would ask the runtime
+/// for a property literally named `0x10` or `'value'`.  Store quoted and BigInt
+/// names as their exact string keys, numeric names as canonical numeric or
+/// string AST forms, and decode `IdentifierName` Unicode escapes before
+/// lowering (bd-h4esx).
+fn parse_static_binding_property_key(
+    source: &str,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<Expression> {
+    let source = source.trim();
+    let invalid_key = || {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            format!("invalid static object-binding property key: `{source}`"),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )
+    };
+
+    if matches!(source.as_bytes().first(), Some(b'\'' | b'"')) {
+        let cooked = parse_binding_property_string_literal(source).ok_or_else(&invalid_key)?;
+        return Ok(Expression::StringLiteral(cooked));
+    }
+
+    if source.ends_with('n') && binding_numeric_key_starts_like_literal(source) {
+        let key = parse_bigint_binding_property_key(source).ok_or_else(&invalid_key)?;
+        return Ok(Expression::StringLiteral(key));
+    }
+
+    if binding_numeric_key_starts_like_literal(source) {
+        return parse_numeric_binding_property_key(source).ok_or_else(&invalid_key);
+    }
+
+    let identifier = if source.contains('\\') {
+        decode_binding_property_identifier_escapes(source).ok_or_else(&invalid_key)?
+    } else {
+        source.to_string()
+    };
+    if !is_binding_property_identifier_name(&identifier) {
+        return Err(invalid_key());
+    }
+    Ok(Expression::Identifier(identifier))
+}
+
+fn is_binding_property_identifier_name(source: &str) -> bool {
+    let mut chars = source.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    // ECMAScript IdentifierName uses Unicode ID_Start/ID_Continue (not the
+    // normalization-closed XID classes), plus its four explicit additions.
+    (matches!(first, '$' | '_') || unicode_id_start::is_id_start(first))
+        && chars.all(|ch| {
+            matches!(ch, '$' | '_' | '\u{200C}' | '\u{200D}')
+                || unicode_id_start::is_id_continue(ch)
+        })
+}
+
+fn binding_numeric_key_starts_like_literal(source: &str) -> bool {
+    let bytes = source.as_bytes();
+    bytes.first().is_some_and(u8::is_ascii_digit)
+        || (bytes.first() == Some(&b'.') && bytes.get(1).is_some_and(u8::is_ascii_digit))
+        || (matches!(bytes.first(), Some(b'+' | b'-'))
+            && bytes
+                .get(1)
+                .is_some_and(|byte| byte.is_ascii_digit() || *byte == b'.'))
+}
+
+fn strip_valid_numeric_separators(source: &str, is_digit: impl Fn(char) -> bool) -> Option<String> {
+    let chars = source.chars().collect::<Vec<_>>();
+    let mut cleaned = String::with_capacity(source.len());
+    for (index, ch) in chars.iter().copied().enumerate() {
+        if ch == '_' {
+            let previous = index.checked_sub(1).and_then(|i| chars.get(i)).copied();
+            let next = chars.get(index + 1).copied();
+            if !previous.is_some_and(&is_digit) || !next.is_some_and(&is_digit) {
+                return None;
+            }
+        } else {
+            cleaned.push(ch);
+        }
+    }
+    Some(cleaned)
+}
+
+fn radix_digits_to_decimal(digits: &str, radix: u32) -> Option<String> {
+    let mut decimal_digits = vec![0u8];
+    for ch in digits.chars() {
+        let mut carry = ch.to_digit(radix)?;
+        for digit in &mut decimal_digits {
+            let value = u32::from(*digit).checked_mul(radix)?.checked_add(carry)?;
+            *digit = u8::try_from(value % 10).ok()?;
+            carry = value / 10;
+        }
+        while carry != 0 {
+            decimal_digits.push(u8::try_from(carry % 10).ok()?);
+            carry /= 10;
+        }
+    }
+    while decimal_digits.len() > 1 && decimal_digits.last() == Some(&0) {
+        decimal_digits.pop();
+    }
+    Some(
+        decimal_digits
+            .iter()
+            .rev()
+            .map(|digit| char::from(b'0' + *digit))
+            .collect(),
+    )
+}
+
+fn prefixed_integer_literal(source: &str) -> Option<(u32, &str)> {
+    source
+        .strip_prefix("0x")
+        .or_else(|| source.strip_prefix("0X"))
+        .map(|digits| (16, digits))
+        .or_else(|| {
+            source
+                .strip_prefix("0o")
+                .or_else(|| source.strip_prefix("0O"))
+                .map(|digits| (8, digits))
+        })
+        .or_else(|| {
+            source
+                .strip_prefix("0b")
+                .or_else(|| source.strip_prefix("0B"))
+                .map(|digits| (2, digits))
+        })
+}
+
+fn parse_bigint_binding_property_key(source: &str) -> Option<String> {
+    let body = source.strip_suffix('n')?;
+    let (radix, digits, prefixed) = match prefixed_integer_literal(body) {
+        Some((radix, digits)) => (radix, digits, true),
+        None => (10, body, false),
+    };
+    let cleaned = strip_valid_numeric_separators(digits, |ch| ch.is_digit(radix))?;
+    if cleaned.is_empty() || !cleaned.chars().all(|ch| ch.is_digit(radix)) {
+        return None;
+    }
+    if !prefixed && cleaned.len() > 1 && cleaned.starts_with('0') {
+        return None;
+    }
+    if radix == 10 {
+        return Some(cleaned);
+    }
+    radix_digits_to_decimal(&cleaned, radix)
+}
+
+fn parse_numeric_binding_property_key(source: &str) -> Option<Expression> {
+    if matches!(source.as_bytes().first(), Some(b'+' | b'-')) {
+        return None;
+    }
+
+    if let Some((radix, digits)) = prefixed_integer_literal(source) {
+        let cleaned = strip_valid_numeric_separators(digits, |ch| ch.is_digit(radix))?;
+        if cleaned.is_empty() || !cleaned.chars().all(|ch| ch.is_digit(radix)) {
+            return None;
+        }
+        let decimal = radix_digits_to_decimal(&cleaned, radix)?;
+        return decimal
+            .parse::<f64>()
+            .ok()
+            .map(binding_numeric_value_expression);
+    }
+
+    let cleaned = strip_valid_numeric_separators(source, |ch| ch.is_ascii_digit())?;
+    if cleaned.is_empty()
+        || !cleaned
+            .chars()
+            .all(|ch| ch.is_ascii_digit() || matches!(ch, '.' | 'e' | 'E' | '+' | '-'))
+    {
+        return None;
+    }
+    for (index, ch) in cleaned.char_indices() {
+        if matches!(ch, '+' | '-')
+            && (index == 0 || !matches!(cleaned.as_bytes().get(index - 1), Some(b'e' | b'E')))
+        {
+            return None;
+        }
+    }
+    let significand_end = cleaned.find(['e', 'E']).unwrap_or(cleaned.len());
+    let significand = &cleaned[..significand_end];
+    if significand.starts_with('0')
+        && significand
+            .as_bytes()
+            .get(1)
+            .is_some_and(u8::is_ascii_digit)
+    {
+        // Annex-B legacy octal spellings are not part of the canonical ES2020
+        // numeric-literal path. Fail closed instead of silently treating `012`
+        // as decimal 12 (its sloppy-script property key would be `10`).
+        return None;
+    }
+    cleaned
+        .parse::<f64>()
+        .ok()
+        .map(binding_numeric_value_expression)
+}
+
+fn binding_numeric_value_expression(value: f64) -> Expression {
+    const MAX_EXACT_INTEGER: f64 = 9_007_199_254_740_992.0;
+    if value.is_finite() && (0.0..=MAX_EXACT_INTEGER).contains(&value) && value.fract() == 0.0 {
+        Expression::NumericLiteral(value as i64)
+    } else {
+        Expression::StringLiteral(js_number_property_key(value))
+    }
+}
+
+/// ECMAScript Number::toString formatting for a property key.
+fn js_number_property_key(value: f64) -> String {
+    let mut buffer = ryu_js::Buffer::new();
+    buffer.format(value).to_string()
+}
+
+fn decode_binding_unicode_escape_value(
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+) -> Option<u32> {
+    if chars.peek() == Some(&'{') {
+        chars.next();
+        let mut code = 0u32;
+        let mut digits = 0usize;
+        loop {
+            match chars.next()? {
+                '}' => break,
+                ch => {
+                    code = code.checked_mul(16)?.checked_add(ch.to_digit(16)?)?;
+                    if code > 0x0010_FFFF {
+                        return None;
+                    }
+                    digits = digits.checked_add(1)?;
+                }
+            }
+        }
+        (digits != 0).then_some(code)
+    } else {
+        let mut code = 0u32;
+        for _ in 0..4 {
+            code = code
+                .checked_mul(16)?
+                .checked_add(chars.next()?.to_digit(16)?)?;
+        }
+        Some(code)
+    }
+}
+
+fn parse_binding_property_string_literal(source: &str) -> Option<String> {
+    if source.len() < 2 {
+        return None;
+    }
+    let delimiter = source.chars().next()?;
+    if !matches!(delimiter, '\'' | '"') || source.chars().next_back()? != delimiter {
+        return None;
+    }
+    unescape_binding_property_string(&source[1..source.len() - 1], delimiter)
+}
+
+fn unescape_binding_property_string(inner: &str, delimiter: char) -> Option<String> {
+    if !inner.contains('\\') {
+        return (!inner.contains(delimiter) && !inner.contains('\n') && !inner.contains('\r'))
+            .then(|| inner.to_string());
+    }
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            if ch == delimiter || matches!(ch, '\n' | '\r') {
+                return None;
+            }
+            out.push(ch);
+            continue;
+        }
+        match chars.next()? {
+            'n' => out.push('\n'),
+            't' => out.push('\t'),
+            'r' => out.push('\r'),
+            'b' => out.push('\u{0008}'),
+            'f' => out.push('\u{000C}'),
+            'v' => out.push('\u{000B}'),
+            '0' => {
+                if chars.peek().is_some_and(|ch| ch.is_ascii_digit()) {
+                    return None;
+                }
+                out.push('\0');
+            }
+            '1'..='9' => return None,
+            '\\' => out.push('\\'),
+            '\'' => out.push('\''),
+            '"' => out.push('"'),
+            '`' => out.push('`'),
+            '\n' => {}
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+            }
+            '\u{2028}' | '\u{2029}' => {}
+            'x' => {
+                let high = chars.next()?.to_digit(16)?;
+                let low = chars.next()?.to_digit(16)?;
+                out.push(char::from_u32(high * 16 + low)?);
+            }
+            'u' => {
+                let first = decode_binding_unicode_escape_value(&mut chars)?;
+                let decoded = if (0xD800..=0xDBFF).contains(&first) {
+                    if chars.next()? != '\\' || chars.next()? != 'u' {
+                        return None;
+                    }
+                    let low = decode_binding_unicode_escape_value(&mut chars)?;
+                    if !(0xDC00..=0xDFFF).contains(&low) {
+                        return None;
+                    }
+                    char::from_u32(0x10000 + ((first - 0xD800) << 10) + (low - 0xDC00))?
+                } else {
+                    char::from_u32(first)?
+                };
+                out.push(decoded);
+            }
+            other => out.push(other),
+        }
+    }
+    Some(out)
+}
+
+fn decode_binding_property_identifier_escapes(source: &str) -> Option<String> {
+    let mut out = String::with_capacity(source.len());
+    let mut chars = source.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+        if chars.next()? != 'u' {
+            return None;
+        }
+        out.push(char::from_u32(decode_binding_unicode_escape_value(
+            &mut chars,
+        )?)?);
+    }
+    Some(out)
 }
 
 /// Find `:` at the top level of a pattern element.
@@ -9333,6 +9694,125 @@ mod tests {
     }
 
     #[test]
+    fn object_binding_property_keys_are_semantic_ast_values_bd_h4esx() {
+        let parser = CanonicalEs2020Parser;
+        let tree = parser
+            .parse(
+                r#"var {'v\x61lue': quoted, \u0076alue: escaped_identifier, 0x10: hex, 1e3: exponent, 9007199254740993: rounded_number, 0x10n: radix_bigint, 9007199254740993n: precise_bigint, π: unicode_name, \u03C0: escaped_unicode_name} = source"#,
+                ParseGoal::Script,
+            )
+            .expect("static property names should parse to semantic key values");
+        let Statement::VariableDeclaration(declaration) = &tree.body[0] else {
+            panic!("expected variable declaration");
+        };
+        let BindingPattern::ObjectPattern(properties) = &declaration.declarations[0].pattern else {
+            panic!("expected object binding pattern");
+        };
+        assert_eq!(properties.len(), 9);
+        assert_eq!(
+            properties[0].key,
+            Expression::StringLiteral("value".to_string())
+        );
+        assert_eq!(
+            properties[1].key,
+            Expression::Identifier("value".to_string())
+        );
+        assert_eq!(properties[2].key, Expression::NumericLiteral(16));
+        assert_eq!(properties[3].key, Expression::NumericLiteral(1000));
+        assert_eq!(
+            properties[4].key,
+            Expression::NumericLiteral(9_007_199_254_740_992)
+        );
+        assert_eq!(
+            properties[5].key,
+            Expression::StringLiteral("16".to_string())
+        );
+        assert_eq!(
+            properties[6].key,
+            Expression::StringLiteral("9007199254740993".to_string())
+        );
+        assert_eq!(properties[7].key, Expression::Identifier("π".to_string()));
+        assert_eq!(properties[8].key, Expression::Identifier("π".to_string()));
+    }
+
+    #[test]
+    fn object_binding_numeric_keys_use_ecmascript_number_spelling_bd_h4esx() {
+        for (value, expected) in [
+            (1e-6, "0.000001"),
+            (1e-7, "1e-7"),
+            (1e20, "100000000000000000000"),
+            (1e21, "1e+21"),
+            (f64::from_bits(1), "5e-324"),
+            (667_082_108_456_853.2, "667082108456853.2"),
+        ] {
+            assert_eq!(js_number_property_key(value), expected);
+        }
+        assert_eq!(
+            js_number_property_key(
+                "9007199254740993"
+                    .parse::<f64>()
+                    .expect("numeric boundary should parse")
+            ),
+            "9007199254740992"
+        );
+        assert_eq!(
+            js_number_property_key(
+                "18446744073709551615"
+                    .parse::<f64>()
+                    .expect("wide numeric boundary should parse")
+            ),
+            "18446744073709552000"
+        );
+    }
+
+    #[test]
+    fn object_binding_identifier_names_use_unicode_identifier_classes_bd_h4esx() {
+        let parser = CanonicalEs2020Parser;
+        parser
+            .parse(r"var {a\u203F: connector} = source", ParseGoal::Script)
+            .expect("connector punctuation is valid after an identifier start");
+        parser
+            .parse(
+                r"var {\u037A: id_start, a\u037A: id_continue} = source",
+                ParseGoal::Script,
+            )
+            .expect("ECMAScript uses Unicode ID classes rather than XID classes");
+
+        for source in [
+            "var {a½: value} = source",
+            "var {\u{0345}bad: value} = source",
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("invalid Unicode identifier class must be rejected");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
+            assert!(error.message.contains("object-binding property key"));
+        }
+    }
+
+    #[test]
+    fn malformed_static_object_binding_keys_fail_closed_bd_h4esx() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "var {0_1: value} = source",
+            "var {a-b: value} = source",
+            r"var {\u0030bad: value} = source",
+            r"var {'\01': value} = source",
+            r"var {'\1': value} = source",
+            r#"var {"a""b": value} = source"#,
+            r"var {'a''b': value} = source",
+            "var {'a\nb': value} = source",
+            "var {'a\rb': value} = source",
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("malformed static property key must be rejected");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
+            assert!(error.message.contains("object-binding property key"));
+        }
+    }
+
+    #[test]
     fn empty_object_destructuring_accepted() {
         let parser = CanonicalEs2020Parser;
         let tree = parser
@@ -12481,6 +12961,29 @@ mod tests {
     fn merge_logical_lines_simple() {
         let lines = merge_logical_lines("a;\nb;");
         assert_eq!(lines.len(), 2);
+    }
+
+    #[test]
+    fn merge_logical_lines_cooks_string_line_continuations_bd_h4esx() {
+        for source in [
+            "var {'a\\\nb': value} = source;",
+            "var {'a\\\r\nb': value} = source;",
+        ] {
+            let lines = merge_logical_lines(source);
+            assert_eq!(lines.len(), 1);
+            assert_eq!(lines[0].text, "var {'ab': value} = source;");
+        }
+
+        let lines = merge_logical_lines("var {'a\nb': value} = source;");
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].text.contains("'a\nb'"));
+    }
+
+    #[test]
+    fn merge_logical_lines_cooks_template_line_continuation_bd_h4esx() {
+        let lines = merge_logical_lines("let value = `a\\\nb`;");
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "let value = `ab`;");
     }
 
     #[test]

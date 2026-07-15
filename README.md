@@ -2491,18 +2491,18 @@ Reflexive claim-evidence integrity (`FE-CLAIM-025`) means the claim-to-proof dis
 The differential oracle runs the same JavaScript program through multiple backends — the native `franken-engine` lane, the extracted `franken-core` lane, and (when present) reference runtimes Node and Bun — canonicalizes each backend's observable result, and classifies any disagreement. It is both a correctness oracle (the cross-runtime lockstep comparison behind `FE-CLAIM-022`) and a free internal bug-finder (the `franken-engine` ↔ `franken-core` twin). The operator-facing surface is `frankenctl oracle`:
 
 ```bash
-# Run one case across the two hermetic in-process lanes; emit a content-addressed bundle.
+# Run one case across the two hermetic in-process lanes; ./out must not exist.
 frankenctl oracle run ./case.js --engines franken,core --bundle ./out --json
 
 # Re-verify the preserved bundle byte-identically (integrity + semantic verdict).
 frankenctl oracle report ./out --json
 ```
 
-A bundle directory carries `manifest.json` (sha256-indexed artifacts + `bundle_id`), `report.json` (per-backend receipts, canonicalization report, divergence taxonomy), and `repro.lock` (the re-run recipe + determinism contract). Exit codes: `0` consensus, `3` divergence, `4` insufficient-data/degraded, `2` io.
+A bundle directory carries `manifest.json` (sha256-indexed artifacts + `bundle_id`), `report.json` (per-backend receipts, canonicalization report, divergence taxonomy), and `repro.lock` (the re-run recipe + determinism contract). A degraded run also has a manifest-addressed `degraded_receipt.json`. Bundle emission is fresh-directory-only: the trusted (or sticky-protected) parent must exist and the requested bundle path must not. The writer pins that parent, creates the child directory as `0700`, creates every artifact with exclusive no-follow semantics, and publishes `manifest.json` last. Exit codes: `0` consensus, `3` divergence, `4` insufficient-data/degraded, `2` io.
 
-**Reading a divergence.** Every classified divergence carries one of seven taxonomy classes — `parser`, `lowering`, `runtime`, `module_resolution`, `hostcall_policy`, `intentional_security_divergence` (a deliberate FrankenEngine security boundary; carries a `waiver_id` and is not a defect), and `reference_runtime_bug` (the FrankenEngine lanes agree and the reference runtime is the outlier). The full taxonomy, bundle anatomy, and triage steps are in the operator runbook [`docs/DW_DIFFERENTIAL_ORACLE_V1.md`](./docs/DW_DIFFERENTIAL_ORACLE_V1.md).
+**Reading a divergence.** Every classified divergence carries one of seven taxonomy classes — `parser`, `lowering`, `runtime`, `module_resolution`, `hostcall_policy`, `intentional_security_divergence` (a deliberate FrankenEngine security boundary authorized from an opaque live candidate by an exact operator-supplied `waiver_id`), and `reference_runtime_bug` (reserved for separately authenticated reference-runtime attribution). Taxonomy v2 treats values/stdout/stderr and backend group shape as evidence only: specialized classes come from private typed runner diagnostics, ordinary output differences remain `runtime`, and the default runner cannot mint waivers. Reloaded bundles are conservatively reclassified from receipts because content hashes prove integrity, not taxonomy authority; stored classes and waiver ids are audit data only. The full taxonomy, bundle anatomy, and triage steps are in the operator runbook [`docs/DW_DIFFERENTIAL_ORACLE_V1.md`](./docs/DW_DIFFERENTIAL_ORACLE_V1.md).
 
-**Degraded path.** Requesting a reference runtime that is not installed does not silently drop the lane and assert consensus: the run is marked degraded, exits non-zero (`4`), and writes a `degraded_receipt.json` (`FE-REPRO-0007`). "Denominator unavailable" is recorded as a distinct evidence state from "we know it diverges".
+**Degraded path.** Requesting a reference runtime that is not installed does not silently drop the lane and assert consensus: the run is marked degraded, exits non-zero (`4`), and writes a `degraded_receipt.json` (`FE-REPRO-0007`) whose hash is required in the manifest. "Denominator unavailable" is recorded as a distinct evidence state from "we know it diverges".
 
 **Reproducing a result.** `repro.lock` pins the *semantic verdict* over canonical structured values and exception classes — not wall-clock timing (so `allow_wall_clock=true`). Re-run the recorded command and confirm `frankenctl oracle report` reports the same verdict.
 

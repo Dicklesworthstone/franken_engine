@@ -9,7 +9,7 @@
 #     minimized+preserved defects, degraded fail-closed receipt, FE-CLAIM-010 posture),
 #   - the operator-facing `frankenctl oracle run|report` CLI integration,
 #   - the differential-oracle integration + the E2.T5 divergence-preserving minimizer,
-#   - the 26 in-module unit tests (canonicalization, divergence taxonomy, minimizer,
+#   - the in-module unit tests (canonicalization, divergence taxonomy, minimizer,
 #     engine<->core internal twin).
 #
 # In ci/test mode it ALSO runs a small fixed corpus through the actual `frankenctl

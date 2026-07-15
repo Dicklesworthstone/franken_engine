@@ -93,7 +93,7 @@ fn frankenctl_differential_oracle_run_emits_four_backend_receipts() {
     );
     assert_eq!(
         stdout_report["divergence_taxonomy"]["schema_version"].as_str(),
-        Some("franken-engine.differential-oracle.divergence-taxonomy.v1")
+        Some("franken-engine.differential-oracle.divergence-taxonomy.v2")
     );
     assert!(
         stdout_report["divergence_taxonomy"]["findings"]

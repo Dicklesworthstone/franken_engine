@@ -6,6 +6,8 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
+#[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -8725,6 +8727,59 @@ fn oracle_canonical_json_bytes(value: &serde_json::Value) -> String {
     text
 }
 
+fn oracle_repro_lock_value(report: &DifferentialOracleReport) -> serde_json::Value {
+    let selected = report
+        .backends
+        .iter()
+        .map(|receipt| receipt.backend.to_string())
+        .collect::<Vec<_>>();
+    let verdict_label = oracle_verdict_label(report.canonicalization.semantic_verdict);
+    serde_json::json!({
+        "schema_version": ORACLE_REPRO_LOCK_SCHEMA_VERSION,
+        "case_id": report.case_id,
+        "source_sha256": format!("sha256:{}", report.source_sha256),
+        "selected_backends": selected,
+        "commands": [
+            format!(
+                "frankenctl oracle run <input.js> --engines {} --bundle <dir>",
+                oracle_engines_csv(report)
+            ),
+        ],
+        "determinism": {
+            "allow_network": false,
+            "allow_randomness": false,
+            "allow_wall_clock": true,
+            "note": "per-backend wall-clock timing is non-deterministic; the reproducible assertion is the semantic verdict over canonical structured values and exception classes, not raw stdout timing",
+            "reproducible_assertion": "semantic_verdict",
+        },
+        "expected_outputs": [
+            {
+                "kind": "semantic_verdict",
+                "path": "report.json#canonicalization.semantic_verdict",
+                "value": verdict_label,
+            },
+        ],
+        "verification": {
+            "command": "frankenctl oracle report <dir>",
+            "expected_verdict": verdict_label,
+        },
+    })
+}
+
+fn oracle_degraded_receipt_value(report: &DifferentialOracleReport) -> Option<serde_json::Value> {
+    let degradations = oracle_external_degradations(report);
+    (!degradations.is_empty()).then(|| {
+        serde_json::json!({
+            "schema_version": ORACLE_RUN_DEGRADED_RECEIPT_SCHEMA_VERSION,
+            "error_code": "FE-REPRO-0007",
+            "verdict": "degraded",
+            "case_id": report.case_id,
+            "reasons": degradations,
+            "policy": "Degraded oracle runs do not assert cross-runtime consensus: a requested reference runtime (Node/Bun) was unavailable, so the engine output is unverified against it.",
+        })
+    })
+}
+
 fn execute_oracle(args: OracleArgs) -> Result<i32, String> {
     match args.mode {
         OracleMode::Run(args) => execute_oracle_run(args),
@@ -8813,15 +8868,18 @@ fn emit_oracle_run_bundle(
     dir: &Path,
     report: &DifferentialOracleReport,
 ) -> Result<OracleBundleSummary, String> {
-    fs::create_dir_all(dir)
-        .map_err(|error| format!("failed to create bundle dir `{}`: {error}", dir.display()))?;
+    let dir_handle = create_oracle_bundle_dir(dir)?;
 
     let report_value = serde_json::to_value(report)
         .map_err(|error| format!("failed to encode oracle report: {error}"))?;
     let report_bytes = oracle_canonical_json_bytes(&report_value);
     let report_sha = sha256_prefixed(report_bytes.as_bytes());
-    fs::write(dir.join("report.json"), report_bytes.as_bytes())
-        .map_err(|error| format!("failed to write report.json: {error}"))?;
+    write_oracle_bundle_file(
+        &dir_handle,
+        "report.json",
+        "report",
+        report_bytes.as_bytes(),
+    )?;
 
     let selected: Vec<String> = report
         .backends
@@ -8830,43 +8888,36 @@ fn emit_oracle_run_bundle(
         .collect();
     let verdict_label = oracle_verdict_label(report.canonicalization.semantic_verdict);
 
-    let lock_value = serde_json::json!({
-        "schema_version": ORACLE_REPRO_LOCK_SCHEMA_VERSION,
-        "case_id": report.case_id,
-        "source_sha256": format!("sha256:{}", report.source_sha256),
-        "selected_backends": selected,
-        "commands": [
-            format!(
-                "frankenctl oracle run <input.js> --engines {} --bundle <dir>",
-                oracle_engines_csv(report)
-            ),
-        ],
-        "determinism": {
-            "allow_network": false,
-            "allow_randomness": false,
-            "allow_wall_clock": true,
-            "note": "per-backend wall-clock timing is non-deterministic; the reproducible assertion is the semantic verdict over canonical structured values and exception classes, not raw stdout timing",
-            "reproducible_assertion": "semantic_verdict",
-        },
-        "expected_outputs": [
-            {
-                "kind": "semantic_verdict",
-                "path": "report.json#canonicalization.semantic_verdict",
-                "value": verdict_label,
-            },
-        ],
-        "verification": {
-            "command": "frankenctl oracle report <dir>",
-            "expected_verdict": verdict_label,
-        },
-    });
+    let lock_value = oracle_repro_lock_value(report);
     let lock_bytes = oracle_canonical_json_bytes(&lock_value);
     let lock_sha = sha256_prefixed(lock_bytes.as_bytes());
-    fs::write(dir.join("repro.lock"), lock_bytes.as_bytes())
-        .map_err(|error| format!("failed to write repro.lock: {error}"))?;
+    write_oracle_bundle_file(
+        &dir_handle,
+        "repro.lock",
+        "reproduction lock",
+        lock_bytes.as_bytes(),
+    )?;
 
-    let degradations = oracle_external_degradations(report);
-    let degraded = !degradations.is_empty();
+    let degraded_receipt_value = oracle_degraded_receipt_value(report);
+    let degraded = degraded_receipt_value.is_some();
+    let degraded_receipt_bytes = degraded_receipt_value
+        .as_ref()
+        .map(oracle_canonical_json_bytes);
+    let mut artifacts = serde_json::json!({
+        "report": { "path": "report.json", "sha256": report_sha },
+        "lock": { "path": "repro.lock", "sha256": lock_sha },
+    });
+    if let (Some(artifacts), Some(receipt_bytes)) =
+        (artifacts.as_object_mut(), degraded_receipt_bytes.as_ref())
+    {
+        artifacts.insert(
+            "degraded_receipt".to_string(),
+            serde_json::json!({
+                "path": "degraded_receipt.json",
+                "sha256": sha256_prefixed(receipt_bytes.as_bytes()),
+            }),
+        );
+    }
 
     let mut manifest = serde_json::json!({
         "schema_version": ORACLE_RUN_BUNDLE_SCHEMA_VERSION,
@@ -8881,10 +8932,7 @@ fn emit_oracle_run_bundle(
             "arch": report.host.arch,
             "franken_engine_version": report.host.franken_engine_version,
         },
-        "artifacts": {
-            "report": { "path": "report.json", "sha256": report_sha },
-            "lock": { "path": "repro.lock", "sha256": lock_sha },
-        },
+        "artifacts": artifacts,
         "validation": {
             "command": "frankenctl oracle report <bundle-dir>",
             "exit_codes": "0 consensus | 3 divergence | 4 insufficient-data/degraded",
@@ -8912,22 +8960,36 @@ fn emit_oracle_run_bundle(
         );
     }
     let manifest_bytes = oracle_canonical_json_bytes(&manifest);
-    fs::write(dir.join("manifest.json"), manifest_bytes.as_bytes())
-        .map_err(|error| format!("failed to write manifest.json: {error}"))?;
 
-    if degraded {
-        let receipt = serde_json::json!({
-            "schema_version": ORACLE_RUN_DEGRADED_RECEIPT_SCHEMA_VERSION,
-            "error_code": "FE-REPRO-0007",
-            "verdict": "degraded",
-            "case_id": report.case_id,
-            "reasons": degradations,
-            "policy": "Degraded oracle runs do not assert cross-runtime consensus: a requested reference runtime (Node/Bun) was unavailable, so the engine output is unverified against it.",
-        });
-        let receipt_bytes = oracle_canonical_json_bytes(&receipt);
-        fs::write(dir.join("degraded_receipt.json"), receipt_bytes.as_bytes())
-            .map_err(|error| format!("failed to write degraded_receipt.json: {error}"))?;
+    if let Some(receipt_bytes) = degraded_receipt_bytes.as_ref() {
+        write_oracle_bundle_file(
+            &dir_handle,
+            "degraded_receipt.json",
+            "degraded receipt",
+            receipt_bytes.as_bytes(),
+        )?;
     }
+    dir_handle.sync_all().map_err(|error| {
+        format!(
+            "failed to sync bundle artifacts in `{}`: {error}",
+            dir.display()
+        )
+    })?;
+
+    // The manifest is the publication marker. Emit it only after every indexed
+    // artifact was created, written, and synced through the pinned directory.
+    write_oracle_bundle_file(
+        &dir_handle,
+        "manifest.json",
+        "manifest",
+        manifest_bytes.as_bytes(),
+    )?;
+    dir_handle.sync_all().map_err(|error| {
+        format!(
+            "failed to publish bundle manifest in `{}`: {error}",
+            dir.display()
+        )
+    })?;
 
     Ok(OracleBundleSummary {
         dir: dir.to_path_buf(),
@@ -9049,6 +9111,7 @@ fn resolve_oracle_bundle(path: &Path) -> Result<(PathBuf, PathBuf), String> {
         if path.file_name().and_then(|name| name.to_str()) == Some("manifest.json") {
             let dir = path
                 .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| PathBuf::from("."));
             return Ok((dir, path.to_path_buf()));
@@ -9061,22 +9124,381 @@ fn resolve_oracle_bundle(path: &Path) -> Result<(PathBuf, PathBuf), String> {
     Err(format!("bundle path `{}` does not exist", path.display()))
 }
 
-fn execute_oracle_report(args: OracleReportArgs) -> Result<i32, String> {
-    let (dir, manifest_path) = resolve_oracle_bundle(&args.bundle)?;
+fn is_canonical_sha256(value: &str) -> bool {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        return false;
+    };
+    is_canonical_sha256_hex(hex)
+}
 
-    let manifest: serde_json::Value = load_json_file(&manifest_path)?;
-    let manifest_obj = manifest.as_object().ok_or_else(|| {
+fn is_canonical_sha256_hex(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+#[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+fn create_oracle_bundle_dir(dir: &Path) -> Result<fs::File, String> {
+    use rustix::fs::{Mode, OFlags, mkdirat, open, openat};
+
+    let name = dir.file_name().ok_or_else(|| {
         format!(
-            "manifest `{}` is not a JSON object",
-            manifest_path.display()
+            "oracle bundle output must name a new child directory (`{}`)",
+            dir.display()
         )
     })?;
+    let parent = dir
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let parent_fd = open(
+        parent,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| {
+        format!(
+            "failed to securely open oracle bundle parent `{}`: {error}",
+            parent.display()
+        )
+    })?;
+    mkdirat(&parent_fd, name, Mode::RWXU).map_err(|error| {
+        format!(
+            "oracle bundle output must be a new directory under an existing trusted parent (`{}`): {error}",
+            dir.display()
+        )
+    })?;
+    let fd = openat(
+        &parent_fd,
+        name,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| {
+        format!(
+            "failed to securely pin new oracle bundle dir `{}`: {error}",
+            dir.display()
+        )
+    })?;
+    let file = fs::File::from(fd);
+    if !file
+        .metadata()
+        .map_err(|error| {
+            format!(
+                "failed to inspect new bundle dir `{}`: {error}",
+                dir.display()
+            )
+        })?
+        .is_dir()
+    {
+        return Err(format!(
+            "new bundle path `{}` is not a directory",
+            dir.display()
+        ));
+    }
+    Ok(file)
+}
 
-    // Integrity: recompute each referenced artifact's sha256 and compare.
-    let artifacts = manifest_obj
+#[cfg(not(all(unix, not(any(target_os = "redox", target_os = "espidf")))))]
+fn create_oracle_bundle_dir(dir: &Path) -> Result<fs::File, String> {
+    Err(format!(
+        "secure no-follow oracle bundle writes are unavailable on this platform: `{}`",
+        dir.display()
+    ))
+}
+
+#[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+fn write_oracle_bundle_file(
+    dir: &fs::File,
+    relative: &str,
+    label: &str,
+    bytes: &[u8],
+) -> Result<(), String> {
+    use rustix::fs::{Mode, OFlags, openat};
+
+    let fd = openat(
+        dir,
+        relative,
+        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::RUSR | Mode::WUSR,
+    )
+    .map_err(|error| format!("failed to securely create bundle {label} `{relative}`: {error}"))?;
+    let mut file = fs::File::from(fd);
+    file.write_all(bytes)
+        .map_err(|error| format!("failed to write bundle {label} `{relative}`: {error}"))?;
+    file.sync_all()
+        .map_err(|error| format!("failed to sync bundle {label} `{relative}`: {error}"))?;
+    Ok(())
+}
+
+#[cfg(not(all(unix, not(any(target_os = "redox", target_os = "espidf")))))]
+fn write_oracle_bundle_file(
+    _dir: &fs::File,
+    relative: &str,
+    label: &str,
+    _bytes: &[u8],
+) -> Result<(), String> {
+    Err(format!(
+        "secure no-follow oracle bundle writes are unavailable for {label} `{relative}` on this platform"
+    ))
+}
+
+#[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+fn open_oracle_bundle_dir(dir: &Path) -> Result<fs::File, String> {
+    use rustix::fs::{Mode, OFlags, open};
+
+    let fd = open(
+        dir,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| {
+        format!(
+            "failed to securely open bundle dir `{}`: {error}",
+            dir.display()
+        )
+    })?;
+    let file = fs::File::from(fd);
+    if !file
+        .metadata()
+        .map_err(|error| format!("failed to inspect bundle dir `{}`: {error}", dir.display()))?
+        .is_dir()
+    {
+        return Err(format!(
+            "bundle path `{}` is not a directory",
+            dir.display()
+        ));
+    }
+    Ok(file)
+}
+
+#[cfg(not(all(unix, not(any(target_os = "redox", target_os = "espidf")))))]
+fn open_oracle_bundle_dir(dir: &Path) -> Result<fs::File, String> {
+    Err(format!(
+        "secure no-follow oracle bundle reads are unavailable on this platform: `{}`",
+        dir.display()
+    ))
+}
+
+#[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+fn read_oracle_bundle_file(dir: &fs::File, relative: &str, label: &str) -> Result<Vec<u8>, String> {
+    use rustix::fs::{Mode, OFlags, openat};
+
+    let fd = openat(
+        dir,
+        relative,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+        Mode::empty(),
+    )
+    .map_err(|error| format!("failed to securely open bundle {label} `{relative}`: {error}"))?;
+    let mut file = fs::File::from(fd);
+    if !file
+        .metadata()
+        .map_err(|error| format!("failed to inspect bundle {label} `{relative}`: {error}"))?
+        .is_file()
+    {
+        return Err(format!("bundle {label} `{relative}` is not a regular file"));
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read bundle {label} `{relative}`: {error}"))?;
+    Ok(bytes)
+}
+
+#[cfg(not(all(unix, not(any(target_os = "redox", target_os = "espidf")))))]
+fn read_oracle_bundle_file(
+    _dir: &fs::File,
+    relative: &str,
+    label: &str,
+) -> Result<Vec<u8>, String> {
+    Err(format!(
+        "secure no-follow oracle bundle reads are unavailable for {label} `{relative}` on this platform"
+    ))
+}
+
+fn validate_oracle_bundle_manifest(
+    manifest: &serde_json::Map<String, serde_json::Value>,
+) -> Result<&serde_json::Map<String, serde_json::Value>, String> {
+    let schema_version = manifest
+        .get("schema_version")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "manifest is missing `schema_version`".to_string())?;
+    if schema_version != ORACLE_RUN_BUNDLE_SCHEMA_VERSION {
+        return Err(format!(
+            "unsupported oracle bundle schema `{schema_version}`"
+        ));
+    }
+    let bundle_id = manifest
+        .get("bundle_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "manifest is missing required `bundle_id`".to_string())?;
+    if !is_canonical_sha256(bundle_id) {
+        return Err("manifest `bundle_id` is not a sha256 content address".to_string());
+    }
+    let source_sha256 = manifest
+        .get("source_sha256")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "manifest is missing required `source_sha256`".to_string())?;
+    if !is_canonical_sha256(source_sha256) {
+        return Err("manifest `source_sha256` is not a canonical content address".to_string());
+    }
+
+    let artifacts = manifest
         .get("artifacts")
         .and_then(serde_json::Value::as_object)
         .ok_or_else(|| "manifest is missing the `artifacts` object".to_string())?;
+    let degraded = manifest
+        .get("degraded")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| "manifest is missing boolean `degraded`".to_string())?;
+    let required: &[(&str, &str)] = if degraded {
+        &[
+            ("report", "report.json"),
+            ("lock", "repro.lock"),
+            ("degraded_receipt", "degraded_receipt.json"),
+        ]
+    } else {
+        &[("report", "report.json"), ("lock", "repro.lock")]
+    };
+    if artifacts.len() != required.len() {
+        return Err(format!(
+            "manifest artifact set is not canonical for degraded={degraded}"
+        ));
+    }
+    for &(required, expected_path) in required {
+        let entry = artifacts
+            .get(required)
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| format!("manifest is missing required `{required}` artifact"))?;
+        let path = entry
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("artifact `{required}` is missing `path`"))?;
+        if path != expected_path {
+            return Err(format!(
+                "artifact `{required}` path `{path}` is not canonical `{expected_path}`"
+            ));
+        }
+        let sha256 = entry
+            .get("sha256")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("artifact `{required}` is missing `sha256`"))?;
+        if !is_canonical_sha256(sha256) {
+            return Err(format!(
+                "artifact `{required}` sha256 is not a canonical content address"
+            ));
+        }
+    }
+    Ok(artifacts)
+}
+
+fn validate_oracle_bundle_semantics(
+    manifest: &serde_json::Map<String, serde_json::Value>,
+    lock: &serde_json::Value,
+    degraded_receipt: Option<&serde_json::Value>,
+    report: &DifferentialOracleReport,
+) -> Result<(), String> {
+    if !is_canonical_sha256_hex(&report.source_sha256) {
+        return Err("report `source_sha256` is not canonical lowercase sha256 hex".to_string());
+    }
+    if report.backends.is_empty()
+        || report
+            .backends
+            .windows(2)
+            .any(|pair| pair[0].backend >= pair[1].backend)
+    {
+        return Err("report backends are empty, duplicated, or not in canonical order".to_string());
+    }
+    for receipt in &report.backends {
+        let stdout_sha256 = hex::encode(Sha256::digest(receipt.stdout.as_bytes()));
+        let stderr_sha256 = hex::encode(Sha256::digest(receipt.stderr.as_bytes()));
+        if receipt.stdout_sha256 != stdout_sha256 || receipt.stderr_sha256 != stderr_sha256 {
+            return Err(format!(
+                "report receipt stream hash mismatch for {}",
+                receipt.backend
+            ));
+        }
+    }
+
+    let selected_backends = report
+        .backends
+        .iter()
+        .map(|receipt| receipt.backend.to_string())
+        .collect::<Vec<_>>();
+    let verdict = oracle_verdict_label(report.canonicalization.semantic_verdict);
+    let expected_degraded_receipt = oracle_degraded_receipt_value(report);
+    let degraded = expected_degraded_receipt.is_some();
+    let source_sha256 = format!("sha256:{}", report.source_sha256);
+    let manifest_expectations = [
+        ("case_id", serde_json::json!(report.case_id)),
+        ("source_sha256", serde_json::json!(source_sha256)),
+        ("semantic_verdict", serde_json::json!(verdict)),
+        (
+            "divergence_count",
+            serde_json::json!(report.divergence_taxonomy.findings.len()),
+        ),
+        ("degraded", serde_json::json!(degraded)),
+        ("selected_backends", serde_json::json!(selected_backends)),
+        (
+            "generated_unix_ns",
+            serde_json::to_value(report.generated_unix_ns)
+                .map_err(|error| format!("failed to encode report timestamp: {error}"))?,
+        ),
+        (
+            "host",
+            serde_json::json!({
+                "os": report.host.os,
+                "arch": report.host.arch,
+                "franken_engine_version": report.host.franken_engine_version,
+            }),
+        ),
+        (
+            "validation",
+            serde_json::json!({
+                "command": "frankenctl oracle report <bundle-dir>",
+                "exit_codes": "0 consensus | 3 divergence | 4 insufficient-data/degraded",
+            }),
+        ),
+    ];
+    for (field, expected) in manifest_expectations {
+        if manifest.get(field) != Some(&expected) {
+            return Err(format!("manifest `{field}` does not match verified report"));
+        }
+    }
+
+    let lock_expected = oracle_repro_lock_value(report);
+    if lock != &lock_expected {
+        return Err("repro.lock does not match the verified report contract".to_string());
+    }
+
+    if degraded_receipt != expected_degraded_receipt.as_ref() {
+        return Err(
+            "degraded receipt presence or contents do not match the verified report".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn execute_oracle_report(args: OracleReportArgs) -> Result<i32, String> {
+    let (dir, _) = resolve_oracle_bundle(&args.bundle)?;
+    let dir_handle = open_oracle_bundle_dir(&dir)?;
+
+    let manifest_bytes = read_oracle_bundle_file(&dir_handle, "manifest.json", "manifest")?;
+    let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes)
+        .map_err(|error| format!("failed to parse bundle manifest.json: {error}"))?;
+    let manifest_obj = manifest.as_object().ok_or_else(|| {
+        format!(
+            "manifest `{}/manifest.json` is not a JSON object",
+            dir.display()
+        )
+    })?;
+
+    let artifacts = validate_oracle_bundle_manifest(manifest_obj)?;
+
+    // Open each exact schema-v1 artifact once through the pinned directory fd,
+    // retain its bytes, and use those same bytes for hashing and parsing.
+    let mut artifact_bytes = BTreeMap::new();
     for (label, entry) in artifacts {
         let rel = entry
             .get("path")
@@ -9086,39 +9508,52 @@ fn execute_oracle_report(args: OracleReportArgs) -> Result<i32, String> {
             .get("sha256")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| format!("artifact `{label}` is missing a `sha256`"))?;
-        let bytes = fs::read(dir.join(rel))
-            .map_err(|error| format!("failed to read bundle artifact `{rel}`: {error}"))?;
+        let bytes = read_oracle_bundle_file(&dir_handle, rel, label)?;
         let actual = sha256_prefixed(&bytes);
         if actual != expected {
             return Err(format!(
                 "bundle integrity failure: `{rel}` sha256 {actual} != manifest {expected}"
             ));
         }
+        artifact_bytes.insert(label.as_str(), bytes);
     }
 
     // Integrity: recompute the manifest's own content address.
-    if let Some(expected_id) = manifest_obj
+    let expected_id = manifest_obj
         .get("bundle_id")
         .and_then(serde_json::Value::as_str)
-    {
-        let mut preimage = manifest.clone();
-        if let Some(object) = preimage.as_object_mut() {
-            object.remove("bundle_id");
-        }
-        let actual_id = sha256_prefixed(oracle_canonical_json_bytes(&preimage).as_bytes());
-        if actual_id != expected_id {
-            return Err(format!(
-                "bundle integrity failure: recomputed bundle_id {actual_id} != manifest {expected_id}"
-            ));
-        }
+        .ok_or_else(|| "manifest is missing required `bundle_id`".to_string())?;
+    let mut preimage = manifest.clone();
+    if let Some(object) = preimage.as_object_mut() {
+        object.remove("bundle_id");
+    }
+    let actual_id = sha256_prefixed(oracle_canonical_json_bytes(&preimage).as_bytes());
+    if actual_id != expected_id {
+        return Err(format!(
+            "bundle integrity failure: recomputed bundle_id {actual_id} != manifest {expected_id}"
+        ));
     }
 
-    let report_rel = artifacts
-        .get("report")
-        .and_then(|entry| entry.get("path"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("report.json");
-    let report: DifferentialOracleReport = load_json_file(&dir.join(report_rel))?;
+    let report: DifferentialOracleReport = serde_json::from_slice(
+        artifact_bytes
+            .get("report")
+            .ok_or_else(|| "verified report bytes are missing".to_string())?,
+    )
+    .map_err(|error| format!("failed to parse verified report.json: {error}"))?;
+    let lock: serde_json::Value = serde_json::from_slice(
+        artifact_bytes
+            .get("lock")
+            .ok_or_else(|| "verified repro.lock bytes are missing".to_string())?,
+    )
+    .map_err(|error| format!("failed to parse verified repro.lock: {error}"))?;
+    let degraded_receipt = artifact_bytes
+        .get("degraded_receipt")
+        .map(|bytes| {
+            serde_json::from_slice::<serde_json::Value>(bytes)
+                .map_err(|error| format!("failed to parse verified degraded receipt: {error}"))
+        })
+        .transpose()?;
+    validate_oracle_bundle_semantics(manifest_obj, &lock, degraded_receipt.as_ref(), &report)?;
 
     let degradations = oracle_external_degradations(&report);
     let degraded = !degradations.is_empty();
@@ -9135,6 +9570,7 @@ fn execute_oracle_report(args: OracleReportArgs) -> Result<i32, String> {
                 "bundle_dir": dir.display().to_string(),
                 "bundle_id": bundle_id,
                 "integrity": "verified",
+                "taxonomy_provenance": "recomputed_from_receipts_without_live_authority",
                 "case_id": report.case_id,
                 "semantic_verdict": oracle_verdict_label(report.canonicalization.semantic_verdict),
                 "divergence_count": report.divergence_taxonomy.findings.len(),
@@ -9150,6 +9586,7 @@ fn execute_oracle_report(args: OracleReportArgs) -> Result<i32, String> {
             let mut lines = vec![
                 format!("oracle bundle: {}", dir.display()),
                 "  integrity: verified (sha256 artifacts + bundle_id)".to_string(),
+                "  taxonomy: recomputed from receipts; stored classes and waivers are non-authoritative".to_string(),
             ];
             lines.push(render_oracle_run_human(&report, None, degraded, exit_code));
             println!("{}", lines.join("\n"));
@@ -11293,7 +11730,8 @@ fn oracle_usage() -> String {
         "",
         "behavior:",
         "  run: executes one JS input across the selected engines, classifies any cross-runtime",
-        "       divergence, and (with --bundle) writes a content-addressed bundle that",
+        "       divergence, and (with --bundle) writes a content-addressed bundle into a new",
+        "       directory (a trusted/sticky parent must exist; the bundle path must not) that",
         "       `oracle report` can re-render and integrity-check.",
         "  report: validates a bundle's sha256 artifact set and bundle_id, then renders the",
         "          recorded backends, verdict, and any divergences.",
@@ -11319,6 +11757,7 @@ fn oracle_run_usage() -> String {
         "             only the selected engines are executed and compared.",
         "  --bundle   write a content-addressed bundle (manifest.json + report.json + repro.lock,",
         "             plus degraded_receipt.json when a reference runtime is unavailable).",
+        "             a trusted/sticky parent must exist; the bundle path must not; existing paths are refused.",
         "  --node-bin / --bun-bin  override the external binaries; otherwise $NODE / $BUN, then",
         "             `node` / `bun` on PATH (point --node-bin at genuine Node where `node` is a shim).",
         "  --engine-budget  raise the in-process engine instruction budget for long programs.",
@@ -14241,5 +14680,272 @@ mod tests {
         assert!(result.is_err());
         let error = result.expect_err("operation should return an error");
         assert!(error.contains("runtime diagnostics requires --input <file>"));
+    }
+
+    #[test]
+    fn oracle_report_manifest_requires_content_addressed_report_and_lock() {
+        let valid = serde_json::json!({
+            "schema_version": ORACLE_RUN_BUNDLE_SCHEMA_VERSION,
+            "bundle_id": format!("sha256:{}", "a".repeat(64)),
+            "source_sha256": format!("sha256:{}", "d".repeat(64)),
+            "degraded": false,
+            "artifacts": {
+                "report": {"path": "report.json", "sha256": format!("sha256:{}", "b".repeat(64))},
+                "lock": {"path": "repro.lock", "sha256": format!("sha256:{}", "c".repeat(64))},
+            },
+        });
+        assert!(validate_oracle_bundle_manifest(valid.as_object().expect("object")).is_ok());
+
+        let mut missing_id = valid.clone();
+        missing_id
+            .as_object_mut()
+            .expect("object")
+            .remove("bundle_id");
+        assert!(validate_oracle_bundle_manifest(missing_id.as_object().expect("object")).is_err());
+
+        let mut missing_report = valid;
+        missing_report["artifacts"]
+            .as_object_mut()
+            .expect("artifacts object")
+            .remove("report");
+        assert!(
+            validate_oracle_bundle_manifest(missing_report.as_object().expect("object")).is_err()
+        );
+    }
+
+    #[test]
+    fn oracle_report_rejects_noncanonical_artifact_paths_and_hashes() {
+        let mut manifest = serde_json::json!({
+            "schema_version": ORACLE_RUN_BUNDLE_SCHEMA_VERSION,
+            "bundle_id": format!("sha256:{}", "a".repeat(64)),
+            "source_sha256": format!("sha256:{}", "d".repeat(64)),
+            "degraded": false,
+            "artifacts": {
+                "report": {"path": "../report.json", "sha256": format!("sha256:{}", "b".repeat(64))},
+                "lock": {"path": "repro.lock", "sha256": format!("sha256:{}", "c".repeat(64))},
+            },
+        });
+        assert!(validate_oracle_bundle_manifest(manifest.as_object().expect("object")).is_err());
+        manifest["artifacts"]["report"]["path"] =
+            serde_json::Value::String("report.json".to_string());
+        manifest["artifacts"]["report"]["sha256"] =
+            serde_json::Value::String(format!("sha256:{}", "B".repeat(64)));
+        assert!(validate_oracle_bundle_manifest(manifest.as_object().expect("object")).is_err());
+    }
+
+    fn oracle_semantic_test_report(degraded: bool) -> DifferentialOracleReport {
+        let selected_backends = if degraded {
+            [
+                DifferentialBackend::NodeLts,
+                DifferentialBackend::FrankenEngine,
+            ]
+        } else {
+            [
+                DifferentialBackend::FrankenEngine,
+                DifferentialBackend::FrankenCore,
+            ]
+        };
+        let mut input = DifferentialOracleInput::new("oracle-semantic-fixture", "1 + 1;")
+            .with_selected_backends(selected_backends);
+        if degraded {
+            input.node.program = "/nonexistent/frankenctl-oracle-semantic-node".to_string();
+        }
+        run_differential_oracle(&input)
+    }
+
+    fn oracle_semantic_test_manifest(report: &DifferentialOracleReport) -> serde_json::Value {
+        let degraded = oracle_degraded_receipt_value(report).is_some();
+        let mut artifacts = serde_json::json!({
+            "report": {
+                "path": "report.json",
+                "sha256": format!("sha256:{}", "a".repeat(64)),
+            },
+            "lock": {
+                "path": "repro.lock",
+                "sha256": format!("sha256:{}", "b".repeat(64)),
+            },
+        });
+        if degraded {
+            artifacts.as_object_mut().expect("artifacts object").insert(
+                "degraded_receipt".to_string(),
+                serde_json::json!({
+                    "path": "degraded_receipt.json",
+                    "sha256": format!("sha256:{}", "c".repeat(64)),
+                }),
+            );
+        }
+        serde_json::json!({
+            "schema_version": ORACLE_RUN_BUNDLE_SCHEMA_VERSION,
+            "bundle_id": format!("sha256:{}", "d".repeat(64)),
+            "case_id": report.case_id,
+            "source_sha256": format!("sha256:{}", report.source_sha256),
+            "semantic_verdict": oracle_verdict_label(report.canonicalization.semantic_verdict),
+            "divergence_count": report.divergence_taxonomy.findings.len(),
+            "degraded": degraded,
+            "selected_backends": report
+                .backends
+                .iter()
+                .map(|receipt| receipt.backend.to_string())
+                .collect::<Vec<_>>(),
+            "generated_unix_ns": report.generated_unix_ns,
+            "host": {
+                "os": report.host.os,
+                "arch": report.host.arch,
+                "franken_engine_version": report.host.franken_engine_version,
+            },
+            "artifacts": artifacts,
+            "validation": {
+                "command": "frankenctl oracle report <bundle-dir>",
+                "exit_codes": "0 consensus | 3 divergence | 4 insufficient-data/degraded",
+            },
+        })
+    }
+
+    #[test]
+    fn oracle_report_semantics_reject_cross_file_and_stream_mismatches() {
+        let report = oracle_semantic_test_report(false);
+        let mut manifest = oracle_semantic_test_manifest(&report);
+        let lock = oracle_repro_lock_value(&report);
+        assert!(
+            validate_oracle_bundle_manifest(manifest.as_object().expect("manifest object")).is_ok()
+        );
+        assert!(
+            validate_oracle_bundle_semantics(
+                manifest.as_object().expect("manifest object"),
+                &lock,
+                None,
+                &report,
+            )
+            .is_ok()
+        );
+
+        manifest["case_id"] = serde_json::Value::String("forged-case".to_string());
+        assert!(
+            validate_oracle_bundle_semantics(
+                manifest.as_object().expect("manifest object"),
+                &lock,
+                None,
+                &report,
+            )
+            .is_err()
+        );
+
+        let mut forged_lock = lock.clone();
+        forged_lock["verification"]["expected_verdict"] =
+            serde_json::Value::String("forged-verdict".to_string());
+        let valid_manifest = oracle_semantic_test_manifest(&report);
+        assert!(
+            validate_oracle_bundle_semantics(
+                valid_manifest.as_object().expect("manifest object"),
+                &forged_lock,
+                None,
+                &report,
+            )
+            .is_err()
+        );
+
+        let mut validation_forgery = valid_manifest;
+        validation_forgery["validation"]["command"] =
+            serde_json::Value::String("attacker-controlled command".to_string());
+        assert!(
+            validate_oracle_bundle_semantics(
+                validation_forgery.as_object().expect("manifest object"),
+                &lock,
+                None,
+                &report,
+            )
+            .is_err()
+        );
+
+        let mut stream_forgery = report.clone();
+        stream_forgery.backends[0].stdout.push_str("forged");
+        let stream_manifest = oracle_semantic_test_manifest(&stream_forgery);
+        assert!(
+            validate_oracle_bundle_semantics(
+                stream_manifest.as_object().expect("manifest object"),
+                &oracle_repro_lock_value(&stream_forgery),
+                None,
+                &stream_forgery,
+            )
+            .is_err()
+        );
+
+        let mut duplicate_backend = report.clone();
+        let duplicate = duplicate_backend.backends[0].clone();
+        duplicate_backend.backends.push(duplicate);
+        let duplicate_manifest = oracle_semantic_test_manifest(&duplicate_backend);
+        assert!(
+            validate_oracle_bundle_semantics(
+                duplicate_manifest.as_object().expect("manifest object"),
+                &oracle_repro_lock_value(&duplicate_backend),
+                None,
+                &duplicate_backend,
+            )
+            .is_err()
+        );
+
+        let mut source_forgery = report;
+        source_forgery.source_sha256 = "garbage".to_string();
+        let source_manifest = oracle_semantic_test_manifest(&source_forgery);
+        assert!(
+            validate_oracle_bundle_semantics(
+                source_manifest.as_object().expect("manifest object"),
+                &oracle_repro_lock_value(&source_forgery),
+                None,
+                &source_forgery,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn oracle_report_degraded_receipt_is_required_and_semantically_bound() {
+        let report = oracle_semantic_test_report(true);
+        let manifest = oracle_semantic_test_manifest(&report);
+        let lock = oracle_repro_lock_value(&report);
+        let receipt = oracle_degraded_receipt_value(&report).expect("degraded receipt");
+        assert!(
+            validate_oracle_bundle_manifest(manifest.as_object().expect("manifest object")).is_ok()
+        );
+        assert!(
+            validate_oracle_bundle_semantics(
+                manifest.as_object().expect("manifest object"),
+                &lock,
+                Some(&receipt),
+                &report,
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_oracle_bundle_semantics(
+                manifest.as_object().expect("manifest object"),
+                &lock,
+                None,
+                &report,
+            )
+            .is_err()
+        );
+
+        let mut forged_receipt = receipt;
+        forged_receipt["case_id"] = serde_json::Value::String("forged-case".to_string());
+        assert!(
+            validate_oracle_bundle_semantics(
+                manifest.as_object().expect("manifest object"),
+                &lock,
+                Some(&forged_receipt),
+                &report,
+            )
+            .is_err()
+        );
+
+        let mut legacy_unindexed = manifest;
+        legacy_unindexed["artifacts"]
+            .as_object_mut()
+            .expect("artifacts object")
+            .remove("degraded_receipt");
+        assert!(
+            validate_oracle_bundle_manifest(legacy_unindexed.as_object().expect("manifest object"))
+                .is_err()
+        );
     }
 }

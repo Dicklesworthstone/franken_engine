@@ -106,6 +106,15 @@ fn oracle_run_with_bundle_emits_content_addressed_bundle() {
         !bundle.join("degraded_receipt.json").exists(),
         "non-degraded run must not emit a degraded receipt"
     );
+    #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(&bundle)
+            .expect("bundle metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700, "bundle directory must be private");
+    }
 
     // The manifest content-addresses report.json by sha256.
     let manifest: serde_json::Value =
@@ -164,6 +173,110 @@ fn oracle_report_verifies_and_renders_bundle() {
     let text = String::from_utf8_lossy(&human.stdout);
     assert!(text.contains("integrity: verified"), "human: {text}");
     assert!(text.contains("verdict: consensus"), "human: {text}");
+}
+
+#[test]
+fn oracle_report_accepts_manifest_basename_from_bundle_directory() {
+    let fixture = write_fixture("oracle_report_basename", "40 + 2;\n");
+    let bundle = temp_dir("oracle_report_basename_out");
+    let run = run_oracle(&[
+        "run",
+        fixture.to_str().unwrap(),
+        "--engines",
+        "franken,core",
+        "--bundle",
+        bundle.to_str().unwrap(),
+    ]);
+    assert!(run.status.success(), "run should succeed");
+
+    let report = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .current_dir(&bundle)
+        .args(["oracle", "report", "manifest.json", "--json"])
+        .output()
+        .expect("frankenctl oracle report should execute");
+    assert!(
+        report.status.success(),
+        "manifest basename should resolve against the current directory: {}",
+        String::from_utf8_lossy(&report.stderr)
+    );
+    let payload = parse_json(&report.stdout);
+    assert_eq!(payload["integrity"].as_str(), Some("verified"));
+}
+
+#[test]
+fn oracle_bundle_emission_requires_a_new_directory() {
+    let fixture = write_fixture("oracle_bundle_existing_dir", "1 + 1;\n");
+    let bundle = temp_dir("oracle_bundle_existing_dir_out");
+    fs::create_dir(&bundle).expect("fixture directory should be created");
+
+    let output = run_oracle(&[
+        "run",
+        fixture.to_str().unwrap(),
+        "--engines",
+        "franken,core",
+        "--bundle",
+        bundle.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(
+        !output.status.success(),
+        "existing output dir must fail closed"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("must be a new directory"),
+        "stderr should explain the fresh-directory contract: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !bundle.join("manifest.json").exists(),
+        "a refused existing directory must remain unpublished"
+    );
+}
+
+#[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+#[test]
+fn oracle_bundle_io_rejects_symlinked_directory_and_artifact() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = write_fixture("oracle_bundle_symlink", "1 + 1;\n");
+    let bundle = temp_dir("oracle_bundle_symlink_out");
+    let run = run_oracle(&[
+        "run",
+        fixture.to_str().unwrap(),
+        "--engines",
+        "franken,core",
+        "--bundle",
+        bundle.to_str().unwrap(),
+    ]);
+    assert!(run.status.success(), "run should succeed");
+
+    let bundle_link = temp_dir("oracle_bundle_symlink_link");
+    symlink(&bundle, &bundle_link).expect("bundle directory symlink should be created");
+    let linked_report = run_oracle(&["report", bundle_link.to_str().unwrap(), "--json"]);
+    assert!(
+        !linked_report.status.success(),
+        "symlinked bundle directories must fail closed"
+    );
+    assert!(
+        String::from_utf8_lossy(&linked_report.stderr).contains("securely open bundle dir"),
+        "stderr should identify the secure-open failure: {}",
+        String::from_utf8_lossy(&linked_report.stderr)
+    );
+
+    let report_path = bundle.join("report.json");
+    let report_target = bundle.join("report-target.json");
+    fs::rename(&report_path, &report_target).expect("report fixture should move");
+    symlink("report-target.json", &report_path).expect("report symlink should be created");
+    let artifact_report = run_oracle(&["report", bundle.to_str().unwrap(), "--json"]);
+    assert!(
+        !artifact_report.status.success(),
+        "symlinked bundle artifacts must fail closed"
+    );
+    assert!(
+        String::from_utf8_lossy(&artifact_report.stderr).contains("securely open bundle report"),
+        "stderr should identify the artifact secure-open failure: {}",
+        String::from_utf8_lossy(&artifact_report.stderr)
+    );
 }
 
 #[test]

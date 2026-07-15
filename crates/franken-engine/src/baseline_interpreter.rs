@@ -238,8 +238,30 @@ const MEMORY_ESTIMATE_READABLE_BUFFERED_CHUNK_BYTES: u64 = 32;
 const MEMORY_ESTIMATE_READABLE_TO_ARRAY_WAITER_BYTES: u64 = 48;
 /// Conservative fixed charges for the engine-owned Writable kernel. Retained
 /// strings and custom IFC-label names are charged separately.
-const MEMORY_ESTIMATE_WRITABLE_BASE_BYTES: u64 = 96;
+// Fixed state-side charges include the inline state payload plus conservative
+// map-entry bookkeeping. Keeping the live charge at least as large as the
+// terminal charge lets a fully drained Writable terminalize at an exact budget
+// ceiling without requiring fresh memory merely to preserve its tombstone.
+const MEMORY_ESTIMATE_WRITABLE_BASE_BYTES: u64 = 512;
+#[cfg(test)]
+const MEMORY_ESTIMATE_WRITABLE_MAP_ENTRY_MARGIN_BYTES: usize = 64;
+const WRITABLE_STATE_VIEW_KEYS: [&str; 10] = [
+    "closed",
+    "destroyed",
+    "writable",
+    "writableCorked",
+    "writableEnded",
+    "writableFinished",
+    "writableHighWaterMark",
+    "writableLength",
+    "writableNeedDrain",
+    "writableObjectMode",
+];
 const MEMORY_ESTIMATE_WRITABLE_WRITE_BYTES: u64 = 48;
+/// Conservative fixed charge for a released Writable's authoritative terminal
+/// state. The lifecycle label and any deferred post-close callbacks are
+/// charged separately.
+const MEMORY_ESTIMATE_WRITABLE_TERMINAL_BASE_BYTES: u64 = 192;
 /// Exact conservative charge for one node in the terminal-callback linked
 /// FIFO. Callback values, labels, and module provenance are charged separately.
 const MEMORY_ESTIMATE_WRITABLE_END_CALLBACK_BYTES: u64 = 160;
@@ -5880,6 +5902,54 @@ enum WritableErrorOrigin {
     Destroy,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WritableTerminalCallbackError {
+    EndAfterFinish,
+    EndAfterDestroy,
+    WriteAfterFinish,
+    WriteAfterDestroy,
+}
+
+impl WritableTerminalCallbackError {
+    fn message(self) -> &'static str {
+        match self {
+            Self::EndAfterFinish => "Cannot call end after a stream was finished",
+            Self::EndAfterDestroy => "Cannot call end after a stream was destroyed",
+            Self::WriteAfterFinish => "write after end",
+            Self::WriteAfterDestroy => "Cannot call write after a stream was destroyed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WritableTerminalCallbackRecord {
+    callback: WritableCallbackRecord,
+    error: WritableTerminalCallbackError,
+}
+
+/// Accounted, engine-owned state retained after the live Writable kernel has
+/// released its queues and implementation callbacks. Keeping this separate
+/// from `writable_streams` prevents closed instances from inflating every
+/// active-stream scheduler scan while preserving branding, state views, IFC
+/// provenance, and deterministic post-close callback delivery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WritableTerminalState {
+    object_mode: bool,
+    high_water_mark: usize,
+    end_requested: bool,
+    finished: bool,
+    buffered_length: usize,
+    cork_depth: u32,
+    /// `end(callback)` after an error-bearing destroy is settled with the
+    /// destroyed-stream error. Bun ignores this callback after a no-error
+    /// destroy, so that distinction must survive live-state release.
+    accepts_late_end_callback: bool,
+    #[allow(clippy::linkedlist)]
+    callbacks: LinkedList<WritableTerminalCallbackRecord>,
+    tick_sequence: Option<u64>,
+    lifecycle_label: Label,
+}
+
 /// Authoritative Writable state. Public `writable*` properties are mirrors
 /// only; guest writes or deletions cannot forge progress, callback tokens, or
 /// lifecycle completion.
@@ -5915,6 +5985,9 @@ struct WritableState {
     finished_end_callback_batch_remaining: usize,
     final_status: WritableFinalStatus,
     prefinish_emitted: bool,
+    /// Becomes true before the first success `end(callback)` runs, matching
+    /// Node/Bun's observable `writableFinished` state during that callback.
+    finished: bool,
     terminal_error: Option<(Value, Label)>,
     terminal_error_origin: Option<WritableErrorOrigin>,
     /// Prevents a re-entrant `destroy()` from emitting an already-observed
@@ -6200,6 +6273,12 @@ pub struct InterpreterCore {
     /// Engine-owned Writable instances. Their per-state ready bit drives a
     /// pre-microtask lifecycle checkpoint without a separately retained queue.
     writable_streams: BTreeMap<ObjectId, WritableState>,
+    /// Released Writable instances retain a compact authoritative terminal
+    /// record without participating in active-stream scheduler scans.
+    writable_terminal_states: BTreeMap<ObjectId, WritableTerminalState>,
+    /// Number of terminal states whose post-close callback tick is armed. A
+    /// zero value lets normal checkpoints skip the persistent tombstone map.
+    pending_writable_terminal_ticks: usize,
     next_writable_tick_sequence: u64,
     /// Process-lifetime authentication nonce for internal Writable completion
     /// callbacks. Unlike heap ObjectIds and execution seeds, this counter is
@@ -6363,6 +6442,8 @@ impl InterpreterCore {
             readable_from_streams: BTreeMap::new(),
             pending_readable_from_pumps: BTreeMap::new(),
             writable_streams: BTreeMap::new(),
+            writable_terminal_states: BTreeMap::new(),
+            pending_writable_terminal_ticks: 0,
             next_writable_tick_sequence: 0,
             next_writable_completion_token: 0,
             promise_combinators: BTreeMap::new(),
@@ -7421,6 +7502,16 @@ impl InterpreterCore {
             self.clear_event_listeners(object_id, None);
             self.clear_event_promise_waiters_for_target(object_id);
         }
+        while let Some(object_id) = self.writable_terminal_states.keys().next().copied() {
+            if let Some(state) = self.writable_terminal_states.remove(&object_id) {
+                self.estimated_memory_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(Self::estimate_writable_terminal_state_bytes(&state));
+            }
+            self.clear_event_listeners(object_id, None);
+            self.clear_event_promise_waiters_for_target(object_id);
+        }
+        self.pending_writable_terminal_ticks = 0;
         self.next_writable_tick_sequence = 0;
     }
 
@@ -7732,6 +7823,7 @@ impl InterpreterCore {
             finished_end_callback_batch_remaining: 0,
             final_status: WritableFinalStatus::NotStarted,
             prefinish_emitted: false,
+            finished: false,
             terminal_error: None,
             terminal_error_origin: None,
             terminal_error_emitted: false,
@@ -7771,6 +7863,77 @@ impl InterpreterCore {
         Ok(Value::Object(object_id))
     }
 
+    /// Resolve public Writable state from engine-owned storage before ordinary
+    /// heap properties. Guest writes, accessors, and deletions may mutate the
+    /// compatibility mirrors, but they cannot forge these authoritative reads.
+    fn writable_state_view_value(&self, object_id: ObjectId, key: &str) -> Option<Value> {
+        if let Some(state) = self.writable_streams.get(&object_id) {
+            let terminal_close_observable =
+                state.destroy_requested || state.tick_phase == WritableTickPhase::Release;
+            return match key {
+                "writable" => Some(Value::Bool(
+                    !state.end_requested && !state.destroy_requested && !state.finished,
+                )),
+                "writableEnded" => Some(Value::Bool(state.end_requested)),
+                "writableFinished" => Some(Value::Bool(state.finished)),
+                "writableLength" => Some(Value::Int(
+                    i64::try_from(state.buffered_length).unwrap_or(i64::MAX),
+                )),
+                "writableCorked" => Some(Value::Int(i64::from(state.cork_depth))),
+                "writableNeedDrain" => Some(Value::Bool(
+                    state.buffered_length > 0 && state.buffered_length >= state.high_water_mark,
+                )),
+                "writableObjectMode" => Some(Value::Bool(state.object_mode)),
+                "writableHighWaterMark" => Some(Value::Int(
+                    i64::try_from(state.high_water_mark).unwrap_or(i64::MAX),
+                )),
+                "destroyed" | "closed" => Some(Value::Bool(terminal_close_observable)),
+                _ => None,
+            };
+        }
+
+        let state = self.writable_terminal_states.get(&object_id)?;
+        match key {
+            "writable" => Some(Value::Bool(false)),
+            "writableEnded" => Some(Value::Bool(state.end_requested)),
+            "writableFinished" => Some(Value::Bool(state.finished)),
+            "writableLength" => Some(Value::Int(
+                i64::try_from(state.buffered_length).unwrap_or(i64::MAX),
+            )),
+            "writableCorked" => Some(Value::Int(i64::from(state.cork_depth))),
+            "writableNeedDrain" => Some(Value::Bool(false)),
+            "writableObjectMode" => Some(Value::Bool(state.object_mode)),
+            "writableHighWaterMark" => Some(Value::Int(
+                i64::try_from(state.high_water_mark).unwrap_or(i64::MAX),
+            )),
+            "destroyed" | "closed" => Some(Value::Bool(true)),
+            _ => None,
+        }
+    }
+
+    fn is_writable_state_view_key(key: &str) -> bool {
+        WRITABLE_STATE_VIEW_KEYS.binary_search(&key).is_ok()
+    }
+
+    /// Node/Bun expose the ten authoritative views as inherited accessors.
+    /// The heap entries are compatibility mirrors only and must stay hidden
+    /// from own-key reflection, copying, and JSON.
+    fn writable_own_property_visible(&self, object_id: ObjectId, key: &str) -> bool {
+        !((self.writable_streams.contains_key(&object_id)
+            || self.writable_terminal_states.contains_key(&object_id))
+            && Self::is_writable_state_view_key(key))
+    }
+
+    fn join_pending_hostcall_stream_label(&mut self, object_id: ObjectId) {
+        let stream_label = self.stream_state_label(object_id);
+        let joined = self
+            .pending_hostcall_result_label
+            .take()
+            .unwrap_or(Label::Public)
+            .join(&stream_label);
+        self.pending_hostcall_result_label = Some(joined);
+    }
+
     fn writable_receiver_id(&self, receiver: Value) -> Result<ObjectId, InterpreterError> {
         let Value::Object(object_id) = receiver else {
             return Err(InterpreterError::TypeError {
@@ -7778,7 +7941,9 @@ impl InterpreterCore {
                 got: receiver.type_name().to_string(),
             });
         };
-        if !self.writable_streams.contains_key(&object_id) {
+        if !self.writable_streams.contains_key(&object_id)
+            && !self.writable_terminal_states.contains_key(&object_id)
+        {
             return Err(InterpreterError::TypeError {
                 expected: "Writable receiver".to_string(),
                 got: "non-Writable object".to_string(),
@@ -7929,12 +8094,55 @@ impl InterpreterCore {
         Ok(())
     }
 
+    fn schedule_writable_terminal_tick(
+        &mut self,
+        object_id: ObjectId,
+    ) -> Result<(), InterpreterError> {
+        if self
+            .writable_terminal_states
+            .get(&object_id)
+            .is_none_or(|state| state.tick_sequence.is_some())
+        {
+            return Ok(());
+        }
+        let sequence = self.next_writable_tick_sequence;
+        let next_sequence =
+            sequence
+                .checked_add(1)
+                .ok_or_else(|| InterpreterError::InternalError {
+                    details: "Writable tick sequence space exhausted".to_string(),
+                })?;
+        let next_pending = self
+            .pending_writable_terminal_ticks
+            .checked_add(1)
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "pending terminal Writable tick count overflowed".to_string(),
+            })?;
+        self.next_writable_tick_sequence = next_sequence;
+        self.pending_writable_terminal_ticks = next_pending;
+        if let Some(state) = self.writable_terminal_states.get_mut(&object_id) {
+            state.tick_sequence = Some(sequence);
+        }
+        Ok(())
+    }
+
     fn next_scheduled_writable_tick(&mut self) -> Result<Option<ObjectId>, InterpreterError> {
         // Selection currently scans the engine-owned state table. Charge the
         // exact number of entries inspected (and one step for the empty scan)
         // to the shared instruction budget so many short-lived streams cannot
         // turn deterministic lifecycle work into unbounded O(N^2) host CPU.
-        let scan_cost = u64::try_from(self.writable_streams.len().max(1)).unwrap_or(u64::MAX);
+        let terminal_scan_len = if self.pending_writable_terminal_ticks == 0 {
+            0
+        } else {
+            self.writable_terminal_states.len()
+        };
+        let scan_cost = u64::try_from(
+            self.writable_streams
+                .len()
+                .saturating_add(terminal_scan_len)
+                .max(1),
+        )
+        .unwrap_or(u64::MAX);
         let next_executed = self.instructions_executed.saturating_add(scan_cost);
         if next_executed > self.config.instruction_budget {
             return Err(InterpreterError::BudgetExhausted {
@@ -7943,10 +8151,22 @@ impl InterpreterCore {
             });
         }
         self.instructions_executed = next_executed;
-        Ok(self
+        let active = self
             .writable_streams
             .iter()
             .filter_map(|(id, state)| state.tick_sequence.map(|sequence| (sequence, *id)))
+            .min_by_key(|(sequence, _)| *sequence);
+        let terminal = (self.pending_writable_terminal_ticks > 0)
+            .then(|| {
+                self.writable_terminal_states
+                    .iter()
+                    .filter_map(|(id, state)| state.tick_sequence.map(|sequence| (sequence, *id)))
+                    .min_by_key(|(sequence, _)| *sequence)
+            })
+            .flatten();
+        Ok(active
+            .into_iter()
+            .chain(terminal)
             .min_by_key(|(sequence, _)| *sequence)
             .map(|(_, object_id)| object_id))
     }
@@ -7998,6 +8218,10 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let object_id = self.writable_receiver_id(receiver)?;
         let trigger_label = self.writable_invocation_label(args)?;
+        if self.writable_terminal_states.contains_key(&object_id) {
+            self.join_writable_terminal_label(object_id, &trigger_label)?;
+            return Ok(Value::Undefined);
+        }
         let Some(state) = self.writable_streams.get(&object_id) else {
             return Ok(Value::Undefined);
         };
@@ -8031,6 +8255,10 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let object_id = self.writable_receiver_id(receiver)?;
         let trigger_label = self.writable_invocation_label(args)?;
+        if self.writable_terminal_states.contains_key(&object_id) {
+            self.join_writable_terminal_label(object_id, &trigger_label)?;
+            return Ok(Value::Undefined);
+        }
         let Some(state) = self.writable_streams.get(&object_id) else {
             return Ok(Value::Undefined);
         };
@@ -8066,6 +8294,10 @@ impl InterpreterCore {
         let mut trigger_label = self.writable_invocation_label(args)?;
         if let Some(Value::Object(error_id)) = &error {
             trigger_label = trigger_label.join(&self.binary_storage_label(*error_id));
+        }
+        if self.writable_terminal_states.contains_key(&object_id) {
+            self.join_writable_terminal_label(object_id, &trigger_label)?;
+            return Ok(receiver);
         }
         let Some(current) = self.writable_streams.get(&object_id) else {
             return Ok(receiver);
@@ -8289,6 +8521,23 @@ impl InterpreterCore {
         }
         label = label.join(&self.join_arg_range_label(args)?);
         let callback = self.writable_callback_arg(args, &[1, 2])?;
+        if let Some(finished) = self
+            .writable_terminal_states
+            .get(&object_id)
+            .map(|state| state.finished)
+        {
+            let error = if finished {
+                WritableTerminalCallbackError::WriteAfterFinish
+            } else {
+                WritableTerminalCallbackError::WriteAfterDestroy
+            };
+            if let Some(callback) = callback {
+                self.append_writable_terminal_callback(object_id, callback, error, &label)?;
+            } else {
+                self.join_writable_terminal_label(object_id, &label)?;
+            }
+            return Ok(Value::Bool(false));
+        }
         let below_high_water_mark = self.writable_enqueue(object_id, value, label, callback)?;
         self.drive_writable(object_id, module)?;
         Ok(Value::Bool(below_high_water_mark))
@@ -8303,9 +8552,51 @@ impl InterpreterCore {
         let object_id = self.writable_receiver_id(receiver)?;
         let first = self.builtin_arg(args, 0)?;
         let callback = self.writable_callback_arg(args, &[0, 1, 2])?;
-        let chunk =
-            first.filter(|value| !value.is_callable() && !matches!(value, Value::Undefined));
+        let chunk = first.filter(|value| {
+            !value.is_callable() && !matches!(value, Value::Undefined | Value::Null)
+        });
         let args_label = self.join_arg_range_label(args)?;
+        let terminal_args_label = if let Some(Value::Object(chunk_id)) = chunk.as_ref() {
+            args_label.join(&self.binary_storage_label(*chunk_id))
+        } else {
+            args_label.clone()
+        };
+        if let Some((finished, accepts_late_end_callback)) = self
+            .writable_terminal_states
+            .get(&object_id)
+            .map(|state| (state.finished, state.accepts_late_end_callback))
+        {
+            if let Some(callback) = callback {
+                if chunk.is_some() {
+                    self.append_writable_terminal_callback(
+                        object_id,
+                        callback,
+                        if finished {
+                            WritableTerminalCallbackError::WriteAfterFinish
+                        } else {
+                            WritableTerminalCallbackError::WriteAfterDestroy
+                        },
+                        &terminal_args_label,
+                    )?;
+                } else if finished || accepts_late_end_callback {
+                    self.append_writable_terminal_callback(
+                        object_id,
+                        callback,
+                        if finished {
+                            WritableTerminalCallbackError::EndAfterFinish
+                        } else {
+                            WritableTerminalCallbackError::EndAfterDestroy
+                        },
+                        &terminal_args_label,
+                    )?;
+                } else {
+                    self.join_writable_terminal_label(object_id, &terminal_args_label)?;
+                }
+            } else {
+                self.join_writable_terminal_label(object_id, &terminal_args_label)?;
+            }
+            return Ok(Value::Object(object_id));
+        }
         if let Some(value) = chunk {
             let mut label = self.get_register_label(args.start)?.clone();
             if let Value::Object(chunk_id) = &value {
@@ -8852,6 +9143,151 @@ impl InterpreterCore {
         Some(callback)
     }
 
+    fn join_writable_terminal_label(
+        &mut self,
+        object_id: ObjectId,
+        trigger_label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let state = self
+            .writable_terminal_states
+            .get(&object_id)
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "terminal Writable label update lost its tombstone".to_string(),
+            })?;
+        let previous_bytes = Self::estimate_writable_terminal_state_bytes(state);
+        let next_label = state.lifecycle_label.join(trigger_label);
+        let next_bytes = previous_bytes
+            .saturating_sub(Self::estimate_label_bytes(&state.lifecycle_label))
+            .saturating_add(Self::estimate_label_bytes(&next_label));
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        let state = self
+            .writable_terminal_states
+            .get_mut(&object_id)
+            .expect("terminal Writable tombstone survived label preflight");
+        state.lifecycle_label = next_label;
+        debug_assert_eq!(
+            Self::estimate_writable_terminal_state_bytes(state),
+            next_bytes
+        );
+        Ok(())
+    }
+
+    fn append_writable_terminal_callback(
+        &mut self,
+        object_id: ObjectId,
+        callback: WritableCallbackRecord,
+        error: WritableTerminalCallbackError,
+        trigger_label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let state = self
+            .writable_terminal_states
+            .get(&object_id)
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "post-close Writable callback lost its tombstone".to_string(),
+            })?;
+        state
+            .callbacks
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| InterpreterError::RangeError {
+                message: "terminal Writable callback FIFO length overflows host address space"
+                    .to_string(),
+            })?;
+        let previous_bytes = Self::estimate_writable_terminal_state_bytes(state);
+        let next_label = state.lifecycle_label.join(trigger_label);
+        let next_bytes = previous_bytes
+            .saturating_sub(Self::estimate_label_bytes(&state.lifecycle_label))
+            .saturating_add(Self::estimate_label_bytes(&next_label))
+            .saturating_add(Self::estimate_writable_callback_bytes(&callback))
+            .saturating_add(MEMORY_ESTIMATE_WRITABLE_END_CALLBACK_BYTES);
+        let scheduled_sequence = if state.tick_sequence.is_none() {
+            let sequence = self.next_writable_tick_sequence;
+            let next_sequence =
+                sequence
+                    .checked_add(1)
+                    .ok_or_else(|| InterpreterError::InternalError {
+                        details: "Writable tick sequence space exhausted".to_string(),
+                    })?;
+            let next_pending = self
+                .pending_writable_terminal_ticks
+                .checked_add(1)
+                .ok_or_else(|| InterpreterError::InternalError {
+                    details: "pending terminal Writable tick count overflowed".to_string(),
+                })?;
+            Some((sequence, next_sequence, next_pending))
+        } else {
+            None
+        };
+
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        let state = self
+            .writable_terminal_states
+            .get_mut(&object_id)
+            .expect("terminal Writable tombstone survived callback preflight");
+        state
+            .callbacks
+            .push_back(WritableTerminalCallbackRecord { callback, error });
+        state.lifecycle_label = next_label;
+        if let Some((sequence, next_sequence, next_pending)) = scheduled_sequence {
+            state.tick_sequence = Some(sequence);
+            self.next_writable_tick_sequence = next_sequence;
+            self.pending_writable_terminal_ticks = next_pending;
+        }
+        debug_assert_eq!(
+            Self::estimate_writable_terminal_state_bytes(state),
+            next_bytes
+        );
+        Ok(())
+    }
+
+    fn take_writable_terminal_callback(
+        &mut self,
+        object_id: ObjectId,
+    ) -> Option<WritableTerminalCallbackRecord> {
+        let state = self.writable_terminal_states.get_mut(&object_id)?;
+        let previous = Self::estimate_writable_terminal_state_bytes(state);
+        let callback = state.callbacks.pop_front()?;
+        let next = Self::estimate_writable_terminal_state_bytes(state);
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous.saturating_sub(next));
+        Some(callback)
+    }
+
+    fn drive_writable_terminal_tick(
+        &mut self,
+        object_id: ObjectId,
+        module: Option<&Ir3Module>,
+    ) -> Result<(), InterpreterError> {
+        let Some(module) = module else {
+            return Ok(());
+        };
+        let lifecycle_label = self
+            .writable_terminal_states
+            .get(&object_id)
+            .map(|state| state.lifecycle_label.clone())
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "scheduled terminal Writable tick lost its tombstone".to_string(),
+            })?;
+        let Some(record) = self.take_writable_terminal_callback(object_id) else {
+            return Ok(());
+        };
+        if self
+            .writable_terminal_states
+            .get(&object_id)
+            .is_some_and(|state| !state.callbacks.is_empty())
+        {
+            self.schedule_writable_terminal_tick(object_id)?;
+        }
+        self.invoke_writable_deferred_callback(
+            module,
+            record.callback,
+            object_id,
+            Some((Value::str(record.error.message()), lifecycle_label.clone())),
+            lifecycle_label,
+        )
+    }
+
     fn release_writable_state_storage(&mut self, object_id: ObjectId) {
         let released = self
             .writable_streams
@@ -8861,6 +9297,46 @@ impl InterpreterCore {
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released);
         self.clear_event_listeners(object_id, None);
         self.clear_event_promise_waiters_for_target(object_id);
+    }
+
+    fn terminalize_writable_state_storage(
+        &mut self,
+        object_id: ObjectId,
+    ) -> Result<(), InterpreterError> {
+        if self.writable_terminal_states.contains_key(&object_id) {
+            return Err(InterpreterError::InternalError {
+                details: "Writable terminalization would replace an existing tombstone".to_string(),
+            });
+        }
+        let state = self.writable_streams.get(&object_id).ok_or_else(|| {
+            InterpreterError::InternalError {
+                details: "Writable terminalization lost its live state".to_string(),
+            }
+        })?;
+        debug_assert!(state.end_callbacks.is_empty());
+        debug_assert!(state.tick_sequence.is_none());
+        let previous_bytes = Self::estimate_writable_state_bytes(state);
+        let terminal = WritableTerminalState {
+            object_mode: state.object_mode,
+            high_water_mark: state.high_water_mark,
+            end_requested: state.end_requested,
+            finished: state.finished,
+            buffered_length: state.buffered_length,
+            cork_depth: state.cork_depth,
+            accepts_late_end_callback: state.finished || state.terminal_error.is_some(),
+            callbacks: LinkedList::new(),
+            tick_sequence: None,
+            lifecycle_label: state.lifecycle_label.clone(),
+        };
+        let next_bytes = Self::estimate_writable_terminal_state_bytes(&terminal);
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        self.writable_streams
+            .remove(&object_id)
+            .expect("live Writable state survived terminalization preflight");
+        self.writable_terminal_states.insert(object_id, terminal);
+        self.clear_event_listeners(object_id, None);
+        self.clear_event_promise_waiters_for_target(object_id);
+        Ok(())
     }
 
     fn drive_writable_tick(
@@ -8925,6 +9401,7 @@ impl InterpreterCore {
                 {
                     return Ok(());
                 }
+                let finishing_successfully = state.terminal_error.is_none();
                 if let Some(state) = self.writable_streams.get_mut(&object_id) {
                     let callbacks_precede_error = matches!(
                         state.terminal_error_origin,
@@ -8936,11 +9413,15 @@ impl InterpreterCore {
                         } else {
                             0
                         };
+                    state.finished = finishing_successfully;
                     state.tick_phase = if state.terminal_error.is_some() {
                         WritableTickPhase::Error
                     } else {
                         WritableTickPhase::Finish
                     };
+                }
+                if finishing_successfully {
+                    self.mirror_writable_bool(object_id, "writableFinished", true);
                 }
                 continue;
             }
@@ -9187,7 +9668,7 @@ impl InterpreterCore {
                     lifecycle_label,
                 );
             }
-            self.release_writable_state_storage(object_id);
+            self.terminalize_writable_state_storage(object_id)?;
             return Ok(());
         }
     }
@@ -11017,15 +11498,45 @@ impl InterpreterCore {
     }
 
     fn stream_state_label(&self, object_id: ObjectId) -> Label {
-        self.readable_from_streams
-            .get(&object_id)
-            .map(|state| state.lifecycle_label.clone())
-            .or_else(|| {
-                self.writable_streams
-                    .get(&object_id)
-                    .map(|state| state.lifecycle_label.clone())
-            })
-            .unwrap_or(Label::Public)
+        let mut label = Label::Public;
+        let mut current = Some(object_id);
+        let mut depth = 0u32;
+        let mut visited = BTreeSet::new();
+        while let Some(id) = current {
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
+                break;
+            }
+            if let Some(state) = self.readable_from_streams.get(&id) {
+                label = label.join(&state.lifecycle_label);
+            }
+            if let Some(state) = self.writable_streams.get(&id) {
+                label = label.join(&state.lifecycle_label);
+            }
+            if let Some(state) = self.writable_terminal_states.get(&id) {
+                label = label.join(&state.lifecycle_label);
+            }
+            if let Some(object) = self.heap.get(id.0 as usize) {
+                let active_proxy_target = matches!(
+                    object.properties.get("__type"),
+                    Some(Value::Str(kind)) if kind.as_ref() == PROXY_TYPE_TAG
+                ) && !matches!(
+                    object.properties.get(PROXY_REVOKED_SLOT),
+                    Some(Value::Bool(true))
+                );
+                current = if active_proxy_target {
+                    match object.properties.get(PROXY_TARGET_SLOT) {
+                        Some(Value::Object(target)) => Some(*target),
+                        _ => None,
+                    }
+                } else {
+                    object.prototype
+                };
+            } else {
+                current = None;
+            }
+            depth += 1;
+        }
+        label
     }
 
     fn join_binary_storage_label(&mut self, object_id: ObjectId, label: &Label) {
@@ -15171,6 +15682,9 @@ impl InterpreterCore {
                 let Some(property) = self.builtin_arg(args, 0)? else {
                     return Ok(Value::Bool(false));
                 };
+                if let Value::Object(object_id) = &receiver {
+                    self.join_pending_hostcall_stream_label(*object_id);
+                }
                 Ok(Value::Bool(
                     self.object_own_property_contains(&receiver, &property),
                 ))
@@ -15180,6 +15694,9 @@ impl InterpreterCore {
                 let Some(property) = self.builtin_arg(args, 0)? else {
                     return Ok(Value::Bool(false));
                 };
+                if let Value::Object(object_id) = &receiver {
+                    self.join_pending_hostcall_stream_label(*object_id);
+                }
                 Ok(Value::Bool(
                     self.object_own_property_contains(&receiver, &property),
                 ))
@@ -22020,6 +22537,9 @@ impl InterpreterCore {
         key: &str,
         receiver: Value,
     ) -> Result<Value, InterpreterError> {
+        if let Some(value) = self.writable_state_view_value(object_id, key) {
+            return Ok(value);
+        }
         if let Some(value) = self.typed_array_indexed_get_property(object_id, key)? {
             return Ok(value);
         }
@@ -22038,6 +22558,9 @@ impl InterpreterCore {
                     "baseline_interpreter",
                 );
                 return Ok(Value::Undefined);
+            }
+            if let Some(value) = self.writable_state_view_value(id, key) {
+                return Ok(value);
             }
             let (property_value, next_prototype) = {
                 let object = self
@@ -22084,7 +22607,9 @@ impl InterpreterCore {
         // and a user-assigned `m.set = …` shadows the builtin.
         let root_type_tag = if self.readable_from_streams.contains_key(&object_id) {
             Some("Readable".to_string())
-        } else if self.writable_streams.contains_key(&object_id) {
+        } else if self.writable_streams.contains_key(&object_id)
+            || self.writable_terminal_states.contains_key(&object_id)
+        {
             Some("Writable".to_string())
         } else {
             self.heap.get(object_id.0 as usize).and_then(|object| {
@@ -22391,6 +22916,12 @@ impl InterpreterCore {
             return false;
         };
         let property_key = self.property_key_from_value(property);
+        if (self.writable_streams.contains_key(object_id)
+            || self.writable_terminal_states.contains_key(object_id))
+            && Self::is_writable_state_view_key(&property_key)
+        {
+            return false;
+        }
         self.heap
             .get(object_id.0 as usize)
             .map(|object| object.properties.contains_key(&property_key))
@@ -22679,16 +23210,18 @@ impl InterpreterCore {
                 return Ok(Value::Undefined);
             }
 
+            let hides_writable_mirror = (self.writable_streams.contains_key(&id)
+                || self.writable_terminal_states.contains_key(&id))
+                && Self::is_writable_state_view_key(key);
             let (descriptor_source, next_prototype) = {
                 let object = self
                     .heap
                     .get(id.0 as usize)
                     .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
                 (
-                    object
-                        .properties
-                        .get(key)
-                        .cloned()
+                    (!hides_writable_mirror)
+                        .then(|| object.properties.get(key).cloned())
+                        .flatten()
                         .map(|value| (value, object.is_frozen)),
                     object.prototype,
                 )
@@ -22750,6 +23283,9 @@ impl InterpreterCore {
         object_id: ObjectId,
         key: &str,
     ) -> Result<bool, InterpreterError> {
+        if self.writable_state_view_value(object_id, key).is_some() {
+            return Ok(true);
+        }
         let mut current = Some(object_id);
         let mut depth = 0u32;
         let mut visited = BTreeSet::new();
@@ -22757,6 +23293,9 @@ impl InterpreterCore {
         while let Some(id) = current {
             if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
                 return Ok(false);
+            }
+            if self.writable_state_view_value(id, key).is_some() {
+                return Ok(true);
             }
             let object = self
                 .heap
@@ -23111,6 +23650,7 @@ impl InterpreterCore {
         Ok(object
             .properties
             .keys()
+            .filter(|key| self.writable_own_property_visible(object_id, key))
             .map(|key| Value::str(key.as_str()))
             .collect())
     }
@@ -24132,33 +24672,53 @@ impl InterpreterCore {
             while let Some(object_id) = self.next_scheduled_writable_tick()? {
                 if let Some(state) = self.writable_streams.get_mut(&object_id) {
                     state.tick_sequence = None;
-                }
-                let emitting_terminal_error =
-                    self.writable_streams.get(&object_id).is_some_and(|state| {
-                        state.tick_phase == WritableTickPhase::Error
-                            && state.finished_end_callback_batch_remaining == 0
-                            && !(matches!(
-                                state.terminal_error_origin,
-                                Some(WritableErrorOrigin::Write | WritableErrorOrigin::Destroy)
-                            ) && state.end_callback_batch_remaining > 0)
-                    });
-                if let Err(error) = self.drive_writable_tick(object_id, module) {
-                    if emitting_terminal_error {
-                        // An unhandled stream `error` is process-fatal in the
-                        // reference runtime. Do not run close handlers, other
-                        // Writable ticks, or the ordinary microtask queue.
-                        return Err(error);
+                    let emitting_terminal_error =
+                        self.writable_streams.get(&object_id).is_some_and(|state| {
+                            state.tick_phase == WritableTickPhase::Error
+                                && state.finished_end_callback_batch_remaining == 0
+                                && !(matches!(
+                                    state.terminal_error_origin,
+                                    Some(WritableErrorOrigin::Write | WritableErrorOrigin::Destroy)
+                                ) && state.end_callback_batch_remaining > 0)
+                        });
+                    if let Err(error) = self.drive_writable_tick(object_id, module) {
+                        if emitting_terminal_error {
+                            // An unhandled stream `error` is process-fatal in
+                            // the reference runtime. Do not run close handlers,
+                            // other Writable ticks, or the ordinary microtask
+                            // queue.
+                            return Err(error);
+                        }
+                        if first_error.is_none() {
+                            first_error = Some(error);
+                        }
                     }
-                    if first_error.is_none() {
+                    continue;
+                }
+
+                if let Some(state) = self.writable_terminal_states.get_mut(&object_id) {
+                    if state.tick_sequence.take().is_some() {
+                        self.pending_writable_terminal_ticks =
+                            self.pending_writable_terminal_ticks.saturating_sub(1);
+                    }
+                    if let Err(error) = self.drive_writable_terminal_tick(object_id, module)
+                        && first_error.is_none()
+                    {
                         first_error = Some(error);
                     }
+                } else if first_error.is_none() {
+                    first_error = Some(InterpreterError::InternalError {
+                        details: "scheduled Writable tick lost both live and terminal state"
+                            .to_string(),
+                    });
                 }
             }
             self.drain_microtasks(module);
-            if !self
-                .writable_streams
-                .values()
-                .any(|state| state.tick_sequence.is_some())
+            if self.pending_writable_terminal_ticks == 0
+                && !self
+                    .writable_streams
+                    .values()
+                    .any(|state| state.tick_sequence.is_some())
             {
                 return match first_error {
                     Some(error) => Err(error),
@@ -28190,6 +28750,10 @@ impl InterpreterCore {
                     let value = match object_value {
                         Value::Object(object_id) => {
                             if let Some(value) =
+                                self.writable_state_view_value(object_id, &key_string)
+                            {
+                                value
+                            } else if let Some(value) =
                                 self.typed_array_indexed_get_property(object_id, &key_string)?
                             {
                                 value
@@ -28446,6 +29010,10 @@ impl InterpreterCore {
                     let value = match object_value {
                         Value::Object(object_id) => {
                             if let Some(value) =
+                                self.writable_state_view_value(object_id, &key_string)
+                            {
+                                value
+                            } else if let Some(value) =
                                 self.typed_array_indexed_get_property(object_id, &key_string)?
                             {
                                 value
@@ -29690,7 +30258,7 @@ impl InterpreterCore {
                     for (key, val) in &object.properties {
                         // Engine-internal metadata (e.g. Symbol __type/__key) is
                         // not a real enumerable JS property — do not serialize it.
-                        if key.starts_with("__") {
+                        if key.starts_with("__") || !self.writable_own_property_visible(*id, key) {
                             continue;
                         }
                         if let Some(rendered_val) = self.json_stringify_value(val, visited) {
@@ -30996,21 +31564,18 @@ impl InterpreterCore {
                 let obj_val = self.read_reg(args.start)?;
                 match obj_val {
                     Value::Object(obj_id) => {
-                        // Get the object's properties
-                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                            let keys: Vec<String> = obj.properties.keys().cloned().collect();
-
-                            let key_values = keys
-                                .iter()
-                                .map(|key| Value::str(key.as_str()))
-                                .collect::<Vec<_>>();
-                            let array_id = self.alloc_array_from_values(&key_values)?;
-
-                            Ok(Value::Object(array_id))
-                        } else {
-                            // Object not found in heap
-                            Ok(Value::Undefined)
-                        }
+                        let key_values = self
+                            .heap
+                            .get(obj_id.0 as usize)
+                            .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?
+                            .properties
+                            .keys()
+                            .filter(|key| self.writable_own_property_visible(obj_id, key))
+                            .map(|key| Value::str(key.as_str()))
+                            .collect::<Vec<_>>();
+                        self.join_pending_hostcall_stream_label(obj_id);
+                        let array_id = self.alloc_array_from_values(&key_values)?;
+                        Ok(Value::Object(array_id))
                     }
                     _ => {
                         // Non-object argument - return empty array per JavaScript behavior
@@ -31028,17 +31593,18 @@ impl InterpreterCore {
                 let obj_val = self.read_reg(args.start)?;
                 match obj_val {
                     Value::Object(obj_id) => {
-                        // Get the object's property values
-                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                            let values: Vec<Value> = obj.properties.values().cloned().collect();
-
-                            let array_id = self.alloc_array_from_values(&values)?;
-
-                            Ok(Value::Object(array_id))
-                        } else {
-                            // Object not found in heap
-                            Ok(Value::Undefined)
-                        }
+                        let values = self
+                            .heap
+                            .get(obj_id.0 as usize)
+                            .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?
+                            .properties
+                            .iter()
+                            .filter(|(key, _)| self.writable_own_property_visible(obj_id, key))
+                            .map(|(_, value)| value.clone())
+                            .collect::<Vec<_>>();
+                        self.join_pending_hostcall_stream_label(obj_id);
+                        let array_id = self.alloc_array_from_values(&values)?;
+                        Ok(Value::Object(array_id))
                     }
                     _ => {
                         // Non-object argument - return empty array per JavaScript behavior
@@ -31056,31 +31622,26 @@ impl InterpreterCore {
                 let obj_val = self.read_reg(args.start)?;
                 match obj_val {
                     Value::Object(obj_id) => {
-                        // Get the object's property entries as [key, value] pairs
-                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                            let entries: Vec<(String, Value)> = obj
-                                .properties
-                                .iter()
-                                .map(|(k, v)| (k.clone(), v.clone()))
-                                .collect();
+                        let entries = self
+                            .heap
+                            .get(obj_id.0 as usize)
+                            .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?
+                            .properties
+                            .iter()
+                            .filter(|(key, _)| self.writable_own_property_visible(obj_id, key))
+                            .map(|(key, value)| (key.clone(), value.clone()))
+                            .collect::<Vec<_>>();
+                        self.join_pending_hostcall_stream_label(obj_id);
+                        let mut entry_values = Vec::with_capacity(entries.len());
 
-                            let mut entry_values = Vec::with_capacity(entries.len());
-
-                            // Set array elements as numeric properties, each containing a [key, value] pair
-                            for (key, value) in &entries {
-                                let entry_array_id = self.alloc_array_from_values(&[
-                                    Value::str(key.as_str()),
-                                    value.clone(),
-                                ])?;
-                                entry_values.push(Value::Object(entry_array_id));
-                            }
-                            let array_id = self.alloc_array_from_values(&entry_values)?;
-
-                            Ok(Value::Object(array_id))
-                        } else {
-                            // Object not found in heap
-                            Ok(Value::Undefined)
+                        // Set array elements as numeric properties, each containing a [key, value] pair
+                        for (key, value) in entries {
+                            let entry_array_id =
+                                self.alloc_array_from_values(&[Value::str(key), value])?;
+                            entry_values.push(Value::Object(entry_array_id));
                         }
+                        let array_id = self.alloc_array_from_values(&entry_values)?;
+                        Ok(Value::Object(array_id))
                     }
                     _ => {
                         // Non-object argument - return empty array per JavaScript behavior
@@ -31115,18 +31676,24 @@ impl InterpreterCore {
                 for i in 1..args.count {
                     let source_val = self.read_reg(args.start + i)?;
                     if let Value::Object(source_obj_id) = source_val {
-                        // Get properties from source object
-                        if let Some(source_obj) = self.heap.get(source_obj_id.0 as usize) {
-                            let properties_to_copy: Vec<(String, Value)> = source_obj
-                                .properties
-                                .iter()
-                                .map(|(k, v)| (k.clone(), v.clone()))
-                                .collect();
+                        let properties_to_copy = self
+                            .heap
+                            .get(source_obj_id.0 as usize)
+                            .ok_or(InterpreterError::ObjectNotFound {
+                                id: source_obj_id.0,
+                            })?
+                            .properties
+                            .iter()
+                            .filter(|(key, _)| {
+                                self.writable_own_property_visible(source_obj_id, key)
+                            })
+                            .map(|(key, value)| (key.clone(), value.clone()))
+                            .collect::<Vec<_>>();
+                        self.join_pending_hostcall_stream_label(source_obj_id);
 
-                            // Copy each property to target object
-                            for (key, value) in properties_to_copy {
-                                self.set_object_property(target_obj_id, key, value)?;
-                            }
+                        // Copy each property to target object
+                        for (key, value) in properties_to_copy {
+                            self.set_object_property(target_obj_id, key, value)?;
                         }
                     }
                     // Skip non-object sources (null, undefined, primitives)
@@ -31872,6 +32439,9 @@ impl InterpreterCore {
                 }
 
                 let value = self.read_reg(args.start)?;
+                if let Value::Object(object_id) = &value {
+                    self.join_pending_hostcall_stream_label(*object_id);
+                }
                 // bd-9a8cz.3: real recursive object/array serialization. Previously
                 // `Value::Object(_)` was a `"{}"` stub. `json_stringify_value`
                 // returns `None` for values JSON omits (undefined/function); at the
@@ -32732,13 +33302,11 @@ impl InterpreterCore {
                     _ => return Ok(Value::Bool(false)),
                 };
 
-                // Check if object has the property
-                if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                    let has_property = obj.properties.contains_key(&prop_name);
-                    Ok(Value::Bool(has_property))
-                } else {
-                    Ok(Value::Bool(false))
-                }
+                self.join_pending_hostcall_stream_label(obj_id);
+                Ok(Value::Bool(self.object_own_property_contains(
+                    &Value::Object(obj_id),
+                    &Value::str(prop_name),
+                )))
             }
             "builtin:ArrayPrototypeSort" => {
                 // Array.prototype.sort([compareFunction]) implementation (consolidated for builtin IDs 28, 248, 385)
@@ -33582,6 +34150,7 @@ impl InterpreterCore {
                 } else {
                     Value::Object(target)
                 };
+                self.join_pending_hostcall_stream_label(target);
                 self.proxy_aware_get_property(module, target, &key, receiver, 0)
             }
             "builtin:ReflectSet" => {
@@ -33614,6 +34183,7 @@ impl InterpreterCore {
                 }
                 let key_value = self.read_reg(args.start + 1)?;
                 let key = self.property_key_from_value(&key_value);
+                self.join_pending_hostcall_stream_label(target);
                 Ok(Value::Bool(
                     self.proxy_aware_has_property(module, target, &key, 0)?,
                 ))
@@ -33621,6 +34191,7 @@ impl InterpreterCore {
             "builtin:ReflectOwnKeys" => {
                 let target = self.read_object_argument(args, 0, "Reflect.ownKeys target object")?;
                 let keys = self.proxy_aware_own_property_keys(module, target, 0)?;
+                self.join_pending_hostcall_stream_label(target);
                 let array_id = self.alloc_array_from_values(&keys)?;
                 Ok(Value::Object(array_id))
             }
@@ -34512,23 +35083,18 @@ impl InterpreterCore {
                 let obj_val = self.read_reg(args.start)?;
                 match obj_val {
                     Value::Object(obj_id) => {
-                        // Get the object's own property names
-                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                            let property_names: Vec<String> =
-                                obj.properties.keys().cloned().collect();
-
-                            let property_name_values = property_names
-                                .iter()
-                                .map(|name| Value::str(name.as_str()))
-                                .collect::<Vec<_>>();
-                            let array_id = self.alloc_array_from_values(&property_name_values)?;
-
-                            Ok(Value::Object(array_id))
-                        } else {
-                            // Object not found, return empty array
-                            let empty_array_id = self.alloc_array_from_values(&[])?;
-                            Ok(Value::Object(empty_array_id))
-                        }
+                        let property_name_values = self
+                            .heap
+                            .get(obj_id.0 as usize)
+                            .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?
+                            .properties
+                            .keys()
+                            .filter(|key| self.writable_own_property_visible(obj_id, key))
+                            .map(|name| Value::str(name.as_str()))
+                            .collect::<Vec<_>>();
+                        self.join_pending_hostcall_stream_label(obj_id);
+                        let array_id = self.alloc_array_from_values(&property_name_values)?;
+                        Ok(Value::Object(array_id))
                     }
                     _ => {
                         // Non-object argument, return empty array
@@ -35265,13 +35831,23 @@ impl InterpreterCore {
                 // Snapshot the property value under an immutable borrow,
                 // then allocate + populate the descriptor under a fresh
                 // &mut self context.
-                let descriptor_source: Option<(Value, bool)> =
-                    self.heap.get(obj_id.0 as usize).and_then(|obj| {
-                        obj.properties
-                            .get(&prop_name)
-                            .cloned()
-                            .map(|value| (value, obj.is_frozen))
-                    });
+                let is_frozen = self
+                    .heap
+                    .get(obj_id.0 as usize)
+                    .map(|obj| obj.is_frozen)
+                    .unwrap_or(false);
+                let hides_writable_mirror = (self.writable_streams.contains_key(&obj_id)
+                    || self.writable_terminal_states.contains_key(&obj_id))
+                    && Self::is_writable_state_view_key(&prop_name);
+                let descriptor_source = (!hides_writable_mirror)
+                    .then(|| {
+                        self.heap
+                            .get(obj_id.0 as usize)
+                            .and_then(|obj| obj.properties.get(&prop_name).cloned())
+                    })
+                    .flatten()
+                    .map(|value| (value, is_frozen));
+                self.join_pending_hostcall_stream_label(obj_id);
                 if let Some((value, is_frozen)) = descriptor_source {
                     {
                         // Create property descriptor object
@@ -35326,6 +35902,7 @@ impl InterpreterCore {
                 };
 
                 // Use our prototype chain descriptor lookup
+                self.join_pending_hostcall_stream_label(obj_id);
                 self.prototype_chain_get_property_descriptor(obj_id, &prop_key)
             }
 
@@ -35624,12 +36201,13 @@ impl InterpreterCore {
                     _ => return Ok(Value::Bool(false)),
                 };
 
-                // Check if the object has the property (simplified: all own properties are enumerable)
-                if let Some(obj) = self.heap.get(object_id.0 as usize) {
-                    Ok(Value::Bool(obj.properties.contains_key(&prop_key)))
-                } else {
-                    Ok(Value::Bool(false))
-                }
+                // All ordinary own properties are enumerable in this simplified
+                // model; Writable state mirrors are inherited accessors.
+                self.join_pending_hostcall_stream_label(object_id);
+                Ok(Value::Bool(self.object_own_property_contains(
+                    &Value::Object(object_id),
+                    &Value::str(prop_key),
+                )))
             }
 
             "builtin:StringPrototypeConcat" => {
@@ -39392,6 +39970,19 @@ impl InterpreterCore {
             .saturating_add(Self::estimate_label_bytes(&state.lifecycle_label))
     }
 
+    fn estimate_writable_terminal_state_bytes(state: &WritableTerminalState) -> u64 {
+        MEMORY_ESTIMATE_WRITABLE_TERMINAL_BASE_BYTES
+            .saturating_add(
+                u64::try_from(state.callbacks.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(MEMORY_ESTIMATE_WRITABLE_END_CALLBACK_BYTES),
+            )
+            .saturating_add(state.callbacks.iter().fold(0u64, |total, record| {
+                total.saturating_add(Self::estimate_writable_callback_bytes(&record.callback))
+            }))
+            .saturating_add(Self::estimate_label_bytes(&state.lifecycle_label))
+    }
+
     fn estimate_scope_frame_bytes(frame: &ScopeFrame) -> u64 {
         let bindings = frame
             .bindings
@@ -39603,6 +40194,13 @@ impl InterpreterCore {
             .sum()
     }
 
+    fn writable_terminal_states_memory_bytes(&self) -> u64 {
+        self.writable_terminal_states
+            .values()
+            .map(Self::estimate_writable_terminal_state_bytes)
+            .sum()
+    }
+
     fn release_event_listener_memory(&mut self, event: &str, record: &EventListenerRecord) {
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
@@ -39663,6 +40261,7 @@ impl InterpreterCore {
             .saturating_add(self.event_promise_waiters_memory_bytes())
             .saturating_add(self.readable_from_streams_memory_bytes())
             .saturating_add(self.writable_streams_memory_bytes())
+            .saturating_add(self.writable_terminal_states_memory_bytes())
             .saturating_add(self.module_state.retained_program_bytes)
     }
 
@@ -40564,7 +41163,7 @@ impl InterpreterCore {
                 .get(id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
             for key in object.properties.keys() {
-                if seen.insert(key.clone()) {
+                if self.writable_own_property_visible(id, key) && seen.insert(key.clone()) {
                     keys.push(key.clone());
                 }
             }
@@ -48267,6 +48866,237 @@ mod async_runtime_tests_current {
         assert_eq!(
             refusal_core.estimated_memory_bytes(),
             refusal_core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn writable_terminal_tombstone_is_accounted_atomic_and_reset_safe_bd_fw7zd_2() {
+        assert!(
+            usize::try_from(MEMORY_ESTIMATE_WRITABLE_BASE_BYTES)
+                .expect("live Writable base charge fits usize")
+                >= std::mem::size_of::<WritableState>()
+                    .saturating_add(MEMORY_ESTIMATE_WRITABLE_MAP_ENTRY_MARGIN_BYTES),
+            "the fixed live charge covers inline state and map-entry margin before dynamic payloads"
+        );
+        assert!(
+            usize::try_from(MEMORY_ESTIMATE_WRITABLE_TERMINAL_BASE_BYTES)
+                .expect("terminal Writable base charge fits usize")
+                >= std::mem::size_of::<WritableTerminalState>()
+                    .saturating_add(MEMORY_ESTIMATE_WRITABLE_MAP_ENTRY_MARGIN_BYTES),
+            "the fixed terminal charge covers retained inline state and map-entry margin before dynamic payloads"
+        );
+        assert!(
+            usize::try_from(MEMORY_ESTIMATE_WRITABLE_END_CALLBACK_BYTES)
+                .expect("terminal callback node charge fits usize")
+                >= std::mem::size_of::<WritableTerminalCallbackRecord>()
+                    .saturating_add(2 * std::mem::size_of::<usize>()),
+            "the terminal callback charge covers the record and linked-list pointers"
+        );
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let seed = core.capture_execution_seed();
+        let Value::Object(writable) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("generic Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        let terminal_label = Label::Custom {
+            name: "terminal-secret".to_string(),
+            level: 4,
+        };
+        {
+            let state = core
+                .writable_streams
+                .get_mut(&writable)
+                .expect("live Writable before terminalization");
+            state.end_requested = true;
+            state.finished = true;
+            state.final_status = WritableFinalStatus::Done;
+            state.prefinish_emitted = true;
+            state.tick_phase = WritableTickPhase::Release;
+            state.lifecycle_label = terminal_label.clone();
+        }
+        core.sync_estimated_memory_bytes()
+            .expect("custom terminal label accounting");
+        let before_terminalization = core.estimated_memory_bytes();
+        let live_bytes =
+            InterpreterCore::estimate_writable_state_bytes(&core.writable_streams[&writable]);
+
+        core.terminalize_writable_state_storage(writable)
+            .expect("normal live-to-terminal conversion");
+        assert!(!core.writable_streams.contains_key(&writable));
+        let tombstone = core
+            .writable_terminal_states
+            .get(&writable)
+            .expect("accounted terminal tombstone");
+        let tombstone_bytes = InterpreterCore::estimate_writable_terminal_state_bytes(tombstone);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            before_terminalization - live_bytes + tombstone_bytes
+        );
+        assert_eq!(
+            core.writable_state_view_value(writable, "writableFinished"),
+            Some(Value::Bool(true))
+        );
+        assert_eq!(
+            core.writable_state_view_value(writable, "destroyed"),
+            Some(Value::Bool(true))
+        );
+        assert_eq!(core.stream_state_label(writable), terminal_label);
+        assert_eq!(
+            core.writable_receiver_id(Value::Object(writable)),
+            Ok(writable),
+            "terminal branding must not depend on a forgeable heap tag"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.remove_object_property(writable, "closed")
+            .expect("delete forgeable closed mirror");
+        let inherited = core
+            .alloc_object_with_prototype(Some(writable))
+            .expect("object inheriting a terminal Writable");
+        assert_eq!(
+            core.prototype_chain_get(inherited, "closed")
+                .expect("inherited authoritative state read"),
+            Value::Bool(true)
+        );
+        assert_eq!(core.stream_state_label(inherited), terminal_label);
+        let proxy_handler = core
+            .alloc_object_with_prototype(None)
+            .expect("transparent Proxy handler");
+        let transparent_proxy = core
+            .create_proxy_object(writable, proxy_handler)
+            .expect("transparent Proxy over terminal Writable");
+        assert_eq!(
+            core.stream_state_label(transparent_proxy),
+            terminal_label,
+            "Proxy target edges retain terminal lifecycle provenance"
+        );
+        core.write_reg(0, Value::Object(inherited))
+            .expect("Reflect.has receiver");
+        core.write_reg(1, Value::str("closed"))
+            .expect("Reflect.has key");
+        core.pending_hostcall_result_label = None;
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ReflectHas",
+                RegRange { start: 0, count: 2 },
+                Some(&module),
+            )
+            .expect("Reflect.has on terminal Writable"),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            core.pending_hostcall_result_label,
+            Some(terminal_label.clone()),
+            "reflective state observations retain the terminal lifecycle label"
+        );
+
+        let callback = WritableCallbackRecord {
+            value: Value::BuiltinFunction(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::ArrayIsArray,
+            )),
+            label: Label::Secret,
+            module_specifier: None,
+        };
+        let callback_charge = MEMORY_ESTIMATE_WRITABLE_END_CALLBACK_BYTES
+            .saturating_add(InterpreterCore::estimate_writable_callback_bytes(&callback));
+        let before_append = core.estimated_memory_bytes();
+        let before_state = core.writable_terminal_states[&writable].clone();
+        let before_sequence = core.next_writable_tick_sequence;
+        core.config.max_total_memory_bytes = before_append
+            .saturating_add(callback_charge)
+            .saturating_sub(1);
+        assert!(matches!(
+            core.append_writable_terminal_callback(
+                writable,
+                callback.clone(),
+                WritableTerminalCallbackError::EndAfterFinish,
+                &Label::Secret,
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.writable_terminal_states[&writable], before_state);
+        assert_eq!(core.estimated_memory_bytes(), before_append);
+        assert_eq!(core.next_writable_tick_sequence, before_sequence);
+        assert_eq!(core.pending_writable_terminal_ticks, 0);
+
+        core.config.max_total_memory_bytes = before_append.saturating_add(callback_charge);
+        core.append_writable_terminal_callback(
+            writable,
+            callback,
+            WritableTerminalCallbackError::EndAfterFinish,
+            &Label::Secret,
+        )
+        .expect("exact callback charge must fit");
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            before_append + callback_charge
+        );
+        assert_eq!(core.pending_writable_terminal_ticks, 1);
+        assert!(
+            core.writable_terminal_states[&writable]
+                .tick_sequence
+                .is_some()
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.config.max_total_memory_bytes = u64::MAX;
+        core.drain_runtime_checkpoint(Some(&module))
+            .expect("post-close callback checkpoint");
+        assert!(
+            core.writable_terminal_states[&writable]
+                .callbacks
+                .is_empty()
+        );
+        assert_eq!(core.pending_writable_terminal_ticks, 0);
+        assert_eq!(core.estimated_memory_bytes(), before_append);
+
+        let previous_register_bytes = core.registers_memory_bytes();
+        let previous_heap_bytes = core.heap_memory_bytes();
+        core.reset_execution_state_from_seed(&seed)
+            .expect("seed reset clears terminal Writable state");
+        core.apply_register_heap_memory_delta(previous_register_bytes, previous_heap_bytes)
+            .expect("first reset memory delta");
+        assert!(!core.writable_terminal_states.contains_key(&writable));
+        assert_eq!(core.pending_writable_terminal_ticks, 0);
+        let replacement = core
+            .alloc_object_with_prototype(None)
+            .expect("ordinary replacement object after reset");
+        assert_eq!(replacement, writable, "reset must permit ObjectId reuse");
+        assert!(matches!(
+            core.writable_receiver_id(Value::Object(replacement)),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        assert_eq!(core.stream_state_label(replacement), Label::Public);
+
+        let previous_register_bytes = core.registers_memory_bytes();
+        let previous_heap_bytes = core.heap_memory_bytes();
+        core.reset_execution_state_from_seed(&seed)
+            .expect("second seed reset before branded ObjectId reuse");
+        core.apply_register_heap_memory_delta(previous_register_bytes, previous_heap_bytes)
+            .expect("second reset memory delta");
+        let Value::Object(reused_writable) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("Writable after terminal ObjectId reset")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        assert_eq!(reused_writable, writable);
+        assert!(core.writable_streams.contains_key(&reused_writable));
+        assert!(!core.writable_terminal_states.contains_key(&reused_writable));
+        assert_eq!(core.stream_state_label(reused_writable), Label::Public);
+        assert_eq!(core.pending_writable_terminal_ticks, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
         );
     }
 

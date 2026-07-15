@@ -1011,6 +1011,221 @@ fn writable_repeated_end_callbacks_preserve_terminal_fifo_contract_bd_fw7zd_1() 
     ]);
 }
 
+const WRITABLE_TOMBSTONE_CASES_BD_FW7ZD_2: &[EvalCase] = &[
+    EvalCase {
+        ids: &["bd-fw7zd.2"],
+        description: "guest property forgery cannot alter live or successful terminal state views",
+        source: r#"
+                const { Writable } = require('stream');
+                const state = (writable) => [
+                  writable.writable,
+                  writable.writableEnded,
+                  writable.writableFinished,
+                  writable.writableLength,
+                  writable.writableCorked,
+                  writable.writableNeedDrain,
+                  writable.writableObjectMode,
+                  writable.writableHighWaterMark,
+                  writable.destroyed,
+                  writable.closed
+                ].join(':');
+                const writable = new Writable({ write(chunk, encoding, callback) { callback(); } });
+                writable.writable = false; delete writable.writable;
+                writable.writableEnded = true; delete writable.writableEnded;
+                writable.writableFinished = true; delete writable.writableFinished;
+                writable.writableLength = 999; delete writable.writableLength;
+                writable.writableCorked = 999; delete writable.writableCorked;
+                writable.writableNeedDrain = true; delete writable.writableNeedDrain;
+                writable.writableObjectMode = true; delete writable.writableObjectMode;
+                writable.writableHighWaterMark = 1; delete writable.writableHighWaterMark;
+                writable.destroyed = true; delete writable.destroyed;
+                writable.closed = true; delete writable.closed;
+                delete writable.__type;
+                console.log('pre:' + state(writable) + ':has=' + ('closed' in writable));
+                writable.on('finish', () => console.log('finish:' + state(writable)));
+                writable.on('close', () => console.log('close:' + state(writable)));
+                writable.end();
+            "#,
+        expected: "pre:true:false:false:0:0:false:false:65536:false:false:has=true\nfinish:false:true:true:0:0:false:false:65536:false:false\nclose:false:true:true:0:0:false:false:65536:true:true",
+    },
+    EvalCase {
+        ids: &["bd-fw7zd.2"],
+        description: "successful tombstones retain branding and deterministic post-close method behavior",
+        source: r#"
+                const { Writable } = require('stream');
+                const events = [];
+                const message = (error) => error && error.message || String(error);
+                const writable = new Writable({ write(chunk, encoding, callback) { callback(); } });
+                delete writable.__type;
+                writable.on('close', () => setImmediate(() => {
+                  writable.write('late', (error) => events.push('write:' + message(error)));
+                  writable.end((error) => {
+                    events.push('end:' + message(error));
+                    writable.end((again) => events.push('reend:' + message(again)));
+                  });
+                  writable.end('', (error) => events.push('end-chunk:' + message(error)));
+                  setImmediate(() => console.log(events.join(',')));
+                }));
+                writable.end();
+            "#,
+        expected: "write:write after end,end:Cannot call end after a stream was finished,end-chunk:write after end,reend:Cannot call end after a stream was finished",
+    },
+    EvalCase {
+        ids: &["bd-fw7zd.2"],
+        description: "successful tombstone write returns false without a callback",
+        source: r#"
+                const { Writable } = require('stream');
+                const writable = new Writable({ write(chunk, encoding, callback) { callback(); } });
+                delete writable.__type;
+                writable.on('close', () => setImmediate(() => {
+                  console.log(writable.write('late'));
+                }));
+                writable.end();
+            "#,
+        expected: "false",
+    },
+    EvalCase {
+        ids: &["bd-fw7zd.2"],
+        description: "successful tombstone end remains chainable without a callback",
+        source: r#"
+                const { Writable } = require('stream');
+                const writable = new Writable({ write(chunk, encoding, callback) { callback(); } });
+                delete writable.__type;
+                writable.on('close', () => setImmediate(() => {
+                  console.log(writable.end() === writable);
+                }));
+                writable.end();
+            "#,
+        expected: "true",
+    },
+    EvalCase {
+        ids: &["bd-fw7zd.2"],
+        description: "successful tombstone controls are no-ops and destroy stays idempotent",
+        source: r#"
+                const { Writable } = require('stream');
+                const writable = new Writable({ write(chunk, encoding, callback) { callback(); } });
+                delete writable.__type;
+                writable.on('close', () => setImmediate(() => {
+                  console.log(String(writable.cork()) + ':' + String(writable.uncork()) + ':' + (writable.destroy() === writable));
+                }));
+                writable.end();
+            "#,
+        expected: "undefined:undefined:true",
+    },
+    EvalCase {
+        ids: &["bd-fw7zd.2"],
+        description: "destroyed tombstones retain branding and ignore a no-error late end callback",
+        source: r#"
+                const { Writable } = require('stream');
+                const events = [];
+                const message = (error) => error && error.message || String(error);
+                const state = (writable) => [
+                  writable.writable,
+                  writable.writableEnded,
+                  writable.writableFinished,
+                  writable.writableLength,
+                  writable.writableCorked,
+                  writable.writableNeedDrain,
+                  writable.writableObjectMode,
+                  writable.writableHighWaterMark,
+                  writable.destroyed,
+                  writable.closed
+                ].join(':');
+                const writable = new Writable({ write(chunk, encoding, callback) {} });
+                writable.on('close', () => {
+                  events.push('close:' + state(writable));
+                  setImmediate(() => {
+                    events.push('post:' + state(writable));
+                    const writeResult = writable.write('late', (error) => events.push('write:' + message(error)));
+                    const endResult = writable.end(() => events.push('wrong:end'));
+                    writable.end('late', (error) => events.push('end-chunk:' + message(error)));
+                    events.push('methods:' + writeResult + ':' + (endResult === writable));
+                    setImmediate(() => console.log(events.join(',')));
+                  });
+                });
+                writable.destroy();
+            "#,
+        expected: "close:false:false:false:0:0:false:false:65536:true:true,post:false:false:false:0:0:false:false:65536:true:true,methods:false:true,write:Cannot call write after a stream was destroyed,end-chunk:Cannot call write after a stream was destroyed",
+    },
+    EvalCase {
+        ids: &["bd-fw7zd.2"],
+        description: "Writable state views stay authoritative through own-property reflection and copying",
+        source: r#"
+                const { Writable } = require('stream');
+                const writable = new Writable({ write(chunk, encoding, callback) { callback(); } });
+                const child = Object.create(writable);
+                const proxy = new Proxy(writable, {});
+                const reflected = () => {
+                  const entries = Object.fromEntries(Object.entries(writable));
+                  const assigned = Object.assign({}, writable);
+                  const enumerated = [];
+                  for (const key in writable) enumerated.push(key);
+                  return [
+                    !writable.hasOwnProperty('closed'),
+                    !writable.propertyIsEnumerable('closed'),
+                    Object.getOwnPropertyDescriptor(writable, 'writableFinished') === undefined,
+                    entries.writableFinished === undefined,
+                    assigned.writableFinished === undefined,
+                    Reflect.get(writable, 'writableFinished'),
+                    Reflect.has(writable, 'closed'),
+                    Object.keys(writable).indexOf('closed') < 0,
+                    Object.getOwnPropertyNames(writable).indexOf('closed') < 0,
+                    Reflect.ownKeys(writable).indexOf('closed') < 0,
+                    enumerated.indexOf('closed') < 0,
+                    JSON.parse(JSON.stringify(writable)).writableFinished === undefined,
+                    child.writableFinished,
+                    Reflect.get(child, 'writableFinished'),
+                    'closed' in child,
+                    proxy.writableFinished,
+                    Reflect.get(proxy, 'writableFinished'),
+                    Reflect.has(proxy, 'closed')
+                  ].join(':');
+                };
+                writable.writableFinished = true; delete writable.writableFinished;
+                writable.closed = true; delete writable.closed;
+                console.log('pre:' + reflected());
+                writable.on('close', () => console.log('post:' + reflected()));
+                writable.end();
+            "#,
+        expected: "pre:true:true:true:true:true:false:true:true:true:true:true:true:false:false:true:false:false:true\npost:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true",
+    },
+];
+
+#[test]
+fn writable_state_views_are_authoritative_bd_fw7zd_2() {
+    assert_cases(&WRITABLE_TOMBSTONE_CASES_BD_FW7ZD_2[0..1]);
+}
+
+#[test]
+fn writable_terminal_methods_are_deterministic_bd_fw7zd_2() {
+    assert_cases(&WRITABLE_TOMBSTONE_CASES_BD_FW7ZD_2[1..2]);
+}
+
+#[test]
+fn writable_terminal_method_results_are_stable_bd_fw7zd_2() {
+    assert_cases(&WRITABLE_TOMBSTONE_CASES_BD_FW7ZD_2[2..3]);
+}
+
+#[test]
+fn writable_terminal_end_result_is_stable_bd_fw7zd_2() {
+    assert_cases(&WRITABLE_TOMBSTONE_CASES_BD_FW7ZD_2[3..4]);
+}
+
+#[test]
+fn writable_terminal_controls_are_stable_bd_fw7zd_2() {
+    assert_cases(&WRITABLE_TOMBSTONE_CASES_BD_FW7ZD_2[4..5]);
+}
+
+#[test]
+fn writable_destroyed_tombstone_is_authoritative_bd_fw7zd_2() {
+    assert_cases(&WRITABLE_TOMBSTONE_CASES_BD_FW7ZD_2[5..6]);
+}
+
+#[test]
+fn writable_state_reflection_is_authoritative_bd_fw7zd_2() {
+    assert_cases(&WRITABLE_TOMBSTONE_CASES_BD_FW7ZD_2[6..7]);
+}
+
 #[test]
 #[ignore = "bd-8nrud: process.nextTick prerequisite not implemented yet"]
 fn writable_cork_next_tick_prerequisite() {

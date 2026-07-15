@@ -96,6 +96,8 @@ const DEFAULT_MAX_CONCURRENT_SAGAS: usize = 4;
 #[allow(dead_code)]
 const IFC_RUNTIME_GUARD_CAPABILITY: &str = "ifc.check_flow";
 const SCALE_MILLION: i64 = 1_000_000;
+const EVIDENCE_COMPRESSION_SKETCH_SCHEMA: &str = "franken-engine.evidence-compression-sketch.v2";
+const EVIDENCE_COMPRESSION_SKETCH_MAX_BYTES: usize = 512;
 
 // ---------------------------------------------------------------------------
 // LossMatrixPreset
@@ -192,6 +194,51 @@ pub struct ExtensionPackage {
 // OrchestratorResult
 // ---------------------------------------------------------------------------
 
+/// Stage at which an evidence-compression attempt failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceCompressionFailureStage {
+    Coder,
+    Encode,
+    Kraft,
+}
+
+impl EvidenceCompressionFailureStage {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Coder => "coder",
+            Self::Encode => "encode",
+            Self::Kraft => "kraft",
+        }
+    }
+}
+
+/// Explicit result of compressing the integrity-bound evidence sketch.
+///
+/// A failed status is never accompanied by a certificate. The failure is
+/// committed to the primary evidence entry so callers can distinguish a
+/// degraded, audited run from an unexplained missing certificate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum EvidenceCompressionStatus {
+    Certified,
+    NotApplicable,
+    Failed {
+        stage: EvidenceCompressionFailureStage,
+        detail: String,
+    },
+}
+
+impl EvidenceCompressionStatus {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Certified => "certified",
+            Self::NotApplicable => "not_applicable",
+            Self::Failed { .. } => "failed",
+        }
+    }
+}
+
 /// Complete result of an orchestrated execution pipeline.
 #[derive(Debug)]
 pub struct OrchestratorResult {
@@ -229,6 +276,7 @@ pub struct OrchestratorResult {
     // Evidence
     pub evidence_entries: Vec<EvidenceEntry>,
     pub evidence_compression_certificate: Option<CompressionCertificate>,
+    pub evidence_compression_status: EvidenceCompressionStatus,
 
     // Containment
     pub containment_receipt: Option<ContainmentReceipt>,
@@ -264,6 +312,28 @@ struct EvidenceRecordInput<'a> {
     adaptive_router_summary: Option<&'a RouterSummary>,
     optimal_stopping_certificate: Option<&'a OptimalStoppingCertificate>,
     guardplane_report: Option<&'a GuardplaneHookReport>,
+    capability_summary: EvidenceCapabilitySummary,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct EvidenceCapabilitySummary {
+    total: u64,
+    multiset_hash: ContentHash,
+}
+
+#[derive(Debug)]
+struct EvidenceCompressionSketch {
+    symbols: Vec<u32>,
+    content_hash: ContentHash,
+}
+
+#[derive(Debug)]
+struct EvidenceCompressionAttempt {
+    certificate: Option<CompressionCertificate>,
+    status: EvidenceCompressionStatus,
+    symbol_count: usize,
+    alphabet_size: usize,
+    sketch_hash: ContentHash,
 }
 
 #[derive(Debug, Clone)]
@@ -311,6 +381,9 @@ pub enum OrchestratorError {
     EvidenceCompressionEncode {
         detail: String,
     },
+    EvidenceCompressionKraft {
+        detail: String,
+    },
     EmptySource,
     EmptyExtensionId,
     PreparedExecutionContextMismatch {
@@ -338,6 +411,9 @@ impl fmt::Display for OrchestratorError {
             }
             Self::EvidenceCompressionEncode { detail } => {
                 write!(f, "evidence compression encode: {detail}")
+            }
+            Self::EvidenceCompressionKraft { detail } => {
+                write!(f, "evidence compression Kraft verification: {detail}")
             }
             Self::EmptySource => f.write_str("extension source is empty"),
             Self::EmptyExtensionId => f.write_str("extension_id is empty"),
@@ -425,6 +501,8 @@ pub struct ExecutionOrchestrator {
     trusted_declassification_authorizers: BTreeMap<String, BTreeSet<VerificationKey>>,
     attempt_counter: u64,
     execution_counter: u64,
+    #[cfg(test)]
+    evidence_compression_status_override: Option<EvidenceCompressionStatus>,
 }
 
 impl ExecutionOrchestrator {
@@ -470,6 +548,8 @@ impl ExecutionOrchestrator {
             trusted_declassification_authorizers: BTreeMap::new(),
             attempt_counter: 0,
             execution_counter: 0,
+            #[cfg(test)]
+            evidence_compression_status_override: None,
             config,
             runtime_config,
         }
@@ -578,6 +658,11 @@ impl ExecutionOrchestrator {
     ) -> Result<OrchestratorResult, OrchestratorError> {
         // Step 0: Validate.
         Self::validate_package(package)?;
+        // Commit attacker-controlled capability metadata before any execution
+        // or host effect. The post-effect evidence phase consumes only this
+        // fixed-size summary, so containment cannot be delayed by re-hashing an
+        // unbounded manifest after effects have already occurred.
+        let evidence_capability_summary = Self::capability_multiset_summary(&package.capabilities);
 
         // Step 1: Generate identifiers.
         let (attempt_index, trace_id, decision_id) =
@@ -640,8 +725,8 @@ impl ExecutionOrchestrator {
         }
 
         // Step 9: Record evidence.
-        let (entries, evidence_compression_certificate) =
-            self.phase_record_evidence(EvidenceRecordInput {
+        let (entries, evidence_compression_certificate, evidence_compression_status) = self
+            .phase_record_evidence(EvidenceRecordInput {
                 trace_id: &trace_id,
                 decision_id: &decision_id,
                 package,
@@ -653,6 +738,7 @@ impl ExecutionOrchestrator {
                 adaptive_router_summary: adaptive_router_summary.as_ref(),
                 optimal_stopping_certificate: optimal_stopping_certificate.as_ref(),
                 guardplane_report: guardplane_report.as_ref(),
+                capability_summary: evidence_capability_summary,
             })?;
         let evidence_entries = entries;
 
@@ -704,6 +790,7 @@ impl ExecutionOrchestrator {
             optimal_stopping_certificate,
             evidence_entries,
             evidence_compression_certificate,
+            evidence_compression_status,
             containment_receipt,
             saga_id,
             cell_events,
@@ -1126,7 +1213,25 @@ impl ExecutionOrchestrator {
     fn phase_record_evidence(
         &mut self,
         input: EvidenceRecordInput<'_>,
-    ) -> Result<(Vec<EvidenceEntry>, Option<CompressionCertificate>), OrchestratorError> {
+    ) -> Result<
+        (
+            Vec<EvidenceEntry>,
+            Option<CompressionCertificate>,
+            EvidenceCompressionStatus,
+        ),
+        OrchestratorError,
+    > {
+        let compression_attempt = Self::build_evidence_compression_attempt_for_input(&input)?;
+        #[cfg(test)]
+        let compression_attempt = match self.evidence_compression_status_override.take() {
+            Some(status) => EvidenceCompressionAttempt {
+                certificate: None,
+                status,
+                ..compression_attempt
+            },
+            None => compression_attempt,
+        };
+
         let EvidenceRecordInput {
             trace_id,
             decision_id,
@@ -1139,6 +1244,7 @@ impl ExecutionOrchestrator {
             adaptive_router_summary,
             optimal_stopping_certificate,
             guardplane_report,
+            capability_summary: _,
         } = input;
         let guardplane_summary = guardplane_report.map(|report| &report.summary);
         let mut builder = EvidenceEntryBuilder::new(
@@ -1295,16 +1401,43 @@ impl ExecutionOrchestrator {
             );
         }
 
-        let compression_certificate = Self::build_evidence_compression_certificate(
-            package,
-            decision,
-            effective_action,
-            exec,
-            update,
-            adaptive_router_summary,
-            optimal_stopping_certificate,
-            ir3_schedule_cost,
-        )?;
+        let EvidenceCompressionAttempt {
+            certificate: compression_certificate,
+            status: compression_status,
+            symbol_count,
+            alphabet_size,
+            sketch_hash,
+        } = compression_attempt;
+        builder = builder.meta(
+            "evidence_compression_status".to_string(),
+            compression_status.as_str().to_string(),
+        );
+        builder = builder.meta(
+            "evidence_compression_sketch_schema".to_string(),
+            EVIDENCE_COMPRESSION_SKETCH_SCHEMA.to_string(),
+        );
+        builder = builder.meta(
+            "evidence_compression_sketch_hash".to_string(),
+            sketch_hash.to_hex(),
+        );
+        builder = builder.meta(
+            "evidence_compression_symbol_count".to_string(),
+            symbol_count.to_string(),
+        );
+        builder = builder.meta(
+            "evidence_compression_alphabet_size".to_string(),
+            alphabet_size.to_string(),
+        );
+        if let EvidenceCompressionStatus::Failed { stage, detail } = &compression_status {
+            builder = builder.meta(
+                "evidence_compression_failure_stage".to_string(),
+                stage.as_str().to_string(),
+            );
+            builder = builder.meta(
+                "evidence_compression_failure_detail".to_string(),
+                detail.clone(),
+            );
+        }
         if let Some(cert) = &compression_certificate {
             builder = builder.meta(
                 "evidence_entropy_millibits".to_string(),
@@ -1359,7 +1492,7 @@ impl ExecutionOrchestrator {
             }
         }
 
-        Ok((entries, compression_certificate))
+        Ok((entries, compression_certificate, compression_status))
     }
 
     fn build_guardplane_decision_entry(
@@ -1816,28 +1949,79 @@ impl ExecutionOrchestrator {
         out
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn build_evidence_compression_certificate(
-        package: &ExtensionPackage,
-        decision: &ActionDecision,
-        effective_action: ContainmentAction,
-        exec: &ExecutionResult,
-        update: &UpdateResult,
-        adaptive_router_summary: Option<&RouterSummary>,
-        optimal_stopping_certificate: Option<&OptimalStoppingCertificate>,
-        ir3_schedule_cost: Option<TropicalWeight>,
-    ) -> Result<Option<CompressionCertificate>, OrchestratorError> {
-        let symbols = Self::build_evidence_symbols(
-            package,
-            decision,
-            effective_action,
-            exec,
-            update,
-            adaptive_router_summary,
-            optimal_stopping_certificate,
-            ir3_schedule_cost,
+    fn build_evidence_compression_attempt_for_input(
+        input: &EvidenceRecordInput<'_>,
+    ) -> Result<EvidenceCompressionAttempt, OrchestratorError> {
+        let sketch = Self::build_evidence_compression_sketch(
+            input.capability_summary,
+            input.decision,
+            input.effective_action,
+            input.exec,
+            input.update,
+            input.adaptive_router_summary,
+            input.optimal_stopping_certificate,
+            input.ir3_schedule_cost,
         );
-        Self::build_evidence_compression_certificate_from_symbols(symbols)
+        Self::build_evidence_compression_attempt(sketch)
+    }
+
+    fn build_evidence_compression_attempt(
+        sketch: EvidenceCompressionSketch,
+    ) -> Result<EvidenceCompressionAttempt, OrchestratorError> {
+        Self::build_evidence_compression_attempt_from_symbols(sketch.symbols, sketch.content_hash)
+    }
+
+    fn build_evidence_compression_attempt_from_symbols(
+        symbols: Vec<u32>,
+        sketch_hash: ContentHash,
+    ) -> Result<EvidenceCompressionAttempt, OrchestratorError> {
+        let symbol_count = symbols.len();
+        let alphabet_size = symbols.iter().copied().collect::<BTreeSet<_>>().len();
+        let compression_result = Self::build_evidence_compression_certificate_from_symbols(symbols);
+        let (certificate, status) = match compression_result {
+            Ok(Some(certificate)) => (Some(certificate), EvidenceCompressionStatus::Certified),
+            Ok(None) => (None, EvidenceCompressionStatus::NotApplicable),
+            Err(OrchestratorError::EvidenceCompressionCoder { detail }) => (
+                None,
+                EvidenceCompressionStatus::Failed {
+                    stage: EvidenceCompressionFailureStage::Coder,
+                    detail,
+                },
+            ),
+            Err(OrchestratorError::EvidenceCompressionEncode { detail }) => (
+                None,
+                EvidenceCompressionStatus::Failed {
+                    stage: EvidenceCompressionFailureStage::Encode,
+                    detail,
+                },
+            ),
+            Err(OrchestratorError::EvidenceCompressionKraft { detail }) => (
+                None,
+                EvidenceCompressionStatus::Failed {
+                    stage: EvidenceCompressionFailureStage::Kraft,
+                    detail,
+                },
+            ),
+            Err(other) => return Err(other),
+        };
+        Ok(EvidenceCompressionAttempt {
+            certificate,
+            status,
+            symbol_count,
+            alphabet_size,
+            sketch_hash,
+        })
+    }
+
+    #[cfg(test)]
+    fn force_next_evidence_compression_failure(&mut self, stage: EvidenceCompressionFailureStage) {
+        self.evidence_compression_status_override = Some(EvidenceCompressionStatus::Failed {
+            stage,
+            detail: format!(
+                "injected {} failure for bounded evidence sketch",
+                stage.as_str()
+            ),
+        });
     }
 
     fn build_evidence_compression_certificate_from_symbols(
@@ -1857,7 +2041,7 @@ impl ExecutionOrchestrator {
             .encode(&symbols)
             .map_err(Self::evidence_compression_encode_error)?;
         let certificate = CompressionCertificate::build_verified(&estimator, &coder, &compressed)
-            .map_err(Self::evidence_compression_encode_error)?;
+            .map_err(Self::evidence_compression_certificate_error)?;
         Ok(Some(certificate))
     }
 
@@ -1873,9 +2057,20 @@ impl ExecutionOrchestrator {
         }
     }
 
+    fn evidence_compression_certificate_error(err: EntropyError) -> OrchestratorError {
+        match err {
+            kraft @ EntropyError::KraftViolation { .. } => {
+                OrchestratorError::EvidenceCompressionKraft {
+                    detail: kraft.to_string(),
+                }
+            }
+            other => Self::evidence_compression_encode_error(other),
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
-    fn build_evidence_symbols(
-        package: &ExtensionPackage,
+    fn build_evidence_compression_sketch(
+        capability_summary: EvidenceCapabilitySummary,
         decision: &ActionDecision,
         effective_action: ContainmentAction,
         exec: &ExecutionResult,
@@ -1883,35 +2078,126 @@ impl ExecutionOrchestrator {
         adaptive_router_summary: Option<&RouterSummary>,
         optimal_stopping_certificate: Option<&OptimalStoppingCertificate>,
         ir3_schedule_cost: Option<TropicalWeight>,
-    ) -> Vec<u32> {
-        let mut symbols = vec![
-            10 + decision.action.severity(),
-            20 + effective_action.severity(),
-            30 + Self::risk_state_symbol(update.posterior.map_estimate()),
-            40 + (exec.instructions_executed.min(u32::MAX as u64) as u32 % 1000),
-            50 + (exec.hostcall_decisions.len() as u32 % 1000),
-        ];
+    ) -> EvidenceCompressionSketch {
+        let (allowed_hostcalls, denied_hostcalls, hostcall_hash) =
+            Self::hostcall_decision_summary(&exec.hostcall_decisions);
 
-        for capability in &package.capabilities {
-            symbols.push(1_000 + (Self::stable_symbol(capability) % 10_000));
+        let mut bytes = Vec::with_capacity(256);
+        Self::append_len_prefixed_bytes(&mut bytes, EVIDENCE_COMPRESSION_SKETCH_SCHEMA.as_bytes());
+        bytes.extend_from_slice(&decision.action.severity().to_be_bytes());
+        bytes.extend_from_slice(&effective_action.severity().to_be_bytes());
+        bytes.extend_from_slice(
+            &Self::risk_state_symbol(update.posterior.map_estimate()).to_be_bytes(),
+        );
+        bytes.extend_from_slice(&exec.instructions_executed.to_be_bytes());
+        bytes.extend_from_slice(&Self::usize_to_u64(exec.hostcall_decisions.len()).to_be_bytes());
+        bytes.extend_from_slice(&capability_summary.total.to_be_bytes());
+        bytes.extend_from_slice(capability_summary.multiset_hash.as_bytes());
+        bytes.extend_from_slice(&allowed_hostcalls.to_be_bytes());
+        bytes.extend_from_slice(&denied_hostcalls.to_be_bytes());
+        bytes.extend_from_slice(hostcall_hash.as_bytes());
+
+        match adaptive_router_summary {
+            Some(summary) => {
+                bytes.push(1);
+                bytes.extend_from_slice(&(summary.active_regime as u32).to_be_bytes());
+                bytes.extend_from_slice(&summary.realized_regret_millionths.to_be_bytes());
+                bytes.push(u8::from(summary.exact_regret_available));
+                bytes.extend_from_slice(&summary.theoretical_regret_bound_millionths.to_be_bytes());
+            }
+            None => bytes.push(0),
         }
-        for decision in &exec.hostcall_decisions {
-            symbols.push(20_000 + (Self::stable_symbol(&decision.capability.0) % 10_000));
+        match optimal_stopping_certificate {
+            Some(certificate) => {
+                bytes.push(1);
+                bytes.extend_from_slice(
+                    ContentHash::compute(certificate.algorithm.as_bytes()).as_bytes(),
+                );
+                bytes.extend_from_slice(&certificate.observations_before_stop.to_be_bytes());
+            }
+            None => bytes.push(0),
+        }
+        match ir3_schedule_cost {
+            Some(cost) => {
+                bytes.push(1);
+                bytes.extend_from_slice(&cost.0.to_be_bytes());
+            }
+            None => bytes.push(0),
         }
 
-        if let Some(summary) = adaptive_router_summary {
-            symbols.push(30_000 + summary.active_regime as u32);
-            symbols.push(31_000 + (summary.realized_regret_millionths.max(0) as u32 % 10_000));
+        let content_hash = ContentHash::compute(&bytes);
+        let symbols: Vec<u32> = bytes.into_iter().map(u32::from).collect();
+        debug_assert!(symbols.len() <= EVIDENCE_COMPRESSION_SKETCH_MAX_BYTES);
+        debug_assert!(symbols.iter().copied().collect::<BTreeSet<_>>().len() <= 256);
+        EvidenceCompressionSketch {
+            symbols,
+            content_hash,
         }
-        if let Some(cert) = optimal_stopping_certificate {
-            symbols.push(40_000 + (Self::stable_symbol(&cert.algorithm) % 10_000));
-            symbols.push(41_000 + (cert.observations_before_stop as u32 % 10_000));
-        }
-        if let Some(cost) = ir3_schedule_cost {
-            symbols.push(50_000 + (cost.0.max(0) as u32 % 10_000));
-        }
+    }
 
-        symbols
+    fn capability_multiset_summary(capabilities: &[String]) -> EvidenceCapabilitySummary {
+        let mut sorted: Vec<&str> = capabilities.iter().map(String::as_str).collect();
+        sorted.sort_unstable();
+        let leaves = sorted
+            .into_iter()
+            .map(|capability| ContentHash::compute(capability.as_bytes()));
+        let capability_count = Self::usize_to_u64(capabilities.len());
+        EvidenceCapabilitySummary {
+            total: capability_count,
+            multiset_hash: Self::fold_content_hashes(b"evidence-capability-multiset-v2", leaves),
+        }
+    }
+
+    fn hostcall_decision_summary(
+        decisions: &[crate::ir_contract::HostcallDecisionRecord],
+    ) -> (u64, u64, ContentHash) {
+        let mut allowed = 0u64;
+        let mut denied = 0u64;
+        let leaves = decisions.iter().map(|decision| {
+            if decision.allowed {
+                allowed = allowed.saturating_add(1);
+            } else {
+                denied = denied.saturating_add(1);
+            }
+            let capability_hash = ContentHash::compute(decision.capability.0.as_bytes());
+            let mut preimage = [0u8; 45];
+            preimage[..32].copy_from_slice(capability_hash.as_bytes());
+            preimage[32..40].copy_from_slice(&decision.seq.to_be_bytes());
+            preimage[40] = u8::from(decision.allowed);
+            preimage[41..45].copy_from_slice(&decision.instruction_index.to_be_bytes());
+            ContentHash::compute(&preimage)
+        });
+        let digest = Self::fold_content_hashes(b"evidence-hostcall-stream-v2", leaves);
+        (allowed, denied, digest)
+    }
+
+    fn fold_content_hashes<I>(domain: &[u8], leaves: I) -> ContentHash
+    where
+        I: IntoIterator<Item = ContentHash>,
+    {
+        let mut state = ContentHash::compute(domain);
+        let mut count = 0u64;
+        for leaf in leaves {
+            let mut preimage = [0u8; 72];
+            preimage[..32].copy_from_slice(state.as_bytes());
+            preimage[32..40].copy_from_slice(&count.to_be_bytes());
+            preimage[40..].copy_from_slice(leaf.as_bytes());
+            state = ContentHash::compute(&preimage);
+            count = count.saturating_add(1);
+        }
+        let mut final_preimage = [0u8; 40];
+        final_preimage[..32].copy_from_slice(state.as_bytes());
+        final_preimage[32..].copy_from_slice(&count.to_be_bytes());
+        ContentHash::compute(&final_preimage)
+    }
+
+    fn append_len_prefixed_bytes(output: &mut Vec<u8>, value: &[u8]) {
+        output.extend_from_slice(&Self::usize_to_u64(value.len()).to_be_bytes());
+        output.extend_from_slice(value);
+    }
+
+    fn usize_to_u64(value: usize) -> u64 {
+        u64::try_from(value).unwrap_or(u64::MAX)
     }
 
     fn risk_state_symbol(state: RiskState) -> u32 {
@@ -1923,6 +2209,7 @@ impl ExecutionOrchestrator {
         }
     }
 
+    #[cfg(test)]
     fn stable_symbol(value: &str) -> u32 {
         let mut hash: u32 = 0x811C9DC5;
         for b in value.bytes() {
@@ -2982,6 +3269,231 @@ mod tests {
     }
 
     #[test]
+    fn high_cardinality_capabilities_certify_and_complete_containment_lifecycle() {
+        let mut pkg = package_with_metadata(
+            "ext-compression-many-capabilities",
+            "const obj = { constructor: 1 }; obj.constructor;",
+            &[
+                ("guardplane.enable_instruction_hooks", "true"),
+                ("capability_witness.trust_level", "suspicious"),
+                ("capability_witness.confidence_millionths", "200000"),
+                ("capability_witness.denied_capabilities", "object.property"),
+            ],
+        );
+        pkg.capabilities
+            .extend((0..257).map(|index| format!("compression-unknown-{index}")));
+        let legacy_symbols: BTreeSet<_> = pkg
+            .capabilities
+            .iter()
+            .map(|capability| 1_000 + (ExecutionOrchestrator::stable_symbol(capability) % 10_000))
+            .collect();
+        assert_eq!(
+            legacy_symbols.len(),
+            257,
+            "fixture must retain the former 257-symbol failure shape"
+        );
+        let mut orch = ExecutionOrchestrator::with_defaults();
+
+        let result = orch
+            .execute(&pkg)
+            .expect("package-controlled capability cardinality must remain compressible");
+
+        assert_eq!(
+            result.evidence_compression_status,
+            EvidenceCompressionStatus::Certified
+        );
+        assert!(result.evidence_compression_certificate.is_some());
+        assert_ne!(result.containment_action, ContainmentAction::Allow);
+        let receipt = result
+            .containment_receipt
+            .as_ref()
+            .expect("selected non-Allow containment must emit a receipt");
+        assert_eq!(receipt.action, result.containment_action);
+        assert!(receipt.verify_integrity());
+        assert!(
+            result
+                .finalize_result
+                .as_ref()
+                .is_some_and(|done| done.success)
+        );
+        assert!(!result.cell_events.is_empty());
+        assert_eq!(orch.execution_count(), 1);
+
+        let metadata = &result.evidence_entries[0].metadata;
+        assert_eq!(
+            metadata
+                .get("evidence_compression_status")
+                .map(String::as_str),
+            Some("certified")
+        );
+        assert_eq!(
+            metadata
+                .get("evidence_compression_sketch_schema")
+                .map(String::as_str),
+            Some(EVIDENCE_COMPRESSION_SKETCH_SCHEMA)
+        );
+        assert!(
+            metadata["evidence_compression_alphabet_size"]
+                .parse::<usize>()
+                .is_ok_and(|size| size <= 256)
+        );
+    }
+
+    #[test]
+    fn high_cardinality_hostcall_stream_certifies_exact_count_and_finalizes() {
+        let source = (0..257)
+            .map(|index| format!(r#""hostcall<\"console:compression-{index}\">";"#))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let package = package_with_source(&source);
+        let config = OrchestratorConfig {
+            force_lane: Some(LaneChoice::V8),
+            ..OrchestratorConfig::default()
+        };
+        let mut orch = ExecutionOrchestrator::new(config);
+
+        let result = orch
+            .execute(&package)
+            .expect("ordered high-cardinality hostcall evidence must stay compressible");
+
+        assert_eq!(result.lane, LaneChoice::V8);
+        assert_eq!(
+            result.evidence_compression_status,
+            EvidenceCompressionStatus::Certified
+        );
+        assert!(result.evidence_compression_certificate.is_some());
+        let telemetry = result.evidence_entries[0]
+            .witnesses
+            .iter()
+            .find(|witness| witness.witness_type == "execution_telemetry")
+            .expect("primary evidence must carry execution telemetry");
+        assert!(
+            telemetry
+                .value
+                .split_ascii_whitespace()
+                .any(|field| field == "hostcalls=257"),
+            "unexpected execution telemetry: {}",
+            telemetry.value
+        );
+        assert!(
+            result
+                .finalize_result
+                .as_ref()
+                .is_some_and(|done| done.success)
+        );
+        assert!(!result.cell_events.is_empty());
+        assert_eq!(orch.execution_count(), 1);
+    }
+
+    #[test]
+    fn residual_compression_failure_is_evidenced_before_containment_and_cell_close() {
+        let pkg = package_with_metadata(
+            "ext-compression-degraded-containment",
+            "const obj = { constructor: 1 }; obj.constructor;",
+            &[
+                ("guardplane.enable_instruction_hooks", "true"),
+                ("capability_witness.trust_level", "suspicious"),
+                ("capability_witness.confidence_millionths", "200000"),
+                ("capability_witness.denied_capabilities", "object.property"),
+            ],
+        );
+        let mut orch = ExecutionOrchestrator::with_defaults();
+        orch.force_next_evidence_compression_failure(EvidenceCompressionFailureStage::Coder);
+
+        let result = orch
+            .execute(&pkg)
+            .expect("compression degradation must not bypass post-effect cleanup");
+
+        assert!(matches!(
+            result.evidence_compression_status,
+            EvidenceCompressionStatus::Failed {
+                stage: EvidenceCompressionFailureStage::Coder,
+                ..
+            }
+        ));
+        assert!(result.evidence_compression_certificate.is_none());
+        assert_ne!(result.containment_action, ContainmentAction::Allow);
+        let receipt = result
+            .containment_receipt
+            .as_ref()
+            .expect("selected non-Allow containment must emit a receipt");
+        assert_eq!(receipt.action, result.containment_action);
+        assert!(receipt.verify_integrity());
+        assert!(
+            result
+                .finalize_result
+                .as_ref()
+                .is_some_and(|done| done.success)
+        );
+        assert!(!result.cell_events.is_empty());
+        assert_eq!(orch.execution_count(), 1);
+
+        let entry = &result.evidence_entries[0];
+        assert_eq!(
+            entry
+                .metadata
+                .get("evidence_compression_status")
+                .map(String::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            entry
+                .metadata
+                .get("evidence_compression_failure_stage")
+                .map(String::as_str),
+            Some("coder")
+        );
+        assert!(
+            entry.metadata["evidence_compression_failure_detail"]
+                .contains("bounded evidence sketch")
+        );
+        assert_eq!(
+            entry
+                .metadata
+                .get("evidence_compression_sketch_schema")
+                .map(String::as_str),
+            Some(EVIDENCE_COMPRESSION_SKETCH_SCHEMA)
+        );
+        assert!(
+            entry
+                .metadata
+                .contains_key("evidence_compression_sketch_hash")
+        );
+        assert!(
+            entry.metadata["evidence_compression_alphabet_size"]
+                .parse::<usize>()
+                .is_ok_and(|size| size <= 256)
+        );
+        assert!(
+            !entry
+                .metadata
+                .contains_key("evidence_compression_certificate_hash")
+        );
+        assert_eq!(
+            orch.ledger().entries()[0].evidence_hash,
+            entry.evidence_hash
+        );
+
+        let mut hash_preimage = entry.clone();
+        hash_preimage.entry_id.clear();
+        hash_preimage.evidence_hash.clear();
+        let encoded = serde_json::to_string(&hash_preimage).expect("serialize evidence preimage");
+        assert_eq!(
+            ContentHash::compute(encoded.as_bytes()).to_hex(),
+            entry.evidence_hash
+        );
+        hash_preimage.metadata.insert(
+            "evidence_compression_failure_stage".to_string(),
+            "encode".to_string(),
+        );
+        let tampered = serde_json::to_string(&hash_preimage).expect("serialize tampered evidence");
+        assert_ne!(
+            ContentHash::compute(tampered.as_bytes()).to_hex(),
+            entry.evidence_hash
+        );
+    }
+
+    #[test]
     fn result_epoch_matches_config() {
         let cfg = OrchestratorConfig {
             epoch: SecurityEpoch::from_raw(42),
@@ -3471,6 +3983,34 @@ mod tests {
     }
 
     // -- Enrichment: stable_symbol determinism --
+
+    #[test]
+    fn capability_multiset_summary_is_order_invariant_and_content_sensitive() {
+        let original = vec!["alpha".to_string(), "beta".to_string()];
+        let reordered = vec!["beta".to_string(), "alpha".to_string()];
+        let duplicated = vec!["alpha".to_string(), "beta".to_string(), "beta".to_string()];
+        let changed = vec!["alpha".to_string(), "gamma".to_string()];
+
+        let original_summary = ExecutionOrchestrator::capability_multiset_summary(&original);
+        let reordered_summary = ExecutionOrchestrator::capability_multiset_summary(&reordered);
+        let duplicated_summary = ExecutionOrchestrator::capability_multiset_summary(&duplicated);
+        let changed_summary = ExecutionOrchestrator::capability_multiset_summary(&changed);
+
+        assert_eq!(original_summary.total, 2);
+        assert_eq!(
+            original_summary.multiset_hash,
+            reordered_summary.multiset_hash
+        );
+        assert_ne!(original_summary.total, duplicated_summary.total);
+        assert_ne!(
+            original_summary.multiset_hash,
+            duplicated_summary.multiset_hash
+        );
+        assert_ne!(
+            original_summary.multiset_hash,
+            changed_summary.multiset_hash
+        );
+    }
 
     #[test]
     fn stable_symbol_deterministic_for_same_input() {

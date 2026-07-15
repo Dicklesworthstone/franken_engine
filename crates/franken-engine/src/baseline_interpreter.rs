@@ -257,7 +257,11 @@ const WRITABLE_STATE_VIEW_KEYS: [&str; 10] = [
     "writableNeedDrain",
     "writableObjectMode",
 ];
-const MEMORY_ESTIMATE_WRITABLE_WRITE_BYTES: u64 = 48;
+/// Exact conservative charge for one node in the live Writable write FIFO.
+/// Retained values, labels, callbacks, and callback provenance are charged
+/// separately. A linked FIFO avoids the allocator-rounded spare capacity and
+/// replacement-buffer peak of `VecDeque` growth at the memory ceiling.
+const MEMORY_ESTIMATE_WRITABLE_WRITE_NODE_BYTES: u64 = 256;
 /// Conservative fixed charge for a released Writable's authoritative terminal
 /// state. The lifecycle label and any deferred post-close callbacks are
 /// charged separately.
@@ -5860,6 +5864,65 @@ struct WritableWriteRecord {
     completion_failed: bool,
 }
 
+/// Allocation-exact FIFO for live Writable records. `LinkedList` gives every
+/// append one independently charged node, so a transaction never needs to
+/// clone or grow an allocator-rounded queue before its budget preflight.
+#[allow(clippy::linkedlist)]
+#[derive(Debug, Default, PartialEq, Eq)]
+struct WritableWriteQueue(LinkedList<WritableWriteRecord>);
+
+impl std::ops::Deref for WritableWriteQueue {
+    type Target = LinkedList<WritableWriteRecord>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for WritableWriteQueue {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl std::ops::Index<usize> for WritableWriteQueue {
+    type Output = WritableWriteRecord;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        self.0
+            .iter()
+            .nth(index)
+            .expect("Writable write queue index was validated")
+    }
+}
+
+impl std::ops::IndexMut<usize> for WritableWriteQueue {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        self.0
+            .iter_mut()
+            .nth(index)
+            .expect("Writable write queue index was validated")
+    }
+}
+
+impl<'a> IntoIterator for &'a WritableWriteQueue {
+    type Item = &'a WritableWriteRecord;
+    type IntoIter = std::collections::linked_list::Iter<'a, WritableWriteRecord>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut WritableWriteQueue {
+    type Item = &'a mut WritableWriteRecord;
+    type IntoIter = std::collections::linked_list::IterMut<'a, WritableWriteRecord>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter_mut()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WritableCallbackRecord {
     value: Value,
@@ -5953,13 +6016,13 @@ struct WritableTerminalState {
 /// Authoritative Writable state. Public `writable*` properties are mirrors
 /// only; guest writes or deletions cannot forge progress, callback tokens, or
 /// lifecycle completion.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 struct WritableState {
     object_mode: bool,
     high_water_mark: usize,
     write_callback: Option<Value>,
     final_callback: Option<Value>,
-    writes: VecDeque<WritableWriteRecord>,
+    writes: WritableWriteQueue,
     buffered_length: usize,
     /// Nested `cork()` depth. This fixed-size field is covered by the
     /// conservative Writable base charge.
@@ -7813,7 +7876,7 @@ impl InterpreterCore {
             high_water_mark: usize::try_from(high_water_mark).unwrap_or(usize::MAX),
             write_callback,
             final_callback,
-            writes: VecDeque::new(),
+            writes: WritableWriteQueue::default(),
             buffered_length: 0,
             cork_depth: 0,
             end_requested: false,
@@ -7952,33 +8015,118 @@ impl InterpreterCore {
         Ok(object_id)
     }
 
-    fn clone_writable_state_with_budget(
-        &self,
+    /// Atomically append one live write record, optionally making the same
+    /// transaction the terminal `end(chunk, callback)` operation. Every
+    /// fallible validation and the complete resident-memory delta is checked
+    /// before either linked FIFO is mutated.
+    fn append_writable_write(
+        &mut self,
         object_id: ObjectId,
-    ) -> Result<Option<WritableState>, InterpreterError> {
+        value: Value,
+        label: Label,
+        write_callback: Option<WritableCallbackRecord>,
+        end_callback: Option<WritableCallbackRecord>,
+        request_end: bool,
+    ) -> Result<Option<bool>, InterpreterError> {
         let Some(state) = self.writable_streams.get(&object_id) else {
             return Ok(None);
         };
-        self.check_temporary_memory_budget(Self::estimate_writable_state_bytes(state))?;
-        Ok(Some(state.clone()))
-    }
-
-    fn commit_writable_state(
-        &mut self,
-        object_id: ObjectId,
-        projected: WritableState,
-    ) -> Result<(), InterpreterError> {
-        let previous_bytes = self
-            .writable_streams
-            .get(&object_id)
-            .map(Self::estimate_writable_state_bytes)
-            .unwrap_or(0);
-        let next_bytes = Self::estimate_writable_state_bytes(&projected);
+        if state.end_requested || state.destroy_requested {
+            return Err(InterpreterError::TypeError {
+                expected: "live Writable that has not ended".to_string(),
+                got: if state.destroy_requested {
+                    if request_end {
+                        "end after destroy".to_string()
+                    } else {
+                        "write after destroy".to_string()
+                    }
+                } else if request_end {
+                    "end after end".to_string()
+                } else {
+                    "write after end".to_string()
+                },
+            });
+        }
+        state
+            .writes
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| InterpreterError::RangeError {
+                message: "Writable write FIFO length overflows host address space".to_string(),
+            })?;
+        if end_callback.is_some() {
+            state.end_callbacks.len().checked_add(1).ok_or_else(|| {
+                InterpreterError::RangeError {
+                    message: "Writable terminal callback FIFO length overflows host address space"
+                        .to_string(),
+                }
+            })?;
+        }
+        let units = self.writable_chunk_units(state.object_mode, &value)?;
+        let next_length = state.buffered_length.checked_add(units).ok_or_else(|| {
+            InterpreterError::RangeError {
+                message: "Writable buffered length overflows host address space".to_string(),
+            }
+        })?;
+        let previous_bytes = Self::estimate_writable_state_bytes(state);
+        let previous_label_bytes = Self::estimate_label_bytes(&state.lifecycle_label);
+        let label_dominates = label > state.lifecycle_label;
+        let next_label_bytes = if label_dominates {
+            Self::estimate_label_bytes(&label)
+        } else {
+            previous_label_bytes
+        };
+        let record_bytes = MEMORY_ESTIMATE_WRITABLE_WRITE_NODE_BYTES
+            .saturating_add(Self::estimate_writable_value_bytes(&value))
+            .saturating_add(next_label_bytes)
+            .saturating_add(
+                write_callback
+                    .as_ref()
+                    .map(Self::estimate_writable_callback_bytes)
+                    .unwrap_or(0),
+            );
+        let end_callback_bytes = end_callback.as_ref().map_or(0, |callback| {
+            MEMORY_ESTIMATE_WRITABLE_END_CALLBACK_BYTES
+                .saturating_add(Self::estimate_writable_callback_bytes(callback))
+        });
+        let next_bytes = previous_bytes
+            .saturating_sub(previous_label_bytes)
+            .saturating_add(next_label_bytes)
+            .saturating_add(record_bytes)
+            .saturating_add(end_callback_bytes);
         self.apply_memory_component_delta(previous_bytes, next_bytes)?;
-        let length = projected.buffered_length;
-        self.writable_streams.insert(object_id, projected);
-        self.mirror_writable_length(object_id, length);
-        Ok(())
+
+        let state = self
+            .writable_streams
+            .get_mut(&object_id)
+            .expect("Writable state survived atomic write preflight");
+        if label_dominates {
+            state.lifecycle_label = label;
+        }
+        let record = WritableWriteRecord {
+            value,
+            label: state.lifecycle_label.clone(),
+            units,
+            callback: write_callback,
+            status: WritableWriteStatus::Pending,
+            completion_failed: false,
+        };
+        state.writes.push_back(record);
+        if let Some(callback) = end_callback {
+            state.end_callbacks.push_back(WritableEndCallbackRecord {
+                callback,
+                registered_after_end: false,
+            });
+        }
+        state.buffered_length = next_length;
+        if request_end {
+            state.cork_depth = 0;
+            state.end_requested = true;
+        }
+        debug_assert_eq!(Self::estimate_writable_state_bytes(state), next_bytes);
+        let below_high_water_mark = next_length < state.high_water_mark;
+        self.mirror_writable_length(object_id, next_length);
+        Ok(Some(below_high_water_mark))
     }
 
     /// Append one callback-only `end(callback)` record without cloning the
@@ -7999,8 +8147,12 @@ impl InterpreterCore {
         })?;
         let previous_state_bytes = Self::estimate_writable_state_bytes(state);
         let previous_label_bytes = Self::estimate_label_bytes(&state.lifecycle_label);
-        let next_lifecycle_label = state.lifecycle_label.join(args_label);
-        let next_label_bytes = Self::estimate_label_bytes(&next_lifecycle_label);
+        let label_dominates = args_label > &state.lifecycle_label;
+        let next_label_bytes = if label_dominates {
+            Self::estimate_label_bytes(args_label)
+        } else {
+            previous_label_bytes
+        };
         let callback_bytes = Self::estimate_writable_callback_bytes(&callback);
         state
             .end_callbacks
@@ -8021,11 +8173,16 @@ impl InterpreterCore {
             .writable_streams
             .get_mut(&object_id)
             .expect("Writable state was retained through terminal callback preflight");
+        if label_dominates {
+            // Drop an attacker-sized lower label before cloning its dominant
+            // replacement so the transient peak never contains both strings.
+            state.lifecycle_label = Label::Public;
+            state.lifecycle_label = args_label.clone();
+        }
         state.end_callbacks.push_back(WritableEndCallbackRecord {
             callback,
             registered_after_end,
         });
-        state.lifecycle_label = next_lifecycle_label;
         if !state.destroy_requested {
             state.cork_depth = 0;
             state.end_requested = true;
@@ -8235,13 +8392,18 @@ impl InterpreterCore {
                 .ok_or_else(|| InterpreterError::RangeError {
                     message: "Writable cork depth overflow".to_string(),
                 })?;
-        let old_label_bytes = Self::estimate_label_bytes(&state.lifecycle_label);
-        let next_label = state.lifecycle_label.join(&trigger_label);
-        let next_label_bytes = Self::estimate_label_bytes(&next_label);
-        self.apply_memory_component_delta(old_label_bytes, next_label_bytes)?;
+        let replace_label = trigger_label > state.lifecycle_label;
+        if replace_label {
+            self.apply_memory_component_delta(
+                Self::estimate_label_bytes(&state.lifecycle_label),
+                Self::estimate_label_bytes(&trigger_label),
+            )?;
+        }
         if let Some(state) = self.writable_streams.get_mut(&object_id) {
             state.cork_depth = next_depth;
-            state.lifecycle_label = next_label;
+            if replace_label {
+                state.lifecycle_label = trigger_label;
+            }
         }
         self.mirror_writable_cork_depth(object_id, next_depth);
         Ok(Value::Undefined)
@@ -8266,13 +8428,18 @@ impl InterpreterCore {
             return Ok(Value::Undefined);
         }
         let next_depth = state.cork_depth.saturating_sub(1);
-        let old_label_bytes = Self::estimate_label_bytes(&state.lifecycle_label);
-        let next_label = state.lifecycle_label.join(&trigger_label);
-        let next_label_bytes = Self::estimate_label_bytes(&next_label);
-        self.apply_memory_component_delta(old_label_bytes, next_label_bytes)?;
+        let replace_label = trigger_label > state.lifecycle_label;
+        if replace_label {
+            self.apply_memory_component_delta(
+                Self::estimate_label_bytes(&state.lifecycle_label),
+                Self::estimate_label_bytes(&trigger_label),
+            )?;
+        }
         if let Some(state) = self.writable_streams.get_mut(&object_id) {
             state.cork_depth = next_depth;
-            state.lifecycle_label = next_label;
+            if replace_label {
+                state.lifecycle_label = trigger_label;
+            }
         }
         self.mirror_writable_cork_depth(object_id, next_depth);
         if next_depth == 0 {
@@ -8287,12 +8454,10 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let object_id = self.writable_receiver_id(receiver.clone())?;
-        let error = match self.builtin_arg(args, 0)? {
-            None | Some(Value::Undefined | Value::Null) => None,
-            Some(error) => Some(error),
-        };
+        let error_register = self.writable_completion_error_register(args)?;
         let mut trigger_label = self.writable_invocation_label(args)?;
-        if let Some(Value::Object(error_id)) = &error {
+        let error = error_register.map(|reg| &self.registers[self.register_base + reg as usize]);
+        if let Some(Value::Object(error_id)) = error {
             trigger_label = trigger_label.join(&self.binary_storage_label(*error_id));
         }
         if self.writable_terminal_states.contains_key(&object_id) {
@@ -8312,15 +8477,15 @@ impl InterpreterCore {
             .iter()
             .filter(|record| matches!(record.status, WritableWriteStatus::Active(_)))
             .fold(0usize, |total, record| total.saturating_add(record.units));
-        let lifecycle_label = current.lifecycle_label.join(&trigger_label);
-        let (terminal_error, terminal_error_origin) = match &current.terminal_error {
-            Some(existing) => (Some(existing.clone()), current.terminal_error_origin),
-            None => (
-                error
-                    .as_ref()
-                    .map(|error| (error.clone(), trigger_label.clone())),
-                Some(WritableErrorOrigin::Destroy),
-            ),
+        let lifecycle_label_bytes = if current.lifecycle_label >= trigger_label {
+            Self::estimate_label_bytes(&current.lifecycle_label)
+        } else {
+            Self::estimate_label_bytes(&trigger_label)
+        };
+        let terminal_error_origin = if current.terminal_error.is_some() {
+            current.terminal_error_origin
+        } else {
+            Some(WritableErrorOrigin::Destroy)
         };
         let retain_terminal_callbacks = current
             .writes
@@ -8358,18 +8523,25 @@ impl InterpreterCore {
             0
         };
         let destroyed_state_bytes = MEMORY_ESTIMATE_WRITABLE_BASE_BYTES
-            .saturating_add(Self::estimate_label_bytes(&lifecycle_label))
+            .saturating_add(lifecycle_label_bytes)
             .saturating_add(end_callback_bytes)
             .saturating_add(
-                terminal_error
+                current
+                    .terminal_error
                     .as_ref()
                     .map(|(value, label)| {
-                        Self::estimate_value_bytes(value)
+                        Self::estimate_writable_value_bytes(value)
                             .saturating_add(Self::estimate_label_bytes(label))
+                    })
+                    .or_else(|| {
+                        error.map(|error| {
+                            Self::estimate_writable_value_bytes(error)
+                                .saturating_add(Self::estimate_label_bytes(&trigger_label))
+                        })
                     })
                     .unwrap_or(0),
             );
-        let released_argument_bytes = error.as_ref().map(Self::estimate_value_bytes).unwrap_or(0);
+        let released_argument_bytes = error.map(Self::estimate_value_bytes).unwrap_or(0);
         let requested_bytes = self
             .estimated_memory_bytes
             .saturating_sub(released_argument_bytes)
@@ -8378,9 +8550,24 @@ impl InterpreterCore {
         if requested_bytes > self.config.max_total_memory_bytes {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
         }
-        if error.is_some() {
-            self.write_reg(args.start, Value::Undefined)?;
-        }
+        let scheduled_tick = if current.tick_sequence.is_none() {
+            let sequence = self.next_writable_tick_sequence;
+            let next_sequence =
+                sequence
+                    .checked_add(1)
+                    .ok_or_else(|| InterpreterError::InternalError {
+                        details: "Writable tick sequence space exhausted".to_string(),
+                    })?;
+            Some((sequence, next_sequence))
+        } else {
+            None
+        };
+        let error = error_register
+            .map(|reg| {
+                self.take_writable_completion_error(reg)
+                    .map(|(error, _)| error)
+            })
+            .transpose()?;
 
         let mut destroyed = self
             .writable_streams
@@ -8388,7 +8575,7 @@ impl InterpreterCore {
             .expect("live Writable state was checked before owned teardown");
         destroyed.write_callback = None;
         destroyed.final_callback = None;
-        destroyed.writes = VecDeque::new();
+        destroyed.writes = WritableWriteQueue::default();
         // Bun retains the synchronous pre-destroy mirrors. At close, queued
         // chunks disappear while a write already inside `_write` remains
         // reflected until its abandoned callback state is collected.
@@ -8397,6 +8584,30 @@ impl InterpreterCore {
         if !retain_terminal_callbacks {
             destroyed.end_callbacks = LinkedList::new();
         }
+        let trigger_dominates = trigger_label > destroyed.lifecycle_label;
+        let mut trigger_label = Some(trigger_label);
+        if trigger_dominates {
+            destroyed.lifecycle_label = trigger_label
+                .take()
+                .expect("dominant destroy label remained owned");
+        }
+        let terminal_error = match destroyed.terminal_error.take() {
+            Some(existing) => {
+                drop(error);
+                Some(existing)
+            }
+            None => error.map(|error| {
+                let label = if trigger_dominates {
+                    destroyed.lifecycle_label.clone()
+                } else {
+                    trigger_label
+                        .take()
+                        .expect("non-dominant destroy label remained owned")
+                };
+                (error, label)
+            }),
+        };
+        drop(trigger_label);
         destroyed.end_callback_batch_remaining = if finishing_success_batch {
             preserved_success_callbacks
         } else {
@@ -8413,7 +8624,10 @@ impl InterpreterCore {
             WritableTickPhase::Error
         };
         destroyed.inside_write_invocation = false;
-        destroyed.lifecycle_label = lifecycle_label;
+        if let Some((sequence, next_sequence)) = scheduled_tick {
+            destroyed.tick_sequence = Some(sequence);
+            self.next_writable_tick_sequence = next_sequence;
+        }
         debug_assert_eq!(
             Self::estimate_writable_state_bytes(&destroyed),
             destroyed_state_bytes
@@ -8426,7 +8640,6 @@ impl InterpreterCore {
         // Bun exposes both flags synchronously even though listener delivery
         // remains on the deferred stream checkpoint.
         self.mirror_writable_bool(object_id, "closed", true);
-        self.schedule_writable_tick(object_id)?;
         Ok(receiver)
     }
 
@@ -8462,44 +8675,9 @@ impl InterpreterCore {
         label: Label,
         callback: Option<WritableCallbackRecord>,
     ) -> Result<bool, InterpreterError> {
-        let Some(mut projected) = self.clone_writable_state_with_budget(object_id)? else {
-            return Ok(false);
-        };
-        if projected.end_requested || projected.destroy_requested {
-            return Err(InterpreterError::TypeError {
-                expected: "live Writable that has not ended".to_string(),
-                got: if projected.destroy_requested {
-                    "write after destroy".to_string()
-                } else {
-                    "write after end".to_string()
-                },
-            });
-        }
-        let units = self.writable_chunk_units(projected.object_mode, &value)?;
-        let next_length = projected
-            .buffered_length
-            .checked_add(units)
-            .ok_or_else(|| InterpreterError::RangeError {
-                message: "Writable buffered length overflows host address space".to_string(),
-            })?;
-        projected
-            .writes
-            .try_reserve(1)
-            .map_err(|_| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
-        let record_label = projected.lifecycle_label.join(&label);
-        projected.lifecycle_label = record_label.clone();
-        projected.writes.push_back(WritableWriteRecord {
-            value,
-            label: record_label,
-            units,
-            callback,
-            status: WritableWriteStatus::Pending,
-            completion_failed: false,
-        });
-        projected.buffered_length = next_length;
-        let below_high_water_mark = next_length < projected.high_water_mark;
-        self.commit_writable_state(object_id, projected)?;
-        Ok(below_high_water_mark)
+        Ok(self
+            .append_writable_write(object_id, value, label, callback, None, false)?
+            .unwrap_or(false))
     }
 
     fn writable_write(
@@ -8603,55 +8781,7 @@ impl InterpreterCore {
                 label = label.join(&self.binary_storage_label(*chunk_id));
             }
             label = label.join(&args_label);
-            let Some(mut projected) = self.clone_writable_state_with_budget(object_id)? else {
-                return Ok(Value::Object(object_id));
-            };
-            if projected.end_requested || projected.destroy_requested {
-                return Err(InterpreterError::TypeError {
-                    expected: "live Writable that has not ended".to_string(),
-                    got: if projected.destroy_requested {
-                        "end after destroy".to_string()
-                    } else {
-                        "end after end".to_string()
-                    },
-                });
-            }
-            let units = self.writable_chunk_units(projected.object_mode, &value)?;
-            let next_length = projected
-                .buffered_length
-                .checked_add(units)
-                .ok_or_else(|| InterpreterError::RangeError {
-                    message: "Writable buffered length overflows host address space".to_string(),
-                })?;
-            projected
-                .writes
-                .try_reserve(1)
-                .map_err(|_| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
-            let record_label = projected.lifecycle_label.join(&label);
-            projected.lifecycle_label = record_label.clone();
-            projected.writes.push_back(WritableWriteRecord {
-                value,
-                label: record_label,
-                units,
-                callback: None,
-                status: WritableWriteStatus::Pending,
-                completion_failed: false,
-            });
-            projected.buffered_length = next_length;
-            // Node/Bun treat end() as an implicit full uncork: every queued
-            // chunk must become eligible for FIFO delivery before finalization.
-            projected.cork_depth = 0;
-            projected.end_requested = true;
-            if let Some(callback) = callback {
-                projected
-                    .end_callbacks
-                    .push_back(WritableEndCallbackRecord {
-                        callback,
-                        registered_after_end: false,
-                    });
-            }
-            projected.lifecycle_label = projected.lifecycle_label.join(&args_label);
-            self.commit_writable_state(object_id, projected)?;
+            self.append_writable_write(object_id, value, label, None, callback, true)?;
         } else {
             let Some(state) = self.writable_streams.get(&object_id) else {
                 return Ok(Value::Object(object_id));
@@ -8700,22 +8830,58 @@ impl InterpreterCore {
         Ok((ObjectId(object_id), token))
     }
 
-    fn take_writable_completion_error(
-        &mut self,
+    fn writable_completion_error_register(
+        &self,
         args: RegRange,
-    ) -> Result<Option<(Value, Label)>, InterpreterError> {
-        let Some(error) = self.builtin_arg(args, 0)? else {
-            return Ok(None);
-        };
-        if matches!(&error, Value::Undefined | Value::Null) {
+    ) -> Result<Option<u32>, InterpreterError> {
+        if args.count == 0 {
             return Ok(None);
         }
-        let label = self.get_register_label(args.start)?.clone();
-        // The internal completion wrapper owns this argument register. Consume
-        // its value before charging the same logical bytes to terminal state so
-        // Active -> Completed progress remains possible at the exact ceiling.
-        self.write_reg(args.start, Value::Undefined)?;
-        Ok(Some((error, label)))
+        if args.start >= self.config.max_registers {
+            return Err(InterpreterError::RegisterOutOfBounds {
+                register: args.start,
+                max: self.config.max_registers,
+            });
+        }
+        let actual_reg = self.register_base + args.start as usize;
+        let Some(error) = self.registers.get(actual_reg) else {
+            return Ok(None);
+        };
+        Ok((!matches!(error, Value::Undefined | Value::Null)).then_some(args.start))
+    }
+
+    /// Move a completion error and its IFC label out of the internal callback
+    /// register after the combined register-to-Writable transfer has passed
+    /// its budget and scheduler preflight.
+    fn take_writable_completion_error(
+        &mut self,
+        reg: u32,
+    ) -> Result<(Value, Label), InterpreterError> {
+        if reg >= self.config.max_registers {
+            return Err(InterpreterError::RegisterOutOfBounds {
+                register: reg,
+                max: self.config.max_registers,
+            });
+        }
+        let actual_reg = self.register_base + reg as usize;
+        let previous_bytes = self
+            .registers
+            .get(actual_reg)
+            .map(Self::estimate_value_bytes)
+            .unwrap_or(0);
+        let value = self.mutate_registers(|registers| {
+            registers
+                .get_mut(actual_reg)
+                .map(|slot| std::mem::replace(slot, Value::Undefined))
+                .unwrap_or(Value::Undefined)
+        });
+        let label = self
+            .register_labels
+            .get_mut(actual_reg)
+            .map(|slot| std::mem::replace(slot, Label::Public))
+            .unwrap_or(Label::Public);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(previous_bytes);
+        Ok((value, label))
     }
 
     fn writable_write_done(
@@ -8725,7 +8891,7 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let (object_id, token) = Self::writable_bound_completion(builtin)?;
-        let completion_error = self.take_writable_completion_error(args)?;
+        let completion_error_register = self.writable_completion_error_register(args)?;
         let Some(state) = self.writable_streams.get(&object_id) else {
             return Ok(Value::Undefined);
         };
@@ -8740,72 +8906,84 @@ impl InterpreterCore {
         let units = record.units;
         let resume = !state.inside_write_invocation;
         let old_dynamic = Self::estimate_writable_error_dynamic_bytes(state);
-        let (next_lifecycle_label, next_terminal_error, next_terminal_error_origin) =
-            match &completion_error {
-                Some((error, label)) => (
-                    state.lifecycle_label.join(label),
-                    Some((error.clone(), label.clone())),
-                    Some(WritableErrorOrigin::Write),
-                ),
-                None => (
-                    state.lifecycle_label.clone(),
-                    state.terminal_error.clone(),
-                    state.terminal_error_origin,
-                ),
-            };
-        let next_dynamic = old_dynamic
-            .saturating_sub(Self::estimate_label_bytes(&state.lifecycle_label))
-            .saturating_sub(
-                state
-                    .terminal_error
-                    .as_ref()
-                    .map(|(value, label)| {
-                        Self::estimate_value_bytes(value)
-                            .saturating_add(Self::estimate_label_bytes(label))
-                    })
-                    .unwrap_or(0),
-            )
-            .saturating_add(Self::estimate_label_bytes(&next_lifecycle_label))
-            .saturating_add(
-                next_terminal_error
-                    .as_ref()
-                    .map(|(value, label)| {
-                        Self::estimate_value_bytes(value)
-                            .saturating_add(Self::estimate_label_bytes(label))
-                    })
-                    .unwrap_or(0),
-            );
-        if let Err(error) = self.apply_memory_component_delta(old_dynamic, next_dynamic) {
-            self.release_writable_state_storage(object_id);
-            return Err(error);
-        }
-        if let Some(state) = self.writable_streams.get_mut(&object_id) {
-            state.writes[record_index].status = WritableWriteStatus::Completed;
-            state.writes[record_index].completion_failed = completion_error.is_some();
-            if completion_error.is_some() {
-                for record in &mut state.writes {
-                    if record.status == WritableWriteStatus::Pending {
-                        record.status = WritableWriteStatus::Completed;
-                        record.completion_failed = true;
-                    }
-                }
-                state.buffered_length = 0;
+        let (next_dynamic, released_argument_bytes) = if let Some(reg) = completion_error_register {
+            let actual_reg = self.register_base + reg as usize;
+            let error = &self.registers[actual_reg];
+            let error_label = self.get_register_label(reg)?;
+            let next_lifecycle_label = if error_label > &state.lifecycle_label {
+                error_label
             } else {
-                state.buffered_length = state.buffered_length.saturating_sub(units);
+                &state.lifecycle_label
+            };
+            (
+                Self::estimate_label_bytes(next_lifecycle_label)
+                    .saturating_add(Self::estimate_writable_value_bytes(error))
+                    .saturating_add(Self::estimate_label_bytes(error_label)),
+                Self::estimate_value_bytes(error),
+            )
+        } else {
+            (old_dynamic, 0)
+        };
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(released_argument_bytes)
+            .saturating_sub(old_dynamic)
+            .saturating_add(next_dynamic);
+        if requested_bytes > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
+        let scheduled_tick = if state.tick_sequence.is_none() {
+            let sequence = self.next_writable_tick_sequence;
+            let next_sequence =
+                sequence
+                    .checked_add(1)
+                    .ok_or_else(|| InterpreterError::InternalError {
+                        details: "Writable tick sequence space exhausted".to_string(),
+                    })?;
+            Some((sequence, next_sequence))
+        } else {
+            None
+        };
+        let completion_error = completion_error_register
+            .map(|reg| self.take_writable_completion_error(reg))
+            .transpose()?;
+        self.estimated_memory_bytes = requested_bytes;
+        let state = self
+            .writable_streams
+            .get_mut(&object_id)
+            .expect("Writable completion state survived preflight");
+        state.writes[record_index].status = WritableWriteStatus::Completed;
+        state.writes[record_index].completion_failed = completion_error.is_some();
+        if let Some((error, error_label)) = completion_error {
+            for record in &mut state.writes {
+                if record.status == WritableWriteStatus::Pending {
+                    record.status = WritableWriteStatus::Completed;
+                    record.completion_failed = true;
+                }
             }
-            state.lifecycle_label = next_lifecycle_label;
-            state.terminal_error = next_terminal_error;
-            state.terminal_error_origin = next_terminal_error_origin;
-            if completion_error.is_some() {
-                state.terminal_error_emitted = false;
-            }
+            state.buffered_length = 0;
+            state.terminal_error = None;
+            let terminal_label = if error_label > state.lifecycle_label {
+                state.lifecycle_label = error_label;
+                state.lifecycle_label.clone()
+            } else {
+                error_label
+            };
+            state.terminal_error = Some((error, terminal_label));
+            state.terminal_error_origin = Some(WritableErrorOrigin::Write);
+            state.terminal_error_emitted = false;
+        } else {
+            state.buffered_length = state.buffered_length.saturating_sub(units);
+        }
+        if let Some((sequence, next_sequence)) = scheduled_tick {
+            state.tick_sequence = Some(sequence);
+            self.next_writable_tick_sequence = next_sequence;
         }
         let length = self
             .writable_streams
             .get(&object_id)
             .map_or(0, |state| state.buffered_length);
         self.mirror_writable_length(object_id, length);
-        self.schedule_writable_tick(object_id)?;
         if resume {
             self.drive_writable(object_id, module)?;
         }
@@ -8819,7 +8997,7 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let (object_id, token) = Self::writable_bound_completion(builtin)?;
-        let completion_error = self.take_writable_completion_error(args)?;
+        let completion_error_register = self.writable_completion_error_register(args)?;
         let Some(state) = self.writable_streams.get(&object_id) else {
             return Ok(Value::Undefined);
         };
@@ -8831,47 +9009,74 @@ impl InterpreterCore {
                 .terminal_error
                 .as_ref()
                 .map(|(value, label)| {
-                    Self::estimate_value_bytes(value)
+                    Self::estimate_writable_value_bytes(value)
                         .saturating_add(Self::estimate_label_bytes(label))
                 })
                 .unwrap_or(0),
         );
-        let (next_lifecycle_label, next_terminal_error, next_terminal_error_origin) =
-            match completion_error {
-                Some((error, label)) => (
-                    state.lifecycle_label.join(&label),
-                    Some((error, label)),
-                    Some(WritableErrorOrigin::Final),
-                ),
-                None => (
-                    state.lifecycle_label.clone(),
-                    state.terminal_error.clone(),
-                    state.terminal_error_origin,
-                ),
+        let (next_dynamic, released_argument_bytes) = if let Some(reg) = completion_error_register {
+            let actual_reg = self.register_base + reg as usize;
+            let error = &self.registers[actual_reg];
+            let error_label = self.get_register_label(reg)?;
+            let next_lifecycle_label = if error_label > &state.lifecycle_label {
+                error_label
+            } else {
+                &state.lifecycle_label
             };
-        let next_dynamic = Self::estimate_label_bytes(&next_lifecycle_label).saturating_add(
-            next_terminal_error
-                .as_ref()
-                .map(|(value, label)| {
-                    Self::estimate_value_bytes(value)
-                        .saturating_add(Self::estimate_label_bytes(label))
-                })
-                .unwrap_or(0),
-        );
-        if let Err(error) = self.apply_memory_component_delta(old_dynamic, next_dynamic) {
-            self.release_writable_state_storage(object_id);
-            return Err(error);
+            (
+                Self::estimate_label_bytes(next_lifecycle_label)
+                    .saturating_add(Self::estimate_writable_value_bytes(error))
+                    .saturating_add(Self::estimate_label_bytes(error_label)),
+                Self::estimate_value_bytes(error),
+            )
+        } else {
+            (old_dynamic, 0)
+        };
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(released_argument_bytes)
+            .saturating_sub(old_dynamic)
+            .saturating_add(next_dynamic);
+        if requested_bytes > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
         }
-        if let Some(state) = self.writable_streams.get_mut(&object_id) {
-            state.final_status = WritableFinalStatus::Done;
-            state.lifecycle_label = next_lifecycle_label;
-            state.terminal_error = next_terminal_error;
-            state.terminal_error_origin = next_terminal_error_origin;
-            if state.terminal_error.is_some() {
-                state.terminal_error_emitted = false;
-            }
+        let scheduled_tick = if state.tick_sequence.is_none() {
+            let sequence = self.next_writable_tick_sequence;
+            let next_sequence =
+                sequence
+                    .checked_add(1)
+                    .ok_or_else(|| InterpreterError::InternalError {
+                        details: "Writable tick sequence space exhausted".to_string(),
+                    })?;
+            Some((sequence, next_sequence))
+        } else {
+            None
+        };
+        let completion_error = completion_error_register
+            .map(|reg| self.take_writable_completion_error(reg))
+            .transpose()?;
+        self.estimated_memory_bytes = requested_bytes;
+        let state = self
+            .writable_streams
+            .get_mut(&object_id)
+            .expect("Writable final state survived preflight");
+        state.final_status = WritableFinalStatus::Done;
+        if let Some((error, error_label)) = completion_error {
+            state.terminal_error = None;
+            let terminal_label = if error_label > state.lifecycle_label {
+                state.lifecycle_label = error_label;
+                state.lifecycle_label.clone()
+            } else {
+                error_label
+            };
+            state.terminal_error = Some((error, terminal_label));
+            state.terminal_error_origin = Some(WritableErrorOrigin::Final);
+            state.terminal_error_emitted = false;
         }
-        self.schedule_writable_tick(object_id)?;
+        if let Some((sequence, next_sequence)) = scheduled_tick {
+            state.tick_sequence = Some(sequence);
+            self.next_writable_tick_sequence = next_sequence;
+        }
         self.emit_writable_prefinish(object_id, module)?;
         Ok(Value::Undefined)
     }
@@ -8880,14 +9085,14 @@ impl InterpreterCore {
         &mut self,
         error: &InterpreterError,
         fallback_label: Label,
-    ) -> (Value, Label) {
+    ) -> (Value, Label, bool) {
         if matches!(error, InterpreterError::UncaughtException { .. })
             && let Some(value) = self.pending_exception.take()
         {
             let label = std::mem::replace(&mut self.pending_exception_label, Label::Public);
-            (value, label)
+            (value, label, true)
         } else {
-            (Value::str(error.to_string()), fallback_label)
+            (Value::str(error.to_string()), fallback_label, false)
         }
     }
 
@@ -8897,41 +9102,71 @@ impl InterpreterCore {
         error: Value,
         error_label: Label,
         origin: WritableErrorOrigin,
+        restore_pending_exception_on_refusal: bool,
     ) -> Result<(), InterpreterError> {
         let Some(state) = self.writable_streams.get(&object_id) else {
             return Ok(());
         };
         let old_dynamic = Self::estimate_writable_error_dynamic_bytes(state);
-        let per_record = Self::estimate_value_bytes(&error)
+        let per_record = Self::estimate_writable_value_bytes(&error)
             .saturating_add(Self::estimate_label_bytes(&error_label));
-        let next_lifecycle_label = state.lifecycle_label.join(&error_label);
-        let next_dynamic = old_dynamic
-            .saturating_sub(Self::estimate_label_bytes(&state.lifecycle_label))
-            .saturating_sub(
-                state
-                    .terminal_error
-                    .as_ref()
-                    .map(|(value, label)| {
-                        Self::estimate_value_bytes(value)
-                            .saturating_add(Self::estimate_label_bytes(label))
-                    })
-                    .unwrap_or(0),
-            )
-            .saturating_add(Self::estimate_label_bytes(&next_lifecycle_label))
-            .saturating_add(per_record);
-        if let Err(error) = self.apply_memory_component_delta(old_dynamic, next_dynamic) {
-            self.release_writable_state_storage(object_id);
-            return Err(error);
+        let label_dominates = error_label > state.lifecycle_label;
+        let next_dynamic = (if label_dominates {
+            Self::estimate_label_bytes(&error_label)
+        } else {
+            Self::estimate_label_bytes(&state.lifecycle_label)
+        })
+        .saturating_add(per_record);
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(old_dynamic)
+            .saturating_add(next_dynamic);
+        if requested_bytes > self.config.max_total_memory_bytes {
+            let budget_error =
+                self.memory_budget_error(requested_bytes, self.heap_object_count_u32());
+            if restore_pending_exception_on_refusal {
+                self.pending_exception = Some(error);
+                self.pending_exception_label = error_label;
+            }
+            return Err(budget_error);
         }
-        if let Some(state) = self.writable_streams.get_mut(&object_id) {
-            state.lifecycle_label = next_lifecycle_label;
-            state.terminal_error = Some((error.clone(), error_label.clone()));
-            state.terminal_error_origin = Some(origin);
-            state.terminal_error_emitted = false;
-            state.final_status = WritableFinalStatus::Done;
-            state.inside_write_invocation = false;
+        let scheduled_tick = if state.tick_sequence.is_none() {
+            let sequence = self.next_writable_tick_sequence;
+            let Some(next_sequence) = sequence.checked_add(1) else {
+                if restore_pending_exception_on_refusal {
+                    self.pending_exception = Some(error);
+                    self.pending_exception_label = error_label;
+                }
+                return Err(InterpreterError::InternalError {
+                    details: "Writable tick sequence space exhausted".to_string(),
+                });
+            };
+            Some((sequence, next_sequence))
+        } else {
+            None
+        };
+        self.estimated_memory_bytes = requested_bytes;
+        let state = self
+            .writable_streams
+            .get_mut(&object_id)
+            .expect("Writable terminal-error state survived preflight");
+        state.terminal_error = None;
+        let terminal_label = if label_dominates {
+            state.lifecycle_label = error_label;
+            state.lifecycle_label.clone()
+        } else {
+            error_label
+        };
+        state.terminal_error = Some((error, terminal_label));
+        state.terminal_error_origin = Some(origin);
+        state.terminal_error_emitted = false;
+        state.final_status = WritableFinalStatus::Done;
+        state.inside_write_invocation = false;
+        if let Some((sequence, next_sequence)) = scheduled_tick {
+            state.tick_sequence = Some(sequence);
+            self.next_writable_tick_sequence = next_sequence;
         }
-        self.schedule_writable_tick(object_id)
+        Ok(())
     }
 
     fn emit_writable_prefinish(
@@ -9037,13 +9272,14 @@ impl InterpreterCore {
                     Some(label.clone()),
                 );
                 if let Err(error) = invocation {
-                    let (error_value, error_label) =
+                    let (error_value, error_label, consumes_pending_exception) =
                         self.writable_invocation_error_value(&error, label);
                     self.record_writable_terminal_error(
                         object_id,
                         error_value,
                         error_label,
                         WritableErrorOrigin::Final,
+                        consumes_pending_exception,
                     )?;
                 }
                 return Ok(());
@@ -9288,6 +9524,7 @@ impl InterpreterCore {
         )
     }
 
+    #[cfg(test)]
     fn release_writable_state_storage(&mut self, object_id: ObjectId) {
         let released = self
             .writable_streams
@@ -9316,6 +9553,14 @@ impl InterpreterCore {
         debug_assert!(state.end_callbacks.is_empty());
         debug_assert!(state.tick_sequence.is_none());
         let previous_bytes = Self::estimate_writable_state_bytes(state);
+        let next_bytes = MEMORY_ESTIMATE_WRITABLE_TERMINAL_BASE_BYTES
+            .saturating_add(Self::estimate_label_bytes(&state.lifecycle_label));
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        let mut state = self
+            .writable_streams
+            .remove(&object_id)
+            .expect("live Writable state survived terminalization preflight");
+        let lifecycle_label = std::mem::replace(&mut state.lifecycle_label, Label::Public);
         let terminal = WritableTerminalState {
             object_mode: state.object_mode,
             high_water_mark: state.high_water_mark,
@@ -9326,13 +9571,13 @@ impl InterpreterCore {
             accepts_late_end_callback: state.finished || state.terminal_error.is_some(),
             callbacks: LinkedList::new(),
             tick_sequence: None,
-            lifecycle_label: state.lifecycle_label.clone(),
+            lifecycle_label,
         };
-        let next_bytes = Self::estimate_writable_terminal_state_bytes(&terminal);
-        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
-        self.writable_streams
-            .remove(&object_id)
-            .expect("live Writable state survived terminalization preflight");
+        debug_assert_eq!(
+            Self::estimate_writable_terminal_state_bytes(&terminal),
+            next_bytes
+        );
+        drop(state);
         self.writable_terminal_states.insert(object_id, terminal);
         self.clear_event_listeners(object_id, None);
         self.clear_event_promise_waiters_for_target(object_id);
@@ -39803,9 +40048,20 @@ impl InterpreterCore {
         MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(text.len() as u64)
     }
 
+    fn estimate_js_string_bytes(text: &JsString) -> u64 {
+        let malformed_utf16_bytes = if text.is_well_formed() {
+            0
+        } else {
+            u64::try_from(text.utf16_len())
+                .unwrap_or(u64::MAX)
+                .saturating_mul(2)
+        };
+        Self::estimate_string_bytes(text).saturating_add(malformed_utf16_bytes)
+    }
+
     fn estimate_value_bytes(value: &Value) -> u64 {
         match value {
-            Value::Str(text) => Self::estimate_string_bytes(text),
+            Value::Str(text) => Self::estimate_js_string_bytes(text),
             _ => 0,
         }
     }
@@ -39893,8 +40149,35 @@ impl InterpreterCore {
         }
     }
 
+    /// Dynamic payload retained by a Writable-owned `Value`. The generic
+    /// register/heap estimator historically counts only shared strings; live
+    /// stream queues also retain owned BigInt digits, builtin module names,
+    /// and boxed accessor values, so their side-table charge must include
+    /// those allocations explicitly.
+    fn estimate_writable_value_bytes(value: &Value) -> u64 {
+        match value {
+            Value::BigInt(digits) => Self::estimate_string_bytes(digits),
+            Value::Str(text) => Self::estimate_js_string_bytes(text),
+            Value::BuiltinFunction(builtin) => {
+                if builtin.module_specifier.is_empty() {
+                    0
+                } else {
+                    Self::estimate_string_bytes(&builtin.module_specifier)
+                }
+            }
+            Value::Accessor { get, set } => [get, set].into_iter().fold(0u64, |total, slot| {
+                total.saturating_add(slot.as_deref().map_or(0, |nested| {
+                    u64::try_from(std::mem::size_of::<Value>())
+                        .unwrap_or(u64::MAX)
+                        .saturating_add(Self::estimate_writable_value_bytes(nested))
+                }))
+            }),
+            _ => 0,
+        }
+    }
+
     fn estimate_writable_callback_bytes(callback: &WritableCallbackRecord) -> u64 {
-        Self::estimate_value_bytes(&callback.value)
+        Self::estimate_writable_value_bytes(&callback.value)
             .saturating_add(Self::estimate_label_bytes(&callback.label))
             .saturating_add(
                 callback
@@ -39905,12 +40188,26 @@ impl InterpreterCore {
             )
     }
 
+    fn estimate_writable_write_record_bytes(record: &WritableWriteRecord) -> u64 {
+        MEMORY_ESTIMATE_WRITABLE_WRITE_NODE_BYTES
+            .saturating_add(Self::estimate_writable_value_bytes(&record.value))
+            .saturating_add(Self::estimate_label_bytes(&record.label))
+            .saturating_add(
+                record
+                    .callback
+                    .as_ref()
+                    .map(Self::estimate_writable_callback_bytes)
+                    .unwrap_or(0),
+            )
+    }
+
     fn estimate_writable_error_dynamic_bytes(state: &WritableState) -> u64 {
         let terminal = state
             .terminal_error
             .as_ref()
             .map(|(value, label)| {
-                Self::estimate_value_bytes(value).saturating_add(Self::estimate_label_bytes(label))
+                Self::estimate_writable_value_bytes(value)
+                    .saturating_add(Self::estimate_label_bytes(label))
             })
             .unwrap_or(0);
         Self::estimate_label_bytes(&state.lifecycle_label).saturating_add(terminal)
@@ -39922,32 +40219,26 @@ impl InterpreterCore {
                 state
                     .write_callback
                     .as_ref()
-                    .map(Self::estimate_value_bytes)
+                    .map(Self::estimate_writable_value_bytes)
                     .unwrap_or(0),
             )
             .saturating_add(
                 state
                     .final_callback
                     .as_ref()
-                    .map(Self::estimate_value_bytes)
+                    .map(Self::estimate_writable_value_bytes)
                     .unwrap_or(0),
             )
             .saturating_add(
-                u64::try_from(state.writes.capacity())
+                u64::try_from(state.writes.len())
                     .unwrap_or(u64::MAX)
-                    .saturating_mul(MEMORY_ESTIMATE_WRITABLE_WRITE_BYTES),
+                    .saturating_mul(MEMORY_ESTIMATE_WRITABLE_WRITE_NODE_BYTES),
             )
             .saturating_add(state.writes.iter().fold(0u64, |total, record| {
-                total
-                    .saturating_add(Self::estimate_value_bytes(&record.value))
-                    .saturating_add(Self::estimate_label_bytes(&record.label))
-                    .saturating_add(
-                        record
-                            .callback
-                            .as_ref()
-                            .map(Self::estimate_writable_callback_bytes)
-                            .unwrap_or(0),
-                    )
+                total.saturating_add(
+                    Self::estimate_writable_write_record_bytes(record)
+                        .saturating_sub(MEMORY_ESTIMATE_WRITABLE_WRITE_NODE_BYTES),
+                )
             }))
             .saturating_add(
                 u64::try_from(state.end_callbacks.len())
@@ -39962,7 +40253,7 @@ impl InterpreterCore {
                     .terminal_error
                     .as_ref()
                     .map(|(value, label)| {
-                        Self::estimate_value_bytes(value)
+                        Self::estimate_writable_value_bytes(value)
                             .saturating_add(Self::estimate_label_bytes(label))
                     })
                     .unwrap_or(0),
@@ -48683,17 +48974,18 @@ mod async_runtime_tests_current {
         };
 
         let initial_bytes = core.estimated_memory_bytes();
-        let mut first = core
-            .clone_writable_state_with_budget(writable)
-            .expect("initial FIFO clone budget")
-            .expect("live Writable state");
-        first.end_callbacks.push_back(WritableEndCallbackRecord {
-            callback: callback.clone(),
-            registered_after_end: false,
-        });
-        let first_state_bytes = InterpreterCore::estimate_writable_state_bytes(&first);
-        core.commit_writable_state(writable, first)
-            .expect("first FIFO callback commit");
+        core.writable_streams
+            .get_mut(&writable)
+            .expect("live Writable state")
+            .end_callbacks
+            .push_back(WritableEndCallbackRecord {
+                callback: callback.clone(),
+                registered_after_end: false,
+            });
+        let first_state_bytes =
+            InterpreterCore::estimate_writable_state_bytes(&core.writable_streams[&writable]);
+        core.sync_estimated_memory_bytes()
+            .expect("first FIFO callback accounting");
         assert_eq!(
             core.estimated_memory_bytes(),
             initial_bytes + first_state_bytes - MEMORY_ESTIMATE_WRITABLE_BASE_BYTES
@@ -48744,6 +49036,245 @@ mod async_runtime_tests_current {
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes(),
             "terminal release must subtract every retained FIFO node and payload"
+        );
+    }
+
+    #[test]
+    fn writable_write_fifo_is_exact_accounted_and_atomic_bd_fw7zd_3() {
+        assert!(
+            usize::try_from(MEMORY_ESTIMATE_WRITABLE_WRITE_NODE_BYTES)
+                .expect("write node charge fits usize")
+                >= std::mem::size_of::<WritableWriteRecord>()
+                    .saturating_add(2 * std::mem::size_of::<usize>()),
+            "the conservative write charge must cover the record and both linked-list pointers"
+        );
+        let mut core = test_interpreter();
+        let Value::Object(writable) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("atomic write Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        core.writable_streams
+            .get_mut(&writable)
+            .expect("live Writable")
+            .object_mode = true;
+        let label = Label::Custom {
+            name: "write-transaction-label".repeat(8),
+            level: 3,
+        };
+        let callback = WritableCallbackRecord {
+            value: Value::BuiltinFunction(BuiltinFunction::require(
+                "retained-require-specifier".repeat(8),
+            )),
+            label: label.clone(),
+            module_specifier: Some("write-owner.mjs".to_string()),
+        };
+        let value = Value::BigInt("9".repeat(256));
+        let record = WritableWriteRecord {
+            value: value.clone(),
+            label: label.clone(),
+            units: 1,
+            callback: Some(callback.clone()),
+            status: WritableWriteStatus::Pending,
+            completion_failed: false,
+        };
+        let previous_state_bytes =
+            InterpreterCore::estimate_writable_state_bytes(&core.writable_streams[&writable]);
+        let next_state_bytes = previous_state_bytes
+            .saturating_add(InterpreterCore::estimate_writable_write_record_bytes(
+                &record,
+            ))
+            .saturating_add(InterpreterCore::estimate_label_bytes(&label));
+        let required_delta = next_state_bytes.saturating_sub(previous_state_bytes);
+        let before_bytes = core.estimated_memory_bytes();
+        let before_state = format!("{:?}", core.writable_streams[&writable]);
+
+        core.config.max_total_memory_bytes = before_bytes.saturating_add(required_delta - 1);
+        assert!(matches!(
+            core.writable_enqueue(
+                writable,
+                value.clone(),
+                label.clone(),
+                Some(callback.clone()),
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(
+            format!("{:?}", core.writable_streams[&writable]),
+            before_state
+        );
+        assert_eq!(core.estimated_memory_bytes(), before_bytes);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.config.max_total_memory_bytes = before_bytes.saturating_add(required_delta);
+        assert!(
+            core.writable_enqueue(writable, value, label.clone(), Some(callback))
+                .expect("the exact node and payload charge must fit")
+        );
+        let state = &core.writable_streams[&writable];
+        assert_eq!(state.writes.len(), 1);
+        assert_eq!(state.lifecycle_label, label);
+        assert_eq!(core.estimated_memory_bytes(), before_bytes + required_delta);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn writable_end_chunk_and_cork_labels_refuse_atomically_bd_fw7zd_3() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let Value::Object(writable) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("atomic end Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        core.writable_streams
+            .get_mut(&writable)
+            .expect("live Writable")
+            .write_callback = Some(Value::BuiltinFunction(BuiltinFunction::new_kind(
+            BuiltinFunctionKind::ArrayIsArray,
+        )));
+        core.sync_estimated_memory_bytes()
+            .expect("write implementation accounting");
+        let label = Label::Custom {
+            name: "end-transaction-label".repeat(8),
+            level: 3,
+        };
+        core.write_reg(0, Value::Int(1)).expect("cork label value");
+        core.set_register_label(0, label.clone())
+            .expect("cork label");
+        let before_cork_bytes = core.estimated_memory_bytes();
+        let label_bytes = InterpreterCore::estimate_label_bytes(&label);
+        core.config.max_total_memory_bytes = before_cork_bytes
+            .saturating_add(label_bytes)
+            .saturating_sub(1);
+        assert!(matches!(
+            core.writable_cork(Value::Object(writable), RegRange { start: 0, count: 1 }),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.writable_streams[&writable].cork_depth, 0);
+        assert_eq!(
+            core.writable_streams[&writable].lifecycle_label,
+            Label::Public
+        );
+
+        core.config.max_total_memory_bytes = before_cork_bytes.saturating_add(label_bytes);
+        core.writable_cork(Value::Object(writable), RegRange { start: 0, count: 1 })
+            .expect("exact cork label replacement");
+        assert_eq!(core.writable_streams[&writable].cork_depth, 1);
+        assert_eq!(core.writable_streams[&writable].lifecycle_label, label);
+
+        core.config.max_total_memory_bytes = u64::MAX;
+        let chunk = Value::str("tail");
+        let callback =
+            Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayIsArray));
+        core.write_reg(0, chunk.clone()).expect("end chunk");
+        core.write_reg(1, callback.clone()).expect("end callback");
+        core.set_register_label(0, label.clone())
+            .expect("end chunk label");
+        core.set_register_label(1, label.clone())
+            .expect("end callback label");
+        let callback_record = WritableCallbackRecord {
+            value: callback,
+            label: label.clone(),
+            module_specifier: None,
+        };
+        let write_record = WritableWriteRecord {
+            value: chunk,
+            label: label.clone(),
+            units: "tail".len(),
+            callback: None,
+            status: WritableWriteStatus::Pending,
+            completion_failed: false,
+        };
+        let required_delta = InterpreterCore::estimate_writable_write_record_bytes(&write_record)
+            .saturating_add(MEMORY_ESTIMATE_WRITABLE_END_CALLBACK_BYTES)
+            .saturating_add(InterpreterCore::estimate_writable_callback_bytes(
+                &callback_record,
+            ));
+        let before_end_bytes = core.estimated_memory_bytes();
+        let before_end_state = format!("{:?}", core.writable_streams[&writable]);
+        core.config.max_total_memory_bytes = before_end_bytes
+            .saturating_add(required_delta)
+            .saturating_sub(1);
+        assert!(matches!(
+            core.writable_end(
+                &module,
+                Value::Object(writable),
+                RegRange { start: 0, count: 2 },
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(
+            format!("{:?}", core.writable_streams[&writable]),
+            before_end_state
+        );
+        assert_eq!(core.estimated_memory_bytes(), before_end_bytes);
+
+        core.config.max_total_memory_bytes = before_end_bytes.saturating_add(required_delta);
+        core.append_writable_write(
+            writable,
+            write_record.value,
+            write_record.label,
+            None,
+            Some(callback_record),
+            true,
+        )
+        .expect("exact combined write and terminal-callback charge");
+        let state = &core.writable_streams[&writable];
+        assert_eq!(state.writes.len(), 1);
+        assert_eq!(state.end_callbacks.len(), 1);
+        assert_eq!(state.cork_depth, 0);
+        assert!(state.end_requested);
+        assert_eq!(state.lifecycle_label, label);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            before_end_bytes + required_delta
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn writable_transactions_use_full_same_level_ifc_order_bd_fw7zd_3() {
+        let mut core = test_interpreter();
+        let Value::Object(writable) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("same-level IFC Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        core.writable_streams
+            .get_mut(&writable)
+            .expect("live Writable")
+            .lifecycle_label = Label::Custom {
+            name: "same-level-a".to_string(),
+            level: 3,
+        };
+        core.sync_estimated_memory_bytes()
+            .expect("initial same-level label accounting");
+        let dominant = Label::Custom {
+            name: "same-level-z".to_string(),
+            level: 3,
+        };
+        core.write_reg(0, Value::Int(1)).expect("same-level arg");
+        core.set_register_label(0, dominant.clone())
+            .expect("same-level arg label");
+        core.writable_cork(Value::Object(writable), RegRange { start: 0, count: 1 })
+            .expect("full-Ord same-level join");
+        assert_eq!(core.writable_streams[&writable].lifecycle_label, dominant);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
         );
     }
 
@@ -48816,7 +49347,7 @@ mod async_runtime_tests_current {
                 RegRange { start: 0, count: 1 },
             )
             .expect("refusal first end callback");
-        let refusal_state = refusal_core.writable_streams[&refusal_writable].clone();
+        let refusal_state = format!("{:?}", refusal_core.writable_streams[&refusal_writable]);
         refusal_core
             .write_reg(1, callback)
             .expect("refusal second callback register");
@@ -48833,7 +49364,7 @@ mod async_runtime_tests_current {
             Err(InterpreterError::MemoryBudgetExceeded { .. })
         ));
         assert_eq!(
-            refusal_core.writable_streams[&refusal_writable],
+            format!("{:?}", refusal_core.writable_streams[&refusal_writable]),
             refusal_state
         );
         assert_eq!(refusal_core.estimated_memory_bytes(), refusal_bytes);
@@ -49243,20 +49774,283 @@ mod async_runtime_tests_current {
             refusal_stream,
             23,
         );
-        assert!(matches!(
-            refusal_core.writable_write_done(
+        let refusal_bytes = refusal_core.estimated_memory_bytes();
+        let requested_bytes = match refusal_core.writable_write_done(
+            &module,
+            &refusal_completion,
+            RegRange { start: 0, count: 1 },
+        ) {
+            Err(InterpreterError::MemoryBudgetExceeded {
+                requested_bytes, ..
+            }) => requested_bytes,
+            other => panic!("expected atomic completion refusal, got {other:?}"),
+        };
+        assert_eq!(
+            refusal_core.writable_streams[&refusal_stream].writes[0].status,
+            WritableWriteStatus::Active(23)
+        );
+        assert!(!refusal_core.writable_streams[&refusal_stream].writes[0].completion_failed);
+        assert_eq!(
+            refusal_core.read_reg(0).expect("refused error argument"),
+            Value::Int(1)
+        );
+        assert_eq!(
+            refusal_core.writable_streams[&refusal_stream].lifecycle_label,
+            Label::Public
+        );
+        assert_eq!(refusal_core.estimated_memory_bytes(), refusal_bytes);
+
+        refusal_core.config.max_total_memory_bytes = requested_bytes;
+        refusal_core
+            .writable_write_done(
                 &module,
                 &refusal_completion,
                 RegRange { start: 0, count: 1 },
-            ),
-            Err(InterpreterError::MemoryBudgetExceeded { .. })
-        ));
-        assert!(
-            !refusal_core.writable_streams.contains_key(&refusal_stream),
-            "a residual label charge refusal must destructively clean rather than strand Active"
+            )
+            .expect("the exact completion transfer charge must succeed");
+        assert_eq!(
+            refusal_core.writable_streams[&refusal_stream].writes[0].status,
+            WritableWriteStatus::Completed
+        );
+        assert!(refusal_core.writable_streams[&refusal_stream].writes[0].completion_failed);
+        assert_eq!(
+            refusal_core.read_reg(0).expect("consumed error argument"),
+            Value::Undefined
         );
 
-        for core in [&write_core, &final_core, &refusal_core] {
+        let mut final_refusal_core = test_interpreter();
+        let Value::Object(final_refusal_stream) = final_refusal_core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("final refusal Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        {
+            let state = final_refusal_core
+                .writable_streams
+                .get_mut(&final_refusal_stream)
+                .expect("final refusal state");
+            state.end_requested = true;
+            state.final_status = WritableFinalStatus::Active(24);
+        }
+        final_refusal_core
+            .write_reg(0, Value::Int(2))
+            .expect("zero-byte final error value");
+        final_refusal_core
+            .set_register_label(
+                0,
+                Label::Custom {
+                    name: "final-ceiling-label".repeat(32),
+                    level: 4,
+                },
+            )
+            .expect("large final error label");
+        final_refusal_core.config.max_total_memory_bytes =
+            final_refusal_core.estimated_memory_bytes();
+        let final_refusal_bytes = final_refusal_core.estimated_memory_bytes();
+        let final_refusal_completion = BuiltinFunction::writable_completion(
+            BuiltinFunctionKind::StreamWritableFinalDone,
+            final_refusal_stream,
+            24,
+        );
+        let final_requested_bytes = match final_refusal_core.writable_final_done(
+            &module,
+            &final_refusal_completion,
+            RegRange { start: 0, count: 1 },
+        ) {
+            Err(InterpreterError::MemoryBudgetExceeded {
+                requested_bytes, ..
+            }) => requested_bytes,
+            other => panic!("expected atomic final refusal, got {other:?}"),
+        };
+        assert_eq!(
+            final_refusal_core.writable_streams[&final_refusal_stream].final_status,
+            WritableFinalStatus::Active(24)
+        );
+        assert_eq!(
+            final_refusal_core
+                .read_reg(0)
+                .expect("refused final error argument"),
+            Value::Int(2)
+        );
+        assert_eq!(
+            final_refusal_core.writable_streams[&final_refusal_stream].lifecycle_label,
+            Label::Public
+        );
+        assert_eq!(
+            final_refusal_core.estimated_memory_bytes(),
+            final_refusal_bytes
+        );
+
+        final_refusal_core.config.max_total_memory_bytes = final_requested_bytes;
+        final_refusal_core
+            .writable_final_done(
+                &module,
+                &final_refusal_completion,
+                RegRange { start: 0, count: 1 },
+            )
+            .expect("the exact final transfer charge must succeed");
+        assert_eq!(
+            final_refusal_core.writable_streams[&final_refusal_stream].final_status,
+            WritableFinalStatus::Done
+        );
+        assert_eq!(
+            final_refusal_core
+                .read_reg(0)
+                .expect("consumed final error argument"),
+            Value::Undefined
+        );
+
+        let mut overflow_core = test_interpreter();
+        let Value::Object(overflow_stream) = overflow_core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("sequence-overflow Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        overflow_core
+            .writable_enqueue(overflow_stream, Value::str("x"), Label::Public, None)
+            .expect("sequence-overflow write");
+        overflow_core
+            .writable_streams
+            .get_mut(&overflow_stream)
+            .expect("sequence-overflow state")
+            .writes[0]
+            .status = WritableWriteStatus::Active(25);
+        overflow_core
+            .write_reg(0, Value::Int(3))
+            .expect("sequence-overflow error");
+        overflow_core
+            .set_register_label(0, Label::Secret)
+            .expect("sequence-overflow error label");
+        overflow_core.next_writable_tick_sequence = u64::MAX;
+        let overflow_state = format!("{:?}", overflow_core.writable_streams[&overflow_stream]);
+        let overflow_bytes = overflow_core.estimated_memory_bytes();
+        let overflow_completion = BuiltinFunction::writable_completion(
+            BuiltinFunctionKind::StreamWritableWriteDone,
+            overflow_stream,
+            25,
+        );
+        assert!(matches!(
+            overflow_core.writable_write_done(
+                &module,
+                &overflow_completion,
+                RegRange { start: 0, count: 1 },
+            ),
+            Err(InterpreterError::InternalError { details })
+                if details == "Writable tick sequence space exhausted"
+        ));
+        assert_eq!(
+            format!("{:?}", overflow_core.writable_streams[&overflow_stream]),
+            overflow_state
+        );
+        assert_eq!(
+            overflow_core
+                .read_reg(0)
+                .expect("unconsumed overflow error"),
+            Value::Int(3)
+        );
+        assert_eq!(overflow_core.get_register_label(0), Ok(&Label::Secret));
+        assert_eq!(overflow_core.estimated_memory_bytes(), overflow_bytes);
+
+        let mut record_overflow_core = test_interpreter();
+        let Value::Object(record_overflow_stream) = record_overflow_core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("record-overflow Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        record_overflow_core.next_writable_tick_sequence = u64::MAX;
+        let record_overflow_state = format!(
+            "{:?}",
+            record_overflow_core.writable_streams[&record_overflow_stream]
+        );
+        let record_overflow_bytes = record_overflow_core.estimated_memory_bytes();
+        assert!(matches!(
+            record_overflow_core.record_writable_terminal_error(
+                record_overflow_stream,
+                Value::BigInt("7".repeat(256)),
+                Label::Custom {
+                    name: "record-overflow-label".repeat(16),
+                    level: 4,
+                },
+                WritableErrorOrigin::Final,
+                false,
+            ),
+            Err(InterpreterError::InternalError { details })
+                if details == "Writable tick sequence space exhausted"
+        ));
+        assert_eq!(
+            format!(
+                "{:?}",
+                record_overflow_core.writable_streams[&record_overflow_stream]
+            ),
+            record_overflow_state
+        );
+        assert_eq!(
+            record_overflow_core.estimated_memory_bytes(),
+            record_overflow_bytes
+        );
+
+        let pending_digits = "8".repeat(256);
+        let pending_label_name = "pending-overflow-label".repeat(16);
+        record_overflow_core.pending_exception = Some(Value::BigInt(pending_digits.clone()));
+        record_overflow_core.pending_exception_label = Label::Custom {
+            name: pending_label_name.clone(),
+            level: 5,
+        };
+        let (pending_error, pending_label, consumes_pending_exception) = record_overflow_core
+            .writable_invocation_error_value(
+                &InterpreterError::UncaughtException {
+                    value: "pending-overflow".to_string(),
+                },
+                Label::Public,
+            );
+        assert!(consumes_pending_exception);
+        assert_eq!(record_overflow_core.pending_exception, None);
+        assert_eq!(record_overflow_core.pending_exception_label, Label::Public);
+        assert!(matches!(
+            record_overflow_core.record_writable_terminal_error(
+                record_overflow_stream,
+                pending_error,
+                pending_label,
+                WritableErrorOrigin::Final,
+                consumes_pending_exception,
+            ),
+            Err(InterpreterError::InternalError { details })
+                if details == "Writable tick sequence space exhausted"
+        ));
+        assert_eq!(
+            record_overflow_core.pending_exception,
+            Some(Value::BigInt(pending_digits))
+        );
+        assert_eq!(
+            record_overflow_core.pending_exception_label,
+            Label::Custom {
+                name: pending_label_name,
+                level: 5,
+            }
+        );
+        assert_eq!(
+            format!(
+                "{:?}",
+                record_overflow_core.writable_streams[&record_overflow_stream]
+            ),
+            record_overflow_state
+        );
+        assert_eq!(
+            record_overflow_core.estimated_memory_bytes(),
+            record_overflow_bytes
+        );
+
+        for core in [
+            &write_core,
+            &final_core,
+            &refusal_core,
+            &final_refusal_core,
+            &overflow_core,
+            &record_overflow_core,
+        ] {
             assert_eq!(
                 core.estimated_memory_bytes(),
                 core.recompute_estimated_memory_bytes()
@@ -49487,24 +50281,22 @@ mod async_runtime_tests_current {
             core.writable_enqueue(writable, Value::str(chunk), Label::Secret, Some(callback()))
                 .expect("queued write");
         }
-        let mut projected = core
-            .clone_writable_state_with_budget(writable)
-            .expect("Writable clone budget")
+        let state = core
+            .writable_streams
+            .get_mut(&writable)
             .expect("live Writable state");
-        projected.writes[0].status = WritableWriteStatus::Completed;
-        projected.writes[1].status = WritableWriteStatus::Active(9);
-        projected.writes[2].status = WritableWriteStatus::Pending;
-        projected.buffered_length = projected.writes[1].units + projected.writes[2].units;
-        projected.end_requested = true;
-        projected.final_status = WritableFinalStatus::Done;
-        projected
-            .end_callbacks
-            .push_back(WritableEndCallbackRecord {
-                callback: callback(),
-                registered_after_end: false,
-            });
-        core.commit_writable_state(writable, projected)
-            .expect("commit arranged write queue");
+        state.writes[0].status = WritableWriteStatus::Completed;
+        state.writes[1].status = WritableWriteStatus::Active(9);
+        state.writes[2].status = WritableWriteStatus::Pending;
+        state.buffered_length = state.writes[1].units + state.writes[2].units;
+        state.end_requested = true;
+        state.final_status = WritableFinalStatus::Done;
+        state.end_callbacks.push_back(WritableEndCallbackRecord {
+            callback: callback(),
+            registered_after_end: false,
+        });
+        core.sync_estimated_memory_bytes()
+            .expect("account arranged write queue");
         core.write_reg(10, Value::Object(writable))
             .expect("events.once receiver");
         core.write_reg(11, Value::str("never"))
@@ -49596,28 +50388,26 @@ mod async_runtime_tests_current {
                 )
                 .expect("write-failure queue");
         }
-        let mut projected = write_core
-            .clone_writable_state_with_budget(write_stream)
-            .expect("write-failure clone budget")
+        let state = write_core
+            .writable_streams
+            .get_mut(&write_stream)
             .expect("write-failure state");
-        projected.writes[0].status = WritableWriteStatus::Completed;
-        projected.writes[1].status = WritableWriteStatus::Active(11);
-        projected.buffered_length = projected.writes[1].units;
-        projected.end_requested = true;
-        projected.final_status = WritableFinalStatus::Done;
-        projected
-            .end_callbacks
-            .push_back(WritableEndCallbackRecord {
-                callback: WritableCallbackRecord {
-                    value: Value::Function(2),
-                    label: Label::Public,
-                    module_specifier: None,
-                },
-                registered_after_end: false,
-            });
+        state.writes[0].status = WritableWriteStatus::Completed;
+        state.writes[1].status = WritableWriteStatus::Active(11);
+        state.buffered_length = state.writes[1].units;
+        state.end_requested = true;
+        state.final_status = WritableFinalStatus::Done;
+        state.end_callbacks.push_back(WritableEndCallbackRecord {
+            callback: WritableCallbackRecord {
+                value: Value::Function(2),
+                label: Label::Public,
+                module_specifier: None,
+            },
+            registered_after_end: false,
+        });
         write_core
-            .commit_writable_state(write_stream, projected)
-            .expect("write-failure state setup");
+            .sync_estimated_memory_bytes()
+            .expect("write-failure state accounting");
         write_core
             .insert_event_listener(
                 write_stream,
@@ -49688,27 +50478,25 @@ mod async_runtime_tests_current {
                 }),
             )
             .expect("final-failure write");
-        let mut projected = final_core
-            .clone_writable_state_with_budget(final_stream)
-            .expect("final-failure clone budget")
+        let state = final_core
+            .writable_streams
+            .get_mut(&final_stream)
             .expect("final-failure state");
-        projected.writes[0].status = WritableWriteStatus::Completed;
-        projected.buffered_length = 0;
-        projected.end_requested = true;
-        projected.final_status = WritableFinalStatus::Active(12);
-        projected
-            .end_callbacks
-            .push_back(WritableEndCallbackRecord {
-                callback: WritableCallbackRecord {
-                    value: Value::Function(3),
-                    label: Label::Public,
-                    module_specifier: None,
-                },
-                registered_after_end: false,
-            });
+        state.writes[0].status = WritableWriteStatus::Completed;
+        state.buffered_length = 0;
+        state.end_requested = true;
+        state.final_status = WritableFinalStatus::Active(12);
+        state.end_callbacks.push_back(WritableEndCallbackRecord {
+            callback: WritableCallbackRecord {
+                value: Value::Function(3),
+                label: Label::Public,
+                module_specifier: None,
+            },
+            registered_after_end: false,
+        });
         final_core
-            .commit_writable_state(final_stream, projected)
-            .expect("final-failure state setup");
+            .sync_estimated_memory_bytes()
+            .expect("final-failure state accounting");
         for (event, function_index) in [("error", 1), ("close", 2)] {
             final_core
                 .insert_event_listener(
@@ -49837,28 +50625,26 @@ mod async_runtime_tests_current {
                 }),
             )
             .expect("completed write record");
-            let mut projected = core
-                .clone_writable_state_with_budget(stream)
-                .expect("state clone budget")
+            let state = core
+                .writable_streams
+                .get_mut(&stream)
                 .expect("live Writable");
-            projected.writes[0].status = WritableWriteStatus::Completed;
-            projected.buffered_length = 0;
-            projected.end_requested = true;
-            projected.final_status = WritableFinalStatus::Done;
+            state.writes[0].status = WritableWriteStatus::Completed;
+            state.buffered_length = 0;
+            state.end_requested = true;
+            state.final_status = WritableFinalStatus::Done;
             for end_fn in end_fns {
-                projected
-                    .end_callbacks
-                    .push_back(WritableEndCallbackRecord {
-                        callback: WritableCallbackRecord {
-                            value: Value::Function(end_fn),
-                            label: Label::Public,
-                            module_specifier: None,
-                        },
-                        registered_after_end: false,
-                    });
+                state.end_callbacks.push_back(WritableEndCallbackRecord {
+                    callback: WritableCallbackRecord {
+                        value: Value::Function(end_fn),
+                        label: Label::Public,
+                        module_specifier: None,
+                    },
+                    registered_after_end: false,
+                });
             }
-            core.commit_writable_state(stream, projected)
-                .expect("terminal state setup");
+            core.sync_estimated_memory_bytes()
+                .expect("terminal state accounting");
             for (event, function_index) in [("finish", finish_fn), ("close", close_fn)] {
                 core.insert_event_listener(
                     stream,
@@ -50154,6 +50940,17 @@ mod async_runtime_tests_current {
     #[test]
     fn writable_destroy_is_deferred_idempotent_ifc_exact_and_ceiling_safe_bd_fw7zd() {
         let module = test_module_with_functions(Vec::new(), Vec::new());
+        let consume_scheduled_tick = |core: &mut InterpreterCore, object_id: ObjectId| {
+            assert!(
+                core.writable_streams
+                    .get_mut(&object_id)
+                    .expect("scheduled live Writable")
+                    .tick_sequence
+                    .take()
+                    .is_some(),
+                "direct tick driving must consume the scheduler-owned sequence"
+            );
+        };
         let mut core = test_interpreter();
         let Value::Object(writable) = core
             .construct_stream_writable(RegRange { start: 0, count: 0 })
@@ -50246,6 +51043,7 @@ mod async_runtime_tests_current {
             core.writable_streams[&writable].terminal_error,
             Some((Value::str("classified destroy"), Label::Secret))
         );
+        consume_scheduled_tick(&mut core, writable);
         core.drive_writable_tick(writable, Some(&module))
             .expect("handled destroy error emission");
         assert!(core.writable_streams[&writable].terminal_error_emitted);
@@ -50253,6 +51051,7 @@ mod async_runtime_tests_current {
             core.writable_streams[&writable].tick_phase,
             WritableTickPhase::Close
         );
+        consume_scheduled_tick(&mut core, writable);
         core.drive_writable_tick(writable, Some(&module))
             .expect("deferred close");
         assert_eq!(
@@ -50273,6 +51072,7 @@ mod async_runtime_tests_current {
             Some(&Value::Int(0)),
             "queued chunks are discarded at close"
         );
+        consume_scheduled_tick(&mut core, writable);
         core.drive_writable_tick(writable, Some(&module))
             .expect("deferred release");
         assert!(!core.writable_streams.contains_key(&writable));
@@ -50340,15 +51140,19 @@ mod async_runtime_tests_current {
             ceiling_core.recompute_estimated_memory_bytes()
         );
         ceiling_core.config.max_total_memory_bytes = u64::MAX;
+        consume_scheduled_tick(&mut ceiling_core, ceiling_writable);
         ceiling_core
             .drive_writable_tick(ceiling_writable, Some(&module))
             .expect("ceiling terminal callback");
+        consume_scheduled_tick(&mut ceiling_core, ceiling_writable);
         ceiling_core
             .drive_writable_tick(ceiling_writable, Some(&module))
             .expect("ceiling error-to-close transition");
+        consume_scheduled_tick(&mut ceiling_core, ceiling_writable);
         ceiling_core
             .drive_writable_tick(ceiling_writable, Some(&module))
             .expect("ceiling close");
+        consume_scheduled_tick(&mut ceiling_core, ceiling_writable);
         ceiling_core
             .drive_writable_tick(ceiling_writable, Some(&module))
             .expect("ceiling release");
@@ -50430,7 +51234,7 @@ mod async_runtime_tests_current {
             )
             .expect("large destroy label");
         refusal_core.config.max_total_memory_bytes = refusal_core.estimated_memory_bytes();
-        let before_refusal = refusal_core.writable_streams[&refusal_writable].clone();
+        let before_refusal = format!("{:?}", refusal_core.writable_streams[&refusal_writable]);
         assert!(matches!(
             refusal_core.writable_destroy(
                 Value::Object(refusal_writable),
@@ -50439,7 +51243,8 @@ mod async_runtime_tests_current {
             Err(InterpreterError::MemoryBudgetExceeded { .. })
         ));
         assert_eq!(
-            refusal_core.writable_streams[&refusal_writable], before_refusal,
+            format!("{:?}", refusal_core.writable_streams[&refusal_writable]),
+            before_refusal,
             "destroy refusal must leave authoritative state unchanged"
         );
         assert_eq!(

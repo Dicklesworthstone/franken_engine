@@ -66,6 +66,9 @@ run_check() {
     and .bead_id == "bd-gvnex"
     and .parent_bead_id == "bd-xyku0"
     and (.extension_bead_ids | index("bd-q8x8x.5") != null)
+    and (.extension_bead_ids | index("bd-q8x8x.9") != null)
+    and (.extension_bead_ids | index("bd-q8x8x.9.1") != null)
+    and (.extension_bead_ids | index("bd-q8x8x.9.2") != null)
     and .inventory_doc == "docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md"
     and (.scope_store_kinds | sort == ["FleetTrustState", "IfcProvenance", "ReplacementLineage", "SpecializationIndex"])
     and (.scope_inventory_rows | length == 4)
@@ -76,6 +79,7 @@ run_check() {
     and (.typed_boundary_requirements.ambiguous_legacy_data_fails_closed == true)
     and (.typed_boundary_requirements.authoritative_helpers | index("FleetVerificationRegistryPersistence") != null)
     and (.typed_boundary_requirements.authoritative_helpers | index("StorageAdapter.compare_and_swap_fleet_trust_state") != null)
+    and (.typed_boundary_requirements.authoritative_helpers | index("FleetTrustStateFrankensqliteStorageAdapter.open_fleet_trust_state_file") != null)
     and (.typed_boundary_requirements.authoritative_helpers | index("TypedStorageAdapterExt.put_typed") != null)
     and (.typed_boundary_requirements.authoritative_helpers | index("TypedStorageAdapterExt.get_typed_by_id") != null)
     and (.typed_boundary_requirements.authoritative_helpers | index("TypedStorageAdapterExt.query_typed") != null)

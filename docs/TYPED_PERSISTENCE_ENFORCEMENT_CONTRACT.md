@@ -5,7 +5,8 @@ This contract defines the required end state for `bd-gvnex` and the broader
 are inventory-mandated to use `sqlmodel_rust on frankensqlite`, what current
 typed evidence already exists in-tree, and what future implementation beads
 must enforce before the AGENTS.md deviation can be considered closed. Bead
-`bd-q8x8x.5` extends the contract with rollback-sensitive fleet trust state.
+`bd-q8x8x.5` extends the contract with rollback-sensitive fleet trust state;
+`bd-q8x8x.9` adds its isolated real FrankenSQLite CAS backend.
 
 Machine-readable contract:
 `docs/typed_persistence_enforcement_contract_v1.json`.
@@ -69,9 +70,29 @@ Backends without one transactional CAS must reject the operation; a read then
 write emulation is forbidden.
 The fleet model and its `fleet_trust_state_create_table_sql` bootstrap are
 therefore excluded from the generic typed-session DDL and unit-of-work writer.
-The current generic `FrankensqliteBackend` default remains fail closed until a
-concrete sibling-backed implementation supplies the revision-plus-snapshot CAS;
-the in-memory adapter is test evidence, not the production durability proof.
+The current generic `FrankensqliteBackend` default remains fail closed. The
+specialized `FleetTrustStateFrankensqliteStorageAdapter` is the only in-tree
+override: it owns a private sibling-backed connection, creates only
+`fleet_trust_state`, maps the exactly-one-transition registry generation to the
+fixed-width durable store revision, and executes bootstrap or advance as one
+affected-row-count statement predicated on both revision and snapshot hash.
+Its generic put, batch, delete, query, and ordinary CAS backend operations all
+reject. FrankenEngine does not set WAL, synchronous, journal, or migration
+policy; opening delegates those settings to FrankenSQLite. That delegation is
+not yet a production authority durability contract: the currently exposed
+generic SQLModel file open uses NORMAL/deferred WAL synchronization and lacks
+strict multi-process, identity-bound admission plus atomic authority-profile
+initialization. Same-connection exact readback does not prove stable-media
+per-commit durability. `bd-q8x8x.9.1` tracks the required sibling-owned strict
+durability/open API. The real in-memory driver tests prove the statement-level
+CAS, while `bd-q8x8x.9.2` tracks retained-file true subprocess crash,
+simultaneous cross-process CAS, lost-response recovery, and stale/fork rollback
+proof. Both blockers must close before `bd-q8x8x.9` can close.
+The current adapter probes cardinality and byte lengths with `octet_length`
+before selecting the complete singleton and repeats the predicates during that
+selection. A sibling streaming or metadata-only bound is still required to
+make hostile oversized on-disk rows a hard pre-allocation ingress guarantee;
+that gap is part of `bd-q8x8x.9.1`.
 
 Legacy `StoreRecord` inputs are allowed only for explicit lossless backfill planning
 and store-specific mapping. Implicit acceptance of untyped or

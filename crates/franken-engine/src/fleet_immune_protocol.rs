@@ -1840,6 +1840,19 @@ pub struct FleetVerificationRegistryPersistence<'a, S: StorageAdapter> {
     context: &'a EventContext,
 }
 
+/// Unforgeable-in-safe-Rust mint marker for rollback-sensitive fleet CAS.
+///
+/// The type is visible to the storage module, but its field and issuer remain
+/// private to this lifecycle module. That makes this module the only production
+/// surface able to construct a [`FleetTrustStateCasAuthorization`].
+pub(crate) struct FleetTrustStateCasMint(());
+
+impl FleetTrustStateCasMint {
+    fn issue() -> Self {
+        Self(())
+    }
+}
+
 impl<'a, S: StorageAdapter> FleetVerificationRegistryPersistence<'a, S> {
     pub fn new(storage: &'a mut S, context: &'a EventContext) -> Self {
         Self { storage, context }
@@ -2015,7 +2028,8 @@ impl<'a, S: StorageAdapter> FleetVerificationRegistryPersistence<'a, S> {
             snapshot_json,
         };
         let entry = model.to_batch_put_entry()?;
-        let authorization = FleetTrustStateCasAuthorization::new(
+        let authorization = FleetTrustStateCasAuthorization::new_authorized(
+            FleetTrustStateCasMint::issue(),
             expected_current.map(|current| current.snapshot_hash().to_hex()),
             anchor_claim.snapshot_hash.to_hex(),
         );
@@ -5796,6 +5810,7 @@ impl FleetProtocolState {
 mod tests {
     use super::*;
     use std::cell::{Cell, RefCell};
+    use std::path::PathBuf;
 
     // -- Helpers --
 
@@ -7526,6 +7541,21 @@ mod tests {
         }
     }
 
+    fn retained_real_fleet_authority_path(scenario: &str) -> PathBuf {
+        let root = std::env::var_os("FLEET_TRUST_STATE_E2E_ROOT")
+            .map(PathBuf::from)
+            .expect("set FLEET_TRUST_STATE_E2E_ROOT to a new retained-artifact directory");
+        std::fs::create_dir_all(&root).expect("create retained fleet authority proof root");
+        let scenario_root = root.join(scenario);
+        std::fs::create_dir(&scenario_root).unwrap_or_else(|error| {
+            panic!(
+                "refusing to overwrite or reuse retained fleet authority proof directory {}: {error}",
+                scenario_root.display()
+            )
+        });
+        scenario_root.join(crate::storage_adapter::FLEET_TRUST_STATE_DATABASE_FILENAME)
+    }
+
     fn v2_test_reconciliation(node_id: &str) -> ReconciliationRequest {
         ReconciliationRequest {
             node_id: NodeId::new(node_id),
@@ -9013,6 +9043,187 @@ mod tests {
                 &authority,
             )
             .expect("restored durable rotation verifies only the new key");
+    }
+
+    #[test]
+    #[ignore = "requires an explicit retained FLEET_TRUST_STATE_E2E_ROOT; artifacts are never removed"]
+    fn real_frankensqlite_registry_gracefully_reopens_prepared_rotation() {
+        let database_path = retained_real_fleet_authority_path("prepared-rotation-reopen");
+        let context = EventContext::new(
+            "trace-real-fleet-reopen",
+            "decision-real-fleet-reopen",
+            "policy-real-fleet-reopen",
+        )
+        .expect("valid storage context");
+        let authority = RecoverableTestAnchorAuthority::new(false);
+        let old_signer = v2_test_signer("node-a", 1, 71);
+        let new_signer = v2_test_signer("node-a", 2, 72);
+        let mut storage = crate::storage_adapter::FleetTrustStateFrankensqliteStorageAdapter::open_fleet_trust_state_file(&database_path)
+            .expect("open isolated real fleet authority database");
+
+        let initial = FleetVerificationRegistryPersistence::new(&mut storage, &context)
+            .prepare_initial_registration(
+                NodeId::new("node-a"),
+                1,
+                old_signer.verification_key().clone(),
+                SecurityEpoch::from_raw(1),
+                &authority,
+            )
+            .expect("initial real-database candidate is durable");
+        let live = initial
+            .finalize_and_publish(&authority)
+            .expect("initial real-database anchor finalizes");
+        assert_eq!(live.generation(), 1);
+        assert_eq!(live.store_revision(), 1);
+
+        let prepared = FleetVerificationRegistryPersistence::new(&mut storage, &context)
+            .prepare_rotation(
+                &live,
+                NodeId::new("node-a"),
+                1,
+                2,
+                new_signer.verification_key().clone(),
+                SecurityEpoch::from_raw(2),
+                &authority,
+            )
+            .expect("rotation commits to the real database before publication");
+        assert_eq!(prepared.claim().generation, 2);
+        assert_eq!(prepared.store_revision(), 2);
+
+        // Exercise graceful close/reopen after the CAS and before external
+        // anchor finalization. True process-death proof is tracked separately.
+        drop(prepared);
+        drop(storage);
+        let mut reopened = crate::storage_adapter::FleetTrustStateFrankensqliteStorageAdapter::open_fleet_trust_state_file(&database_path)
+            .expect("reopen retained real fleet authority database");
+        let restored = FleetVerificationRegistryPersistence::new(&mut reopened, &context)
+            .restore(&authority)
+            .expect("restart authenticates the stored permit and finalizes the anchor");
+        assert_eq!(restored.generation(), 2);
+        assert_eq!(restored.store_revision(), 2);
+        assert!(database_path.exists());
+    }
+
+    #[test]
+    #[ignore = "requires an explicit retained FLEET_TRUST_STATE_E2E_ROOT; artifacts are never removed"]
+    fn real_frankensqlite_registry_reconciles_lost_finalize_response_after_reopen() {
+        let database_path = retained_real_fleet_authority_path("lost-finalize-response-reopen");
+        let context = EventContext::new(
+            "trace-real-fleet-finalize-retry",
+            "decision-real-fleet-finalize-retry",
+            "policy-real-fleet-finalize-retry",
+        )
+        .expect("valid storage context");
+        let authority = RecoverableTestAnchorAuthority::new(true);
+        let signer = v2_test_signer("node-a", 1, 73);
+        let mut storage = crate::storage_adapter::FleetTrustStateFrankensqliteStorageAdapter::open_fleet_trust_state_file(&database_path)
+            .expect("open isolated real fleet authority database");
+        let pending = FleetVerificationRegistryPersistence::new(&mut storage, &context)
+            .prepare_initial_registration(
+                NodeId::new("node-a"),
+                1,
+                signer.verification_key().clone(),
+                SecurityEpoch::from_raw(1),
+                &authority,
+            )
+            .expect("initial real-database candidate is durable");
+        assert!(matches!(
+            pending.finalize_and_publish(&authority),
+            Err(FleetRegistryPersistenceError::Identity(
+                FleetIdentityError::UnverifiedRegistryAnchor { .. }
+            ))
+        ));
+        assert_eq!(
+            authority
+                .current
+                .borrow()
+                .as_ref()
+                .map(|claim| claim.generation),
+            Some(1)
+        );
+
+        drop(storage);
+        let mut reopened = crate::storage_adapter::FleetTrustStateFrankensqliteStorageAdapter::open_fleet_trust_state_file(&database_path)
+            .expect("reopen retained real fleet authority database");
+        let restored = FleetVerificationRegistryPersistence::new(&mut reopened, &context)
+            .restore(&authority)
+            .expect("idempotent finalize reconciles the already-advanced authority");
+        assert_eq!(restored.generation(), 1);
+        assert_eq!(restored.store_revision(), 1);
+        assert!(database_path.exists());
+    }
+
+    #[test]
+    #[ignore = "requires an explicit retained FLEET_TRUST_STATE_E2E_ROOT; artifacts are never removed"]
+    fn real_frankensqlite_sequential_connections_reject_a_stale_rotation() {
+        let database_path = retained_real_fleet_authority_path("independent-connection-cas");
+        let context = EventContext::new(
+            "trace-real-fleet-cas",
+            "decision-real-fleet-cas",
+            "policy-real-fleet-cas",
+        )
+        .expect("valid storage context");
+        let authority = RecoverableTestAnchorAuthority::new(false);
+        let old_signer = v2_test_signer("node-a", 1, 74);
+        let winning_signer = v2_test_signer("node-a", 2, 75);
+        let losing_signer = v2_test_signer("node-a", 3, 76);
+
+        let mut bootstrap = crate::storage_adapter::FleetTrustStateFrankensqliteStorageAdapter::open_fleet_trust_state_file(&database_path)
+            .expect("open isolated real fleet authority database");
+        let initial = FleetVerificationRegistryPersistence::new(&mut bootstrap, &context)
+            .prepare_initial_registration(
+                NodeId::new("node-a"),
+                1,
+                old_signer.verification_key().clone(),
+                SecurityEpoch::from_raw(1),
+                &authority,
+            )
+            .expect("initial real-database candidate is durable");
+        let live = initial
+            .finalize_and_publish(&authority)
+            .expect("initial real-database anchor finalizes");
+        drop(bootstrap);
+
+        let mut writer_a = crate::storage_adapter::FleetTrustStateFrankensqliteStorageAdapter::open_fleet_trust_state_file(&database_path)
+            .expect("open first independent real connection");
+        let mut writer_b = crate::storage_adapter::FleetTrustStateFrankensqliteStorageAdapter::open_fleet_trust_state_file(&database_path)
+            .expect("open second independent real connection");
+        let winner = FleetVerificationRegistryPersistence::new(&mut writer_a, &context)
+            .prepare_rotation(
+                &live,
+                NodeId::new("node-a"),
+                1,
+                2,
+                winning_signer.verification_key().clone(),
+                SecurityEpoch::from_raw(2),
+                &authority,
+            )
+            .expect("first real connection wins generation-two CAS");
+        let loser = FleetVerificationRegistryPersistence::new(&mut writer_b, &context)
+            .prepare_rotation(
+                &live,
+                NodeId::new("node-a"),
+                1,
+                3,
+                losing_signer.verification_key().clone(),
+                SecurityEpoch::from_raw(2),
+                &authority,
+            )
+            .expect_err("second real connection must observe the CAS conflict");
+        assert!(matches!(
+            loser,
+            FleetRegistryPersistenceError::ConcurrentUpdate {
+                expected_revision: Some(1),
+                actual_revision: Some(2)
+            }
+        ));
+        assert_eq!(winner.store_revision(), 2);
+        let published = winner
+            .finalize_and_publish(&authority)
+            .expect("winning real-database candidate finalizes");
+        assert_eq!(published.generation(), 2);
+        assert_eq!(published.store_revision(), 2);
+        assert!(database_path.exists());
     }
 
     #[test]

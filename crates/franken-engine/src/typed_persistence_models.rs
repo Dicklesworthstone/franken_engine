@@ -1434,8 +1434,8 @@ pub fn fleet_trust_state_create_table_sql() -> String {
 
 pub const FLEET_TRUST_STATE_SCHEMA_VERSION: &str = "fleet_trust_state_v1";
 pub const FLEET_TRUST_STATE_RECORD_ID: i64 = 1;
-const FLEET_TRUST_STATE_MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
-const FLEET_TRUST_STATE_MAX_ANCHOR_PERMIT_BYTES: usize = 64 * 1024;
+pub(crate) const FLEET_TRUST_STATE_MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const FLEET_TRUST_STATE_MAX_ANCHOR_PERMIT_BYTES: usize = 64 * 1024;
 
 /// Single-row typed authority snapshot committed through a specialized CAS.
 ///

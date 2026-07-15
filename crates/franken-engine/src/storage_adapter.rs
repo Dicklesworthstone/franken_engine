@@ -11,13 +11,19 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use sqlmodel::{Model, Value};
+use sqlmodel_frankensqlite::FrankenConnection;
 
+use crate::fleet_immune_protocol::FleetTrustStateCasMint;
 use crate::typed_persistence_models::{
-    FleetTrustStateEntry, IfcProvenanceEntry, ReplacementLineageEntry, ShadowEvidenceJournalEntry,
+    FLEET_TRUST_STATE_MAX_ANCHOR_PERMIT_BYTES, FLEET_TRUST_STATE_MAX_SNAPSHOT_BYTES,
+    FLEET_TRUST_STATE_RECORD_ID, FLEET_TRUST_STATE_SCHEMA_VERSION, FleetTrustStateEntry,
+    IfcProvenanceEntry, ReplacementLineageEntry, ShadowEvidenceJournalEntry,
     SpecializationIndexEntry, TypedFrankenSqliteSession, TypedStoreRecord,
-    open_typed_frankensqlite_memory_session,
+    fleet_trust_state_create_table_sql, open_typed_frankensqlite_memory_session,
 };
 
 /// Current schema version for storage-adapter contracts.
@@ -501,6 +507,18 @@ pub struct FleetTrustStateCasAuthorization {
 }
 
 impl FleetTrustStateCasAuthorization {
+    pub(crate) fn new_authorized(
+        _mint: FleetTrustStateCasMint,
+        expected_current_snapshot_hash: Option<String>,
+        next_snapshot_hash: String,
+    ) -> Self {
+        Self {
+            expected_current_snapshot_hash,
+            next_snapshot_hash,
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn new(
         expected_current_snapshot_hash: Option<String>,
         next_snapshot_hash: String,
@@ -1210,6 +1228,555 @@ pub trait FrankensqliteBackend {
     ) -> Result<Vec<StoreRecord>, String>;
 }
 
+/// Required basename for the isolated fleet-authority database.
+pub const FLEET_TRUST_STATE_DATABASE_FILENAME: &str = "fleet_trust_state.db";
+
+/// Real FrankenSQLite backend for the rollback-sensitive fleet authority row.
+///
+/// This backend deliberately exposes no connection accessor and implements no
+/// generic mutation. The physical SQLModel row is the only database state it
+/// can write. Under the fleet lifecycle contract, the first durable snapshot
+/// has generation one and every later publication contains exactly one
+/// authority transition, so the fixed-width `generation_decimal` column is
+/// also the specialized [`StoreRecord::revision`]. If metadata-only durable
+/// writes or multi-transition publications are ever introduced, this mapping
+/// must be replaced by an independent typed revision column.
+pub struct FleetTrustStateFrankensqliteBackend {
+    connection: FrankenConnection,
+}
+
+impl fmt::Debug for FleetTrustStateFrankensqliteBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FleetTrustStateFrankensqliteBackend")
+            .field("path", &self.connection.path())
+            .finish_non_exhaustive()
+    }
+}
+
+impl FleetTrustStateFrankensqliteBackend {
+    /// Open the isolated authority database through the sibling-owned driver.
+    ///
+    /// FrankenEngine intentionally does not set WAL, synchronous, journal, or
+    /// migration policy here. Opening the connection delegates those choices
+    /// to FrankenSQLite; [`FrankensqliteBackend::apply_control_plane_profile`]
+    /// only installs and validates the separately generated fleet table.
+    fn open_file(path: impl AsRef<Path>) -> Result<Self, StorageError> {
+        let path = path.as_ref();
+        if path.file_name().and_then(|name| name.to_str())
+            != Some(FLEET_TRUST_STATE_DATABASE_FILENAME)
+        {
+            return Err(StorageError::BackendUnavailable {
+                backend: "frankensqlite_fleet_trust_state".to_string(),
+                detail: format!(
+                    "isolated fleet authority database must be named `{FLEET_TRUST_STATE_DATABASE_FILENAME}`"
+                ),
+            });
+        }
+        let path = path
+            .to_str()
+            .ok_or_else(|| StorageError::BackendUnavailable {
+                backend: "frankensqlite_fleet_trust_state".to_string(),
+                detail: "fleet authority database path must be valid UTF-8".to_string(),
+            })?;
+        let connection = FrankenConnection::open_file(path).map_err(|error| {
+            StorageError::BackendUnavailable {
+                backend: "frankensqlite_fleet_trust_state".to_string(),
+                detail: format!("failed to open isolated authority database: {error}"),
+            }
+        })?;
+        Ok(Self { connection })
+    }
+
+    #[cfg(test)]
+    fn open_memory() -> Result<Self, StorageError> {
+        let connection =
+            FrankenConnection::open_memory().map_err(|error| StorageError::BackendUnavailable {
+                backend: "frankensqlite_fleet_trust_state".to_string(),
+                detail: format!("failed to open in-memory authority database: {error}"),
+            })?;
+        Ok(Self { connection })
+    }
+
+    fn canonical_key() -> Result<String, String> {
+        FleetTrustStateEntry::typed_record_key_for_id(FLEET_TRUST_STATE_RECORD_ID)
+            .map_err(|error| error.to_string())
+    }
+
+    fn reject_generic(operation: &str) -> String {
+        format!(
+            "isolated fleet trust-state backend rejects generic `{operation}`; use the opaque-authorized singleton CAS"
+        )
+    }
+
+    fn model_from_envelope(
+        key: &str,
+        value: &[u8],
+        metadata: &BTreeMap<String, String>,
+    ) -> Result<FleetTrustStateEntry, String> {
+        let canonical_key = Self::canonical_key()?;
+        if key != canonical_key {
+            return Err(format!(
+                "fleet trust-state key must be canonical `{canonical_key}`, got `{key}`"
+            ));
+        }
+        let record = StoreRecord {
+            store: StoreKind::FleetTrustState,
+            key: key.to_string(),
+            value: value.to_vec(),
+            metadata: metadata.clone(),
+            revision: 0,
+        };
+        let model =
+            FleetTrustStateEntry::from_store_record(&record).map_err(|error| error.to_string())?;
+        let canonical = model
+            .to_store_record(0)
+            .map_err(|error| error.to_string())?;
+        if canonical.key != key || canonical.value != value || canonical.metadata != *metadata {
+            return Err(
+                "fleet trust-state envelope is not the canonical typed encoding".to_string(),
+            );
+        }
+        Ok(model)
+    }
+
+    fn revision_from_model(model: &FleetTrustStateEntry) -> Result<u64, String> {
+        let revision = model
+            .generation_decimal
+            .parse::<u64>()
+            .map_err(|error| format!("invalid fleet generation/revision: {error}"))?;
+        if revision == 0 {
+            return Err("durable fleet generation/revision zero is forbidden".to_string());
+        }
+        Ok(revision)
+    }
+
+    fn values_for_model(model: &FleetTrustStateEntry) -> Vec<Value> {
+        vec![
+            Value::BigInt(model.state_id),
+            Value::Text(model.schema_version.clone()),
+            Value::Text(model.generation_decimal.clone()),
+            Value::Text(model.authority_epoch_decimal.clone()),
+            Value::Text(model.snapshot_hash.clone()),
+            Value::Text(model.prior_snapshot_hash.clone()),
+            Value::Text(model.authority_head_hash.clone()),
+            Value::Text(model.anchor_advance_permit_hex.clone()),
+            Value::Text(model.snapshot_json.clone()),
+        ]
+    }
+
+    fn load_current(&self) -> Result<Option<StoreRecord>, String> {
+        let probes = self
+            .connection
+            .query_sync(
+                "SELECT state_id, \
+                        octet_length(schema_version) AS schema_version_bytes, \
+                        octet_length(generation_decimal) AS generation_bytes, \
+                        octet_length(authority_epoch_decimal) AS authority_epoch_bytes, \
+                        octet_length(snapshot_hash) AS snapshot_hash_bytes, \
+                        octet_length(prior_snapshot_hash) AS prior_snapshot_hash_bytes, \
+                        octet_length(authority_head_hash) AS authority_head_hash_bytes, \
+                        octet_length(anchor_advance_permit_hex) AS permit_bytes, \
+                        octet_length(snapshot_json) AS snapshot_bytes \
+                 FROM fleet_trust_state ORDER BY state_id ASC LIMIT 2;",
+                &[],
+            )
+            .map_err(|error| format!("fleet trust-state bounded read probe failed: {error}"))?;
+        if probes.len() > 1 {
+            return Err(format!(
+                "fleet trust-state database contains at least {} rows; exactly one canonical singleton is allowed",
+                probes.len()
+            ));
+        }
+        let Some(probe) = probes.first() else {
+            return Ok(None);
+        };
+
+        let state_id = probe
+            .get_named::<i64>("state_id")
+            .map_err(|error| format!("invalid fleet trust-state probe row: {error}"))?;
+        if state_id != FLEET_TRUST_STATE_RECORD_ID {
+            return Err(format!(
+                "fleet trust-state database contains noncanonical state_id {state_id}"
+            ));
+        }
+        let expected_lengths = [
+            (
+                "schema_version_bytes",
+                FLEET_TRUST_STATE_SCHEMA_VERSION.len(),
+            ),
+            ("generation_bytes", 20),
+            ("authority_epoch_bytes", 20),
+            ("snapshot_hash_bytes", 64),
+            ("prior_snapshot_hash_bytes", 64),
+            ("authority_head_hash_bytes", 64),
+        ];
+        for (field, expected) in expected_lengths {
+            let actual = probe
+                .get_named::<i64>(field)
+                .map_err(|error| format!("invalid fleet trust-state probe row: {error}"))?;
+            if actual != i64::try_from(expected).expect("fixed field length fits i64") {
+                return Err(format!(
+                    "fleet trust-state {field} must be exactly {expected} bytes, got {actual}"
+                ));
+            }
+        }
+        let permit_bytes = probe
+            .get_named::<i64>("permit_bytes")
+            .map_err(|error| format!("invalid fleet trust-state probe row: {error}"))?;
+        let max_permit_hex_bytes = i64::try_from(
+            FLEET_TRUST_STATE_MAX_ANCHOR_PERMIT_BYTES
+                .checked_mul(2)
+                .expect("permit hex bound fits usize"),
+        )
+        .expect("permit hex bound fits i64");
+        if permit_bytes <= 0 || permit_bytes > max_permit_hex_bytes {
+            return Err(format!(
+                "fleet trust-state permit_bytes must be in 1..={max_permit_hex_bytes}, got {permit_bytes}"
+            ));
+        }
+        let snapshot_bytes = probe
+            .get_named::<i64>("snapshot_bytes")
+            .map_err(|error| format!("invalid fleet trust-state probe row: {error}"))?;
+        let max_snapshot_bytes =
+            i64::try_from(FLEET_TRUST_STATE_MAX_SNAPSHOT_BYTES).expect("snapshot bound fits i64");
+        if snapshot_bytes <= 0 || snapshot_bytes > max_snapshot_bytes {
+            return Err(format!(
+                "fleet trust-state snapshot_bytes must be in 1..={max_snapshot_bytes}, got {snapshot_bytes}"
+            ));
+        }
+
+        // Repeat the bounds inside the materializing statement. This closes the
+        // probe-to-load allocation window if another connection changes the row.
+        let rows = self
+            .connection
+            .query_sync(
+                "SELECT state_id, schema_version, generation_decimal, authority_epoch_decimal, \
+                        snapshot_hash, prior_snapshot_hash, authority_head_hash, \
+                        anchor_advance_permit_hex, snapshot_json \
+                 FROM fleet_trust_state \
+                 WHERE state_id = ?1 \
+                   AND octet_length(schema_version) = ?2 \
+                   AND octet_length(generation_decimal) = 20 \
+                   AND octet_length(authority_epoch_decimal) = 20 \
+                   AND octet_length(snapshot_hash) = 64 \
+                   AND octet_length(prior_snapshot_hash) = 64 \
+                   AND octet_length(authority_head_hash) = 64 \
+                   AND octet_length(anchor_advance_permit_hex) BETWEEN 1 AND ?3 \
+                   AND octet_length(snapshot_json) BETWEEN 1 AND ?4 \
+                   AND NOT EXISTS (\
+                       SELECT 1 FROM fleet_trust_state AS extra \
+                       WHERE extra.state_id <> ?1\
+                   ) \
+                 LIMIT 1;",
+                &[
+                    Value::BigInt(FLEET_TRUST_STATE_RECORD_ID),
+                    Value::BigInt(
+                        i64::try_from(FLEET_TRUST_STATE_SCHEMA_VERSION.len())
+                            .expect("schema version length fits i64"),
+                    ),
+                    Value::BigInt(max_permit_hex_bytes),
+                    Value::BigInt(max_snapshot_bytes),
+                ],
+            )
+            .map_err(|error| format!("fleet trust-state bounded read failed: {error}"))?;
+        let Some(row) = rows.first() else {
+            return Err(
+                "fleet trust-state row changed or exceeded its typed bounds during read"
+                    .to_string(),
+            );
+        };
+        let model = FleetTrustStateEntry::from_row(row)
+            .map_err(|error| format!("fleet trust-state SQLModel row is invalid: {error}"))?;
+        let revision = Self::revision_from_model(&model)?;
+        model
+            .to_store_record(revision)
+            .map(Some)
+            .map_err(|error| error.to_string())
+    }
+
+    fn user_schema_objects(&self) -> Result<Vec<(String, String, String)>, String> {
+        self.connection
+            .query_sync(
+                "SELECT type, name, tbl_name FROM sqlite_schema \
+                 WHERE substr(name, 1, 7) <> 'sqlite_' \
+                 ORDER BY type ASC, name ASC;",
+                &[],
+            )
+            .map_err(|error| format!("fleet trust-state schema inventory failed: {error}"))?
+            .into_iter()
+            .map(|row| {
+                Ok((
+                    row.get_named::<String>("type")
+                        .map_err(|error| format!("invalid schema inventory row: {error}"))?,
+                    row.get_named::<String>("name")
+                        .map_err(|error| format!("invalid schema inventory row: {error}"))?,
+                    row.get_named::<String>("tbl_name")
+                        .map_err(|error| format!("invalid schema inventory row: {error}"))?,
+                ))
+            })
+            .collect::<Result<Vec<_>, _>>()
+    }
+
+    fn validate_authority_table_shape(&self) -> Result<(), String> {
+        let rows = self
+            .connection
+            .query_sync("PRAGMA table_info(fleet_trust_state);", &[])
+            .map_err(|error| format!("fleet trust-state table inspection failed: {error}"))?;
+        let expected = [
+            ("state_id", "BIGINT", 1_i64, 1_i64),
+            ("schema_version", "TEXT", 1, 0),
+            ("generation_decimal", "TEXT", 1, 0),
+            ("authority_epoch_decimal", "TEXT", 1, 0),
+            ("snapshot_hash", "TEXT", 1, 0),
+            ("prior_snapshot_hash", "TEXT", 1, 0),
+            ("authority_head_hash", "TEXT", 1, 0),
+            ("anchor_advance_permit_hex", "TEXT", 1, 0),
+            ("snapshot_json", "TEXT", 1, 0),
+        ];
+        if rows.len() != expected.len() {
+            return Err(format!(
+                "fleet trust-state table has {} columns; expected {}",
+                rows.len(),
+                expected.len()
+            ));
+        }
+        for (index, (row, (name, sql_type, not_null, primary_key))) in
+            rows.iter().zip(expected).enumerate()
+        {
+            let actual = (
+                row.get_named::<i64>("cid")
+                    .map_err(|error| format!("invalid table-info row: {error}"))?,
+                row.get_named::<String>("name")
+                    .map_err(|error| format!("invalid table-info row: {error}"))?,
+                row.get_named::<String>("type")
+                    .map_err(|error| format!("invalid table-info row: {error}"))?,
+                row.get_named::<i64>("notnull")
+                    .map_err(|error| format!("invalid table-info row: {error}"))?,
+                row.get_named::<Option<String>>("dflt_value")
+                    .map_err(|error| format!("invalid table-info row: {error}"))?,
+                row.get_named::<i64>("pk")
+                    .map_err(|error| format!("invalid table-info row: {error}"))?,
+            );
+            let expected_cid = i64::try_from(index).expect("fleet column count fits i64");
+            if actual
+                != (
+                    expected_cid,
+                    name.to_string(),
+                    sql_type.to_string(),
+                    not_null,
+                    None,
+                    primary_key,
+                )
+            {
+                return Err(format!(
+                    "fleet trust-state column {index} has noncanonical shape {actual:?}"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn initialize_authority_schema(&self) -> Result<(), String> {
+        let expected_objects = vec![(
+            "table".to_string(),
+            "fleet_trust_state".to_string(),
+            "fleet_trust_state".to_string(),
+        )];
+        let preflight_objects = self.user_schema_objects()?;
+        if !preflight_objects.is_empty() && preflight_objects != expected_objects {
+            return Err(format!(
+                "isolated fleet authority database contains unexpected schema objects before bootstrap: {preflight_objects:?}"
+            ));
+        }
+        if preflight_objects.is_empty() {
+            self.connection
+                .execute_raw(&fleet_trust_state_create_table_sql())
+                .map_err(|error| format!("fleet trust-state schema bootstrap failed: {error}"))?;
+        }
+        let postflight_objects = self.user_schema_objects()?;
+        if postflight_objects != expected_objects {
+            return Err(format!(
+                "isolated fleet authority database contains unexpected schema objects after bootstrap: {postflight_objects:?}"
+            ));
+        }
+        self.validate_authority_table_shape()?;
+        self.load_current().map(|_| ())
+    }
+
+    fn apply_candidate(
+        &self,
+        model: &FleetTrustStateEntry,
+        expected_revision: Option<u64>,
+        expected_current_snapshot_hash: Option<&str>,
+    ) -> Result<u64, String> {
+        match (expected_revision, expected_current_snapshot_hash) {
+            (None, None) => self
+                .connection
+                .execute_sync(
+                    "INSERT INTO fleet_trust_state \
+                        (state_id, schema_version, generation_decimal, authority_epoch_decimal, \
+                         snapshot_hash, prior_snapshot_hash, authority_head_hash, \
+                         anchor_advance_permit_hex, snapshot_json) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
+                     ON CONFLICT(state_id) DO NOTHING;",
+                    &Self::values_for_model(model),
+                )
+                .map_err(|error| format!("fleet trust-state bootstrap CAS failed: {error}")),
+            (Some(expected_revision), Some(expected_hash)) => {
+                let mut values = Self::values_for_model(model);
+                values.extend([
+                    Value::Text(format!("{expected_revision:020}")),
+                    Value::Text(expected_hash.to_string()),
+                ]);
+                self.connection
+                    .execute_sync(
+                        "UPDATE fleet_trust_state \
+                         SET schema_version = ?2, generation_decimal = ?3, \
+                             authority_epoch_decimal = ?4, snapshot_hash = ?5, \
+                             prior_snapshot_hash = ?6, authority_head_hash = ?7, \
+                             anchor_advance_permit_hex = ?8, snapshot_json = ?9 \
+                         WHERE state_id = ?1 \
+                           AND generation_decimal = ?10 \
+                           AND snapshot_hash = ?11;",
+                        &values,
+                    )
+                    .map_err(|error| format!("fleet trust-state update CAS failed: {error}"))
+            }
+            _ => Err(
+                "fleet trust-state expected revision and expected snapshot hash must both be present or both be absent"
+                    .to_string(),
+            ),
+        }
+    }
+}
+
+impl FrankensqliteBackend for FleetTrustStateFrankensqliteBackend {
+    fn apply_control_plane_profile(&mut self) -> Result<(), String> {
+        self.initialize_authority_schema()
+    }
+
+    fn current_schema_version(&self) -> Result<u32, String> {
+        Ok(STORAGE_SCHEMA_VERSION)
+    }
+
+    fn migrate_to(&mut self, target_version: u32) -> Result<(), String> {
+        if target_version == STORAGE_SCHEMA_VERSION {
+            Ok(())
+        } else {
+            Err(format!(
+                "fleet trust-state schema migration to {target_version} requires a sibling-owned transactional migration primitive"
+            ))
+        }
+    }
+
+    fn put_record(
+        &mut self,
+        _store: StoreKind,
+        _key: &str,
+        _value: &[u8],
+        _metadata: &BTreeMap<String, String>,
+    ) -> Result<StoreRecord, String> {
+        Err(Self::reject_generic("put_record"))
+    }
+
+    fn compare_and_swap_record(
+        &mut self,
+        _store: StoreKind,
+        _key: &str,
+        _expected_revision: Option<u64>,
+        _value: &[u8],
+        _metadata: &BTreeMap<String, String>,
+    ) -> Result<CompareAndSwapOutcome, String> {
+        Err(Self::reject_generic("compare_and_swap_record"))
+    }
+
+    fn compare_and_swap_fleet_trust_state_record(
+        &mut self,
+        key: &str,
+        expected_revision: Option<u64>,
+        expected_current_snapshot_hash: Option<&str>,
+        value: &[u8],
+        metadata: &BTreeMap<String, String>,
+    ) -> Result<CompareAndSwapOutcome, String> {
+        let model = Self::model_from_envelope(key, value, metadata)?;
+        let next_revision = expected_revision
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| "fleet trust-state revision space is exhausted".to_string())?;
+        if Self::revision_from_model(&model)? != next_revision {
+            return Err(format!(
+                "fleet trust-state candidate generation must equal next storage revision {next_revision}"
+            ));
+        }
+        let expected_prior = expected_current_snapshot_hash
+            .unwrap_or("0000000000000000000000000000000000000000000000000000000000000000");
+        if model.prior_snapshot_hash != expected_prior {
+            return Err(
+                "fleet trust-state candidate prior hash does not match the CAS predicate"
+                    .to_string(),
+            );
+        }
+
+        let affected =
+            self.apply_candidate(&model, expected_revision, expected_current_snapshot_hash)?;
+        if affected > 1 {
+            return Err(format!(
+                "fleet trust-state singleton CAS affected {affected} rows"
+            ));
+        }
+        let current = self.load_current()?;
+        if affected == 0 {
+            return Ok(CompareAndSwapOutcome::Conflict { current });
+        }
+
+        let expected = model
+            .to_store_record(next_revision)
+            .map_err(|error| error.to_string())?;
+        match current {
+            Some(current) if current == expected => Ok(CompareAndSwapOutcome::Applied(current)),
+            Some(_) => Err(
+                "fleet trust-state CAS committed but exact durable readback changed before publication"
+                    .to_string(),
+            ),
+            None => Err(
+                "fleet trust-state CAS reported one affected row without durable readback"
+                    .to_string(),
+            ),
+        }
+    }
+
+    fn get_record(&self, store: StoreKind, key: &str) -> Result<Option<StoreRecord>, String> {
+        let canonical_key = Self::canonical_key()?;
+        if store != StoreKind::FleetTrustState || key != canonical_key {
+            return Err(
+                "isolated fleet trust-state backend only reads the canonical singleton key"
+                    .to_string(),
+            );
+        }
+        self.load_current()
+    }
+
+    fn query_records(
+        &self,
+        _store: StoreKind,
+        _query: &StoreQuery,
+    ) -> Result<Vec<StoreRecord>, String> {
+        Err(Self::reject_generic("query_records"))
+    }
+
+    fn delete_record(&mut self, _store: StoreKind, _key: &str) -> Result<bool, String> {
+        Err(Self::reject_generic("delete_record"))
+    }
+
+    fn put_batch(
+        &mut self,
+        _store: StoreKind,
+        _entries: &[BatchPutEntry],
+    ) -> Result<Vec<StoreRecord>, String> {
+        Err(Self::reject_generic("put_batch"))
+    }
+}
+
 /// Adapter implementation backed by a frankensqlite integration backend.
 pub struct FrankensqliteStorageAdapter<B: FrankensqliteBackend> {
     backend: B,
@@ -1334,6 +1901,22 @@ impl<B: FrankensqliteBackend> FrankensqliteStorageAdapter<B> {
             outcome: outcome.to_string(),
             error_code: error.map(|err| err.code().to_string()),
         });
+    }
+}
+
+/// Storage-adapter type for the isolated real fleet-authority database.
+pub type FleetTrustStateFrankensqliteStorageAdapter =
+    FrankensqliteStorageAdapter<FleetTrustStateFrankensqliteBackend>;
+
+impl FrankensqliteStorageAdapter<FleetTrustStateFrankensqliteBackend> {
+    /// Open, initialize, and validate the isolated `fleet_trust_state.db`.
+    pub fn open_fleet_trust_state_file(path: impl AsRef<Path>) -> Result<Self, StorageError> {
+        Self::new(FleetTrustStateFrankensqliteBackend::open_file(path)?)
+    }
+
+    #[cfg(test)]
+    fn open_fleet_trust_state_memory() -> Result<Self, StorageError> {
+        Self::new(FleetTrustStateFrankensqliteBackend::open_memory()?)
     }
 }
 
@@ -4363,6 +4946,284 @@ mod tests {
             .expect_err("revision exhaustion must not reuse u64::MAX");
         assert!(matches!(overflow_error, StorageError::WriteRejected { .. }));
         assert!(overflow_error.to_string().contains("revision space"));
+    }
+
+    #[test]
+    fn real_frankensqlite_fleet_backend_bootstraps_and_advances_exact_revision() {
+        let mut adapter =
+            FleetTrustStateFrankensqliteStorageAdapter::open_fleet_trust_state_memory()
+                .expect("real FrankenSQLite fleet adapter should initialize");
+        assert!(!adapter.has_typed_session());
+
+        let initial_model = fleet_trust_state_entry(1, 10);
+        let initial = initial_model
+            .to_batch_put_entry()
+            .expect("initial fleet state should encode");
+        let initial_record = match adapter
+            .compare_and_swap_fleet_trust_state(
+                &FleetTrustStateCasAuthorization::new(None, initial_model.snapshot_hash.clone()),
+                initial.key.clone(),
+                None,
+                initial.value.clone(),
+                initial.metadata.clone(),
+                &ctx(),
+            )
+            .expect("single-statement bootstrap should execute")
+        {
+            CompareAndSwapOutcome::Applied(record) => record,
+            CompareAndSwapOutcome::Conflict { .. } => panic!("empty real database must bootstrap"),
+        };
+        assert_eq!(initial_record.revision, 1);
+        assert_eq!(initial_record.value, initial.value);
+        assert_eq!(initial_record.metadata, initial.metadata);
+
+        let generic_error = adapter
+            .put(
+                StoreKind::FleetTrustState,
+                initial.key.clone(),
+                initial.value,
+                initial.metadata,
+                &ctx(),
+            )
+            .expect_err("real authority backend must reject generic mutation");
+        assert!(matches!(generic_error, StorageError::WriteRejected { .. }));
+
+        let next_model = fleet_trust_state_entry(2, 11);
+        let next = next_model
+            .to_batch_put_entry()
+            .expect("next fleet state should encode");
+        let next_record = match adapter
+            .compare_and_swap_fleet_trust_state(
+                &FleetTrustStateCasAuthorization::new(
+                    Some(initial_model.snapshot_hash),
+                    next_model.snapshot_hash,
+                ),
+                next.key.clone(),
+                Some(initial_record.revision),
+                next.value,
+                next.metadata,
+                &ctx(),
+            )
+            .expect("single-statement revision-plus-hash update should execute")
+        {
+            CompareAndSwapOutcome::Applied(record) => record,
+            CompareAndSwapOutcome::Conflict { .. } => panic!("fresh real CAS must apply"),
+        };
+        assert_eq!(next_record.revision, 2);
+        let stored = adapter
+            .get(StoreKind::FleetTrustState, &next.key, &ctx())
+            .expect("real fleet read should execute")
+            .expect("advanced fleet row should exist");
+        assert_eq!(stored, next_record);
+    }
+
+    #[test]
+    fn real_frankensqlite_fleet_backend_hash_conflict_gap_and_exhaustion_fail_closed() {
+        let mut adapter =
+            FleetTrustStateFrankensqliteStorageAdapter::open_fleet_trust_state_memory()
+                .expect("real FrankenSQLite fleet adapter should initialize");
+        let initial_model = fleet_trust_state_entry(1, 10);
+        let initial = initial_model
+            .to_batch_put_entry()
+            .expect("initial fleet state should encode");
+        let initial_record = match adapter
+            .compare_and_swap_fleet_trust_state(
+                &FleetTrustStateCasAuthorization::new(None, initial_model.snapshot_hash.clone()),
+                initial.key,
+                None,
+                initial.value,
+                initial.metadata,
+                &ctx(),
+            )
+            .expect("bootstrap should execute")
+        {
+            CompareAndSwapOutcome::Applied(record) => record,
+            CompareAndSwapOutcome::Conflict { .. } => panic!("empty real database must bootstrap"),
+        };
+
+        let wrong_hash = "33".repeat(32);
+        let mut wrong_hash_model = fleet_trust_state_entry(2, 11);
+        wrong_hash_model.prior_snapshot_hash = wrong_hash.clone();
+        let wrong_hash_entry = wrong_hash_model
+            .to_batch_put_entry()
+            .expect("wrong-hash candidate is still structurally typed");
+        let conflict = adapter
+            .compare_and_swap_fleet_trust_state(
+                &FleetTrustStateCasAuthorization::new(
+                    Some(wrong_hash),
+                    wrong_hash_model.snapshot_hash,
+                ),
+                wrong_hash_entry.key,
+                Some(initial_record.revision),
+                wrong_hash_entry.value,
+                wrong_hash_entry.metadata,
+                &ctx(),
+            )
+            .expect("wrong-hash SQL predicate should report conflict");
+        assert_eq!(
+            conflict,
+            CompareAndSwapOutcome::Conflict {
+                current: Some(initial_record.clone())
+            }
+        );
+
+        let gap_model = fleet_trust_state_entry(3, 12);
+        let gap = gap_model
+            .to_batch_put_entry()
+            .expect("gap candidate should encode");
+        let gap_error = adapter
+            .compare_and_swap_fleet_trust_state(
+                &FleetTrustStateCasAuthorization::new(
+                    Some(initial_model.snapshot_hash.clone()),
+                    gap_model.snapshot_hash,
+                ),
+                gap.key,
+                Some(initial_record.revision),
+                gap.value,
+                gap.metadata,
+                &ctx(),
+            )
+            .expect_err("generation/revision gaps must fail before SQL");
+        assert!(matches!(gap_error, StorageError::BackendUnavailable { .. }));
+        assert!(gap_error.to_string().contains("next storage revision 2"));
+
+        let overflow_model = fleet_trust_state_entry(2, 11);
+        let mut overflow_model = overflow_model
+            .to_store_record(0)
+            .expect("overflow candidate should encode");
+        overflow_model
+            .metadata
+            .insert("generation_decimal".to_string(), format!("{:020}", 2));
+        let overflow_error = adapter
+            .backend
+            .compare_and_swap_fleet_trust_state_record(
+                &overflow_model.key,
+                Some(u64::MAX),
+                Some(&initial_model.snapshot_hash),
+                &overflow_model.value,
+                &overflow_model.metadata,
+            )
+            .expect_err("revision exhaustion must fail before SQL");
+        assert!(overflow_error.contains("revision space is exhausted"));
+
+        let stored = adapter
+            .get(StoreKind::FleetTrustState, &initial_record.key, &ctx())
+            .expect("real fleet read should execute")
+            .expect("initial record must remain after rejected writes");
+        assert_eq!(stored, initial_record);
+    }
+
+    #[test]
+    fn real_fleet_backend_requires_the_isolated_database_basename() {
+        let error =
+            FleetTrustStateFrankensqliteBackend::open_file("/data/tmp/not-the-fleet-authority.db")
+                .expect_err("alternate database basename must fail before opening a file");
+        assert!(
+            error
+                .to_string()
+                .contains(FLEET_TRUST_STATE_DATABASE_FILENAME)
+        );
+    }
+
+    #[test]
+    fn real_fleet_backend_rejects_a_shared_database_schema() {
+        let backend = FleetTrustStateFrankensqliteBackend::open_memory()
+            .expect("real in-memory FrankenSQLite backend should open");
+        backend
+            .connection
+            .execute_raw("CREATE TABLE sqliteevil (id INTEGER PRIMARY KEY);")
+            .expect("test should seed an unrelated table");
+        let error = backend
+            .initialize_authority_schema()
+            .expect_err("fleet authority backend must reject a shared database");
+        assert!(error.contains("unexpected schema objects before bootstrap"));
+        assert!(error.contains("sqliteevil"));
+        let fleet_tables = backend
+            .connection
+            .query_sync(
+                "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'fleet_trust_state';",
+                &[],
+            )
+            .expect("schema remains inspectable after fail-closed preflight");
+        assert!(
+            fleet_tables.is_empty(),
+            "rejected shared database must not be mutated by fleet schema bootstrap"
+        );
+    }
+
+    #[test]
+    fn real_fleet_backend_rejects_noncanonical_table_shape_and_triggers() {
+        let malformed = FleetTrustStateFrankensqliteBackend::open_memory()
+            .expect("malformed-schema test backend should open");
+        malformed
+            .connection
+            .execute_raw(
+                "CREATE TABLE fleet_trust_state (\
+                    state_id BIGINT NOT NULL, snapshot_json TEXT NOT NULL, \
+                    PRIMARY KEY (state_id));",
+            )
+            .expect("test should seed a malformed authority table");
+        let shape_error = malformed
+            .initialize_authority_schema()
+            .expect_err("malformed authority schema must fail closed");
+        assert!(shape_error.contains("has 2 columns"));
+
+        let triggered = FleetTrustStateFrankensqliteBackend::open_memory()
+            .expect("trigger-schema test backend should open");
+        triggered
+            .connection
+            .execute_raw(&fleet_trust_state_create_table_sql())
+            .expect("test should seed the canonical authority table");
+        triggered
+            .connection
+            .execute_raw(
+                "CREATE TRIGGER fleet_trust_state_after_update \
+                 AFTER UPDATE ON fleet_trust_state BEGIN SELECT 1; END;",
+            )
+            .expect("test should seed an unexpected authority trigger");
+        let trigger_error = triggered
+            .initialize_authority_schema()
+            .expect_err("authority triggers must fail closed");
+        assert!(trigger_error.contains("unexpected schema objects before bootstrap"));
+        assert!(trigger_error.contains("fleet_trust_state_after_update"));
+    }
+
+    #[test]
+    fn real_fleet_backend_rejects_multiple_rows_before_sqlmodel_deserialization() {
+        let backend = FleetTrustStateFrankensqliteBackend::open_memory()
+            .expect("cardinality test backend should open");
+        backend
+            .initialize_authority_schema()
+            .expect("canonical authority schema should initialize");
+        let first = fleet_trust_state_entry(1, 10);
+        let mut second = fleet_trust_state_entry(2, 11);
+        second.state_id = 2;
+        backend
+            .connection
+            .execute_sync(
+                "INSERT INTO fleet_trust_state \
+                    (state_id, schema_version, generation_decimal, authority_epoch_decimal, \
+                     snapshot_hash, prior_snapshot_hash, authority_head_hash, \
+                     anchor_advance_permit_hex, snapshot_json) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);",
+                &FleetTrustStateFrankensqliteBackend::values_for_model(&first),
+            )
+            .expect("test should seed the canonical row");
+        backend
+            .connection
+            .execute_sync(
+                "INSERT INTO fleet_trust_state \
+                    (state_id, schema_version, generation_decimal, authority_epoch_decimal, \
+                     snapshot_hash, prior_snapshot_hash, authority_head_hash, \
+                     anchor_advance_permit_hex, snapshot_json) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);",
+                &FleetTrustStateFrankensqliteBackend::values_for_model(&second),
+            )
+            .expect("test should seed a second physical row");
+        let error = backend
+            .load_current()
+            .expect_err("multiple physical rows must fail before SQLModel deserialization");
+        assert!(error.contains("at least 2 rows"));
     }
 
     #[test]

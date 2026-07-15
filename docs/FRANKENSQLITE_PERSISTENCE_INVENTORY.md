@@ -53,9 +53,32 @@ is materially different:
 | fleet trust state | sqlmodel_rust on frankensqlite | one canonical authority snapshot containing key activation/retirement windows, revocation history, key-sequence floors, node/key tombstones, generation, authority epoch, prior snapshot hash, authority-chain head, and an authenticated external-anchor advance permit | external authority prepares an old-to-new permit without advancing; a single-row revision-plus-prior-hash CAS persists the candidate and permit; idempotent permit finalization advances the external anchor; only then may immutable live state publish | transactional compare-and-swap is mandatory; read-then-write emulation, generic put/batch/delete, live-before-durable publication, and unpermitted anchor advancement fail closed | long-lived authority history; no destructive delete; every persisted candidate remains restart-recoverable through its authenticated prepare permit and external anchor | `sqlmodel_rust::FleetTrustStateEntry` through the specialized `FleetVerificationRegistryPersistence` surface | additive typed fields only; bounded raw envelope before outer deserialization and bounded snapshot bytes before inner deserialization; restore reauthenticates/finalizes the permit and rebuilds derived indexes only after schema, canonical-envelope, hash, transition-chain, and external-anchor validation | required; restart and historical verification must reproduce exact key windows and revocation decisions, stale or forked snapshots are rejected, and crash after DB commit resumes idempotent anchor finalization |
 
 Fleet authority schema bootstrap is intentionally isolated from the generic
-typed SQLModel session. The in-tree generic FrankenSQLite backend currently
-rejects fleet CAS until a concrete sibling-backed revision-plus-snapshot CAS is
-provided; that fail-closed default is not production persistence completion.
+typed SQLModel session. The generic FrankenSQLite backend default still rejects
+fleet CAS. The concrete `FleetTrustStateFrankensqliteStorageAdapter` owns a
+private real FrankenSQLite connection and overrides only canonical singleton
+read plus opaque-authorized CAS. Because every durable publication contains
+exactly one authority transition, `generation_decimal` is also its fixed-width
+store revision; bootstrap and advance are single SQL statements predicated on
+revision and current snapshot hash. All generic mutations reject, and the
+backend delegates WAL/PRAGMA/journal policy to FrankenSQLite. Real-driver
+in-memory CAS evidence is in tree; retained file restart/crash/cross-process
+proof remains an explicit `bd-q8x8x.9` close gate.
+
+This is a statement-level CAS foundation, not yet production authority
+durability. The currently exposed SQLModel `FrankenConnection::open_file`
+uses the generic FrankenSQLite open path: its NORMAL synchronous policy maps to
+deferred WAL synchronization, and it does not expose strict multi-process,
+identity-bound admission or an atomic authority schema/profile initializer.
+Same-connection readback therefore cannot certify per-commit stable-media
+durability. `bd-q8x8x.9.1` blocks production use until the sibling-owned strict
+durability profile is exposed through SQLModel; `bd-q8x8x.9.2` blocks closeout
+until retained real databases pass true subprocess-crash, simultaneous
+cross-process CAS, restart, lost-response, and rollback/fork rejection proofs.
+The adapter performs an `octet_length` cardinality/size probe before selecting
+the complete row and repeats those bounds in the materializing statement, but
+the current driver does not expose a streaming or metadata-only hard ingress
+primitive. That API gap also remains in `bd-q8x8x.9.1` for hostile oversized
+database rows.
 
 ## Decision Boundary: Shared Vs Isolated
 

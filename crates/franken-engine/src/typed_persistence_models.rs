@@ -1432,7 +1432,7 @@ pub fn fleet_trust_state_create_table_sql() -> String {
 // FleetTrustState: rollback-sensitive aggregate authority snapshot
 // ---------------------------------------------------------------------------
 
-pub const FLEET_TRUST_STATE_SCHEMA_VERSION: &str = "fleet_trust_state_v1";
+pub const FLEET_TRUST_STATE_SCHEMA_VERSION: &str = "fleet_trust_state_v2";
 pub const FLEET_TRUST_STATE_RECORD_ID: i64 = 1;
 pub(crate) const FLEET_TRUST_STATE_MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
 pub(crate) const FLEET_TRUST_STATE_MAX_ANCHOR_PERMIT_BYTES: usize = 64 * 1024;
@@ -1450,6 +1450,8 @@ pub struct FleetTrustStateEntry {
     #[sqlmodel(primary_key)]
     pub state_id: i64,
     pub schema_version: String,
+    /// Required, separately provisioned fleet namespace as canonical hex.
+    pub fleet_authority_id: String,
     /// Fixed-width unsigned decimal avoids lossy u64-to-SQL-i64 conversion.
     pub generation_decimal: String,
     pub authority_epoch_decimal: String,
@@ -1471,6 +1473,10 @@ impl TypedStoreRecord for FleetTrustStateEntry {
 
     fn typed_record_extra_metadata(&self) -> BTreeMap<String, String> {
         BTreeMap::from([
+            (
+                "fleet_authority_id".to_string(),
+                self.fleet_authority_id.clone(),
+            ),
             (
                 "authority_head_hash".to_string(),
                 self.authority_head_hash.clone(),
@@ -1497,6 +1503,18 @@ impl TypedStoreRecord for FleetTrustStateEntry {
         }
         validate_fixed_width_u64::<Self>("generation_decimal", &self.generation_decimal)?;
         validate_fixed_width_u64::<Self>("authority_epoch_decimal", &self.authority_epoch_decimal)?;
+        let normalized_authority_id =
+            normalize_sha256_typed::<Self>("fleet_authority_id", &self.fleet_authority_id)?;
+        if normalized_authority_id != self.fleet_authority_id {
+            return Err(typed_integrity_error::<Self>(
+                "`fleet_authority_id` must use canonical lowercase hex without a prefix",
+            ));
+        }
+        if self.fleet_authority_id.bytes().all(|byte| byte == b'0') {
+            return Err(typed_integrity_error::<Self>(
+                "`fleet_authority_id` must not be all zero",
+            ));
+        }
         for (field, digest) in [
             ("snapshot_hash", &self.snapshot_hash),
             ("prior_snapshot_hash", &self.prior_snapshot_hash),
@@ -2621,6 +2639,7 @@ mod tests {
         FleetTrustStateEntry {
             state_id: FLEET_TRUST_STATE_RECORD_ID,
             schema_version: FLEET_TRUST_STATE_SCHEMA_VERSION.to_string(),
+            fleet_authority_id: "a5".repeat(32),
             generation_decimal: format!("{:020}", 7_u64),
             authority_epoch_decimal: format!("{:020}", 4_u64),
             snapshot_hash: sha256_hex_typed(snapshot_json.as_bytes()),
@@ -2940,8 +2959,12 @@ mod tests {
         assert_eq!(FleetTrustStateEntry::PRIMARY_KEY, &["state_id"]);
 
         let fields = FleetTrustStateEntry::fields();
-        assert_eq!(fields.len(), 9);
+        assert_eq!(fields.len(), 10);
         assert!(field::<FleetTrustStateEntry>("state_id").primary_key);
+        assert_eq!(
+            field::<FleetTrustStateEntry>("fleet_authority_id").sql_type,
+            SqlType::Text
+        );
         assert_eq!(
             field::<FleetTrustStateEntry>("generation_decimal").sql_type,
             SqlType::Text
@@ -3337,6 +3360,13 @@ mod tests {
             Some(model.generation_decimal.as_str())
         );
         assert_eq!(
+            record
+                .metadata
+                .get("fleet_authority_id")
+                .map(String::as_str),
+            Some(model.fleet_authority_id.as_str())
+        );
+        assert_eq!(
             record.metadata.get("snapshot_hash").map(String::as_str),
             Some(model.snapshot_hash.as_str())
         );
@@ -3387,6 +3417,27 @@ mod tests {
 
     #[test]
     fn fleet_trust_state_rejects_noncanonical_or_mismatched_digests() {
+        let mut legacy = fleet_trust_state_entry("{}");
+        legacy.schema_version = "fleet_trust_state_v1".to_string();
+        let error = legacy
+            .to_store_record(0)
+            .expect_err("authority-free legacy schema must fail closed");
+        assert!(error.to_string().contains("unsupported schema version"));
+
+        let mut zero_authority = fleet_trust_state_entry("{}");
+        zero_authority.fleet_authority_id = "00".repeat(32);
+        let error = zero_authority
+            .to_store_record(0)
+            .expect_err("zero fleet authority must fail closed");
+        assert!(error.to_string().contains("must not be all zero"));
+
+        let mut uppercase_authority = fleet_trust_state_entry("{}");
+        uppercase_authority.fleet_authority_id = "A5".repeat(32);
+        let error = uppercase_authority
+            .to_store_record(0)
+            .expect_err("uppercase fleet authority must fail closed");
+        assert!(error.to_string().contains("canonical lowercase hex"));
+
         let mut prefixed = fleet_trust_state_entry("{}");
         prefixed.prior_snapshot_hash = format!("sha256:{}", prefixed.prior_snapshot_hash);
         let error = prefixed

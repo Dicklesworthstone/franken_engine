@@ -4,6 +4,7 @@
   "parent_bead_id": "bd-xyku0",
   "extension_bead_ids": [
     "bd-q8x8x.5",
+    "bd-q8x8x.8",
     "bd-q8x8x.9",
     "bd-q8x8x.9.1",
     "bd-q8x8x.9.2"
@@ -55,6 +56,7 @@
     "primary_authority_required": true,
     "authoritative_helpers": [
       "TypedStoreRecord",
+      "FleetAuthorityId",
       "FleetVerificationRegistryPersistence",
       "StorageAdapter.compare_and_swap_fleet_trust_state",
       "FleetTrustStateFrankensqliteStorageAdapter.open_fleet_trust_state_file",
@@ -83,6 +85,7 @@
         "pub fn map_legacy_ifc_provenance_record",
         "pub fn map_legacy_specialization_index_record",
         "pub fn fleet_trust_state_create_table_sql",
+        "pub const FLEET_TRUST_STATE_SCHEMA_VERSION: &str = \"fleet_trust_state_v2\"",
         "pub struct FleetTrustStateEntry",
         "pub struct ReplacementLineageEntry",
         "pub struct IfcProvenanceEntry",
@@ -105,6 +108,7 @@
     {
       "path": "crates/franken-engine/src/fleet_immune_protocol.rs",
       "must_contain": [
+        "pub struct FleetAuthorityId",
         "pub struct FleetVerificationRegistryPersistence",
         "pub struct PendingFleetRegistryPublication",
         "compare_and_swap_fleet_trust_state",

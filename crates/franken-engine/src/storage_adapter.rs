@@ -1354,6 +1354,7 @@ impl FleetTrustStateFrankensqliteBackend {
         vec![
             Value::BigInt(model.state_id),
             Value::Text(model.schema_version.clone()),
+            Value::Text(model.fleet_authority_id.clone()),
             Value::Text(model.generation_decimal.clone()),
             Value::Text(model.authority_epoch_decimal.clone()),
             Value::Text(model.snapshot_hash.clone()),
@@ -1370,6 +1371,7 @@ impl FleetTrustStateFrankensqliteBackend {
             .query_sync(
                 "SELECT state_id, \
                         octet_length(schema_version) AS schema_version_bytes, \
+                        octet_length(fleet_authority_id) AS fleet_authority_id_bytes, \
                         octet_length(generation_decimal) AS generation_bytes, \
                         octet_length(authority_epoch_decimal) AS authority_epoch_bytes, \
                         octet_length(snapshot_hash) AS snapshot_hash_bytes, \
@@ -1404,6 +1406,7 @@ impl FleetTrustStateFrankensqliteBackend {
                 "schema_version_bytes",
                 FLEET_TRUST_STATE_SCHEMA_VERSION.len(),
             ),
+            ("fleet_authority_id_bytes", 64),
             ("generation_bytes", 20),
             ("authority_epoch_bytes", 20),
             ("snapshot_hash_bytes", 64),
@@ -1450,12 +1453,13 @@ impl FleetTrustStateFrankensqliteBackend {
         let rows = self
             .connection
             .query_sync(
-                "SELECT state_id, schema_version, generation_decimal, authority_epoch_decimal, \
+                "SELECT state_id, schema_version, fleet_authority_id, generation_decimal, authority_epoch_decimal, \
                         snapshot_hash, prior_snapshot_hash, authority_head_hash, \
                         anchor_advance_permit_hex, snapshot_json \
                  FROM fleet_trust_state \
                  WHERE state_id = ?1 \
                    AND octet_length(schema_version) = ?2 \
+                   AND octet_length(fleet_authority_id) = 64 \
                    AND octet_length(generation_decimal) = 20 \
                    AND octet_length(authority_epoch_decimal) = 20 \
                    AND octet_length(snapshot_hash) = 64 \
@@ -1525,6 +1529,7 @@ impl FleetTrustStateFrankensqliteBackend {
         let expected = [
             ("state_id", "BIGINT", 1_i64, 1_i64),
             ("schema_version", "TEXT", 1, 0),
+            ("fleet_authority_id", "TEXT", 1, 0),
             ("generation_decimal", "TEXT", 1, 0),
             ("authority_epoch_decimal", "TEXT", 1, 0),
             ("snapshot_hash", "TEXT", 1, 0),
@@ -1614,10 +1619,10 @@ impl FleetTrustStateFrankensqliteBackend {
                 .connection
                 .execute_sync(
                     "INSERT INTO fleet_trust_state \
-                        (state_id, schema_version, generation_decimal, authority_epoch_decimal, \
+                        (state_id, schema_version, fleet_authority_id, generation_decimal, authority_epoch_decimal, \
                          snapshot_hash, prior_snapshot_hash, authority_head_hash, \
                          anchor_advance_permit_hex, snapshot_json) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
                      ON CONFLICT(state_id) DO NOTHING;",
                     &Self::values_for_model(model),
                 )
@@ -1631,13 +1636,14 @@ impl FleetTrustStateFrankensqliteBackend {
                 self.connection
                     .execute_sync(
                         "UPDATE fleet_trust_state \
-                         SET schema_version = ?2, generation_decimal = ?3, \
-                             authority_epoch_decimal = ?4, snapshot_hash = ?5, \
-                             prior_snapshot_hash = ?6, authority_head_hash = ?7, \
-                             anchor_advance_permit_hex = ?8, snapshot_json = ?9 \
+                         SET schema_version = ?2, fleet_authority_id = ?3, \
+                             generation_decimal = ?4, authority_epoch_decimal = ?5, \
+                             snapshot_hash = ?6, prior_snapshot_hash = ?7, \
+                             authority_head_hash = ?8, anchor_advance_permit_hex = ?9, \
+                             snapshot_json = ?10 \
                          WHERE state_id = ?1 \
-                           AND generation_decimal = ?10 \
-                           AND snapshot_hash = ?11;",
+                           AND generation_decimal = ?11 \
+                           AND snapshot_hash = ?12;",
                         &values,
                     )
                     .map_err(|error| format!("fleet trust-state update CAS failed: {error}"))
@@ -4625,6 +4631,7 @@ mod tests {
             state_id: crate::typed_persistence_models::FLEET_TRUST_STATE_RECORD_ID,
             schema_version: crate::typed_persistence_models::FLEET_TRUST_STATE_SCHEMA_VERSION
                 .to_string(),
+            fleet_authority_id: "a5".repeat(32),
             generation_decimal: format!("{generation:020}"),
             authority_epoch_decimal: format!("{authority_epoch:020}"),
             snapshot_hash: "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
@@ -5202,10 +5209,10 @@ mod tests {
             .connection
             .execute_sync(
                 "INSERT INTO fleet_trust_state \
-                    (state_id, schema_version, generation_decimal, authority_epoch_decimal, \
+                    (state_id, schema_version, fleet_authority_id, generation_decimal, authority_epoch_decimal, \
                      snapshot_hash, prior_snapshot_hash, authority_head_hash, \
                      anchor_advance_permit_hex, snapshot_json) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10);",
                 &FleetTrustStateFrankensqliteBackend::values_for_model(&first),
             )
             .expect("test should seed the canonical row");
@@ -5213,10 +5220,10 @@ mod tests {
             .connection
             .execute_sync(
                 "INSERT INTO fleet_trust_state \
-                    (state_id, schema_version, generation_decimal, authority_epoch_decimal, \
+                    (state_id, schema_version, fleet_authority_id, generation_decimal, authority_epoch_decimal, \
                      snapshot_hash, prior_snapshot_hash, authority_head_hash, \
                      anchor_advance_permit_hex, snapshot_json) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10);",
                 &FleetTrustStateFrankensqliteBackend::values_for_model(&second),
             )
             .expect("test should seed a second physical row");

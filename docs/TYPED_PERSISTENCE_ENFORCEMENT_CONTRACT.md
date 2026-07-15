@@ -70,6 +70,11 @@ Backends without one transactional CAS must reject the operation; a read then
 write emulation is forbidden.
 The fleet model and its `fleet_trust_state_create_table_sql` bootstrap are
 therefore excluded from the generic typed-session DDL and unit-of-work writer.
+`FleetTrustStateEntry` schema v2 carries a required canonical nonzero
+`fleet_authority_id` in the outer row as well as the embedded registry
+snapshot. Restore must match both copies, the external anchor claim, and the
+authority's separately provisioned ID before finalization or index rebuild;
+authority-free v1 rows are rejected rather than inferred or upgraded.
 The current generic `FrankensqliteBackend` default remains fail closed. The
 specialized `FleetTrustStateFrankensqliteStorageAdapter` is the only in-tree
 override: it owns a private sibling-backed connection, creates only

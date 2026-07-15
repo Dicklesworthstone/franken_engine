@@ -504,6 +504,7 @@ fn sequence_gap_detected() {
 fn sequence_gap_allowed_when_configured() {
     let mut ledger = build_ledger(3);
     ledger[1].sequence = 5;
+    ledger[2].sequence = 6;
     reseal_ledger(&mut ledger);
     let config = ReplayConfig {
         allow_gaps: true,
@@ -513,6 +514,54 @@ fn sequence_gap_allowed_when_configured() {
     let result = checker.replay(&ledger, None);
     assert!(!result.has_violation(&ReplayViolationType::SequenceGap));
     assert_eq!(result.entries_skipped, 4);
+}
+
+#[test]
+fn duplicate_sequence_rejected_when_forward_gaps_allowed() {
+    let mut ledger = build_ledger(2);
+    ledger[1].sequence = ledger[0].sequence;
+    reseal_ledger(&mut ledger);
+    let config = ReplayConfig {
+        allow_gaps: true,
+        ..ReplayConfig::default()
+    };
+
+    let mut checker = EvidenceReplayChecker::new(config);
+    let result = checker.replay(&ledger, None);
+
+    assert!(!result.passed);
+    assert!(result.has_violation(&ReplayViolationType::SequenceGap));
+    assert_eq!(result.entries_skipped, 0);
+    assert_eq!(result.entries_processed, 2);
+    assert_eq!(result.entries_with_violations(), 1);
+}
+
+#[test]
+fn backward_sequence_rejected_when_forward_gaps_allowed() {
+    let mut ledger = build_ledger(2);
+    ledger[0].sequence = 5;
+    ledger[1].sequence = 2;
+    reseal_ledger(&mut ledger);
+    let config = ReplayConfig {
+        allow_gaps: true,
+        ..ReplayConfig::default()
+    };
+
+    let mut checker = EvidenceReplayChecker::new(config);
+    let result = checker.replay(&ledger, None);
+
+    assert!(!result.passed);
+    assert!(result.has_violation(&ReplayViolationType::SequenceGap));
+    assert_eq!(result.entries_skipped, 0);
+    assert_eq!(result.entries_processed, 2);
+    assert_eq!(result.entries_with_violations(), 1);
+    let violation = result
+        .violations
+        .iter()
+        .find(|violation| violation.violation_type == ReplayViolationType::SequenceGap)
+        .expect("backward sequence should be reported");
+    assert_eq!(violation.expected.as_deref(), Some("6"));
+    assert_eq!(violation.actual.as_deref(), Some("2"));
 }
 
 // ── Timestamp monotonicity ──────────────────────────────────────────────

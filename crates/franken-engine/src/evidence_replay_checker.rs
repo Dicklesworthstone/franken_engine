@@ -269,7 +269,7 @@ pub struct ReplayConfig {
     pub calibration_tolerance: f64,
     /// Tolerance for expected loss comparison.
     pub loss_tolerance: f64,
-    /// Whether to allow sequence gaps (for forensic analysis of partial ledgers).
+    /// Whether to allow strictly forward sequence gaps (for analysis of partial ledgers).
     pub allow_gaps: bool,
     /// Whether to halt on first violation.
     pub halt_on_first: bool,
@@ -449,7 +449,7 @@ pub struct ReplayEvidenceArtifact {
 pub struct ReplayResult {
     /// Total entries processed.
     pub entries_processed: u64,
-    /// Total entries skipped (gaps when allow_gaps=true).
+    /// Total entries skipped by strictly forward gaps when `allow_gaps` is true.
     pub entries_skipped: u64,
     /// All violations detected.
     pub violations: Vec<ReplayViolation>,
@@ -722,9 +722,10 @@ impl EvidenceReplayChecker {
             if let Some(prev) = prev_entry {
                 match prev.sequence.checked_add(1) {
                     Some(expected_seq) if entry.sequence == expected_seq => {}
-                    Some(expected_seq) if self.config.allow_gaps => {
-                        skipped =
-                            skipped.saturating_add(entry.sequence.saturating_sub(expected_seq));
+                    Some(expected_seq)
+                        if self.config.allow_gaps && entry.sequence > expected_seq =>
+                    {
+                        skipped = skipped.saturating_add(entry.sequence - expected_seq);
                         self.push_event(
                             entry,
                             "sequence_gap_skipped",
@@ -1596,6 +1597,7 @@ mod tests {
     fn sequence_gap_allowed_with_config() {
         let mut ledger = build_ledger(3);
         ledger[1].sequence = 5;
+        ledger[2].sequence = 6;
         reseal_ledger(&mut ledger);
         let config = ReplayConfig {
             allow_gaps: true,
@@ -1605,6 +1607,94 @@ mod tests {
         let result = checker.replay(&ledger, None);
         assert!(!result.has_violation(&ReplayViolationType::SequenceGap));
         assert_eq!(result.entries_skipped, 4); // skipped seq 1-4
+    }
+
+    #[test]
+    fn duplicate_sequence_is_rejected_when_forward_gaps_are_allowed() {
+        let mut ledger = build_ledger(2);
+        ledger[1].sequence = ledger[0].sequence;
+        reseal_ledger(&mut ledger);
+        let config = ReplayConfig {
+            allow_gaps: true,
+            ..ReplayConfig::default()
+        };
+
+        let mut checker = EvidenceReplayChecker::new(config);
+        let result = checker.replay(&ledger, None);
+
+        assert!(!result.passed);
+        assert!(result.has_violation(&ReplayViolationType::SequenceGap));
+        assert_eq!(result.entries_skipped, 0);
+        assert_eq!(result.entries_processed, 2);
+        assert_eq!(result.entries_with_violations(), 1);
+        let violation = result
+            .violations
+            .iter()
+            .find(|violation| violation.violation_type == ReplayViolationType::SequenceGap)
+            .expect("duplicate sequence should be reported");
+        assert_eq!(violation.expected.as_deref(), Some("1"));
+        assert_eq!(violation.actual.as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn duplicate_sequence_is_rejected_when_gaps_are_disallowed() {
+        let mut ledger = build_ledger(2);
+        ledger[1].sequence = ledger[0].sequence;
+        reseal_ledger(&mut ledger);
+
+        let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
+        let result = checker.replay(&ledger, None);
+
+        assert!(!result.passed);
+        assert!(result.has_violation(&ReplayViolationType::SequenceGap));
+        assert_eq!(result.entries_skipped, 0);
+        assert_eq!(result.entries_processed, 2);
+        assert_eq!(result.entries_with_violations(), 1);
+    }
+
+    #[test]
+    fn backward_sequence_is_rejected_when_forward_gaps_are_allowed() {
+        let mut ledger = build_ledger(2);
+        ledger[0].sequence = 5;
+        ledger[1].sequence = 2;
+        reseal_ledger(&mut ledger);
+        let config = ReplayConfig {
+            allow_gaps: true,
+            ..ReplayConfig::default()
+        };
+
+        let mut checker = EvidenceReplayChecker::new(config);
+        let result = checker.replay(&ledger, None);
+
+        assert!(!result.passed);
+        assert!(result.has_violation(&ReplayViolationType::SequenceGap));
+        assert_eq!(result.entries_skipped, 0);
+        assert_eq!(result.entries_processed, 2);
+        assert_eq!(result.entries_with_violations(), 1);
+        let violation = result
+            .violations
+            .iter()
+            .find(|violation| violation.violation_type == ReplayViolationType::SequenceGap)
+            .expect("backward sequence should be reported");
+        assert_eq!(violation.expected.as_deref(), Some("6"));
+        assert_eq!(violation.actual.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn backward_sequence_is_rejected_when_gaps_are_disallowed() {
+        let mut ledger = build_ledger(2);
+        ledger[0].sequence = 5;
+        ledger[1].sequence = 2;
+        reseal_ledger(&mut ledger);
+
+        let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
+        let result = checker.replay(&ledger, None);
+
+        assert!(!result.passed);
+        assert!(result.has_violation(&ReplayViolationType::SequenceGap));
+        assert_eq!(result.entries_skipped, 0);
+        assert_eq!(result.entries_processed, 2);
+        assert_eq!(result.entries_with_violations(), 1);
     }
 
     // -----------------------------------------------------------------------
@@ -2696,8 +2786,45 @@ mod tests {
         };
         let mut checker = EvidenceReplayChecker::new(config);
         let result = checker.replay(&ledger, None);
-        // Should handle very large gap without panic.
-        assert!(result.entries_skipped > 0);
+        assert!(result.passed);
+        assert!(!result.has_violation(&ReplayViolationType::SequenceGap));
+        assert_eq!(result.entries_skipped, u64::MAX - 1);
+    }
+
+    #[test]
+    fn adversarial_very_large_sequence_gap_is_rejected_when_disallowed() {
+        let mut ledger = build_ledger(2);
+        ledger[1].sequence = u64::MAX;
+        reseal_ledger(&mut ledger);
+
+        let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
+        let result = checker.replay(&ledger, None);
+
+        assert!(!result.passed);
+        assert!(result.has_violation(&ReplayViolationType::SequenceGap));
+        assert_eq!(result.entries_skipped, 0);
+    }
+
+    #[test]
+    fn terminal_sequence_boundary_is_contiguous_in_both_gap_modes() {
+        for allow_gaps in [false, true] {
+            let mut ledger = build_ledger(2);
+            ledger[0].sequence = u64::MAX - 1;
+            ledger[1].sequence = u64::MAX;
+            reseal_ledger(&mut ledger);
+            let config = ReplayConfig {
+                allow_gaps,
+                ..ReplayConfig::default()
+            };
+
+            let mut checker = EvidenceReplayChecker::new(config);
+            let result = checker.replay(&ledger, None);
+
+            assert!(result.passed, "allow_gaps={allow_gaps}");
+            assert!(!result.has_violation(&ReplayViolationType::SequenceGap));
+            assert_eq!(result.entries_skipped, 0);
+            assert_eq!(result.entries_processed, 2);
+        }
     }
 
     #[test]
@@ -2708,7 +2835,11 @@ mod tests {
         reseal_ledger(&mut ledger);
         let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
         let result = checker.replay(&ledger, None);
+        assert!(!result.passed);
         assert!(result.has_violation(&ReplayViolationType::SequenceGap));
+        assert_eq!(result.entries_skipped, 0);
+        assert_eq!(result.entries_processed, 2);
+        assert_eq!(result.entries_with_violations(), 1);
         let gap = result
             .violations
             .iter()
@@ -2718,6 +2849,37 @@ mod tests {
             gap.expected.as_deref(),
             Some("sequence successor within u64 range")
         );
+    }
+
+    #[test]
+    fn adversarial_sequence_overflow_is_detected_when_forward_gaps_are_allowed() {
+        let mut ledger = build_ledger(2);
+        ledger[0].sequence = u64::MAX;
+        ledger[1].sequence = 0;
+        reseal_ledger(&mut ledger);
+        let config = ReplayConfig {
+            allow_gaps: true,
+            ..ReplayConfig::default()
+        };
+
+        let mut checker = EvidenceReplayChecker::new(config);
+        let result = checker.replay(&ledger, None);
+
+        assert!(!result.passed);
+        assert!(result.has_violation(&ReplayViolationType::SequenceGap));
+        assert_eq!(result.entries_skipped, 0);
+        assert_eq!(result.entries_processed, 2);
+        assert_eq!(result.entries_with_violations(), 1);
+        let gap = result
+            .violations
+            .iter()
+            .find(|violation| violation.violation_type == ReplayViolationType::SequenceGap)
+            .expect("sequence overflow should be reported with gaps enabled");
+        assert_eq!(
+            gap.expected.as_deref(),
+            Some("sequence successor within u64 range")
+        );
+        assert_eq!(gap.actual.as_deref(), Some("0"));
     }
 
     // -----------------------------------------------------------------------

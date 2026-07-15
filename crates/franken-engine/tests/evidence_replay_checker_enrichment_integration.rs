@@ -1540,6 +1540,7 @@ fn enrichment_sequence_gap_detected() {
 fn enrichment_sequence_gap_allowed_skips_counted() {
     let mut ledger = build_ledger(3);
     ledger[1].sequence = 5;
+    ledger[2].sequence = 6;
     reseal_ledger(&mut ledger);
     let config = ReplayConfig {
         allow_gaps: true,
@@ -1553,12 +1554,19 @@ fn enrichment_sequence_gap_allowed_skips_counted() {
 
 #[test]
 fn enrichment_sequence_gap_backward_detected() {
-    let mut ledger = build_ledger(3);
-    ledger[1].sequence = 0; // backward
+    let mut ledger = build_ledger(2);
+    ledger[0].sequence = 5;
+    ledger[1].sequence = 2;
     reseal_ledger(&mut ledger);
-    let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
+    let config = ReplayConfig {
+        allow_gaps: true,
+        ..ReplayConfig::default()
+    };
+    let mut checker = EvidenceReplayChecker::new(config);
     let result = checker.replay(&ledger, None);
     assert!(!result.passed);
+    assert!(result.has_violation(&ReplayViolationType::SequenceGap));
+    assert_eq!(result.entries_skipped, 0);
 }
 
 // ===========================================================================
@@ -2431,7 +2439,8 @@ fn enrichment_adversarial_very_large_gap_with_allow() {
     };
     let mut checker = EvidenceReplayChecker::new(config);
     let result = checker.replay(&ledger, None);
-    assert!(result.entries_skipped > 0);
+    assert!(result.passed);
+    assert_eq!(result.entries_skipped, u64::MAX - 1);
 }
 
 #[test]

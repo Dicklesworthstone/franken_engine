@@ -147,6 +147,35 @@ pub struct MessageSignature {
 // Fleet protocol v2 signing foundation
 // ---------------------------------------------------------------------------
 
+/// Hard ceiling for one serialized fleet-v2 transport frame.
+///
+/// Transport code must apply this limit to the raw frame before deserializing
+/// it. The typed signing and verification paths additionally enforce the
+/// structural budgets below before allocation proportional to attacker input
+/// or construction of a canonical tree.
+pub const FLEET_V2_MAX_FRAME_BYTES: usize = 64 * 1024;
+
+/// Maximum aggregate UTF-8 bytes across dynamic fields in one v2 message.
+pub const FLEET_V2_MAX_DYNAMIC_BYTES: usize = 32 * 1024;
+
+/// Maximum UTF-8 byte length of an identifier or map key.
+pub const FLEET_V2_MAX_IDENTIFIER_BYTES: usize = 256;
+
+/// Maximum UTF-8 byte length of an extension or health-map value.
+pub const FLEET_V2_MAX_VALUE_BYTES: usize = 4 * 1024;
+
+/// Maximum elements in any single array or set carried by a v2 message.
+pub const FLEET_V2_MAX_COLLECTION_ITEMS: usize = 256;
+
+/// Maximum entries in any string or legacy-signature map.
+pub const FLEET_V2_MAX_MAP_ENTRIES: usize = 64;
+
+/// Maximum aggregate collection elements across a nested v2 message.
+pub const FLEET_V2_MAX_TOTAL_COLLECTION_ITEMS: usize = 1024;
+
+/// Maximum inclusive reconciliation range accepted from one peer.
+pub const FLEET_V2_MAX_SEQUENCE_RANGE_LEN: u64 = 65_536;
+
 /// Stable identifier for a fleet verification key.
 ///
 /// The identifier is derived from the verification-key bytes rather than
@@ -272,9 +301,10 @@ impl FleetSigner {
         &self,
         message: &T,
     ) -> Result<FleetSignatureV2, FleetIdentityError> {
+        message.validate_fleet_ingress_limits()?;
         message.validate_fleet_structure()?;
         message.validate_fleet_signer(&self.identity.signer)?;
-        self.sign_preimage(&message.fleet_signature_preimage_v2(&self.identity))
+        self.sign_preimage(&message.fleet_signature_preimage_v2(&self.identity)?)
     }
 }
 
@@ -481,21 +511,29 @@ impl FleetVerificationRegistry {
         message: &T,
         signature: &FleetSignatureV2,
     ) -> Result<(), FleetIdentityError> {
+        validate_ingress_limit(
+            "fleet-detached-signature-v2",
+            "signer",
+            signature.signer.as_str().len(),
+            FLEET_V2_MAX_IDENTIFIER_BYTES,
+        )?;
         validate_fleet_node_id(&signature.signer)?;
+        // Resolve the separately bounded signer first so unknown, rotated, or
+        // revoked keys fail without traversing an attacker-controlled payload.
+        // Registry lookup is bounded and read-only; canonical-tree allocation
+        // and cryptographic verification remain behind the message budget.
         let entry = self.resolve_entry(
             &signature.signer,
             signature.key_sequence,
             Some(signature.key_id),
         )?;
+        message.validate_fleet_ingress_limits()?;
         message.validate_fleet_structure()?;
         message.validate_fleet_signer(&signature.signer)?;
         let identity = signature.identity();
-        verify_signature(
-            &entry.key,
-            &message.fleet_signature_preimage_v2(&identity),
-            &signature.signature,
-        )
-        .map_err(FleetIdentityError::from_signature_error)
+        let preimage = message.fleet_signature_preimage_v2(&identity)?;
+        verify_signature(&entry.key, &preimage, &signature.signature)
+            .map_err(FleetIdentityError::from_signature_error)
     }
 
     /// Number of nodes that currently have an active verification key.
@@ -729,11 +767,215 @@ impl fmt::Display for FleetIdentityError {
 
 impl std::error::Error for FleetIdentityError {}
 
+/// Validate a supplied raw fleet-v2 frame length before deserialization.
+///
+/// The atomic ingress cutover owns the actual decoder. Keeping this byte gate
+/// separate lets that boundary reject `len > max` before it materializes a
+/// message while the typed APIs below independently bound canonicalization.
+pub fn validate_fleet_v2_frame_len(frame_len: usize) -> Result<(), FleetIdentityError> {
+    validate_ingress_limit(
+        "fleet-v2-frame",
+        "frame_bytes",
+        frame_len,
+        FLEET_V2_MAX_FRAME_BYTES,
+    )
+}
+
+#[derive(Debug, Default)]
+struct FleetV2IngressBudget {
+    dynamic_bytes: usize,
+    collection_items: usize,
+}
+
+impl FleetV2IngressBudget {
+    fn charge_identifier(
+        &mut self,
+        message_type: &str,
+        field: &str,
+        value: &str,
+    ) -> Result<(), FleetIdentityError> {
+        validate_ingress_limit(
+            message_type,
+            field,
+            value.len(),
+            FLEET_V2_MAX_IDENTIFIER_BYTES,
+        )?;
+        self.charge_dynamic_bytes(message_type, field, value.len())
+    }
+
+    fn charge_value(
+        &mut self,
+        message_type: &str,
+        field: &str,
+        value: &str,
+    ) -> Result<(), FleetIdentityError> {
+        validate_ingress_limit(message_type, field, value.len(), FLEET_V2_MAX_VALUE_BYTES)?;
+        self.charge_dynamic_bytes(message_type, field, value.len())
+    }
+
+    fn charge_node_id(
+        &mut self,
+        message_type: &str,
+        field: &str,
+        node_id: &NodeId,
+    ) -> Result<(), FleetIdentityError> {
+        self.charge_identifier(message_type, field, node_id.as_str())
+    }
+
+    fn charge_collection(
+        &mut self,
+        message_type: &str,
+        field: &str,
+        item_count: usize,
+        per_collection_limit: usize,
+    ) -> Result<(), FleetIdentityError> {
+        validate_ingress_limit(message_type, field, item_count, per_collection_limit)?;
+        let next = self
+            .collection_items
+            .checked_add(item_count)
+            .ok_or_else(|| {
+                ingress_limit_error(
+                    message_type,
+                    field,
+                    usize::MAX,
+                    FLEET_V2_MAX_TOTAL_COLLECTION_ITEMS,
+                )
+            })?;
+        validate_ingress_limit(
+            message_type,
+            "aggregate_collection_items",
+            next,
+            FLEET_V2_MAX_TOTAL_COLLECTION_ITEMS,
+        )?;
+        self.collection_items = next;
+        Ok(())
+    }
+
+    fn charge_string_array(
+        &mut self,
+        message_type: &str,
+        field: &str,
+        values: &[String],
+    ) -> Result<(), FleetIdentityError> {
+        self.charge_collection(
+            message_type,
+            field,
+            values.len(),
+            FLEET_V2_MAX_COLLECTION_ITEMS,
+        )?;
+        for value in values {
+            self.charge_identifier(message_type, field, value)?;
+        }
+        Ok(())
+    }
+
+    fn charge_string_map(
+        &mut self,
+        message_type: &str,
+        field: &str,
+        values: &BTreeMap<String, String>,
+    ) -> Result<(), FleetIdentityError> {
+        self.charge_collection(message_type, field, values.len(), FLEET_V2_MAX_MAP_ENTRIES)?;
+        for (key, value) in values {
+            self.charge_identifier(message_type, field, key)?;
+            self.charge_value(message_type, field, value)?;
+        }
+        Ok(())
+    }
+
+    fn charge_legacy_signature(
+        &mut self,
+        message_type: &str,
+        field: &str,
+        signature: &MessageSignature,
+    ) -> Result<(), FleetIdentityError> {
+        self.charge_node_id(message_type, field, &signature.signer)
+    }
+
+    fn charge_dynamic_bytes(
+        &mut self,
+        message_type: &str,
+        field: &str,
+        bytes: usize,
+    ) -> Result<(), FleetIdentityError> {
+        let next = self.dynamic_bytes.checked_add(bytes).ok_or_else(|| {
+            ingress_limit_error(message_type, field, usize::MAX, FLEET_V2_MAX_DYNAMIC_BYTES)
+        })?;
+        validate_ingress_limit(
+            message_type,
+            "aggregate_dynamic_bytes",
+            next,
+            FLEET_V2_MAX_DYNAMIC_BYTES,
+        )?;
+        self.dynamic_bytes = next;
+        Ok(())
+    }
+}
+
+fn validate_ingress_limit(
+    message_type: &str,
+    field: &str,
+    actual: usize,
+    limit: usize,
+) -> Result<(), FleetIdentityError> {
+    if actual <= limit {
+        Ok(())
+    } else {
+        Err(ingress_limit_error(message_type, field, actual, limit))
+    }
+}
+
+fn validate_ingress_limit_u64(
+    message_type: &str,
+    field: &str,
+    actual: u64,
+    limit: u64,
+) -> Result<(), FleetIdentityError> {
+    if actual <= limit {
+        Ok(())
+    } else {
+        Err(ingress_limit_error_u64(message_type, field, actual, limit))
+    }
+}
+
+fn ingress_limit_error(
+    message_type: &str,
+    field: &str,
+    actual: usize,
+    limit: usize,
+) -> FleetIdentityError {
+    FleetIdentityError::NonCanonicalMessage {
+        message_type: message_type.to_string(),
+        detail: format!("ingress limit exceeded for {field}: {actual} > {limit}"),
+    }
+}
+
+fn ingress_limit_error_u64(
+    message_type: &str,
+    field: &str,
+    actual: u64,
+    limit: u64,
+) -> FleetIdentityError {
+    FleetIdentityError::NonCanonicalMessage {
+        message_type: message_type.to_string(),
+        detail: format!("ingress limit exceeded for {field}: {actual} > {limit}"),
+    }
+}
+
+fn validate_fleet_signing_identity_ingress(
+    identity: &FleetSigningIdentity,
+) -> Result<(), FleetIdentityError> {
+    let mut budget = FleetV2IngressBudget::default();
+    budget.charge_node_id("fleet-signing-identity", "signer", &identity.signer)?;
+    validate_fleet_node_id(&identity.signer)?;
+    validate_key_sequence(identity.key_sequence)
+}
+
 fn validate_fleet_node_id(node_id: &NodeId) -> Result<(), FleetIdentityError> {
     let value = node_id.as_str();
     let reason = if value.is_empty() {
         Some("identity is empty")
-    } else if value.len() > 256 {
+    } else if value.len() > FLEET_V2_MAX_IDENTIFIER_BYTES {
         Some("identity exceeds 256 UTF-8 bytes")
     } else if value.trim() != value {
         Some("identity has leading or trailing whitespace")
@@ -1443,9 +1685,15 @@ pub trait FleetSignaturePreimageV2: fleet_signature_preimage_v2_sealed::Sealed {
 
     fn fleet_signature_schema_v2(&self) -> &SchemaHash;
 
-    fn fleet_unsigned_view_v2(&self, identity: &FleetSigningIdentity) -> CanonicalValue;
+    fn fleet_unsigned_view_v2(
+        &self,
+        identity: &FleetSigningIdentity,
+    ) -> Result<CanonicalValue, FleetIdentityError>;
 
     fn fleet_message_type(&self) -> &'static str;
+
+    /// Bound every attacker-controlled dynamic field before canonical-tree allocation.
+    fn validate_fleet_ingress_limits(&self) -> Result<(), FleetIdentityError>;
 
     fn validate_fleet_structure(&self) -> Result<(), FleetIdentityError> {
         Ok(())
@@ -1453,12 +1701,16 @@ pub trait FleetSignaturePreimageV2: fleet_signature_preimage_v2_sealed::Sealed {
 
     fn validate_fleet_signer(&self, signer: &NodeId) -> Result<(), FleetIdentityError>;
 
-    fn fleet_signature_preimage_v2(&self, identity: &FleetSigningIdentity) -> Vec<u8> {
-        build_preimage(
+    fn fleet_signature_preimage_v2(
+        &self,
+        identity: &FleetSigningIdentity,
+    ) -> Result<Vec<u8>, FleetIdentityError> {
+        let unsigned_view = self.fleet_unsigned_view_v2(identity)?;
+        Ok(build_preimage(
             self.fleet_signature_domain(),
             self.fleet_signature_schema_v2(),
-            &self.fleet_unsigned_view_v2(identity),
-        )
+            &unsigned_view,
+        ))
     }
 }
 
@@ -1473,8 +1725,13 @@ impl FleetSignaturePreimageV2 for EvidencePacket {
         &EVIDENCE_SIGNATURE_SCHEMA_HASH_V2
     }
 
-    fn fleet_unsigned_view_v2(&self, identity: &FleetSigningIdentity) -> CanonicalValue {
-        CanonicalValue::Map(BTreeMap::from([
+    fn fleet_unsigned_view_v2(
+        &self,
+        identity: &FleetSigningIdentity,
+    ) -> Result<CanonicalValue, FleetIdentityError> {
+        self.validate_fleet_ingress_limits()?;
+        validate_fleet_signing_identity_ingress(identity)?;
+        Ok(CanonicalValue::Map(BTreeMap::from([
             (
                 "epoch".to_string(),
                 CanonicalValue::U64(self.epoch.as_u64()),
@@ -1520,11 +1777,21 @@ impl FleetSignaturePreimageV2 for EvidencePacket {
                 "trace_id".to_string(),
                 CanonicalValue::String(self.trace_id.clone()),
             ),
-        ]))
+        ])))
     }
 
     fn fleet_message_type(&self) -> &'static str {
         "evidence"
+    }
+
+    fn validate_fleet_ingress_limits(&self) -> Result<(), FleetIdentityError> {
+        let message_type = self.fleet_message_type();
+        let mut budget = FleetV2IngressBudget::default();
+        budget.charge_identifier(message_type, "trace_id", &self.trace_id)?;
+        budget.charge_identifier(message_type, "extension_id", &self.extension_id)?;
+        budget.charge_node_id(message_type, "node_id", &self.node_id)?;
+        budget.charge_legacy_signature(message_type, "signature.signer", &self.signature)?;
+        budget.charge_string_map(message_type, "extensions", &self.extensions)
     }
 
     fn validate_fleet_structure(&self) -> Result<(), FleetIdentityError> {
@@ -1548,8 +1815,13 @@ impl FleetSignaturePreimageV2 for ContainmentIntent {
         &INTENT_SIGNATURE_SCHEMA_HASH_V2
     }
 
-    fn fleet_unsigned_view_v2(&self, identity: &FleetSigningIdentity) -> CanonicalValue {
-        CanonicalValue::Map(BTreeMap::from([
+    fn fleet_unsigned_view_v2(
+        &self,
+        identity: &FleetSigningIdentity,
+    ) -> Result<CanonicalValue, FleetIdentityError> {
+        self.validate_fleet_ingress_limits()?;
+        validate_fleet_signing_identity_ingress(identity)?;
+        Ok(CanonicalValue::Map(BTreeMap::from([
             (
                 "confidence_millionths".to_string(),
                 CanonicalValue::U64(self.confidence_millionths),
@@ -1599,11 +1871,26 @@ impl FleetSignaturePreimageV2 for ContainmentIntent {
                 "timestamp_ns".to_string(),
                 CanonicalValue::U64(self.timestamp_ns),
             ),
-        ]))
+        ])))
     }
 
     fn fleet_message_type(&self) -> &'static str {
         "containment-intent"
+    }
+
+    fn validate_fleet_ingress_limits(&self) -> Result<(), FleetIdentityError> {
+        let message_type = self.fleet_message_type();
+        let mut budget = FleetV2IngressBudget::default();
+        budget.charge_identifier(message_type, "intent_id", &self.intent_id)?;
+        budget.charge_identifier(message_type, "extension_id", &self.extension_id)?;
+        budget.charge_string_array(
+            message_type,
+            "supporting_evidence_ids",
+            &self.supporting_evidence_ids,
+        )?;
+        budget.charge_node_id(message_type, "node_id", &self.node_id)?;
+        budget.charge_legacy_signature(message_type, "signature.signer", &self.signature)?;
+        budget.charge_string_map(message_type, "extensions", &self.extensions)
     }
 
     fn validate_fleet_structure(&self) -> Result<(), FleetIdentityError> {
@@ -1638,8 +1925,13 @@ impl FleetSignaturePreimageV2 for HeartbeatLiveness {
         &HEARTBEAT_SIGNATURE_SCHEMA_HASH_V2
     }
 
-    fn fleet_unsigned_view_v2(&self, identity: &FleetSigningIdentity) -> CanonicalValue {
-        CanonicalValue::Map(BTreeMap::from([
+    fn fleet_unsigned_view_v2(
+        &self,
+        identity: &FleetSigningIdentity,
+    ) -> Result<CanonicalValue, FleetIdentityError> {
+        self.validate_fleet_ingress_limits()?;
+        validate_fleet_signing_identity_ingress(identity)?;
+        Ok(CanonicalValue::Map(BTreeMap::from([
             (
                 "epoch".to_string(),
                 CanonicalValue::U64(self.epoch.as_u64()),
@@ -1677,11 +1969,20 @@ impl FleetSignaturePreimageV2 for HeartbeatLiveness {
                 "timestamp_ns".to_string(),
                 CanonicalValue::U64(self.timestamp_ns),
             ),
-        ]))
+        ])))
     }
 
     fn fleet_message_type(&self) -> &'static str {
         "heartbeat"
+    }
+
+    fn validate_fleet_ingress_limits(&self) -> Result<(), FleetIdentityError> {
+        let message_type = self.fleet_message_type();
+        let mut budget = FleetV2IngressBudget::default();
+        budget.charge_node_id(message_type, "node_id", &self.node_id)?;
+        budget.charge_string_map(message_type, "local_health", &self.local_health)?;
+        budget.charge_legacy_signature(message_type, "signature.signer", &self.signature)?;
+        budget.charge_string_map(message_type, "extensions", &self.extensions)
     }
 
     fn validate_fleet_structure(&self) -> Result<(), FleetIdentityError> {
@@ -1705,7 +2006,12 @@ impl FleetSignaturePreimageV2 for ReconciliationRequest {
         &RECONCILIATION_SIGNATURE_SCHEMA_HASH_V2
     }
 
-    fn fleet_unsigned_view_v2(&self, identity: &FleetSigningIdentity) -> CanonicalValue {
+    fn fleet_unsigned_view_v2(
+        &self,
+        identity: &FleetSigningIdentity,
+    ) -> Result<CanonicalValue, FleetIdentityError> {
+        self.validate_fleet_ingress_limits()?;
+        validate_fleet_signing_identity_ingress(identity)?;
         let requested_ranges = CanonicalValue::Array(
             self.requested_ranges
                 .iter()
@@ -1721,7 +2027,7 @@ impl FleetSignaturePreimageV2 for ReconciliationRequest {
                 })
                 .collect(),
         );
-        CanonicalValue::Map(BTreeMap::from([
+        Ok(CanonicalValue::Map(BTreeMap::from([
             (
                 "epoch".to_string(),
                 CanonicalValue::U64(self.epoch.as_u64()),
@@ -1748,11 +2054,49 @@ impl FleetSignaturePreimageV2 for ReconciliationRequest {
                 "timestamp_ns".to_string(),
                 CanonicalValue::U64(self.timestamp_ns),
             ),
-        ]))
+        ])))
     }
 
     fn fleet_message_type(&self) -> &'static str {
         "reconciliation-request"
+    }
+
+    fn validate_fleet_ingress_limits(&self) -> Result<(), FleetIdentityError> {
+        let message_type = self.fleet_message_type();
+        let mut budget = FleetV2IngressBudget::default();
+        budget.charge_node_id(message_type, "node_id", &self.node_id)?;
+        budget.charge_collection(
+            message_type,
+            "requested_ranges",
+            self.requested_ranges.len(),
+            FLEET_V2_MAX_COLLECTION_ITEMS,
+        )?;
+        let mut total_span = 0u64;
+        for (requested_node, range) in &self.requested_ranges {
+            budget.charge_node_id(message_type, "requested_ranges.node_id", requested_node)?;
+            let span = range.len();
+            validate_ingress_limit_u64(
+                message_type,
+                "requested_ranges.span",
+                span,
+                FLEET_V2_MAX_SEQUENCE_RANGE_LEN,
+            )?;
+            total_span = total_span.checked_add(span).ok_or_else(|| {
+                ingress_limit_error_u64(
+                    message_type,
+                    "requested_ranges.aggregate_span",
+                    u64::MAX,
+                    FLEET_V2_MAX_SEQUENCE_RANGE_LEN,
+                )
+            })?;
+            validate_ingress_limit_u64(
+                message_type,
+                "requested_ranges.aggregate_span",
+                total_span,
+                FLEET_V2_MAX_SEQUENCE_RANGE_LEN,
+            )?;
+        }
+        budget.charge_legacy_signature(message_type, "signature.signer", &self.signature)
     }
 
     fn validate_fleet_structure(&self) -> Result<(), FleetIdentityError> {
@@ -1786,7 +2130,12 @@ impl FleetSignaturePreimageV2 for QuorumCheckpoint {
         &CHECKPOINT_SIGNATURE_SCHEMA_HASH_V2
     }
 
-    fn fleet_unsigned_view_v2(&self, identity: &FleetSigningIdentity) -> CanonicalValue {
+    fn fleet_unsigned_view_v2(
+        &self,
+        identity: &FleetSigningIdentity,
+    ) -> Result<CanonicalValue, FleetIdentityError> {
+        self.validate_fleet_ingress_limits()?;
+        validate_fleet_signing_identity_ingress(identity)?;
         let decisions = CanonicalValue::Array(
             self.containment_decisions
                 .iter()
@@ -1799,7 +2148,7 @@ impl FleetSignaturePreimageV2 for QuorumCheckpoint {
                 .map(|node_id| CanonicalValue::String(node_id.as_str().to_string()))
                 .collect(),
         );
-        CanonicalValue::Map(BTreeMap::from([
+        Ok(CanonicalValue::Map(BTreeMap::from([
             (
                 "checkpoint_seq".to_string(),
                 CanonicalValue::U64(self.checkpoint_seq),
@@ -1834,11 +2183,60 @@ impl FleetSignaturePreimageV2 for QuorumCheckpoint {
                 "timestamp_ns".to_string(),
                 CanonicalValue::U64(self.timestamp_ns),
             ),
-        ]))
+        ])))
     }
 
     fn fleet_message_type(&self) -> &'static str {
         "quorum-checkpoint"
+    }
+
+    fn validate_fleet_ingress_limits(&self) -> Result<(), FleetIdentityError> {
+        let message_type = self.fleet_message_type();
+        let mut budget = FleetV2IngressBudget::default();
+        budget.charge_collection(
+            message_type,
+            "participating_nodes",
+            self.participating_nodes.len(),
+            FLEET_V2_MAX_COLLECTION_ITEMS,
+        )?;
+        for participant in &self.participating_nodes {
+            budget.charge_node_id(message_type, "participating_nodes", participant)?;
+        }
+
+        budget.charge_collection(
+            message_type,
+            "containment_decisions",
+            self.containment_decisions.len(),
+            FLEET_V2_MAX_COLLECTION_ITEMS,
+        )?;
+        for decision in &self.containment_decisions {
+            budget.charge_identifier(
+                message_type,
+                "containment_decisions.extension_id",
+                &decision.extension_id,
+            )?;
+            budget.charge_string_array(
+                message_type,
+                "containment_decisions.contributing_intent_ids",
+                &decision.contributing_intent_ids,
+            )?;
+        }
+
+        budget.charge_collection(
+            message_type,
+            "quorum_signatures",
+            self.quorum_signatures.len(),
+            FLEET_V2_MAX_MAP_ENTRIES,
+        )?;
+        for (node_id, signature) in &self.quorum_signatures {
+            budget.charge_node_id(message_type, "quorum_signatures.node_id", node_id)?;
+            budget.charge_legacy_signature(
+                message_type,
+                "quorum_signatures.signature.signer",
+                signature,
+            )?;
+        }
+        budget.charge_string_map(message_type, "extensions", &self.extensions)
     }
 
     fn validate_fleet_structure(&self) -> Result<(), FleetIdentityError> {
@@ -1852,16 +2250,18 @@ impl FleetSignaturePreimageV2 for QuorumCheckpoint {
         for participant in &self.participating_nodes {
             validate_fleet_node_id(participant)?;
         }
-        let decision_ids: Vec<String> = self
+        if !self
             .containment_decisions
-            .iter()
-            .map(|decision| decision.extension_id.clone())
-            .collect();
-        validate_sorted_unique(
-            self.fleet_message_type(),
-            "containment_decisions.extension_id",
-            &decision_ids,
-        )?;
+            .windows(2)
+            .all(|pair| pair[0].extension_id.as_str() < pair[1].extension_id.as_str())
+        {
+            return Err(FleetIdentityError::NonCanonicalMessage {
+                message_type: self.fleet_message_type().to_string(),
+                detail:
+                    "containment_decisions.extension_id must be strictly sorted and duplicate-free"
+                        .to_string(),
+            });
+        }
         for decision in &self.containment_decisions {
             if decision.epoch != self.epoch {
                 return Err(FleetIdentityError::NonCanonicalMessage {
@@ -4826,6 +5226,308 @@ mod tests {
             .expect("legacy carrier is outside the staged v2 projection");
     }
 
+    fn assert_v2_ingress_limit(error: FleetIdentityError, field: &str) {
+        match error {
+            FleetIdentityError::NonCanonicalMessage { detail, .. } => {
+                assert!(detail.contains("ingress limit exceeded"), "{detail}");
+                assert!(detail.contains(field), "{detail}");
+            }
+            other => panic!("expected ingress limit error for {field}, got {other:?}"),
+        }
+    }
+
+    fn v2_numbered_ids(prefix: &str, count: usize) -> Vec<String> {
+        (0..count)
+            .map(|index| format!("{prefix}-{index:03}"))
+            .collect()
+    }
+
+    #[test]
+    fn v2_ingress_scalar_map_and_frame_boundaries_fail_closed() {
+        assert!(validate_fleet_v2_frame_len(FLEET_V2_MAX_FRAME_BYTES).is_ok());
+        assert_v2_ingress_limit(
+            validate_fleet_v2_frame_len(FLEET_V2_MAX_FRAME_BYTES + 1).unwrap_err(),
+            "frame_bytes",
+        );
+
+        let signer = v2_test_signer("node-a", 1, 31);
+        let mut evidence = test_evidence("node-a", "ext-a", 1, 100_000);
+        evidence.protocol_version = ProtocolVersion::V2;
+
+        evidence.trace_id = "é".repeat(FLEET_V2_MAX_IDENTIFIER_BYTES / 2);
+        signer
+            .sign_detached_message_v2(&evidence)
+            .expect("exact UTF-8 byte identifier limit is accepted");
+        evidence.trace_id.push('é');
+        assert_v2_ingress_limit(
+            signer.sign_detached_message_v2(&evidence).unwrap_err(),
+            "trace_id",
+        );
+
+        evidence = test_evidence("node-a", "ext-a", 1, 100_000);
+        evidence.protocol_version = ProtocolVersion::V2;
+        evidence.extensions = (0..FLEET_V2_MAX_MAP_ENTRIES)
+            .map(|index| (format!("key-{index:03}"), "v".to_string()))
+            .collect();
+        signer
+            .sign_detached_message_v2(&evidence)
+            .expect("exact map-entry limit is accepted");
+        evidence
+            .extensions
+            .insert("key-over".to_string(), "v".to_string());
+        assert_v2_ingress_limit(
+            signer.sign_detached_message_v2(&evidence).unwrap_err(),
+            "extensions",
+        );
+
+        evidence.extensions =
+            BTreeMap::from([("value".to_string(), "v".repeat(FLEET_V2_MAX_VALUE_BYTES))]);
+        signer
+            .sign_detached_message_v2(&evidence)
+            .expect("exact map-value byte limit is accepted");
+        evidence
+            .extensions
+            .get_mut("value")
+            .expect("value exists")
+            .push('v');
+        assert_v2_ingress_limit(
+            signer.sign_detached_message_v2(&evidence).unwrap_err(),
+            "extensions",
+        );
+
+        evidence.extensions = (0..8)
+            .map(|index| {
+                (
+                    format!("aggregate-{index}"),
+                    "v".repeat(FLEET_V2_MAX_VALUE_BYTES),
+                )
+            })
+            .collect();
+        assert_v2_ingress_limit(
+            signer.sign_detached_message_v2(&evidence).unwrap_err(),
+            "aggregate_dynamic_bytes",
+        );
+
+        evidence.extensions.clear();
+        evidence.signature.signer = NodeId::new("s".repeat(FLEET_V2_MAX_IDENTIFIER_BYTES + 1));
+        assert_v2_ingress_limit(
+            signer.sign_detached_message_v2(&evidence).unwrap_err(),
+            "signature.signer",
+        );
+    }
+
+    #[test]
+    fn v2_ingress_collection_range_and_nested_limits_cover_all_families() {
+        let signer = v2_test_signer("node-a", 1, 32);
+
+        let mut intent = test_intent("node-a", "ext-a", ContainmentAction::Suspend, 2, 1);
+        intent.protocol_version = ProtocolVersion::V2;
+        intent.supporting_evidence_ids = v2_numbered_ids("trace", FLEET_V2_MAX_COLLECTION_ITEMS);
+        signer
+            .sign_detached_message_v2(&intent)
+            .expect("exact array-item limit is accepted");
+        intent
+            .supporting_evidence_ids
+            .push("trace-over".to_string());
+        assert_v2_ingress_limit(
+            signer.sign_detached_message_v2(&intent).unwrap_err(),
+            "supporting_evidence_ids",
+        );
+
+        let mut heartbeat = test_heartbeat("node-a", 3, 30_000);
+        heartbeat.protocol_version = ProtocolVersion::V2;
+        heartbeat.local_health = (0..=FLEET_V2_MAX_MAP_ENTRIES)
+            .map(|index| (format!("health-{index:03}"), "ok".to_string()))
+            .collect();
+        assert_v2_ingress_limit(
+            signer.sign_detached_message_v2(&heartbeat).unwrap_err(),
+            "local_health",
+        );
+
+        let mut reconciliation = v2_test_reconciliation("node-a");
+        reconciliation.requested_ranges = BTreeMap::from([(
+            NodeId::new("node-b"),
+            SequenceRange::new(0, FLEET_V2_MAX_SEQUENCE_RANGE_LEN - 1),
+        )]);
+        signer
+            .sign_detached_message_v2(&reconciliation)
+            .expect("exact sequence-range limit is accepted");
+        reconciliation.requested_ranges.insert(
+            NodeId::new("node-b"),
+            SequenceRange::new(0, FLEET_V2_MAX_SEQUENCE_RANGE_LEN),
+        );
+        assert_v2_ingress_limit(
+            signer
+                .sign_detached_message_v2(&reconciliation)
+                .unwrap_err(),
+            "requested_ranges.span",
+        );
+
+        reconciliation.requested_ranges = BTreeMap::from([
+            (NodeId::new("node-b"), SequenceRange::new(0, 32_768)),
+            (NodeId::new("node-c"), SequenceRange::new(0, 32_768)),
+        ]);
+        assert_v2_ingress_limit(
+            signer
+                .sign_detached_message_v2(&reconciliation)
+                .unwrap_err(),
+            "requested_ranges.aggregate_span",
+        );
+
+        reconciliation.requested_ranges = (0..=FLEET_V2_MAX_COLLECTION_ITEMS)
+            .map(|index| {
+                (
+                    NodeId::new(format!("node-{index:03}")),
+                    SequenceRange::new(1, 1),
+                )
+            })
+            .collect();
+        assert_v2_ingress_limit(
+            signer
+                .sign_detached_message_v2(&reconciliation)
+                .unwrap_err(),
+            "requested_ranges",
+        );
+
+        let mut checkpoint = v2_test_checkpoint("node-a");
+        checkpoint.participating_nodes = (0..=FLEET_V2_MAX_COLLECTION_ITEMS)
+            .map(|index| NodeId::new(format!("node-{index:03}")))
+            .collect();
+        assert_v2_ingress_limit(
+            signer.sign_detached_message_v2(&checkpoint).unwrap_err(),
+            "participating_nodes",
+        );
+
+        checkpoint = v2_test_checkpoint("node-a");
+        let checkpoint_epoch = checkpoint.epoch;
+        checkpoint.containment_decisions = (0..=FLEET_V2_MAX_COLLECTION_ITEMS)
+            .map(|index| ResolvedContainmentDecision {
+                extension_id: format!("ext-{index:03}"),
+                resolved_action: ContainmentAction::Quarantine,
+                contributing_intent_ids: Vec::new(),
+                epoch: checkpoint_epoch,
+            })
+            .collect();
+        assert_v2_ingress_limit(
+            signer.sign_detached_message_v2(&checkpoint).unwrap_err(),
+            "containment_decisions",
+        );
+
+        checkpoint = v2_test_checkpoint("node-a");
+        checkpoint.containment_decisions[0].contributing_intent_ids =
+            v2_numbered_ids("intent", FLEET_V2_MAX_COLLECTION_ITEMS + 1);
+        assert_v2_ingress_limit(
+            signer.sign_detached_message_v2(&checkpoint).unwrap_err(),
+            "containment_decisions.contributing_intent_ids",
+        );
+
+        checkpoint = v2_test_checkpoint("node-a");
+        let checkpoint_epoch = checkpoint.epoch;
+        checkpoint.containment_decisions = (0..4)
+            .map(|index| ResolvedContainmentDecision {
+                extension_id: format!("ext-{index:03}"),
+                resolved_action: ContainmentAction::Quarantine,
+                contributing_intent_ids: v2_numbered_ids("intent", FLEET_V2_MAX_COLLECTION_ITEMS),
+                epoch: checkpoint_epoch,
+            })
+            .collect();
+        assert_v2_ingress_limit(
+            signer.sign_detached_message_v2(&checkpoint).unwrap_err(),
+            "aggregate_collection_items",
+        );
+
+        checkpoint = v2_test_checkpoint("node-a");
+        checkpoint.quorum_signatures = (0..=FLEET_V2_MAX_MAP_ENTRIES)
+            .map(|index| {
+                let node_id = format!("node-{index:03}");
+                (NodeId::new(node_id.as_str()), test_signature(&node_id))
+            })
+            .collect();
+        assert_v2_ingress_limit(
+            signer.sign_detached_message_v2(&checkpoint).unwrap_err(),
+            "quorum_signatures",
+        );
+    }
+
+    #[test]
+    fn v2_oversized_tamper_fails_before_crypto_without_registry_mutation() {
+        let signer = v2_test_signer("node-a", 1, 33);
+        let mut registry = FleetVerificationRegistry::new();
+        registry.register_signer(&signer).expect("register signer");
+        let mut evidence = test_evidence("node-a", "ext-a", 1, 100_000);
+        evidence.protocol_version = ProtocolVersion::V2;
+        let signature = signer
+            .sign_detached_message_v2(&evidence)
+            .expect("sign bounded evidence");
+
+        evidence.extensions.insert(
+            "oversized".to_string(),
+            "v".repeat(FLEET_V2_MAX_VALUE_BYTES + 1),
+        );
+        assert_v2_ingress_limit(
+            registry
+                .verify_live_detached_message_v2(&evidence, &signature)
+                .unwrap_err(),
+            "extensions",
+        );
+        assert_v2_ingress_limit(
+            evidence
+                .fleet_signature_preimage_v2(signer.identity())
+                .unwrap_err(),
+            "extensions",
+        );
+        assert_v2_ingress_limit(
+            evidence
+                .fleet_unsigned_view_v2(signer.identity())
+                .unwrap_err(),
+            "extensions",
+        );
+        assert_eq!(registry.active_node_count(), 1);
+        assert_eq!(
+            registry
+                .active_identity(&NodeId::new("node-a"))
+                .expect("registry authority remains intact"),
+            signer.identity()
+        );
+
+        let mut oversized_identity = signature;
+        oversized_identity.signer = NodeId::new("s".repeat(FLEET_V2_MAX_IDENTIFIER_BYTES + 1));
+        assert_v2_ingress_limit(
+            registry
+                .verify_live_detached_message_v2(&evidence, &oversized_identity)
+                .unwrap_err(),
+            "signer",
+        );
+    }
+
+    #[test]
+    fn v2_ingress_budget_checked_accounting_is_atomic() {
+        let mut exact = FleetV2IngressBudget::default();
+        exact
+            .charge_dynamic_bytes("test", "payload", FLEET_V2_MAX_DYNAMIC_BYTES)
+            .expect("exact dynamic budget is accepted");
+        let before = exact.dynamic_bytes;
+        assert_v2_ingress_limit(
+            exact
+                .charge_dynamic_bytes("test", "payload", 1)
+                .unwrap_err(),
+            "aggregate_dynamic_bytes",
+        );
+        assert_eq!(exact.dynamic_bytes, before);
+
+        let mut overflow = FleetV2IngressBudget {
+            dynamic_bytes: usize::MAX,
+            collection_items: 0,
+        };
+        assert_v2_ingress_limit(
+            overflow
+                .charge_dynamic_bytes("test", "payload", 1)
+                .unwrap_err(),
+            "payload",
+        );
+        assert_eq!(overflow.dynamic_bytes, usize::MAX);
+    }
+
     #[test]
     fn v2_registry_signs_and_verifies_every_common_message_family() {
         let signer = v2_test_signer("node-a", 1, 11);
@@ -4880,8 +5582,11 @@ mod tests {
             .register_signer(&wrong_signer)
             .expect("register wrong signer independently");
 
+        let forged_preimage = evidence
+            .fleet_signature_preimage_v2(wrong_signer.identity())
+            .expect("bounded wrong-identity preimage");
         let forged_identity_signature = wrong_signer
-            .sign_preimage(&evidence.fleet_signature_preimage_v2(wrong_signer.identity()))
+            .sign_preimage(&forged_preimage)
             .expect("sign deliberately wrong identity preimage");
         assert!(matches!(
             registry.verify_live_detached_message_v2(&evidence, &forged_identity_signature),
@@ -5195,7 +5900,7 @@ mod tests {
         }
         assert!(matches!(
             FleetSigner::new(
-                NodeId::new("x".repeat(257)),
+                NodeId::new("x".repeat(FLEET_V2_MAX_IDENTIFIER_BYTES + 1)),
                 1,
                 SigningKey::from_bytes([16; 32]).expect("test key"),
             ),
@@ -5249,6 +5954,8 @@ mod tests {
             let engine_preimage =
                 engine_message.fleet_signature_preimage_v2(engine_signer.identity());
             let core_preimage = core_message.fleet_signature_preimage_v2(core_signer.identity());
+            let engine_preimage = engine_preimage.expect("bounded engine preimage");
+            let core_preimage = core_preimage.expect("bounded core preimage");
             assert_eq!(engine_preimage, core_preimage);
 
             let engine_signature = engine_signer

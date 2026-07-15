@@ -545,6 +545,10 @@ struct EntryResealError {
     detail: String,
 }
 
+fn replay_failed_entry_count(result: &ReplayResult) -> usize {
+    usize::try_from(result.entries_with_violations()).unwrap_or(usize::MAX)
+}
+
 /// Recompute every derived artifact hash from the authoritative canonical
 /// envelope and then rebuild the chain in sequence order.
 fn reseal_entry_sequence(entries: &mut [CanonicalEvidenceEntry]) -> Result<(), EntryResealError> {
@@ -686,6 +690,7 @@ impl MigrationCompatibilityChecker {
     fn check_backward_compatible(&mut self, ledger: &GoldenLedger) -> MigrationTestResult {
         let replay_result = self.replay_entries(&ledger.entries);
         let violations = replay_result.violations.len();
+        let failed_entries = replay_failed_entry_count(&replay_result);
 
         self.push_event(
             &ledger.schema_version,
@@ -705,7 +710,7 @@ impl MigrationCompatibilityChecker {
                 MigrationOutcome::Failed
             },
             entries_processed: ledger.entries.len(),
-            entries_replayed_ok: ledger.entries.len().saturating_sub(violations),
+            entries_replayed_ok: ledger.entries.len().saturating_sub(failed_entries),
             errors: Vec::new(),
             replay_violations: violations,
             schema_migrations_detected: replay_result.diagnostics.schema_migrations.clone(),
@@ -753,6 +758,7 @@ impl MigrationCompatibilityChecker {
         // Replay migrated entries.
         let replay_result = self.replay_entries(&migrated_entries);
         let violations = replay_result.violations.len();
+        let failed_entries = replay_failed_entry_count(&replay_result);
 
         let mut result_errors = Vec::new();
         if !determinism_ok {
@@ -788,7 +794,7 @@ impl MigrationCompatibilityChecker {
             to_version: func.to_version.clone(),
             outcome,
             entries_processed: ledger.entries.len(),
-            entries_replayed_ok: migrated_entries.len().saturating_sub(violations),
+            entries_replayed_ok: migrated_entries.len().saturating_sub(failed_entries),
             errors: result_errors,
             replay_violations: violations,
             schema_migrations_detected: replay_result.diagnostics.schema_migrations.clone(),
@@ -2024,6 +2030,7 @@ mod tests {
     use crate::evidence_emission::{
         ActionCategory, CanonicalEvidenceEmitter, EmitterConfig, EvidenceEmissionRequest,
     };
+    use crate::security_epoch::SecurityEpoch;
     use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -2131,6 +2138,19 @@ mod tests {
         reseal_entry_sequence(&mut entries).expect("test evidence entries must reseal");
         let first_version = versions.first().copied().unwrap_or("evidence-v1");
         GoldenLedger::freeze(name, first_version, entries, 1_700_000_000_000)
+    }
+
+    fn build_structurally_invalid_golden_ledger(name: &str, schema_version: &str) -> GoldenLedger {
+        let mut entries = build_golden_ledger(name, schema_version, 3).entries;
+        entries[0].epoch = SecurityEpoch::from_raw(2);
+        entries[1].sequence = 4;
+        entries[1].ts_unix_ms = entries[0].ts_unix_ms.saturating_sub(1);
+        entries[1].ledger_entry.ts_unix_ms = entries[1].ts_unix_ms;
+        entries[1].epoch = SecurityEpoch::from_raw(1);
+        entries[2].sequence = 6;
+        entries[2].epoch = SecurityEpoch::from_raw(1);
+        reseal_entry_sequence(&mut entries).expect("test evidence entries must reseal");
+        GoldenLedger::freeze(name, schema_version, entries, 1_700_000_000_000)
     }
 
     /// Identity migration: entries pass through unchanged (for testing).
@@ -2590,6 +2610,26 @@ mod tests {
         assert!(results[0].determinism_verified);
     }
 
+    #[test]
+    fn backward_compatibility_counts_failed_positions_not_violation_records() {
+        let ledger = build_structurally_invalid_golden_ledger("mixed-v1", "evidence-v1");
+        let registry = MigrationRegistry::new();
+        let mut checker = MigrationCompatibilityChecker::new("evidence-v1", registry);
+
+        let first = checker.test_golden_ledger(&ledger);
+        let second = checker.test_golden_ledger(&ledger);
+
+        assert_eq!(first.entries_processed, 3);
+        assert_eq!(first.replay_violations, 4);
+        assert_eq!(first.entries_replayed_ok, 1);
+        assert_eq!(first.entries_replayed_ok, second.entries_replayed_ok);
+        assert_eq!(first.replay_violations, second.replay_violations);
+        assert_eq!(
+            first.schema_migrations_detected,
+            second.schema_migrations_detected
+        );
+    }
+
     // -------------------------------------------------------------------
     // MigrationCompatibilityChecker — successful migration
     // -------------------------------------------------------------------
@@ -2617,6 +2657,29 @@ mod tests {
         assert!(results[0].passed());
         assert_eq!(results[0].outcome, MigrationOutcome::MigratedSuccessfully);
         assert!(results[0].determinism_verified);
+    }
+
+    #[test]
+    fn migrated_replay_counts_failed_positions_not_violation_records() {
+        let ledger = build_structurally_invalid_golden_ledger("mixed-v1", "evidence-v1");
+        let mut registry = MigrationRegistry::new();
+        registry.register(
+            MigrationFunction {
+                from_version: "evidence-v1".to_string(),
+                to_version: "evidence-v2".to_string(),
+                lossy: false,
+                description: "version bump preserving replay structure".to_string(),
+            },
+            v1_to_v2_migration,
+        );
+        let mut checker = MigrationCompatibilityChecker::new("evidence-v2", registry);
+
+        let result = checker.test_golden_ledger(&ledger);
+
+        assert_eq!(result.entries_processed, 3);
+        assert_eq!(result.replay_violations, 4);
+        assert_eq!(result.entries_replayed_ok, 1);
+        assert!(result.determinism_verified);
     }
 
     #[test]

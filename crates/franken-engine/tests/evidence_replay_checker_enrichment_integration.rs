@@ -932,6 +932,7 @@ fn enrichment_config_clone_eq() {
 #[test]
 fn enrichment_diagnostics_default_is_empty() {
     let diag = ReplayDiagnostics::default();
+    assert_eq!(diag.entries_with_violations, 0);
     assert!(diag.schema_versions_seen.is_empty());
     assert!(diag.schema_migrations.is_empty());
     assert!(diag.policy_versions_seen.is_empty());
@@ -957,6 +958,7 @@ fn enrichment_diagnostics_serde_with_data() {
         validation_mode: ReplayValidationMode::DecisionReplay,
         decision_replay_executed: true,
         outcome_checked_count: 10,
+        entries_with_violations: 4,
         schema_versions_seen: ["1.0.0".to_string(), "2.0.0".to_string()]
             .into_iter()
             .collect(),
@@ -1963,6 +1965,7 @@ fn enrichment_halt_on_first_stops_early_action_divergence() {
     let result = checker.replay(&ledger, Some(&replay));
     assert!(!result.passed);
     assert_eq!(result.violations.len(), 1);
+    assert_eq!(result.entries_with_violations(), 1);
     assert!(result.entries_processed < 5);
 }
 
@@ -1978,6 +1981,7 @@ fn enrichment_halt_on_first_stops_at_sequence_gap() {
     let mut checker = EvidenceReplayChecker::new(config);
     let result = checker.replay(&ledger, None);
     assert!(!result.passed);
+    assert_eq!(result.entries_with_violations(), 1);
     assert!(result.entries_processed <= 3);
 }
 
@@ -1994,6 +1998,7 @@ fn enrichment_halt_on_first_stops_at_epoch_regression() {
     let mut checker = EvidenceReplayChecker::new(config);
     let result = checker.replay(&ledger, None);
     assert!(!result.passed);
+    assert_eq!(result.entries_with_violations(), 1);
     assert!(result.entries_processed < 5);
 }
 
@@ -2010,6 +2015,7 @@ fn enrichment_halt_on_first_stops_at_policy_discontinuity() {
     let mut checker = EvidenceReplayChecker::new(config);
     let result = checker.replay(&ledger, None);
     assert!(!result.passed);
+    assert_eq!(result.entries_with_violations(), 1);
     assert!(result.entries_processed < 5);
 }
 
@@ -2026,6 +2032,7 @@ fn enrichment_halt_on_first_stops_at_schema_migration_violation() {
     let mut checker = EvidenceReplayChecker::new(config);
     let result = checker.replay(&ledger, None);
     assert!(!result.passed);
+    assert_eq!(result.entries_with_violations(), 1);
     assert!(result.entries_processed < 5);
 }
 

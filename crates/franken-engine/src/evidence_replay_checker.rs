@@ -37,6 +37,16 @@ fn usize_to_u64_saturating(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
 }
 
+fn record_failed_entry(
+    entries_with_violations: &mut u64,
+    violation_count_before: usize,
+    violation_count_after: usize,
+) {
+    if violation_count_after > violation_count_before {
+        *entries_with_violations = entries_with_violations.saturating_add(1);
+    }
+}
+
 fn values_diverge(recorded: f64, replayed: f64, tolerance: f64) -> bool {
     if !recorded.is_finite() || !replayed.is_finite() {
         return true;
@@ -342,6 +352,13 @@ pub struct ReplayDiagnostics {
     pub decision_replay_executed: bool,
     /// Number of entries whose recorded outcome was checked by the evaluator.
     pub outcome_checked_count: u64,
+    /// Number of input positions that produced one or more violations.
+    ///
+    /// This is positional rather than keyed by sequence or entry ID because
+    /// repeated entries may legitimately share both public identifiers while
+    /// representing distinct failing positions in the replay input.
+    #[serde(default)]
+    pub entries_with_violations: u64,
     /// Schema versions encountered during replay.
     pub schema_versions_seen: BTreeSet<String>,
     /// Schema migration boundaries detected.
@@ -462,6 +479,11 @@ impl ReplayResult {
         self.diagnostics.outcome_checked_count
     }
 
+    /// Number of input positions that produced one or more violations.
+    pub fn entries_with_violations(&self) -> u64 {
+        self.diagnostics.entries_with_violations
+    }
+
     /// Count violations by type.
     pub fn violation_counts(&self) -> BTreeMap<ReplayViolationType, u64> {
         let mut counts = BTreeMap::new();
@@ -551,12 +573,14 @@ impl EvidenceReplayChecker {
     fn preflight_integrity(
         &mut self,
         entries: &[CanonicalEvidenceEntry],
-    ) -> (Vec<ReplayViolation>, u64) {
+    ) -> (Vec<ReplayViolation>, u64, u64) {
         let mut violations = Vec::new();
         let mut processed = 0u64;
+        let mut entries_with_violations = 0u64;
         let mut previous: Option<&CanonicalEvidenceEntry> = None;
 
         for entry in entries {
+            let violation_count_before = violations.len();
             let computed_artifact_hash = entry.compute_artifact_hash();
             let artifact_valid = computed_artifact_hash
                 .as_ref()
@@ -596,13 +620,19 @@ impl EvidenceReplayChecker {
             }
 
             processed = processed.saturating_add(1);
+            record_failed_entry(
+                &mut entries_with_violations,
+                violation_count_before,
+                violations.len(),
+            );
             if stop {
                 break;
             }
             previous = Some(entry);
         }
 
-        (violations, processed)
+        debug_assert!(entries_with_violations <= processed);
+        (violations, processed, entries_with_violations)
     }
 
     /// Replay a sequence of evidence entries, verifying integrity and
@@ -621,8 +651,10 @@ impl EvidenceReplayChecker {
             decision_replay_executed: false,
             ..ReplayDiagnostics::default()
         };
-        let (integrity_violations, integrity_processed) = self.preflight_integrity(entries);
+        let (integrity_violations, integrity_processed, integrity_failed_entries) =
+            self.preflight_integrity(entries);
         if !integrity_violations.is_empty() {
+            diagnostics.entries_with_violations = integrity_failed_entries;
             if integrity_processed > 0 {
                 self.push_integrity_event("replay_complete", "fail", None);
             }
@@ -655,6 +687,7 @@ impl EvidenceReplayChecker {
             if halted {
                 break;
             }
+            let violation_count_before = violations.len();
 
             // Progress reporting.
             if processed > 0
@@ -714,6 +747,11 @@ impl EvidenceReplayChecker {
                         });
                         if self.config.halt_on_first {
                             halted = true;
+                            record_failed_entry(
+                                &mut diagnostics.entries_with_violations,
+                                violation_count_before,
+                                violations.len(),
+                            );
                             processed = processed.saturating_add(1);
                             continue;
                         }
@@ -733,6 +771,11 @@ impl EvidenceReplayChecker {
                         });
                         if self.config.halt_on_first {
                             halted = true;
+                            record_failed_entry(
+                                &mut diagnostics.entries_with_violations,
+                                violation_count_before,
+                                violations.len(),
+                            );
                             processed = processed.saturating_add(1);
                             continue;
                         }
@@ -755,6 +798,11 @@ impl EvidenceReplayChecker {
                     });
                     if self.config.halt_on_first {
                         halted = true;
+                        record_failed_entry(
+                            &mut diagnostics.entries_with_violations,
+                            violation_count_before,
+                            violations.len(),
+                        );
                         processed = processed.saturating_add(1);
                         continue;
                     }
@@ -790,6 +838,11 @@ impl EvidenceReplayChecker {
                         );
                         if self.config.halt_on_first {
                             halted = true;
+                            record_failed_entry(
+                                &mut diagnostics.entries_with_violations,
+                                violation_count_before,
+                                violations.len(),
+                            );
                             processed = processed.saturating_add(1);
                             continue;
                         }
@@ -836,6 +889,11 @@ impl EvidenceReplayChecker {
                         );
                         if self.config.halt_on_first {
                             halted = true;
+                            record_failed_entry(
+                                &mut diagnostics.entries_with_violations,
+                                violation_count_before,
+                                violations.len(),
+                            );
                             processed = processed.saturating_add(1);
                             continue;
                         }
@@ -862,6 +920,11 @@ impl EvidenceReplayChecker {
                     });
                     if self.config.halt_on_first {
                         halted = true;
+                        record_failed_entry(
+                            &mut diagnostics.entries_with_violations,
+                            violation_count_before,
+                            violations.len(),
+                        );
                         processed = processed.saturating_add(1);
                         continue;
                     }
@@ -874,8 +937,13 @@ impl EvidenceReplayChecker {
                 diagnostics.outcome_checked_count =
                     diagnostics.outcome_checked_count.saturating_add(1);
                 self.check_outcome(entry, &replayed, &mut violations);
-                if self.config.halt_on_first && !violations.is_empty() {
+                if self.config.halt_on_first && violations.len() > violation_count_before {
                     halted = true;
+                    record_failed_entry(
+                        &mut diagnostics.entries_with_violations,
+                        violation_count_before,
+                        violations.len(),
+                    );
                     processed = processed.saturating_add(1);
                     continue;
                 }
@@ -887,11 +955,17 @@ impl EvidenceReplayChecker {
             rolling_hash = ContentHash::compute(&hash_input);
 
             prev_entry = Some(entry);
+            record_failed_entry(
+                &mut diagnostics.entries_with_violations,
+                violation_count_before,
+                violations.len(),
+            );
             processed = processed.saturating_add(1);
         }
 
         diagnostics.distinct_trace_ids = usize_to_u64_saturating(trace_ids.len());
         diagnostics.distinct_decision_ids = usize_to_u64_saturating(decision_ids.len());
+        debug_assert!(diagnostics.entries_with_violations <= processed);
 
         let passed = violations.is_empty();
         let event_outcome = if passed { "pass" } else { "fail" };
@@ -1352,6 +1426,7 @@ mod tests {
         );
         assert!(!result.decision_replay_executed());
         assert_eq!(result.outcome_checked_count(), 0);
+        assert_eq!(result.entries_with_violations(), 0);
     }
 
     #[test]
@@ -1427,6 +1502,7 @@ mod tests {
         assert_eq!(result.diagnostics.distinct_decision_ids, 0);
         assert_eq!(result.diagnostics.first_ts, None);
         assert_eq!(result.diagnostics.epoch_range, None);
+        assert_eq!(result.entries_with_violations(), 1);
         assert!(
             checker
                 .events()
@@ -1449,6 +1525,29 @@ mod tests {
         assert!(result.has_violation(&ReplayViolationType::ChainHashMismatch));
     }
 
+    #[test]
+    fn repeated_chain_broken_positions_are_counted_independently() {
+        let mut ledger = build_ledger(2);
+        let repeated = ledger[1].clone();
+        ledger.push(repeated.clone());
+        ledger.push(repeated);
+
+        let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
+        let result = checker.replay(&ledger, None);
+        let chain_violations: Vec<_> = result
+            .violations
+            .iter()
+            .filter(|violation| violation.violation_type == ReplayViolationType::ChainHashMismatch)
+            .collect();
+
+        assert_eq!(result.entries_processed, 4);
+        assert_eq!(chain_violations.len(), 2);
+        assert_eq!(chain_violations[0].sequence, chain_violations[1].sequence);
+        assert_eq!(chain_violations[0].entry_id, chain_violations[1].entry_id);
+        assert_eq!(result.entries_with_violations(), 2);
+        assert!(result.entries_with_violations() <= result.entries_processed);
+    }
+
     // -----------------------------------------------------------------------
     // Sequence gap
     // -----------------------------------------------------------------------
@@ -1469,6 +1568,28 @@ mod tests {
             .expect("operation should succeed for valid inputs");
         assert_eq!(gap_v.expected.as_deref(), Some("1"));
         assert_eq!(gap_v.actual.as_deref(), Some("5"));
+    }
+
+    #[test]
+    fn one_position_with_multiple_structural_violations_is_counted_once() {
+        let mut ledger = build_ledger(2);
+        ledger[0].epoch = SecurityEpoch::from_raw(2);
+        ledger[1].sequence = 4;
+        ledger[1].ts_unix_ms = ledger[0].ts_unix_ms.saturating_sub(1);
+        ledger[1].ledger_entry.ts_unix_ms = ledger[1].ts_unix_ms;
+        ledger[1].epoch = SecurityEpoch::from_raw(1);
+        reseal_ledger(&mut ledger);
+
+        let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
+        let result = checker.replay(&ledger, None);
+
+        assert_eq!(result.entries_processed, 2);
+        assert_eq!(result.violations.len(), 3);
+        assert!(result.has_violation(&ReplayViolationType::SequenceGap));
+        assert!(result.has_violation(&ReplayViolationType::TimestampMonotonicityViolation));
+        assert!(result.has_violation(&ReplayViolationType::EpochRegression));
+        assert_eq!(result.entries_with_violations(), 1);
+        assert!(result.entries_with_violations() <= result.entries_processed);
     }
 
     #[test]
@@ -1830,6 +1951,7 @@ mod tests {
         assert!(!result.passed);
         // Should have stopped at first entry.
         assert_eq!(result.violations.len(), 1);
+        assert_eq!(result.entries_with_violations(), 1);
         assert!(result.entries_processed < 5);
     }
 
@@ -2697,6 +2819,21 @@ mod tests {
         assert_eq!(result.diagnostics, back);
     }
 
+    #[test]
+    fn diagnostics_deserializes_legacy_payload_without_failed_entry_count() {
+        let mut payload = serde_json::to_value(ReplayDiagnostics::default())
+            .expect("diagnostics should serialize");
+        payload
+            .as_object_mut()
+            .expect("diagnostics should serialize as an object")
+            .remove("entries_with_violations");
+
+        let diagnostics: ReplayDiagnostics =
+            serde_json::from_value(payload).expect("legacy diagnostics should deserialize");
+
+        assert_eq!(diagnostics.entries_with_violations, 0);
+    }
+
     // -----------------------------------------------------------------------
     // Halt-on-first with various violation types
     // -----------------------------------------------------------------------
@@ -2714,6 +2851,7 @@ mod tests {
         let mut checker = EvidenceReplayChecker::new(config);
         let result = checker.replay(&ledger, None);
         assert!(!result.passed);
+        assert_eq!(result.entries_with_violations(), 1);
         // Should stop after detecting the regression.
         assert!(result.entries_processed < 5);
     }
@@ -2731,6 +2869,7 @@ mod tests {
         let mut checker = EvidenceReplayChecker::new(config);
         let result = checker.replay(&ledger, None);
         assert!(!result.passed);
+        assert_eq!(result.entries_with_violations(), 1);
         assert!(result.entries_processed < 5);
     }
 
@@ -2747,6 +2886,7 @@ mod tests {
         let mut checker = EvidenceReplayChecker::new(config);
         let result = checker.replay(&ledger, None);
         assert!(!result.passed);
+        assert_eq!(result.entries_with_violations(), 1);
         assert!(result.entries_processed < 5);
     }
 

@@ -302,6 +302,7 @@ fn config_custom_serde() {
 #[test]
 fn diagnostics_default_is_empty() {
     let diag = ReplayDiagnostics::default();
+    assert_eq!(diag.entries_with_violations, 0);
     assert!(diag.schema_versions_seen.is_empty());
     assert!(diag.schema_migrations.is_empty());
     assert!(diag.policy_versions_seen.is_empty());
@@ -319,6 +320,7 @@ fn diagnostics_serde_with_data() {
         validation_mode: ReplayValidationMode::DecisionReplay,
         decision_replay_executed: true,
         outcome_checked_count: 5,
+        entries_with_violations: 2,
         schema_versions_seen: ["1.0.0".into(), "2.0.0".into()].into_iter().collect(),
         schema_migrations: vec![SchemaMigrationRecord {
             at_sequence: 10,
@@ -755,6 +757,7 @@ fn checker_halt_on_first_stops_early() {
     let mut checker = EvidenceReplayChecker::new(config);
     let result = checker.replay(&ledger, None);
     assert!(!result.passed);
+    assert_eq!(result.entries_with_violations(), 1);
     assert!(result.entries_processed < 5);
 }
 

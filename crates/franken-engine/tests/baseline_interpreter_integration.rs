@@ -2234,6 +2234,219 @@ fn import_module_executes_and_returns_export() {
 }
 
 #[test]
+fn imported_closure_calls_use_the_exporting_module_function_table() {
+    let root = temp_module_dir("module_import_callable_origin");
+    fs::create_dir_all(&root).expect("create module root");
+    let dep_path = root.join("dep.mjs");
+    fs::write(
+        &dep_path,
+        "const base = 40; export function plus(value) { return base + value; }",
+    )
+    .expect("write callable dependency");
+
+    // The dependency lowers `plus` to function-table index 1. Deliberately
+    // install an unrelated index-1 function in the importer: without module
+    // provenance the raw imported closure would jump here and return 99.
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::LoadInt { dst: 4, value: 2 },
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange { start: 4, count: 1 },
+                dst: 5,
+            },
+            Ir3Instruction::LoadInt { dst: 4, value: 3 },
+            Ir3Instruction::CallMethod {
+                receiver: 1,
+                callee: 3,
+                args: RegRange { start: 4, count: 1 },
+                dst: 6,
+            },
+            Ir3Instruction::Add {
+                dst: 7,
+                lhs: 5,
+                rhs: 6,
+            },
+            Ir3Instruction::Return { value: 7 },
+            Ir3Instruction::LoadUndefined { dst: 0 },
+            Ir3Instruction::Return { value: 0 },
+            Ir3Instruction::LoadInt { dst: 0, value: 99 },
+            Ir3Instruction::Return { value: 0 },
+        ],
+        vec!["./dep.mjs".to_string(), "plus".to_string()],
+    );
+    module.function_table = vec![
+        Ir3FunctionDesc {
+            name: Some("main".to_string()),
+            entry: 10,
+            arity: 0,
+            frame_size: 8,
+            is_generator: false,
+            rest_param_index: None,
+        },
+        Ir3FunctionDesc {
+            name: Some("wrong_importer_function".to_string()),
+            entry: 12,
+            arity: 1,
+            frame_size: 8,
+            is_generator: false,
+            rest_param_index: None,
+        },
+    ];
+    module.header.source_label = root.join("main.mjs").display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = capabilities_with([RuntimeCapability::ModuleLoad]);
+    let result = QuickJsLane::with_config(config)
+        .execute(&module, "module-import-callable-origin-trace")
+        .expect("execute imported closure calls");
+    assert_eq!(result.value, Value::Int(85));
+}
+
+#[test]
+fn imported_closure_dynamic_function_construction_fails_closed() {
+    let root = temp_module_dir("module_import_generated_callable");
+    fs::create_dir_all(&root).expect("create module root");
+    fs::write(
+        root.join("dep.mjs"),
+        "export function make() { return Function('return 7;'); }",
+    )
+    .expect("write generated-callable dependency");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange { start: 4, count: 0 },
+                dst: 4,
+            },
+            Ir3Instruction::Call {
+                callee: 4,
+                args: RegRange { start: 5, count: 0 },
+                dst: 5,
+            },
+            Ir3Instruction::Return { value: 5 },
+        ],
+        vec!["./dep.mjs".to_string(), "make".to_string()],
+    );
+    module.header.source_label = root.join("main.mjs").display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities =
+        capabilities_with([RuntimeCapability::ModuleLoad, RuntimeCapability::Builtin]);
+    let error = QuickJsLane::with_config(config)
+        .execute(&module, "module-import-generated-callable-trace")
+        .expect_err("cross-module dynamic Function artifacts need durable owner state");
+    assert!(
+        matches!(
+            error,
+            InterpreterError::ModuleEvaluationFailed { ref reason, .. }
+                if reason.contains("persistent generated-artifact ownership")
+        ),
+        "unexpected generated-artifact containment error: {error:?}"
+    );
+}
+
+#[test]
+fn alternating_cross_module_recursion_preserves_effective_depth_limit() {
+    let root = temp_module_dir("module_import_cross_recursion_depth");
+    fs::create_dir_all(&root).expect("create module root");
+    fs::write(
+        root.join("a.mjs"),
+        "import { bounce } from './b.mjs';\n\
+         export function start(n) {\n\
+           if (n <= 0) return 0;\n\
+           return bounce(n, start);\n\
+         }",
+    )
+    .expect("write recursive module a");
+    fs::write(
+        root.join("b.mjs"),
+        "export function bounce(n, callback) { return callback(n - 1); }",
+    )
+    .expect("write recursive module b");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::LoadInt { dst: 4, value: 20 },
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange { start: 4, count: 1 },
+                dst: 5,
+            },
+            Ir3Instruction::Return { value: 5 },
+        ],
+        vec!["./a.mjs".to_string(), "start".to_string()],
+    );
+    module.header.source_label = root.join("main.mjs").display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.max_call_depth = 8;
+    config.granted_capabilities = capabilities_with([RuntimeCapability::ModuleLoad]);
+    let error = QuickJsLane::with_config(config)
+        .execute(&module, "module-import-cross-recursion-depth-trace")
+        .expect_err("alternating module recursion must remain depth-bounded");
+    assert!(
+        matches!(error, InterpreterError::StackOverflow { max: 8, .. }),
+        "unexpected recursion containment error: {error:?}"
+    );
+}
+
+#[test]
 fn import_module_prefers_mjs_over_js_for_extensionless_specifier() {
     let root = temp_module_dir("module_import_mjs_prefer");
     fs::create_dir_all(&root).expect("create module root");

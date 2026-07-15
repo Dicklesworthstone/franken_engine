@@ -3809,17 +3809,27 @@ struct ModuleRuntimeRecord {
     namespace_object: ObjectId,
     exports: BTreeMap<String, Value>,
     cjs_module_object: Option<ObjectId>,
+    /// The executable program that owns every closure created while this
+    /// module is evaluated. Imported closures carry only an index into this
+    /// program; retaining one shared `Arc` prevents that index from being
+    /// reinterpreted against the importing module's function table.
+    compiled_module: Option<Arc<Ir3Module>>,
 }
 
 #[derive(Debug, Clone, Default)]
 struct ModuleState {
     modules: BTreeMap<String, ModuleRuntimeRecord>,
+    /// Memory charged for retained module programs and their registry keys.
+    /// The heap-resident namespace objects and exported values are accounted
+    /// by their ordinary heap/register owners.
+    retained_program_bytes: u64,
 }
 
 impl ModuleState {
     fn new() -> Self {
         Self {
             modules: BTreeMap::new(),
+            retained_program_bytes: 0,
         }
     }
 }
@@ -5440,6 +5450,7 @@ struct ModuleExecutionSnapshot {
     catch_frames: Vec<CatchFrame>,
     pending_exception: Option<Value>,
     pending_exception_label: Label,
+    pending_hostcall_result_label: Option<Label>,
     pending_return: Option<Value>,
     suspended_abrupt_completions: Vec<AbruptCompletion>,
     finally_modes: Vec<FinallyMode>,
@@ -6059,6 +6070,11 @@ pub struct InterpreterCore {
     /// the thrown value's label. Meaningful only while `pending_exception` is
     /// `Some`; reset to `Public` when the exception is cleared.
     pending_exception_label: Label,
+    /// Out-of-band IFC label returned by builtin hostcalls whose implementation
+    /// invokes a user callable in an isolated module wrapper. The enclosing
+    /// `HostCall` consumes this exactly once and joins it with the ordinary
+    /// argument label before writing the destination register.
+    pending_hostcall_result_label: Option<Label>,
     /// A pending return value during unwinding through finally blocks.
     pending_return: Option<Value>,
     /// Saved outer abrupt completion state that was temporarily suspended by a
@@ -6078,6 +6094,20 @@ pub struct InterpreterCore {
     scope_chain: ScopeChain,
     /// Closure store: maps closure IDs to captured environments.
     closures: Vec<ClosureValue>,
+    /// Program provenance for closures created by the live interpreter. Test
+    /// fixtures that seed the private closure table directly intentionally
+    /// have no entry and retain same-module behavior.
+    closure_module_origins: BTreeMap<u32, String>,
+    /// Cross-module calls execute through an isolated wrapper whose local call
+    /// stack is intentionally empty. Keep an outer, non-snapshotted depth so
+    /// alternating module recursion cannot reset `max_call_depth` at every
+    /// boundary and recurse through Rust frames without containment.
+    module_reentrant_call_depth: usize,
+    /// Non-zero only while an imported ordinary closure is executing in its
+    /// retained owner program. Dynamic `Function` artifacts are currently
+    /// snapshot-local, so construction in this lane fails closed instead of
+    /// returning or scheduling an artifact id that restore would invalidate.
+    active_foreign_module_call_depth: usize,
     /// Function-constructor artifacts compiled from runtime strings.
     generated_functions: Vec<GeneratedFunctionArtifact>,
     /// Pending capture names for the next `CreateClosure` instruction.
@@ -6275,6 +6305,7 @@ impl InterpreterCore {
             catch_frames: Vec::new(),
             pending_exception: None,
             pending_exception_label: Label::Public,
+            pending_hostcall_result_label: None,
             pending_return: None,
             suspended_abrupt_completions: Vec::new(),
             finally_modes: Vec::new(),
@@ -6282,6 +6313,9 @@ impl InterpreterCore {
             last_post_run_seed: None,
             scope_chain,
             closures: Vec::new(),
+            closure_module_origins: BTreeMap::new(),
+            module_reentrant_call_depth: 0,
+            active_foreign_module_call_depth: 0,
             generated_functions: Vec::new(),
             pending_captures: Vec::new(),
             generators: Vec::new(),
@@ -11338,6 +11372,7 @@ impl InterpreterCore {
             catch_frames: self.catch_frames.clone(),
             pending_exception: self.pending_exception.clone(),
             pending_exception_label: self.pending_exception_label.clone(),
+            pending_hostcall_result_label: self.pending_hostcall_result_label.clone(),
             pending_return: self.pending_return.clone(),
             suspended_abrupt_completions: self.suspended_abrupt_completions.clone(),
             finally_modes: self.finally_modes.clone(),
@@ -11358,6 +11393,7 @@ impl InterpreterCore {
         self.catch_frames = snapshot.catch_frames;
         self.pending_exception = snapshot.pending_exception;
         self.pending_exception_label = snapshot.pending_exception_label;
+        self.pending_hostcall_result_label = snapshot.pending_hostcall_result_label;
         self.pending_return = snapshot.pending_return;
         self.suspended_abrupt_completions = snapshot.suspended_abrupt_completions;
         self.finally_modes = snapshot.finally_modes;
@@ -11384,6 +11420,7 @@ impl InterpreterCore {
         self.catch_frames.clear();
         self.pending_exception = None;
         self.pending_exception_label = Label::Public;
+        self.pending_hostcall_result_label = None;
         self.pending_return = None;
         self.suspended_abrupt_completions.clear();
         self.finally_modes.clear();
@@ -11861,8 +11898,31 @@ impl InterpreterCore {
         if let Some(record) = self.module_state.modules.get(specifier) {
             return Ok(record.namespace_object);
         }
+        // Entry modules are already compiled. Imported records are installed
+        // before parsing to support cycle detection, so their actual program
+        // is attached by `retain_module_program` immediately after lowering.
+        let retain_entry_program = specifier == module.header.source_label;
+        let retained_program_bytes = if retain_entry_program {
+            Self::retained_module_program_bytes(module, specifier)
+        } else {
+            0
+        };
+        // Enforce the logical budget before allocating either the namespace or
+        // the duplicated executable IR. If namespace allocation is refused,
+        // release this precharge so a failed module load cannot poison later
+        // budget checks.
         self.run_pre_allocation_hook(module, AllocKind::Object, 0)?;
-        let namespace_object = self.alloc_object_with_prototype(None)?;
+        self.apply_memory_component_delta(0, retained_program_bytes)?;
+        let namespace_object = match self.alloc_object_with_prototype(None) {
+            Ok(namespace_object) => namespace_object,
+            Err(error) => {
+                self.estimated_memory_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(retained_program_bytes);
+                return Err(error);
+            }
+        };
+        let compiled_module = retain_entry_program.then(|| Arc::new(module.clone()));
         self.module_state.modules.insert(
             specifier.to_string(),
             ModuleRuntimeRecord {
@@ -11870,9 +11930,117 @@ impl InterpreterCore {
                 namespace_object,
                 exports: BTreeMap::new(),
                 cjs_module_object: None,
+                compiled_module,
             },
         );
+        self.module_state.retained_program_bytes = self
+            .module_state
+            .retained_program_bytes
+            .saturating_add(retained_program_bytes);
         Ok(namespace_object)
+    }
+
+    fn retained_module_program_bytes(module: &Ir3Module, specifier: &str) -> u64 {
+        let instruction_slots = u64::try_from(module.instructions.capacity())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(std::mem::size_of::<Ir3Instruction>() as u64);
+        let instruction_strings = module.instructions.iter().fold(0u64, |total, instruction| {
+            let dynamic = match instruction {
+                Ir3Instruction::LoadBigInt { value, .. } => Self::estimate_string_bytes(value),
+                Ir3Instruction::HostCall { capability, .. } => {
+                    Self::estimate_string_bytes(&capability.0)
+                }
+                _ => 0,
+            };
+            total.saturating_add(dynamic)
+        });
+        let constant_pool = module.constant_pool.iter().fold(
+            u64::try_from(module.constant_pool.capacity())
+                .unwrap_or(u64::MAX)
+                .saturating_mul(std::mem::size_of::<String>() as u64),
+            |total, value| total.saturating_add(Self::estimate_string_bytes(value)),
+        );
+        let function_table = module.function_table.iter().fold(
+            u64::try_from(module.function_table.capacity())
+                .unwrap_or(u64::MAX)
+                .saturating_mul(std::mem::size_of::<crate::ir_contract::Ir3FunctionDesc>() as u64),
+            |total, function| {
+                total.saturating_add(
+                    function
+                        .name
+                        .as_deref()
+                        .map(Self::estimate_string_bytes)
+                        .unwrap_or(0),
+                )
+            },
+        );
+        let required_capabilities = module.required_capabilities.iter().fold(
+            u64::try_from(module.required_capabilities.capacity())
+                .unwrap_or(u64::MAX)
+                .saturating_mul(std::mem::size_of::<CapabilityTag>() as u64),
+            |total, capability| total.saturating_add(Self::estimate_string_bytes(&capability.0)),
+        );
+        let specialization = module.specialization.as_ref().map_or(0, |linkage| {
+            let proof_inputs = linkage.proof_input_ids.iter().fold(
+                u64::try_from(linkage.proof_input_ids.capacity())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(std::mem::size_of::<String>() as u64),
+                |total, proof_id| total.saturating_add(Self::estimate_string_bytes(proof_id)),
+            );
+            (std::mem::size_of::<crate::ir_contract::SpecializationLinkage>() as u64)
+                .saturating_add(proof_inputs)
+                .saturating_add(Self::estimate_string_bytes(&linkage.optimization_class))
+        });
+        (std::mem::size_of::<Ir3Module>() as u64)
+            .saturating_add(Self::estimate_string_bytes(&module.header.source_label))
+            .saturating_add(instruction_slots)
+            .saturating_add(instruction_strings)
+            .saturating_add(constant_pool)
+            .saturating_add(function_table)
+            .saturating_add(required_capabilities)
+            .saturating_add(specialization)
+            .saturating_add(Self::estimate_string_bytes(specifier))
+    }
+
+    fn transient_module_wrapper_bytes(module: &Ir3Module) -> u64 {
+        // Appending the synthetic call/return pair can make Vec grow to roughly
+        // twice its previous capacity. Charge that conservative peak rather
+        // than only the retained program's steady-state footprint.
+        Self::retained_module_program_bytes(module, "<inline-wrapper>")
+            .saturating_mul(2)
+            .saturating_add(2u64.saturating_mul(std::mem::size_of::<Ir3Instruction>() as u64))
+    }
+
+    fn retain_module_program(
+        &mut self,
+        specifier: &str,
+        module: &Ir3Module,
+    ) -> Result<(), InterpreterError> {
+        let record = self.module_state.modules.get(specifier).ok_or_else(|| {
+            InterpreterError::ModuleEvaluationFailed {
+                specifier: specifier.to_string(),
+                reason: "module record missing before program retention".to_string(),
+            }
+        })?;
+        if record.compiled_module.is_some() {
+            return Ok(());
+        }
+        let retained_program_bytes = Self::retained_module_program_bytes(module, specifier);
+        self.apply_memory_component_delta(0, retained_program_bytes)?;
+        let record = self
+            .module_state
+            .modules
+            .get_mut(specifier)
+            .ok_or_else(|| InterpreterError::ModuleEvaluationFailed {
+                specifier: specifier.to_string(),
+                reason: "module record disappeared during program retention".to_string(),
+            })?;
+        record.compiled_module = Some(Arc::new(module.clone()));
+        self.module_state.retained_program_bytes = self
+            .module_state
+            .retained_program_bytes
+            .saturating_add(retained_program_bytes);
+        Ok(())
     }
 
     fn init_cjs_environment(
@@ -11992,6 +12160,7 @@ impl InterpreterCore {
                 error: error.to_string(),
             }
         })?;
+        self.retain_module_program(resolved, &lowering_output.ir3)?;
         let eval_result = if is_cjs {
             self.evaluate_cjs_ir3(&lowering_output.ir3, resolved)
         } else {
@@ -12066,6 +12235,16 @@ impl InterpreterCore {
         module: &Ir3Module,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
+        if self.active_foreign_module_call_depth > 0 {
+            return Err(InterpreterError::ModuleEvaluationFailed {
+                specifier: self
+                    .current_module_specifier
+                    .clone()
+                    .unwrap_or_else(|| module.header.source_label.clone()),
+                reason: "dynamic Function construction from a cross-module closure requires persistent generated-artifact ownership"
+                    .to_string(),
+            });
+        }
         let mut parts = Vec::with_capacity(args.count as usize);
         for index in 0..args.count {
             let value = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
@@ -12373,7 +12552,9 @@ impl InterpreterCore {
         // generated function. The instruction counter is deliberately NOT part
         // of `snapshot_module_execution`, so the post-call delta reflects the
         // generated body's real spend against the one shared budget.
-        let caller_call_depth = self.call_stack.len();
+        let caller_call_depth = self.effective_call_depth();
+        self.check_module_reentrant_call_depth()?;
+        let generated_hidden_call_depth = caller_call_depth;
         let instructions_before = self.instructions_executed;
 
         let snapshot = self.snapshot_module_execution();
@@ -12415,7 +12596,11 @@ impl InterpreterCore {
                 let register = 1u32 + index as u32;
                 self.write_reg(register, argument)?;
             }
-            self.run_loop(&wrapper)
+            let previous_reentrant_depth = self.module_reentrant_call_depth;
+            self.module_reentrant_call_depth = generated_hidden_call_depth;
+            let result = self.run_loop(&wrapper);
+            self.module_reentrant_call_depth = previous_reentrant_depth;
+            result
         })();
         // Preserve a thrown value across the snapshot restore so an enclosing
         // try/catch in the caller can still observe it (same contract as
@@ -15595,6 +15780,91 @@ impl InterpreterCore {
         }
     }
 
+    /// Return the retained program for a closure owned by another module.
+    /// Function-table indices are local to one `Ir3Module`; treating an
+    /// imported closure's index as if it belonged to the caller can silently
+    /// jump into an unrelated same-numbered function.
+    fn foreign_closure_module(
+        &self,
+        callee: &Value,
+        current_module: &Ir3Module,
+    ) -> Result<Option<Arc<Ir3Module>>, InterpreterError> {
+        let (closure_id, resumable_kind) = match callee {
+            Value::Closure(id) => (*id, None),
+            Value::GeneratorFunction(id) => (*id, Some("generator")),
+            Value::AsyncFunction(id) => (*id, Some("async function")),
+            Value::AsyncGeneratorFunction(id) => (*id, Some("async generator")),
+            _ => return Ok(None),
+        };
+        let Some(origin) = self.closure_module_origins.get(&closure_id) else {
+            return Ok(None);
+        };
+        if origin == &current_module.header.source_label {
+            return Ok(None);
+        }
+        // Suspended runtime objects currently retain a closure index but not
+        // an owner program. Starting one through a foreign wrapper would work
+        // only until `.next()`/`await` resumed it against the entry module.
+        // Fail closed until continuation objects carry the same provenance.
+        if let Some(kind) = resumable_kind {
+            return Err(InterpreterError::ModuleEvaluationFailed {
+                specifier: origin.clone(),
+                reason: format!(
+                    "cross-module {kind} invocation requires owner-program continuation support"
+                ),
+            });
+        }
+        let record = self.module_state.modules.get(origin).ok_or_else(|| {
+            InterpreterError::ModuleEvaluationFailed {
+                specifier: origin.clone(),
+                reason: format!(
+                    "closure#{closure_id} refers to a module program that is not retained"
+                ),
+            }
+        })?;
+        let compiled_module = record.compiled_module.as_ref().ok_or_else(|| {
+            InterpreterError::ModuleEvaluationFailed {
+                specifier: origin.clone(),
+                reason: format!(
+                    "closure#{closure_id} refers to a module record without retained code"
+                ),
+            }
+        })?;
+        Ok(Some(Arc::clone(compiled_module)))
+    }
+
+    fn effective_call_depth(&self) -> usize {
+        self.call_stack
+            .len()
+            .saturating_add(self.module_reentrant_call_depth)
+    }
+
+    fn check_module_reentrant_call_depth(&self) -> Result<(), InterpreterError> {
+        let depth = self.effective_call_depth();
+        if depth >= self.config.max_call_depth {
+            return Err(InterpreterError::StackOverflow {
+                depth,
+                max: self.config.max_call_depth,
+            });
+        }
+        Ok(())
+    }
+
+    fn call_arguments(&self, args: RegRange) -> Result<Vec<Value>, InterpreterError> {
+        let mut values = Vec::with_capacity(args.count as usize);
+        for offset in 0..args.count {
+            let register =
+                args.start
+                    .checked_add(offset)
+                    .ok_or(InterpreterError::RegisterOutOfBounds {
+                        register: args.start,
+                        max: self.config.max_registers,
+                    })?;
+            values.push(self.read_reg(register)?);
+        }
+        Ok(values)
+    }
+
     fn function_ref(&self, module: &Ir3Module, callee: &Value, function_index: u32) -> FunctionRef {
         let name = module
             .function_table
@@ -16588,6 +16858,7 @@ impl InterpreterCore {
                         // preserved; route it into THIS frame's catch handler
                         // rather than letting `?` escape the caller's try/catch
                         // (bd-8enww.4.7).
+                        self.pending_hostcall_result_label = None;
                         let result =
                             match self.dispatch_builtin_function(module, builtin, args, None) {
                                 Ok(value) => value,
@@ -16612,6 +16883,10 @@ impl InterpreterCore {
                                     Some(err) => return Err(err),
                                 },
                             };
+                        let callback_result_label = self
+                            .pending_hostcall_result_label
+                            .take()
+                            .unwrap_or(Label::Public);
                         self.write_reg(dst, result)?;
                         // IFC: builtin results derive entirely from the arg
                         // registers (incl. any callback lanes the builtin runs,
@@ -16620,7 +16895,36 @@ impl InterpreterCore {
                         // HostCall propagation (bd-ooaka.1, fourth member of
                         // the bd-n2mjy/bd-0zybl under-tainting family).
                         let args_label = self.join_arg_range_label(args)?;
-                        self.set_register_label(dst, args_label)?;
+                        self.set_register_label(dst, args_label.join(&callback_result_label))?;
+                        self.ip += 1;
+                        continue;
+                    }
+
+                    if let Some(_origin_module) =
+                        self.foreign_closure_module(&callee_val, module)?
+                    {
+                        let arguments = self.call_arguments(args)?;
+                        let argument_label = self.join_arg_range_label(args)?;
+                        let (result, result_label) = match self
+                            .invoke_inline_method_call_with_argument_label(
+                                Some(module),
+                                callee_val.clone(),
+                                Value::Undefined,
+                                arguments,
+                                Some(argument_label.clone()),
+                            ) {
+                            Ok(value) => value,
+                            Err(err) => match self.route_isolated_explicit_throw(err)? {
+                                None => {
+                                    self.pending_exception_label =
+                                        self.pending_exception_label.join(&argument_label);
+                                    continue;
+                                }
+                                Some(err) => return Err(err),
+                            },
+                        };
+                        self.write_reg(dst, result)?;
+                        self.set_register_label(dst, result_label.join(&argument_label))?;
                         self.ip += 1;
                         continue;
                     }
@@ -16689,21 +16993,21 @@ impl InterpreterCore {
                             },
                         )?;
 
-                        if self.call_stack.len() >= self.config.max_call_depth {
+                        let effective_depth = self.effective_call_depth();
+                        if effective_depth >= self.config.max_call_depth {
                             // Capture stack limit enforcement for deterministic replay
                             self.nondeterminism_trace.capture(
                                 NondeterminismSource::StackLimitEnforcement,
                                 format!(
                                     "async_stack_overflow:depth={},max={}",
-                                    self.call_stack.len(),
-                                    self.config.max_call_depth
+                                    effective_depth, self.config.max_call_depth
                                 )
                                 .into_bytes(),
                                 self.instructions_executed,
                                 "baseline_interpreter",
                             );
                             return Err(InterpreterError::StackOverflow {
-                                depth: self.call_stack.len(),
+                                depth: effective_depth,
                                 max: self.config.max_call_depth,
                             });
                         }
@@ -16873,12 +17177,19 @@ impl InterpreterCore {
                                     )?;
 
                                     // Capability granted - dispatch as a builtin hostcall
+                                    self.pending_hostcall_result_label = None;
                                     let result = self.dispatch_builtin_hostcall(
                                         &builtin_cap,
                                         args,
                                         Some(module),
                                     )?;
+                                    let result_label = self
+                                        .pending_hostcall_result_label
+                                        .take()
+                                        .unwrap_or(Label::Public)
+                                        .join(&self.join_arg_range_label(args)?);
                                     self.write_reg(dst, result)?;
+                                    self.set_register_label(dst, result_label)?;
                                     self.ip += 1;
                                     continue;
                                 } else {
@@ -16890,9 +17201,10 @@ impl InterpreterCore {
                                 }
                             };
 
-                            if self.call_stack.len() >= self.config.max_call_depth {
+                            let effective_depth = self.effective_call_depth();
+                            if effective_depth >= self.config.max_call_depth {
                                 return Err(InterpreterError::StackOverflow {
-                                    depth: self.call_stack.len(),
+                                    depth: effective_depth,
                                     max: self.config.max_call_depth,
                                 });
                             }
@@ -17057,6 +17369,7 @@ impl InterpreterCore {
                         // builtin runs (e.g. `arr.forEach(() => { throw … })`)
                         // must be catchable by an enclosing try/catch in this
                         // frame (bd-8enww.4.7).
+                        self.pending_hostcall_result_label = None;
                         let result = match self.dispatch_builtin_function(
                             module,
                             builtin,
@@ -17084,6 +17397,10 @@ impl InterpreterCore {
                                 Some(err) => return Err(err),
                             },
                         };
+                        let callback_result_label = self
+                            .pending_hostcall_result_label
+                            .take()
+                            .unwrap_or(Label::Public);
                         self.write_reg(dst, result)?;
                         // IFC: a receiver-aware builtin's result derives from
                         // the receiver and the arg registers (e.g. a Secret
@@ -17104,7 +17421,8 @@ impl InterpreterCore {
                             .join_arg_range_label(args)?
                             .join(self.get_register_label(receiver)?)
                             .join(&binary_storage_label)
-                            .join(&stream_state_label);
+                            .join(&stream_state_label)
+                            .join(&callback_result_label);
                         self.propagate_builtin_binary_mutation_label(
                             builtin,
                             &receiver_val,
@@ -17112,6 +17430,35 @@ impl InterpreterCore {
                             &result_label,
                         )?;
                         self.set_register_label(dst, result_label)?;
+                        self.ip += 1;
+                        continue;
+                    }
+
+                    if let Some(_origin_module) =
+                        self.foreign_closure_module(&callee_val, module)?
+                    {
+                        let arguments = self.call_arguments(args)?;
+                        let argument_label = self.join_arg_range_label(args)?.join(&receiver_label);
+                        let (result, result_label) = match self
+                            .invoke_inline_method_call_with_argument_label(
+                                Some(module),
+                                callee_val.clone(),
+                                receiver_val,
+                                arguments,
+                                Some(argument_label.clone()),
+                            ) {
+                            Ok(value) => value,
+                            Err(err) => match self.route_isolated_explicit_throw(err)? {
+                                None => {
+                                    self.pending_exception_label =
+                                        self.pending_exception_label.join(&argument_label);
+                                    continue;
+                                }
+                                Some(err) => return Err(err),
+                            },
+                        };
+                        self.write_reg(dst, result)?;
+                        self.set_register_label(dst, result_label.join(&argument_label))?;
                         self.ip += 1;
                         continue;
                     }
@@ -17171,9 +17518,10 @@ impl InterpreterCore {
                             },
                         )?;
 
-                        if self.call_stack.len() >= self.config.max_call_depth {
+                        let effective_depth = self.effective_call_depth();
+                        if effective_depth >= self.config.max_call_depth {
                             return Err(InterpreterError::StackOverflow {
-                                depth: self.call_stack.len(),
+                                depth: effective_depth,
                                 max: self.config.max_call_depth,
                             });
                         }
@@ -17317,9 +17665,10 @@ impl InterpreterCore {
                         },
                     )?;
 
-                    if self.call_stack.len() >= self.config.max_call_depth {
+                    let effective_depth = self.effective_call_depth();
+                    if effective_depth >= self.config.max_call_depth {
                         return Err(InterpreterError::StackOverflow {
-                            depth: self.call_stack.len(),
+                            depth: effective_depth,
                             max: self.config.max_call_depth,
                         });
                     }
@@ -17447,6 +17796,7 @@ impl InterpreterCore {
 
                     // Dispatch promise hostcalls to the promise subsystem.
                     let is_promise_cap = capability.0.starts_with("promise:");
+                    self.pending_hostcall_result_label = None;
                     let result = if is_promise_cap {
                         self.dispatch_promise_hostcall(&capability.0, args, Some(module))?
                     } else if capability.0 == "module:require" {
@@ -17531,8 +17881,13 @@ impl InterpreterCore {
                         // Non-promise hostcalls return undefined in baseline.
                         Value::Undefined
                     };
+                    let result_label = self
+                        .pending_hostcall_result_label
+                        .take()
+                        .unwrap_or(Label::Public)
+                        .join(&args_label);
                     self.write_reg(dst, result)?;
-                    self.set_register_label(dst, args_label)?;
+                    self.set_register_label(dst, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::ImportModule { specifier, dst } => {
@@ -18269,6 +18624,17 @@ impl InterpreterCore {
                         continue;
                     }
 
+                    if let Some(_origin_module) =
+                        self.foreign_closure_module(&callee_val, module)?
+                    {
+                        return Err(InterpreterError::ModuleEvaluationFailed {
+                            specifier: module.header.source_label.clone(),
+                            reason:
+                                "cross-module construction requires owner-keyed prototype support"
+                                    .to_string(),
+                        });
+                    }
+
                     // Resolve function index and optional captured environment.
                     let (func_idx, captured_env, closure_id) = match &callee_val {
                         Value::Function(idx) => (*idx, None, None),
@@ -18303,9 +18669,10 @@ impl InterpreterCore {
                                 },
                             )?;
 
-                            if self.call_stack.len() >= self.config.max_call_depth {
+                            let effective_depth = self.effective_call_depth();
+                            if effective_depth >= self.config.max_call_depth {
                                 return Err(InterpreterError::StackOverflow {
-                                    depth: self.call_stack.len(),
+                                    depth: effective_depth,
                                     max: self.config.max_call_depth,
                                 });
                             }
@@ -18708,8 +19075,15 @@ impl InterpreterCore {
                         function_index,
                         captured_env,
                     });
+                    self.closure_module_origins.insert(
+                        closure_id,
+                        self.current_module_specifier
+                            .clone()
+                            .unwrap_or_else(|| module.header.source_label.clone()),
+                    );
                     if let Err(err) = self.apply_closures_memory_delta(previous_closure_bytes) {
                         self.closures.pop();
+                        self.closure_module_origins.remove(&closure_id);
                         return Err(err);
                     }
                     self.pending_captures.clear();
@@ -18740,8 +19114,15 @@ impl InterpreterCore {
                         function_index,
                         captured_env,
                     });
+                    self.closure_module_origins.insert(
+                        closure_id,
+                        self.current_module_specifier
+                            .clone()
+                            .unwrap_or_else(|| module.header.source_label.clone()),
+                    );
                     if let Err(err) = self.apply_closures_memory_delta(previous_closure_bytes) {
                         self.closures.pop();
+                        self.closure_module_origins.remove(&closure_id);
                         return Err(err);
                     }
                     self.pending_captures.clear();
@@ -18770,8 +19151,15 @@ impl InterpreterCore {
                         function_index,
                         captured_env,
                     });
+                    self.closure_module_origins.insert(
+                        closure_id,
+                        self.current_module_specifier
+                            .clone()
+                            .unwrap_or_else(|| module.header.source_label.clone()),
+                    );
                     if let Err(err) = self.apply_closures_memory_delta(previous_closure_bytes) {
                         self.closures.pop();
+                        self.closure_module_origins.remove(&closure_id);
                         return Err(err);
                     }
                     self.pending_captures.clear();
@@ -18800,8 +19188,15 @@ impl InterpreterCore {
                         function_index,
                         captured_env,
                     });
+                    self.closure_module_origins.insert(
+                        closure_id,
+                        self.current_module_specifier
+                            .clone()
+                            .unwrap_or_else(|| module.header.source_label.clone()),
+                    );
                     if let Err(err) = self.apply_closures_memory_delta(previous_closure_bytes) {
                         self.closures.pop();
+                        self.closure_module_origins.remove(&closure_id);
                         return Err(err);
                     }
                     self.pending_captures.clear();
@@ -23023,8 +23418,12 @@ impl InterpreterCore {
                     function_index,
                     captured_env: Vec::new(),
                 });
+                if let Some(origin) = self.current_module_specifier.clone() {
+                    self.closure_module_origins.insert(closure_id, origin);
+                }
                 if let Err(err) = self.apply_closures_memory_delta(previous_closure_bytes) {
                     self.closures.pop();
+                    self.closure_module_origins.remove(&closure_id);
                     return Err(err);
                 }
                 Ok(Some(crate::closure_model::ClosureHandle(closure_id)))
@@ -27893,6 +28292,7 @@ impl InterpreterCore {
         self.invoke_inline_method_call_with_argument_label(
             module, callee, receiver, arguments, None,
         )
+        .map(|(value, _label)| value)
     }
 
     /// Invoke an isolated inline callback under one aggregate IFC context.
@@ -27907,11 +28307,23 @@ impl InterpreterCore {
         receiver: Value,
         arguments: Vec<Value>,
         argument_label: Option<Label>,
-    ) -> Result<Value, InterpreterError> {
-        let module = module.ok_or_else(|| InterpreterError::TypeError {
+    ) -> Result<(Value, Label), InterpreterError> {
+        let caller_module = module.ok_or_else(|| InterpreterError::TypeError {
             expected: "module-backed Function.prototype.call/apply dispatch".to_string(),
             got: "missing module context".to_string(),
         })?;
+        // Deferred callbacks (timers, EventEmitter, streams, Promise jobs) are
+        // commonly invoked while the entry module is active. Select the
+        // closure's retained owner program here as well as in direct Call/
+        // CallMethod, otherwise the callback path can reintroduce the same
+        // cross-module function-index collision.
+        let foreign_module = self.foreign_closure_module(&callee, caller_module)?;
+        let is_foreign_call = foreign_module.is_some();
+        if is_foreign_call {
+            self.check_module_reentrant_call_depth()?;
+        }
+        let foreign_hidden_call_depth = self.effective_call_depth();
+        let module = foreign_module.as_deref().unwrap_or(caller_module);
         let arg_count =
             u32::try_from(arguments.len()).map_err(|_| InterpreterError::TypeError {
                 expected: "u32-bounded Function.prototype.call/apply argument count".to_string(),
@@ -27935,6 +28347,17 @@ impl InterpreterCore {
             });
         }
 
+        let transient_wrapper_bytes = Self::transient_module_wrapper_bytes(module);
+        let snapshot_retained_bytes = self
+            .registers_memory_bytes()
+            .saturating_add(self.scope_chain_memory_bytes())
+            .saturating_add(self.call_stack_memory_bytes());
+        let transient_execution_bytes =
+            transient_wrapper_bytes.saturating_add(snapshot_retained_bytes);
+        // The wrapper and caller snapshot coexist with the isolated callee
+        // state. Charge both before either clone so a near-budget guest cannot
+        // make the re-entrant module seam temporarily exceed containment.
+        self.apply_memory_component_delta(0, transient_execution_bytes)?;
         let mut wrapper = module.clone();
         let wrapper_start = wrapper.instructions.len();
         wrapper.instructions.push(Ir3Instruction::CallMethod {
@@ -28009,8 +28432,25 @@ impl InterpreterCore {
                     self.set_register_label(register, label.clone())?;
                 }
             }
-            self.run_loop(&wrapper)
+            if is_foreign_call {
+                let previous_reentrant_depth = self.module_reentrant_call_depth;
+                let previous_foreign_call_depth = self.active_foreign_module_call_depth;
+                self.module_reentrant_call_depth = foreign_hidden_call_depth;
+                self.active_foreign_module_call_depth =
+                    previous_foreign_call_depth.saturating_add(1);
+                let result = self.run_loop(&wrapper);
+                self.module_reentrant_call_depth = previous_reentrant_depth;
+                self.active_foreign_module_call_depth = previous_foreign_call_depth;
+                result
+            } else {
+                self.run_loop(&wrapper)
+            }
         })();
+        let result_label = if result.is_ok() {
+            self.get_register_label(0).cloned().unwrap_or(Label::Public)
+        } else {
+            Label::Public
+        };
         // If the callee threw and nothing inside it caught the exception, the
         // isolated run cleared `catch_frames` so an *enclosing* try/catch was
         // invisible here. Capture the thrown VALUE before the snapshot restore
@@ -28024,23 +28464,32 @@ impl InterpreterCore {
                 .map(|v| (v, self.pending_exception_label.clone())),
             _ => None,
         };
+        drop(wrapper);
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(transient_execution_bytes);
         let previous_register_bytes = self.registers_memory_bytes();
         let previous_scope_bytes = self.scope_chain_memory_bytes();
         let previous_call_stack_bytes = self.call_stack_memory_bytes();
         self.restore_module_execution(snapshot);
         self.active_cjs_context = saved_active_cjs_context;
-        if wrapper_memory_committed {
-            self.apply_register_scope_call_stack_memory_delta(
+        let restore_memory_result = if wrapper_memory_committed {
+            Some(self.apply_register_scope_call_stack_memory_delta(
                 previous_register_bytes,
                 previous_scope_bytes,
                 previous_call_stack_bytes,
-            )?;
+            ))
+        } else {
+            None
+        };
+        if let Some(result) = restore_memory_result {
+            result?;
         }
         if let Some((value, label)) = thrown_value {
             self.pending_exception = Some(value);
             self.pending_exception_label = label;
         }
-        result
+        result.map(|value| (value, result_label))
     }
 
     fn invoke_inline_construct(
@@ -28053,6 +28502,13 @@ impl InterpreterCore {
             expected: "module-backed Reflect.construct dispatch".to_string(),
             got: "missing module context".to_string(),
         })?;
+        if self.foreign_closure_module(&constructor, module)?.is_some() {
+            return Err(InterpreterError::ModuleEvaluationFailed {
+                specifier: module.header.source_label.clone(),
+                reason: "cross-module construction requires owner-keyed prototype support"
+                    .to_string(),
+            });
+        }
         let arg_count =
             u32::try_from(arguments.len()).map_err(|_| InterpreterError::TypeError {
                 expected: "u32-bounded Reflect.construct argument count".to_string(),
@@ -28074,6 +28530,14 @@ impl InterpreterCore {
             });
         }
 
+        let transient_wrapper_bytes = Self::transient_module_wrapper_bytes(module);
+        let snapshot_retained_bytes = self
+            .registers_memory_bytes()
+            .saturating_add(self.scope_chain_memory_bytes())
+            .saturating_add(self.call_stack_memory_bytes());
+        let transient_execution_bytes =
+            transient_wrapper_bytes.saturating_add(snapshot_retained_bytes);
+        self.apply_memory_component_delta(0, transient_execution_bytes)?;
         let mut wrapper = module.clone();
         let wrapper_start = wrapper.instructions.len();
         wrapper.instructions.push(Ir3Instruction::Construct {
@@ -28130,17 +28594,26 @@ impl InterpreterCore {
             }
             self.run_loop(&wrapper)
         })();
+        drop(wrapper);
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(transient_execution_bytes);
         let previous_register_bytes = self.registers_memory_bytes();
         let previous_scope_bytes = self.scope_chain_memory_bytes();
         let previous_call_stack_bytes = self.call_stack_memory_bytes();
         self.restore_module_execution(snapshot);
         self.active_cjs_context = saved_active_cjs_context;
-        if wrapper_memory_committed {
-            self.apply_register_scope_call_stack_memory_delta(
+        let restore_memory_result = if wrapper_memory_committed {
+            Some(self.apply_register_scope_call_stack_memory_delta(
                 previous_register_bytes,
                 previous_scope_bytes,
                 previous_call_stack_bytes,
-            )?;
+            ))
+        } else {
+            None
+        };
+        if let Some(result) = restore_memory_result {
+            result?;
         }
         result
     }
@@ -28960,6 +29433,10 @@ impl InterpreterCore {
         args: RegRange,
         module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
+        // Each dispatch owns exactly one optional callback-derived label. A
+        // previous failed or test-only direct dispatch must never taint the
+        // next, unrelated hostcall.
+        self.pending_hostcall_result_label = None;
         let timestamp_ns = self.instructions_executed;
         let args_hash = self.hostcall_arguments_hash(args);
         let outcome = self.dispatch_builtin_hostcall_inner(cap, args, module);
@@ -32883,7 +33360,11 @@ impl InterpreterCore {
                 }
                 let this_arg = self.read_reg(args.start + 1)?;
                 let arguments = self.array_like_argument_values(self.read_reg(args.start + 2)?)?;
-                self.invoke_inline_method_call(module, target, this_arg, arguments)
+                let (value, label) = self.invoke_inline_method_call_with_argument_label(
+                    module, target, this_arg, arguments, None,
+                )?;
+                self.pending_hostcall_result_label = Some(label);
+                Ok(value)
             }
             "builtin:ReflectConstruct" => {
                 if args.count < 2 {
@@ -33849,7 +34330,11 @@ impl InterpreterCore {
                 for arg_offset in 2..args.count {
                     call_args.push(self.read_reg(args.start + arg_offset)?);
                 }
-                self.invoke_inline_method_call(module, function, this_arg, call_args)
+                let (value, label) = self.invoke_inline_method_call_with_argument_label(
+                    module, function, this_arg, call_args, None,
+                )?;
+                self.pending_hostcall_result_label = Some(label);
+                Ok(value)
             }
 
             "builtin:MathAsin" => {
@@ -34032,7 +34517,11 @@ impl InterpreterCore {
                     Value::Undefined
                 };
                 let apply_args = self.array_like_argument_values(args_array)?;
-                self.invoke_inline_method_call(module, function, this_arg, apply_args)
+                let (value, label) = self.invoke_inline_method_call_with_argument_label(
+                    module, function, this_arg, apply_args, None,
+                )?;
+                self.pending_hostcall_result_label = Some(label);
+                Ok(value)
             }
 
             "builtin:StringPrototypeLocaleCompare" => {
@@ -38745,7 +39234,15 @@ impl InterpreterCore {
     }
 
     fn closures_memory_bytes(&self) -> u64 {
-        Self::estimate_closures_bytes(&self.closures)
+        Self::estimate_closures_bytes(&self.closures).saturating_add(
+            self.closure_module_origins
+                .values()
+                .map(|origin| {
+                    (std::mem::size_of::<u32>() as u64)
+                        .saturating_add(Self::estimate_string_bytes(origin))
+                })
+                .sum::<u64>(),
+        )
     }
 
     fn call_stack_memory_bytes(&self) -> u64 {
@@ -38842,7 +39339,7 @@ impl InterpreterCore {
                     .sum::<u64>(),
             )
             .saturating_add(Self::estimate_scope_chain_bytes(&self.scope_chain.frames))
-            .saturating_add(Self::estimate_closures_bytes(&self.closures))
+            .saturating_add(self.closures_memory_bytes())
             .saturating_add(
                 self.call_stack
                     .iter()
@@ -38860,6 +39357,7 @@ impl InterpreterCore {
             .saturating_add(self.event_promise_waiters_memory_bytes())
             .saturating_add(self.readable_from_streams_memory_bytes())
             .saturating_add(self.writable_streams_memory_bytes())
+            .saturating_add(self.module_state.retained_program_bytes)
     }
 
     #[cfg(test)]
@@ -51657,6 +52155,63 @@ mod function_prototype_call_apply_tests_current {
             .execute(&module)
             .expect("Function.prototype.apply should execute");
         assert_eq!(result.value, Value::Int(12));
+    }
+
+    #[test]
+    fn imported_closure_call_apply_and_reflect_apply_publish_callee_ifc_label() {
+        let mut owner = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 2,
+                name: Some("foreign_result".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        owner.header.source_label = "foreign-owner.mjs".to_string();
+        let caller = test_module_with_functions(Vec::new(), Vec::new());
+
+        let mut core = test_interpreter();
+        core.ensure_module_record(&owner, "foreign-owner.mjs")
+            .expect("foreign owner program should be retained");
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: core.scope_chain.snapshot(),
+        });
+        core.closure_module_origins
+            .insert(0, "foreign-owner.mjs".to_string());
+        // Model a Secret caller PC/callback context. The isolated owner-module
+        // run must return that label through all three value-only builtin
+        // dispatch forms rather than publishing a Public result.
+        core.active_inline_callback_context_label = Some(Label::Secret);
+
+        let empty_args = seed_array_like(&mut core, &[]);
+        let cases = [
+            ("builtin:FunctionPrototypeCall", 2),
+            ("builtin:FunctionPrototypeApply", 3),
+            ("builtin:ReflectApply", 3),
+        ];
+        for (capability, count) in cases {
+            core.mutate_registers(|registers| {
+                registers[0] = Value::Closure(0);
+                registers[1] = Value::Undefined;
+                registers[2] = Value::Object(empty_args);
+            });
+            let value = core
+                .dispatch_builtin_hostcall(capability, RegRange { start: 0, count }, Some(&caller))
+                .unwrap_or_else(|error| panic!("{capability} should dispatch: {error:?}"));
+            assert_eq!(value, Value::Int(7), "wrong value from {capability}");
+            assert_eq!(
+                core.pending_hostcall_result_label.take(),
+                Some(Label::Secret),
+                "{capability} must publish the isolated callee result label"
+            );
+        }
     }
 
     #[test]

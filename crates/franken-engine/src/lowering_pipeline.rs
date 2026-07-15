@@ -77,6 +77,7 @@ const IFC_FLOW_PROOF_SCHEMA_VERSION: &str = "frankenengine.ir2_flow_proof_witnes
 const LEXICAL_BINDING_SENTINEL_PREFIX: &str = "\0lexical\0";
 const CAPTURE_ORIGIN_SENTINEL_PREFIX: &str = "\0capture-origin\0";
 const CAPTURE_CELL_NAME_PREFIX: &str = "\0capture-cell\0";
+const CLASS_EXPRESSION_SELF_CAPTURE_PREFIX: &str = "\0class-expression-self\0";
 const CHILD_CAPTURE_BINDING_SENTINEL_PREFIX: &str = "\0child-capture\0";
 
 /// Maximum number of IR1 ops to preallocate based on AST size (prevents pathological growth).
@@ -99,6 +100,16 @@ fn capture_cell_name(name: &str, origin_id: BindingId) -> String {
 
 fn parse_capture_cell_name(name: &str) -> Option<(BindingId, &str)> {
     let encoded = name.strip_prefix(CAPTURE_CELL_NAME_PREFIX)?;
+    let (origin_id, source_name) = encoded.split_once('\0')?;
+    Some((origin_id.parse().ok()?, source_name))
+}
+
+fn class_expression_self_capture_name(name: &str, origin_id: BindingId) -> String {
+    format!("{CLASS_EXPRESSION_SELF_CAPTURE_PREFIX}{origin_id}\0{name}")
+}
+
+fn parse_class_expression_self_capture_name(name: &str) -> Option<(BindingId, &str)> {
+    let encoded = name.strip_prefix(CLASS_EXPRESSION_SELF_CAPTURE_PREFIX)?;
     let (origin_id, source_name) = encoded.split_once('\0')?;
     Some((origin_id.parse().ok()?, source_name))
 }
@@ -2128,6 +2139,65 @@ fn restore_binding_entries(
         } else {
             binding_lookup.remove(&name);
         }
+    }
+}
+
+/// Temporarily expose the class expression's internal constructor binding under
+/// its source-local name while lowering a constructor or method body. The
+/// snapshot is restored before lowering returns to the enclosing expression,
+/// so the name never becomes an outer lexical binding.
+fn expose_class_expression_self_binding(
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    self_name: &str,
+    class_binding: BindingId,
+) -> Vec<(String, Option<BindingId>)> {
+    let keys = [
+        self_name.to_string(),
+        lexical_binding_sentinel(self_name),
+        capture_origin_sentinel(self_name),
+    ];
+    let snapshot = keys
+        .iter()
+        .map(|key| (key.clone(), binding_lookup.get(key).copied()))
+        .collect();
+    binding_lookup.insert(self_name.to_string(), class_binding);
+    binding_lookup.insert(lexical_binding_sentinel(self_name), 0);
+    binding_lookup.insert(capture_origin_sentinel(self_name), class_binding);
+    snapshot
+}
+
+/// Replace the ordinary outer-capture alias synthesized by `collect_free_vars`
+/// with the class-specific runtime name selected by the caller. Constructors
+/// retain their literal source name so the existing exact-name closure self-bind
+/// can initialize the cycle. Methods retain a private alias for the already
+/// created internal class binding, which prevents the source name from leaking.
+fn rewrite_class_expression_self_capture(
+    outer_lookup: &mut BTreeMap<String, BindingId>,
+    body_binding: BindingId,
+    class_binding: BindingId,
+    runtime_name: String,
+    retain_outer_capture: bool,
+    free_vars: &mut [String],
+    free_var_ids: &[BindingId],
+) {
+    let Some(index) = free_var_ids.iter().position(|id| *id == body_binding) else {
+        return;
+    };
+    let Some(free_var) = free_vars.get_mut(index) else {
+        return;
+    };
+
+    let ordinary_name = std::mem::replace(free_var, runtime_name);
+    outer_lookup.remove(&child_capture_binding_sentinel(
+        class_binding,
+        &ordinary_name,
+    ));
+    if retain_outer_capture {
+        let specialized_name = free_var.clone();
+        outer_lookup.insert(
+            child_capture_binding_sentinel(class_binding, &specialized_name),
+            class_binding,
+        );
     }
 }
 
@@ -5290,8 +5360,15 @@ pub fn lower_ir2_to_ir3(
                 _ => Vec::new(),
             })
             .filter_map(|runtime_name| {
-                let (binding_id, source_name) = parse_capture_cell_name(&runtime_name)?;
-                (binding_id_to_name.get(&binding_id).map(String::as_str) == Some(source_name))
+                if let Some((binding_id, source_name)) = parse_capture_cell_name(&runtime_name) {
+                    return (binding_id_to_name.get(&binding_id).map(String::as_str)
+                        == Some(source_name))
+                    .then_some((binding_id, runtime_name));
+                }
+                let (binding_id, _) = parse_class_expression_self_capture_name(&runtime_name)?;
+                binding_id_to_name
+                    .get(&binding_id)
+                    .is_some_and(|binding_name| is_internal_lowering_binding(binding_name))
                     .then_some((binding_id, runtime_name))
             })
             .collect();
@@ -7430,6 +7507,25 @@ pub fn lower_ir2_to_ir3(
                     let dst = *fn_binding_regs
                         .entry(*inner_bid)
                         .or_insert_with(|| alloc_register(&mut fn_reg));
+                    let available_capture_names: BTreeSet<&str> = fv_id_to_name
+                        .values()
+                        .chain(child_capture_id_to_name.values())
+                        .map(String::as_str)
+                        .collect();
+                    let temp_free_vars: Vec<&String> = inner_fv
+                        .iter()
+                        .filter(|name| !available_capture_names.contains(name.as_str()))
+                        .collect();
+                    if !temp_free_vars.is_empty() {
+                        ir3.instructions.push(Ir3Instruction::PushScope);
+                        for name in &temp_free_vars {
+                            let pool_idx = push_constant_optimized(&mut constant_pool, name);
+                            ir3.instructions.push(Ir3Instruction::DeclareBinding {
+                                name_pool_index: pool_idx,
+                                kind: 0,
+                            });
+                        }
+                    }
                     let function_index = deferred_functions.len() as u32 + 1;
                     deferred_functions.push((
                         inner_body.clone(),
@@ -7480,6 +7576,9 @@ pub fn lower_ir2_to_ir3(
                             src: dst,
                             name_pool_index: pool_idx,
                         });
+                    }
+                    if !temp_free_vars.is_empty() {
+                        ir3.instructions.push(Ir3Instruction::PopScope);
                     }
                     fn_value_stack.push(dst);
                 }
@@ -13204,6 +13303,9 @@ fn lower_expression_to_ir1_inner(
                 root_scope_id,
                 "class_expression",
             )?;
+            let ctor_self_snapshot = name.as_deref().map(|self_name| {
+                expose_class_expression_self_binding(binding_lookup, self_name, bid)
+            });
 
             let constructor = body.iter().find(|m| m.kind == MethodKind::Constructor);
             // Identifier params keep their name; non-identifier patterns (default
@@ -13273,7 +13375,7 @@ fn lower_expression_to_ir1_inner(
             let ctor_statements = constructor.map(|ctor| ctor.body.body.as_slice());
             let ctor_pre_lower_names = prepare_function_body_bindings(
                 ctor_statements,
-                Some(&class_name),
+                name.as_deref(),
                 binding_lookup,
                 &mut body_lookup,
                 &mut body_binding_index,
@@ -13299,7 +13401,7 @@ fn lower_expression_to_ir1_inner(
                 body_ops.push(Ir1Op::Return);
             }
 
-            let (ctor_free_vars, ctor_free_var_ids) = collect_free_vars(
+            let (mut ctor_free_vars, ctor_free_var_ids) = collect_free_vars(
                 &body_lookup,
                 &ctor_pre_lower_names,
                 bindings,
@@ -13312,8 +13414,24 @@ fn lower_expression_to_ir1_inner(
                 &body_lookup,
                 &ctor_pre_lower_names,
                 binding_lookup,
-                Some(&class_name),
+                name.as_deref(),
             );
+            if let Some(self_name) = name.as_deref()
+                && let Some(&self_binding) = body_lookup.get(self_name)
+            {
+                rewrite_class_expression_self_capture(
+                    binding_lookup,
+                    self_binding,
+                    bid,
+                    self_name.to_string(),
+                    false,
+                    &mut ctor_free_vars,
+                    &ctor_free_var_ids,
+                );
+            }
+            if let Some(snapshot) = ctor_self_snapshot {
+                restore_binding_entries(binding_lookup, snapshot);
+            }
             let ctor_child_captured_locals =
                 collect_child_captured_locals(&body_lookup, &ctor_free_vars, &ctor_free_var_ids);
             ops.push(Ir1Op::DeclareFunction {
@@ -13396,6 +13514,9 @@ fn lower_expression_to_ir1_inner(
                 if let Some(self_name) = name {
                     suppress_stream_module_sentinel(&mut m_lookup, self_name);
                 }
+                let method_self_snapshot = name.as_deref().map(|self_name| {
+                    expose_class_expression_self_binding(binding_lookup, self_name, bid)
+                });
                 let mut m_binding_index: BindingId = 0;
                 let m_scope = ScopeId { depth: 0, index: 0 };
                 let mut m_label_counter: u32 = 0;
@@ -13437,7 +13558,7 @@ fn lower_expression_to_ir1_inner(
                 }
                 let method_pre_lower_names = prepare_function_body_bindings(
                     Some(&method.body.body),
-                    None,
+                    name.as_deref(),
                     binding_lookup,
                     &mut m_lookup,
                     &mut m_binding_index,
@@ -13467,7 +13588,7 @@ fn lower_expression_to_ir1_inner(
                         key: Ir1PropertyKey::Static("prototype".to_string()),
                     });
                 }
-                let (method_free_vars, method_free_var_ids) = collect_free_vars(
+                let (mut method_free_vars, method_free_var_ids) = collect_free_vars(
                     &m_lookup,
                     &method_pre_lower_names,
                     bindings,
@@ -13480,8 +13601,24 @@ fn lower_expression_to_ir1_inner(
                     &m_lookup,
                     &method_pre_lower_names,
                     binding_lookup,
-                    None,
+                    name.as_deref(),
                 );
+                if let Some(self_name) = name.as_deref()
+                    && let Some(&self_binding) = m_lookup.get(self_name)
+                {
+                    rewrite_class_expression_self_capture(
+                        binding_lookup,
+                        self_binding,
+                        bid,
+                        class_expression_self_capture_name(self_name, bid),
+                        true,
+                        &mut method_free_vars,
+                        &method_free_var_ids,
+                    );
+                }
+                if let Some(snapshot) = method_self_snapshot {
+                    restore_binding_entries(binding_lookup, snapshot);
+                }
                 let m_child_captured_locals = collect_child_captured_locals(
                     &m_lookup,
                     &method_free_vars,

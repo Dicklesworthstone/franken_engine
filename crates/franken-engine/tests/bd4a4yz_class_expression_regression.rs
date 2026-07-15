@@ -41,6 +41,128 @@ fn named_class_expression_bound_then_constructed() {
 }
 
 #[test]
+fn named_class_expression_constructor_sees_private_self_binding_bd_01sk2() {
+    assert_eq!(
+        eval_ok(
+            "let C = class Inner { constructor(){ this.self = Inner; } }; \
+             let D = C; C = 0; new D().self === D;"
+        ),
+        "true"
+    );
+}
+
+#[test]
+fn named_class_expression_method_sees_same_private_self_binding_bd_01sk2() {
+    assert_eq!(
+        eval_ok(
+            "let C = class Inner { self(){ return Inner; } }; \
+             let D = C; C = 0; new D().self() === D;"
+        ),
+        "true"
+    );
+}
+
+#[test]
+fn nested_method_closure_preserves_private_class_self_binding_bd_01sk2() {
+    assert_eq!(
+        eval_ok(
+            "let C = class Inner { self(){ return () => Inner; } }; \
+             let D = C; C = 0; new D().self()() === D;"
+        ),
+        "true"
+    );
+}
+
+#[test]
+fn class_self_binding_shadows_same_named_outer_without_replacing_it_bd_01sk2() {
+    assert_eq!(
+        eval_ok(
+            "let Inner = 7; \
+             let C = class Inner { \
+                 constructor(){ this.ctor = Inner; } \
+                 method(){ return Inner; } \
+             }; \
+             let value = new C(); \
+             value.ctor === C && value.method() === C && Inner === 7;"
+        ),
+        "true"
+    );
+}
+
+#[test]
+fn duplicate_named_class_expressions_keep_distinct_self_cells_bd_01sk2() {
+    assert_eq!(
+        eval_ok(
+            "let A = class Inner { \
+                 constructor(){ this.self = Inner; } \
+                 method(){ return Inner; } \
+             }; \
+             let B = class Inner { \
+                 constructor(){ this.self = Inner; } \
+                 method(){ return Inner; } \
+             }; \
+             let a = new A(); let b = new B(); \
+             a.self === A && a.method() === A && \
+             b.self === B && b.method() === B;"
+        ),
+        "true"
+    );
+}
+
+#[test]
+fn method_parameters_and_locals_shadow_private_class_self_binding_bd_01sk2() {
+    assert_eq!(
+        eval_ok(
+            "let C = class Inner { \
+                 parameter(Inner){ return Inner; } \
+                 local(){ let Inner = 9; return Inner; } \
+                 self(){ return Inner; } \
+             }; \
+             let value = new C(); \
+             value.parameter(8) === 8 && value.local() === 9 && value.self() === C;"
+        ),
+        "true"
+    );
+}
+
+#[test]
+fn nested_class_expression_shares_self_between_constructor_and_method_bd_01sk2() {
+    assert_eq!(
+        eval_ok(
+            "function make(){ \
+                 return class Inner { \
+                     constructor(){ this.ctor = Inner; } \
+                     method(){ return Inner; } \
+                 }; \
+             } \
+             let C = make(); let value = new C(); \
+             value.ctor === C && value.method() === C;"
+        ),
+        "true"
+    );
+}
+
+#[test]
+fn named_class_expression_self_name_does_not_leak_bd_01sk2() {
+    assert_eq!(
+        eval_ok("let C = class Inner {}; typeof Inner;"),
+        "undefined"
+    );
+}
+
+#[test]
+fn anonymous_class_has_no_synthetic_anonymous_self_binding_bd_01sk2() {
+    assert_eq!(
+        eval_ok(
+            "let C = class { constructor(){ \
+                 try { anonymous; } catch (e) { this.kind = e.name; } \
+             } }; new C().kind;"
+        ),
+        "ReferenceError"
+    );
+}
+
+#[test]
 fn inline_new_class_expression() {
     // The original bd-4a4yz repro shape.
     assert_eq!(

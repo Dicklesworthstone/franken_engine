@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::evidence_emission::{
     ActionCategory, CanonicalEvidenceEmitter, CanonicalEvidenceEntry, EmitterConfig,
-    EvidenceEmissionRequest,
+    EvidenceEmissionRequest, compute_chain_hash,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::migration_compatibility::{
@@ -92,8 +92,22 @@ fn build_golden_ledger(name: &str, schema_version: &str, n: usize) -> GoldenLedg
         let req = make_request(&format!("action_{i}"), ts);
         emitter.emit(&mut cx, &req).expect("emit");
     }
-    let entries = emitter.entries().to_vec();
+    let mut entries = emitter.entries().to_vec();
+    stamp_and_reseal_entries(&mut entries, schema_version);
     GoldenLedger::freeze(name, schema_version, entries, 1_700_000_000_000)
+}
+
+fn stamp_and_reseal_entries(entries: &mut [CanonicalEvidenceEntry], schema_version: &str) {
+    let mut previous_chain: Option<ContentHash> = None;
+    for entry in entries {
+        entry.schema_version = schema_version.to_string();
+        entry.artifact_hash = entry
+            .compute_artifact_hash()
+            .expect("test evidence entry should have a canonical artifact hash");
+
+        entry.chain_hash = compute_chain_hash(previous_chain.as_ref(), &entry.artifact_hash);
+        previous_chain = Some(entry.chain_hash);
+    }
 }
 
 fn identity_migration(
@@ -110,13 +124,9 @@ fn v1_to_v2_migration(
     migrated
         .metadata
         .insert("migrated_from".to_string(), "evidence-v1".to_string());
-    // Recompute artifact hash since metadata changed (artifact_hash covers
-    // ledger_entry + metadata).
-    let mut payload = serde_json::to_vec(&migrated.ledger_entry).unwrap();
-    if let Ok(meta_bytes) = serde_json::to_vec(&migrated.metadata) {
-        payload.extend_from_slice(&meta_bytes);
-    }
-    migrated.artifact_hash = ContentHash::compute(&payload);
+    migrated.artifact_hash = migrated
+        .compute_artifact_hash()
+        .expect("test migration output should have a canonical artifact hash");
     Ok(migrated)
 }
 
@@ -192,6 +202,10 @@ fn migration_error_code_display_all_variants() {
         ),
         (MigrationErrorCode::NoMigrationPath, "no_migration_path"),
         (MigrationErrorCode::LossyMigration, "lossy_migration"),
+        (
+            MigrationErrorCode::GoldenLedgerIntegrityFailed,
+            "golden_ledger_integrity_failed",
+        ),
     ];
     for (code, label) in &expected {
         assert_eq!(code.to_string(), *label, "Display mismatch for {code:?}");
@@ -205,6 +219,7 @@ fn migration_error_code_ord_stable() {
     );
     assert!(MigrationErrorCode::RequiredFieldMissing < MigrationErrorCode::FieldTypeChanged);
     assert!(MigrationErrorCode::NoMigrationPath < MigrationErrorCode::LossyMigration);
+    assert!(MigrationErrorCode::LossyMigration < MigrationErrorCode::GoldenLedgerIntegrityFailed);
 }
 
 #[test]
@@ -218,6 +233,7 @@ fn migration_error_code_serde_roundtrip_all() {
         MigrationErrorCode::PartialReplayFailure,
         MigrationErrorCode::NoMigrationPath,
         MigrationErrorCode::LossyMigration,
+        MigrationErrorCode::GoldenLedgerIntegrityFailed,
     ];
     for code in &all {
         let json = serde_json::to_string(code).unwrap();
@@ -692,6 +708,26 @@ fn checker_backward_compatible_same_version() {
 }
 
 #[test]
+fn checker_rejects_corrupt_golden_ledger_before_replay() {
+    let mut ledger = build_golden_ledger("corrupt-corpus", "evidence-v1", 3);
+    ledger.entries[1].action_name = "tampered-after-freeze".to_string();
+
+    let registry = MigrationRegistry::new();
+    let mut checker = MigrationCompatibilityChecker::new("evidence-v1", registry);
+    let result = checker.test_golden_ledger(&ledger);
+
+    assert_eq!(result.outcome, MigrationOutcome::Failed);
+    assert_eq!(result.entries_processed, 0);
+    assert_eq!(result.entries_replayed_ok, 0);
+    assert_eq!(result.replay_violations, 0);
+    assert_eq!(result.errors.len(), 1);
+    assert_eq!(
+        result.errors[0].error_code,
+        MigrationErrorCode::GoldenLedgerIntegrityFailed
+    );
+}
+
+#[test]
 fn checker_successful_migration_v1_to_v2() {
     let ledger = build_golden_ledger("test-v1", "evidence-v1", 5);
 
@@ -714,6 +750,34 @@ fn checker_successful_migration_v1_to_v2() {
     assert!(results[0].passed());
     assert_eq!(results[0].outcome, MigrationOutcome::MigratedSuccessfully);
     assert!(results[0].determinism_verified);
+}
+
+#[test]
+fn checker_rejects_identity_transform_that_keeps_source_schema() {
+    let ledger = build_golden_ledger("identity-schema-mismatch", "evidence-v1", 2);
+    let mut registry = MigrationRegistry::new();
+    registry.register(
+        MigrationFunction {
+            from_version: "evidence-v1".to_string(),
+            to_version: "evidence-v2".to_string(),
+            lossy: false,
+            description: "invalid identity transform".to_string(),
+        },
+        identity_migration,
+    );
+
+    let mut checker = MigrationCompatibilityChecker::new("evidence-v2", registry);
+    let result = checker.test_golden_ledger(&ledger);
+
+    assert_eq!(result.outcome, MigrationOutcome::Failed);
+    assert!(!result.errors.is_empty());
+    assert!(result.errors.iter().all(|error| {
+        error.error_code == MigrationErrorCode::MigrationFunctionFailed
+            && error
+                .incompatible_fields
+                .iter()
+                .any(|field| field.field_path.contains("schema_version"))
+    }));
 }
 
 #[test]
@@ -931,8 +995,9 @@ fn manifest_tampered_ledger_fails_verify() {
 
     let mut tampered = ledger;
     tampered.entries[0].action_name = "tampered".to_string();
-    let payload = serde_json::to_vec(&tampered.entries).unwrap();
-    tampered.corpus_hash = ContentHash::compute(&payload);
+    tampered.corpus_hash = tampered
+        .compute_corpus_hash()
+        .expect("tampered test ledger should serialize canonically");
     assert!(!manifest.verify(&tampered));
 }
 

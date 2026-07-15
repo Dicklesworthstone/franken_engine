@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::control_plane::{EvidenceLedger, EvidenceLedgerBuilder};
 use frankenengine_engine::evidence_emission::{
-    ActionCategory, CanonicalEvidenceEntry, EvidenceEntryId,
+    ActionCategory, CanonicalEvidenceEntry, EvidenceEntryId, compute_chain_hash,
 };
 use frankenengine_engine::evidence_replay_checker::{
     DecisionReplayFn, EvidenceReplayChecker, PolicyVersionRecord, ReplayConfig, ReplayDiagnostics,
@@ -53,16 +53,6 @@ fn make_ledger_entry(seq: u64) -> EvidenceLedger {
         .expect("valid evidence")
 }
 
-fn compute_chain_hash(prev: Option<&ContentHash>, current: &ContentHash) -> ContentHash {
-    let mut input = Vec::with_capacity(64);
-    match prev {
-        Some(p) => input.extend_from_slice(p.as_bytes()),
-        None => input.extend_from_slice(b"genesis"),
-    }
-    input.extend_from_slice(current.as_bytes());
-    ContentHash::compute(&input)
-}
-
 fn build_valid_entry(
     seq: u64,
     ts: u64,
@@ -73,14 +63,7 @@ fn build_valid_entry(
 ) -> CanonicalEvidenceEntry {
     let ledger = make_ledger_entry(seq);
     let metadata: BTreeMap<String, String> = BTreeMap::new();
-    // artifact hash must include metadata to match verify_artifact_integrity.
-    let mut payload = serde_json::to_vec(&ledger).unwrap();
-    if let Ok(meta_bytes) = serde_json::to_vec(&metadata) {
-        payload.extend_from_slice(&meta_bytes);
-    }
-    let artifact_hash = ContentHash::compute(&payload);
-    let chain_hash = compute_chain_hash(prev_chain_hash, &artifact_hash);
-    CanonicalEvidenceEntry {
+    let mut entry = CanonicalEvidenceEntry {
         entry_id: EvidenceEntryId::new(format!("ev-{seq}")),
         sequence: seq,
         category: ActionCategory::DecisionContract,
@@ -91,11 +74,16 @@ fn build_valid_entry(
         schema_version: schema_version.to_string(),
         ts_unix_ms: ts,
         epoch: SecurityEpoch::from_raw(epoch),
-        artifact_hash,
+        artifact_hash: ContentHash::default(),
         ledger_entry: ledger,
-        chain_hash,
+        chain_hash: ContentHash::default(),
         metadata,
-    }
+    };
+    entry.artifact_hash = entry
+        .compute_artifact_hash()
+        .expect("test evidence envelope must serialize");
+    entry.chain_hash = compute_chain_hash(prev_chain_hash, &entry.artifact_hash);
+    entry
 }
 
 fn build_ledger(n: usize) -> Vec<CanonicalEvidenceEntry> {
@@ -110,11 +98,25 @@ fn build_ledger(n: usize) -> Vec<CanonicalEvidenceEntry> {
     entries
 }
 
+/// Re-seal a deliberately modified, otherwise-valid ledger so replay reaches
+/// semantic checks instead of stopping in the integrity preflight.
+fn reseal_ledger(entries: &mut [CanonicalEvidenceEntry]) {
+    let mut prev_chain: Option<ContentHash> = None;
+    for entry in entries {
+        entry.artifact_hash = entry
+            .compute_artifact_hash()
+            .expect("test evidence envelope must serialize");
+        entry.chain_hash = compute_chain_hash(prev_chain.as_ref(), &entry.artifact_hash);
+        prev_chain = Some(entry.chain_hash);
+    }
+}
+
 fn build_ledger_with_traces(n: usize, traces: &[&str]) -> Vec<CanonicalEvidenceEntry> {
     let mut entries = build_ledger(n);
     for (i, entry) in entries.iter_mut().enumerate() {
         entry.trace_id = traces[i % traces.len()].to_string();
     }
+    reseal_ledger(&mut entries);
     entries
 }
 
@@ -123,6 +125,7 @@ fn build_ledger_with_decisions(n: usize, decisions: &[&str]) -> Vec<CanonicalEvi
     for (i, entry) in entries.iter_mut().enumerate() {
         entry.decision_id = decisions[i % decisions.len()].to_string();
     }
+    reseal_ledger(&mut entries);
     entries
 }
 
@@ -1517,6 +1520,7 @@ fn enrichment_tampered_chain_hash_detected() {
 fn enrichment_sequence_gap_detected() {
     let mut ledger = build_ledger(3);
     ledger[1].sequence = 5;
+    reseal_ledger(&mut ledger);
     let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
     let result = checker.replay(&ledger, None);
     assert!(!result.passed);
@@ -1534,6 +1538,7 @@ fn enrichment_sequence_gap_detected() {
 fn enrichment_sequence_gap_allowed_skips_counted() {
     let mut ledger = build_ledger(3);
     ledger[1].sequence = 5;
+    reseal_ledger(&mut ledger);
     let config = ReplayConfig {
         allow_gaps: true,
         ..ReplayConfig::default()
@@ -1548,6 +1553,7 @@ fn enrichment_sequence_gap_allowed_skips_counted() {
 fn enrichment_sequence_gap_backward_detected() {
     let mut ledger = build_ledger(3);
     ledger[1].sequence = 0; // backward
+    reseal_ledger(&mut ledger);
     let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
     let result = checker.replay(&ledger, None);
     assert!(!result.passed);
@@ -1561,6 +1567,8 @@ fn enrichment_sequence_gap_backward_detected() {
 fn enrichment_timestamp_regression_detected() {
     let mut ledger = build_ledger(3);
     ledger[2].ts_unix_ms = ledger[0].ts_unix_ms - 1;
+    ledger[2].ledger_entry.ts_unix_ms = ledger[2].ts_unix_ms;
+    reseal_ledger(&mut ledger);
     let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
     let result = checker.replay(&ledger, None);
     assert!(result.has_violation(&ReplayViolationType::TimestampMonotonicityViolation));
@@ -1572,6 +1580,9 @@ fn enrichment_timestamp_equal_allowed() {
     let same_ts = ledger[0].ts_unix_ms;
     ledger[1].ts_unix_ms = same_ts;
     ledger[2].ts_unix_ms = same_ts;
+    ledger[1].ledger_entry.ts_unix_ms = same_ts;
+    ledger[2].ledger_entry.ts_unix_ms = same_ts;
+    reseal_ledger(&mut ledger);
     let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
     let result = checker.replay(&ledger, None);
     assert!(!result.has_violation(&ReplayViolationType::TimestampMonotonicityViolation));
@@ -1582,7 +1593,9 @@ fn enrichment_all_zero_timestamps_no_violation() {
     let mut ledger = build_ledger(3);
     for e in &mut ledger {
         e.ts_unix_ms = 0;
+        e.ledger_entry.ts_unix_ms = 0;
     }
+    reseal_ledger(&mut ledger);
     let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
     let result = checker.replay(&ledger, None);
     assert!(!result.has_violation(&ReplayViolationType::TimestampMonotonicityViolation));
@@ -1725,6 +1738,7 @@ fn enrichment_epoch_regression_detected() {
     let mut ledger = build_ledger(3);
     ledger[1].epoch = SecurityEpoch::from_raw(5);
     ledger[2].epoch = SecurityEpoch::from_raw(0);
+    reseal_ledger(&mut ledger);
     let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
     let result = checker.replay(&ledger, None);
     assert!(result.has_violation(&ReplayViolationType::EpochRegression));
@@ -1736,6 +1750,7 @@ fn enrichment_epoch_regression_disabled() {
     let mut ledger = build_ledger(3);
     ledger[1].epoch = SecurityEpoch::from_raw(5);
     ledger[2].epoch = SecurityEpoch::from_raw(0);
+    reseal_ledger(&mut ledger);
     let config = ReplayConfig {
         detect_epoch_regression: false,
         ..ReplayConfig::default()
@@ -1751,6 +1766,7 @@ fn enrichment_epoch_forward_no_violation() {
     ledger[0].epoch = SecurityEpoch::from_raw(1);
     ledger[1].epoch = SecurityEpoch::from_raw(2);
     ledger[2].epoch = SecurityEpoch::from_raw(3);
+    reseal_ledger(&mut ledger);
     let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
     let result = checker.replay(&ledger, None);
     assert!(!result.has_violation(&ReplayViolationType::EpochRegression));
@@ -1762,6 +1778,7 @@ fn enrichment_epoch_equal_no_regression() {
     ledger[0].epoch = SecurityEpoch::from_raw(5);
     ledger[1].epoch = SecurityEpoch::from_raw(5);
     ledger[2].epoch = SecurityEpoch::from_raw(5);
+    reseal_ledger(&mut ledger);
     let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
     let result = checker.replay(&ledger, None);
     assert!(!result.has_violation(&ReplayViolationType::EpochRegression));
@@ -1775,6 +1792,7 @@ fn enrichment_epoch_equal_no_regression() {
 fn enrichment_schema_migration_tracked_not_violated_by_default() {
     let mut ledger = build_ledger(3);
     ledger[2].schema_version = "2.0.0".to_string();
+    reseal_ledger(&mut ledger);
     let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
     let result = checker.replay(&ledger, None);
     assert!(!result.has_violation(&ReplayViolationType::SchemaMigration));
@@ -1786,6 +1804,7 @@ fn enrichment_schema_migration_tracked_not_violated_by_default() {
 fn enrichment_schema_migration_is_violation_when_configured() {
     let mut ledger = build_ledger(3);
     ledger[2].schema_version = "2.0.0".to_string();
+    reseal_ledger(&mut ledger);
     let config = ReplayConfig {
         schema_migration_is_violation: true,
         ..ReplayConfig::default()
@@ -1803,6 +1822,7 @@ fn enrichment_multiple_schema_migrations_tracked() {
     ledger[2].schema_version = "2.0.0".to_string();
     ledger[3].schema_version = "3.0.0".to_string();
     ledger[4].schema_version = "3.0.0".to_string();
+    reseal_ledger(&mut ledger);
     let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
     let result = checker.replay(&ledger, None);
     assert_eq!(result.diagnostics.schema_migrations.len(), 2);
@@ -1813,6 +1833,7 @@ fn enrichment_multiple_schema_migrations_tracked() {
 fn enrichment_schema_migration_not_tracked_when_disabled() {
     let mut ledger = build_ledger(3);
     ledger[2].schema_version = "2.0.0".to_string();
+    reseal_ledger(&mut ledger);
     let config = ReplayConfig {
         track_schema_migrations: false,
         ..ReplayConfig::default()
@@ -1831,6 +1852,7 @@ fn enrichment_policy_discontinuity_tracked_not_violated_by_default() {
     let mut ledger = build_ledger(3);
     ledger[1].policy_id = "policy-v2".to_string();
     ledger[2].policy_id = "policy-v2".to_string();
+    reseal_ledger(&mut ledger);
     let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
     let result = checker.replay(&ledger, None);
     assert!(!result.has_violation(&ReplayViolationType::PolicyVersionChange));
@@ -1842,6 +1864,7 @@ fn enrichment_policy_discontinuity_tracked_not_violated_by_default() {
 fn enrichment_policy_discontinuity_is_violation_when_configured() {
     let mut ledger = build_ledger(3);
     ledger[1].policy_id = "policy-v2".to_string();
+    reseal_ledger(&mut ledger);
     let config = ReplayConfig {
         policy_discontinuity_is_violation: true,
         ..ReplayConfig::default()
@@ -1858,6 +1881,7 @@ fn enrichment_policy_allowed_ids_approved_not_violated() {
     let original = ledger[0].policy_id.clone();
     ledger[1].policy_id = "approved-v2".to_string();
     ledger[2].policy_id = "approved-v2".to_string();
+    reseal_ledger(&mut ledger);
     let mut allowed = BTreeSet::new();
     allowed.insert(original);
     allowed.insert("approved-v2".to_string());
@@ -1876,6 +1900,7 @@ fn enrichment_policy_allowed_ids_unapproved_violated() {
     let original = ledger[0].policy_id.clone();
     ledger[1].policy_id = "approved-v2".to_string();
     ledger[2].policy_id = "UNAPPROVED".to_string();
+    reseal_ledger(&mut ledger);
     let mut allowed = BTreeSet::new();
     allowed.insert(original);
     allowed.insert("approved-v2".to_string());
@@ -1901,6 +1926,7 @@ fn enrichment_multiple_policy_transitions_tracked() {
     ledger[2].policy_id = "pol-v2".to_string();
     ledger[3].policy_id = "pol-v3".to_string();
     ledger[4].policy_id = "pol-v3".to_string();
+    reseal_ledger(&mut ledger);
     let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
     let result = checker.replay(&ledger, None);
     assert_eq!(result.diagnostics.policy_transitions.len(), 2);
@@ -1911,6 +1937,7 @@ fn enrichment_multiple_policy_transitions_tracked() {
 fn enrichment_policy_not_tracked_when_disabled() {
     let mut ledger = build_ledger(3);
     ledger[2].policy_id = "new-pol".to_string();
+    reseal_ledger(&mut ledger);
     let config = ReplayConfig {
         track_policy_versions: false,
         ..ReplayConfig::default()
@@ -1943,6 +1970,7 @@ fn enrichment_halt_on_first_stops_early_action_divergence() {
 fn enrichment_halt_on_first_stops_at_sequence_gap() {
     let mut ledger = build_ledger(5);
     ledger[2].sequence = 100;
+    reseal_ledger(&mut ledger);
     let config = ReplayConfig {
         halt_on_first: true,
         ..ReplayConfig::default()
@@ -1958,6 +1986,7 @@ fn enrichment_halt_on_first_stops_at_epoch_regression() {
     let mut ledger = build_ledger(5);
     ledger[1].epoch = SecurityEpoch::from_raw(10);
     ledger[2].epoch = SecurityEpoch::from_raw(1);
+    reseal_ledger(&mut ledger);
     let config = ReplayConfig {
         halt_on_first: true,
         ..ReplayConfig::default()
@@ -1972,6 +2001,7 @@ fn enrichment_halt_on_first_stops_at_epoch_regression() {
 fn enrichment_halt_on_first_stops_at_policy_discontinuity() {
     let mut ledger = build_ledger(5);
     ledger[1].policy_id = "new-pol".to_string();
+    reseal_ledger(&mut ledger);
     let config = ReplayConfig {
         halt_on_first: true,
         policy_discontinuity_is_violation: true,
@@ -1987,6 +2017,7 @@ fn enrichment_halt_on_first_stops_at_policy_discontinuity() {
 fn enrichment_halt_on_first_stops_at_schema_migration_violation() {
     let mut ledger = build_ledger(5);
     ledger[1].schema_version = "2.0.0".to_string();
+    reseal_ledger(&mut ledger);
     let config = ReplayConfig {
         halt_on_first: true,
         schema_migration_is_violation: true,
@@ -2051,6 +2082,7 @@ fn enrichment_events_accumulate_between_replays() {
 fn enrichment_schema_migration_boundary_info_event() {
     let mut ledger = build_ledger(3);
     ledger[2].schema_version = "2.0.0".to_string();
+    reseal_ledger(&mut ledger);
     let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
     checker.replay(&ledger, None);
     let events = checker.events();
@@ -2066,6 +2098,7 @@ fn enrichment_schema_migration_boundary_info_event() {
 fn enrichment_schema_migration_violation_event() {
     let mut ledger = build_ledger(3);
     ledger[2].schema_version = "2.0.0".to_string();
+    reseal_ledger(&mut ledger);
     let config = ReplayConfig {
         schema_migration_is_violation: true,
         ..ReplayConfig::default()
@@ -2090,6 +2123,7 @@ fn enrichment_policy_discontinuity_violation_event() {
     let mut ledger = build_ledger(3);
     ledger[1].policy_id = "pol-v2".to_string();
     ledger[2].policy_id = "pol-v2".to_string();
+    reseal_ledger(&mut ledger);
     let config = ReplayConfig {
         policy_discontinuity_is_violation: true,
         ..ReplayConfig::default()
@@ -2110,6 +2144,7 @@ fn enrichment_policy_transition_info_event() {
     let mut ledger = build_ledger(3);
     ledger[1].policy_id = "pol-v2".to_string();
     ledger[2].policy_id = "pol-v2".to_string();
+    reseal_ledger(&mut ledger);
     let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
     checker.replay(&ledger, None);
     let events = checker.events();
@@ -2157,6 +2192,7 @@ fn enrichment_diagnostics_epoch_range() {
     ledger[0].epoch = SecurityEpoch::from_raw(2);
     ledger[1].epoch = SecurityEpoch::from_raw(5);
     ledger[2].epoch = SecurityEpoch::from_raw(7);
+    reseal_ledger(&mut ledger);
     let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
     let result = checker.replay(&ledger, None);
     let (lo, hi) = result.diagnostics.epoch_range.unwrap();
@@ -2326,11 +2362,11 @@ fn enrichment_rolling_hash_changes_with_each_entry() {
 }
 
 // ===========================================================================
-// Multiple violation types in one run
+// Integrity preflight precedence
 // ===========================================================================
 
 #[test]
-fn enrichment_multiple_violations_tamper_and_gap() {
+fn enrichment_artifact_tamper_preempts_sequence_gap_checks() {
     let mut ledger = build_ledger(3);
     ledger[0].ledger_entry.ts_unix_ms = 999; // tamper
     ledger[2].sequence = 10; // gap
@@ -2338,11 +2374,11 @@ fn enrichment_multiple_violations_tamper_and_gap() {
     let result = checker.replay(&ledger, None);
     assert!(!result.passed);
     assert!(result.has_violation(&ReplayViolationType::ArtifactHashMismatch));
-    assert!(result.has_violation(&ReplayViolationType::SequenceGap));
+    assert!(!result.has_violation(&ReplayViolationType::SequenceGap));
 }
 
 #[test]
-fn enrichment_violation_plus_outcome_divergence() {
+fn enrichment_artifact_tamper_preempts_outcome_replay() {
     let mut ledger = build_ledger(3);
     ledger[1].ledger_entry.ts_unix_ms = 999; // tamper
     let replay = diverging_action_replay();
@@ -2350,7 +2386,8 @@ fn enrichment_violation_plus_outcome_divergence() {
     let result = checker.replay(&ledger, Some(&replay));
     assert!(!result.passed);
     assert!(result.has_violation(&ReplayViolationType::ArtifactHashMismatch));
-    assert!(result.has_violation(&ReplayViolationType::OutcomeDivergence));
+    assert!(!result.has_violation(&ReplayViolationType::OutcomeDivergence));
+    assert_eq!(result.outcome_checked_count(), 0);
 }
 
 // ===========================================================================
@@ -2370,6 +2407,7 @@ fn enrichment_adversarial_empty_entry_id() {
 fn enrichment_adversarial_max_epoch_no_panic() {
     let mut ledger = build_ledger(1);
     ledger[0].epoch = SecurityEpoch::from_raw(u64::MAX);
+    reseal_ledger(&mut ledger);
     let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
     let result = checker.replay(&ledger, None);
     assert_eq!(result.entries_processed, 1);
@@ -2379,6 +2417,7 @@ fn enrichment_adversarial_max_epoch_no_panic() {
 fn enrichment_adversarial_very_large_gap_with_allow() {
     let mut ledger = build_ledger(2);
     ledger[1].sequence = u64::MAX;
+    reseal_ledger(&mut ledger);
     let config = ReplayConfig {
         allow_gaps: true,
         ..ReplayConfig::default()
@@ -2392,6 +2431,7 @@ fn enrichment_adversarial_very_large_gap_with_allow() {
 fn enrichment_adversarial_duplicate_sequence() {
     let mut ledger = build_ledger(3);
     ledger[1].sequence = 0; // duplicate of entry 0
+    reseal_ledger(&mut ledger);
     let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
     let result = checker.replay(&ledger, None);
     assert!(!result.passed);
@@ -2502,6 +2542,7 @@ fn enrichment_full_lifecycle_failing_with_diagnostics() {
     ledger[4].schema_version = "2.0.0".to_string();
     ledger[3].epoch = SecurityEpoch::from_raw(10);
     ledger[4].epoch = SecurityEpoch::from_raw(1); // regression
+    reseal_ledger(&mut ledger);
 
     let config = ReplayConfig {
         policy_discontinuity_is_violation: true,

@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::control_plane::EvidenceLedgerBuilder;
 use frankenengine_engine::evidence_emission::{
-    ActionCategory, CanonicalEvidenceEntry, EvidenceEntryId,
+    ActionCategory, CanonicalEvidenceEntry, EvidenceEntryId, compute_chain_hash,
 };
 use frankenengine_engine::evidence_replay_checker::{
     EvidenceReplayChecker, PolicyVersionRecord, ReplayConfig, ReplayDiagnostics, ReplayErrorCode,
@@ -47,14 +47,7 @@ fn make_ledger_entry(seq: u64, ts: u64, action: &str) -> CanonicalEvidenceEntry 
         .unwrap();
 
     let metadata: BTreeMap<String, String> = BTreeMap::new();
-    // artifact hash must include metadata to match verify_artifact_integrity.
-    let mut payload = serde_json::to_vec(&ledger).unwrap();
-    if let Ok(meta_bytes) = serde_json::to_vec(&metadata) {
-        payload.extend_from_slice(&meta_bytes);
-    }
-    let artifact_hash = ContentHash::compute(&payload);
-
-    CanonicalEvidenceEntry {
+    let mut entry = CanonicalEvidenceEntry {
         entry_id: EvidenceEntryId::new(format!("ev-{seq}")),
         sequence: seq,
         category: ActionCategory::DecisionContract,
@@ -65,11 +58,15 @@ fn make_ledger_entry(seq: u64, ts: u64, action: &str) -> CanonicalEvidenceEntry 
         schema_version: "1.0.0".into(),
         ts_unix_ms: ts,
         epoch: SecurityEpoch::from_raw(1),
-        artifact_hash,
+        artifact_hash: ContentHash::default(),
         ledger_entry: ledger,
-        chain_hash: ContentHash::compute(b"placeholder"),
+        chain_hash: ContentHash::default(),
         metadata,
-    }
+    };
+    entry.artifact_hash = entry
+        .compute_artifact_hash()
+        .expect("test evidence envelope must serialize");
+    entry
 }
 
 /// Build a ledger with correct chain hashes for N entries.
@@ -79,21 +76,26 @@ fn build_chained_ledger(n: usize) -> Vec<CanonicalEvidenceEntry> {
         let ts = 1_700_000_000_000 + (i as u64) * 1000;
         let mut entry = make_ledger_entry(i as u64, ts, &format!("action_{i}"));
 
-        // Compute chain hash from previous entry.
-        // Must match compute_chain_hash: None → prefix "genesis", Some → prev hash bytes.
         let prev_chain_hash = entries
             .last()
             .map(|e: &CanonicalEvidenceEntry| &e.chain_hash);
-        let mut chain_input = Vec::new();
-        match prev_chain_hash {
-            Some(prev) => chain_input.extend_from_slice(prev.as_bytes()),
-            None => chain_input.extend_from_slice(b"genesis"),
-        }
-        chain_input.extend_from_slice(entry.artifact_hash.as_bytes());
-        entry.chain_hash = ContentHash::compute(&chain_input);
+        entry.chain_hash = compute_chain_hash(prev_chain_hash, &entry.artifact_hash);
         entries.push(entry);
     }
     entries
+}
+
+/// Re-seal a deliberately modified, otherwise-valid ledger so replay reaches
+/// semantic checks instead of stopping in the integrity preflight.
+fn reseal_ledger(entries: &mut [CanonicalEvidenceEntry]) {
+    let mut prev_chain_hash: Option<ContentHash> = None;
+    for entry in entries {
+        entry.artifact_hash = entry
+            .compute_artifact_hash()
+            .expect("test evidence envelope must serialize");
+        entry.chain_hash = compute_chain_hash(prev_chain_hash.as_ref(), &entry.artifact_hash);
+        prev_chain_hash = Some(entry.chain_hash);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -687,6 +689,7 @@ fn checker_tampered_artifact_detected() {
 fn checker_sequence_gap_detected() {
     let mut ledger = build_chained_ledger(3);
     ledger[1].sequence = 5; // gap: expected 1, got 5
+    reseal_ledger(&mut ledger);
     let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
     let result = checker.replay(&ledger, None);
     assert!(result.has_violation(&ReplayViolationType::SequenceGap));
@@ -696,6 +699,8 @@ fn checker_sequence_gap_detected() {
 fn checker_timestamp_regression_detected() {
     let mut ledger = build_chained_ledger(3);
     ledger[2].ts_unix_ms = ledger[0].ts_unix_ms - 1;
+    ledger[2].ledger_entry.ts_unix_ms = ledger[2].ts_unix_ms;
+    reseal_ledger(&mut ledger);
     let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
     let result = checker.replay(&ledger, None);
     assert!(result.has_violation(&ReplayViolationType::TimestampMonotonicityViolation));
@@ -706,6 +711,7 @@ fn checker_epoch_regression_detected() {
     let mut ledger = build_chained_ledger(3);
     ledger[1].epoch = SecurityEpoch::from_raw(10);
     ledger[2].epoch = SecurityEpoch::from_raw(1);
+    reseal_ledger(&mut ledger);
     let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
     let result = checker.replay(&ledger, None);
     assert!(result.has_violation(&ReplayViolationType::EpochRegression));
@@ -715,6 +721,7 @@ fn checker_epoch_regression_detected() {
 fn checker_schema_migration_tracked() {
     let mut ledger = build_chained_ledger(3);
     ledger[2].schema_version = "2.0.0".into();
+    reseal_ledger(&mut ledger);
     let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
     let result = checker.replay(&ledger, None);
     assert_eq!(result.diagnostics.schema_migrations.len(), 1);
@@ -728,6 +735,7 @@ fn checker_policy_transition_tracked() {
     let mut ledger = build_chained_ledger(3);
     ledger[1].policy_id = "policy-v2".into();
     ledger[2].policy_id = "policy-v2".into();
+    reseal_ledger(&mut ledger);
     let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
     let result = checker.replay(&ledger, None);
     assert_eq!(result.diagnostics.policy_transitions.len(), 1);
@@ -739,6 +747,7 @@ fn checker_halt_on_first_stops_early() {
     let mut ledger = build_chained_ledger(5);
     ledger[1].sequence = 10; // gap
     ledger[2].sequence = 20; // another gap
+    reseal_ledger(&mut ledger);
     let config = ReplayConfig {
         halt_on_first: true,
         ..ReplayConfig::default()

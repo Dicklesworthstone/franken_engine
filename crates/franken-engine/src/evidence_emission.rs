@@ -38,8 +38,10 @@ use crate::security_epoch::SecurityEpoch;
 // ---------------------------------------------------------------------------
 
 const COMPONENT_NAME: &str = "evidence-emission";
-const SCHEMA_VERSION: &str = "evidence-v1";
+const SCHEMA_VERSION: &str = "evidence-v2";
 const WITNESS_METADATA_KEY: &str = "frankenengine.evidence_witnesses";
+const ARTIFACT_HASH_DOMAIN: &[u8] = b"franken-engine.canonical-evidence-envelope.v2\0";
+const CHAIN_HASH_DOMAIN: &[u8] = b"franken-engine.canonical-evidence-chain.v2\0";
 
 /// Default bounded-buffer capacity for evidence entries.
 const DEFAULT_BUFFER_CAPACITY: usize = 4096;
@@ -214,7 +216,7 @@ pub struct CanonicalEvidenceEntry {
     pub ts_unix_ms: u64,
     /// Security epoch at emission time.
     pub epoch: SecurityEpoch,
-    /// Content hash of the underlying EvidenceLedger payload.
+    /// Content hash of the complete canonical unsigned evidence envelope.
     pub artifact_hash: ContentHash,
     /// The franken-evidence ledger entry.
     pub ledger_entry: EvidenceLedger,
@@ -224,13 +226,105 @@ pub struct CanonicalEvidenceEntry {
     pub metadata: BTreeMap<String, String>,
 }
 
+/// Canonical artifact-hash preimage for a persisted evidence entry.
+///
+/// Derived hashes are deliberately absent. Every other persisted field is
+/// included in a fixed struct order, with ordered maps providing stable key
+/// order. Keeping this as a separate type prevents a future field from being
+/// silently omitted by an ad hoc concatenation.
+#[derive(Serialize)]
+struct CanonicalEvidenceUnsignedEnvelope<'a> {
+    entry_id: &'a EvidenceEntryId,
+    sequence: u64,
+    category: ActionCategory,
+    action_name: &'a str,
+    trace_id: &'a str,
+    decision_id: &'a str,
+    policy_id: &'a str,
+    schema_version: &'a str,
+    ts_unix_ms: u64,
+    epoch: &'a SecurityEpoch,
+    ledger_entry: &'a EvidenceLedger,
+    metadata: &'a BTreeMap<String, String>,
+}
+
+impl<'a> From<&'a CanonicalEvidenceEntry> for CanonicalEvidenceUnsignedEnvelope<'a> {
+    fn from(entry: &'a CanonicalEvidenceEntry) -> Self {
+        let CanonicalEvidenceEntry {
+            entry_id,
+            sequence,
+            category,
+            action_name,
+            trace_id,
+            decision_id,
+            policy_id,
+            schema_version,
+            ts_unix_ms,
+            epoch,
+            artifact_hash: _,
+            ledger_entry,
+            chain_hash: _,
+            metadata,
+        } = entry;
+        Self {
+            entry_id,
+            sequence: *sequence,
+            category: *category,
+            action_name,
+            trace_id,
+            decision_id,
+            policy_id,
+            schema_version,
+            ts_unix_ms: *ts_unix_ms,
+            epoch,
+            ledger_entry,
+            metadata,
+        }
+    }
+}
+
 impl CanonicalEvidenceEntry {
-    /// Verify the artifact hash matches the ledger entry content.
+    fn validate_canonical_mirrors(&self) -> Result<(), EvidenceEmissionError> {
+        let mut errors: Vec<String> = self
+            .ledger_entry
+            .validate()
+            .into_iter()
+            .map(|error| format!("ledger_entry: {error}"))
+            .collect();
+        if self.action_name != self.ledger_entry.action {
+            errors.push(format!(
+                "action_name {:?} does not match ledger_entry.action {:?}",
+                self.action_name, self.ledger_entry.action
+            ));
+        }
+        if self.ts_unix_ms != self.ledger_entry.ts_unix_ms {
+            errors.push(format!(
+                "ts_unix_ms {} does not match ledger_entry.ts_unix_ms {}",
+                self.ts_unix_ms, self.ledger_entry.ts_unix_ms
+            ));
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(EvidenceEmissionError::ValidationFailed { errors })
+        }
+    }
+
+    /// Compute the canonical artifact hash for every persisted semantic field.
+    ///
+    /// `artifact_hash` and `chain_hash` are derived fields and are therefore
+    /// excluded from their own preimage. This method is public so explicit
+    /// schema migrations can re-seal their transformed output through the
+    /// same authoritative encoding used by the emitter and verifier.
+    pub fn compute_artifact_hash(&self) -> Result<ContentHash, EvidenceEmissionError> {
+        let mut scratch = Vec::with_capacity(HASH_SCRATCH_CAPACITY);
+        compute_artifact_hash_with_buffer(&mut scratch, self)
+    }
+
+    /// Verify the artifact hash matches the complete unsigned envelope.
     pub fn verify_artifact_integrity(&self) -> bool {
         let mut scratch = Vec::with_capacity(HASH_SCRATCH_CAPACITY);
-        let Ok(computed) =
-            compute_artifact_hash_with_buffer(&mut scratch, &self.ledger_entry, &self.metadata)
-        else {
+        let Ok(computed) = compute_artifact_hash_with_buffer(&mut scratch, self) else {
             return false;
         };
         self.artifact_hash == computed
@@ -477,27 +571,13 @@ impl CanonicalEvidenceEmitter {
 
         let metadata = metadata_with_witnesses(request)?;
 
-        // Compute artifact hash covering both ledger entry AND metadata so
-        // neither can be tampered with independently.
-        let artifact_hash =
-            compute_artifact_hash_with_buffer(&mut self.scratch, &ledger_entry, &metadata)
-                .map_err(|error| EvidenceEmissionError::BuildError {
-                    detail: format!("artifact hash serialization failed: {error}"),
-                })?;
-
-        // Compute chain hash.
-        let prev_chain = self.entries.last().map(|e| &e.chain_hash);
-        let chain_hash = compute_chain_hash(prev_chain, &artifact_hash);
-
         // Build the canonical entry.
-        self.next_sequence = next_sequence;
-
         let entry_id = EvidenceEntryId::new(format!(
             "ev-{}-{}-{}",
             request.category, sequence, request.ts_unix_ms
         ));
 
-        let canonical = CanonicalEvidenceEntry {
+        let mut canonical = CanonicalEvidenceEntry {
             entry_id: entry_id.clone(),
             sequence,
             category: request.category,
@@ -508,12 +588,17 @@ impl CanonicalEvidenceEmitter {
             schema_version: SCHEMA_VERSION.to_string(),
             ts_unix_ms: request.ts_unix_ms,
             epoch: self.epoch,
-            artifact_hash,
+            artifact_hash: ContentHash::default(),
             ledger_entry,
-            chain_hash,
+            chain_hash: ContentHash::default(),
             metadata,
         };
+        canonical.artifact_hash = compute_artifact_hash_with_buffer(&mut self.scratch, &canonical)?;
+        let prev_chain = self.entries.last().map(|entry| &entry.chain_hash);
+        canonical.chain_hash = compute_chain_hash(prev_chain, &canonical.artifact_hash);
+        let artifact_hash = canonical.artifact_hash;
 
+        self.next_sequence = next_sequence;
         self.entries.push(canonical);
         let count = self.category_counts.entry(request.category).or_insert(0);
         *count = count.saturating_add(1);
@@ -618,16 +703,9 @@ impl CanonicalEvidenceEmitter {
         &self,
         request: &EvidenceEmissionRequest,
     ) -> Result<EvidenceLedger, EvidenceEmissionError> {
-        // Feature weights must be finite. serde_json serializes NaN / +Inf / -Inf
-        // all to JSON `null` (see `compute_artifact_hash_with_buffer`), so a
-        // non-finite weight would collapse otherwise-distinct evidence entries to
-        // an identical `artifact_hash` — and thus `chain_hash` — breaking the
-        // injectivity the tamper-evidence chain relies on. The underlying
-        // EvidenceLedger validator checks posterior / expected-loss / calibration
-        // finiteness but not `top_features` (true for the default `franken-evidence`
-        // crate path), so we fail closed here at the engine emission boundary
-        // before any hash is minted. Sign is unconstrained: a feature contribution
-        // may legitimately be negative.
+        // Feature weights must be finite. Fail early here for a request-specific
+        // error; canonical hashing independently calls `EvidenceLedger::validate`
+        // so migration and replay resealing cannot bypass this invariant.
         let non_finite_features: Vec<String> = request
             .top_features
             .iter()
@@ -714,11 +792,19 @@ fn metadata_with_witnesses(
     Ok(metadata)
 }
 
-pub(crate) fn compute_chain_hash(prev: Option<&ContentHash>, current: &ContentHash) -> ContentHash {
-    let mut input = Vec::with_capacity(64);
+/// Compute a domain-separated evidence chain node.
+///
+/// This is public so offline migration and verification tools can rebuild the
+/// exact canonical chain without duplicating protocol bytes.
+pub fn compute_chain_hash(prev: Option<&ContentHash>, current: &ContentHash) -> ContentHash {
+    let mut input = Vec::with_capacity(CHAIN_HASH_DOMAIN.len() + 9 + 64);
+    input.extend_from_slice(CHAIN_HASH_DOMAIN);
     match prev {
-        Some(p) => input.extend_from_slice(p.as_bytes()),
-        None => input.extend_from_slice(b"genesis"),
+        Some(previous) => {
+            input.extend_from_slice(b"link\0");
+            input.extend_from_slice(previous.as_bytes());
+        }
+        None => input.extend_from_slice(b"genesis\0"),
     }
     input.extend_from_slice(current.as_bytes());
     ContentHash::compute(&input)
@@ -726,15 +812,22 @@ pub(crate) fn compute_chain_hash(prev: Option<&ContentHash>, current: &ContentHa
 
 fn compute_artifact_hash_with_buffer(
     buffer: &mut Vec<u8>,
-    ledger_entry: &EvidenceLedger,
-    metadata: &BTreeMap<String, String>,
-) -> Result<ContentHash, serde_json::Error> {
+    entry: &CanonicalEvidenceEntry,
+) -> Result<ContentHash, EvidenceEmissionError> {
+    entry.validate_canonical_mirrors()?;
     buffer.clear();
+    buffer.extend_from_slice(ARTIFACT_HASH_DOMAIN);
     {
         let mut writer = BufWriter::with_capacity(0, &mut *buffer);
-        serde_json::to_writer(&mut writer, ledger_entry)?;
-        serde_json::to_writer(&mut writer, metadata)?;
-        writer.flush().map_err(serde_json::Error::io)?;
+        serde_json::to_writer(&mut writer, &CanonicalEvidenceUnsignedEnvelope::from(entry))
+            .map_err(|error| EvidenceEmissionError::BuildError {
+                detail: format!("artifact hash serialization failed: {error}"),
+            })?;
+        writer
+            .flush()
+            .map_err(|error| EvidenceEmissionError::BuildError {
+                detail: format!("artifact hash buffer flush failed: {error}"),
+            })?;
     }
     Ok(ContentHash::compute(buffer))
 }
@@ -920,7 +1013,7 @@ mod tests {
     }
 
     #[test]
-    fn artifact_hash_writer_matches_legacy_vec_preimage() {
+    fn artifact_hash_writer_matches_canonical_unsigned_envelope_preimage() {
         let mut em = emitter();
         let mut cx = mock_cx();
         let mut req = make_request(ActionCategory::ExtensionLifecycle, "extension_load");
@@ -932,13 +1025,153 @@ mod tests {
             .expect("operation should succeed for valid inputs");
 
         let entry = &em.entries()[0];
-        let mut legacy =
-            serde_json::to_vec(&entry.ledger_entry).expect("serialization should succeed");
-        legacy.extend_from_slice(
-            &serde_json::to_vec(&entry.metadata).expect("serialization should succeed"),
+        let mut canonical = ARTIFACT_HASH_DOMAIN.to_vec();
+        canonical.extend_from_slice(
+            &serde_json::to_vec(&CanonicalEvidenceUnsignedEnvelope::from(entry))
+                .expect("serialization should succeed"),
         );
-        assert_eq!(entry.artifact_hash, ContentHash::compute(&legacy));
+        assert_eq!(entry.artifact_hash, ContentHash::compute(&canonical));
         assert!(entry.verify_artifact_integrity());
+    }
+
+    #[test]
+    fn artifact_hash_protocol_vector_is_stable() {
+        let ledger_entry = EvidenceLedgerBuilder::new()
+            .ts_unix_ms(123)
+            .component("vector")
+            .action("allow")
+            .posterior(vec![1.0])
+            .expected_loss("allow", 0.0)
+            .chosen_expected_loss(0.0)
+            .calibration_score(1.0)
+            .fallback_active(false)
+            .build()
+            .expect("protocol vector must be valid evidence");
+        let entry = CanonicalEvidenceEntry {
+            entry_id: EvidenceEntryId::new("ev-vector"),
+            sequence: 0,
+            category: ActionCategory::DecisionContract,
+            action_name: "allow".to_string(),
+            trace_id: "trace-vector".to_string(),
+            decision_id: "decision-vector".to_string(),
+            policy_id: "policy-vector".to_string(),
+            schema_version: "evidence-v2".to_string(),
+            ts_unix_ms: 123,
+            epoch: SecurityEpoch::from_raw(7),
+            artifact_hash: ContentHash::default(),
+            ledger_entry,
+            chain_hash: ContentHash::default(),
+            metadata: BTreeMap::new(),
+        };
+
+        assert_eq!(
+            entry
+                .compute_artifact_hash()
+                .expect("protocol vector must serialize")
+                .to_hex(),
+            "31c20d9de66bba9e6a67a8976e585d5751b50623b44ef3cff980ce04e3f15e99"
+        );
+    }
+
+    #[test]
+    fn artifact_hash_commits_every_unsigned_envelope_field() {
+        let mut em = emitter();
+        let mut cx = mock_cx();
+        let req = make_request(ActionCategory::ExtensionLifecycle, "extension_load");
+        em.emit(&mut cx, &req)
+            .expect("operation should succeed for valid inputs");
+        let entry = em.entries()[0].clone();
+
+        macro_rules! reject_tamper {
+            ($field:ident, $value:expr) => {{
+                let mut tampered = entry.clone();
+                tampered.$field = $value;
+                assert!(
+                    !tampered.verify_artifact_integrity(),
+                    "tampered {} must invalidate the artifact hash",
+                    stringify!($field)
+                );
+            }};
+        }
+
+        reject_tamper!(entry_id, EvidenceEntryId::new("ev-tampered"));
+        reject_tamper!(sequence, entry.sequence.saturating_add(1));
+        reject_tamper!(category, ActionCategory::Cancellation);
+        reject_tamper!(action_name, "tampered-action".to_string());
+        reject_tamper!(trace_id, "tampered-trace".to_string());
+        reject_tamper!(decision_id, "tampered-decision".to_string());
+        reject_tamper!(policy_id, "tampered-policy".to_string());
+        reject_tamper!(schema_version, "tampered-schema".to_string());
+        reject_tamper!(ts_unix_ms, entry.ts_unix_ms.saturating_add(1));
+        reject_tamper!(
+            epoch,
+            SecurityEpoch::from_raw(entry.epoch.as_u64().saturating_add(1))
+        );
+
+        let mut tampered_ledger = entry.ledger_entry.clone();
+        tampered_ledger.action = "tampered-ledger-action".to_string();
+        reject_tamper!(ledger_entry, tampered_ledger);
+
+        let mut tampered_metadata = entry.metadata.clone();
+        tampered_metadata.insert("tampered".to_string(), "true".to_string());
+        reject_tamper!(metadata, tampered_metadata);
+
+        let expected = entry
+            .compute_artifact_hash()
+            .expect("valid entry must serialize");
+        let mut derived_only = entry.clone();
+        derived_only.artifact_hash = ContentHash::compute(b"different-artifact-hash");
+        derived_only.chain_hash = ContentHash::compute(b"different-chain-hash");
+        assert_eq!(
+            derived_only
+                .compute_artifact_hash()
+                .expect("derived hashes are excluded from the preimage"),
+            expected
+        );
+    }
+
+    #[test]
+    fn artifact_hash_rejects_contradictory_mirrored_fields() {
+        let mut em = emitter();
+        let mut cx = mock_cx();
+        let req = make_request(ActionCategory::DecisionContract, "allow");
+        em.emit(&mut cx, &req)
+            .expect("operation should succeed for valid inputs");
+        let entry = em.entries()[0].clone();
+
+        let mut mismatched_action = entry.clone();
+        mismatched_action.action_name = "contradictory-action".to_string();
+        assert!(matches!(
+            mismatched_action.compute_artifact_hash(),
+            Err(EvidenceEmissionError::ValidationFailed { .. })
+        ));
+
+        let mut mismatched_timestamp = entry;
+        mismatched_timestamp.ts_unix_ms = mismatched_timestamp.ts_unix_ms.saturating_add(1);
+        assert!(matches!(
+            mismatched_timestamp.compute_artifact_hash(),
+            Err(EvidenceEmissionError::ValidationFailed { .. })
+        ));
+    }
+
+    #[test]
+    fn artifact_hash_rejects_invalid_non_finite_ledger_values() {
+        let mut em = emitter();
+        let mut cx = mock_cx();
+        let req = make_request(ActionCategory::DecisionContract, "allow");
+        em.emit(&mut cx, &req)
+            .expect("operation should succeed for valid inputs");
+        let mut entry = em.entries()[0].clone();
+        entry
+            .ledger_entry
+            .top_features
+            .insert("non-finite".to_string(), f64::NAN);
+
+        assert!(matches!(
+            entry.compute_artifact_hash(),
+            Err(EvidenceEmissionError::ValidationFailed { .. })
+        ));
+        assert!(!entry.verify_artifact_integrity());
     }
 
     #[test]
@@ -957,6 +1190,16 @@ mod tests {
     // -----------------------------------------------------------------------
     // Chain hash integrity
     // -----------------------------------------------------------------------
+
+    #[test]
+    fn chain_hash_genesis_protocol_vector_is_stable() {
+        let artifact = ContentHash::from_bytes([0x42; 32]);
+
+        assert_eq!(
+            compute_chain_hash(None, &artifact).to_hex(),
+            "43ad7b94ed98a9183a98fd1e2c1c13b3abe119bfb3b2eaa41839d8b5070ce8dd"
+        );
+    }
 
     #[test]
     fn chain_integrity_passes_for_valid_ledger() {
@@ -983,6 +1226,31 @@ mod tests {
         // Tamper with chain hash of middle entry.
         em.entries[1].chain_hash = ContentHash::compute(b"tampered");
         assert!(!em.verify_chain_integrity());
+    }
+
+    #[test]
+    fn resealed_middle_tamper_invalidates_its_chain_and_descendant() {
+        let mut em = emitter();
+        let mut cx = mock_cx();
+        for i in 0..3 {
+            let req = make_request(ActionCategory::DecisionContract, &format!("a{i}"));
+            em.emit(&mut cx, &req)
+                .expect("operation should succeed for valid inputs");
+        }
+
+        let mut tampered = em.entries()[1].clone();
+        tampered.policy_id = "forged-policy".to_string();
+        tampered.artifact_hash = tampered
+            .compute_artifact_hash()
+            .expect("tampered test envelope must serialize");
+
+        assert!(tampered.verify_artifact_integrity());
+        assert!(!tampered.verify_chain_link(Some(&em.entries()[0])));
+
+        tampered.chain_hash =
+            compute_chain_hash(Some(&em.entries()[0].chain_hash), &tampered.artifact_hash);
+        assert!(tampered.verify_chain_link(Some(&em.entries()[0])));
+        assert!(!em.entries()[2].verify_chain_link(Some(&tampered)));
     }
 
     // -----------------------------------------------------------------------
@@ -1961,7 +2229,7 @@ mod tests {
             &make_request(ActionCategory::DecisionContract, "a"),
         )
         .expect("operation should succeed for valid inputs");
-        assert_eq!(em.entries()[0].schema_version, "evidence-v1");
+        assert_eq!(em.entries()[0].schema_version, "evidence-v2");
     }
 
     #[test]

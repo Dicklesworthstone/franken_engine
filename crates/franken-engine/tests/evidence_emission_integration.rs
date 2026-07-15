@@ -379,7 +379,7 @@ fn emit_single_entry_populates_all_fields() {
     assert_eq!(entry.entry_id, id);
     assert_eq!(entry.category, ActionCategory::DecisionContract);
     assert_eq!(entry.action_name, "quarantine");
-    assert_eq!(entry.schema_version, "evidence-v1");
+    assert_eq!(entry.schema_version, "evidence-v2");
     assert_eq!(entry.ts_unix_ms, 1_700_000_000_000);
     assert_eq!(entry.sequence, 0);
     assert!(!entry.trace_id.is_empty());

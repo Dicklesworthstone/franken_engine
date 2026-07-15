@@ -245,7 +245,7 @@ tee-real-sdk = []
 
 [dependencies]
 frankenengine-core = { path = "../franken-core" }
-serde = { version = "1.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = { version = "1.0", features = ["unbounded_depth"] }
 proc-macro2 = { version = "1.0", features = ["span-locations"] }
 proptest = "1.6"

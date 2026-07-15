@@ -36,6 +36,8 @@ use crate::{EngineMemoryBudget, EvalErrorCode, HybridRouter, RouteReason};
 
 pub const DIFFERENTIAL_ORACLE_SCHEMA_VERSION: &str = "franken-engine.differential-oracle.v1";
 pub const DIFFERENTIAL_ORACLE_CANONICALIZATION_SCHEMA_VERSION: &str =
+    "franken-engine.differential-oracle.canonicalization.v2";
+const DIFFERENTIAL_ORACLE_CANONICALIZATION_SCHEMA_VERSION_V1: &str =
     "franken-engine.differential-oracle.canonicalization.v1";
 pub const DIFFERENTIAL_ORACLE_DIVERGENCE_TAXONOMY_SCHEMA_VERSION: &str =
     "franken-engine.differential-oracle.divergence-taxonomy.v2";
@@ -197,6 +199,20 @@ impl std::fmt::Display for DifferentialBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.stable_label())
     }
+}
+
+fn is_reference_backend(backend: &DifferentialBackend) -> bool {
+    matches!(
+        backend,
+        DifferentialBackend::NodeLts | DifferentialBackend::BunStable
+    )
+}
+
+fn is_franken_backend(backend: &DifferentialBackend) -> bool {
+    matches!(
+        backend,
+        DifferentialBackend::FrankenEngine | DifferentialBackend::FrankenCore
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -832,8 +848,19 @@ impl<'de> Deserialize<'de> for DifferentialOracleReport {
                 "differential-oracle source_sha256 is not canonical lowercase sha256 hex",
             ));
         }
-        if wire.stored_canonicalization.schema_version
-            != DIFFERENTIAL_ORACLE_CANONICALIZATION_SCHEMA_VERSION
+        if wire.backends.is_empty()
+            || wire
+                .backends
+                .windows(2)
+                .any(|pair| pair[0].backend >= pair[1].backend)
+        {
+            return Err(serde::de::Error::custom(
+                "differential-oracle backends are empty, duplicated, or not in canonical order",
+            ));
+        }
+        let canonicalization_schema = wire.stored_canonicalization.schema_version.as_str();
+        if canonicalization_schema != DIFFERENTIAL_ORACLE_CANONICALIZATION_SCHEMA_VERSION
+            && canonicalization_schema != DIFFERENTIAL_ORACLE_CANONICALIZATION_SCHEMA_VERSION_V1
         {
             return Err(serde::de::Error::custom(format!(
                 "unsupported differential-oracle canonicalization schema `{}`",
@@ -850,7 +877,13 @@ impl<'de> Deserialize<'de> for DifferentialOracleReport {
         }
 
         let canonicalization = canonicalize_backend_receipts(&wire.backends);
-        if canonicalization != wire.stored_canonicalization {
+        let expected_stored_canonicalization =
+            if canonicalization_schema == DIFFERENTIAL_ORACLE_CANONICALIZATION_SCHEMA_VERSION_V1 {
+                canonicalize_backend_receipts_v1(&wire.backends)
+            } else {
+                canonicalization.clone()
+            };
+        if expected_stored_canonicalization != wire.stored_canonicalization {
             return Err(serde::de::Error::custom(
                 "stored canonicalization does not match recomputation from backend receipts",
             ));
@@ -1055,8 +1088,12 @@ fn run_external_backend(
                 DifferentialBackendStatus::Timeout
             } else if output.status.success() {
                 DifferentialBackendStatus::Completed
-            } else {
+            } else if output.status.code() == Some(1)
+                && canonical_js_exception_line(&stderr).is_some()
+            {
                 DifferentialBackendStatus::Failed
+            } else {
+                DifferentialBackendStatus::Degraded
             };
             let mut diagnostics = Vec::new();
             if output.timed_out {
@@ -1065,6 +1102,18 @@ fn run_external_backend(
                     spec.runtime_id,
                     timeout.as_millis()
                 ));
+            } else if status == DifferentialBackendStatus::Degraded {
+                diagnostics.push(if output.status.code().is_none() {
+                    format!(
+                        "{} terminated without a comparable runtime exit code",
+                        spec.runtime_id
+                    )
+                } else {
+                    format!(
+                        "{} exited without a recognized JavaScript exception",
+                        spec.runtime_id
+                    )
+                });
             }
             DifferentialBackendReceipt {
                 backend: spec.runtime_id,
@@ -1102,7 +1151,10 @@ fn run_external_backend(
         },
         Err(error) => DifferentialBackendReceipt {
             backend: spec.runtime_id,
-            status: DifferentialBackendStatus::Failed,
+            // A post-version-probe launch/I/O failure is an infrastructure
+            // fault, not a JavaScript exception that can participate in the
+            // ExceptionClass semantic domain.
+            status: DifferentialBackendStatus::Degraded,
             command,
             version,
             exit_code: None,
@@ -1290,6 +1342,7 @@ fn run_franken_core_backend(
         Err(error) => {
             let stderr = format!("{}: {}", error.stage, error.message);
             let mut diagnostics = vec![
+                error.semantic_exception_namespace().to_string(),
                 format!("frankenengine-core backend failed during {}", error.stage),
                 "frankenengine-core path dependency is linked; no fallback lane was used"
                     .to_string(),
@@ -1364,6 +1417,20 @@ impl FrankenCoreBackendError {
             _ => TrustedBaseClass::Runtime,
         };
         Self::new(FrankenCoreFailureStage::Execute, class, error)
+    }
+
+    const fn semantic_exception_namespace(&self) -> &'static str {
+        match (self.stage, self.class) {
+            (FrankenCoreFailureStage::Parse, _) | (_, TrustedBaseClass::Parser) => {
+                "eval.parse.failure"
+            }
+            (FrankenCoreFailureStage::Lower, _) | (_, TrustedBaseClass::Lowering) => {
+                "eval.lowering.failure"
+            }
+            (_, TrustedBaseClass::ModuleResolution) => "eval.resolution.failure",
+            (_, TrustedBaseClass::HostcallPolicy) => "eval.policy.denied",
+            (_, TrustedBaseClass::Runtime) => "eval.runtime.fault",
+        }
     }
 }
 
@@ -1573,10 +1640,40 @@ fn core_ir3_destination_register(instr: &CoreIr3Instruction) -> Option<u32> {
 pub fn canonicalize_backend_receipts(
     receipts: &[DifferentialBackendReceipt],
 ) -> DifferentialCanonicalizationReport {
+    canonicalize_backend_receipts_with_policy(
+        receipts,
+        DIFFERENTIAL_ORACLE_CANONICALIZATION_SCHEMA_VERSION,
+        true,
+    )
+}
+
+fn canonicalize_backend_receipts_v1(
+    receipts: &[DifferentialBackendReceipt],
+) -> DifferentialCanonicalizationReport {
+    canonicalize_backend_receipts_with_policy(
+        receipts,
+        DIFFERENTIAL_ORACLE_CANONICALIZATION_SCHEMA_VERSION_V1,
+        false,
+    )
+}
+
+fn canonicalize_backend_receipts_with_policy(
+    receipts: &[DifferentialBackendReceipt],
+    schema_version: &str,
+    require_full_semantic_coverage: bool,
+) -> DifferentialCanonicalizationReport {
     let observations = receipts
         .iter()
-        .map(canonicalize_backend_receipt)
+        .map(|receipt| canonicalize_backend_receipt(receipt, require_full_semantic_coverage))
         .collect::<Vec<_>>();
+    let mut distinct_backends = observations
+        .iter()
+        .map(|observation| observation.backend)
+        .collect::<Vec<_>>();
+    distinct_backends.sort_unstable();
+    distinct_backends.dedup();
+    let selected_cohort_is_valid =
+        !observations.is_empty() && distinct_backends.len() == observations.len();
     let comparisons = [
         DifferentialComparisonMode::StructuredValue,
         DifferentialComparisonMode::ExactStdout,
@@ -1585,10 +1682,17 @@ pub fn canonicalize_backend_receipts(
         DifferentialComparisonMode::TimingEnvelope,
     ]
     .into_iter()
-    .map(|mode| build_mode_comparison(mode, &observations))
+    .map(|mode| {
+        build_mode_comparison(
+            mode,
+            &observations,
+            require_full_semantic_coverage,
+            selected_cohort_is_valid,
+        )
+    })
     .collect::<Vec<_>>();
     let semantic_verdict = summarize_semantic_verdict(&comparisons);
-    let diagnostics = observations
+    let mut diagnostics = observations
         .iter()
         .filter(|observation| {
             matches!(
@@ -1606,9 +1710,38 @@ pub fn canonicalize_backend_receipts(
             )
         })
         .collect::<Vec<_>>();
+    if require_full_semantic_coverage
+        && semantic_verdict == DifferentialComparisonVerdict::InsufficientData
+    {
+        let status_domain = if !selected_cohort_is_valid {
+            None
+        } else if observations
+            .iter()
+            .all(|observation| observation.status == DifferentialBackendStatus::Completed)
+        {
+            Some(DifferentialComparisonMode::StructuredValue)
+        } else if observations
+            .iter()
+            .all(|observation| observation.status == DifferentialBackendStatus::Failed)
+        {
+            Some(DifferentialComparisonMode::ExceptionClass)
+        } else {
+            None
+        };
+        diagnostics.push(match (selected_cohort_is_valid, status_domain) {
+            (false, _) => "selected backend cohort is empty or contains duplicate backend identities; semantic verdict is insufficient_data"
+                .to_string(),
+            (true, Some(mode)) => format!(
+                "{} comparison did not cover at least two and every selected backend; semantic verdict is insufficient_data",
+                mode.stable_label()
+            ),
+            (true, None) => "selected backends do not share one comparable semantic status domain; semantic verdict is insufficient_data"
+                .to_string(),
+        });
+    }
 
     DifferentialCanonicalizationReport {
-        schema_version: DIFFERENTIAL_ORACLE_CANONICALIZATION_SCHEMA_VERSION.to_string(),
+        schema_version: schema_version.to_string(),
         semantic_verdict,
         observations,
         comparisons,
@@ -1659,7 +1792,9 @@ fn taxonomy_verdict(
     canonicalization: &DifferentialCanonicalizationReport,
     findings: &[DifferentialDivergenceFinding],
 ) -> DifferentialComparisonVerdict {
-    if findings.is_empty() {
+    if canonicalization.semantic_verdict == DifferentialComparisonVerdict::InsufficientData {
+        DifferentialComparisonVerdict::InsufficientData
+    } else if findings.is_empty() {
         canonicalization.semantic_verdict
     } else if findings.iter().any(|finding| {
         finding.comparison_mode.contributes_to_semantic_verdict()
@@ -1691,6 +1826,9 @@ fn build_live_waiver_candidates(
     canonicalization: &DifferentialCanonicalizationReport,
     executions: &[BackendExecution],
 ) -> Vec<DifferentialWaiverCandidate> {
+    if taxonomy.verdict != DifferentialComparisonVerdict::Divergence {
+        return Vec::new();
+    }
     taxonomy
         .findings
         .iter()
@@ -1838,16 +1976,43 @@ fn remediation_hint(class: DifferentialDivergenceClass) -> &'static str {
 
 fn canonicalize_backend_receipt(
     receipt: &DifferentialBackendReceipt,
+    normalize_infrastructure_failures: bool,
 ) -> DifferentialCanonicalObservation {
+    // Canonicalization v1 treated every serialized `Failed` receipt as a
+    // comparable JavaScript exception. V2 requires the conventional JS error
+    // exit plus a typed internal diagnostic or recognized exception line;
+    // old post-probe I/O errors, crashes, empty exits, and generic failures
+    // cannot safely enter the ExceptionClass domain.
+    let v2_exception = normalize_infrastructure_failures
+        .then(|| canonical_exception_v2(receipt, DifferentialBackendStatus::Failed));
+    let status = if normalize_infrastructure_failures
+        && receipt.status == DifferentialBackendStatus::Failed
+        && (receipt.exit_code != Some(1)
+            || v2_exception
+                .as_ref()
+                .is_some_and(|(kind, _)| kind.is_none()))
+    {
+        DifferentialBackendStatus::Degraded
+    } else {
+        receipt.status
+    };
     let canonical_stdout = canonicalize_stream(receipt.stdout.as_str());
     let canonical_stderr = canonicalize_stream(receipt.stderr.as_str());
     let (structured_value, structured_value_wtf16) =
         canonical_structured_value(receipt, canonical_stdout.as_str());
-    let (exception_kind, exception_message_class) = canonical_exception(receipt);
+    let (exception_kind, exception_message_class) = if normalize_infrastructure_failures {
+        if status == DifferentialBackendStatus::Failed {
+            v2_exception.unwrap_or((None, None))
+        } else {
+            (None, None)
+        }
+    } else {
+        canonical_exception_v1(receipt, status)
+    };
 
     DifferentialCanonicalObservation {
         backend: receipt.backend,
-        status: receipt.status,
+        status,
         canonical_stdout,
         canonical_stderr,
         structured_value,
@@ -1861,6 +2026,8 @@ fn canonicalize_backend_receipt(
 fn build_mode_comparison(
     mode: DifferentialComparisonMode,
     observations: &[DifferentialCanonicalObservation],
+    require_full_semantic_coverage: bool,
+    selected_cohort_is_valid: bool,
 ) -> DifferentialModeComparison {
     let mut applicable_backends = Vec::new();
     let mut ignored_backends = Vec::new();
@@ -1888,7 +2055,32 @@ fn build_mode_comparison(
             backends,
         })
         .collect::<Vec<_>>();
-    let verdict = if applicable_backends.len() < 2 {
+    let has_full_semantic_coverage = if require_full_semantic_coverage {
+        if !selected_cohort_is_valid {
+            false
+        } else {
+            match mode {
+                DifferentialComparisonMode::StructuredValue => {
+                    applicable_backends.len() == observations.len()
+                        && observations.iter().all(|observation| {
+                            observation.status == DifferentialBackendStatus::Completed
+                        })
+                }
+                DifferentialComparisonMode::ExceptionClass => {
+                    applicable_backends.len() == observations.len()
+                        && observations.iter().all(|observation| {
+                            observation.status == DifferentialBackendStatus::Failed
+                        })
+                }
+                DifferentialComparisonMode::ExactStdout
+                | DifferentialComparisonMode::ExactStderr
+                | DifferentialComparisonMode::TimingEnvelope => true,
+            }
+        }
+    } else {
+        true
+    };
+    let verdict = if !has_full_semantic_coverage || applicable_backends.len() < 2 {
         DifferentialComparisonVerdict::InsufficientData
     } else if groups.len() == 1 {
         DifferentialComparisonVerdict::Consensus
@@ -2042,8 +2234,67 @@ fn infer_single_stdout_value(canonical_stdout: &str) -> Option<&str> {
     }
 }
 
-fn canonical_exception(receipt: &DifferentialBackendReceipt) -> (Option<String>, Option<String>) {
-    if receipt.status != DifferentialBackendStatus::Failed {
+fn canonical_exception_v2(
+    receipt: &DifferentialBackendReceipt,
+    status: DifferentialBackendStatus,
+) -> (Option<String>, Option<String>) {
+    if status != DifferentialBackendStatus::Failed {
+        return (None, None);
+    }
+
+    if is_franken_backend(&receipt.backend)
+        && let Some(namespace) = receipt
+            .diagnostics
+            .iter()
+            .find(|entry| entry.starts_with("eval."))
+    {
+        return (Some(namespace.to_string()), Some(namespace.to_string()));
+    }
+
+    let Some((kind, message)) = canonical_js_exception_line(&receipt.stderr) else {
+        return (None, None);
+    };
+    (
+        Some(canonicalize_exception_kind(kind)),
+        Some(canonicalize_message_class(message)),
+    )
+}
+
+fn canonical_js_exception_line(stderr: &str) -> Option<(&str, &str)> {
+    const JS_EXCEPTION_KINDS: &[&str] = &[
+        "AggregateError",
+        "CompileError",
+        "DOMException",
+        "Error",
+        "EvalError",
+        "InternalError",
+        "LinkError",
+        "RangeError",
+        "ReferenceError",
+        "RuntimeError",
+        "SyntaxError",
+        "TypeError",
+        "URIError",
+        "WebAssembly.CompileError",
+        "WebAssembly.LinkError",
+        "WebAssembly.RuntimeError",
+    ];
+    stderr.lines().find_map(|line| {
+        let line = line.trim();
+        let line = line.strip_prefix("Uncaught ").unwrap_or(line);
+        let (kind, message) = line.split_once(':')?;
+        let kind = kind.trim();
+        JS_EXCEPTION_KINDS
+            .contains(&kind)
+            .then_some((kind, message.trim()))
+    })
+}
+
+fn canonical_exception_v1(
+    receipt: &DifferentialBackendReceipt,
+    status: DifferentialBackendStatus,
+) -> (Option<String>, Option<String>) {
+    if status != DifferentialBackendStatus::Failed {
         return (None, None);
     }
 
@@ -3334,6 +3585,18 @@ mod tests {
             "memory-budget override must be recorded in diagnostics: {:?}",
             with.diagnostics
         );
+        let canonical = canonicalize_backend_receipts(std::slice::from_ref(&with));
+        assert_eq!(
+            canonical.observations[0].status,
+            DifferentialBackendStatus::Failed,
+            "the core runner's typed semantic namespace must keep its live failure in the exception domain"
+        );
+        assert!(
+            canonical.observations[0]
+                .exception_kind
+                .as_deref()
+                .is_some_and(|kind| kind.starts_with("eval."))
+        );
     }
 
     #[test]
@@ -3601,6 +3864,8 @@ mod tests {
 
     #[test]
     fn canonicalization_matches_equivalent_exception_shapes() {
+        // A homogeneous all-failed cohort is a real semantic outcome domain:
+        // equivalent canonical exception classes are consensus, not degraded.
         let report = canonicalize_backend_receipts(&[
             receipt(
                 DifferentialBackend::NodeLts,
@@ -3660,6 +3925,276 @@ mod tests {
             DifferentialComparisonVerdict::Divergence
         );
         assert_eq!(exceptions.groups.len(), 2);
+    }
+
+    #[test]
+    fn canonicalization_requires_one_full_selected_status_domain() {
+        let mixed = vec![
+            receipt(
+                DifferentialBackend::NodeLts,
+                DifferentialBackendStatus::Completed,
+                Some("1"),
+                "1",
+                "",
+                &[],
+            ),
+            receipt(
+                DifferentialBackend::BunStable,
+                DifferentialBackendStatus::Completed,
+                Some("1"),
+                "1",
+                "",
+                &[],
+            ),
+            receipt(
+                DifferentialBackend::FrankenEngine,
+                DifferentialBackendStatus::Completed,
+                Some("1"),
+                "1",
+                "",
+                &[],
+            ),
+            receipt(
+                DifferentialBackend::FrankenCore,
+                DifferentialBackendStatus::Failed,
+                None,
+                "",
+                "TypeError: expected object, got undefined",
+                &[],
+            ),
+        ];
+        let report = canonicalize_backend_receipts(&mixed);
+        assert_eq!(
+            report.semantic_verdict,
+            DifferentialComparisonVerdict::InsufficientData
+        );
+        for mode in [
+            DifferentialComparisonMode::StructuredValue,
+            DifferentialComparisonMode::ExceptionClass,
+        ] {
+            assert_eq!(
+                comparison(&report, mode).verdict,
+                DifferentialComparisonVerdict::InsufficientData,
+                "a semantic mode must not classify a selected status subgroup"
+            );
+        }
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("do not share one comparable semantic status domain")
+        }));
+
+        let taxonomy = classify_differential_divergences(&mixed, &report);
+        assert_eq!(
+            taxonomy.verdict,
+            DifferentialComparisonVerdict::InsufficientData
+        );
+        assert!(
+            taxonomy
+                .findings
+                .iter()
+                .all(|finding| !finding.comparison_mode.contributes_to_semantic_verdict()),
+            "an incomplete status cohort must not mint a semantic finding"
+        );
+    }
+
+    #[test]
+    fn noncomparable_statuses_make_the_selected_cohort_insufficient() {
+        for status in [
+            DifferentialBackendStatus::Unavailable,
+            DifferentialBackendStatus::Timeout,
+            DifferentialBackendStatus::Degraded,
+        ] {
+            let report = canonicalize_backend_receipts(&[
+                receipt(
+                    DifferentialBackend::NodeLts,
+                    DifferentialBackendStatus::Completed,
+                    Some("1"),
+                    "1",
+                    "",
+                    &[],
+                ),
+                receipt(
+                    DifferentialBackend::FrankenEngine,
+                    DifferentialBackendStatus::Completed,
+                    Some("1"),
+                    "1",
+                    "",
+                    &[],
+                ),
+                receipt(DifferentialBackend::FrankenCore, status, None, "", "", &[]),
+            ]);
+            assert_eq!(
+                report.semantic_verdict,
+                DifferentialComparisonVerdict::InsufficientData,
+                "{status:?} must prevent selected-cohort consensus"
+            );
+        }
+    }
+
+    #[test]
+    fn generic_or_no_exit_failures_are_infrastructure_degraded_in_v2() {
+        let first = receipt(
+            DifferentialBackend::NodeLts,
+            DifferentialBackendStatus::Failed,
+            None,
+            "",
+            "generic process failure",
+            &["failed to run node_lts"],
+        );
+        let mut second = first.clone();
+        second.backend = DifferentialBackend::BunStable;
+
+        let current = canonicalize_backend_receipts(&[first.clone(), second.clone()]);
+        assert_eq!(
+            current.semantic_verdict,
+            DifferentialComparisonVerdict::InsufficientData
+        );
+        assert!(current.observations.iter().all(|observation| {
+            observation.status == DifferentialBackendStatus::Degraded
+                && observation.exception_kind.is_none()
+        }));
+
+        let forged_external = receipt(
+            DifferentialBackend::NodeLts,
+            DifferentialBackendStatus::Failed,
+            None,
+            "",
+            "generic process failure",
+            &["eval.runtime.fault"],
+        );
+        let mut forged_external_peer = forged_external.clone();
+        forged_external_peer.backend = DifferentialBackend::BunStable;
+        let current = canonicalize_backend_receipts(&[forged_external, forged_external_peer]);
+        assert!(current.observations.iter().all(|observation| {
+            observation.status == DifferentialBackendStatus::Degraded
+                && observation.exception_kind.is_none()
+        }));
+
+        let legacy = canonicalize_backend_receipts_v1(&[first, second]);
+        assert_eq!(
+            legacy.semantic_verdict,
+            DifferentialComparisonVerdict::Consensus,
+            "the v1 reconstruction must preserve its old evidence semantics before migration"
+        );
+
+        let mut no_exit = receipt(
+            DifferentialBackend::NodeLts,
+            DifferentialBackendStatus::Failed,
+            None,
+            "",
+            "TypeError: recognizable text is insufficient without an exit code",
+            &[],
+        );
+        no_exit.exit_code = None;
+        let mut no_exit_peer = no_exit.clone();
+        no_exit_peer.backend = DifferentialBackend::BunStable;
+        let current = canonicalize_backend_receipts(&[no_exit, no_exit_peer]);
+        assert!(current.observations.iter().all(|observation| {
+            observation.status == DifferentialBackendStatus::Degraded
+                && observation.exception_kind.is_none()
+        }));
+    }
+
+    #[test]
+    fn duplicate_backend_identities_never_form_a_semantic_cohort() {
+        let node = receipt(
+            DifferentialBackend::NodeLts,
+            DifferentialBackendStatus::Completed,
+            Some("1"),
+            "1",
+            "",
+            &[],
+        );
+        let receipts = vec![node.clone(), node];
+        let report = canonicalize_backend_receipts(&receipts);
+        assert_eq!(
+            report.semantic_verdict,
+            DifferentialComparisonVerdict::InsufficientData
+        );
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("empty or contains duplicate backend identities")
+        }));
+        let taxonomy = classify_differential_divergences(&receipts, &report);
+        assert_eq!(
+            taxonomy.verdict,
+            DifferentialComparisonVerdict::InsufficientData
+        );
+    }
+
+    #[test]
+    fn completed_lanes_without_full_structured_coverage_are_insufficient() {
+        let report = canonicalize_backend_receipts(&[
+            receipt(
+                DifferentialBackend::NodeLts,
+                DifferentialBackendStatus::Completed,
+                None,
+                "1",
+                "",
+                &[],
+            ),
+            receipt(
+                DifferentialBackend::BunStable,
+                DifferentialBackendStatus::Completed,
+                None,
+                "",
+                "",
+                &[],
+            ),
+        ]);
+        assert_eq!(
+            report.semantic_verdict,
+            DifferentialComparisonVerdict::InsufficientData
+        );
+        assert_eq!(
+            comparison(&report, DifferentialComparisonMode::StructuredValue).verdict,
+            DifferentialComparisonVerdict::InsufficientData
+        );
+    }
+
+    #[test]
+    fn status_disagreement_cannot_be_minimized_into_a_subset_divergence() {
+        let completed = [
+            receipt(
+                DifferentialBackend::NodeLts,
+                DifferentialBackendStatus::Completed,
+                Some("1"),
+                "1",
+                "",
+                &[],
+            ),
+            receipt(
+                DifferentialBackend::FrankenEngine,
+                DifferentialBackendStatus::Completed,
+                Some("2"),
+                "2",
+                "",
+                &[],
+            ),
+        ];
+        let mut mixed = completed.to_vec();
+        mixed.push(receipt(
+            DifferentialBackend::FrankenCore,
+            DifferentialBackendStatus::Failed,
+            None,
+            "",
+            "TypeError: expected object",
+            &[],
+        ));
+
+        let mixed_canonicalization = canonicalize_backend_receipts(&mixed);
+        let mixed_taxonomy = classify_differential_divergences(&mixed, &mixed_canonicalization);
+        let mixed_signature = DivergenceSignature::from_live_taxonomy(&mixed_taxonomy);
+        assert_eq!(
+            mixed_signature.verdict,
+            DifferentialComparisonVerdict::InsufficientData
+        );
+        assert!(!mixed_signature.has_classified_divergence());
+
+        let subset_canonicalization = canonicalize_backend_receipts(&completed);
+        let subset_taxonomy =
+            classify_differential_divergences(&completed, &subset_canonicalization);
+        let subset_signature = DivergenceSignature::from_live_taxonomy(&subset_taxonomy);
+        assert!(subset_signature.has_classified_divergence());
+        assert_ne!(mixed_signature, subset_signature);
     }
 
     const RESERVED_TAXONOMY_NEEDLES: &[&str] = &[
@@ -4372,6 +4907,72 @@ mod tests {
     }
 
     #[test]
+    fn legacy_v1_canonicalization_is_validated_then_migrated_fail_closed() {
+        let receipts = vec![
+            receipt(
+                DifferentialBackend::NodeLts,
+                DifferentialBackendStatus::Completed,
+                Some("1"),
+                "1",
+                "",
+                &[],
+            ),
+            receipt(
+                DifferentialBackend::FrankenEngine,
+                DifferentialBackendStatus::Completed,
+                Some("1"),
+                "1",
+                "",
+                &[],
+            ),
+            receipt(
+                DifferentialBackend::FrankenCore,
+                DifferentialBackendStatus::Failed,
+                None,
+                "",
+                "TypeError: expected object",
+                &[],
+            ),
+        ];
+        let canonicalization = canonicalize_backend_receipts(&receipts);
+        let divergence_taxonomy = classify_differential_divergences(&receipts, &canonicalization);
+        let report = DifferentialOracleReport {
+            schema_version: DIFFERENTIAL_ORACLE_SCHEMA_VERSION.to_string(),
+            generated_unix_ns: 1,
+            case_id: "legacy-status-mismatch".to_string(),
+            source_path: None,
+            source_sha256: sha256_hex(b"legacy status mismatch"),
+            host: capture_host_facts(),
+            backends: receipts.clone(),
+            canonicalization,
+            divergence_taxonomy,
+        };
+
+        let mut archived = serde_json::to_value(&report).expect("report should serialize");
+        archived["canonicalization"] =
+            serde_json::to_value(canonicalize_backend_receipts_v1(&receipts))
+                .expect("legacy canonicalization should serialize");
+        let migrated: DifferentialOracleReport = serde_json::from_value(archived.clone())
+            .expect("valid legacy v1 canonicalization should remain readable");
+        assert_eq!(
+            migrated.canonicalization.schema_version,
+            DIFFERENTIAL_ORACLE_CANONICALIZATION_SCHEMA_VERSION
+        );
+        assert_eq!(
+            migrated.canonicalization.semantic_verdict,
+            DifferentialComparisonVerdict::InsufficientData,
+            "the old subgroup consensus must be downgraded under v2"
+        );
+
+        archived["canonicalization"]["semantic_verdict"] =
+            serde_json::Value::String("divergence".to_string());
+        assert!(
+            serde_json::from_value::<DifferentialOracleReport>(archived).is_err(),
+            "legacy evidence must still match an exact v1 recomputation before migration"
+        );
+    }
+
+    #[test]
     fn deserialized_reports_reject_forged_canonicalization_and_unknown_schemas() {
         let report = trusted_policy_execution(b"archive validation", false).into_report();
         let mut forged = serde_json::to_value(&report).expect("report should serialize");
@@ -4383,6 +4984,29 @@ mod tests {
         unknown["divergence_taxonomy"]["schema_version"] =
             serde_json::Value::String("attacker.taxonomy.v999".to_string());
         assert!(serde_json::from_value::<DifferentialOracleReport>(unknown).is_err());
+
+        let mut unknown_canonicalization =
+            serde_json::to_value(&report).expect("report should serialize");
+        unknown_canonicalization["canonicalization"]["schema_version"] =
+            serde_json::Value::String("attacker.canonicalization.v999".to_string());
+        assert!(
+            serde_json::from_value::<DifferentialOracleReport>(unknown_canonicalization).is_err()
+        );
+
+        let mut duplicate_backends =
+            serde_json::to_value(&report).expect("report should serialize");
+        let duplicate_receipt = duplicate_backends["backends"][0].clone();
+        duplicate_backends["backends"][1] = duplicate_receipt;
+        let duplicate_receipts: Vec<DifferentialBackendReceipt> =
+            serde_json::from_value(duplicate_backends["backends"].clone())
+                .expect("duplicate receipt fixture should decode");
+        duplicate_backends["canonicalization"] =
+            serde_json::to_value(canonicalize_backend_receipts(&duplicate_receipts))
+                .expect("duplicate canonicalization should serialize");
+        assert!(
+            serde_json::from_value::<DifferentialOracleReport>(duplicate_backends).is_err(),
+            "standalone reports must reject duplicate backend identities even when their stored canonicalization is self-consistent"
+        );
 
         for malformed in ["garbage".to_string(), "A".repeat(64)] {
             let mut malformed_source =
@@ -4397,7 +5021,10 @@ mod tests {
         swap_group_membership: bool,
     ) -> DifferentialOracleExecution {
         let reference_error = "TypeError: reference failure";
-        let policy_error = "PolicyError: capability denied";
+        // Use two recognized semantic exception shapes for the evidence
+        // topology. The private typed signal below, never this observable text,
+        // is what assigns HostcallPolicy.
+        let policy_error = "ReferenceError: capability denied";
         let (node_error, engine_error) = if swap_group_membership {
             (policy_error, reference_error)
         } else {
@@ -4475,6 +5102,7 @@ mod tests {
         Vec<DifferentialBackendReceipt>,
         DifferentialCanonicalizationReport,
     ) {
+        let internal_stderr = format!("ReferenceError: internal baseline\n{internal_stderr}");
         let receipts = vec![
             receipt(
                 DifferentialBackend::NodeLts,
@@ -4489,7 +5117,7 @@ mod tests {
                 DifferentialBackendStatus::Failed,
                 None,
                 "",
-                internal_stderr,
+                &internal_stderr,
                 &[],
             ),
         ];

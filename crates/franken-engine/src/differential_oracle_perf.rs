@@ -838,7 +838,12 @@ fn run_engine_perf_case(source: &str, config: &PerfArmConfig) -> PerfBackendCase
 fn check_behavior_equivalence(case: &PerfCorpusCase, config: &PerfArmConfig) -> (bool, String) {
     let mut input = DifferentialOracleInput::new(case.case_id.clone(), case.source.clone())
         .with_timeout_ms(config.case_timeout_ms.max(1))
-        .with_engine_instruction_budget(config.engine_instruction_budget);
+        .with_engine_instruction_budget(config.engine_instruction_budget)
+        .with_selected_backends([
+            DifferentialBackend::NodeLts,
+            DifferentialBackend::BunStable,
+            DifferentialBackend::FrankenEngine,
+        ]);
     input.node = config.node.clone();
     input.bun = config.bun.clone();
     let report = run_differential_oracle(&input);

@@ -8625,7 +8625,8 @@ fn execute_differential_oracle_run(args: DifferentialOracleRunArgs) -> Result<i3
         write_json_file(&path, &report)?;
     }
     print_json(&report)?;
-    Ok(0)
+    let degraded = !oracle_external_degradations(&report).is_empty();
+    Ok(oracle_exit_for_report(&report, degraded))
 }
 
 // ── oracle (operator-facing differential oracle) ───────────────────────────
@@ -8676,31 +8677,49 @@ fn oracle_engines_csv(report: &DifferentialOracleReport) -> String {
         .join(",")
 }
 
-/// Reasons a selected reference runtime (Node/Bun) failed to produce a result.
+/// Reasons a selected reference runtime (Node/Bun) failed to produce a
+/// comparable runtime result.
 /// Non-empty ⇒ the run is degraded: the engine output is unverified against at
 /// least one requested reference runtime.
 fn oracle_external_degradations(report: &DifferentialOracleReport) -> Vec<String> {
     report
         .backends
         .iter()
-        .filter(|receipt| {
-            matches!(
+        .filter_map(|receipt| {
+            if !matches!(
                 receipt.backend,
                 DifferentialBackend::NodeLts | DifferentialBackend::BunStable
-            ) && receipt.status != DifferentialBackendStatus::Completed
+            ) {
+                return None;
+            }
+            let status = report
+                .canonicalization
+                .observations
+                .iter()
+                .find(|observation| observation.backend == receipt.backend)
+                .map(|observation| observation.status)
+                .unwrap_or(DifferentialBackendStatus::Degraded);
+            matches!(
+                status,
+                DifferentialBackendStatus::Unavailable
+                    | DifferentialBackendStatus::Timeout
+                    | DifferentialBackendStatus::Degraded
+            )
+            .then_some((receipt.backend, status))
         })
-        .map(|receipt| {
+        .map(|(backend, status)| {
             format!(
                 "{} is {} and was excluded from cross-runtime consensus",
-                receipt.backend,
-                receipt.status.stable_label()
+                backend,
+                status.stable_label()
             )
         })
         .collect()
 }
 
 /// Derive the documented exit code from the recorded verdict. A consensus only
-/// counts as a pass (`0`) when no requested reference runtime was missing;
+/// counts as a pass (`0`) when no requested reference runtime was unavailable,
+/// timed out, or infrastructure-degraded;
 /// otherwise it is downgraded to insufficient-data (`4`). A divergence is always
 /// surfaced (`3`).
 fn oracle_exit_for_report(report: &DifferentialOracleReport, degraded: bool) -> i32 {
@@ -8775,7 +8794,7 @@ fn oracle_degraded_receipt_value(report: &DifferentialOracleReport) -> Option<se
             "verdict": "degraded",
             "case_id": report.case_id,
             "reasons": degradations,
-            "policy": "Degraded oracle runs do not assert cross-runtime consensus: a requested reference runtime (Node/Bun) was unavailable, so the engine output is unverified against it.",
+            "policy": "Degraded oracle runs do not assert cross-runtime consensus: a requested reference runtime (Node/Bun) was unavailable, timed out, or infrastructure-degraded, so the engine output is unverified against it.",
         })
     })
 }
@@ -8863,7 +8882,8 @@ fn execute_oracle_run(args: OracleRunArgs) -> Result<i32, String> {
 /// Write a content-addressed oracle-run bundle: `report.json` (the full report),
 /// `repro.lock` (re-run recipe + the reproducible semantic-verdict assertion),
 /// `manifest.json` (sha256-indexed artifact set + `bundle_id`), and, when a
-/// requested reference runtime was unavailable, `degraded_receipt.json`.
+/// requested reference runtime was unavailable, timed out, or
+/// infrastructure-degraded, `degraded_receipt.json`.
 fn emit_oracle_run_bundle(
     dir: &Path,
     report: &DifferentialOracleReport,
@@ -9480,6 +9500,62 @@ fn validate_oracle_bundle_semantics(
     Ok(())
 }
 
+fn validate_oracle_bundle_stored_verdict(
+    manifest: &serde_json::Map<String, serde_json::Value>,
+    lock: &serde_json::Value,
+    stored_report: &serde_json::Value,
+) -> Result<(), String> {
+    // Preserve the literal assertion carried by report.json before typed
+    // deserialization migrates canonicalization v1 to the effective v2
+    // verdict. Otherwise a re-authored manifest/lock could assert the migrated
+    // value while its documented JSON pointer still names a different stored
+    // value.
+    let stored_verdict = stored_report
+        .pointer("/canonicalization/semantic_verdict")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "stored report is missing canonicalization.semantic_verdict".to_string())?;
+    let manifest_verdict = manifest
+        .get("semantic_verdict")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "manifest is missing string `semantic_verdict`".to_string())?;
+    if manifest_verdict != stored_verdict {
+        return Err(
+            "manifest semantic_verdict does not match the literal stored report verdict"
+                .to_string(),
+        );
+    }
+
+    let lock_verdict = lock
+        .pointer("/verification/expected_verdict")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "repro.lock is missing verification.expected_verdict".to_string())?;
+    if lock_verdict != stored_verdict {
+        return Err(
+            "repro.lock expected_verdict does not match the literal stored report verdict"
+                .to_string(),
+        );
+    }
+    let assertion = lock
+        .get("expected_outputs")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|outputs| {
+            outputs.iter().find(|output| {
+                output.get("kind").and_then(serde_json::Value::as_str) == Some("semantic_verdict")
+            })
+        })
+        .ok_or_else(|| "repro.lock is missing the semantic_verdict assertion".to_string())?;
+    if assertion.get("path").and_then(serde_json::Value::as_str)
+        != Some("report.json#canonicalization.semantic_verdict")
+        || assertion.get("value").and_then(serde_json::Value::as_str) != Some(stored_verdict)
+    {
+        return Err(
+            "repro.lock semantic_verdict assertion does not match its literal report.json path"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 fn execute_oracle_report(args: OracleReportArgs) -> Result<i32, String> {
     let (dir, _) = resolve_oracle_bundle(&args.bundle)?;
     let dir_handle = open_oracle_bundle_dir(&dir)?;
@@ -9534,12 +9610,13 @@ fn execute_oracle_report(args: OracleReportArgs) -> Result<i32, String> {
         ));
     }
 
-    let report: DifferentialOracleReport = serde_json::from_slice(
-        artifact_bytes
-            .get("report")
-            .ok_or_else(|| "verified report bytes are missing".to_string())?,
-    )
-    .map_err(|error| format!("failed to parse verified report.json: {error}"))?;
+    let report_bytes = artifact_bytes
+        .get("report")
+        .ok_or_else(|| "verified report bytes are missing".to_string())?;
+    let stored_report: serde_json::Value = serde_json::from_slice(report_bytes)
+        .map_err(|error| format!("failed to parse verified report.json: {error}"))?;
+    let report: DifferentialOracleReport = serde_json::from_slice(report_bytes)
+        .map_err(|error| format!("failed to parse verified report.json: {error}"))?;
     let lock: serde_json::Value = serde_json::from_slice(
         artifact_bytes
             .get("lock")
@@ -9553,6 +9630,7 @@ fn execute_oracle_report(args: OracleReportArgs) -> Result<i32, String> {
                 .map_err(|error| format!("failed to parse verified degraded receipt: {error}"))
         })
         .transpose()?;
+    validate_oracle_bundle_stored_verdict(manifest_obj, &lock, &stored_report)?;
     validate_oracle_bundle_semantics(manifest_obj, &lock, degraded_receipt.as_ref(), &report)?;
 
     let degradations = oracle_external_degradations(&report);
@@ -11739,7 +11817,7 @@ fn oracle_usage() -> String {
         "exit codes (run and report):",
         "  0  consensus across the selected engines",
         "  3  semantic divergence detected",
-        "  4  insufficient data (a requested reference runtime was unavailable / degraded)",
+        "  4  insufficient data (selected status mismatch or requested reference unavailable / timed out / degraded)",
         "  2  usage or I/O error (e.g. bundle integrity failure)",
     ]
     .join("\n")
@@ -14799,6 +14877,43 @@ mod tests {
                 "exit_codes": "0 consensus | 3 divergence | 4 insufficient-data/degraded",
             },
         })
+    }
+
+    #[test]
+    fn oracle_report_binds_manifest_and_lock_to_literal_stored_verdict() {
+        let report = oracle_semantic_test_report(false);
+        let stored_report = serde_json::to_value(&report).expect("report should serialize");
+        let manifest = oracle_semantic_test_manifest(&report);
+        let lock = oracle_repro_lock_value(&report);
+        assert!(
+            validate_oracle_bundle_stored_verdict(
+                manifest.as_object().expect("manifest object"),
+                &lock,
+                &stored_report,
+            )
+            .is_ok()
+        );
+
+        // Model a fully re-addressed legacy bundle whose literal report still
+        // says consensus while both outer artifacts assert the migrated value.
+        // Content hashes alone cannot make that false JSON-pointer assertion
+        // true, so the raw stored-verdict check must reject it.
+        let mut reauthored_manifest = manifest;
+        reauthored_manifest["semantic_verdict"] =
+            serde_json::Value::String("insufficient_data".to_string());
+        let mut reauthored_lock = lock;
+        reauthored_lock["verification"]["expected_verdict"] =
+            serde_json::Value::String("insufficient_data".to_string());
+        reauthored_lock["expected_outputs"][0]["value"] =
+            serde_json::Value::String("insufficient_data".to_string());
+        assert!(
+            validate_oracle_bundle_stored_verdict(
+                reauthored_manifest.as_object().expect("manifest object"),
+                &reauthored_lock,
+                &stored_report,
+            )
+            .is_err()
+        );
     }
 
     #[test]

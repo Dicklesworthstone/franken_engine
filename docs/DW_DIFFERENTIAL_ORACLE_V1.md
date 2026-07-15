@@ -65,7 +65,7 @@ A bundle directory contains:
 | `manifest.json` | `franken-engine.oracle-run-bundle.v1`: case id, source sha256, semantic verdict, divergence count, degraded flag, selected backends, host facts, the exact sha256-indexed artifact set (`report` + `lock`, plus `degraded_receipt` iff degraded), and a content-addressed `bundle_id`. |
 | `report.json` | the full `DifferentialOracleReport`: per-backend receipts (status, value, stdout/stderr hashes, timing), the canonicalization report, and the divergence taxonomy report. sha256-addressed by the manifest. |
 | `repro.lock` | `franken-engine.repro-lock.v1`: the re-run command and the **determinism contract**. The reproducible assertion is the *semantic verdict* over canonical structured values and exception classes — **not** raw wall-clock timing. |
-| `degraded_receipt.json` | present and sha256-addressed by the manifest only when a requested reference runtime was unavailable (see *Degraded path*). |
+| `degraded_receipt.json` | present and sha256-addressed by the manifest only when a requested reference runtime was unavailable, timed out, or hit an infrastructure degradation (see *Degraded path*). |
 
 Bundle emission requires a new final directory whose trusted (or
 sticky-protected) parent already exists and whose parent path's final component
@@ -84,16 +84,41 @@ degraded receipt semantically.
 
 | Code | Meaning |
 |---|---|
-| `0` | consensus — all applicable lanes agree on the semantic verdict |
+| `0` | consensus — every selected lane belongs to one fully covered semantic outcome domain and agrees |
 | `2` | io / usage error |
 | `3` | divergence — a classified semantic divergence was found |
-| `4` | insufficient-data or degraded — fewer than two applicable lanes reached a comparable verdict, or a requested reference runtime was unavailable |
+| `4` | insufficient-data or degraded — selected lanes did not form one fully covered semantic outcome domain, or a requested reference runtime was unavailable/timed out/degraded |
 
 > Note: a `consensus` verdict can still report a non-zero `divergence_count`.
 > Cosmetic, non-semantic differences (e.g. a lane that renders a console stream
 > while another reports the completion value) are recorded as findings but do not
 > change the semantic verdict. Always read `semantic_verdict` / `exit_code`, not
 > the raw finding count.
+
+### Canonicalization v2: full selected-cohort coverage
+
+The semantic verdict is computed over every unique backend identity explicitly
+selected for the run, not whichever subgroup happened to return a convenient
+value. Duplicate identities are invalid. There are two comparable outcome
+domains:
+
+- `StructuredValue`: every selected backend has status `completed`, every one
+  contributes a structured value, and at least two lanes participate.
+- `ExceptionClass`: every selected backend has status `failed`, every one
+  contributes a canonical exception class from a recognized JavaScript
+  exception with exit `1` or a stable typed internal `eval.*` diagnostic, and
+  at least two lanes participate.
+
+One group in the active domain is consensus; multiple groups are divergence.
+A mixed completed/failed cohort, missing structured value, duplicate identity,
+single selected lane, generic/crashed process failure, or any `unavailable`,
+`timeout`, or `degraded` status is
+`insufficient_data`. Per-backend receipts and non-semantic stdout/stderr/timing
+comparisons are still retained as evidence. A JavaScript exception is therefore
+not automatically a degraded denominator: an all-failed cohort with the same
+recognized canonical exception class is valid consensus, while differing
+exception classes are a divergence. An empty/generic nonzero exit or signal
+termination is infrastructure degradation, never `process_failure` consensus.
 
 ### Lone-surrogate observables (`value_wtf16`)
 
@@ -153,10 +178,21 @@ Serialization deliberately drops this provenance. Deserializing a report
 validates its supported schemas, recomputes canonicalization from receipts, and
 reclassifies without typed sidecars or waiver authority. `frankenctl oracle
 report` also requires the bundle schema, `bundle_id`, and content-addressed
-report and lock artifacts. Thus integrity-complete current and taxonomy-v1
-reports remain readable for audit history, but stored classes and waiver ids are
-non-authoritative and legacy auto-derived waivers are downgraded. One intentional
-fail-closed compatibility edge remains within bundle schema v1: older degraded
+report and lock artifacts. Thus integrity-complete current,
+canonicalization-v1, and taxonomy-v1 reports remain readable for audit history,
+but stored classes and waiver ids are non-authoritative and legacy auto-derived
+waivers are downgraded. A valid canonicalization-v1 report is first checked
+against the exact v1 algorithm and then recomputed under v2; a former
+successful-subgroup consensus can therefore become `insufficient_data`. A
+bundle whose v1 manifest/lock asserts the old false consensus then fails its
+semantic cross-file check rather than silently changing the archived assertion.
+Likewise, pre-v2 bundles marked every reference-runtime `failed` receipt as
+degraded; if v2 recognizes that receipt as a comparable JavaScript exception,
+the old manifest/degraded receipt no longer matches the effective policy and
+bundle verification rejects it. The standalone report remains readable in both
+cases.
+One intentional fail-closed compatibility edge remains within bundle schema v1:
+older degraded
 bundles that did not index `degraded_receipt.json` in `manifest.json` are
 rejected as incomplete rather than trusted under the tightened contract.
 
@@ -175,7 +211,10 @@ that accepts a reduction only when the semantic-verdict plus mode/class signatur
 is identical, so it never minimizes the divergence class away), and the capstone
 independently re-runs each minimized reproducer to confirm it reproduces the same
 signature. Waiver authority is source-hash-bound and is never carried onto a
-modified/minimized source implicitly.
+modified/minimized source implicitly. A mixed or otherwise incomplete status
+cohort is `insufficient_data`, has no classified semantic divergence, and is not
+eligible for minimization; removing its failed lane cannot turn it into an
+accepted reduction.
 
 ```bash
 # (library surface) run the seed corpus through the internal twin oracle:
@@ -184,8 +223,10 @@ modified/minimized source implicitly.
 
 ## Degraded path (denominator unavailable)
 
-When you request a reference runtime that is not installed (e.g. Node on a host
-without it), the oracle does **not** silently drop the lane and claim consensus.
+When a requested reference runtime is not installed, times out, crashes, exits
+without a recognized JavaScript exception, or cannot be executed because of an
+infrastructure I/O failure, the oracle does **not** silently drop the lane and
+claim consensus.
 It marks the run degraded, exits non-zero (`4`), and writes a manifest-addressed
 `degraded_receipt.json`:
 
@@ -196,8 +237,10 @@ frankenctl oracle run ./case.js --engines franken,node \
 ```
 
 A degraded run means *we don't know* whether the engine agrees with the
-reference — distinct from *we know it diverges*. Both are evidence states; the
-gate refuses to conflate them.
+reference — distinct from *we know it diverges*. An executed runtime's ordinary
+non-zero JavaScript exception is `failed`, not degraded, and can be compared
+when every selected lane failed. These are separate evidence states; the gate
+refuses to conflate them.
 
 ## Node/Bun denominator and FE-CLAIM-010
 

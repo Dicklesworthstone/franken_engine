@@ -38,6 +38,23 @@ fn write_fixture(name: &str, source: &str) -> PathBuf {
     path
 }
 
+#[cfg(unix)]
+fn write_runtime_fixture(name: &str, evaluation_body: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = temp_file(name, "sh");
+    let script = format!(
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'fixture-runtime-v1\\n'\n  exit 0\nfi\n{evaluation_body}\n"
+    );
+    fs::write(&path, script).expect("runtime fixture should write");
+    let mut permissions = fs::metadata(&path)
+        .expect("runtime fixture metadata")
+        .permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&path, permissions).expect("runtime fixture should become executable");
+    path
+}
+
 fn run_oracle(args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .arg("oracle")
@@ -70,6 +87,8 @@ fn oracle_run_with_bundle_emits_content_addressed_bundle() {
         fixture.to_str().expect("fixture path is utf8"),
         "--engines",
         "franken,core",
+        "--node-bin",
+        "/nonexistent/unselected_franken_oracle_node",
         "--bundle",
         bundle.to_str().expect("bundle path is utf8"),
         "--json",
@@ -343,6 +362,10 @@ fn oracle_run_degraded_when_reference_runtime_unavailable() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(summary["exit_code"].as_i64(), Some(4));
+    assert_eq!(
+        summary["semantic_verdict"].as_str(),
+        Some("insufficient_data")
+    );
 
     // The degraded receipt is written and names the unavailable runtime.
     let receipt_path = bundle.join("degraded_receipt.json");
@@ -361,6 +384,199 @@ fn oracle_run_degraded_when_reference_runtime_unavailable() {
         reasons.contains("node_lts"),
         "reasons should name node_lts: {reasons}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn oracle_run_and_report_fail_closed_on_mixed_completed_and_failed_lanes() {
+    let fixture = write_fixture("oracle_run_mixed_status", "console.log(1);\n");
+    let completed = write_runtime_fixture("oracle_runtime_completed", "printf '1\\n'");
+    let failed = write_runtime_fixture(
+        "oracle_runtime_failed",
+        "printf 'TypeError: shared failure\\n' >&2\nexit 1",
+    );
+    let bundle = temp_dir("oracle_run_mixed_status_out");
+
+    let output = run_oracle(&[
+        "run",
+        fixture.to_str().unwrap(),
+        "--engines",
+        "node,bun,franken",
+        "--node-bin",
+        completed.to_str().unwrap(),
+        "--bun-bin",
+        failed.to_str().unwrap(),
+        "--bundle",
+        bundle.to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(output.status.code(), Some(4));
+    let summary = parse_json(&output.stdout);
+    assert_eq!(
+        summary["semantic_verdict"].as_str(),
+        Some("insufficient_data")
+    );
+    assert_eq!(summary["degraded"].as_bool(), Some(false));
+    assert_eq!(summary["exit_code"].as_i64(), Some(4));
+    let statuses = summary["backends"]
+        .as_array()
+        .expect("backends array")
+        .iter()
+        .map(|receipt| receipt["status"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(statuses, vec!["completed", "failed", "completed"]);
+    assert!(
+        !bundle.join("degraded_receipt.json").exists(),
+        "a comparable JavaScript exception is not an unavailable denominator"
+    );
+
+    let archived = run_oracle(&["report", bundle.to_str().unwrap(), "--json"]);
+    assert_eq!(archived.status.code(), Some(4));
+    let archived_summary = parse_json(&archived.stdout);
+    assert_eq!(archived_summary["integrity"].as_str(), Some("verified"));
+    assert_eq!(
+        archived_summary["semantic_verdict"].as_str(),
+        Some("insufficient_data")
+    );
+    assert_eq!(
+        archived_summary["backends"][1]["status"].as_str(),
+        Some("failed")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn oracle_all_failed_same_exception_is_consensus_not_degraded() {
+    let fixture = write_fixture("oracle_run_all_failed", "ignored;\n");
+    let failed = write_runtime_fixture(
+        "oracle_runtime_all_failed",
+        "printf 'TypeError: shared failure\\n' >&2\nexit 1",
+    );
+    let bundle = temp_dir("oracle_run_all_failed_out");
+
+    let output = run_oracle(&[
+        "run",
+        fixture.to_str().unwrap(),
+        "--engines",
+        "node,bun",
+        "--node-bin",
+        failed.to_str().unwrap(),
+        "--bun-bin",
+        failed.to_str().unwrap(),
+        "--bundle",
+        bundle.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(
+        output.status.success(),
+        "equivalent exception outcomes should exit 0: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary = parse_json(&output.stdout);
+    assert_eq!(summary["semantic_verdict"].as_str(), Some("consensus"));
+    assert_eq!(summary["degraded"].as_bool(), Some(false));
+    assert!(
+        summary["backends"]
+            .as_array()
+            .expect("backends array")
+            .iter()
+            .all(|receipt| receipt["status"].as_str() == Some("failed"))
+    );
+    assert!(!bundle.join("degraded_receipt.json").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn oracle_all_failed_different_exceptions_is_divergence() {
+    let fixture = write_fixture("oracle_run_failed_divergence", "ignored;\n");
+    let type_error = write_runtime_fixture(
+        "oracle_runtime_type_error",
+        "printf 'TypeError: shared failure\\n' >&2\nexit 1",
+    );
+    let reference_error = write_runtime_fixture(
+        "oracle_runtime_reference_error",
+        "printf 'ReferenceError: missing name\\n' >&2\nexit 1",
+    );
+
+    let output = run_oracle(&[
+        "run",
+        fixture.to_str().unwrap(),
+        "--engines",
+        "node,bun",
+        "--node-bin",
+        type_error.to_str().unwrap(),
+        "--bun-bin",
+        reference_error.to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(output.status.code(), Some(3));
+    let summary = parse_json(&output.stdout);
+    assert_eq!(summary["semantic_verdict"].as_str(), Some("divergence"));
+    assert_eq!(summary["degraded"].as_bool(), Some(false));
+    assert_eq!(summary["exit_code"].as_i64(), Some(3));
+}
+
+#[cfg(unix)]
+#[test]
+fn oracle_generic_nonzero_process_exits_are_degraded_not_consensus() {
+    let fixture = write_fixture("oracle_run_generic_failures", "ignored;\n");
+    let generic_failure = write_runtime_fixture("oracle_runtime_generic_failure", "exit 1");
+
+    let output = run_oracle(&[
+        "run",
+        fixture.to_str().unwrap(),
+        "--engines",
+        "node,bun",
+        "--node-bin",
+        generic_failure.to_str().unwrap(),
+        "--bun-bin",
+        generic_failure.to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(output.status.code(), Some(4));
+    let summary = parse_json(&output.stdout);
+    assert_eq!(
+        summary["semantic_verdict"].as_str(),
+        Some("insufficient_data")
+    );
+    assert_eq!(summary["degraded"].as_bool(), Some(true));
+    assert!(
+        summary["backends"]
+            .as_array()
+            .expect("backends array")
+            .iter()
+            .all(|receipt| receipt["status"].as_str() == Some("degraded"))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn oracle_timeout_is_insufficient_and_degraded() {
+    let fixture = write_fixture("oracle_run_timeout", "ignored;\n");
+    let completed = write_runtime_fixture("oracle_timeout_completed", "printf '1\\n'");
+    let timeout = write_runtime_fixture("oracle_timeout_slow", "sleep 1\nprintf '1\\n'");
+
+    let output = run_oracle(&[
+        "run",
+        fixture.to_str().unwrap(),
+        "--engines",
+        "node,bun",
+        "--node-bin",
+        completed.to_str().unwrap(),
+        "--bun-bin",
+        timeout.to_str().unwrap(),
+        "--timeout-ms",
+        "100",
+        "--json",
+    ]);
+    assert_eq!(output.status.code(), Some(4));
+    let summary = parse_json(&output.stdout);
+    assert_eq!(
+        summary["semantic_verdict"].as_str(),
+        Some("insufficient_data")
+    );
+    assert_eq!(summary["degraded"].as_bool(), Some(true));
+    assert_eq!(summary["backends"][1]["status"].as_str(), Some("timeout"));
 }
 
 #[test]

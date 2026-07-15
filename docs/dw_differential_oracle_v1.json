@@ -22,12 +22,18 @@
   ],
   "acceptance": {
     "content_addressed_bundle": "Each corpus case emits manifest.json + report.json + repro.lock, plus degraded_receipt.json iff degraded. Emission requires a new 0700 directory beneath an existing trusted or sticky-protected parent, pins that parent before mkdir/open, uses exclusive no-follow artifact creation, and publishes the manifest last. `frankenctl oracle report` requires the exact declared artifact set, canonical source and artifact hashes, and bundle_id; reads through a pinned directory descriptor; rejects symlinks, semantic cross-file mismatches, stream-hash drift, escaping paths, or canonicalization drift; and conservatively reclassifies stored taxonomy from receipts.",
-    "canonicalization": "Number formatting, NaN, Infinity, -0, float rounding, and BigInt-boundary integers are equated across the two independent interpreters (semantic consensus); a real structured value difference is surfaced as a divergence, never smoothed away.",
+    "canonicalization": "Canonicalization v2 requires unique backend identities and full selected-cohort coverage. Structured values are comparable only when every selected lane completed and contributed a value; exception classes are comparable only when every selected lane produced a recognized JavaScript exception with exit 1 or a stable typed internal eval namespace. Mixed completed/failed cohorts, duplicate identities, generic/crashed process failures, incomplete value coverage, or any unavailable/timeout/degraded lane are insufficient_data. Within a fully covered domain, canonical number formatting, NaN, Infinity, -0, float rounding, and BigInt-boundary integers are equated; real value or exception-class differences are surfaced.",
     "divergence_taxonomy": "All seven divergence classes are enumerable with stable, unique wire labels.",
     "taxonomy_trust_boundary": "Taxonomy v2 derives specialized classes only from private typed in-process runner signals. Values, group samples, stdout, stderr, serialized diagnostics, and structural group shape are evidence-only. Intentional-security classification requires an opaque live candidate plus an explicit in-memory authority record bound to source bytes, typed base class, mode, ignored lanes, and exact hash-to-backend membership topology; the default runner never synthesizes waiver authority.",
     "engine_core_free_oracle": "The engine<->franken-core internal twin reports every classified divergence as a defect carrying a minimized reproducer that independently re-classifies to the same divergence signature (the minimizer never over-minimizes).",
-    "degraded_path": "A requested reference runtime that is absent yields a manifest-addressed, semantically cross-checked degraded_receipt.json (FE-REPRO-0007) and a non-zero exit (4) - never a silent pass. Legacy degraded bundle-v1 manifests that omit this artifact are intentionally rejected as incomplete.",
+    "degraded_path": "A requested reference runtime that is unavailable, times out, crashes, exits without a recognized JavaScript exception, or suffers an infrastructure launch/I/O degradation yields a manifest-addressed, semantically cross-checked degraded_receipt.json (FE-REPRO-0007) and a non-zero exit (4) - never a silent pass. A recognized executed JavaScript exception is failed, remains comparable in an all-failed cohort, and is not automatically degraded. Legacy degraded bundle-v1 manifests that omit this artifact are intentionally rejected as incomplete.",
     "claim": "FE-CLAIM-010 (Node/Bun denominator throughput) is the honest, repro.lock-backed `target` state - a measured denominator below the >= 3x floor - and the oracle refuses to fabricate a denominator from a single lane (insufficient_data, exit 4). Simulated/mock evidence (hot_paths_simulation / MockCertificate) is absent from the linked artifact."
+  },
+  "canonicalization": {
+    "schema_version": "franken-engine.differential-oracle.canonicalization.v2",
+    "selected_cohort_policy": "One semantic verdict requires unique backend identities and every selected lane in one domain: all completed with structured values, or all failed with recognized JavaScript exception classes from exit 1 or stable typed internal eval diagnostics. At least two lanes must participate.",
+    "inconclusive_policy": "Mixed completed/failed, duplicate identities, generic/crashed process failures, incomplete structured-value coverage, a single lane, or any unavailable/timeout/degraded status is insufficient_data and cannot enter divergence minimization.",
+    "legacy_v1": "A v1 report is validated against exact v1 recomputation and then migrated to an effective v2 canonicalization. A bundle whose manifest or lock asserts a now-invalid subgroup consensus fails semantic cross-file verification. Pre-v2 bundles that marked every reference Failed receipt degraded also fail bundle verification when v2 recognizes a comparable JavaScript exception; standalone reports remain readable."
   },
   "divergence_taxonomy": {
     "schema_version": "franken-engine.differential-oracle.divergence-taxonomy.v2",
@@ -36,7 +42,7 @@
       "evidence_only": ["structured values", "canonical group samples", "stdout", "stderr", "serialized diagnostics", "backend group shape"],
       "intentional_security_authority": "opaque live candidate plus explicit DifferentialWaiverAuthority bound to the SHA-256 of live source bytes, typed base class, comparison mode, ignored lanes, and exact canonical hash-to-backend membership topology; only a typed candidate spanning a real reference and internal lane is eligible",
       "default_policy": "no authority; no generated waiver ids; every engine-core divergence remains a defect",
-      "archive_ingestion": "supported schemas only; canonicalization is recomputed and must match receipts; effective taxonomy is conservatively rebuilt without typed sidecars, so stored specialized classes and waiver ids are audit data rather than authority",
+      "archive_ingestion": "supported schemas only; current canonicalization must match v2 receipts, legacy v1 is validated under v1 then recomputed under v2, and effective taxonomy is conservatively rebuilt without typed sidecars, so stored specialized classes and waiver ids are audit data rather than authority",
       "legacy_v1": "readable for audit history and conservatively reclassified; stored auto-derived waiver ids are never taxonomy-v2 authority"
     },
     "classes": [
@@ -53,13 +59,13 @@
     "manifest.json": "schema franken-engine.oracle-run-bundle.v1: case_id, source_sha256, semantic_verdict, divergence_count, degraded flag, selected_backends, host facts, the exact sha256-indexed artifact set (report + lock, plus degraded_receipt iff degraded), and a content-addressed bundle_id.",
     "report.json": "the full DifferentialOracleReport (per-backend receipts with timing, canonicalization report, divergence taxonomy report), canonical-JSON encoded and sha256-addressed by the manifest.",
     "repro.lock": "schema franken-engine.repro-lock.v1: case_id, source_sha256, selected_backends, the re-run command, and the determinism contract. The reproducible assertion is the SEMANTIC VERDICT over canonical structured values and exception classes - NOT raw wall-clock timing (allow_wall_clock=true precisely because per-backend timing is non-deterministic).",
-    "degraded_receipt.json": "schema franken-engine.oracle-run-degraded-receipt.v1 (only when a requested reference runtime was unavailable and always sha256-addressed by the manifest): error_code FE-REPRO-0007, the unavailable runtime(s), and the policy statement that a degraded run does not assert cross-runtime consensus."
+    "degraded_receipt.json": "schema franken-engine.oracle-run-degraded-receipt.v1 (only when a requested reference runtime was unavailable, timed out, or infrastructure-degraded, and always sha256-addressed by the manifest): error_code FE-REPRO-0007, the unavailable runtime(s), and the policy statement that a degraded run does not assert cross-runtime consensus."
   },
   "exit_codes": {
-    "0": "consensus - all applicable lanes agree on the semantic verdict",
+    "0": "consensus - every selected lane belongs to one fully covered semantic outcome domain and agrees",
     "2": "io / usage error",
     "3": "divergence - a classified semantic divergence was found",
-    "4": "insufficient-data or degraded - fewer than two applicable lanes reached a comparable verdict, or a requested reference runtime was unavailable"
+    "4": "insufficient-data or degraded - selected lanes did not form one fully covered semantic outcome domain, or a requested reference runtime was unavailable/timed out/degraded"
   },
   "fe_claim_010": {
     "claim_id": "FE-CLAIM-010",

@@ -12037,6 +12037,213 @@ impl InterpreterCore {
         Ok(())
     }
 
+    /// Apply an IR array spread as one target-array/register-label transaction.
+    ///
+    /// Element writes and the final `length` update are individually fallible,
+    /// while the IFC label replacement can retain an attacker-sized Custom
+    /// name. Reserve an exact snapshot-plus-label peak before cloning either,
+    /// run all heap writes under the remaining live-state ceiling, and restore
+    /// the complete target object plus the incremental accumulator on refusal.
+    /// Iterator advancement and guest `next()` side effects remain observable,
+    /// matching ordinary iterator semantics; only the spread target and its
+    /// label form this transaction.
+    fn spread_into_array_transaction(
+        &mut self,
+        module: &Ir3Module,
+        array: u32,
+        iterable: u32,
+    ) -> Result<(), InterpreterError> {
+        let array_value = self.read_reg(array)?;
+        let iterable_value = self.read_reg(iterable)?;
+        let Value::Object(array_id) = array_value else {
+            return Ok(());
+        };
+        let heap_index = array_id.0 as usize;
+        let actual_array_register = self.register_base + array as usize;
+
+        let (array_snapshot, final_label, previous_label_bytes, transaction_temporary_bytes) = {
+            let Some(array_object) = self.heap.get(heap_index) else {
+                return Ok(());
+            };
+            let array_label = self.get_register_label(array)?;
+            let mut label_winner = array_label;
+            let iterable_label = self.get_register_label(iterable)?;
+            if iterable_label > label_winner {
+                label_winner = iterable_label;
+            }
+            if let Some(context_label) = self.active_inline_callback_context_label.as_ref()
+                && context_label > label_winner
+            {
+                label_winner = context_label;
+            }
+            let label_changes = label_winner != array_label;
+            let previous_label_bytes = Self::estimate_label_bytes(array_label);
+            let transaction_temporary_bytes = Self::estimate_heap_object_bytes(array_object)
+                .saturating_add(if label_changes {
+                    Self::estimate_label_bytes(label_winner)
+                } else {
+                    0
+                });
+            self.check_temporary_memory_budget(transaction_temporary_bytes)?;
+            let final_label = label_changes.then(|| label_winner.clone());
+            (
+                array_object.clone(),
+                final_label,
+                previous_label_bytes,
+                transaction_temporary_bytes,
+            )
+        };
+
+        let target_was_remembered = self.gc_remembered_set.contains(&array_id);
+        let original_memory_ceiling = self.config.max_total_memory_bytes;
+        self.config.max_total_memory_bytes =
+            original_memory_ceiling.saturating_sub(transaction_temporary_bytes);
+
+        let mutation_result = (|| {
+            let mut next_index = self
+                .heap
+                .get(heap_index)
+                .map(|object| {
+                    object.properties.keys().fold(0u32, |current, key| {
+                        key.parse::<u32>()
+                            .ok()
+                            .filter(|&index| index != u32::MAX)
+                            .map_or(current, |index| current.max(index + 1))
+                    })
+                })
+                .unwrap_or(0);
+
+            match iterable_value {
+                Value::Object(iterable_id) => {
+                    if let Some(view) = self.typed_array_view_for_object(iterable_id)? {
+                        for index in 0..view.length {
+                            let value = self.with_array_buffer_bytes(view.buffer, |bytes| {
+                                Self::read_typed_array_element_bytes(&view, bytes, index)
+                            })??;
+                            self.append_spread_array_element(array_id, &mut next_index, value)?;
+                        }
+                    } else {
+                        let mut index = 0u32;
+                        loop {
+                            // Spreading an array into itself must consume the
+                            // finite pre-transaction view. Reading the live
+                            // target would observe our own appends forever.
+                            let value = if iterable_id == array_id {
+                                array_snapshot.properties.get(&index.to_string()).cloned()
+                            } else {
+                                self.heap
+                                    .get(iterable_id.0 as usize)
+                                    .and_then(|object| object.properties.get(&index.to_string()))
+                                    .cloned()
+                            };
+                            let Some(value) = value else {
+                                break;
+                            };
+                            self.append_spread_array_element(array_id, &mut next_index, value)?;
+                            index = index.saturating_add(1);
+                        }
+                    }
+                }
+                Value::Str(text) => {
+                    for element in text.code_point_elements() {
+                        self.append_spread_array_element(
+                            array_id,
+                            &mut next_index,
+                            Value::Str(element),
+                        )?;
+                    }
+                }
+                Value::Iterator(handle) => {
+                    while let Some(value) =
+                        self.advance_for_of_iterator(Some(module), Value::Iterator(handle))?
+                    {
+                        self.append_spread_array_element(array_id, &mut next_index, value)?;
+                    }
+                }
+                _ => {}
+            }
+            self.set_object_property(
+                array_id,
+                "length".to_string(),
+                Value::Int(i64::from(next_index)),
+            )
+        })();
+
+        self.config.max_total_memory_bytes = original_memory_ceiling;
+        if let Err(error) = mutation_result {
+            self.mutate_heap(|heap| {
+                if let Some(target) = heap.get_mut(heap_index) {
+                    *target = array_snapshot;
+                }
+            });
+            if !target_was_remembered {
+                self.gc_remembered_set.remove(&array_id);
+            }
+            // A custom iterator's guest `next()` can mutate unrelated live
+            // state. Keep those observable effects and re-derive accounting
+            // after restoring only the transaction-owned target object.
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Err(match error {
+                InterpreterError::MemoryBudgetExceeded {
+                    requested_bytes,
+                    requested_heap_objects,
+                    max_heap_objects,
+                    ..
+                } => InterpreterError::MemoryBudgetExceeded {
+                    requested_bytes: requested_bytes.saturating_add(transaction_temporary_bytes),
+                    max_bytes: original_memory_ceiling,
+                    requested_heap_objects,
+                    max_heap_objects,
+                },
+                other => other,
+            });
+        }
+
+        let final_label_bytes = final_label
+            .as_ref()
+            .map(Self::estimate_label_bytes)
+            .unwrap_or(previous_label_bytes);
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_label_bytes)
+            .saturating_add(final_label_bytes);
+        if requested_bytes > original_memory_ceiling {
+            self.mutate_heap(|heap| {
+                if let Some(target) = heap.get_mut(heap_index) {
+                    *target = array_snapshot;
+                }
+            });
+            if !target_was_remembered {
+                self.gc_remembered_set.remove(&array_id);
+            }
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
+
+        if let Some(final_label) = final_label {
+            let Some(target_label) = self.register_labels.get_mut(actual_array_register) else {
+                self.mutate_heap(|heap| {
+                    if let Some(target) = heap.get_mut(heap_index) {
+                        *target = array_snapshot;
+                    }
+                });
+                if !target_was_remembered {
+                    self.gc_remembered_set.remove(&array_id);
+                }
+                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                return Err(InterpreterError::RegisterOutOfBounds {
+                    register: array,
+                    max: self.config.max_registers,
+                });
+            };
+            let previous_label = std::mem::replace(target_label, Label::Public);
+            drop(previous_label);
+            *target_label = final_label;
+        }
+        self.estimated_memory_bytes = requested_bytes;
+        Ok(())
+    }
+
     /// Clone one binary-operation label winner after a strict temporary peak
     /// preflight. The caller can then commit value+label through
     /// `write_reg_with_label` as one transaction.
@@ -19597,95 +19804,7 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::SpreadIntoArray { array, iterable } => {
-                    let arr_val = self.read_reg(array)?;
-                    let iter_val = self.read_reg(iterable)?;
-                    if let Value::Object(arr_id) = arr_val
-                        && self.heap.get(arr_id.0 as usize).is_some()
-                    {
-                        let mut next_idx = self
-                            .heap
-                            .get(arr_id.0 as usize)
-                            .map(|obj| {
-                                obj.properties.keys().fold(0u32, |current, key| {
-                                    key.parse::<u32>()
-                                        .ok()
-                                        .filter(|&n| n != u32::MAX)
-                                        .map_or(current, |n| current.max(n + 1))
-                                })
-                            })
-                            .unwrap_or(0);
-
-                        match iter_val {
-                            Value::Object(iter_id) => {
-                                if let Some(view) = self.typed_array_view_for_object(iter_id)? {
-                                    // Buffer/TypedArray elements live in the
-                                    // backing store, not ordinary properties.
-                                    // Stream them directly so spread does not
-                                    // duplicate the complete view in a host Vec.
-                                    for index in 0..view.length {
-                                        let value =
-                                            self.with_array_buffer_bytes(view.buffer, |bytes| {
-                                                Self::read_typed_array_element_bytes(
-                                                    &view, bytes, index,
-                                                )
-                                            })??;
-                                        self.append_spread_array_element(
-                                            arr_id,
-                                            &mut next_idx,
-                                            value,
-                                        )?;
-                                    }
-                                } else {
-                                    let mut index = 0u32;
-                                    loop {
-                                        let value = self
-                                            .heap
-                                            .get(iter_id.0 as usize)
-                                            .and_then(|object| {
-                                                object.properties.get(&index.to_string())
-                                            })
-                                            .cloned();
-                                        let Some(value) = value else {
-                                            break;
-                                        };
-                                        self.append_spread_array_element(
-                                            arr_id,
-                                            &mut next_idx,
-                                            value,
-                                        )?;
-                                        index = index.saturating_add(1);
-                                    }
-                                }
-                            }
-                            Value::Str(text) => {
-                                for element in text.code_point_elements() {
-                                    self.append_spread_array_element(
-                                        arr_id,
-                                        &mut next_idx,
-                                        Value::Str(element),
-                                    )?;
-                                }
-                            }
-                            Value::Iterator(handle) => {
-                                while let Some(value) = self.advance_for_of_iterator(
-                                    Some(module),
-                                    Value::Iterator(handle),
-                                )? {
-                                    self.append_spread_array_element(arr_id, &mut next_idx, value)?;
-                                }
-                            }
-                            _ => {}
-                        }
-                        self.set_object_property(
-                            arr_id,
-                            "length".to_string(),
-                            Value::Int(i64::from(next_idx)),
-                        )?;
-                        let array_label = self
-                            .get_register_label(array)?
-                            .join(self.get_register_label(iterable)?);
-                        self.set_register_label(array, array_label)?;
-                    }
+                    self.spread_into_array_transaction(module, array, iterable)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::SpreadIntoObject { target, source } => {
@@ -50031,6 +50150,334 @@ mod async_runtime_tests_current {
         assert_eq!(
             property_core.estimated_memory_bytes(),
             property_core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn spread_direct_sources_are_failure_atomic_at_exact_ceiling_bd_kvq09() {
+        #[derive(Clone, Copy, Debug)]
+        enum SourceKind {
+            IndexedObject,
+            TypedArray,
+            String,
+        }
+
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::SpreadIntoArray {
+                    array: 0,
+                    iterable: 1,
+                },
+                Ir3Instruction::Halt,
+            ],
+            Vec::new(),
+        );
+        let target_label = Label::Custom {
+            name: "same-level-a-target".repeat(4),
+            level: 41,
+        };
+        let iterable_label = Label::Custom {
+            name: "same-level-m-iterable".repeat(6),
+            level: 41,
+        };
+        let context_label = Label::Custom {
+            name: "same-level-z-context".repeat(8),
+            level: 41,
+        };
+
+        let attempt = |kind: SourceKind, budget: u64| {
+            let mut core = test_interpreter();
+            let target = core
+                .alloc_array_from_values(&[Value::str("seed")])
+                .expect("spread target allocation");
+            let source = match kind {
+                SourceKind::IndexedObject => Value::Object(
+                    core.alloc_array_from_values(&[
+                        Value::Int(7),
+                        Value::str("indexed-object-payload"),
+                    ])
+                    .expect("indexed spread source"),
+                ),
+                SourceKind::TypedArray => Value::Object(
+                    core.alloc_typed_array_from_values(
+                        TypedArrayKind::Uint8,
+                        &[Value::Int(7), Value::Int(8)],
+                    )
+                    .expect("typed-array spread source"),
+                ),
+                SourceKind::String => Value::str("A\u{1f4a5}"),
+            };
+            core.write_reg_with_label(0, Value::Object(target), target_label.clone())
+                .expect("labeled spread target register");
+            core.write_reg_with_label(1, source, iterable_label.clone())
+                .expect("labeled spread source register");
+            core.active_inline_callback_context_label = Some(context_label.clone());
+            core.gc_remembered_set.remove(&target);
+            let baseline = core
+                .sync_estimated_memory_bytes()
+                .expect("initial spread transaction accounting");
+            let heap_snapshot = core.heap.iter().cloned().collect::<Vec<_>>();
+            let label_snapshot = core.register_labels.clone();
+            let remembered_snapshot = core.gc_remembered_set.clone();
+            core.config.max_total_memory_bytes = budget;
+            let result = core.run_loop(&module);
+            (
+                core,
+                target,
+                baseline,
+                heap_snapshot,
+                label_snapshot,
+                remembered_snapshot,
+                result,
+            )
+        };
+
+        for kind in [
+            SourceKind::IndexedObject,
+            SourceKind::TypedArray,
+            SourceKind::String,
+        ] {
+            let baseline = attempt(kind, u64::MAX).2;
+            let mut distance = 1u64;
+            let mut upper = loop {
+                let budget = baseline.saturating_add(distance);
+                if matches!(attempt(kind, budget).6, Err(InterpreterError::Halted)) {
+                    break budget;
+                }
+                distance = distance
+                    .checked_mul(2)
+                    .expect("spread ceiling search remains bounded");
+                assert!(distance <= (1 << 32), "spread ceiling is implausible");
+            };
+            let mut lower = baseline;
+            while lower < upper {
+                let midpoint = lower + (upper - lower) / 2;
+                if matches!(attempt(kind, midpoint).6, Err(InterpreterError::Halted)) {
+                    upper = midpoint;
+                } else {
+                    lower = midpoint + 1;
+                }
+            }
+            let exact_ceiling = lower;
+
+            let (
+                refused_core,
+                target,
+                refused_baseline,
+                heap_snapshot,
+                label_snapshot,
+                remembered_snapshot,
+                refusal,
+            ) = attempt(kind, exact_ceiling - 1);
+            assert!(matches!(
+                refusal,
+                Err(InterpreterError::MemoryBudgetExceeded {
+                    requested_bytes,
+                    max_bytes,
+                    ..
+                }) if requested_bytes == exact_ceiling && max_bytes == exact_ceiling - 1
+            ));
+            assert_eq!(refused_core.ip, 0, "failed {kind:?} spread must retry");
+            assert_eq!(
+                &*refused_core.heap, &heap_snapshot,
+                "failed {kind:?} spread must restore the full heap object, including caches"
+            );
+            assert_eq!(refused_core.register_labels, label_snapshot);
+            assert_eq!(refused_core.gc_remembered_set, remembered_snapshot);
+            assert!(!refused_core.gc_is_remembered(target));
+            assert_eq!(refused_core.estimated_memory_bytes(), refused_baseline);
+            assert_eq!(
+                refused_core.estimated_memory_bytes(),
+                refused_core.recompute_estimated_memory_bytes()
+            );
+
+            let (exact_core, target, _, _, _, _, exact_result) = attempt(kind, exact_ceiling);
+            assert_eq!(exact_result, Err(InterpreterError::Halted));
+            let expected = match kind {
+                SourceKind::IndexedObject => vec![
+                    Value::str("seed"),
+                    Value::Int(7),
+                    Value::str("indexed-object-payload"),
+                ],
+                SourceKind::TypedArray => {
+                    vec![Value::str("seed"), Value::Int(7), Value::Int(8)]
+                }
+                SourceKind::String => {
+                    vec![Value::str("seed"), Value::str("A"), Value::str("\u{1f4a5}")]
+                }
+            };
+            assert_eq!(exact_core.read_array_like_values(target), expected);
+            assert_eq!(
+                exact_core
+                    .get_register_label(0)
+                    .expect("spread target label"),
+                &context_label,
+                "full Label ordering must select the same-level context winner"
+            );
+            assert!(exact_core.gc_is_remembered(target));
+            assert_eq!(
+                exact_core.estimated_memory_bytes(),
+                exact_core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn spread_iterator_refusal_restores_target_but_consumes_iterator_bd_kvq09() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::SpreadIntoArray {
+                    array: 0,
+                    iterable: 1,
+                },
+                Ir3Instruction::Halt,
+            ],
+            Vec::new(),
+        );
+        let target_label = Label::Custom {
+            name: "iterator-target".repeat(4),
+            level: 43,
+        };
+        let iterable_label = Label::Custom {
+            name: "iterator-source".repeat(8),
+            level: 44,
+        };
+
+        let attempt = |budget: u64| {
+            let mut core = test_interpreter();
+            let target = core
+                .alloc_array_from_values(&[Value::str("seed")])
+                .expect("iterator-spread target");
+            let source = core
+                .alloc_array_from_values(&[Value::str("first"), Value::str("second-longer-value")])
+                .expect("iterator-spread source");
+            let iterator = core
+                .init_for_of_iterator(None, Value::Object(source))
+                .expect("runtime iterator initialization");
+            let Value::Iterator(handle) = iterator else {
+                panic!("for-of initialization must return an iterator handle");
+            };
+            core.write_reg_with_label(0, Value::Object(target), target_label.clone())
+                .expect("labeled iterator-spread target");
+            core.write_reg_with_label(1, Value::Iterator(handle), iterable_label.clone())
+                .expect("labeled iterator-spread source");
+            core.gc_remembered_set.remove(&target);
+            let baseline = core
+                .sync_estimated_memory_bytes()
+                .expect("initial iterator-spread accounting");
+            let target_snapshot = core.heap[target.0 as usize].clone();
+            core.config.max_total_memory_bytes = budget;
+            let result = core.run_loop(&module);
+            (core, target, handle, baseline, target_snapshot, result)
+        };
+
+        let baseline = attempt(u64::MAX).3;
+        let mut distance = 1u64;
+        let mut upper = loop {
+            let budget = baseline.saturating_add(distance);
+            if matches!(attempt(budget).5, Err(InterpreterError::Halted)) {
+                break budget;
+            }
+            distance = distance
+                .checked_mul(2)
+                .expect("iterator-spread ceiling search remains bounded");
+            assert!(
+                distance <= (1 << 32),
+                "iterator-spread ceiling is implausible"
+            );
+        };
+        let mut lower = baseline;
+        while lower < upper {
+            let midpoint = lower + (upper - lower) / 2;
+            if matches!(attempt(midpoint).5, Err(InterpreterError::Halted)) {
+                upper = midpoint;
+            } else {
+                lower = midpoint + 1;
+            }
+        }
+        let exact_ceiling = lower;
+
+        let (refused_core, target, handle, baseline, target_snapshot, refusal) =
+            attempt(exact_ceiling - 1);
+        assert!(matches!(
+            refusal,
+            Err(InterpreterError::MemoryBudgetExceeded {
+                requested_bytes,
+                max_bytes,
+                ..
+            }) if requested_bytes == exact_ceiling && max_bytes == exact_ceiling - 1
+        ));
+        assert_eq!(refused_core.heap[target.0 as usize], target_snapshot);
+        assert_eq!(
+            refused_core
+                .get_register_label(0)
+                .expect("restored iterator-spread target label"),
+            &target_label
+        );
+        assert!(!refused_core.gc_is_remembered(target));
+        let RuntimeIteratorState::ForOf(iterator_state) = &refused_core.iterators[handle as usize]
+        else {
+            panic!("spread source must remain a for-of iterator");
+        };
+        assert!(
+            iterator_state.next_index > 0,
+            "iterator consumption and guest next() effects are intentionally not rolled back"
+        );
+        assert_eq!(refused_core.estimated_memory_bytes(), baseline);
+        assert_eq!(
+            refused_core.estimated_memory_bytes(),
+            refused_core.recompute_estimated_memory_bytes()
+        );
+
+        let (exact_core, target, _, _, _, exact_result) = attempt(exact_ceiling);
+        assert_eq!(exact_result, Err(InterpreterError::Halted));
+        assert_eq!(
+            exact_core.read_array_like_values(target),
+            vec![
+                Value::str("seed"),
+                Value::str("first"),
+                Value::str("second-longer-value"),
+            ]
+        );
+        assert_eq!(
+            exact_core
+                .get_register_label(0)
+                .expect("joined target label"),
+            &iterable_label
+        );
+    }
+
+    #[test]
+    fn spread_into_itself_uses_finite_pre_transaction_view_bd_kvq09() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::SpreadIntoArray {
+                    array: 0,
+                    iterable: 1,
+                },
+                Ir3Instruction::Halt,
+            ],
+            Vec::new(),
+        );
+        let mut core = test_interpreter();
+        let target = core
+            .alloc_array_from_values(&[Value::Int(1), Value::Int(2)])
+            .expect("self-spread target");
+        core.write_reg(0, Value::Object(target))
+            .expect("self-spread target register");
+        core.write_reg(1, Value::Object(target))
+            .expect("self-spread iterable register");
+        core.sync_estimated_memory_bytes()
+            .expect("self-spread accounting");
+
+        assert_eq!(core.run_loop(&module), Err(InterpreterError::Halted));
+        assert_eq!(
+            core.read_array_like_values(target),
+            vec![Value::Int(1), Value::Int(2), Value::Int(1), Value::Int(2),]
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
         );
     }
 

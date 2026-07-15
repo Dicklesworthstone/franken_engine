@@ -837,6 +837,181 @@ fn writable_write_end_final_flags_and_callbacks() {
 }
 
 #[test]
+fn writable_repeated_end_callbacks_preserve_terminal_fifo_contract_bd_fw7zd_1() {
+    assert_cases(&[
+        EvalCase {
+            ids: &["bd-fw7zd.1"],
+            description: "success callbacks retain FIFO order across callback, finish, and close reentrancy",
+            source: r#"
+                const { Writable } = require('stream');
+                const events = [];
+                const message = (error) => error && error.message || String(error);
+                const writable = new Writable({ write(chunk, encoding, callback) { callback(); } });
+                writable.on('finish', () => {
+                  events.push('finish');
+                  writable.end((error) => events.push('from-finish:' + message(error)));
+                });
+                writable.on('close', () => {
+                  events.push('close');
+                  writable.end((error) => {
+                    events.push('from-close:' + message(error));
+                    console.log(events.join(','));
+                  });
+                });
+                writable.end(() => {
+                  events.push('first');
+                  writable.end((error) => events.push('reentrant:' + message(error)));
+                });
+                writable.end(() => events.push('second'));
+            "#,
+            expected: "first,second,finish,reentrant:Cannot call end after a stream was finished,from-finish:Cannot call end after a stream was finished,close,from-close:Cannot call end after a stream was finished",
+        },
+        EvalCase {
+            ids: &["bd-fw7zd.1"],
+            description: "callback-only repeats enqueue while finalization remains active",
+            source: r#"
+                const { Writable } = require('stream');
+                const events = [];
+                const writable = new Writable({
+                  write(chunk, encoding, callback) { callback(); },
+                  final(callback) { events.push('final'); this.completeFinal = callback; }
+                });
+                writable.on('finish', () => events.push('finish'));
+                writable.on('close', () => {
+                  events.push('close');
+                  console.log(events.join(','));
+                });
+                writable.end(() => events.push('first'));
+                writable.end(() => events.push('second'));
+                writable.completeFinal();
+            "#,
+            expected: "final,first,second,finish,close",
+        },
+        EvalCase {
+            ids: &["bd-fw7zd.1"],
+            description: "write errors reach the initial FIFO before error while listener reentrancy waits for close",
+            source: r#"
+                const { Writable } = require('stream');
+                const events = [];
+                const message = (error) => error && error.message || String(error);
+                const writable = new Writable({
+                  write(chunk, encoding, callback) { callback(new Error('write-fail')); }
+                });
+                writable.on('error', (error) => {
+                  events.push('error:' + error.message);
+                  writable.end((late) => events.push('from-error:' + message(late)));
+                });
+                writable.on('close', () => events.push('close'));
+                writable.end('payload', (error) => events.push('first:' + error.message));
+                writable.end((error) => events.push('second:' + error.message));
+                setImmediate(() => console.log(events.join(',')));
+            "#,
+            expected: "first:write-fail,second:write-fail,error:write-fail,close,from-error:Cannot call end after a stream was destroyed",
+        },
+        EvalCase {
+            ids: &["bd-fw7zd.1"],
+            description: "final errors close before the original callback and destroy repeated callbacks",
+            source: r#"
+                const { Writable } = require('stream');
+                const events = [];
+                const message = (error) => error && error.message || String(error);
+                const writable = new Writable({
+                  write(chunk, encoding, callback) { callback(); },
+                  final(callback) { callback(new Error('final-fail')); }
+                });
+                writable.on('error', (error) => events.push('error:' + error.message));
+                writable.on('close', () => events.push('close'));
+                writable.end((error) => events.push('first:' + error.message));
+                writable.end((error) => {
+                  events.push('second:' + message(error));
+                  console.log(events.join(','));
+                });
+            "#,
+            expected: "error:final-fail,close,first:final-fail,second:Cannot call end after a stream was destroyed",
+        },
+        EvalCase {
+            ids: &["bd-fw7zd.1"],
+            description: "destroy reentrancy preserves the active success batch and finished late lane",
+            source: r#"
+                const { Writable } = require('stream');
+                const events = [];
+                const message = (error) => error && error.message || String(error);
+                const writable = new Writable({ write(chunk, encoding, callback) { callback(); } });
+                writable.on('finish', () => events.push('finish'));
+                writable.on('error', (error) => events.push('error:' + error.message));
+                writable.on('close', () => {
+                  events.push('close');
+                  console.log(events.join(','));
+                });
+                writable.end(() => {
+                  events.push('first');
+                  writable.end((error) => events.push('late:' + message(error)));
+                  writable.destroy(new Error('destroy-reentrant'));
+                });
+                writable.end(() => events.push('second'));
+            "#,
+            expected: "first,second,finish,late:Cannot call end after a stream was finished,error:destroy-reentrant,close",
+        },
+        EvalCase {
+            ids: &["bd-fw7zd.1"],
+            description: "destroy drains callbacks already registered and defers later registrations until close",
+            source: r#"
+                const { Writable } = require('stream');
+                const events = [];
+                const message = (error) => error && error.message || String(error);
+                const writable = new Writable({ write(chunk, encoding, callback) { callback(); } });
+                writable.on('error', (error) => events.push('error:' + error.message));
+                writable.on('close', () => events.push('close'));
+                writable.end('pending', (error) => events.push('first:' + error.message));
+                writable.destroy(new Error('destroy-fail'));
+                writable.end((error) => {
+                  events.push('after:' + message(error));
+                  console.log(events.join(','));
+                });
+            "#,
+            expected: "first:destroy-fail,error:destroy-fail,close,after:Cannot call end after a stream was destroyed",
+        },
+        EvalCase {
+            ids: &["bd-fw7zd.1"],
+            description: "destroy without an error still settles both sides of the terminal batch boundary",
+            source: r#"
+                const { Writable } = require('stream');
+                const events = [];
+                const message = (error) => error && error.message || String(error);
+                const writable = new Writable({ write(chunk, encoding, callback) { callback(); } });
+                writable.on('close', () => events.push('close'));
+                writable.end('pending', (error) => events.push('first:' + message(error)));
+                writable.destroy();
+                writable.end((error) => {
+                  events.push('after:' + message(error));
+                  console.log(events.join(','));
+                });
+            "#,
+            expected: "first:Cannot call end after a stream was destroyed,close,after:Cannot call end after a stream was destroyed",
+        },
+        EvalCase {
+            ids: &["bd-fw7zd.1"],
+            description: "destroy drops an end callback that never reached the terminal phase",
+            source: r#"
+                const { Writable } = require('stream');
+                const events = [];
+                const message = (error) => error && error.message || String(error);
+                const writable = new Writable({ write(chunk, encoding, callback) {} });
+                writable.on('error', (error) => events.push('error:' + error.message));
+                writable.on('close', () => events.push('close'));
+                writable.end('stuck', () => events.push('wrong:first'));
+                writable.destroy(new Error('destroy-stuck'));
+                writable.end((error) => {
+                  events.push('after:' + message(error));
+                  console.log(events.join(','));
+                });
+            "#,
+            expected: "error:destroy-stuck,close,after:Cannot call end after a stream was destroyed",
+        },
+    ]);
+}
+
+#[test]
 #[ignore = "bd-8nrud: process.nextTick prerequisite not implemented yet"]
 fn writable_cork_next_tick_prerequisite() {
     assert_cases(&[EvalCase {

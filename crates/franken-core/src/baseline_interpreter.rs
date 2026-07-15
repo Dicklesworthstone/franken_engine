@@ -47,7 +47,9 @@ use crate::ir_contract::{
     Ir3Instruction, Ir3Module, IteratorCloseReason, RegRange, WitnessEvent, WitnessEventKind,
 };
 use crate::js_string::JsString;
-use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+use crate::lowering_pipeline::{
+    CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX, LoweringContext, lower_ir0_to_ir3,
+};
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 use crate::runtime_config::ExecutionConfig;
 
@@ -1714,7 +1716,7 @@ pub struct ExecutionSeed {
     registers: Vec<Value>,
     register_labels: Vec<crate::ifc_artifacts::Label>,
     heap: Vec<HeapObject>,
-    function_prototypes: BTreeMap<u32, ObjectId>,
+    function_prototypes: BTreeMap<FunctionObjectKey, ObjectId>,
     function_objects: BTreeMap<FunctionObjectKey, ObjectId>,
 }
 
@@ -1807,8 +1809,10 @@ pub struct InterpreterCore {
     estimated_memory_bytes: u64,
     /// Dedicated iterator runtime state used by iterator-specific IR3 ops.
     iterators: Vec<RuntimeIteratorState>,
-    /// Lazily allocated prototype objects for constructor functions.
-    function_prototypes: BTreeMap<u32, ObjectId>,
+    /// Lazily allocated prototype objects for constructor function values.
+    /// Closure identity is significant: repeated evaluations of the same class
+    /// expression must not share a prototype merely because they share code.
+    function_prototypes: BTreeMap<FunctionObjectKey, ObjectId>,
     /// Heap-backed own-property storage for callable values.
     function_objects: BTreeMap<FunctionObjectKey, ObjectId>,
     /// Current instruction pointer.
@@ -5555,7 +5559,12 @@ impl InterpreterCore {
                             // guarded. Allocate the constructor receiver only
                             // after that guard succeeds so a denied rest
                             // allocation leaves no constructor setup behind.
-                            let prototype = self.ensure_function_prototype(func_idx)?;
+                            let prototype = self
+                                .function_prototype_for_value(&callee_val)?
+                                .ok_or_else(|| InterpreterError::TypeError {
+                                    expected: "constructor function".to_string(),
+                                    got: callee_val.type_name().to_string(),
+                                })?;
                             let this_id = self.alloc_object_with_prototype(Some(prototype))?;
                             if let Some(this_obj) = self.heap.get_mut(this_id.0 as usize) {
                                 this_obj.constructor_function = Some(func_idx);
@@ -5884,13 +5893,29 @@ impl InterpreterCore {
                     // accumulated by prior PushCapture instructions but
                     // the scope chain snapshot already contains those
                     // bindings, so we just clear them.
-                    let captured_env = self.snapshot_scope_chain()?;
+                    let mut captured_env = self.snapshot_scope_chain()?;
                     let closure_id = u32::try_from(self.closures.len()).map_err(|_| {
                         InterpreterError::TypeError {
                             expected: "closure table capacity".into(),
                             got: format!("exceeded u32::MAX ({})", self.closures.len()),
                         }
                     })?;
+                    // Class constructors capture their private self name before
+                    // the destination register receives the new closure. Only
+                    // the constructor-specific marker is cyclically initialized:
+                    // descriptor-name matching would corrupt an unrelated outer
+                    // capture when a class method and that capture share a name.
+                    // The marker is materialized in the immediate capture frame;
+                    // ancestor frames can belong to an enclosing constructor.
+                    if let Some(frame) = captured_env.last_mut() {
+                        for (name, binding) in &mut frame.bindings {
+                            if name.starts_with(CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX) {
+                                binding.value = Value::Closure(closure_id);
+                                binding.initialized = true;
+                                break;
+                            }
+                        }
+                    }
                     self.closures.push(ClosureValue {
                         function_index,
                         captured_env,
@@ -6872,21 +6897,17 @@ impl InterpreterCore {
     fn eval_instanceof(&mut self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
         let candidate = self.read_reg(lhs)?;
         let constructor = self.read_reg(rhs)?;
-        let func_idx = match constructor {
-            Value::Function(func_idx) => func_idx,
-            other => {
-                return Err(InterpreterError::TypeError {
-                    expected: "function".to_string(),
-                    got: other.type_name().to_string(),
-                });
-            }
-        };
+        let prototype = self
+            .function_prototype_for_value(&constructor)?
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "function".to_string(),
+                got: constructor.type_name().to_string(),
+            })?;
 
         let Value::Object(object_id) = candidate else {
             return Ok(Value::Bool(false));
         };
 
-        let prototype = self.ensure_function_prototype(func_idx)?;
         Ok(Value::Bool(
             self.prototype_chain_contains(object_id, prototype)?,
         ))
@@ -7242,9 +7263,9 @@ impl InterpreterCore {
         if !called
             && key == "prototype"
             && let Value::Object(prototype) = value
-            && let Some(func_idx) = self.function_index_for_value(&receiver)?
+            && let Some(function_key) = self.function_prototype_key_for_value(&receiver)?
         {
-            self.function_prototypes.insert(func_idx, prototype);
+            self.function_prototypes.insert(function_key, prototype);
         }
         Ok(called)
     }
@@ -8816,6 +8837,17 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         match cap {
+            "builtin:ReferenceError" => {
+                let message = self
+                    .optional_arg(args, 0)?
+                    .map_or_else(String::new, |value| self.value_to_string(&value));
+                let object_id = self.alloc_object_with_properties(&[
+                    ("name", Value::str("ReferenceError")),
+                    ("message", Value::str(message)),
+                ])?;
+                Ok(Value::Object(object_id))
+            }
+
             // Array methods
             "builtin:ArrayPrototypePush" => {
                 let this = self.required_arg(args, 0, "array object")?;
@@ -10512,12 +10544,20 @@ impl InterpreterCore {
         Ok(removed.is_some() || removed_accessor.is_some())
     }
 
+    #[cfg(test)]
     fn ensure_function_prototype(&mut self, func_idx: u32) -> Result<ObjectId, InterpreterError> {
-        if let Some(existing) = self.function_prototypes.get(&func_idx) {
+        self.ensure_function_prototype_for_key(FunctionObjectKey::Function(func_idx))
+    }
+
+    fn ensure_function_prototype_for_key(
+        &mut self,
+        function_key: FunctionObjectKey,
+    ) -> Result<ObjectId, InterpreterError> {
+        if let Some(existing) = self.function_prototypes.get(&function_key) {
             Ok(*existing)
         } else {
             let prototype = self.alloc_object_with_prototype(None)?;
-            self.function_prototypes.insert(func_idx, prototype);
+            self.function_prototypes.insert(function_key, prototype);
             Ok(prototype)
         }
     }
@@ -10530,17 +10570,20 @@ impl InterpreterCore {
         }
     }
 
-    fn function_index_for_value(&self, value: &Value) -> Result<Option<u32>, InterpreterError> {
+    fn function_prototype_key_for_value(
+        &self,
+        value: &Value,
+    ) -> Result<Option<FunctionObjectKey>, InterpreterError> {
         match value {
-            Value::Function(idx) => Ok(Some(*idx)),
+            Value::Function(idx) => Ok(Some(FunctionObjectKey::Function(*idx))),
             Value::Closure(closure_id) => {
-                let closure = self.closures.get(*closure_id as usize).ok_or_else(|| {
+                self.closures.get(*closure_id as usize).ok_or_else(|| {
                     InterpreterError::TypeError {
                         expected: "valid closure".to_string(),
                         got: format!("closure#{closure_id} not found"),
                     }
                 })?;
-                Ok(Some(closure.function_index))
+                Ok(Some(FunctionObjectKey::Closure(*closure_id)))
             }
             _ => Ok(None),
         }
@@ -10638,10 +10681,11 @@ impl InterpreterCore {
         &mut self,
         value: &Value,
     ) -> Result<Option<ObjectId>, InterpreterError> {
-        let Some(func_idx) = self.function_index_for_value(value)? else {
+        let Some(function_key) = self.function_prototype_key_for_value(value)? else {
             return Ok(None);
         };
-        self.ensure_function_prototype(func_idx).map(Some)
+        self.ensure_function_prototype_for_key(function_key)
+            .map(Some)
     }
 
     // -- JSON.parse recursive-descent parser (bd-zql4d) --------------------
@@ -17826,7 +17870,7 @@ mod tests {
         };
         let prototype_id = *core
             .function_prototypes
-            .get(&0)
+            .get(&FunctionObjectKey::Function(0))
             .expect("constructor prototype should be allocated");
         let instance = core
             .heap
@@ -18277,6 +18321,158 @@ mod tests {
             .expect("class expression constructor and prototype method should execute");
 
         assert_eq!(result.value, Value::Int(1));
+    }
+
+    fn execute_class_expression_source_bd_va13y(source: &str) -> Value {
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect("bd-va13y class expression source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd-va13y-class-expression.js");
+        let output = lower_ir0_to_ir3(
+            &ir0,
+            &LoweringContext::new("trace-bd-va13y", "decision-bd-va13y", "policy-bd-va13y"),
+        )
+        .expect("bd-va13y class expression source should lower");
+        quickjs_test_core()
+            .execute(&output.ir3)
+            .expect("bd-va13y class expression source should execute")
+            .value
+    }
+
+    #[test]
+    fn named_class_expression_constructor_and_method_share_private_self_bd_va13y() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "let C = class Inner { \
+                     constructor(){ this.ctor = Inner; } \
+                     method(){ return Inner; } \
+                 }; \
+                 let D = C; C = 0; let value = new D(); \
+                 value.ctor === D && value.method() === D;"
+            ),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn named_class_expression_nested_method_closure_keeps_self_bd_va13y() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "let C = class Inner { self(){ return () => Inner; } }; \
+                 let D = C; C = 0; new D().self()() === D;"
+            ),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn named_class_expression_nested_constructor_closure_keeps_self_bd_va13y() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "let C = class Inner { constructor(){ this.self = () => Inner; } }; \
+                 let D = C; C = 0; new D().self() === D;"
+            ),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn named_class_expression_shadows_outer_but_not_params_or_locals_bd_va13y() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "let Inner = 7; \
+                 let C = class Inner { \
+                     parameter(Inner){ return Inner; } \
+                     local(){ let Inner = 9; return Inner; } \
+                     self(){ return Inner; } \
+                 }; \
+                 let value = new C(); \
+                 value.parameter(8) === 8 && value.local() === 9 && \
+                 value.self() === C && Inner === 7;"
+            ),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn duplicate_named_class_expressions_keep_distinct_self_cells_bd_va13y() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "let A = class Inner { method(){ return Inner; } }; \
+                 let B = class Inner { method(){ return Inner; } }; \
+                 new A().method() === A && new B().method() === B;"
+            ),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn nested_factory_class_expression_shares_constructor_and_method_self_bd_va13y() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "function make(){ \
+                     return class Inner { \
+                         constructor(){ this.ctor = Inner; } \
+                         method(){ return Inner; } \
+                     }; \
+                 } \
+                 let C = make(); let D = make(); \
+                 let c = new C(); let d = new D(); \
+                 (c.ctor === C ? 1 : 0) + \
+                 (c.method() === C ? 2 : 0) + \
+                 (d.ctor === D ? 4 : 0) + \
+                 (d.method() === D ? 8 : 0) + \
+                 (C !== D ? 16 : 0) + \
+                 (c instanceof C ? 32 : 0) + \
+                 (d instanceof D ? 64 : 0) + \
+                 (!(c instanceof D) ? 128 : 0) + \
+                 (!(d instanceof C) ? 256 : 0);"
+            ),
+            Value::Int(511)
+        );
+    }
+
+    #[test]
+    fn class_method_name_does_not_overwrite_same_named_outer_capture_bd_va13y() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "let method = 7; \
+                 let C = class Inner { method(){ return method; } }; \
+                 new C().method();"
+            ),
+            Value::Int(7)
+        );
+    }
+
+    #[test]
+    fn named_class_expression_self_does_not_leak_bd_va13y() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y("let C = class Inner {}; typeof Inner;"),
+            Value::str("undefined")
+        );
+    }
+
+    #[test]
+    fn anonymous_class_has_no_synthetic_self_binding_bd_va13y() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "let C = class { \
+                     constructor(){ \
+                         try { anonymous; } catch (error) { this.kind = error.name; } \
+                     } \
+                 }; \
+                 new C().kind;"
+            ),
+            Value::str("ReferenceError")
+        );
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "let anonymous = 9; \
+                 let C = class { method(){ return anonymous; } }; \
+                 new C().method();"
+            ),
+            Value::Int(9)
+        );
     }
 
     #[test]

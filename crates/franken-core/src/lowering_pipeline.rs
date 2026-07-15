@@ -37,6 +37,17 @@ const COMPONENT: &str = "lowering_pipeline";
 const IFC_RUNTIME_GUARD_CAPABILITY: &str = "ifc.check_flow";
 const IFC_FLOW_PROOF_ERROR_CODE: &str = "FE-LOWER-IFC-0001";
 const IFC_FLOW_PROOF_SCHEMA_VERSION: &str = "frankenengine.ir2_flow_proof_witness.v1";
+pub(crate) const CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX: &str =
+    "\0class-expression-constructor-self\0";
+const CLASS_EXPRESSION_METHOD_SELF_CAPTURE_PREFIX: &str = "\0class-expression-method-self\0";
+
+fn class_expression_constructor_self_capture_name(name: &str, origin_id: BindingId) -> String {
+    format!("{CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX}{origin_id}\0{name}")
+}
+
+fn class_expression_method_self_capture_name(name: &str, origin_id: BindingId) -> String {
+    format!("{CLASS_EXPRESSION_METHOD_SELF_CAPTURE_PREFIX}{origin_id}\0{name}")
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoweringContext {
@@ -2162,6 +2173,112 @@ fn restore_block_lexical_bindings(
         } else {
             binding_lookup.remove(&name);
         }
+    }
+}
+
+fn restore_class_expression_self_binding(
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    self_name: Option<&str>,
+    enclosing_binding: Option<BindingId>,
+) {
+    let Some(self_name) = self_name else {
+        return;
+    };
+    if let Some(binding_id) = enclosing_binding {
+        binding_lookup.insert(self_name.to_string(), binding_id);
+    } else {
+        binding_lookup.remove(self_name);
+    }
+}
+
+fn emit_reference_error_throw(ops: &mut Vec<Ir1Op>, name: &str) {
+    ops.push(Ir1Op::LoadLiteral {
+        value: Ir1Literal::String(format!("{name} is not defined")),
+    });
+    ops.push(Ir1Op::HostCall {
+        capability: "builtin:ReferenceError".to_string(),
+        arg_count: 1,
+    });
+    ops.push(Ir1Op::Throw);
+    ops.push(Ir1Op::LoadLiteral {
+        value: Ir1Literal::Undefined,
+    });
+}
+
+/// Class bodies use ordinary function lowering, but an unresolved bare name
+/// must still throw instead of becoming a captured `undefined` placeholder.
+/// Preserve the special `typeof missingName` behavior and any real enclosing
+/// binding; named class expressions install their private self alias in the
+/// outer lookup before this pass runs.
+fn rewrite_unresolved_class_body_loads(
+    body_ops: &mut Vec<Ir1Op>,
+    body_lookup: &BTreeMap<String, BindingId>,
+    pre_lower_names: &BTreeSet<String>,
+    outer_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let locally_defined_ids: BTreeSet<BindingId> = body_ops
+        .iter()
+        .filter_map(|op| match op {
+            Ir1Op::StoreBinding { binding_id } | Ir1Op::DeclareFunction { binding_id, .. } => {
+                Some(*binding_id)
+            }
+            _ => None,
+        })
+        .collect();
+    let unresolved_by_id: BTreeMap<BindingId, String> = body_lookup
+        .iter()
+        .filter(|(name, binding_id)| {
+            !is_internal_lowering_binding(name)
+                && !pre_lower_names.contains(name.as_str())
+                && !outer_lookup.contains_key(name.as_str())
+                && !locally_defined_ids.contains(binding_id)
+        })
+        .map(|(name, binding_id)| (*binding_id, name.clone()))
+        .collect();
+    if unresolved_by_id.is_empty() {
+        return BTreeSet::new();
+    }
+    let unresolved_names = unresolved_by_id.values().cloned().collect();
+
+    let mut rewritten = Vec::with_capacity(body_ops.len());
+    for (index, op) in body_ops.iter().enumerate() {
+        if let Ir1Op::LoadBinding { binding_id } = op
+            && let Some(name) = unresolved_by_id.get(binding_id)
+            && !matches!(
+                body_ops.get(index.saturating_add(1)),
+                Some(Ir1Op::UnaryOp {
+                    operator: UnaryOperator::Typeof
+                })
+            )
+        {
+            emit_reference_error_throw(&mut rewritten, name);
+            continue;
+        }
+        rewritten.push(op.clone());
+    }
+    *body_ops = rewritten;
+    unresolved_names
+}
+
+/// Give a class-expression self capture a runtime-private name while retaining
+/// its exact body and outer binding IDs. Constructor and method markers are
+/// deliberately distinct: only a constructor marker is initialized to the new
+/// closure at runtime, while methods capture the already-created class value.
+fn rewrite_class_expression_self_capture(
+    body_lookup: &BTreeMap<String, BindingId>,
+    self_name: &str,
+    runtime_name: String,
+    free_vars: &mut [String],
+    free_var_ids: &[BindingId],
+) {
+    let Some(self_binding) = body_lookup.get(self_name) else {
+        return;
+    };
+    let Some(index) = free_var_ids.iter().position(|id| id == self_binding) else {
+        return;
+    };
+    if let Some(free_var) = free_vars.get_mut(index) {
+        *free_var = runtime_name;
     }
 }
 
@@ -5081,9 +5198,9 @@ fn emit_exact_nested_capture_scope(
     // function-frame binding register.
     let mut sources = Vec::with_capacity(names.len());
     for (name, outer_id) in names.iter().zip(outer_ids.iter()) {
-        let source = if function_free_var_names.contains_key(outer_id) {
+        let source = if let Some(parent_runtime_name) = function_free_var_names.get(outer_id) {
             let dst = alloc_register(register_cursor);
-            let name_pool_index = push_constant(&mut ir3.constant_pool, name);
+            let name_pool_index = push_constant(&mut ir3.constant_pool, parent_runtime_name);
             ir3.instructions.push(Ir3Instruction::LoadScoped {
                 dst,
                 name_pool_index,
@@ -8101,6 +8218,13 @@ fn lower_class_expression_to_ir1(
     let constructor = body
         .iter()
         .find(|method| method.kind == MethodKind::Constructor);
+    let class_binding = alloc_internal_binding(
+        bindings,
+        binding_lookup,
+        binding_index,
+        scope_id,
+        "class_expression",
+    )?;
     let mut body_ops = Vec::new();
     let mut body_bindings = Vec::new();
     let mut body_lookup = BTreeMap::new();
@@ -8140,7 +8264,9 @@ fn lower_class_expression_to_ir1(
             ctor.span.clone(),
         )?;
     }
-    let ctor_pre_lower_names = if let Some(ctor) = constructor {
+    let ctor_enclosing_self_binding =
+        name.and_then(|self_name| binding_lookup.insert(self_name.to_string(), class_binding));
+    let mut ctor_pre_lower_names = if let Some(ctor) = constructor {
         let pre_lower_names = prepare_function_body_bindings(
             Some(&ctor.body.body),
             parameter_binding_names,
@@ -8177,6 +8303,13 @@ fn lower_class_expression_to_ir1(
         });
         body_ops.push(Ir1Op::Return);
     }
+    let unresolved_ctor_names = rewrite_unresolved_class_body_loads(
+        &mut body_ops,
+        &body_lookup,
+        &ctor_pre_lower_names,
+        binding_lookup,
+    );
+    ctor_pre_lower_names.extend(unresolved_ctor_names);
     let (mut ctor_free_vars, mut ctor_free_var_ids, mut ctor_free_var_outer_ids) =
         collect_free_vars(
             &body_lookup,
@@ -8196,14 +8329,16 @@ fn lower_class_expression_to_ir1(
         binding_index,
         scope_id,
     );
-
-    let class_binding = alloc_internal_binding(
-        bindings,
-        binding_lookup,
-        binding_index,
-        scope_id,
-        "class_expression",
-    )?;
+    if let Some(self_name) = name {
+        rewrite_class_expression_self_capture(
+            &body_lookup,
+            self_name,
+            class_expression_constructor_self_capture_name(self_name, class_binding),
+            &mut ctor_free_vars,
+            &ctor_free_var_ids,
+        );
+    }
+    restore_class_expression_self_binding(binding_lookup, name, ctor_enclosing_self_binding);
     ops.push(Ir1Op::CreateFunction {
         name: name.map(str::to_string),
         param_names,
@@ -8317,7 +8452,9 @@ fn lower_class_expression_to_ir1(
                 method.span.clone(),
             )?;
         }
-        let method_pre_lower_names = prepare_function_body_bindings(
+        let method_enclosing_self_binding =
+            name.and_then(|self_name| binding_lookup.insert(self_name.to_string(), class_binding));
+        let mut method_pre_lower_names = prepare_function_body_bindings(
             Some(&method.body.body),
             parameter_binding_names,
             &mut method_lookup,
@@ -8349,6 +8486,13 @@ fn lower_class_expression_to_ir1(
             });
             method_body_ops.push(Ir1Op::Return);
         }
+        let unresolved_method_names = rewrite_unresolved_class_body_loads(
+            &mut method_body_ops,
+            &method_lookup,
+            &method_pre_lower_names,
+            binding_lookup,
+        );
+        method_pre_lower_names.extend(unresolved_method_names);
         let (mut method_free_vars, mut method_free_var_ids, mut method_free_var_outer_ids) =
             collect_free_vars(
                 &method_lookup,
@@ -8368,6 +8512,16 @@ fn lower_class_expression_to_ir1(
             binding_index,
             scope_id,
         );
+        if let Some(self_name) = name {
+            rewrite_class_expression_self_capture(
+                &method_lookup,
+                self_name,
+                class_expression_method_self_capture_name(self_name, class_binding),
+                &mut method_free_vars,
+                &method_free_var_ids,
+            );
+        }
+        restore_class_expression_self_binding(binding_lookup, name, method_enclosing_self_binding);
 
         let method_super_binding = if super_class.is_some() {
             Some(alloc_internal_binding(
@@ -13489,6 +13643,99 @@ mod tests {
     #[test]
     fn named_class_expression_lowers() {
         assert_class_expression_lowers(basic_class_expression(Some("NamedClass")));
+    }
+
+    #[test]
+    fn named_class_expression_uses_private_constructor_and_method_captures_bd_va13y() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                "let C = class Inner { \
+                     constructor(){ this.ctor = Inner; } \
+                     method(){ return Inner; } \
+                 };",
+                ParseGoal::Script,
+            )
+            .expect("bd-va13y named class source should parse");
+        let module = lower_ir0_to_ir1(&Ir0Module::from_syntax_tree(tree, "bd_va13y_named.js"))
+            .expect("bd-va13y named class source should lower")
+            .module;
+        let capture_names: Vec<&str> = module
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Ir1Op::CreateFunction { free_vars, .. } => Some(free_vars.as_slice()),
+                _ => None,
+            })
+            .flatten()
+            .map(String::as_str)
+            .collect();
+
+        assert!(
+            capture_names
+                .iter()
+                .any(|name| { name.starts_with(CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX) })
+        );
+        assert!(
+            capture_names
+                .iter()
+                .any(|name| name.starts_with(CLASS_EXPRESSION_METHOD_SELF_CAPTURE_PREFIX))
+        );
+        assert!(!capture_names.contains(&"Inner"));
+        assert!(
+            module
+                .scopes
+                .iter()
+                .flat_map(|scope| &scope.bindings)
+                .all(|binding| binding.name != "Inner"),
+            "class self name must not become an enclosing lexical binding"
+        );
+    }
+
+    #[test]
+    fn anonymous_class_unresolved_name_is_not_promoted_to_outer_capture_bd_va13y() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                "let C = class { method(){ try { anonymous; } catch (error) {} } };",
+                ParseGoal::Script,
+            )
+            .expect("bd-va13y anonymous class source should parse");
+        let module = lower_ir0_to_ir1(&Ir0Module::from_syntax_tree(tree, "bd_va13y_anonymous.js"))
+            .expect("bd-va13y anonymous class source should lower")
+            .module;
+
+        assert!(
+            module
+                .scopes
+                .iter()
+                .flat_map(|scope| &scope.bindings)
+                .all(|binding| binding.name != "anonymous")
+        );
+        let functions: Vec<(&[String], &[Ir1Op])> = module
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Ir1Op::CreateFunction {
+                    free_vars,
+                    body_ops,
+                    ..
+                } => Some((free_vars.as_slice(), body_ops.as_slice())),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            functions
+                .iter()
+                .all(|(free_vars, _)| { !free_vars.iter().any(|name| name == "anonymous") })
+        );
+        assert!(functions.iter().any(|(_, body_ops)| {
+            body_ops.iter().any(|op| {
+                matches!(
+                    op,
+                    Ir1Op::HostCall { capability, .. }
+                        if capability == "builtin:ReferenceError"
+                )
+            })
+        }));
     }
 
     #[test]

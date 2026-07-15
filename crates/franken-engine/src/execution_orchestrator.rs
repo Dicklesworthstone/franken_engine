@@ -1077,6 +1077,30 @@ impl ExecutionOrchestrator {
         TraceId::from_bytes(bytes)
     }
 
+    fn module_root_for_execution(
+        package: &ExtensionPackage,
+    ) -> Option<(String, Option<std::path::PathBuf>)> {
+        let parent = package
+            .source_file
+            .as_deref()
+            .and_then(|path| std::path::Path::new(path).parent())?;
+        let root = if parent.as_os_str().is_empty() {
+            std::path::Path::new(".")
+        } else {
+            parent
+        };
+        let root_string = root.display().to_string();
+
+        // Canonicalize once so both lanes enforce the same pinned containment
+        // boundary. A source_file can also be a diagnostic-only label whose
+        // parent does not exist; retaining the lexical root in that case
+        // preserves the existing behavior for programs without imports, while
+        // the interpreter still canonicalizes and fails closed if resolution
+        // is actually attempted.
+        let canonical_root = root.canonicalize().ok();
+        Some((root_string, canonical_root))
+    }
+
     fn lane_router_for_execution(package: &ExtensionPackage) -> LaneRouter {
         // Console is granted by default because orchestrated console output is
         // capture-only: it lands in `OrchestratorResult::console_output` and the
@@ -1095,23 +1119,23 @@ impl ExecutionOrchestrator {
                 .filter_map(|s| RuntimeCapability::from_tag_str(s)),
         );
 
+        let module_root = Self::module_root_for_execution(package);
+
         let mut quickjs_config = InterpreterConfig::quickjs_defaults();
         quickjs_config.granted_capabilities = granted_capabilities.clone();
         quickjs_config.extension_id = Some(package.extension_id.clone());
-        quickjs_config.module_root = package
-            .source_file
-            .as_deref()
-            .and_then(|path| std::path::Path::new(path).parent())
-            .map(|path| path.display().to_string());
+        if let Some((root, canonical_root)) = module_root.as_ref() {
+            quickjs_config.module_root = Some(root.clone());
+            quickjs_config.canonical_module_root = canonical_root.clone();
+        }
 
         let mut v8_config = InterpreterConfig::v8_defaults();
         v8_config.granted_capabilities = granted_capabilities;
         v8_config.extension_id = Some(package.extension_id.clone());
-        v8_config.module_root = package
-            .source_file
-            .as_deref()
-            .and_then(|path| std::path::Path::new(path).parent())
-            .map(|path| path.display().to_string());
+        if let Some((root, canonical_root)) = module_root {
+            v8_config.module_root = Some(root);
+            v8_config.canonical_module_root = canonical_root;
+        }
 
         LaneRouter::with_configs(quickjs_config, v8_config)
     }

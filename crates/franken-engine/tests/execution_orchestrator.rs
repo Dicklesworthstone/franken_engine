@@ -581,7 +581,9 @@ fn orchestrator_error_debug_is_nonempty() {
 // ────────────────────────────────────────────────────────────────────────────
 
 use frankenengine_engine::ast::ParseGoal;
-use frankenengine_engine::baseline_interpreter::LaneChoice;
+use frankenengine_engine::baseline_interpreter::{
+    InterpreterError, LaneChoice, ModuleResolutionFailureReason,
+};
 use frankenengine_engine::expected_loss_selector::ContainmentAction;
 use frankenengine_engine::ts_normalization::SourceLanguage;
 
@@ -648,6 +650,132 @@ fn source_file_ts_triggers_ts_normalization_pathway() {
         SourceLanguage::TypeScript
     );
     assert!(result.source_ingestion.normalization_applied);
+}
+
+#[test]
+fn source_file_basename_resolves_relative_imports_in_both_lanes_bd_fw7zd_4() {
+    let current_dir = std::env::current_dir().expect("read test working directory");
+    let fixture =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/perf_h2/input.js");
+    let relative_fixture = fixture
+        .strip_prefix(&current_dir)
+        .expect("fixture must be below the Cargo test working directory")
+        .to_string_lossy()
+        .replace('\\', "/");
+    let source = format!("import './{relative_fixture}'; 42;");
+
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let config = OrchestratorConfig {
+            force_lane: Some(lane),
+            parse_goal: ParseGoal::Module,
+            ..OrchestratorConfig::default()
+        };
+        let mut package = simple_package("ext-basename-import", &source);
+        package.source_file = Some("entry.mjs".to_string());
+
+        let result = ExecutionOrchestrator::new(config)
+            .execute(&package)
+            .unwrap_or_else(|error| panic!("{lane:?} relative import failed: {error}"));
+        assert_eq!(result.lane, lane);
+    }
+}
+
+#[test]
+fn source_file_basename_keeps_parent_import_outside_cached_root_bd_fw7zd_4() {
+    let current_dir = std::env::current_dir()
+        .expect("read test working directory")
+        .canonicalize()
+        .expect("canonicalize test working directory");
+    let workspace_manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../Cargo.toml")
+        .canonicalize()
+        .expect("workspace manifest must exist");
+    assert!(
+        !workspace_manifest.starts_with(&current_dir),
+        "escape fixture must be outside the basename-derived module root"
+    );
+
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let config = OrchestratorConfig {
+            force_lane: Some(lane),
+            parse_goal: ParseGoal::Module,
+            ..OrchestratorConfig::default()
+        };
+        let mut package = simple_package("ext-basename-escape", "import '../../Cargo.toml';");
+        package.source_file = Some("entry.mjs".to_string());
+
+        let error = ExecutionOrchestrator::new(config)
+            .execute(&package)
+            .expect_err("parent import outside cached root must be refused");
+        assert!(
+            matches!(
+                error,
+                OrchestratorError::Interpreter(InterpreterError::ModuleResolutionFailed {
+                    reason: ModuleResolutionFailureReason::Other(reason),
+                    ..
+                }) if reason.contains("escapes module root")
+            ),
+            "{lane:?} must reject the parent import at the containment boundary"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn source_file_basename_rejects_in_root_symlink_escape_bd_fw7zd_4() {
+    use std::os::unix::fs::symlink;
+
+    let current_dir = std::env::current_dir()
+        .expect("read test working directory")
+        .canonicalize()
+        .expect("canonicalize test working directory");
+    let in_root = tempfile::Builder::new()
+        .prefix("bd-fw7zd-4-in-root-")
+        .tempdir_in(&current_dir)
+        .expect("create in-root scratch directory");
+    let outside = tempfile::tempdir().expect("create outside scratch directory");
+    let outside_module = outside.path().join("outside.mjs");
+    std::fs::write(&outside_module, "export const escaped = true;").expect("write outside module");
+    assert!(
+        !outside_module
+            .canonicalize()
+            .expect("canonicalize outside module")
+            .starts_with(&current_dir),
+        "symlink target must be outside the basename-derived module root"
+    );
+
+    let link = in_root.path().join("escape.mjs");
+    symlink(&outside_module, &link).expect("create in-root symlink to outside module");
+    let relative_link = link
+        .strip_prefix(&current_dir)
+        .expect("symlink must be created below the module root")
+        .to_string_lossy()
+        .replace('\\', "/");
+    let source = format!("import './{relative_link}';");
+
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let config = OrchestratorConfig {
+            force_lane: Some(lane),
+            parse_goal: ParseGoal::Module,
+            ..OrchestratorConfig::default()
+        };
+        let mut package = simple_package("ext-basename-symlink-escape", &source);
+        package.source_file = Some("entry.mjs".to_string());
+
+        let error = ExecutionOrchestrator::new(config)
+            .execute(&package)
+            .expect_err("symlink import outside cached root must be refused");
+        assert!(
+            matches!(
+                error,
+                OrchestratorError::Interpreter(InterpreterError::ModuleResolutionFailed {
+                    reason: ModuleResolutionFailureReason::Other(reason),
+                    ..
+                }) if reason.contains("escapes module root")
+            ),
+            "{lane:?} must reject the symlink target at the canonical boundary"
+        );
+    }
 }
 
 // -- OrchestratorResult field coverage ----------------------------------------

@@ -6407,6 +6407,12 @@ pub struct InterpreterCore {
     /// writes join this label after per-call frame clearing, so zero-argument
     /// callbacks cannot lose lifecycle/emission context.
     active_inline_callback_context_label: Option<Label>,
+    /// Transaction probes for isolated callbacks whose caller publishes an
+    /// in-flight state before invocation. The innermost probe flips after
+    /// CallMethod validates the callee but before any persistent callee setup
+    /// (rest arrays, promises, generator records, or guest code); it deliberately
+    /// survives module snapshot/restore.
+    inline_callback_start_probes: Vec<bool>,
     /// WeakMap storage with weak reference semantics.
     weakmap_storage: BTreeMap<ObjectId, WeakMapStorage>,
     /// Global Symbol registry for `Symbol.for(key)` / `Symbol.keyFor(sym)`
@@ -6531,6 +6537,7 @@ impl InterpreterCore {
             nondeterminism_trace,
             register_labels: vec![Label::Public; max_regs],
             active_inline_callback_context_label: None,
+            inline_callback_start_probes: Vec::new(),
             weakmap_storage: BTreeMap::new(),
             symbol_registry: BTreeMap::new(),
             gc_remembered_set: BTreeSet::new(),
@@ -9318,6 +9325,22 @@ impl InterpreterCore {
             let Some((is_final, record_index, callback, value, label)) = action else {
                 return Ok(());
             };
+            if !is_final && callback.is_none() {
+                return Err(InterpreterError::TypeError {
+                    expected: "Writable with a callable write implementation".to_string(),
+                    got: "missing write option".to_string(),
+                });
+            }
+            if !is_final {
+                self.preflight_inline_method_call_with_argument_label(
+                    Some(module),
+                    callback
+                        .as_ref()
+                        .expect("non-final Writable callback was checked"),
+                    3,
+                    Some(&label),
+                )?;
+            }
             let token = self.allocate_writable_completion_token()?;
             let Some(state) = self.writable_streams.get_mut(&object_id) else {
                 return Ok(());
@@ -9362,32 +9385,45 @@ impl InterpreterCore {
                 return Ok(());
             }
 
-            let Some(callback) = callback else {
-                return Err(InterpreterError::TypeError {
-                    expected: "Writable with a callable write implementation".to_string(),
-                    got: "missing write option".to_string(),
-                });
-            };
+            let callback = callback.expect("non-final Writable callback was preflighted");
             let completion = Value::BuiltinFunction(BuiltinFunction::writable_completion(
                 BuiltinFunctionKind::StreamWritableWriteDone,
                 object_id,
                 token,
             ));
-            let invocation = self.invoke_inline_method_call_with_argument_label(
-                Some(module),
-                callback,
-                Value::Object(object_id),
-                vec![value, Value::str("utf8"), completion],
-                Some(label.clone()),
-            );
+            let (invocation, callback_started) = self
+                .invoke_inline_method_call_tracking_callback_start(
+                    Some(module),
+                    callback,
+                    Value::Object(object_id),
+                    vec![value, Value::str("utf8"), completion],
+                    Some(label),
+                );
             if let Some(state) = self.writable_streams.get_mut(&object_id) {
                 state.inside_write_invocation = false;
             }
             // Bun/Node propagate a synchronous `_write` throw from write()
-            // itself. The guest callback never completed the engine-owned
-            // token, so preserve Active/buffered state rather than fabricating
-            // an asynchronous terminal completion.
-            invocation?;
+            // itself. Roll back only while the isolated wrapper is still in
+            // reversible startup. Once CallMethod commits the callback call,
+            // rest binding and other function-instantiation work may mutate
+            // persistent guest state, so preserve Active/buffered state rather
+            // than retrying those effects.
+            if let Err(error) = invocation {
+                if !callback_started {
+                    let Some(state) = self.writable_streams.get_mut(&object_id) else {
+                        return Err(error);
+                    };
+                    if let Some(record) = state
+                        .writes
+                        .iter_mut()
+                        .find(|record| record.status == WritableWriteStatus::Active(token))
+                    {
+                        record.status = WritableWriteStatus::Pending;
+                        self.next_writable_completion_token = token;
+                    }
+                }
+                return Err(error);
+            }
             let completed = self.writable_streams.get(&object_id).is_some_and(|state| {
                 state
                     .writes
@@ -18863,6 +18899,7 @@ impl InterpreterCore {
                         } else {
                             Value::Undefined
                         };
+                        self.mark_inline_callback_started();
                         let result = self.generator_next(module, gen_id, arg)?;
                         self.write_reg(dst, result)?;
                         self.ip += 1;
@@ -18876,6 +18913,7 @@ impl InterpreterCore {
                         // must be catchable by an enclosing try/catch in this
                         // frame (bd-8enww.4.7).
                         self.pending_hostcall_result_label = None;
+                        self.mark_inline_callback_started();
                         let result = match self.dispatch_builtin_function(
                             module,
                             builtin,
@@ -18998,6 +19036,7 @@ impl InterpreterCore {
                                 got: format!("exceeded u32::MAX ({})", self.generators.len()),
                             }
                         })?;
+                        self.mark_inline_callback_started();
                         self.generators.push(GeneratorObject {
                             function_index: func_idx,
                             closure_index: Some(*cid),
@@ -19037,6 +19076,7 @@ impl InterpreterCore {
                             )?;
                             arg_vals.push(self.read_reg(reg)?);
                         }
+                        self.mark_inline_callback_started();
                         self.apply_rest_param(&mut arg_vals, func.rest_param_index, args)?;
 
                         self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
@@ -19148,6 +19188,7 @@ impl InterpreterCore {
                                     ),
                                 }
                             })?;
+                        self.mark_inline_callback_started();
                         self.async_generators.push(AsyncGeneratorObject {
                             function_index: func_idx,
                             closure_index: Some(*cid),
@@ -19188,6 +19229,7 @@ impl InterpreterCore {
                         arg_vals.push(self.read_reg(reg)?);
                         arg_labels.push(self.get_register_label(reg)?.clone());
                     }
+                    self.mark_inline_callback_started();
                     self.apply_rest_param(&mut arg_vals, func.rest_param_index, args)?;
                     self.apply_rest_param_labels(&mut arg_labels, func.rest_param_index, args)?;
 
@@ -29764,6 +29806,108 @@ impl InterpreterCore {
         .map(|(value, _label)| value)
     }
 
+    fn mark_inline_callback_started(&mut self) {
+        if let Some(started) = self.inline_callback_start_probes.last_mut() {
+            *started = true;
+        }
+    }
+
+    fn invoke_inline_method_call_tracking_callback_start(
+        &mut self,
+        module: Option<&Ir3Module>,
+        callee: Value,
+        receiver: Value,
+        arguments: Vec<Value>,
+        argument_label: Option<Label>,
+    ) -> (Result<(Value, Label), InterpreterError>, bool) {
+        self.inline_callback_start_probes.push(false);
+        let result = self.invoke_inline_method_call_with_argument_label(
+            module,
+            callee,
+            receiver,
+            arguments,
+            argument_label,
+        );
+        let callback_started = self
+            .inline_callback_start_probes
+            .pop()
+            .expect("isolated callback start probe remained balanced");
+        if self.inline_callback_start_probes.is_empty() {
+            // The probe stack is execution-transient. Drop its allocation at
+            // the outer boundary so repeated callbacks do not create hidden
+            // resident memory outside the interpreter accounting model.
+            self.inline_callback_start_probes = Vec::new();
+        }
+        (result, callback_started)
+    }
+
+    /// Validate every fallible, tracked allocation needed to enter an isolated
+    /// inline callback without cloning or mutating interpreter state. Callers
+    /// that publish an externally visible in-flight state can use this before
+    /// committing that transition, then invoke through the checked path below.
+    fn preflight_inline_method_call_with_argument_label(
+        &self,
+        module: Option<&Ir3Module>,
+        callee: &Value,
+        argument_count: usize,
+        argument_label: Option<&Label>,
+    ) -> Result<(), InterpreterError> {
+        let caller_module = module.ok_or_else(|| InterpreterError::TypeError {
+            expected: "module-backed Function.prototype.call/apply dispatch".to_string(),
+            got: "missing module context".to_string(),
+        })?;
+        let foreign_module = self.foreign_closure_module(callee, caller_module)?;
+        if foreign_module.is_some() {
+            self.check_module_reentrant_call_depth()?;
+        }
+        let module = foreign_module.as_deref().unwrap_or(caller_module);
+        let arg_count = u32::try_from(argument_count).map_err(|_| InterpreterError::TypeError {
+            expected: "u32-bounded Function.prototype.call/apply argument count".to_string(),
+            got: format!("{argument_count} arguments"),
+        })?;
+        let required_registers =
+            2u32.checked_add(arg_count)
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "u32-bounded Function.prototype.call/apply register budget"
+                        .to_string(),
+                    got: format!("2 metadata registers + {arg_count} arguments"),
+                })?;
+        if required_registers > self.config.max_registers {
+            return Err(InterpreterError::TypeError {
+                expected: "Function.prototype.call/apply arguments within register budget"
+                    .to_string(),
+                got: format!(
+                    "{required_registers} registers required but max is {}",
+                    self.config.max_registers
+                ),
+            });
+        }
+
+        let transient_execution_bytes = Self::transient_module_wrapper_bytes(module)
+            .saturating_add(self.registers_memory_bytes())
+            .saturating_add(self.register_context_labels_memory_bytes())
+            .saturating_add(self.scope_chain_memory_bytes())
+            .saturating_add(self.call_stack_memory_bytes());
+        let callback_context_label = match (
+            self.active_inline_callback_context_label.as_ref(),
+            argument_label,
+        ) {
+            (Some(inherited), Some(argument)) => Some(if inherited >= argument {
+                inherited
+            } else {
+                argument
+            }),
+            (Some(inherited), None) => Some(inherited),
+            (None, argument) => argument,
+        };
+        let callback_context_bytes = callback_context_label
+            .map(Self::estimate_label_bytes)
+            .unwrap_or(0);
+        self.check_temporary_memory_budget(
+            transient_execution_bytes.saturating_add(callback_context_bytes),
+        )
+    }
+
     /// Invoke an isolated inline callback under one aggregate IFC context.
     /// EventEmitter supplies its emission label here; ordinary inline calls use
     /// `None` and retain their existing value-only behavior. The context is
@@ -29777,6 +29921,12 @@ impl InterpreterCore {
         arguments: Vec<Value>,
         argument_label: Option<Label>,
     ) -> Result<(Value, Label), InterpreterError> {
+        self.preflight_inline_method_call_with_argument_label(
+            module,
+            &callee,
+            arguments.len(),
+            argument_label.as_ref(),
+        )?;
         let caller_module = module.ok_or_else(|| InterpreterError::TypeError {
             expected: "module-backed Function.prototype.call/apply dispatch".to_string(),
             got: "missing module context".to_string(),
@@ -29844,18 +29994,8 @@ impl InterpreterCore {
                 .active_inline_callback_context_label
                 .as_ref()
                 .expect("dominant inherited callback context was checked");
-            self.check_temporary_memory_budget(
-                transient_execution_bytes.saturating_add(Self::estimate_label_bytes(inherited)),
-            )?;
             Some(inherited.clone())
         } else {
-            let argument_bytes = argument_label
-                .as_ref()
-                .map(Self::estimate_label_bytes)
-                .unwrap_or(0);
-            self.check_temporary_memory_budget(
-                transient_execution_bytes.saturating_add(argument_bytes),
-            )?;
             // Move the argument aggregate directly into the isolated context;
             // no second attacker-sized String allocation is needed.
             argument_label
@@ -53288,6 +53428,220 @@ mod async_runtime_tests_current {
     }
 
     #[test]
+    fn writable_missing_write_refusal_preserves_pending_transaction_bd_2q8dg() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let Value::Object(writable) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("generic Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        let label = Label::Custom {
+            name: "missing-write-refusal".repeat(8),
+            level: 23,
+        };
+        core.write_reg_with_label(1, Value::str("pending"), label.clone())
+            .expect("labeled write chunk");
+        let token_before = core.next_writable_completion_token;
+
+        assert!(matches!(
+            core.writable_write(
+                &module,
+                Value::Object(writable),
+                RegRange { start: 1, count: 1 },
+            ),
+            Err(InterpreterError::TypeError { expected, got })
+                if expected == "Writable with a callable write implementation"
+                    && got == "missing write option"
+        ));
+        let memory_after_enqueue = core.estimated_memory_bytes();
+        let state_after_enqueue = format!("{:?}", core.writable_streams[&writable]);
+        let state = &core.writable_streams[&writable];
+        assert_eq!(state.writes.len(), 1);
+        assert_eq!(state.writes[0].status, WritableWriteStatus::Pending);
+        assert_eq!(state.writes[0].label, label);
+        assert_eq!(state.lifecycle_label, label);
+        assert_eq!(state.buffered_length, "pending".len());
+        assert!(!state.inside_write_invocation);
+        assert_eq!(core.next_writable_completion_token, token_before);
+
+        assert!(matches!(
+            core.drive_writable(writable, &module),
+            Err(InterpreterError::TypeError { expected, got })
+                if expected == "Writable with a callable write implementation"
+                    && got == "missing write option"
+        ));
+        assert_eq!(
+            format!("{:?}", core.writable_streams[&writable]),
+            state_after_enqueue,
+            "repeated startup refusal must not mutate the queued transaction"
+        );
+        assert_eq!(core.next_writable_completion_token, token_before);
+        assert_eq!(core.estimated_memory_bytes(), memory_after_enqueue);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn writable_public_write_startup_has_exact_atomic_ceiling_bd_2q8dg() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadUndefined { dst: 0 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 3,
+                frame_size: 4,
+                name: Some("pending_write".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let label = Label::Custom {
+            name: "write-startup-ceiling".repeat(12),
+            level: 29,
+        };
+        let attempt = |budget: u64| {
+            let mut core = test_interpreter();
+            let options = core
+                .alloc_object_with_properties(&[("write", Value::Function(0))])
+                .expect("Writable write options");
+            core.write_reg(0, Value::Object(options))
+                .expect("Writable options register");
+            let Value::Object(writable) = core
+                .construct_stream_writable(RegRange { start: 0, count: 1 })
+                .expect("Writable with pending write")
+            else {
+                panic!("Writable constructor must return an object");
+            };
+            core.write_reg_with_label(1, Value::str("startup-chunk"), label.clone())
+                .expect("labeled startup chunk");
+            let baseline = core
+                .sync_estimated_memory_bytes()
+                .expect("startup refusal baseline");
+            let token_before = core.next_writable_completion_token;
+            core.config.max_total_memory_bytes = budget;
+            let result = core.writable_write(
+                &module,
+                Value::Object(writable),
+                RegRange { start: 1, count: 1 },
+            );
+            (core, writable, baseline, token_before, result)
+        };
+
+        let unbounded = attempt(u64::MAX);
+        assert_eq!(unbounded.4, Ok(Value::Bool(true)));
+        assert!(matches!(
+            unbounded.0.writable_streams[&unbounded.1].writes[0].status,
+            WritableWriteStatus::Active(_)
+        ));
+        let baseline = unbounded.2;
+        let callback_started = |core: &InterpreterCore, writable: ObjectId| {
+            core.writable_streams.get(&writable).is_some_and(|state| {
+                state
+                    .writes
+                    .front()
+                    .is_some_and(|record| matches!(record.status, WritableWriteStatus::Active(_)))
+            })
+        };
+        let mut distance = 1u64;
+        let mut upper = loop {
+            let budget = baseline.saturating_add(distance);
+            let candidate = attempt(budget);
+            if callback_started(&candidate.0, candidate.1) {
+                break budget;
+            }
+            distance = distance
+                .checked_mul(2)
+                .expect("Writable startup ceiling search remains bounded");
+            assert!(
+                distance <= (1 << 32),
+                "Writable startup ceiling is implausible"
+            );
+        };
+        let mut lower = baseline;
+        while lower < upper {
+            let midpoint = lower + (upper - lower) / 2;
+            let candidate = attempt(midpoint);
+            if callback_started(&candidate.0, candidate.1) {
+                upper = midpoint;
+            } else {
+                lower = midpoint + 1;
+            }
+        }
+        let exact_ceiling = lower;
+
+        let (mut refused_core, writable, _, token_before, refusal) = attempt(exact_ceiling - 1);
+        assert!(matches!(
+            refusal,
+            Err(InterpreterError::MemoryBudgetExceeded {
+                requested_bytes,
+                max_bytes,
+                ..
+            }) if requested_bytes == exact_ceiling && max_bytes == exact_ceiling - 1
+        ));
+        let state = &refused_core.writable_streams[&writable];
+        assert_eq!(state.writes.len(), 1);
+        assert_eq!(state.writes[0].status, WritableWriteStatus::Pending);
+        assert_eq!(state.writes[0].label, label);
+        assert_eq!(state.lifecycle_label, label);
+        assert_eq!(state.buffered_length, "startup-chunk".len());
+        assert!(!state.inside_write_invocation);
+        assert_eq!(refused_core.next_writable_completion_token, token_before);
+        assert_eq!(
+            refused_core.estimated_memory_bytes(),
+            refused_core.recompute_estimated_memory_bytes()
+        );
+
+        refused_core.config.max_total_memory_bytes = u64::MAX;
+        refused_core
+            .drive_writable(writable, &module)
+            .expect("Pending write must retry after the startup ceiling is raised");
+        let token = match refused_core.writable_streams[&writable].writes[0].status {
+            WritableWriteStatus::Active(token) => token,
+            ref status => panic!("retried write must be Active, got {status:?}"),
+        };
+        assert_eq!(token, token_before);
+        assert_eq!(refused_core.next_writable_completion_token, token + 1);
+        let completion = BuiltinFunction::writable_completion(
+            BuiltinFunctionKind::StreamWritableWriteDone,
+            writable,
+            token,
+        );
+        refused_core
+            .writable_write_done(&module, &completion, RegRange { start: 0, count: 0 })
+            .expect("retried write completion");
+        refused_core
+            .drain_runtime_checkpoint(Some(&module))
+            .expect("completed retried write drain");
+        let state = &refused_core.writable_streams[&writable];
+        assert!(state.writes.is_empty());
+        assert_eq!(state.buffered_length, 0);
+        assert_eq!(state.lifecycle_label, label);
+        assert_eq!(
+            refused_core.estimated_memory_bytes(),
+            refused_core.recompute_estimated_memory_bytes()
+        );
+
+        let (exact_core, exact_writable, _, exact_token, _) = attempt(exact_ceiling);
+        let entered_token = match exact_core.writable_streams[&exact_writable].writes[0].status {
+            WritableWriteStatus::Active(token) => token,
+            ref status => panic!("exact startup ceiling must enter guest, got {status:?}"),
+        };
+        assert_eq!(entered_token, exact_token);
+        assert_eq!(exact_core.next_writable_completion_token, exact_token + 1);
+        assert!(exact_core.inline_callback_start_probes.is_empty());
+        assert_eq!(
+            exact_core.estimated_memory_bytes(),
+            exact_core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
     fn synchronous_write_throw_propagates_without_fabricating_completion_bd_fw7zd() {
         let module = test_module_with_functions(
             vec![
@@ -53325,15 +53679,24 @@ mod async_runtime_tests_current {
             Err(InterpreterError::UncaughtException { .. })
         ));
         let state = &core.writable_streams[&writable];
-        assert!(matches!(
-            state.writes[0].status,
-            WritableWriteStatus::Active(_)
-        ));
+        let token = match state.writes[0].status {
+            WritableWriteStatus::Active(token) => token,
+            ref status => panic!("entered throwing write must stay Active, got {status:?}"),
+        };
         assert_eq!(state.buffered_length, 1);
         assert!(state.terminal_error.is_none());
         assert!(!state.inside_write_invocation);
         assert!(state.tick_sequence.is_none());
         assert_eq!(core.pending_exception, Some(Value::Int(31)));
+        let instructions_after_throw = core.instructions_executed;
+        core.drive_writable(writable, &module)
+            .expect("an entered throwing write must not be retried");
+        assert_eq!(
+            core.writable_streams[&writable].writes[0].status,
+            WritableWriteStatus::Active(token)
+        );
+        assert_eq!(core.instructions_executed, instructions_after_throw);
+        assert!(core.inline_callback_start_probes.is_empty());
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -53441,6 +53804,12 @@ mod async_runtime_tests_current {
         else {
             panic!("Writable constructor must return an object");
         };
+        core.writable_streams
+            .get_mut(&writable)
+            .expect("live Writable")
+            .write_callback = Some(Value::BuiltinFunction(BuiltinFunction::new_kind(
+            BuiltinFunctionKind::ArrayIsArray,
+        )));
         core.writable_enqueue(writable, Value::str("x"), Label::Public, None)
             .expect("pending write");
         core.next_writable_completion_token = u32::MAX;

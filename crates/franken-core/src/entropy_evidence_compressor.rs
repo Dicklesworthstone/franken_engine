@@ -38,6 +38,12 @@ use crate::hash_tiers::ContentHash;
 const MILLION: i64 = 1_000_000;
 /// Schema version for compressed evidence artifacts.
 pub const ENTROPY_SCHEMA_VERSION: &str = "franken-engine.entropy-evidence-compressor.v2";
+/// Schema version for compression certificates.
+pub const COMPRESSION_CERTIFICATE_SCHEMA_VERSION: &str =
+    "franken-engine.entropy-compression-certificate.v1";
+
+/// Allowed rounding distance from unit model mass.
+const KRAFT_NORMALIZATION_TOLERANCE_MILLIONTHS: i64 = 1_000;
 
 /// Maximum alphabet size for the compressor.
 const MAX_ALPHABET_SIZE: usize = 256;
@@ -707,6 +713,15 @@ pub struct CompressedEvidence {
 }
 
 impl CompressedEvidence {
+    /// Content identity of the complete serialized artifact semantics.
+    ///
+    /// This hash commits to the payload, schema, framing metadata, restored
+    /// symbol-stream hash, and arithmetic-model hash. It is an identity, not a
+    /// substitute for [`ArithmeticCoder::decode`] validation.
+    pub fn artifact_hash(&self) -> ContentHash {
+        content_hash_for_compressed_artifact(self)
+    }
+
     fn validate_metadata(&self, coder: &ArithmeticCoder) -> Result<(), EntropyError> {
         if self.schema != ENTROPY_SCHEMA_VERSION {
             return Err(decode_error(format!(
@@ -793,6 +808,7 @@ impl CompressedEvidence {
 /// The Shannon- and Kraft-named fields are empirical comparison and model-mass
 /// diagnostics, not a source-distribution or prefix-freeness proof.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CompressionCertificate {
     pub schema: String,
     /// Empirical entropy H(X) in millionths of bits per symbol.
@@ -813,7 +829,13 @@ pub struct CompressionCertificate {
     pub redundancy_millibits: i64,
     /// Number of symbols.
     pub symbol_count: u64,
-    /// Content hash for audit.
+    /// Content identity of the complete compressed artifact.
+    pub compressed_artifact_hash: ContentHash,
+    /// Content identity of the restored symbol stream.
+    pub content_hash: ContentHash,
+    /// Content identity of the canonical arithmetic model.
+    pub model_hash: ContentHash,
+    /// Content hash committing to every preceding certificate field.
     pub certificate_hash: ContentHash,
 }
 
@@ -825,21 +847,22 @@ impl CompressionCertificate {
         coder: &ArithmeticCoder,
         compressed: &CompressedEvidence,
     ) -> Result<Self, EntropyError> {
-        let restored = coder.decode(compressed)?;
-        let mut restored_estimator = EntropyEstimator::new();
-        for symbol in restored {
-            restored_estimator.observe(symbol);
-        }
+        let restored_estimator = estimator_for_verified_artifact(coder, compressed)?;
         if restored_estimator != *estimator {
             return Err(decode_error(
                 "decoded symbol histogram does not match certificate estimator",
             ));
         }
         let kraft_sum = coder.verify_kraft_inequality()?;
-        Ok(Self::build(estimator, compressed, kraft_sum))
+        let certificate = Self::build(estimator, compressed, kraft_sum);
+        certificate.verify_integrity()?;
+        Ok(certificate)
     }
 
-    /// Build a certificate from compression results.
+    /// Build an unchecked structural certificate from compression results.
+    ///
+    /// Production issuers must use [`Self::build_verified`]. This helper does
+    /// not prove estimator/artifact association or canonical model mass.
     pub fn build(
         estimator: &EntropyEstimator,
         compressed: &CompressedEvidence,
@@ -848,45 +871,119 @@ impl CompressionCertificate {
         let entropy = estimator.entropy_millibits();
         let lower_bound = estimator.shannon_lower_bound_bits();
         let achieved = compressed.compressed_bits;
-        let achieved_bits_millionths = i128::from(achieved).saturating_mul(i128::from(MILLION));
-        let lower_bound_millionths = i128::from(lower_bound).saturating_mul(i128::from(MILLION));
-        let overhead = (achieved_bits_millionths - lower_bound_millionths).max(0);
-        let overhead_ratio = if lower_bound_millionths > 0 {
-            let ratio = achieved_bits_millionths.saturating_mul(i128::from(MILLION))
-                / lower_bound_millionths;
-            i64_from_i128_saturating(ratio)
-        } else if achieved <= 0 {
-            // Degenerate zero/zero case: treat as exact.
-            MILLION
-        } else {
-            // Positive achieved size over a zero theoretical lower bound is
-            // effectively unbounded overhead; fail closed in ratio checks.
-            i64::MAX
-        };
+        let (overhead, overhead_ratio) = certificate_overhead(achieved, lower_bound);
 
-        let cert_data = format!(
-            "{}:{}:{}:{}",
-            entropy, lower_bound, achieved, estimator.total_count
-        );
-
-        Self {
-            schema: ENTROPY_SCHEMA_VERSION.to_string(),
+        let mut certificate = Self {
+            schema: COMPRESSION_CERTIFICATE_SCHEMA_VERSION.to_string(),
             entropy_millibits_per_symbol: entropy,
             shannon_lower_bound_bits: lower_bound,
             achieved_bits: achieved,
-            overhead_bits_millionths: i64_from_i128_saturating(overhead),
+            overhead_bits_millionths: overhead,
             overhead_ratio_millionths: overhead_ratio,
             kraft_sum_millionths: kraft_sum,
-            kraft_satisfied: kraft_sum <= MILLION + 1000,
+            kraft_satisfied: kraft_mass_is_normalized(kraft_sum),
             redundancy_millibits: estimator.redundancy_millibits(),
             symbol_count: estimator.total_count,
-            certificate_hash: ContentHash::compute(cert_data.as_bytes()),
-        }
+            compressed_artifact_hash: compressed.artifact_hash(),
+            content_hash: compressed.content_hash,
+            model_hash: compressed.model_hash,
+            certificate_hash: ContentHash::default(),
+        };
+        certificate.certificate_hash = content_hash_for_compression_certificate(&certificate);
+        certificate
     }
 
-    /// Compare the stored empirical overhead ratio with `factor`.
-    pub fn is_within_factor(&self, factor_millionths: i64) -> bool {
-        self.overhead_ratio_millionths <= factor_millionths
+    /// Verify certificate-internal schema, arithmetic, model-mass, and hash
+    /// invariants.
+    ///
+    /// This proves that the stored fields form one canonical certificate. Use
+    /// [`Self::verify`] when the coder and artifact are available, because
+    /// only contextual verification proves that those inputs are the ones
+    /// committed by this certificate.
+    pub fn verify_integrity(&self) -> Result<(), EntropyError> {
+        if self.schema != COMPRESSION_CERTIFICATE_SCHEMA_VERSION {
+            return Err(certificate_error(format!(
+                "unsupported schema: {}",
+                self.schema
+            )));
+        }
+        if self.entropy_millibits_per_symbol < 0
+            || self.shannon_lower_bound_bits < 0
+            || self.achieved_bits <= 0
+            || self.overhead_bits_millionths < 0
+            || self.overhead_ratio_millionths < 0
+            || self.redundancy_millibits < 0
+            || self.symbol_count == 0
+        {
+            return Err(certificate_error(
+                "negative, zero, or otherwise invalid certificate metric",
+            ));
+        }
+
+        let (expected_overhead, expected_ratio) =
+            certificate_overhead(self.achieved_bits, self.shannon_lower_bound_bits);
+        if self.overhead_bits_millionths != expected_overhead {
+            return Err(certificate_error("overhead-bit metadata mismatch"));
+        }
+        if self.overhead_ratio_millionths != expected_ratio {
+            return Err(certificate_error("overhead-ratio metadata mismatch"));
+        }
+
+        let expected_kraft_satisfied = kraft_mass_is_normalized(self.kraft_sum_millionths);
+        if self.kraft_satisfied != expected_kraft_satisfied {
+            return Err(certificate_error("Kraft normalization flag mismatch"));
+        }
+        if !expected_kraft_satisfied {
+            return Err(EntropyError::KraftViolation {
+                kraft_sum_millionths: self.kraft_sum_millionths,
+            });
+        }
+
+        let expected_hash = content_hash_for_compression_certificate(self);
+        if self.certificate_hash != expected_hash {
+            return Err(certificate_error("certificate hash mismatch"));
+        }
+        Ok(())
+    }
+
+    /// Verify this certificate against the estimator reconstructed from the
+    /// exact model and compressed artifact.
+    pub fn verify(
+        &self,
+        coder: &ArithmeticCoder,
+        compressed: &CompressedEvidence,
+    ) -> Result<(), EntropyError> {
+        self.verify_integrity()?;
+        let restored_estimator = estimator_for_verified_artifact(coder, compressed)?;
+        let kraft_sum = coder.verify_kraft_inequality()?;
+        let expected = Self::build(&restored_estimator, compressed, kraft_sum);
+        expected.verify_integrity()?;
+        if *self != expected {
+            return Err(certificate_error(
+                "certificate does not match estimator, model, and artifact",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Contextually verify the certificate before comparing its empirical
+    /// overhead ratio with `factor`.
+    ///
+    /// A malformed certificate, invalid model mass, mismatched model or
+    /// artifact, degenerate lower bound, or negative factor fails
+    /// closed. A bare certificate cannot authorize this gate because its
+    /// public content hash is not an authenticity proof.
+    pub fn is_within_factor(
+        &self,
+        coder: &ArithmeticCoder,
+        compressed: &CompressedEvidence,
+        factor_millionths: i64,
+    ) -> bool {
+        factor_millionths >= 0
+            && self.shannon_lower_bound_bits > 0
+            && self.overhead_ratio_millionths != i64::MAX
+            && self.verify(coder, compressed).is_ok()
+            && self.overhead_ratio_millionths <= factor_millionths
     }
 }
 
@@ -1113,6 +1210,100 @@ fn content_hash_for_model(coder: &ArithmeticCoder) -> ContentHash {
         bytes.extend_from_slice(&frequency.to_be_bytes());
     }
     ContentHash::compute(&bytes)
+}
+
+fn estimator_for_verified_artifact(
+    coder: &ArithmeticCoder,
+    compressed: &CompressedEvidence,
+) -> Result<EntropyEstimator, EntropyError> {
+    let restored = coder.decode(compressed)?;
+    let mut estimator = EntropyEstimator::new();
+    for symbol in restored {
+        estimator.observe(symbol);
+    }
+    Ok(estimator)
+}
+
+fn content_hash_for_compressed_artifact(compressed: &CompressedEvidence) -> ContentHash {
+    const DOMAIN: &[u8] = b"franken-engine.entropy-compressed-artifact.v2\0";
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(DOMAIN);
+    extend_len_prefixed(&mut bytes, compressed.schema.as_bytes());
+    extend_len_prefixed(&mut bytes, &compressed.compressed_data);
+    bytes.extend_from_slice(
+        &u64::try_from(compressed.original_symbol_count)
+            .unwrap_or(u64::MAX)
+            .to_be_bytes(),
+    );
+    bytes.extend_from_slice(
+        &u64::try_from(compressed.compressed_bytes)
+            .unwrap_or(u64::MAX)
+            .to_be_bytes(),
+    );
+    bytes.extend_from_slice(&compressed.original_bits_estimate.to_be_bytes());
+    bytes.extend_from_slice(&compressed.compressed_bits.to_be_bytes());
+    bytes.extend_from_slice(&compressed.compression_ratio_millionths.to_be_bytes());
+    bytes.extend_from_slice(compressed.content_hash.as_bytes());
+    bytes.extend_from_slice(compressed.model_hash.as_bytes());
+    ContentHash::compute(&bytes)
+}
+
+fn content_hash_for_compression_certificate(certificate: &CompressionCertificate) -> ContentHash {
+    const DOMAIN: &[u8] = b"franken-engine.entropy-compression-certificate.v1\0";
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(DOMAIN);
+    extend_len_prefixed(&mut bytes, certificate.schema.as_bytes());
+    bytes.extend_from_slice(&certificate.entropy_millibits_per_symbol.to_be_bytes());
+    bytes.extend_from_slice(&certificate.shannon_lower_bound_bits.to_be_bytes());
+    bytes.extend_from_slice(&certificate.achieved_bits.to_be_bytes());
+    bytes.extend_from_slice(&certificate.overhead_bits_millionths.to_be_bytes());
+    bytes.extend_from_slice(&certificate.overhead_ratio_millionths.to_be_bytes());
+    bytes.extend_from_slice(&certificate.kraft_sum_millionths.to_be_bytes());
+    bytes.push(u8::from(certificate.kraft_satisfied));
+    bytes.extend_from_slice(&certificate.redundancy_millibits.to_be_bytes());
+    bytes.extend_from_slice(&certificate.symbol_count.to_be_bytes());
+    bytes.extend_from_slice(certificate.compressed_artifact_hash.as_bytes());
+    bytes.extend_from_slice(certificate.content_hash.as_bytes());
+    bytes.extend_from_slice(certificate.model_hash.as_bytes());
+    ContentHash::compute(&bytes)
+}
+
+fn extend_len_prefixed(bytes: &mut Vec<u8>, value: &[u8]) {
+    bytes.extend_from_slice(&u64::try_from(value.len()).unwrap_or(u64::MAX).to_be_bytes());
+    bytes.extend_from_slice(value);
+}
+
+fn certificate_overhead(achieved_bits: i64, lower_bound_bits: i64) -> (i64, i64) {
+    let achieved_millionths = i128::from(achieved_bits).saturating_mul(i128::from(MILLION));
+    let lower_bound_millionths = i128::from(lower_bound_bits).saturating_mul(i128::from(MILLION));
+    let overhead = i64_from_i128_saturating(
+        achieved_millionths
+            .saturating_sub(lower_bound_millionths)
+            .max(0),
+    );
+    let ratio = if lower_bound_millionths > 0 {
+        i64_from_i128_saturating(
+            achieved_millionths.saturating_mul(i128::from(MILLION)) / lower_bound_millionths,
+        )
+    } else if achieved_bits <= 0 {
+        MILLION
+    } else {
+        i64::MAX
+    };
+    (overhead, ratio)
+}
+
+fn kraft_mass_is_normalized(kraft_sum_millionths: i64) -> bool {
+    (MILLION - KRAFT_NORMALIZATION_TOLERANCE_MILLIONTHS
+        ..=MILLION + KRAFT_NORMALIZATION_TOLERANCE_MILLIONTHS)
+        .contains(&kraft_sum_millionths)
+}
+
+fn certificate_error(message: impl Into<String>) -> EntropyError {
+    decode_error(format!(
+        "compression certificate verification failed: {}",
+        message.into()
+    ))
 }
 
 fn i64_from_i128_saturating(value: i128) -> i64 {
@@ -1497,7 +1688,7 @@ mod tests {
     #[test]
     fn compression_certificate_serde_roundtrip() {
         let cert = CompressionCertificate {
-            schema: ENTROPY_SCHEMA_VERSION.to_string(),
+            schema: COMPRESSION_CERTIFICATE_SCHEMA_VERSION.to_string(),
             entropy_millibits_per_symbol: MILLION,
             shannon_lower_bound_bits: 100,
             achieved_bits: 120,
@@ -1507,6 +1698,9 @@ mod tests {
             kraft_satisfied: true,
             redundancy_millibits: 0,
             symbol_count: 100,
+            compressed_artifact_hash: ContentHash::compute(b"cert-artifact"),
+            content_hash: ContentHash::compute(b"cert-content"),
+            model_hash: ContentHash::compute(b"cert-model"),
             certificate_hash: ContentHash::compute(b"cert"),
         };
         // SAFETY: CompressionCertificate derives Serialize and has no non-serializable fields.
@@ -1590,7 +1784,8 @@ mod tests {
         assert_eq!(cert.shannon_lower_bound_bits, 0);
         assert!(cert.achieved_bits > 0);
         assert_eq!(cert.overhead_ratio_millionths, i64::MAX);
-        assert!(!cert.is_within_factor(10_000_000));
+        assert!(!cert.is_within_factor(&coder, &compressed, 10_000_000));
+        assert!(!cert.is_within_factor(&coder, &compressed, i64::MAX));
     }
 
     // === Error display ===
@@ -1825,23 +2020,24 @@ mod tests {
 
     #[test]
     fn is_within_factor_passing() {
-        let cert = CompressionCertificate {
-            schema: ENTROPY_SCHEMA_VERSION.to_string(),
-            entropy_millibits_per_symbol: MILLION,
-            shannon_lower_bound_bits: 100,
-            achieved_bits: 120,
-            overhead_bits_millionths: 20 * MILLION,
-            overhead_ratio_millionths: 1_200_000,
-            kraft_sum_millionths: MILLION,
-            kraft_satisfied: true,
-            redundancy_millibits: 0,
-            symbol_count: 100,
-            certificate_hash: ContentHash::compute(b"x"),
-        };
-        // 1.2x overhead — within 2.0x factor
-        assert!(cert.is_within_factor(2_000_000));
-        // But not within 1.1x factor
-        assert!(!cert.is_within_factor(1_100_000));
+        let mut estimator = EntropyEstimator::new();
+        for _ in 0..100 {
+            estimator.observe(0);
+            estimator.observe(1);
+        }
+        let coder = ArithmeticCoder::from_estimator(&estimator)
+            .expect("uniform estimator should build a coder");
+        let symbols: Vec<u32> = (0..200).map(|index| index % 2).collect();
+        let compressed = coder.encode(&symbols).expect("symbols should encode");
+        let cert = CompressionCertificate::build_verified(&estimator, &coder, &compressed)
+            .expect("canonical inputs should certify");
+
+        assert!(cert.is_within_factor(&coder, &compressed, cert.overhead_ratio_millionths));
+        assert!(!cert.is_within_factor(
+            &coder,
+            &compressed,
+            cert.overhead_ratio_millionths.saturating_sub(1)
+        ));
     }
 
     // -----------------------------------------------------------------------
@@ -1953,7 +2149,7 @@ mod tests {
     #[test]
     fn enrichment_clone_eq_compression_certificate() {
         let cert = CompressionCertificate {
-            schema: ENTROPY_SCHEMA_VERSION.to_string(),
+            schema: COMPRESSION_CERTIFICATE_SCHEMA_VERSION.to_string(),
             entropy_millibits_per_symbol: 500_000,
             shannon_lower_bound_bits: 50,
             achieved_bits: 60,
@@ -1963,6 +2159,9 @@ mod tests {
             kraft_satisfied: true,
             redundancy_millibits: 500_000,
             symbol_count: 200,
+            compressed_artifact_hash: ContentHash::compute(b"clone-artifact"),
+            content_hash: ContentHash::compute(b"clone-content"),
+            model_hash: ContentHash::compute(b"clone-model"),
             certificate_hash: ContentHash::compute(b"cert_clone"),
         };
         let cloned = cert.clone();
@@ -1998,7 +2197,7 @@ mod tests {
     #[test]
     fn enrichment_json_fields_compression_certificate() {
         let cert = CompressionCertificate {
-            schema: ENTROPY_SCHEMA_VERSION.to_string(),
+            schema: COMPRESSION_CERTIFICATE_SCHEMA_VERSION.to_string(),
             entropy_millibits_per_symbol: MILLION,
             shannon_lower_bound_bits: 80,
             achieved_bits: 90,
@@ -2008,6 +2207,9 @@ mod tests {
             kraft_satisfied: true,
             redundancy_millibits: 0,
             symbol_count: 100,
+            compressed_artifact_hash: ContentHash::compute(b"fields-artifact"),
+            content_hash: ContentHash::compute(b"fields-content"),
+            model_hash: ContentHash::compute(b"fields-model"),
             certificate_hash: ContentHash::compute(b"fld"),
         };
         let json = serde_json::to_string(&cert).unwrap();
@@ -2179,7 +2381,7 @@ mod tests {
     #[test]
     fn debug_distinct_compression_certificate() {
         let cert_a = CompressionCertificate {
-            schema: ENTROPY_SCHEMA_VERSION.to_string(),
+            schema: COMPRESSION_CERTIFICATE_SCHEMA_VERSION.to_string(),
             entropy_millibits_per_symbol: 500_000,
             shannon_lower_bound_bits: 50,
             achieved_bits: 60,
@@ -2189,10 +2391,13 @@ mod tests {
             kraft_satisfied: true,
             redundancy_millibits: 500_000,
             symbol_count: 100,
+            compressed_artifact_hash: ContentHash::compute(b"ca-artifact"),
+            content_hash: ContentHash::compute(b"ca-content"),
+            model_hash: ContentHash::compute(b"ca-model"),
             certificate_hash: ContentHash::compute(b"ca"),
         };
         let cert_b = CompressionCertificate {
-            schema: ENTROPY_SCHEMA_VERSION.to_string(),
+            schema: COMPRESSION_CERTIFICATE_SCHEMA_VERSION.to_string(),
             entropy_millibits_per_symbol: 800_000,
             shannon_lower_bound_bits: 80,
             achieved_bits: 90,
@@ -2202,6 +2407,9 @@ mod tests {
             kraft_satisfied: true,
             redundancy_millibits: 200_000,
             symbol_count: 200,
+            compressed_artifact_hash: ContentHash::compute(b"cb-artifact"),
+            content_hash: ContentHash::compute(b"cb-content"),
+            model_hash: ContentHash::compute(b"cb-model"),
             certificate_hash: ContentHash::compute(b"cb"),
         };
         assert_ne!(format!("{cert_a:?}"), format!("{cert_b:?}"));
@@ -2615,22 +2823,22 @@ mod tests {
 
     #[test]
     fn certificate_is_within_factor_exact_boundary() {
-        let cert = CompressionCertificate {
-            schema: ENTROPY_SCHEMA_VERSION.to_string(),
-            entropy_millibits_per_symbol: MILLION,
-            shannon_lower_bound_bits: 100,
-            achieved_bits: 150,
-            overhead_bits_millionths: 50 * MILLION,
-            overhead_ratio_millionths: 1_500_000,
-            kraft_sum_millionths: MILLION,
-            kraft_satisfied: true,
-            redundancy_millibits: 0,
-            symbol_count: 100,
-            certificate_hash: ContentHash::compute(b"boundary"),
-        };
-        assert!(cert.is_within_factor(1_500_000));
-        assert!(cert.is_within_factor(1_500_001));
-        assert!(!cert.is_within_factor(1_499_999));
+        let mut estimator = EntropyEstimator::new();
+        for _ in 0..64 {
+            estimator.observe(0);
+            estimator.observe(1);
+        }
+        let coder = ArithmeticCoder::from_estimator(&estimator)
+            .expect("uniform estimator should build a coder");
+        let symbols: Vec<u32> = (0..128).map(|index| index % 2).collect();
+        let compressed = coder.encode(&symbols).expect("symbols should encode");
+        let cert = CompressionCertificate::build_verified(&estimator, &coder, &compressed)
+            .expect("canonical inputs should certify");
+        let boundary = cert.overhead_ratio_millionths;
+
+        assert!(cert.is_within_factor(&coder, &compressed, boundary));
+        assert!(cert.is_within_factor(&coder, &compressed, boundary.saturating_add(1)));
+        assert!(!cert.is_within_factor(&coder, &compressed, boundary.saturating_sub(1)));
     }
 
     #[test]

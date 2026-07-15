@@ -77,6 +77,14 @@ fn constant_schema_version_value() {
     );
 }
 
+#[test]
+fn certificate_schema_version_value() {
+    assert_eq!(
+        COMPRESSION_CERTIFICATE_SCHEMA_VERSION,
+        "franken-engine.entropy-compression-certificate.v1"
+    );
+}
+
 // ===========================================================================
 // Section 2: EntropyError — Display, serde, std::error
 // ===========================================================================
@@ -827,6 +835,29 @@ fn coder_and_artifact_are_exactly_cross_crate_canonical() {
         );
         assert_eq!(engine_coder.decode(&engine_artifact).unwrap(), symbols);
         assert_eq!(core_coder.decode(&core_artifact).unwrap(), symbols);
+
+        let engine_certificate = CompressionCertificate::build_verified(
+            &engine_estimator,
+            &engine_coder,
+            &engine_artifact,
+        )
+        .unwrap();
+        let core_certificate = core_entropy::CompressionCertificate::build_verified(
+            &core_estimator,
+            &core_coder,
+            &core_artifact,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&engine_certificate).unwrap(),
+            serde_json::to_value(&core_certificate).unwrap()
+        );
+        engine_certificate
+            .verify(&engine_coder, &engine_artifact)
+            .unwrap();
+        core_certificate
+            .verify(&core_coder, &core_artifact)
+            .unwrap();
     }
 
     let engine_scaled_estimator = EntropyEstimator {
@@ -1038,7 +1069,7 @@ fn certificate_build_basic() {
     let kraft = coder.verify_kraft_inequality().unwrap();
     let cert = CompressionCertificate::build(&est, &compressed, kraft);
 
-    assert_eq!(cert.schema, ENTROPY_SCHEMA_VERSION);
+    assert_eq!(cert.schema, COMPRESSION_CERTIFICATE_SCHEMA_VERSION);
     assert!(cert.kraft_satisfied);
     assert!(cert.entropy_millibits_per_symbol > 0);
     assert!(cert.shannon_lower_bound_bits > 0);
@@ -1058,28 +1089,123 @@ fn certificate_zero_lower_bound_fails_closed() {
     assert_eq!(cert.shannon_lower_bound_bits, 0);
     assert!(cert.achieved_bits > 0);
     assert_eq!(cert.overhead_ratio_millionths, i64::MAX);
-    assert!(!cert.is_within_factor(10_000_000));
+    assert!(!cert.is_within_factor(&coder, &compressed, 10_000_000));
+    assert!(!cert.is_within_factor(&coder, &compressed, i64::MAX));
 }
 
 #[test]
 fn certificate_is_within_factor_passing() {
-    let cert = CompressionCertificate {
-        schema: ENTROPY_SCHEMA_VERSION.to_string(),
-        entropy_millibits_per_symbol: MILLION,
-        shannon_lower_bound_bits: 100,
-        achieved_bits: 120,
-        overhead_bits_millionths: 20 * MILLION,
-        overhead_ratio_millionths: 1_200_000,
-        kraft_sum_millionths: MILLION,
-        kraft_satisfied: true,
-        redundancy_millibits: 0,
-        symbol_count: 100,
-        certificate_hash: test_hash(b"factor"),
-    };
-    // 1.2x overhead is within 2.0x factor.
-    assert!(cert.is_within_factor(2_000_000));
-    // But not within 1.1x factor.
-    assert!(!cert.is_within_factor(1_100_000));
+    let est = uniform_estimator(2, 100);
+    let coder = ArithmeticCoder::from_estimator(&est).unwrap();
+    let symbols: Vec<u32> = (0..200).map(|index| index % 2).collect();
+    let compressed = coder.encode(&symbols).unwrap();
+    let cert = CompressionCertificate::build_verified(&est, &coder, &compressed).unwrap();
+
+    assert!(cert.is_within_factor(&coder, &compressed, cert.overhead_ratio_millionths));
+    assert!(!cert.is_within_factor(
+        &coder,
+        &compressed,
+        cert.overhead_ratio_millionths.saturating_sub(1)
+    ));
+    assert!(!cert.is_within_factor(&coder, &compressed, -1));
+}
+
+#[test]
+fn certificate_verification_rejects_every_tampered_field_and_artifact_substitution() {
+    let symbols: Vec<u32> = (0..256).map(|index| index % 4).collect();
+    let estimator = freq_estimator(&[(0, 64), (1, 64), (2, 64), (3, 64)]);
+    let coder = ArithmeticCoder::from_estimator(&estimator).unwrap();
+    let artifact = coder.encode(&symbols).unwrap();
+    let certificate =
+        CompressionCertificate::build_verified(&estimator, &coder, &artifact).unwrap();
+    certificate.verify(&coder, &artifact).unwrap();
+
+    macro_rules! reject_tamper {
+        ($field:ident, $value:expr) => {{
+            let mut tampered = certificate.clone();
+            tampered.$field = $value;
+            assert!(
+                tampered.verify(&coder, &artifact).is_err(),
+                "tampered {} must fail contextual verification",
+                stringify!($field)
+            );
+            assert!(
+                !tampered.is_within_factor(&coder, &artifact, i64::MAX),
+                "tampered {} must not authorize factor gating",
+                stringify!($field)
+            );
+        }};
+    }
+
+    reject_tamper!(schema, "unknown-certificate-schema".to_string());
+    reject_tamper!(
+        entropy_millibits_per_symbol,
+        certificate.entropy_millibits_per_symbol.saturating_add(1)
+    );
+    reject_tamper!(
+        shannon_lower_bound_bits,
+        certificate.shannon_lower_bound_bits.saturating_add(1)
+    );
+    reject_tamper!(achieved_bits, certificate.achieved_bits.saturating_add(1));
+    reject_tamper!(
+        overhead_bits_millionths,
+        certificate.overhead_bits_millionths.saturating_add(1)
+    );
+    reject_tamper!(
+        overhead_ratio_millionths,
+        certificate.overhead_ratio_millionths.saturating_add(1)
+    );
+    reject_tamper!(
+        kraft_sum_millionths,
+        certificate.kraft_sum_millionths.saturating_add(1)
+    );
+    reject_tamper!(kraft_satisfied, !certificate.kraft_satisfied);
+    reject_tamper!(
+        redundancy_millibits,
+        certificate.redundancy_millibits.saturating_add(1)
+    );
+    reject_tamper!(symbol_count, certificate.symbol_count.saturating_add(1));
+    reject_tamper!(compressed_artifact_hash, test_hash(b"forged-artifact-hash"));
+    reject_tamper!(content_hash, test_hash(b"forged-content-hash"));
+    reject_tamper!(model_hash, test_hash(b"forged-model-hash"));
+    reject_tamper!(certificate_hash, test_hash(b"forged-certificate-hash"));
+
+    let mut alternate_symbols = symbols.clone();
+    alternate_symbols.rotate_left(1);
+    let alternate_artifact = coder.encode(&alternate_symbols).unwrap();
+    let alternate_certificate =
+        CompressionCertificate::build_verified(&estimator, &coder, &alternate_artifact).unwrap();
+    alternate_certificate
+        .verify(&coder, &alternate_artifact)
+        .unwrap();
+    assert!(alternate_certificate.verify(&coder, &artifact).is_err());
+    assert!(!alternate_certificate.is_within_factor(&coder, &artifact, i64::MAX));
+
+    for accepted_but_noncanonical_kraft in [999_000, 1_001_000] {
+        let forged =
+            CompressionCertificate::build(&estimator, &artifact, accepted_but_noncanonical_kraft);
+        forged.verify_integrity().unwrap();
+        assert!(forged.verify(&coder, &artifact).is_err());
+        assert!(!forged.is_within_factor(&coder, &artifact, i64::MAX));
+    }
+    for rejected_kraft in [i64::MIN, -1, 0, 998_999, 1_001_001, i64::MAX] {
+        let forged = CompressionCertificate::build(&estimator, &artifact, rejected_kraft);
+        assert!(forged.verify_integrity().is_err());
+        assert!(!forged.is_within_factor(&coder, &artifact, i64::MAX));
+    }
+
+    let mut json = serde_json::to_value(&certificate).unwrap();
+    json.as_object_mut()
+        .unwrap()
+        .insert("unexpected".to_string(), serde_json::json!(true));
+    assert!(serde_json::from_value::<CompressionCertificate>(json).is_err());
+
+    let mut missing_link = serde_json::to_value(&certificate).unwrap();
+    missing_link
+        .as_object_mut()
+        .unwrap()
+        .remove("compressed_artifact_hash");
+    assert!(serde_json::from_value::<CompressionCertificate>(missing_link).is_err());
 }
 
 #[test]
@@ -1100,7 +1226,7 @@ fn certificate_overhead_ratio_consistency() {
 #[test]
 fn certificate_serde_roundtrip() {
     let cert = CompressionCertificate {
-        schema: ENTROPY_SCHEMA_VERSION.to_string(),
+        schema: COMPRESSION_CERTIFICATE_SCHEMA_VERSION.to_string(),
         entropy_millibits_per_symbol: 500_000,
         shannon_lower_bound_bits: 50,
         achieved_bits: 60,
@@ -1110,6 +1236,9 @@ fn certificate_serde_roundtrip() {
         kraft_satisfied: true,
         redundancy_millibits: 500_000,
         symbol_count: 200,
+        compressed_artifact_hash: test_hash(b"cert-serde-artifact"),
+        content_hash: test_hash(b"cert-serde-content"),
+        model_hash: test_hash(b"cert-serde-model"),
         certificate_hash: test_hash(b"cert-serde"),
     };
     let json = serde_json::to_string(&cert).unwrap();
@@ -1120,7 +1249,7 @@ fn certificate_serde_roundtrip() {
 #[test]
 fn certificate_clone_eq() {
     let cert = CompressionCertificate {
-        schema: ENTROPY_SCHEMA_VERSION.to_string(),
+        schema: COMPRESSION_CERTIFICATE_SCHEMA_VERSION.to_string(),
         entropy_millibits_per_symbol: MILLION,
         shannon_lower_bound_bits: 100,
         achieved_bits: 110,
@@ -1130,6 +1259,9 @@ fn certificate_clone_eq() {
         kraft_satisfied: true,
         redundancy_millibits: 0,
         symbol_count: 500,
+        compressed_artifact_hash: test_hash(b"cert-clone-artifact"),
+        content_hash: test_hash(b"cert-clone-content"),
+        model_hash: test_hash(b"cert-clone-model"),
         certificate_hash: test_hash(b"cert-clone"),
     };
     let cloned = cert.clone();

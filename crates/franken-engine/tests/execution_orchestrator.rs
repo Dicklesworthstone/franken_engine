@@ -1537,6 +1537,45 @@ fn evidence_compression_certificate_overhead_ratio_non_negative() {
     }
 }
 
+#[test]
+fn evidence_compression_certificate_identities_are_bound_to_evidence_metadata() {
+    let mut orch = ExecutionOrchestrator::with_defaults();
+    let pkg = simple_package("ext-compression-bindings", "42");
+    let result = orch.execute(&pkg).expect("execute");
+    let cert = result
+        .evidence_compression_certificate
+        .as_ref()
+        .expect("evidence compression certificate");
+    cert.verify_integrity()
+        .expect("issued certificate should be internally valid");
+    let metadata = &result.evidence_entries[0].metadata;
+    let certificate_hash = cert.certificate_hash.to_hex();
+    let artifact_hash = cert.compressed_artifact_hash.to_hex();
+    let content_hash = cert.content_hash.to_hex();
+    let model_hash = cert.model_hash.to_hex();
+
+    assert_eq!(
+        metadata.get("evidence_compression_certificate_schema"),
+        Some(&cert.schema)
+    );
+    assert_eq!(
+        metadata.get("evidence_compression_certificate_hash"),
+        Some(&certificate_hash)
+    );
+    assert_eq!(
+        metadata.get("evidence_compressed_artifact_hash"),
+        Some(&artifact_hash)
+    );
+    assert_eq!(
+        metadata.get("evidence_compressed_content_hash"),
+        Some(&content_hash)
+    );
+    assert_eq!(
+        metadata.get("evidence_compression_model_hash"),
+        Some(&model_hash)
+    );
+}
+
 // -- OrchestratorConfig cell_close_budget_ms edge case ------------------------
 
 #[test]

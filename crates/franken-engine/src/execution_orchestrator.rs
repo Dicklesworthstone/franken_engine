@@ -1699,6 +1699,26 @@ impl ExecutionOrchestrator {
                 "evidence_overhead_ratio_millionths".to_string(),
                 cert.overhead_ratio_millionths.to_string(),
             );
+            builder = builder.meta(
+                "evidence_compression_certificate_schema".to_string(),
+                cert.schema.clone(),
+            );
+            builder = builder.meta(
+                "evidence_compression_certificate_hash".to_string(),
+                cert.certificate_hash.to_hex(),
+            );
+            builder = builder.meta(
+                "evidence_compressed_artifact_hash".to_string(),
+                cert.compressed_artifact_hash.to_hex(),
+            );
+            builder = builder.meta(
+                "evidence_compressed_content_hash".to_string(),
+                cert.content_hash.to_hex(),
+            );
+            builder = builder.meta(
+                "evidence_compression_model_hash".to_string(),
+                cert.model_hash.to_hex(),
+            );
         }
 
         let entry = builder.build()?;
@@ -5583,6 +5603,33 @@ mod tests {
         assert!(cert.shannon_lower_bound_bits >= 0);
         // Overhead ratio is in fixed-point millionths; should be non-negative.
         assert!(cert.overhead_ratio_millionths >= 0);
+        cert.verify_integrity()
+            .expect("issued certificate should remain internally valid");
+        let metadata = &result.evidence_entries[0].metadata;
+        let certificate_hash = cert.certificate_hash.to_hex();
+        let artifact_hash = cert.compressed_artifact_hash.to_hex();
+        let content_hash = cert.content_hash.to_hex();
+        let model_hash = cert.model_hash.to_hex();
+        assert_eq!(
+            metadata.get("evidence_compression_certificate_schema"),
+            Some(&cert.schema)
+        );
+        assert_eq!(
+            metadata.get("evidence_compression_certificate_hash"),
+            Some(&certificate_hash)
+        );
+        assert_eq!(
+            metadata.get("evidence_compressed_artifact_hash"),
+            Some(&artifact_hash)
+        );
+        assert_eq!(
+            metadata.get("evidence_compressed_content_hash"),
+            Some(&content_hash)
+        );
+        assert_eq!(
+            metadata.get("evidence_compression_model_hash"),
+            Some(&model_hash)
+        );
     }
 
     #[test]

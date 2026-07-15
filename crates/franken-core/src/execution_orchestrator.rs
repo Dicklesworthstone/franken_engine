@@ -32,7 +32,7 @@ use crate::containment_executor::{
 };
 use crate::control_plane::{Budget, Cx, KernelContext, NoCaps, TraceId};
 use crate::entropy_evidence_compressor::{
-    ArithmeticCoder, CompressionCertificate, EntropyEstimator,
+    ArithmeticCoder, CompressionCertificate, EntropyError, EntropyEstimator,
 };
 use crate::evidence_ledger::{
     CandidateAction, ChosenAction, DecisionType, EvidenceEmitter, EvidenceEntry,
@@ -305,6 +305,12 @@ pub enum OrchestratorError {
     Cell(CellError),
     Containment(ContainmentError),
     TsNormalization(TsNormalizationError),
+    EvidenceCompressionCoder {
+        detail: String,
+    },
+    EvidenceCompressionEncode {
+        detail: String,
+    },
     EmptySource,
     EmptyExtensionId,
     PreparedExecutionContextMismatch {
@@ -327,6 +333,12 @@ impl fmt::Display for OrchestratorError {
             Self::Cell(e) => write!(f, "cell: {e}"),
             Self::Containment(e) => write!(f, "containment: {e}"),
             Self::TsNormalization(e) => write!(f, "ts normalization: {e}"),
+            Self::EvidenceCompressionCoder { detail } => {
+                write!(f, "evidence compression coder: {detail}")
+            }
+            Self::EvidenceCompressionEncode { detail } => {
+                write!(f, "evidence compression encode: {detail}")
+            }
             Self::EmptySource => f.write_str("extension source is empty"),
             Self::EmptyExtensionId => f.write_str("extension_id is empty"),
             Self::PreparedExecutionContextMismatch {
@@ -1292,7 +1304,7 @@ impl ExecutionOrchestrator {
             adaptive_router_summary,
             optimal_stopping_certificate,
             ir3_schedule_cost,
-        );
+        )?;
         if let Some(cert) = &compression_certificate {
             builder = builder.meta(
                 "evidence_entropy_millibits".to_string(),
@@ -1305,6 +1317,26 @@ impl ExecutionOrchestrator {
             builder = builder.meta(
                 "evidence_overhead_ratio_millionths".to_string(),
                 cert.overhead_ratio_millionths.to_string(),
+            );
+            builder = builder.meta(
+                "evidence_compression_certificate_schema".to_string(),
+                cert.schema.clone(),
+            );
+            builder = builder.meta(
+                "evidence_compression_certificate_hash".to_string(),
+                cert.certificate_hash.to_hex(),
+            );
+            builder = builder.meta(
+                "evidence_compressed_artifact_hash".to_string(),
+                cert.compressed_artifact_hash.to_hex(),
+            );
+            builder = builder.meta(
+                "evidence_compressed_content_hash".to_string(),
+                cert.content_hash.to_hex(),
+            );
+            builder = builder.meta(
+                "evidence_compression_model_hash".to_string(),
+                cert.model_hash.to_hex(),
             );
         }
 
@@ -1794,7 +1826,7 @@ impl ExecutionOrchestrator {
         adaptive_router_summary: Option<&RouterSummary>,
         optimal_stopping_certificate: Option<&OptimalStoppingCertificate>,
         ir3_schedule_cost: Option<TropicalWeight>,
-    ) -> Option<CompressionCertificate> {
+    ) -> Result<Option<CompressionCertificate>, OrchestratorError> {
         let symbols = Self::build_evidence_symbols(
             package,
             decision,
@@ -1805,17 +1837,40 @@ impl ExecutionOrchestrator {
             optimal_stopping_certificate,
             ir3_schedule_cost,
         );
+        Self::build_evidence_compression_certificate_from_symbols(symbols)
+    }
+
+    fn build_evidence_compression_certificate_from_symbols(
+        symbols: Vec<u32>,
+    ) -> Result<Option<CompressionCertificate>, OrchestratorError> {
         if symbols.is_empty() {
-            return None;
+            return Ok(None);
         }
 
         let mut estimator = EntropyEstimator::new();
         for &symbol in &symbols {
             estimator.observe(symbol);
         }
-        let coder = ArithmeticCoder::from_estimator(&estimator).ok()?;
-        let compressed = coder.encode(&symbols).ok()?;
-        CompressionCertificate::build_verified(&estimator, &coder, &compressed).ok()
+        let coder = ArithmeticCoder::from_estimator(&estimator)
+            .map_err(Self::evidence_compression_coder_error)?;
+        let compressed = coder
+            .encode(&symbols)
+            .map_err(Self::evidence_compression_encode_error)?;
+        let certificate = CompressionCertificate::build_verified(&estimator, &coder, &compressed)
+            .map_err(Self::evidence_compression_encode_error)?;
+        Ok(Some(certificate))
+    }
+
+    fn evidence_compression_coder_error(err: EntropyError) -> OrchestratorError {
+        OrchestratorError::EvidenceCompressionCoder {
+            detail: err.to_string(),
+        }
+    }
+
+    fn evidence_compression_encode_error(err: EntropyError) -> OrchestratorError {
+        OrchestratorError::EvidenceCompressionEncode {
+            detail: err.to_string(),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3879,6 +3934,47 @@ mod tests {
         assert!(cert.shannon_lower_bound_bits >= 0);
         // Overhead ratio is in fixed-point millionths; should be non-negative.
         assert!(cert.overhead_ratio_millionths >= 0);
+        cert.verify_integrity()
+            .expect("issued certificate should remain internally valid");
+        let metadata = &result.evidence_entries[0].metadata;
+        let certificate_hash = cert.certificate_hash.to_hex();
+        let artifact_hash = cert.compressed_artifact_hash.to_hex();
+        let content_hash = cert.content_hash.to_hex();
+        let model_hash = cert.model_hash.to_hex();
+        assert_eq!(
+            metadata.get("evidence_compression_certificate_schema"),
+            Some(&cert.schema)
+        );
+        assert_eq!(
+            metadata.get("evidence_compression_certificate_hash"),
+            Some(&certificate_hash)
+        );
+        assert_eq!(
+            metadata.get("evidence_compressed_artifact_hash"),
+            Some(&artifact_hash)
+        );
+        assert_eq!(
+            metadata.get("evidence_compressed_content_hash"),
+            Some(&content_hash)
+        );
+        assert_eq!(
+            metadata.get("evidence_compression_model_hash"),
+            Some(&model_hash)
+        );
+    }
+
+    #[test]
+    fn evidence_compression_certificate_surfaces_coder_failures() {
+        let symbols: Vec<u32> = (0..=256).collect();
+        let err =
+            ExecutionOrchestrator::build_evidence_compression_certificate_from_symbols(symbols)
+                .expect_err("large evidence alphabet must surface coder construction failure");
+
+        assert!(
+            matches!(err, OrchestratorError::EvidenceCompressionCoder { .. }),
+            "expected evidence compression coder error, got {err}"
+        );
+        assert!(err.to_string().contains("alphabet size"));
     }
 
     #[test]

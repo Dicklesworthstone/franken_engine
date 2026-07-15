@@ -71,6 +71,29 @@ tables, and non-canonical encodings fail closed. Production certificate
 issuance uses `CompressionCertificate::build_verified`, which performs this
 decode and also requires the restored histogram to match the estimator.
 
+Compression certificates have an independent wire contract,
+`franken-engine.entropy-compression-certificate.v1`; changing the certificate
+shape does not silently redefine the codec-v2 artifact. Unknown, missing, and
+legacy certificate fields are rejected during deserialization. The certificate
+commits with a domain-separated, fixed-width preimage to every semantic and
+derived field, the complete compressed-artifact identity, the restored symbol
+content hash, and the canonical arithmetic-model hash. The compressed-artifact
+identity itself covers the exact payload plus every codec-v2 schema and framing
+field.
+
+`CompressionCertificate::verify` is the authoritative persisted verifier. It
+decodes and canonically re-encodes the supplied artifact, reconstructs the
+estimator from the restored symbols, recomputes the exact model mass and every
+certificate field, and requires an exact certificate match.
+`verify_integrity` checks only the certificate's internal arithmetic, schema,
+model-mass flag, and content hash; because `ContentHash` is not an authenticity
+primitive, internal integrity alone cannot authorize a security or performance
+decision. `is_within_factor` therefore requires the exact coder and compressed
+artifact and runs contextual verification before comparing the ratio. Negative
+thresholds, non-normalized mass, invalid hashes, artifact/model mismatch, and
+zero-bound or unbounded-ratio cases fail closed, including an `i64::MAX`
+threshold.
+
 This is **not** a claim that the current orchestrator persists a lossless copy
 of a complete `EvidenceEntry`. `build_evidence_symbols` is a many-to-one
 observability sketch, and the current orchestrator retains only its certificate
@@ -78,17 +101,34 @@ metadata, not the coder/artifact pair. Full evidence serialization, durable
 artifact retention, and replay-bundle integration remain separate work. The
 infallible `CompressionCertificate::build` constructor is an unchecked
 structural helper and must not be used by production emission paths.
+Both engine and core production issuance propagate coder, encoding, and
+certificate-verification errors; only a genuinely empty symbol sketch may
+produce no certificate. Issued certificate schema and certificate, artifact,
+content, and model hashes are copied into evidence-entry metadata. The engine
+ledger signs that entry and therefore provides an outer authenticity anchor;
+the core mirror currently binds the metadata only through its entry content
+hash, which detects mutation but supplies no producer authenticity. Persisting
+the coder/artifact pair and exposing a complete operator replay bundle remain
+separate work; a certificate by itself cannot be contextually reverified after
+those inputs have been discarded.
 
 ### Certificate fields
 
 Required certificate fields:
 
+- `schema`
 - `entropy_millibits_per_symbol`
 - `shannon_lower_bound_bits`
 - `achieved_bits`
+- `overhead_bits_millionths`
 - `overhead_ratio_millionths`
 - `kraft_sum_millionths`
 - `kraft_satisfied`
+- `redundancy_millibits`
+- `symbol_count`
+- `compressed_artifact_hash`
+- `content_hash`
+- `model_hash`
 - `certificate_hash`
 
 Gate semantics:
@@ -96,7 +136,9 @@ Gate semantics:
 - the legacy Kraft-named field records canonical model probability-mass
   normalization (`sum(frequency) / total_frequency`), not sequence-level
   prefix-freeness or a substitute for decode verification
-- normalized mass must be satisfied (`kraft_sum_millionths <= 1_000_000 + tolerance`)
+- normalized mass must be satisfied symmetrically
+  (`999_000 <= kraft_sum_millionths <= 1_001_000`), and contextual
+  verification requires the exact mass recomputed from the supplied coder
 - Overhead ratio checks must fail closed when lower bounds are degenerate
 - Shannon fields compare achieved length with the module's empirical entropy
   estimate; they are not, by themselves, a source-distribution proof

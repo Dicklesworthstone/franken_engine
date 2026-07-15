@@ -257,8 +257,11 @@
       "engine_export_present": true,
       "file_relation": "different",
       "owner_rationale": "Evidence compression may be core evidence substrate or engine-level reporting; ownership is unsettled.",
-      "test_expectation": "Future parity work must compare deterministic compressed evidence artifacts.",
-      "known_beads": []
+      "test_expectation": "Cross-crate tests compare deterministic coder, compressed artifact, certificate JSON, artifact and certificate hashes, contextual verification, and tamper rejection.",
+      "known_beads": [
+        "bd-2hcua",
+        "bd-btnco"
+      ]
     },
     {
       "module": "evidence_ledger",

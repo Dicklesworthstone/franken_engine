@@ -173,7 +173,7 @@ fn entropy_certificate_and_quality_sentinel_fail_closed_in_fidelity_emergency() 
     assert!(certificate.shannon_lower_bound_bits > 0);
     assert!(certificate.achieved_bits > 0);
     assert!(
-        certificate.is_within_factor(8_000_000),
+        certificate.is_within_factor(&coder, &compressed, 8_000_000),
         "compression should remain within an 8x empirical entropy comparison",
     );
 

@@ -181,6 +181,13 @@ pub const FLEET_V2_MAX_MAP_ENTRIES: usize = 64;
 /// Maximum aggregate collection elements across a nested v2 message.
 pub const FLEET_V2_MAX_TOTAL_COLLECTION_ITEMS: usize = 1024;
 
+/// Maximum shards admitted into one authenticated v2 erasure set.
+///
+/// Each shard is already charged against the 32 KiB per-message dynamic-byte
+/// budget, so this bounds attacker-controlled dynamic input to 32 MiB while
+/// retaining the shipped 1,000-node tuned topology.
+pub const FLEET_V2_MAX_ERASURE_SHARDS: usize = 1024;
+
 /// Maximum inclusive reconciliation range accepted from one peer.
 pub const FLEET_V2_MAX_SEQUENCE_RANGE_LEN: u64 = 65_536;
 
@@ -382,6 +389,16 @@ impl FleetSigner {
         message.validate_fleet_structure()?;
         message.validate_fleet_signer(&self.identity.signer)?;
         self.sign_preimage(&message.fleet_signature_preimage_v2(&self.identity)?)
+    }
+
+    /// Sign one additive protocol-v2 erasure envelope without changing the
+    /// legacy shard carrier used by protocol v1.
+    pub fn sign_erasure_shard_v2(
+        &self,
+        message: ErasureShardV2,
+    ) -> Result<SignedErasureShardV2, FleetIdentityError> {
+        let signature = self.sign_detached_message_v2(&message)?;
+        Ok(SignedErasureShardV2 { message, signature })
     }
 }
 
@@ -1234,6 +1251,77 @@ impl FleetVerificationRegistry {
             .map_err(FleetIdentityError::from_signature_error)
     }
 
+    fn verify_live_erasure_shard_set_v2(
+        &self,
+        signed_shards: &[SignedErasureShardV2],
+        trusted_epoch: SecurityEpoch,
+    ) -> Result<VerifiedErasureShardSet, FleetErasureV2Error> {
+        validate_ingress_limit(
+            "erasure-shard-set",
+            "shards",
+            signed_shards.len(),
+            FLEET_V2_MAX_ERASURE_SHARDS,
+        )?;
+        if signed_shards.is_empty() {
+            return Err(FleetErasureV2Error::Protocol(
+                ProtocolError::ErasureDecodeFailed {
+                    shard_set_id: String::new(),
+                    reason: "no shards supplied".to_string(),
+                },
+            ));
+        }
+
+        let mut set_identity: Option<FleetSigningIdentity> = None;
+        let mut by_index: BTreeMap<u16, &SignedErasureShardV2> = BTreeMap::new();
+        for signed in signed_shards {
+            // Every signature is checked before any duplicate is collapsed.
+            self.verify_live_detached_message_v2(
+                &signed.message,
+                &signed.signature,
+                trusted_epoch,
+            )?;
+            let identity = signed.signature.identity();
+            if let Some(expected) = &set_identity {
+                if expected != &identity {
+                    return Err(FleetErasureV2Error::Protocol(
+                        ProtocolError::ErasureDecodeFailed {
+                            shard_set_id: signed.message.shard.shard_set_id.clone(),
+                            reason: "mixed protocol-v2 shard signing identity".to_string(),
+                        },
+                    ));
+                }
+            } else {
+                set_identity = Some(identity.clone());
+            }
+            match by_index.entry(signed.message.shard.shard_index) {
+                std::collections::btree_map::Entry::Occupied(entry) => {
+                    let existing = entry.get();
+                    if existing.signature.identity() != identity
+                        || existing.message != signed.message
+                    {
+                        return Err(FleetErasureV2Error::Protocol(
+                            ProtocolError::ErasureDecodeFailed {
+                                shard_set_id: signed.message.shard.shard_set_id.clone(),
+                                reason: "conflicting duplicate protocol-v2 shard evidence"
+                                    .to_string(),
+                            },
+                        ));
+                    }
+                }
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(signed);
+                }
+            }
+        }
+
+        let shards: Vec<ErasureShard> = by_index
+            .values()
+            .map(|signed| signed.message.shard.clone())
+            .collect();
+        canonicalize_erasure_shard_set(&shards)?;
+        Ok(VerifiedErasureShardSet { shards })
+    }
+
     /// Verify an exactly committed historical artifact under a retired key.
     ///
     /// Epoch-window membership alone is insufficient because a compromised old
@@ -1921,6 +2009,39 @@ impl DurableFleetVerificationRegistry {
         self.ensure_current(authority)?;
         self.registry
             .verify_live_detached_message_v2(message, signature, trusted_epoch)
+    }
+
+    pub(crate) fn verify_live_erasure_shard_set_v2<A: FleetRegistryAnchorAuthority>(
+        &self,
+        signed_shards: &[SignedErasureShardV2],
+        trusted_epoch: SecurityEpoch,
+        authority: &A,
+    ) -> Result<VerifiedErasureShardSet, FleetErasureV2Error> {
+        self.ensure_current(authority)?;
+        let verified = self
+            .registry
+            .verify_live_erasure_shard_set_v2(signed_shards, trusted_epoch)?;
+        // Do not mint a verified capability if the external anchor advanced
+        // during a multi-shard verification batch.
+        self.ensure_current(authority)?;
+        Ok(verified)
+    }
+
+    /// Verify every detached shard signature and all set-level provenance,
+    /// then reconstruct once from owned canonical evidence.
+    pub fn reconstruct_live_erasure_payload_v2<A: FleetRegistryAnchorAuthority>(
+        &self,
+        signed_shards: &[SignedErasureShardV2],
+        trusted_epoch: SecurityEpoch,
+        authority: &A,
+    ) -> Result<Vec<u8>, FleetErasureV2Error> {
+        let payload = self
+            .verify_live_erasure_shard_set_v2(signed_shards, trusted_epoch, authority)?
+            .reconstruct()?;
+        // Reconstruction is pure but may be nontrivial. Do not release bytes
+        // after an authority rotation or revocation that raced the decoder.
+        self.ensure_current(authority)?;
+        Ok(payload)
     }
 
     /// Verify exact historical evidence while this durable authority remains current.
@@ -3238,6 +3359,36 @@ impl fmt::Display for FleetIdentityError {
 
 impl std::error::Error for FleetIdentityError {}
 
+/// Failure from the additive, authority-verified erasure reconstruction path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FleetErasureV2Error {
+    Identity(FleetIdentityError),
+    Protocol(ProtocolError),
+}
+
+impl fmt::Display for FleetErasureV2Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Identity(error) => write!(f, "fleet erasure identity failure: {error}"),
+            Self::Protocol(error) => write!(f, "fleet erasure protocol failure: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for FleetErasureV2Error {}
+
+impl From<FleetIdentityError> for FleetErasureV2Error {
+    fn from(error: FleetIdentityError) -> Self {
+        Self::Identity(error)
+    }
+}
+
+impl From<ProtocolError> for FleetErasureV2Error {
+    fn from(error: ProtocolError) -> Self {
+        Self::Protocol(error)
+    }
+}
+
 /// Validate a supplied raw fleet-v2 frame length before deserialization.
 ///
 /// The atomic ingress cutover owns the actual decoder. Keeping this byte gate
@@ -3727,6 +3878,39 @@ impl ErasureShard {
     }
 }
 
+/// Additive protocol-v2 erasure message.
+///
+/// The explicit security epoch is intentionally outside the legacy shard: a
+/// timestamp is not an authority epoch, and the v1 wire shape remains isolated
+/// until the atomic protocol cutover owns its removal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ErasureShardV2 {
+    pub epoch: SecurityEpoch,
+    pub shard: ErasureShard,
+}
+
+/// Untrusted transport carrier for one detached, Ed25519-authenticated shard.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignedErasureShardV2 {
+    pub message: ErasureShardV2,
+    pub signature: FleetSignatureV2,
+}
+
+/// Owned, non-serializable proof that every shard in a canonical set passed
+/// the live fleet registry and set-level provenance checks.
+#[derive(Debug)]
+pub(crate) struct VerifiedErasureShardSet {
+    shards: Vec<ErasureShard>,
+}
+
+impl VerifiedErasureShardSet {
+    fn reconstruct(self) -> Result<Vec<u8>, ProtocolError> {
+        reconstruct_erasure_payload_intrinsic(&self.shards)
+    }
+}
+
 /// Encode an arbitrary gossip payload into deterministic erasure shards.
 pub fn encode_erasure_shards(
     shard_set_id: impl Into<String>,
@@ -3736,8 +3920,72 @@ pub fn encode_erasure_shards(
     payload: &[u8],
     plan: ErasureCodingPlan,
 ) -> Result<Vec<ErasureShard>, ProtocolError> {
-    let plan = ErasureCodingPlan::new(plan.data_shards, plan.total_shards)?;
+    encode_erasure_shards_for_version(
+        shard_set_id.into(),
+        origin_node,
+        first_sequence,
+        timestamp_ns,
+        payload,
+        plan,
+        ProtocolVersion::V1,
+    )
+}
+
+/// Encode shards for the additive protocol-v2 authenticated envelope.
+pub fn encode_erasure_shards_v2(
+    shard_set_id: impl Into<String>,
+    origin_node: NodeId,
+    first_sequence: u64,
+    timestamp_ns: u64,
+    epoch: SecurityEpoch,
+    payload: &[u8],
+    plan: ErasureCodingPlan,
+) -> Result<Vec<ErasureShardV2>, ProtocolError> {
     let shard_set_id = shard_set_id.into();
+    let plan = ErasureCodingPlan::new(plan.data_shards, plan.total_shards)?;
+    if usize::from(plan.total_shards) > FLEET_V2_MAX_ERASURE_SHARDS {
+        return Err(ProtocolError::ErasureDecodeFailed {
+            shard_set_id,
+            reason: format!(
+                "protocol-v2 erasure plan exceeds the {FLEET_V2_MAX_ERASURE_SHARDS}-shard authenticated-set limit"
+            ),
+        });
+    }
+    encode_erasure_shards_for_version(
+        shard_set_id,
+        origin_node,
+        first_sequence,
+        timestamp_ns,
+        payload,
+        plan,
+        ProtocolVersion::V2,
+    )
+    .map(|shards| {
+        shards
+            .into_iter()
+            .map(|shard| ErasureShardV2 { epoch, shard })
+            .collect()
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_erasure_shards_for_version(
+    shard_set_id: String,
+    origin_node: NodeId,
+    first_sequence: u64,
+    timestamp_ns: u64,
+    payload: &[u8],
+    plan: ErasureCodingPlan,
+    protocol_version: ProtocolVersion,
+) -> Result<Vec<ErasureShard>, ProtocolError> {
+    let plan = ErasureCodingPlan::new(plan.data_shards, plan.total_shards)?;
+    let maximum_offset = u64::from(plan.total_shards.saturating_sub(1));
+    first_sequence.checked_add(maximum_offset).ok_or_else(|| {
+        ProtocolError::ErasureDecodeFailed {
+            shard_set_id: shard_set_id.clone(),
+            reason: "shard sequence range overflows u64".to_string(),
+        }
+    })?;
     let payload_hash = ContentHash::compute(payload);
     let chunk_len = erasure_chunk_len(payload.len(), plan.data_shards)?;
     let mut data_chunks = Vec::new();
@@ -3773,7 +4021,9 @@ pub fn encode_erasure_shards(
         shards.push(ErasureShard::new(
             shard_set_id.clone(),
             origin_node.clone(),
-            first_sequence.saturating_add(u64::from(shard_index)),
+            first_sequence
+                .checked_add(u64::from(shard_index))
+                .expect("sequence range was checked before shard allocation"),
             shard_index,
             plan,
             role,
@@ -3781,15 +4031,117 @@ pub fn encode_erasure_shards(
             payload_hash,
             shard_payload,
             timestamp_ns,
-            ProtocolVersion::CURRENT,
+            protocol_version,
         ));
     }
 
     Ok(shards)
 }
 
-/// Reconstruct a payload from a deterministic erasure shard set.
+/// Reconstruct an exact protocol-v1.0 payload from intrinsically consistent
+/// erasure shards.
+///
+/// Protocol-v2 callers must use
+/// [`DurableFleetVerificationRegistry::reconstruct_live_erasure_payload_v2`];
+/// accepting a bare v2 shard here would bypass detached signature and anchor
+/// verification.
 pub fn reconstruct_erasure_payload(shards: &[ErasureShard]) -> Result<Vec<u8>, ProtocolError> {
+    ensure_exact_legacy_erasure_version(shards)?;
+    reconstruct_erasure_payload_intrinsic(shards)
+}
+
+pub(crate) fn validate_legacy_erasure_shard_set(
+    shards: &[ErasureShard],
+) -> Result<(), ProtocolError> {
+    ensure_exact_legacy_erasure_version(shards)?;
+    canonicalize_erasure_shard_set(shards)?;
+    Ok(())
+}
+
+fn ensure_exact_legacy_erasure_version(shards: &[ErasureShard]) -> Result<(), ProtocolError> {
+    if shards
+        .iter()
+        .any(|shard| shard.protocol_version != ProtocolVersion::V1)
+    {
+        return Err(ProtocolError::ErasureDecodeFailed {
+            shard_set_id: shards
+                .first()
+                .map(|shard| shard.shard_set_id.clone())
+                .unwrap_or_default(),
+            reason: "non-v1.0 shards require trusted registry verification".to_string(),
+        });
+    }
+    Ok(())
+}
+
+struct CanonicalErasureShardSet<'a> {
+    shard_set_id: String,
+    plan: ErasureCodingPlan,
+    payload_len: usize,
+    payload_hash: ContentHash,
+    data_shards: BTreeMap<u16, &'a ErasureShard>,
+    parity_shards: BTreeMap<u16, &'a ErasureShard>,
+}
+
+fn reconstruct_erasure_payload_intrinsic(
+    shards: &[ErasureShard],
+) -> Result<Vec<u8>, ProtocolError> {
+    let canonical = canonicalize_erasure_shard_set(shards)?;
+    let mut data_chunks: BTreeMap<u16, Vec<u8>> = canonical
+        .data_shards
+        .iter()
+        .map(|(index, shard)| (*index, shard.shard_payload.clone()))
+        .collect();
+    let missing: Vec<u16> = (0..canonical.plan.data_shards)
+        .filter(|index| !data_chunks.contains_key(index))
+        .collect();
+    if missing.len() > 1 {
+        return Err(ProtocolError::ErasureDecodeFailed {
+            shard_set_id: canonical.shard_set_id.clone(),
+            reason: "more than one data shard is missing".to_string(),
+        });
+    }
+    if let Some(missing_index) = missing.first().copied() {
+        let mut recovered = canonical
+            .parity_shards
+            .values()
+            .next()
+            .map(|shard| shard.shard_payload.clone())
+            .ok_or_else(|| ProtocolError::ErasureDecodeFailed {
+                shard_set_id: canonical.shard_set_id.clone(),
+                reason: "missing data shard without parity".to_string(),
+            })?;
+        for chunk in data_chunks.values() {
+            for (slot, byte) in recovered.iter_mut().zip(chunk) {
+                *slot ^= *byte;
+            }
+        }
+        data_chunks.insert(missing_index, recovered);
+    }
+
+    let mut payload = Vec::new();
+    for index in 0..canonical.plan.data_shards {
+        let chunk = data_chunks
+            .get(&index)
+            .ok_or_else(|| ProtocolError::ErasureDecodeFailed {
+                shard_set_id: canonical.shard_set_id.clone(),
+                reason: "required data shard unavailable".to_string(),
+            })?;
+        payload.extend_from_slice(chunk);
+    }
+    payload.truncate(canonical.payload_len);
+    if ContentHash::compute(&payload) != canonical.payload_hash {
+        return Err(ProtocolError::ErasureDecodeFailed {
+            shard_set_id: canonical.shard_set_id,
+            reason: "reconstructed payload hash mismatch".to_string(),
+        });
+    }
+    Ok(payload)
+}
+
+fn canonicalize_erasure_shard_set<'a>(
+    shards: &'a [ErasureShard],
+) -> Result<CanonicalErasureShardSet<'a>, ProtocolError> {
     let first = shards
         .first()
         .ok_or_else(|| ProtocolError::ErasureDecodeFailed {
@@ -3803,11 +4155,19 @@ pub fn reconstruct_erasure_payload(shards: &[ErasureShard]) -> Result<Vec<u8>, P
             reason: "payload length does not fit usize".to_string(),
         })?;
     let chunk_len = erasure_chunk_len(payload_len, plan.data_shards)?;
-    let mut data_chunks: BTreeMap<u16, Vec<u8>> = BTreeMap::new();
-    let mut parity_chunk: Option<Vec<u8>> = None;
+    let sequence_base = first
+        .sequence
+        .checked_sub(u64::from(first.shard_index))
+        .ok_or_else(|| ProtocolError::ErasureDecodeFailed {
+            shard_set_id: first.shard_set_id.clone(),
+            reason: "shard sequence precedes its index".to_string(),
+        })?;
+    let mut data_shards: BTreeMap<u16, &ErasureShard> = BTreeMap::new();
+    let mut parity_shards: BTreeMap<u16, &ErasureShard> = BTreeMap::new();
+    let mut parity_payload: Option<&[u8]> = None;
 
     for shard in shards {
-        validate_erasure_shard_compatibility(first, shard, chunk_len)?;
+        validate_erasure_shard_compatibility(first, shard, chunk_len, sequence_base)?;
         match shard.role {
             ErasureShardRole::Data => {
                 if shard.shard_index >= plan.data_shards {
@@ -3816,15 +4176,15 @@ pub fn reconstruct_erasure_payload(shards: &[ErasureShard]) -> Result<Vec<u8>, P
                         reason: "data shard index outside data range".to_string(),
                     });
                 }
-                if let Some(existing) = data_chunks.get(&shard.shard_index) {
-                    if existing != &shard.shard_payload {
+                if let Some(existing) = data_shards.get(&shard.shard_index) {
+                    if existing.shard_hash != shard.shard_hash {
                         return Err(ProtocolError::ErasureDecodeFailed {
                             shard_set_id: first.shard_set_id.clone(),
-                            reason: "conflicting duplicate data shard".to_string(),
+                            reason: "conflicting duplicate data shard provenance".to_string(),
                         });
                     }
                 } else {
-                    data_chunks.insert(shard.shard_index, shard.shard_payload.clone());
+                    data_shards.insert(shard.shard_index, shard);
                 }
             }
             ErasureShardRole::Parity => {
@@ -3834,60 +4194,37 @@ pub fn reconstruct_erasure_payload(shards: &[ErasureShard]) -> Result<Vec<u8>, P
                         reason: "parity shard index overlaps data range".to_string(),
                     });
                 }
-                if let Some(existing) = &parity_chunk {
-                    if existing != &shard.shard_payload {
+                if let Some(existing) = parity_shards.get(&shard.shard_index) {
+                    if existing.shard_hash != shard.shard_hash {
                         return Err(ProtocolError::ErasureDecodeFailed {
                             shard_set_id: first.shard_set_id.clone(),
-                            reason: "conflicting parity shard".to_string(),
+                            reason: "conflicting duplicate parity shard provenance".to_string(),
                         });
                     }
                 } else {
-                    parity_chunk = Some(shard.shard_payload.clone());
+                    parity_shards.insert(shard.shard_index, shard);
+                }
+                if let Some(existing) = parity_payload {
+                    if existing != shard.shard_payload.as_slice() {
+                        return Err(ProtocolError::ErasureDecodeFailed {
+                            shard_set_id: first.shard_set_id.clone(),
+                            reason: "conflicting parity shard payload".to_string(),
+                        });
+                    }
+                } else {
+                    parity_payload = Some(&shard.shard_payload);
                 }
             }
         }
     }
-
-    let missing: Vec<u16> = (0..plan.data_shards)
-        .filter(|index| !data_chunks.contains_key(index))
-        .collect();
-    if missing.len() > 1 {
-        return Err(ProtocolError::ErasureDecodeFailed {
-            shard_set_id: first.shard_set_id.clone(),
-            reason: "more than one data shard is missing".to_string(),
-        });
-    }
-    if let Some(missing_index) = missing.first().copied() {
-        let mut recovered = parity_chunk.ok_or_else(|| ProtocolError::ErasureDecodeFailed {
-            shard_set_id: first.shard_set_id.clone(),
-            reason: "missing data shard without parity".to_string(),
-        })?;
-        for chunk in data_chunks.values() {
-            for (slot, byte) in recovered.iter_mut().zip(chunk) {
-                *slot ^= *byte;
-            }
-        }
-        data_chunks.insert(missing_index, recovered);
-    }
-
-    let mut payload = Vec::new();
-    for index in 0..plan.data_shards {
-        let chunk = data_chunks
-            .get(&index)
-            .ok_or_else(|| ProtocolError::ErasureDecodeFailed {
-                shard_set_id: first.shard_set_id.clone(),
-                reason: "required data shard unavailable".to_string(),
-            })?;
-        payload.extend_from_slice(chunk);
-    }
-    payload.truncate(payload_len);
-    if ContentHash::compute(&payload) != first.payload_hash {
-        return Err(ProtocolError::ErasureDecodeFailed {
-            shard_set_id: first.shard_set_id.clone(),
-            reason: "reconstructed payload hash mismatch".to_string(),
-        });
-    }
-    Ok(payload)
+    Ok(CanonicalErasureShardSet {
+        shard_set_id: first.shard_set_id.clone(),
+        plan,
+        payload_len,
+        payload_hash: first.payload_hash,
+        data_shards,
+        parity_shards,
+    })
 }
 
 fn erasure_chunk_len(payload_len: usize, data_shards: u16) -> Result<usize, ProtocolError> {
@@ -3908,6 +4245,7 @@ fn validate_erasure_shard_compatibility(
     first: &ErasureShard,
     shard: &ErasureShard,
     chunk_len: usize,
+    sequence_base: u64,
 ) -> Result<(), ProtocolError> {
     let mismatch = first.shard_set_id != shard.shard_set_id
         || first.plan != shard.plan
@@ -3918,6 +4256,15 @@ fn validate_erasure_shard_compatibility(
         return Err(ProtocolError::ErasureDecodeFailed {
             shard_set_id: first.shard_set_id.clone(),
             reason: "mixed shard set metadata".to_string(),
+        });
+    }
+    if first.origin_node != shard.origin_node
+        || first.timestamp_ns != shard.timestamp_ns
+        || shard.sequence.checked_sub(u64::from(shard.shard_index)) != Some(sequence_base)
+    {
+        return Err(ProtocolError::ErasureDecodeFailed {
+            shard_set_id: first.shard_set_id.clone(),
+            reason: "mixed shard set provenance".to_string(),
         });
     }
     if shard.shard_index >= shard.plan.total_shards {
@@ -3936,6 +4283,16 @@ fn validate_erasure_shard_compatibility(
         return Err(ProtocolError::ErasureDecodeFailed {
             shard_set_id: first.shard_set_id.clone(),
             reason: "shard hash mismatch".to_string(),
+        });
+    }
+    let expected_legacy_tag = AuthenticityHash::compute_keyed(
+        shard.origin_node.as_str().as_bytes(),
+        shard.shard_hash.as_bytes(),
+    );
+    if shard.signature.signer != shard.origin_node || shard.signature.hash != expected_legacy_tag {
+        return Err(ProtocolError::ErasureDecodeFailed {
+            shard_set_id: first.shard_set_id.clone(),
+            reason: "legacy shard signature is inconsistent with canonical provenance".to_string(),
         });
     }
     Ok(())
@@ -4155,6 +4512,7 @@ impl SequenceRange {
 // ---------------------------------------------------------------------------
 
 const EVIDENCE_SIGNATURE_SCHEMA_V2: &[u8] = b"FrankenEngine.FleetEvidencePacket.v2|trace_id:string|extension_id:string|evidence_hash:bytes32|posterior_delta_millionths:i64|policy_version:u64|epoch:u64|node_id:string|sequence:u64|timestamp_ns:u64|signature:{fleet_authority_id:bytes32,signer:string,key_id:bytes32,key_sequence:u64,signature:bytes64-sentinel}|protocol_version:{major:u64,minor:u64}|extensions:map<string,string>";
+const ERASURE_SHARD_SIGNATURE_SCHEMA_V2: &[u8] = b"FrankenEngine.FleetErasureShard.v2|epoch:u64|shard_set_id:string|origin_node:string|sequence:u64|shard_index:u64|plan:{data_shards:u64,total_shards:u64}|role:u64|payload_len:u64|payload_hash:bytes32|shard_hash:bytes32|shard_payload:bytes|timestamp_ns:u64|signature:{fleet_authority_id:bytes32,signer:string,key_id:bytes32,key_sequence:u64,signature:bytes64-sentinel}|protocol_version:{major:u64,minor:u64}|extensions:map<string,string>";
 const INTENT_SIGNATURE_SCHEMA_V2: &[u8] = b"FrankenEngine.FleetContainmentIntent.v2|intent_id:string|extension_id:string|proposed_action:u64|confidence_millionths:u64|supporting_evidence_ids:array<string>|policy_version:u64|epoch:u64|node_id:string|sequence:u64|timestamp_ns:u64|signature:{fleet_authority_id:bytes32,signer:string,key_id:bytes32,key_sequence:u64,signature:bytes64-sentinel}|protocol_version:{major:u64,minor:u64}|extensions:map<string,string>";
 const HEARTBEAT_SIGNATURE_SCHEMA_V2: &[u8] = b"FrankenEngine.FleetHeartbeatLiveness.v2|node_id:string|policy_version:u64|evidence_frontier_hash:bytes32|local_health:map<string,string>|epoch:u64|sequence:u64|timestamp_ns:u64|signature:{fleet_authority_id:bytes32,signer:string,key_id:bytes32,key_sequence:u64,signature:bytes64-sentinel}|protocol_version:{major:u64,minor:u64}|extensions:map<string,string>";
 const RECONCILIATION_SIGNATURE_SCHEMA_V2: &[u8] = b"FrankenEngine.FleetReconciliationRequest.v2|node_id:string|known_frontier_hash:bytes32|requested_ranges:array<{node_id:string,start:u64,end:u64}>|epoch:u64|sequence:u64|timestamp_ns:u64|signature:{fleet_authority_id:bytes32,signer:string,key_id:bytes32,key_sequence:u64,signature:bytes64-sentinel}|protocol_version:{major:u64,minor:u64}";
@@ -4162,6 +4520,8 @@ const CHECKPOINT_SIGNATURE_SCHEMA_V2: &[u8] = b"FrankenEngine.FleetQuorumCheckpo
 
 static EVIDENCE_SIGNATURE_SCHEMA_HASH_V2: LazyLock<SchemaHash> =
     LazyLock::new(|| SchemaHash::from_definition(EVIDENCE_SIGNATURE_SCHEMA_V2));
+static ERASURE_SHARD_SIGNATURE_SCHEMA_HASH_V2: LazyLock<SchemaHash> =
+    LazyLock::new(|| SchemaHash::from_definition(ERASURE_SHARD_SIGNATURE_SCHEMA_V2));
 static INTENT_SIGNATURE_SCHEMA_HASH_V2: LazyLock<SchemaHash> =
     LazyLock::new(|| SchemaHash::from_definition(INTENT_SIGNATURE_SCHEMA_V2));
 static HEARTBEAT_SIGNATURE_SCHEMA_HASH_V2: LazyLock<SchemaHash> =
@@ -4215,6 +4575,191 @@ pub trait FleetSignaturePreimageV2: fleet_signature_preimage_v2_sealed::Sealed {
             self.fleet_signature_schema_v2(),
             &unsigned_view,
         ))
+    }
+}
+
+impl fleet_signature_preimage_v2_sealed::Sealed for ErasureShardV2 {}
+
+impl FleetSignaturePreimageV2 for ErasureShardV2 {
+    fn fleet_signature_domain(&self) -> ObjectDomain {
+        ObjectDomain::EvidenceRecord
+    }
+
+    fn fleet_signature_schema_v2(&self) -> &SchemaHash {
+        &ERASURE_SHARD_SIGNATURE_SCHEMA_HASH_V2
+    }
+
+    fn fleet_security_epoch(&self) -> SecurityEpoch {
+        self.epoch
+    }
+
+    fn fleet_unsigned_view_v2(
+        &self,
+        identity: &FleetSigningIdentity,
+    ) -> Result<CanonicalValue, FleetIdentityError> {
+        self.validate_fleet_ingress_limits()?;
+        validate_fleet_signing_identity_ingress(identity)?;
+        let shard = &self.shard;
+        Ok(CanonicalValue::Map(BTreeMap::from([
+            (
+                "epoch".to_string(),
+                CanonicalValue::U64(self.epoch.as_u64()),
+            ),
+            (
+                "extensions".to_string(),
+                canonical_string_map(&shard.extensions),
+            ),
+            (
+                "origin_node".to_string(),
+                CanonicalValue::String(shard.origin_node.as_str().to_string()),
+            ),
+            (
+                "payload_hash".to_string(),
+                canonical_content_hash(shard.payload_hash),
+            ),
+            (
+                "payload_len".to_string(),
+                CanonicalValue::U64(shard.payload_len),
+            ),
+            (
+                "plan".to_string(),
+                CanonicalValue::Map(BTreeMap::from([
+                    (
+                        "data_shards".to_string(),
+                        CanonicalValue::U64(u64::from(shard.plan.data_shards)),
+                    ),
+                    (
+                        "total_shards".to_string(),
+                        CanonicalValue::U64(u64::from(shard.plan.total_shards)),
+                    ),
+                ])),
+            ),
+            (
+                "protocol_version".to_string(),
+                canonical_protocol_version(shard.protocol_version),
+            ),
+            (
+                "role".to_string(),
+                CanonicalValue::U64(match shard.role {
+                    ErasureShardRole::Data => 0,
+                    ErasureShardRole::Parity => 1,
+                }),
+            ),
+            ("sequence".to_string(), CanonicalValue::U64(shard.sequence)),
+            (
+                "shard_hash".to_string(),
+                canonical_content_hash(shard.shard_hash),
+            ),
+            (
+                "shard_index".to_string(),
+                CanonicalValue::U64(u64::from(shard.shard_index)),
+            ),
+            (
+                "shard_payload".to_string(),
+                CanonicalValue::Bytes(shard.shard_payload.clone()),
+            ),
+            (
+                "shard_set_id".to_string(),
+                CanonicalValue::String(shard.shard_set_id.clone()),
+            ),
+            (
+                "signature".to_string(),
+                canonical_signature_identity(identity),
+            ),
+            (
+                "timestamp_ns".to_string(),
+                CanonicalValue::U64(shard.timestamp_ns),
+            ),
+        ])))
+    }
+
+    fn fleet_message_type(&self) -> &'static str {
+        "erasure-shard"
+    }
+
+    fn validate_fleet_ingress_limits(&self) -> Result<(), FleetIdentityError> {
+        let message_type = self.fleet_message_type();
+        let mut budget = FleetV2IngressBudget::default();
+        budget.charge_identifier(message_type, "shard_set_id", &self.shard.shard_set_id)?;
+        budget.charge_node_id(message_type, "origin_node", &self.shard.origin_node)?;
+        validate_ingress_limit(
+            message_type,
+            "shard_payload",
+            self.shard.shard_payload.len(),
+            FLEET_V2_MAX_DYNAMIC_BYTES,
+        )?;
+        budget.charge_dynamic_bytes(
+            message_type,
+            "shard_payload",
+            self.shard.shard_payload.len(),
+        )?;
+        budget.charge_legacy_signature(
+            message_type,
+            "legacy_signature.signer",
+            &self.shard.signature,
+        )?;
+        budget.charge_string_map(message_type, "extensions", &self.shard.extensions)
+    }
+
+    fn validate_fleet_structure(&self) -> Result<(), FleetIdentityError> {
+        let shard = &self.shard;
+        validate_fleet_node_id(&shard.origin_node)?;
+        validate_protocol_v2(self.fleet_message_type(), shard.protocol_version)?;
+        let plan = ErasureCodingPlan::new(shard.plan.data_shards, shard.plan.total_shards)
+            .map_err(|error| FleetIdentityError::NonCanonicalMessage {
+                message_type: self.fleet_message_type().to_string(),
+                detail: error.to_string(),
+            })?;
+        if usize::from(plan.total_shards) > FLEET_V2_MAX_ERASURE_SHARDS {
+            return Err(FleetIdentityError::NonCanonicalMessage {
+                message_type: self.fleet_message_type().to_string(),
+                detail: format!(
+                    "erasure plan exceeds the {FLEET_V2_MAX_ERASURE_SHARDS}-shard authenticated-set limit"
+                ),
+            });
+        }
+        let payload_len = usize::try_from(shard.payload_len).map_err(|_| {
+            FleetIdentityError::NonCanonicalMessage {
+                message_type: self.fleet_message_type().to_string(),
+                detail: "payload length does not fit usize".to_string(),
+            }
+        })?;
+        let chunk_len = erasure_chunk_len(payload_len, plan.data_shards).map_err(|error| {
+            FleetIdentityError::NonCanonicalMessage {
+                message_type: self.fleet_message_type().to_string(),
+                detail: error.to_string(),
+            }
+        })?;
+        let sequence_base = shard
+            .sequence
+            .checked_sub(u64::from(shard.shard_index))
+            .ok_or_else(|| FleetIdentityError::NonCanonicalMessage {
+                message_type: self.fleet_message_type().to_string(),
+                detail: "shard sequence precedes its index".to_string(),
+            })?;
+        validate_erasure_shard_compatibility(shard, shard, chunk_len, sequence_base).map_err(
+            |error| FleetIdentityError::NonCanonicalMessage {
+                message_type: self.fleet_message_type().to_string(),
+                detail: error.to_string(),
+            },
+        )?;
+        let role_matches_index = match shard.role {
+            ErasureShardRole::Data => shard.shard_index < plan.data_shards,
+            ErasureShardRole::Parity => {
+                shard.shard_index >= plan.data_shards && shard.shard_index < plan.total_shards
+            }
+        };
+        if !role_matches_index {
+            return Err(FleetIdentityError::NonCanonicalMessage {
+                message_type: self.fleet_message_type().to_string(),
+                detail: "shard role does not match its coding-plan index".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_fleet_signer(&self, signer: &NodeId) -> Result<(), FleetIdentityError> {
+        validate_exact_message_signer(self.fleet_message_type(), &self.shard.origin_node, signer)
     }
 }
 
@@ -5638,7 +6183,10 @@ impl FleetProtocolState {
         Ok(())
     }
 
-    /// Process an incoming erasure-coded gossip shard.
+    /// Process an incoming exact protocol-v1.0 erasure-coded gossip shard.
+    ///
+    /// The additive v2 carrier is deliberately rejected until the atomic v2
+    /// cutover routes it through the verified-set capability.
     pub fn process_erasure_shard(&mut self, shard: &ErasureShard) -> Result<(), ProtocolError> {
         if !self
             .protocol_version
@@ -5649,13 +6197,13 @@ impl FleetProtocolState {
                 remote: shard.protocol_version,
             });
         }
-
-        if shard.shard_hash != shard.recompute_shard_hash() {
+        if shard.protocol_version != ProtocolVersion::V1 {
             return Err(ProtocolError::ErasureDecodeFailed {
                 shard_set_id: shard.shard_set_id.clone(),
-                reason: "shard hash mismatch".to_string(),
+                reason: "non-v1.0 shards require trusted registry verification".to_string(),
             });
         }
+        canonicalize_erasure_shard_set(std::slice::from_ref(shard))?;
 
         self.sequence_tracker
             .accept(&shard.origin_node, shard.sequence)?;
@@ -5819,24 +6367,46 @@ impl FleetProtocolState {
         ErasureCodingPlan::tuned(total_known, partitioned)
     }
 
-    /// Encode an evidence packet for erasure-coded gossip dissemination.
+    /// Encode an evidence packet for exact protocol-v1.0 erasure gossip.
+    ///
+    /// A non-v1.0 state must use the trusted outbound carrier owned by the
+    /// atomic v2 cutover; silently emitting this legacy carrier would be a
+    /// protocol downgrade.
     pub fn encode_evidence_for_erasure_gossip(
         &mut self,
         packet: &EvidencePacket,
         current_time_ns: u64,
     ) -> Result<Vec<FleetMessage>, ProtocolError> {
+        if self.protocol_version != ProtocolVersion::V1
+            || packet.protocol_version != ProtocolVersion::V1
+        {
+            return Err(ProtocolError::ErasureDecodeFailed {
+                shard_set_id: format!("{}:{}", packet.node_id, packet.trace_id),
+                reason: "non-v1.0 fleet state or evidence cannot emit legacy erasure gossip"
+                    .to_string(),
+            });
+        }
         let payload =
             serde_json::to_vec(packet).map_err(|err| ProtocolError::SerializationFailed {
                 message_type: "EvidencePacket".to_string(),
                 detail: err.to_string(),
             })?;
         let plan = self.erasure_coding_plan(current_time_ns);
-        let first_sequence = self.local_sequence.saturating_add(1);
-        self.local_sequence = self
+        let first_sequence = self.local_sequence.checked_add(1).ok_or_else(|| {
+            ProtocolError::ErasureDecodeFailed {
+                shard_set_id: format!("{}:{}", packet.node_id, packet.trace_id),
+                reason: "shard sequence range overflows u64".to_string(),
+            }
+        })?;
+        let next_local_sequence = self
             .local_sequence
-            .saturating_add(u64::from(plan.total_shards));
+            .checked_add(u64::from(plan.total_shards))
+            .ok_or_else(|| ProtocolError::ErasureDecodeFailed {
+                shard_set_id: format!("{}:{}", packet.node_id, packet.trace_id),
+                reason: "shard sequence range overflows u64".to_string(),
+            })?;
         let shard_set_id = format!("{}:{}", packet.node_id, packet.trace_id);
-        encode_erasure_shards(
+        let messages = encode_erasure_shards(
             shard_set_id,
             self.local_node_id.clone(),
             first_sequence,
@@ -5844,10 +6414,12 @@ impl FleetProtocolState {
             &payload,
             plan,
         )
-        .map(|shards| shards.into_iter().map(FleetMessage::ErasureShard).collect())
+        .map(|shards| shards.into_iter().map(FleetMessage::ErasureShard).collect())?;
+        self.local_sequence = next_local_sequence;
+        Ok(messages)
     }
 
-    /// Reconstruct an erasure-coded gossip payload and emit a legacy-v1
+    /// Reconstruct an erasure-coded gossip payload and emit a legacy-v1.0
     /// reconstruction receipt attributed to this node (`bd-cixqu.35.2`).
     ///
     /// The returned [`ReconstructionReceipt`] binds which shards fed the
@@ -7690,6 +8262,43 @@ mod tests {
         .expect("valid fleet signer")
     }
 
+    fn signed_v2_erasure_shards(
+        signer: &FleetSigner,
+        shard_set_id: &str,
+        first_sequence: u64,
+        timestamp_ns: u64,
+        epoch: SecurityEpoch,
+        payload: &[u8],
+        plan: ErasureCodingPlan,
+    ) -> Vec<SignedErasureShardV2> {
+        encode_erasure_shards_v2(
+            shard_set_id,
+            signer.identity().signer.clone(),
+            first_sequence,
+            timestamp_ns,
+            epoch,
+            payload,
+            plan,
+        )
+        .expect("encode protocol-v2 erasure shards")
+        .into_iter()
+        .map(|message| {
+            signer
+                .sign_erasure_shard_v2(message)
+                .expect("sign protocol-v2 erasure shard")
+        })
+        .collect()
+    }
+
+    fn reauthenticate_legacy_erasure_shard(shard: &mut ErasureShard) {
+        shard.shard_hash = shard.recompute_shard_hash();
+        shard.signature.signer = shard.origin_node.clone();
+        shard.signature.hash = AuthenticityHash::compute_keyed(
+            shard.origin_node.as_str().as_bytes(),
+            shard.shard_hash.as_bytes(),
+        );
+    }
+
     struct TestFleetRegistryAnchorAuthority;
 
     impl FleetRegistryAnchorAuthority for TestFleetRegistryAnchorAuthority {
@@ -7702,6 +8311,31 @@ mod tests {
             claim: &FleetRegistrySnapshotAnchorClaim,
         ) -> Result<String, FleetIdentityError> {
             Ok(format!("test-anchor-generation-{}", claim.generation))
+        }
+    }
+
+    struct AdvanceAfterErasureBatchAuthority {
+        expected_claim: FleetRegistrySnapshotAnchorClaim,
+        authenticate_calls: Cell<u32>,
+    }
+
+    impl FleetRegistryAnchorAuthority for AdvanceAfterErasureBatchAuthority {
+        fn fleet_authority_id(&self) -> FleetAuthorityId {
+            self.expected_claim.fleet_authority_id
+        }
+
+        fn authenticate_current_registry_anchor(
+            &self,
+            claim: &FleetRegistrySnapshotAnchorClaim,
+        ) -> Result<String, FleetIdentityError> {
+            let call = self.authenticate_calls.get() + 1;
+            self.authenticate_calls.set(call);
+            if claim != &self.expected_claim || call >= 3 {
+                return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "test authority advanced during erasure reconstruction".to_string(),
+                });
+            }
+            Ok(format!("test-erasure-anchor-check-{call}"))
         }
     }
 
@@ -8505,6 +9139,301 @@ mod tests {
         assert!(matches!(
             foreign_revocation_snapshot.digest(),
             Err(FleetIdentityError::FleetAuthorityMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn v2_erasure_verified_set_reconstructs_canonical_permutations_and_blocks_raw_bypass() {
+        let signer = v2_test_signer("node-a", 1, 81);
+        let mut registry = FleetVerificationRegistry::new();
+        registry.register_signer(&signer).expect("register signer");
+        let epoch = SecurityEpoch::from_raw(1);
+        let payload = b"trusted protocol-v2 erasure reconstruction";
+        let signed = signed_v2_erasure_shards(
+            &signer,
+            "v2-erasure-set",
+            100,
+            1_000_000,
+            epoch,
+            payload,
+            ErasureCodingPlan::new(2, 3).expect("valid coding plan"),
+        );
+        let candidates = vec![signed[1].clone(), signed[0].clone(), signed[0].clone()];
+
+        let verified = registry
+            .verify_live_erasure_shard_set_v2(&candidates, epoch)
+            .expect("all signatures and canonical provenance verify");
+        assert_eq!(
+            verified.reconstruct().expect("reconstruct verified set"),
+            payload
+        );
+        let raw_v2: Vec<ErasureShard> = candidates
+            .iter()
+            .map(|signed| signed.message.shard.clone())
+            .collect();
+        assert!(matches!(
+            reconstruct_erasure_payload(&raw_v2),
+            Err(ProtocolError::ErasureDecodeFailed { ref reason, .. })
+                if reason.contains("trusted registry")
+        ));
+
+        for version in [
+            ProtocolVersion { major: 1, minor: 1 },
+            ProtocolVersion { major: 2, minor: 1 },
+        ] {
+            let mut raw_non_v1_0 = raw_v2.clone();
+            for shard in &mut raw_non_v1_0 {
+                shard.protocol_version = version;
+                reauthenticate_legacy_erasure_shard(shard);
+            }
+            assert!(matches!(
+                reconstruct_erasure_payload(&raw_non_v1_0),
+                Err(ProtocolError::ErasureDecodeFailed { ref reason, .. })
+                    if reason.contains("trusted registry")
+            ));
+        }
+    }
+
+    #[test]
+    fn v2_erasure_set_limit_matches_encoder_structure_and_verifier() {
+        let epoch = SecurityEpoch::from_raw(1);
+        let maximum = u16::try_from(FLEET_V2_MAX_ERASURE_SHARDS)
+            .expect("authenticated erasure-set limit fits u16");
+        let boundary = encode_erasure_shards_v2(
+            "v2-erasure-limit-boundary",
+            NodeId::new("node-a"),
+            1,
+            1_000,
+            epoch,
+            b"",
+            ErasureCodingPlan::new(1, maximum).expect("boundary plan"),
+        )
+        .expect("exact authenticated-set limit is encodable");
+        assert_eq!(boundary.len(), FLEET_V2_MAX_ERASURE_SHARDS);
+
+        let oversized = maximum
+            .checked_add(1)
+            .expect("test limit is below u16::MAX");
+        assert!(matches!(
+            encode_erasure_shards_v2(
+                "v2-erasure-limit-plus-one",
+                NodeId::new("node-a"),
+                1,
+                1_000,
+                epoch,
+                b"",
+                ErasureCodingPlan::new(1, oversized).expect("oversized but intrinsic plan"),
+            ),
+            Err(ProtocolError::ErasureDecodeFailed { ref reason, .. })
+                if reason.contains("authenticated-set limit")
+        ));
+
+        let signer = v2_test_signer("node-a", 1, 86);
+        let mut registry = FleetVerificationRegistry::new();
+        registry.register_signer(&signer).expect("register signer");
+        let one = signed_v2_erasure_shards(
+            &signer,
+            "v2-erasure-limit-verifier",
+            10,
+            2_000,
+            epoch,
+            b"x",
+            ErasureCodingPlan::new(1, 1).expect("one-shard plan"),
+        )
+        .remove(0);
+        let too_many = vec![one.clone(); FLEET_V2_MAX_ERASURE_SHARDS + 1];
+        assert!(matches!(
+            registry.verify_live_erasure_shard_set_v2(&too_many, epoch),
+            Err(FleetErasureV2Error::Identity(
+                FleetIdentityError::NonCanonicalMessage { ref detail, .. }
+            )) if detail.contains("shards")
+        ));
+
+        let mut oversized_message = one.message;
+        oversized_message.shard.plan =
+            ErasureCodingPlan::new(1, oversized).expect("oversized but intrinsic plan");
+        reauthenticate_legacy_erasure_shard(&mut oversized_message.shard);
+        assert!(matches!(
+            signer.sign_erasure_shard_v2(oversized_message),
+            Err(FleetIdentityError::NonCanonicalMessage { ref detail, .. })
+                if detail.contains("authenticated-set limit")
+        ));
+    }
+
+    #[test]
+    fn v2_erasure_verification_rejects_wrong_keys_mixed_origins_and_conflicting_duplicates() {
+        let signer_a = v2_test_signer("node-a", 1, 82);
+        let signer_b = v2_test_signer("node-b", 1, 83);
+        let foreign_signer = FleetSigner::new(
+            alternate_test_fleet_authority_id(),
+            NodeId::new("node-a"),
+            1,
+            SigningKey::from_bytes([82; 32]).expect("non-zero foreign test key"),
+        )
+        .expect("foreign authority signer");
+        let wrong_key_signer = FleetSigner::new(
+            test_fleet_authority_id(),
+            NodeId::new("node-a"),
+            1,
+            SigningKey::from_bytes([85; 32]).expect("non-zero wrong test key"),
+        )
+        .expect("same-node wrong-key signer");
+        let mut registry = FleetVerificationRegistry::new();
+        registry
+            .register_signer(&signer_a)
+            .expect("register signer A");
+        registry
+            .register_signer(&signer_b)
+            .expect("register signer B");
+        let epoch = SecurityEpoch::from_raw(1);
+        let plan = ErasureCodingPlan::new(2, 3).expect("valid coding plan");
+        let signed_a = signed_v2_erasure_shards(
+            &signer_a,
+            "v2-erasure-security",
+            200,
+            2_000_000,
+            epoch,
+            b"security-bound erasure payload",
+            plan,
+        );
+        let signed_b = signed_v2_erasure_shards(
+            &signer_b,
+            "v2-erasure-security",
+            200,
+            2_000_000,
+            epoch,
+            b"security-bound erasure payload",
+            plan,
+        );
+
+        assert!(matches!(
+            registry.verify_live_erasure_shard_set_v2(
+                &[signed_a[0].clone(), signed_b[1].clone()],
+                epoch,
+            ),
+            Err(FleetErasureV2Error::Protocol(
+                ProtocolError::ErasureDecodeFailed { .. }
+            ))
+        ));
+
+        for mutation in ["sequence", "timestamp"] {
+            let mut conflicting_message = signed_a[1].message.clone();
+            match mutation {
+                "sequence" => conflicting_message.shard.sequence += 1,
+                "timestamp" => conflicting_message.shard.timestamp_ns += 1,
+                _ => unreachable!(),
+            }
+            reauthenticate_legacy_erasure_shard(&mut conflicting_message.shard);
+            let conflicting = signer_a
+                .sign_erasure_shard_v2(conflicting_message)
+                .expect("sign individually valid conflicting provenance");
+            for candidates in [
+                vec![signed_a[0].clone(), conflicting.clone()],
+                vec![conflicting.clone(), signed_a[0].clone()],
+            ] {
+                assert!(matches!(
+                    registry.verify_live_erasure_shard_set_v2(&candidates, epoch),
+                    Err(FleetErasureV2Error::Protocol(
+                        ProtocolError::ErasureDecodeFailed { ref reason, .. }
+                    )) if reason.contains("mixed shard set provenance")
+                ));
+            }
+        }
+
+        let mut invalid_duplicate = signed_a[0].clone();
+        invalid_duplicate.signature.signature.lower[0] ^= 1;
+        for candidates in [
+            vec![
+                signed_a[0].clone(),
+                invalid_duplicate.clone(),
+                signed_a[1].clone(),
+            ],
+            vec![
+                invalid_duplicate.clone(),
+                signed_a[0].clone(),
+                signed_a[1].clone(),
+            ],
+        ] {
+            assert!(matches!(
+                registry.verify_live_erasure_shard_set_v2(&candidates, epoch),
+                Err(FleetErasureV2Error::Identity(
+                    FleetIdentityError::CryptographicFailure { .. }
+                ))
+            ));
+        }
+
+        let mut conflicting_message = signed_a[0].message.clone();
+        conflicting_message
+            .shard
+            .extensions
+            .insert("duplicate".to_string(), "conflict".to_string());
+        let conflicting_duplicate = signer_a
+            .sign_erasure_shard_v2(conflicting_message)
+            .expect("sign individually valid conflicting duplicate");
+        assert!(matches!(
+            registry.verify_live_erasure_shard_set_v2(
+                &[
+                    signed_a[0].clone(),
+                    conflicting_duplicate,
+                    signed_a[1].clone(),
+                ],
+                epoch,
+            ),
+            Err(FleetErasureV2Error::Protocol(ProtocolError::ErasureDecodeFailed {
+                ref reason,
+                ..
+            })) if reason.contains("conflicting duplicate protocol-v2")
+        ));
+
+        let mut tampered = vec![signed_a[0].clone(), signed_a[1].clone()];
+        tampered[0]
+            .message
+            .shard
+            .extensions
+            .insert("tampered".to_string(), "after-signing".to_string());
+        assert!(matches!(
+            registry.verify_live_erasure_shard_set_v2(&tampered, epoch),
+            Err(FleetErasureV2Error::Identity(
+                FleetIdentityError::CryptographicFailure { .. }
+            ))
+        ));
+
+        let message = signed_a[0].message.clone();
+        let wrong_node_preimage = message
+            .fleet_signature_preimage_v2(signer_b.identity())
+            .expect("canonical wrong-node preimage");
+        let wrong_node_signature = signer_b
+            .sign_preimage(&wrong_node_preimage)
+            .expect("cryptographically valid wrong-node signature");
+        let wrong_node = SignedErasureShardV2 {
+            message,
+            signature: wrong_node_signature,
+        };
+        assert!(matches!(
+            registry.verify_live_erasure_shard_set_v2(&[wrong_node], epoch),
+            Err(FleetErasureV2Error::Identity(
+                FleetIdentityError::SignerMismatch { .. }
+            ))
+        ));
+
+        let foreign = foreign_signer
+            .sign_erasure_shard_v2(signed_a[0].message.clone())
+            .expect("foreign authority signs matching-node shard");
+        assert!(matches!(
+            registry.verify_live_erasure_shard_set_v2(&[foreign], epoch),
+            Err(FleetErasureV2Error::Identity(
+                FleetIdentityError::FleetAuthorityMismatch { .. }
+            ))
+        ));
+
+        let wrong_key = wrong_key_signer
+            .sign_erasure_shard_v2(signed_a[0].message.clone())
+            .expect("same-node wrong key signs matching message");
+        assert!(matches!(
+            registry.verify_live_erasure_shard_set_v2(&[wrong_key], epoch),
+            Err(FleetErasureV2Error::Identity(
+                FleetIdentityError::UnknownKey { .. }
+            ))
         ));
     }
 
@@ -9617,6 +10546,78 @@ mod tests {
                 &authority,
             )
             .expect("restored durable rotation verifies only the new key");
+    }
+
+    #[test]
+    fn durable_registry_reconstructs_only_an_authority_verified_v2_erasure_set() {
+        let context = EventContext::new(
+            "trace-v2-erasure-authority",
+            "decision-v2-erasure-authority",
+            "policy-v2-erasure-authority",
+        )
+        .expect("valid storage context");
+        let authority = RecoverableTestAnchorAuthority::new(false);
+        let signer = v2_test_signer("node-a", 1, 84);
+        let mut storage = crate::storage_adapter::InMemoryStorageAdapter::new();
+        let pending = FleetVerificationRegistryPersistence::new(&mut storage, &context)
+            .prepare_initial_registration(
+                NodeId::new("node-a"),
+                1,
+                signer.verification_key().clone(),
+                SecurityEpoch::from_raw(1),
+                &authority,
+            )
+            .expect("durably prepare signer registration");
+        let live = pending
+            .finalize_and_publish(&authority)
+            .expect("publish current durable registry");
+        let epoch = SecurityEpoch::from_raw(1);
+        let payload = b"anchored one-shot erasure reconstruction";
+        let signed = signed_v2_erasure_shards(
+            &signer,
+            "durable-v2-erasure",
+            300,
+            3_000_000,
+            epoch,
+            payload,
+            ErasureCodingPlan::new(2, 3).expect("valid coding plan"),
+        );
+
+        assert_eq!(
+            live.reconstruct_live_erasure_payload_v2(
+                &[signed[1].clone(), signed[0].clone()],
+                epoch,
+                &authority,
+            )
+            .expect("anchored registry verifies before reconstruction"),
+            payload
+        );
+
+        let advancing_authority = AdvanceAfterErasureBatchAuthority {
+            expected_claim: live.anchor_claim.clone(),
+            authenticate_calls: Cell::new(0),
+        };
+        assert!(matches!(
+            live.reconstruct_live_erasure_payload_v2(
+                &[signed[1].clone(), signed[0].clone()],
+                epoch,
+                &advancing_authority,
+            ),
+            Err(FleetErasureV2Error::Identity(
+                FleetIdentityError::UnverifiedRegistryAnchor { .. }
+            ))
+        ));
+        assert_eq!(advancing_authority.authenticate_calls.get(), 3);
+
+        let mut tampered = vec![signed[0].clone(), signed[1].clone()];
+        tampered[0].message.shard.sequence += 1;
+        assert!(matches!(
+            live.reconstruct_live_erasure_payload_v2(&tampered, epoch, &authority),
+            Err(FleetErasureV2Error::Identity(
+                FleetIdentityError::NonCanonicalMessage { .. }
+                    | FleetIdentityError::CryptographicFailure { .. }
+            ))
+        ));
     }
 
     #[test]

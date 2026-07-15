@@ -269,14 +269,20 @@ fn verify_against_shards_rejects_retagged_metadata_mismatches() {
     let mut wrong_version = receipt;
     wrong_version.protocol_version = ProtocolVersion::V2;
     reauthenticate_legacy_receipt(&mut wrong_version);
-    wrong_version.verify().unwrap();
+    assert!(matches!(
+        wrong_version.verify(),
+        Err(ReceiptError::InconsistentStructure { ref reason })
+            if reason.contains("exact protocol version 1.0")
+    ));
     assert!(matches!(
         wrong_version.verify_against_shards(&shards, false),
-        Err(ReceiptError::ShardCommitmentMismatch { .. })
+        Err(ReceiptError::InconsistentStructure { ref reason })
+            if reason.contains("exact protocol version 1.0")
     ));
     assert!(matches!(
         wrong_version.verify_against_shards(&shards, true),
-        Err(ReceiptError::ShardCommitmentMismatch { .. })
+        Err(ReceiptError::InconsistentStructure { ref reason })
+            if reason.contains("exact protocol version 1.0")
     ));
 }
 

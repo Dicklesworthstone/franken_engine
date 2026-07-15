@@ -1,4 +1,4 @@
-//! Legacy-v1 reconstruction receipts for erasure-coded fleet gossip.
+//! Legacy-v1.0 reconstruction receipts for erasure-coded fleet gossip.
 //!
 //! Track II (`bd-cixqu.35.2`) — when a fleet node reconstructs an original
 //! payload from a `k`-of-`n` erasure shard set (see
@@ -9,7 +9,7 @@
 //! - **Commitment to the contributing shards.** The receipt binds the shard
 //!   indices, roles, per-shard content hashes, and origin identities that
 //!   materially fed the reconstruction, plus the coding parameters used.
-//! - **Legacy-v1 authentication carrier.** The receipt carries the same
+//! - **Legacy-v1.0 authentication carrier.** The receipt carries the same
 //!   NodeId-keyed tag used by legacy fleet messages over a length-prefixed
 //!   canonical commitment. Because NodeId bytes are public, this detects
 //!   accidental corruption but does **not** establish signer authority or
@@ -52,7 +52,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::fleet_immune_protocol::{
     ErasureCodingPlan, ErasureShard, ErasureShardRole, MessageSignature, NodeId, ProtocolError,
-    ProtocolVersion, reconstruct_erasure_payload,
+    ProtocolVersion, reconstruct_erasure_payload, validate_legacy_erasure_shard_set,
 };
 use crate::hash_tiers::{AuthenticityHash, ContentHash};
 
@@ -178,7 +178,7 @@ impl ShardCommitment {
 // ReconstructionReceipt
 // ---------------------------------------------------------------------------
 
-/// A legacy-v1 self-consistency record for a payload reconstruction from a
+/// A legacy-v1.0 self-consistency record for a payload reconstruction from a
 /// specific set of erasure shards.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -304,6 +304,12 @@ impl ReconstructionReceipt {
     /// Validate the structural invariants that must hold regardless of any
     /// external data.
     fn check_structure(&self) -> Result<(), ReceiptError> {
+        if self.protocol_version != ProtocolVersion::V1 {
+            return Err(ReceiptError::InconsistentStructure {
+                reason: "legacy receipt requires exact protocol version 1.0".to_string(),
+            });
+        }
+
         // Coding plan must be well-formed.
         if self.plan.data_shards == 0
             || self.plan.total_shards == 0
@@ -429,6 +435,14 @@ impl ReconstructionReceipt {
 
         let mut by_index: BTreeMap<u16, &ErasureShard> = BTreeMap::new();
         for shard in shards {
+            // Validate every supplied candidate before duplicate collapse so
+            // an invalid exact-index duplicate cannot be hidden behind the
+            // first representative in input order.
+            validate_legacy_erasure_shard_set(std::slice::from_ref(shard)).map_err(|_| {
+                ReceiptError::ShardCommitmentMismatch {
+                    shard_index: shard.shard_index,
+                }
+            })?;
             match by_index.entry(shard.shard_index) {
                 Entry::Occupied(entry) => {
                     let existing = *entry.get();
@@ -473,14 +487,23 @@ impl ReconstructionReceipt {
             }
         }
 
+        let contributing: Vec<ErasureShard> = self
+            .contributing_shards
+            .iter()
+            .filter_map(|commitment| {
+                by_index
+                    .get(&commitment.shard_index)
+                    .map(|shard| (**shard).clone())
+            })
+            .collect();
+        validate_legacy_erasure_shard_set(&contributing).map_err(|error| {
+            ReceiptError::ReconstructionFailed {
+                shard_set_id: self.shard_set_id.clone(),
+                reason: error.to_string(),
+            }
+        })?;
+
         if reconstruct {
-            let contributing: Vec<ErasureShard> = self
-                .contributing_shards
-                .iter()
-                .filter_map(|commitment| {
-                    by_index.get(&commitment.shard_index).map(|s| (**s).clone())
-                })
-                .collect();
             let payload = reconstruct_erasure_payload(&contributing).map_err(|err| {
                 ReceiptError::ReconstructionFailed {
                     shard_set_id: self.shard_set_id.clone(),
@@ -510,7 +533,7 @@ impl ReconstructionReceipt {
 // ---------------------------------------------------------------------------
 
 /// Reconstruct a payload from an erasure shard set and emit an intrinsic
-/// legacy-v1 receipt attributed to `reconstructing_node`.
+/// legacy-v1.0 receipt attributed to `reconstructing_node`.
 ///
 /// Returns the reconstructed payload alongside its receipt. The reconstruction
 /// itself is performed by [`reconstruct_erasure_payload`], so the receipt is
@@ -820,6 +843,15 @@ mod tests {
         receipt.signature.hash = receipt.expected_signature_tag(&commitment);
     }
 
+    fn reauthenticate_legacy_shard(shard: &mut ErasureShard) {
+        shard.shard_hash = shard.recompute_shard_hash();
+        shard.signature.signer = shard.origin_node.clone();
+        shard.signature.hash = AuthenticityHash::compute_keyed(
+            shard.origin_node.as_str().as_bytes(),
+            shard.shard_hash.as_bytes(),
+        );
+    }
+
     #[test]
     fn receipt_generation_happy_path_all_data_shards() {
         let payload = b"the quick brown fox jumps over the lazy dog";
@@ -930,27 +962,31 @@ mod tests {
     }
 
     #[test]
-    fn verify_against_shards_rejects_receipt_protocol_version_mismatch() {
+    fn legacy_receipt_verification_rejects_v2_retag_before_shard_comparison() {
         let shards = shards_for(b"protocol version cross-check", 2, 3);
         let (_payload, mut receipt) =
             reconstruct_with_receipt(&all_data(&shards), node("recon-version"), 7_200).unwrap();
         receipt.protocol_version = ProtocolVersion::V2;
         reauthenticate_legacy_receipt(&mut receipt);
-        receipt
-            .verify()
-            .expect("mutation is internally self-consistent");
+        assert!(matches!(
+            receipt.verify(),
+            Err(ReceiptError::InconsistentStructure { ref reason })
+                if reason.contains("exact protocol version 1.0")
+        ));
         assert!(matches!(
             receipt.verify_against_shards(&shards, false),
-            Err(ReceiptError::ShardCommitmentMismatch { .. })
+            Err(ReceiptError::InconsistentStructure { ref reason })
+                if reason.contains("exact protocol version 1.0")
         ));
         assert!(matches!(
             receipt.verify_against_shards(&shards, true),
-            Err(ReceiptError::ShardCommitmentMismatch { .. })
+            Err(ReceiptError::InconsistentStructure { ref reason })
+                if reason.contains("exact protocol version 1.0")
         ));
     }
 
     #[test]
-    fn generated_receipt_preserves_shard_protocol_version() {
+    fn legacy_receipt_generation_rejects_v2_shards_without_registry_verification() {
         let mut shards = shards_for(b"version propagation", 2, 3);
         for shard in &mut shards {
             shard.protocol_version = ProtocolVersion::V2;
@@ -960,10 +996,11 @@ mod tests {
                 shard.shard_hash.as_bytes(),
             );
         }
-        let (_payload, receipt) =
-            reconstruct_with_receipt(&all_data(&shards), node("recon-versioned"), 7_300).unwrap();
-        assert_eq!(receipt.protocol_version, ProtocolVersion::V2);
-        receipt.verify_against_shards(&shards, true).unwrap();
+        assert!(matches!(
+            reconstruct_with_receipt(&all_data(&shards), node("recon-versioned"), 7_300),
+            Err(ReceiptError::ReconstructionFailed { ref reason, .. })
+                if reason.contains("trusted registry verification")
+        ));
     }
 
     #[test]
@@ -1256,6 +1293,7 @@ mod tests {
         let mut conflict = data[0].clone();
         conflict.origin_node = node("other-origin");
         conflict.shard_hash = conflict.recompute_shard_hash();
+        reauthenticate_legacy_shard(&mut conflict);
 
         let mut conflict_last = data.clone();
         conflict_last.push(conflict.clone());
@@ -1300,11 +1338,62 @@ mod tests {
         let mut conflict = data[0].clone();
         conflict.origin_node = node("other-origin");
         conflict.shard_hash = conflict.recompute_shard_hash();
+        reauthenticate_legacy_shard(&mut conflict);
         data.push(conflict);
         assert!(matches!(
             reconstruct_with_receipt(&data, node("recon-provenance"), 25_200),
-            Err(ReceiptError::InconsistentStructure { .. })
+            Err(ReceiptError::ReconstructionFailed { ref reason, .. })
+                if reason.contains("mixed shard set provenance")
         ));
+    }
+
+    #[test]
+    fn verify_against_shards_without_reconstruction_enforces_canonical_provenance() {
+        let shards = shards_for(b"false-mode provenance validation", 2, 3);
+        let mut bad_tag = all_data(&shards);
+        let (_payload, receipt) =
+            reconstruct_with_receipt(&bad_tag, node("recon-false-tag"), 25_300).unwrap();
+        bad_tag[0].signature.hash =
+            AuthenticityHash::compute_keyed(b"wrong-legacy-key", bad_tag[0].shard_hash.as_bytes());
+        for candidates in [
+            bad_tag.clone(),
+            vec![shards[0].clone(), bad_tag[0].clone(), shards[1].clone()],
+            vec![bad_tag[0].clone(), shards[0].clone(), shards[1].clone()],
+        ] {
+            assert!(matches!(
+                receipt.verify_against_shards(&candidates, false),
+                Err(ReceiptError::ShardCommitmentMismatch { .. })
+            ));
+        }
+
+        for mutation in ["sequence", "timestamp"] {
+            let mut data = all_data(&shards);
+            let (_payload, mut receipt) =
+                reconstruct_with_receipt(&data, node("recon-false-provenance"), 25_400).unwrap();
+            match mutation {
+                "sequence" => data[1].sequence += 1,
+                "timestamp" => data[1].timestamp_ns += 1,
+                _ => unreachable!(),
+            }
+            reauthenticate_legacy_shard(&mut data[1]);
+            let commitment = receipt
+                .contributing_shards
+                .iter_mut()
+                .find(|commitment| commitment.shard_index == data[1].shard_index)
+                .expect("receipt commits the mutated shard");
+            commitment.sequence = data[1].sequence;
+            commitment.shard_hash = data[1].shard_hash;
+            reauthenticate_legacy_receipt(&mut receipt);
+            receipt
+                .verify()
+                .expect("each mutated receipt remains individually self-consistent");
+
+            assert!(matches!(
+                receipt.verify_against_shards(&data, false),
+                Err(ReceiptError::ReconstructionFailed { ref reason, .. })
+                    if reason.contains("mixed shard set provenance")
+            ));
+        }
     }
 
     #[test]

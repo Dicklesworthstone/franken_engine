@@ -138,12 +138,15 @@ const IMPLEMENTED_FIXTURE_IDS: &[&str] = &[
     "tc::stream::0035",
     "tc::stream::0036",
     "tc::stream::0037",
+    "tc::stream::0044",
     "tc::stream::0046",
     "tc::stream::0047",
     "tc::stream::0049",
     "tc::stream::0050",
     "tc::stream::0051",
+    "tc::stream::0052",
     "tc::stream::0054",
+    "tc::stream::0055",
 ];
 
 #[test]
@@ -157,7 +160,7 @@ fn target_and_implemented_inventories_are_explicit() {
         .iter()
         .copied()
         .collect::<BTreeSet<_>>();
-    assert_eq!(IMPLEMENTED_FIXTURE_IDS.len(), 27);
+    assert_eq!(IMPLEMENTED_FIXTURE_IDS.len(), 30);
     assert_eq!(implemented.len(), IMPLEMENTED_FIXTURE_IDS.len());
     assert!(IMPLEMENTED_FIXTURE_IDS.iter().all(|id| unique.contains(id)));
 }
@@ -834,13 +837,12 @@ fn writable_write_end_final_flags_and_callbacks() {
 }
 
 #[test]
-#[ignore = "bd-fw7zd: Writable cork/destroy slice not implemented yet"]
-fn writable_cork_uncork_and_destroy() {
-    assert_cases(&[
-        EvalCase {
-            ids: &["tc::stream::0013"],
-            description: "cork defers _write until uncork and keeps FIFO order",
-            source: r#"
+#[ignore = "bd-8nrud: process.nextTick prerequisite not implemented yet"]
+fn writable_cork_next_tick_prerequisite() {
+    assert_cases(&[EvalCase {
+        ids: &["tc::stream::0013"],
+        description: "cork defers _write until uncork and keeps FIFO order",
+        source: r#"
                 const { Writable } = require('stream');
                 const writable = new Writable({ write(c, e, cb) { console.log('w:' + c.toString()); cb(); } });
                 writable.cork();
@@ -849,8 +851,13 @@ fn writable_cork_uncork_and_destroy() {
                 console.log('corked-no-writes-yet');
                 process.nextTick(() => { writable.uncork(); console.log('after-uncork'); writable.end(); });
             "#,
-            expected: "corked-no-writes-yet\nw:a\nw:b\nafter-uncork",
-        },
+        expected: "corked-no-writes-yet\nw:a\nw:b\nafter-uncork",
+    }]);
+}
+
+#[test]
+fn writable_cork_uncork_and_destroy() {
+    assert_cases(&[
         EvalCase {
             ids: &["tc::stream::0052"],
             description: "cork exposes buffered byte length and flushes before finish",
@@ -909,6 +916,23 @@ fn writable_cork_uncork_and_destroy() {
             expected: "error:write-fail,close",
         },
     ]);
+}
+
+#[test]
+fn writable_destroy_error_argument_is_deferred_and_handled() {
+    assert_eq!(
+        eval_console(
+            r#"
+                const { Writable } = require('stream');
+                const writable = new Writable({ write(chunk, encoding, callback) { callback(); } });
+                writable.on('error', (error) => console.log('error:' + error.message));
+                writable.on('close', () => console.log('close'));
+                writable.destroy(new Error('boom'));
+                console.log('sync:' + writable.destroyed + ':' + writable.closed);
+            "#,
+        ),
+        "sync:true:true\nerror:boom\nclose"
+    );
 }
 
 #[test]

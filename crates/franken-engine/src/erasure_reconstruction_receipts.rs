@@ -1,19 +1,19 @@
-//! Reconstruction-proof signed receipts for erasure-coded fleet gossip.
+//! Legacy-v1 reconstruction receipts for erasure-coded fleet gossip.
 //!
 //! Track II (`bd-cixqu.35.2`) — when a fleet node reconstructs an original
 //! payload from a `k`-of-`n` erasure shard set (see
 //! [`crate::fleet_immune_protocol`]'s erasure-coded gossip lane), it must be
-//! able to emit a tamper-evident proof of *what it reconstructed and from
-//! which shards*. That proof is a [`ReconstructionReceipt`]:
+//! able to emit a self-consistency record of *what it reconstructed and from
+//! which shards*. That record is a [`ReconstructionReceipt`]:
 //!
 //! - **Commitment to the contributing shards.** The receipt binds the shard
 //!   indices, roles, per-shard content hashes, and origin identities that
 //!   materially fed the reconstruction, plus the coding parameters used.
-//! - **Signed attestation of correct reconstruction.** The receipt carries a
-//!   keyed-authenticity signature (the same primitive every other fleet
-//!   message is signed with — [`AuthenticityHash::compute_keyed`]) over a
-//!   length-prefixed canonical commitment, attributed to the reconstructing
-//!   node for non-repudiation.
+//! - **Legacy-v1 authentication carrier.** The receipt carries the same
+//!   NodeId-keyed tag used by legacy fleet messages over a length-prefixed
+//!   canonical commitment. Because NodeId bytes are public, this detects
+//!   accidental corruption but does **not** establish signer authority or
+//!   non-repudiation. Trusted Ed25519 admission is part of `bd-q8x8x.6`.
 //! - **Verification data usable without the original payload.**
 //!   [`ReconstructionReceipt::verify`] validates the receipt's internal
 //!   cryptographic and structural consistency with *no* access to the
@@ -44,6 +44,7 @@
 //! are big-endian; the `Option<u16>` recovery slot carries an explicit tag
 //! byte so `None` cannot collide with `Some(0)`.
 
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -88,12 +89,14 @@ pub enum ReceiptError {
     CommitmentMismatch,
     /// The signer identity does not match the reconstructing node.
     SignerMismatch,
-    /// The signature does not authenticate the commitment.
+    /// The legacy self-consistency tag does not match the commitment.
     InvalidSignature,
     /// A contributing shard was absent from the supplied verification set.
     MissingShardForVerification { shard_index: u16 },
     /// A supplied shard's recomputed commitment disagrees with the receipt.
     ShardCommitmentMismatch { shard_index: u16 },
+    /// A persisted ledger contained the same receipt commitment more than once.
+    DuplicateReceiptCommitment { commitment: ContentHash },
 }
 
 impl fmt::Display for ReceiptError {
@@ -122,6 +125,12 @@ impl fmt::Display for ReceiptError {
             Self::ShardCommitmentMismatch { shard_index } => {
                 write!(f, "shard {shard_index} commitment mismatch")
             }
+            Self::DuplicateReceiptCommitment { commitment } => {
+                write!(
+                    f,
+                    "duplicate reconstruction receipt commitment {commitment}"
+                )
+            }
         }
     }
 }
@@ -139,6 +148,7 @@ impl std::error::Error for ReceiptError {}
 /// payload bytes, so a receipt can be verified without leaking or transmitting
 /// the erasure fragments themselves.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ShardCommitment {
     /// Index of the shard within its set.
     pub shard_index: u16,
@@ -168,9 +178,10 @@ impl ShardCommitment {
 // ReconstructionReceipt
 // ---------------------------------------------------------------------------
 
-/// A tamper-evident, signed proof that a node reconstructed a payload from a
+/// A legacy-v1 self-consistency record for a payload reconstruction from a
 /// specific set of erasure shards.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReconstructionReceipt {
     /// Schema identifier for drift detection.
     pub schema_id: String,
@@ -191,14 +202,14 @@ pub struct ReconstructionReceipt {
     /// The data-shard index recovered from parity, if any (`None` when every
     /// data shard was directly present).
     pub recovered_shard_index: Option<u16>,
-    /// Identity of the node that performed the reconstruction.
+    /// Claimed identity of the node that performed the reconstruction.
     pub reconstructing_node: NodeId,
     /// Reconstruction timestamp in nanoseconds.
     pub reconstruction_timestamp_ns: u64,
     /// Content hash over the length-prefixed canonical receipt preimage.
     pub receipt_commitment: ContentHash,
-    /// Keyed-authenticity signature over the commitment, by the reconstructing
-    /// node.
+    /// Legacy public-NodeId keyed tag over the commitment, attributed to the
+    /// reconstructing node but not proof of its authority.
     pub signature: MessageSignature,
     /// Protocol version.
     pub protocol_version: ProtocolVersion,
@@ -262,8 +273,8 @@ impl ReconstructionReceipt {
     /// the "validate without performing reconstruction" path other fleet nodes
     /// use. It confirms the schema and scheme, that the structural invariants
     /// hold, that the stored commitment matches the fields, and that the
-    /// signature authenticates the commitment under the reconstructing node's
-    /// identity.
+    /// legacy tag is self-consistent with the reconstructing-node metadata.
+    /// This method does not consult trusted verification authority.
     pub fn verify(&self) -> Result<(), ReceiptError> {
         if self.schema_id != RECONSTRUCTION_RECEIPT_SCHEMA_ID {
             return Err(ReceiptError::UnknownSchema {
@@ -307,7 +318,7 @@ impl ReconstructionReceipt {
         // order and role-consistent with their index.
         let mut previous: Option<u16> = None;
         let mut data_indices: BTreeSet<u16> = BTreeSet::new();
-        let mut parity_present = false;
+        let mut parity_count = 0usize;
         for shard in &self.contributing_shards {
             if let Some(prev) = previous
                 && shard.shard_index <= prev
@@ -333,7 +344,12 @@ impl ReconstructionReceipt {
                             reason: "parity shard index overlaps data range".to_string(),
                         });
                     }
-                    parity_present = true;
+                    if shard.shard_index >= self.plan.total_shards {
+                        return Err(ReceiptError::InconsistentStructure {
+                            reason: "parity shard index outside total shard range".to_string(),
+                        });
+                    }
+                    parity_count += 1;
                 }
             }
         }
@@ -352,9 +368,9 @@ impl ReconstructionReceipt {
                         reason: "recovered index also present as a data shard".to_string(),
                     });
                 }
-                if !parity_present {
+                if parity_count != 1 {
                     return Err(ReceiptError::InconsistentStructure {
-                        reason: "recovery claimed without a parity shard".to_string(),
+                        reason: "recovery requires exactly one parity shard".to_string(),
                     });
                 }
                 if data_indices.len() != usize::from(self.plan.data_shards) - 1 {
@@ -364,6 +380,11 @@ impl ReconstructionReceipt {
                 }
             }
             None => {
+                if parity_count != 0 {
+                    return Err(ReceiptError::InconsistentStructure {
+                        reason: "parity shard committed without recovery".to_string(),
+                    });
+                }
                 if data_indices.len() != usize::from(self.plan.data_shards) {
                     return Err(ReceiptError::InconsistentStructure {
                         reason: "no recovery claimed but data shards incomplete".to_string(),
@@ -372,10 +393,9 @@ impl ReconstructionReceipt {
             }
         }
 
-        // The reconstructed payload length must be consistent with the plan.
-        if self.payload_len == 0 && self.plan.data_shards == 0 {
+        if self.contributing_shards.len() != usize::from(self.plan.data_shards) {
             return Err(ReceiptError::InconsistentStructure {
-                reason: "zero data shards".to_string(),
+                reason: "receipt must commit to exactly data_shards contributors".to_string(),
             });
         }
 
@@ -397,9 +417,35 @@ impl ReconstructionReceipt {
     ) -> Result<(), ReceiptError> {
         self.verify()?;
 
+        let payload_len =
+            usize::try_from(self.payload_len).map_err(|_| ReceiptError::InconsistentStructure {
+                reason: "receipt payload length does not fit usize".to_string(),
+            })?;
+        let expected_shard_payload_len = if payload_len == 0 {
+            0
+        } else {
+            payload_len.div_ceil(usize::from(self.plan.data_shards))
+        };
+
         let mut by_index: BTreeMap<u16, &ErasureShard> = BTreeMap::new();
         for shard in shards {
-            by_index.entry(shard.shard_index).or_insert(shard);
+            match by_index.entry(shard.shard_index) {
+                Entry::Occupied(entry) => {
+                    let existing = *entry.get();
+                    if existing.shard_hash != shard.shard_hash
+                        || existing.recompute_shard_hash() != shard.recompute_shard_hash()
+                        || ShardCommitment::from_shard(existing)
+                            != ShardCommitment::from_shard(shard)
+                    {
+                        return Err(ReceiptError::ShardCommitmentMismatch {
+                            shard_index: shard.shard_index,
+                        });
+                    }
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(shard);
+                }
+            }
         }
 
         for commitment in &self.contributing_shards {
@@ -416,7 +462,10 @@ impl ReconstructionReceipt {
                 || !recomputed.constant_time_eq(&shard.shard_hash)
                 || shard.shard_set_id != self.shard_set_id
                 || shard.plan != self.plan
+                || shard.payload_len != self.payload_len
                 || !shard.payload_hash.constant_time_eq(&self.payload_hash)
+                || shard.protocol_version != self.protocol_version
+                || shard.shard_payload.len() != expected_shard_payload_len
             {
                 return Err(ReceiptError::ShardCommitmentMismatch {
                     shard_index: commitment.shard_index,
@@ -441,6 +490,15 @@ impl ReconstructionReceipt {
             if !ContentHash::compute(&payload).constant_time_eq(&self.payload_hash) {
                 return Err(ReceiptError::CommitmentMismatch);
             }
+            let payload_len =
+                u64::try_from(payload.len()).map_err(|_| ReceiptError::InconsistentStructure {
+                    reason: "reconstructed payload length does not fit u64".to_string(),
+                })?;
+            if payload_len != self.payload_len {
+                return Err(ReceiptError::InconsistentStructure {
+                    reason: "reconstructed payload length does not match receipt".to_string(),
+                });
+            }
         }
 
         Ok(())
@@ -451,8 +509,8 @@ impl ReconstructionReceipt {
 // Generation
 // ---------------------------------------------------------------------------
 
-/// Reconstruct a payload from an erasure shard set and emit a signed
-/// reconstruction-proof receipt attributed to `reconstructing_node`.
+/// Reconstruct a payload from an erasure shard set and emit an intrinsic
+/// legacy-v1 receipt attributed to `reconstructing_node`.
 ///
 /// Returns the reconstructed payload alongside its receipt. The reconstruction
 /// itself is performed by [`reconstruct_erasure_payload`], so the receipt is
@@ -497,7 +555,7 @@ pub fn reconstruct_with_receipt(
             signer: reconstructing_node.clone(),
             hash: AuthenticityHash::compute_keyed(b"", b""),
         },
-        protocol_version: ProtocolVersion::CURRENT,
+        protocol_version: first.protocol_version,
         extensions: BTreeMap::new(),
     };
 
@@ -527,21 +585,41 @@ fn derive_contributing_shards(
     let plan = first.plan;
 
     let mut data_shards: BTreeMap<u16, &ErasureShard> = BTreeMap::new();
-    let mut parity_shard: Option<&ErasureShard> = None;
+    let mut parity_shards: BTreeMap<u16, &ErasureShard> = BTreeMap::new();
     for shard in shards {
         match shard.role {
             ErasureShardRole::Data if shard.shard_index < plan.data_shards => {
-                data_shards.entry(shard.shard_index).or_insert(shard);
+                match data_shards.entry(shard.shard_index) {
+                    Entry::Occupied(entry) => {
+                        if entry.get().shard_hash != shard.shard_hash {
+                            return Err(ReceiptError::InconsistentStructure {
+                                reason: format!(
+                                    "conflicting duplicate data shard {}",
+                                    shard.shard_index
+                                ),
+                            });
+                        }
+                    }
+                    Entry::Vacant(entry) => {
+                        entry.insert(shard);
+                    }
+                }
             }
             ErasureShardRole::Parity if shard.shard_index >= plan.data_shards => {
-                // Deterministically keep the lowest-index parity shard: the
-                // erasure lane emits identical parity for every parity slot when
-                // `n - k > 1`, so committing to the smallest index makes the
-                // receipt independent of input shard ordering.
-                let replace =
-                    parity_shard.is_none_or(|existing| shard.shard_index < existing.shard_index);
-                if replace {
-                    parity_shard = Some(shard);
+                match parity_shards.entry(shard.shard_index) {
+                    Entry::Occupied(entry) => {
+                        if entry.get().shard_hash != shard.shard_hash {
+                            return Err(ReceiptError::InconsistentStructure {
+                                reason: format!(
+                                    "conflicting duplicate parity shard {}",
+                                    shard.shard_index
+                                ),
+                            });
+                        }
+                    }
+                    Entry::Vacant(entry) => {
+                        entry.insert(shard);
+                    }
                 }
             }
             // Out-of-range shards would already have been rejected by
@@ -562,9 +640,16 @@ fn derive_contributing_shards(
         .map(|shard| ShardCommitment::from_shard(shard))
         .collect();
     if recovered_shard_index.is_some() {
-        let parity = parity_shard.ok_or(ReceiptError::InconsistentStructure {
-            reason: "reconstruction recovered a shard without parity".to_string(),
-        })?;
+        // The erasure lane emits identical parity for every parity slot when
+        // `n - k > 1`; BTreeMap order deterministically selects the lowest.
+        let parity =
+            parity_shards
+                .values()
+                .next()
+                .copied()
+                .ok_or(ReceiptError::InconsistentStructure {
+                    reason: "reconstruction recovered a shard without parity".to_string(),
+                })?;
         contributing.push(ShardCommitment::from_shard(parity));
     }
     contributing.sort();
@@ -582,17 +667,56 @@ fn derive_contributing_shards(
 /// holds receipts that passed [`ReconstructionReceipt::verify`]. Deduplication
 /// is keyed on the receipt commitment, so an idempotent re-reconstruction of
 /// the same shard set by the same node at the same instant does not double-log.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct ReconstructionReceiptLedger {
     receipts: Vec<ReconstructionReceipt>,
     #[serde(skip)]
     seen: BTreeSet<[u8; 32]>,
 }
 
+impl<'de> Deserialize<'de> for ReconstructionReceiptLedger {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields, rename = "ReconstructionReceiptLedger")]
+        struct WireLedger {
+            receipts: Vec<ReconstructionReceipt>,
+        }
+
+        let wire = WireLedger::deserialize(deserializer)?;
+        let seen = Self::validated_seen(&wire.receipts).map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            receipts: wire.receipts,
+            seen,
+        })
+    }
+}
+
 impl ReconstructionReceiptLedger {
     /// Create an empty ledger.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Verify every receipt and build a duplicate-free commitment index.
+    ///
+    /// This validates the current receipt schema's self-contained structural,
+    /// commitment, and legacy-tag consistency contract. Trusted-key
+    /// authorization is context supplied by the protocol-v2 receipt cutover,
+    /// not by Serde.
+    fn validated_seen(
+        receipts: &[ReconstructionReceipt],
+    ) -> Result<BTreeSet<[u8; 32]>, ReceiptError> {
+        let mut seen = BTreeSet::new();
+        for receipt in receipts {
+            receipt.verify()?;
+            let key = *receipt.receipt_commitment.as_bytes();
+            if !seen.insert(key) {
+                return Err(ReceiptError::DuplicateReceiptCommitment {
+                    commitment: receipt.receipt_commitment,
+                });
+            }
+        }
+        Ok(seen)
     }
 
     /// Verify and record a receipt.
@@ -642,16 +766,15 @@ impl ReconstructionReceiptLedger {
         ContentHash::compute(&buf)
     }
 
-    /// Rebuild the in-memory dedup index after deserialization.
+    /// Re-verify all receipts and atomically rebuild the dedup index.
     ///
-    /// `seen` is `#[serde(skip)]`, so a ledger loaded from disk must call this
-    /// once before further `record` calls to restore dedup semantics.
-    pub fn reindex(&mut self) {
-        self.seen = self
-            .receipts
-            .iter()
-            .map(|receipt| *receipt.receipt_commitment.as_bytes())
-            .collect();
+    /// Deserialization already performs this validation. This method remains
+    /// available for callers that mutate a ledger through an older persistence
+    /// adapter before handing it to the current API.
+    pub fn reindex(&mut self) -> Result<(), ReceiptError> {
+        let seen = Self::validated_seen(&self.receipts)?;
+        self.seen = seen;
+        Ok(())
     }
 }
 
@@ -688,6 +811,13 @@ mod tests {
 
     fn all_data(shards: &[ErasureShard]) -> Vec<ErasureShard> {
         shards.iter().filter(|s| s.is_data()).cloned().collect()
+    }
+
+    fn reauthenticate_legacy_receipt(receipt: &mut ReconstructionReceipt) {
+        let commitment = receipt.compute_commitment();
+        receipt.receipt_commitment = commitment;
+        receipt.signature.signer = receipt.reconstructing_node.clone();
+        receipt.signature.hash = receipt.expected_signature_tag(&commitment);
     }
 
     #[test]
@@ -777,6 +907,63 @@ mod tests {
             .collect();
         let (_p, receipt) = reconstruct_with_receipt(&available, node("recon-6"), 7_000).unwrap();
         receipt.verify_against_shards(&available, true).unwrap();
+    }
+
+    #[test]
+    fn verify_against_shards_rejects_receipt_payload_len_mismatch() {
+        let shards = shards_for(b"payload length cross-check", 2, 3);
+        let (_payload, mut receipt) =
+            reconstruct_with_receipt(&all_data(&shards), node("recon-len"), 7_100).unwrap();
+        receipt.payload_len = receipt.payload_len.saturating_add(1);
+        reauthenticate_legacy_receipt(&mut receipt);
+        receipt
+            .verify()
+            .expect("mutation is internally self-consistent");
+        assert!(matches!(
+            receipt.verify_against_shards(&shards, false),
+            Err(ReceiptError::ShardCommitmentMismatch { .. })
+        ));
+        assert!(matches!(
+            receipt.verify_against_shards(&shards, true),
+            Err(ReceiptError::ShardCommitmentMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn verify_against_shards_rejects_receipt_protocol_version_mismatch() {
+        let shards = shards_for(b"protocol version cross-check", 2, 3);
+        let (_payload, mut receipt) =
+            reconstruct_with_receipt(&all_data(&shards), node("recon-version"), 7_200).unwrap();
+        receipt.protocol_version = ProtocolVersion::V2;
+        reauthenticate_legacy_receipt(&mut receipt);
+        receipt
+            .verify()
+            .expect("mutation is internally self-consistent");
+        assert!(matches!(
+            receipt.verify_against_shards(&shards, false),
+            Err(ReceiptError::ShardCommitmentMismatch { .. })
+        ));
+        assert!(matches!(
+            receipt.verify_against_shards(&shards, true),
+            Err(ReceiptError::ShardCommitmentMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn generated_receipt_preserves_shard_protocol_version() {
+        let mut shards = shards_for(b"version propagation", 2, 3);
+        for shard in &mut shards {
+            shard.protocol_version = ProtocolVersion::V2;
+            shard.shard_hash = shard.recompute_shard_hash();
+            shard.signature.hash = AuthenticityHash::compute_keyed(
+                shard.origin_node.as_str().as_bytes(),
+                shard.shard_hash.as_bytes(),
+            );
+        }
+        let (_payload, receipt) =
+            reconstruct_with_receipt(&all_data(&shards), node("recon-versioned"), 7_300).unwrap();
+        assert_eq!(receipt.protocol_version, ProtocolVersion::V2);
+        receipt.verify_against_shards(&shards, true).unwrap();
     }
 
     #[test]
@@ -964,7 +1151,7 @@ mod tests {
     }
 
     #[test]
-    fn ledger_reindex_restores_dedup_after_deserialization() {
+    fn ledger_deserialization_restores_dedup_immediately() {
         let payload = b"reindex restores dedup semantics";
         let shards = shards_for(payload, 2, 3);
         let (_p, receipt) =
@@ -974,10 +1161,55 @@ mod tests {
         let json = serde_json::to_string(&ledger).unwrap();
         let mut restored: ReconstructionReceiptLedger = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.len(), 1);
-        // Before reindex the skip-serialized dedup set is empty.
-        restored.reindex();
         assert!(!restored.record(receipt).unwrap());
         assert_eq!(restored.len(), 1);
+    }
+
+    #[test]
+    fn ledger_deserialization_rejects_tampered_receipt() {
+        let shards = shards_for(b"tampered persisted receipt", 2, 3);
+        let (_payload, receipt) =
+            reconstruct_with_receipt(&all_data(&shards), node("recon-tampered"), 23_100).unwrap();
+        let mut ledger = ReconstructionReceiptLedger::new();
+        ledger.record(receipt).unwrap();
+        let mut value = serde_json::to_value(&ledger).unwrap();
+        value["receipts"][0]["payload_len"] = serde_json::Value::from(9_999u64);
+        assert!(serde_json::from_value::<ReconstructionReceiptLedger>(value).is_err());
+    }
+
+    #[test]
+    fn ledger_deserialization_rejects_duplicate_commitments() {
+        let shards = shards_for(b"duplicate persisted receipt", 2, 3);
+        let (_payload, receipt) =
+            reconstruct_with_receipt(&all_data(&shards), node("recon-duplicate"), 23_200).unwrap();
+        let mut ledger = ReconstructionReceiptLedger::new();
+        ledger.record(receipt).unwrap();
+        let mut value = serde_json::to_value(&ledger).unwrap();
+        let duplicate = value["receipts"][0].clone();
+        value["receipts"]
+            .as_array_mut()
+            .expect("receipts is an array")
+            .push(duplicate);
+        let error = serde_json::from_value::<ReconstructionReceiptLedger>(value).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate reconstruction receipt")
+        );
+    }
+
+    #[test]
+    fn ledger_reindex_is_atomic_on_verification_failure() {
+        let shards = shards_for(b"atomic reindex", 2, 3);
+        let (_payload, receipt) =
+            reconstruct_with_receipt(&all_data(&shards), node("recon-atomic"), 23_300).unwrap();
+        let mut ledger = ReconstructionReceiptLedger::new();
+        ledger.record(receipt.clone()).unwrap();
+        let seen_before = ledger.seen.clone();
+        ledger.receipts[0].payload_len = ledger.receipts[0].payload_len.saturating_add(1);
+        assert!(ledger.reindex().is_err());
+        assert_eq!(ledger.seen, seen_before);
+        assert!(ledger.contains(&receipt.receipt_commitment));
     }
 
     #[test]
@@ -1013,6 +1245,66 @@ mod tests {
             ReceiptError::ShardCommitmentMismatch { .. } => {}
             other => panic!("expected ShardCommitmentMismatch, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn verify_against_shards_rejects_conflicting_duplicate_provenance_in_any_order() {
+        let shards = shards_for(b"conflicting duplicate provenance", 2, 3);
+        let data = all_data(&shards);
+        let (_payload, receipt) =
+            reconstruct_with_receipt(&data, node("recon-provenance"), 25_100).unwrap();
+        let mut conflict = data[0].clone();
+        conflict.origin_node = node("other-origin");
+        conflict.shard_hash = conflict.recompute_shard_hash();
+
+        let mut conflict_last = data.clone();
+        conflict_last.push(conflict.clone());
+        assert!(matches!(
+            receipt.verify_against_shards(&conflict_last, false),
+            Err(ReceiptError::ShardCommitmentMismatch { .. })
+        ));
+
+        let mut conflict_first = vec![conflict];
+        conflict_first.extend(data);
+        assert!(matches!(
+            receipt.verify_against_shards(&conflict_first, false),
+            Err(ReceiptError::ShardCommitmentMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn verify_against_shards_rejects_inconsistent_shard_payload_length_without_reconstruction() {
+        let shards = shards_for(b"fragment length must match the coding plan", 2, 3);
+        let mut data = all_data(&shards);
+        let (_payload, mut receipt) =
+            reconstruct_with_receipt(&data, node("recon-fragment-len"), 25_150).unwrap();
+        assert!(data[0].shard_payload.pop().is_some());
+        data[0].shard_hash = data[0].recompute_shard_hash();
+        let commitment = receipt
+            .contributing_shards
+            .iter_mut()
+            .find(|commitment| commitment.shard_index == data[0].shard_index)
+            .expect("receipt commits the mutated shard");
+        commitment.shard_hash = data[0].shard_hash;
+        reauthenticate_legacy_receipt(&mut receipt);
+        assert!(matches!(
+            receipt.verify_against_shards(&data, false),
+            Err(ReceiptError::ShardCommitmentMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn receipt_generation_rejects_conflicting_duplicate_provenance() {
+        let shards = shards_for(b"generation duplicate provenance", 2, 3);
+        let mut data = all_data(&shards);
+        let mut conflict = data[0].clone();
+        conflict.origin_node = node("other-origin");
+        conflict.shard_hash = conflict.recompute_shard_hash();
+        data.push(conflict);
+        assert!(matches!(
+            reconstruct_with_receipt(&data, node("recon-provenance"), 25_200),
+            Err(ReceiptError::InconsistentStructure { .. })
+        ));
     }
 
     #[test]
@@ -1077,6 +1369,68 @@ mod tests {
             ReceiptError::InconsistentStructure { .. } => {}
             other => panic!("expected InconsistentStructure, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn structural_check_rejects_parity_index_outside_total_range() {
+        let shards = shards_for(b"parity index range", 2, 3);
+        let available: Vec<ErasureShard> = shards
+            .iter()
+            .filter(|shard| shard.shard_index != 0)
+            .cloned()
+            .collect();
+        let (_payload, mut receipt) =
+            reconstruct_with_receipt(&available, node("recon-parity-range"), 29_100).unwrap();
+        let total_shards = receipt.plan.total_shards;
+        let parity = receipt
+            .contributing_shards
+            .iter_mut()
+            .find(|commitment| commitment.role == ErasureShardRole::Parity)
+            .expect("recovery receipt contains parity");
+        parity.shard_index = total_shards;
+        reauthenticate_legacy_receipt(&mut receipt);
+        assert!(matches!(
+            receipt.verify(),
+            Err(ReceiptError::InconsistentStructure { .. })
+        ));
+    }
+
+    #[test]
+    fn structural_check_rejects_parity_without_recovery() {
+        let shards = shards_for(b"superfluous parity", 2, 4);
+        let (_payload, mut receipt) =
+            reconstruct_with_receipt(&all_data(&shards), node("recon-extra-parity"), 29_200)
+                .unwrap();
+        receipt
+            .contributing_shards
+            .push(ShardCommitment::from_shard(&shards[2]));
+        receipt.contributing_shards.sort();
+        reauthenticate_legacy_receipt(&mut receipt);
+        assert!(matches!(
+            receipt.verify(),
+            Err(ReceiptError::InconsistentStructure { .. })
+        ));
+    }
+
+    #[test]
+    fn structural_check_rejects_multiple_parity_contributors() {
+        let shards = shards_for(b"multiple parity contributors", 2, 4);
+        let available: Vec<ErasureShard> = shards
+            .iter()
+            .filter(|shard| shard.shard_index != 0)
+            .cloned()
+            .collect();
+        let (_payload, mut receipt) =
+            reconstruct_with_receipt(&available, node("recon-multi-parity"), 29_300).unwrap();
+        receipt
+            .contributing_shards
+            .push(ShardCommitment::from_shard(&shards[3]));
+        receipt.contributing_shards.sort();
+        reauthenticate_legacy_receipt(&mut receipt);
+        assert!(matches!(
+            receipt.verify(),
+            Err(ReceiptError::InconsistentStructure { .. })
+        ));
     }
 
     #[test]

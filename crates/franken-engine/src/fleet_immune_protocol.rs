@@ -2919,15 +2919,16 @@ impl FleetProtocolState {
         .map(|shards| shards.into_iter().map(FleetMessage::ErasureShard).collect())
     }
 
-    /// Reconstruct an erasure-coded gossip payload and emit a signed
-    /// reconstruction-proof receipt attributed to this node (`bd-cixqu.35.2`).
+    /// Reconstruct an erasure-coded gossip payload and emit a legacy-v1
+    /// reconstruction receipt attributed to this node (`bd-cixqu.35.2`).
     ///
-    /// The returned [`ReconstructionReceipt`] is a tamper-evident proof of
-    /// which shards fed the reconstruction and that the reconstructing node
-    /// performed it. Callers persist it into a
+    /// The returned [`ReconstructionReceipt`] binds which shards fed the
+    /// reconstruction, but its legacy public-NodeId tag does not prove who
+    /// performed it. Trusted Ed25519 admission is deferred to `bd-q8x8x.6`.
+    /// Callers persist the intrinsic record into a
     /// [`crate::erasure_reconstruction_receipts::ReconstructionReceiptLedger`]
-    /// (the audit ledger) for later independent verification. This method is
-    /// read-only: it does not mutate protocol state.
+    /// (the audit ledger) for later independent intrinsic validation. This
+    /// method is read-only: it does not mutate protocol state.
     pub fn reconstruct_gossip_payload_with_receipt(
         &self,
         shards: &[ErasureShard],

@@ -1,13 +1,14 @@
 #![forbid(unsafe_code)]
-//! Integration tests for reconstruction-proof signed receipts (`bd-cixqu.35.2`).
+//! Integration tests for legacy-v1 reconstruction receipts (`bd-cixqu.35.2`).
 //!
 //! Covers the full Track-II reconstruction-receipt surface end to end:
 //! generation via [`FleetProtocolState::reconstruct_gossip_payload_with_receipt`],
-//! cross-node verification without access to the original data, parity-recovery
+//! cross-node intrinsic validation without the original data, parity-recovery
 //! receipts, the append-only [`ReconstructionReceiptLedger`] audit ledger,
-//! tamper detection across every committed field, serde persistence, and
-//! deterministic content-hash stability. The committed schema contract is
-//! `docs/schemas/reconstruction_receipt_v1.json`.
+//! mutation detection across committed fields, serde persistence, and
+//! deterministic content-hash stability. These tests do not claim trusted
+//! signer authority; that protocol-v2 cutover is tracked by `bd-q8x8x.6`. The
+//! committed legacy contract is `docs/schemas/reconstruction_receipt_v1.json`.
 
 use frankenengine_engine::erasure_reconstruction_receipts::{
     RECONSTRUCTION_RECEIPT_SCHEMA_ID, ReceiptError, ReconstructionReceipt,
@@ -15,7 +16,7 @@ use frankenengine_engine::erasure_reconstruction_receipts::{
 };
 use frankenengine_engine::fleet_immune_protocol::{
     ErasureCodingPlan, ErasureShard, ErasureShardRole, FleetProtocolState, GossipConfig, NodeId,
-    encode_erasure_shards,
+    ProtocolVersion, encode_erasure_shards,
 };
 use frankenengine_engine::hash_tiers::{AuthenticityHash, ContentHash};
 
@@ -54,10 +55,20 @@ fn drop_index(shards: &[ErasureShard], idx: u16) -> Vec<ErasureShard> {
         .collect()
 }
 
+fn reauthenticate_legacy_receipt(receipt: &mut ReconstructionReceipt) {
+    let commitment = receipt.compute_commitment();
+    receipt.receipt_commitment = commitment;
+    receipt.signature.signer = receipt.reconstructing_node.clone();
+    receipt.signature.hash = AuthenticityHash::compute_keyed(
+        receipt.reconstructing_node.as_str().as_bytes(),
+        commitment.as_bytes(),
+    );
+}
+
 // ── fleet-state integration ─────────────────────────────────────────────────
 
 #[test]
-fn fleet_state_reconstructs_and_signs_receipt() {
+fn fleet_state_reconstructs_and_tags_legacy_receipt() {
     let state = fresh_state("node-alpha");
     let shards = encode(b"fleet gossip evidence payload", 3, 4, "origin-a");
     let (payload, receipt) = state
@@ -71,7 +82,7 @@ fn fleet_state_reconstructs_and_signs_receipt() {
 }
 
 #[test]
-fn fleet_state_receipt_signer_is_local_node() {
+fn fleet_state_receipt_claimed_signer_is_local_node() {
     let state = fresh_state("node-bravo");
     let shards = encode(b"signer attribution", 2, 3, "origin-b");
     let (_p, receipt) = state
@@ -104,10 +115,10 @@ fn fleet_state_rejects_empty_shards() {
     assert_eq!(err, ReceiptError::EmptyShardSet);
 }
 
-// ── cross-node verification (no shards, no payload) ──────────────────────────
+// ── cross-node intrinsic validation (no shards, no payload) ──────────────────
 
 #[test]
-fn other_node_verifies_receipt_without_shards() {
+fn other_node_intrinsically_validates_receipt_without_shards() {
     let producer = fresh_state("producer");
     let shards = encode(b"cross-node verification payload", 3, 4, "origin-x");
     let (_p, receipt) = producer
@@ -118,11 +129,11 @@ fn other_node_verifies_receipt_without_shards() {
     let received: ReconstructionReceipt = serde_json::from_str(&json).unwrap();
     received
         .verify()
-        .expect("independent node can verify receipt");
+        .expect("independent node can validate intrinsic receipt consistency");
 }
 
 #[test]
-fn cross_node_verification_survives_transport_round_trip() {
+fn cross_node_intrinsic_validation_survives_transport_round_trip() {
     let producer = fresh_state("producer-2");
     let shards = encode(b"transport round trip", 4, 5, "origin-y");
     let (_p, receipt) = producer
@@ -231,7 +242,45 @@ fn verify_against_shards_detects_corrupted_shard_payload() {
     }
 }
 
-// ── tamper detection (end to end) ────────────────────────────────────────────
+#[test]
+fn verify_against_shards_rejects_retagged_metadata_mismatches() {
+    let shards = encode(
+        b"receipt metadata must match shard metadata",
+        2,
+        3,
+        "origin-metadata",
+    );
+    let (_payload, receipt) =
+        reconstruct_with_receipt(&data_shards(&shards), node("recon-metadata"), 72_100).unwrap();
+
+    let mut wrong_len = receipt.clone();
+    wrong_len.payload_len = wrong_len.payload_len.saturating_add(1);
+    reauthenticate_legacy_receipt(&mut wrong_len);
+    wrong_len.verify().unwrap();
+    assert!(matches!(
+        wrong_len.verify_against_shards(&shards, false),
+        Err(ReceiptError::ShardCommitmentMismatch { .. })
+    ));
+    assert!(matches!(
+        wrong_len.verify_against_shards(&shards, true),
+        Err(ReceiptError::ShardCommitmentMismatch { .. })
+    ));
+
+    let mut wrong_version = receipt;
+    wrong_version.protocol_version = ProtocolVersion::V2;
+    reauthenticate_legacy_receipt(&mut wrong_version);
+    wrong_version.verify().unwrap();
+    assert!(matches!(
+        wrong_version.verify_against_shards(&shards, false),
+        Err(ReceiptError::ShardCommitmentMismatch { .. })
+    ));
+    assert!(matches!(
+        wrong_version.verify_against_shards(&shards, true),
+        Err(ReceiptError::ShardCommitmentMismatch { .. })
+    ));
+}
+
+// ── committed-field mutation detection (end to end) ────────────────
 
 #[test]
 fn tampering_payload_hash_is_detected() {
@@ -268,12 +317,14 @@ fn tampering_reconstructing_node_is_detected() {
 }
 
 #[test]
-fn forging_signature_and_signer_still_fails_commitment_binding() {
+fn changing_claimed_identity_without_recommitting_fails_binding() {
     let shards = encode(b"forge both signer and signature", 2, 3, "origin-forge");
     let (_p, mut receipt) =
         reconstruct_with_receipt(&data_shards(&shards), node("recon-forge"), 76_000).unwrap();
-    // Attacker rewrites the reconstructing node and re-signs with that identity,
-    // but cannot reproduce the original commitment which binds the true node.
+    // Rewrite the claimed node and refresh the public-NodeId tag, but
+    // deliberately retain the old commitment. Legacy v1 does not prevent a
+    // caller from recomputing both the commitment and tag; this test only
+    // proves that changing a committed field without recommitting is detected.
     receipt.reconstructing_node = node("attacker");
     receipt.signature.signer = node("attacker");
     receipt.signature.hash =
@@ -368,7 +419,7 @@ fn ledger_summary_hash_is_order_sensitive_and_stable() {
 }
 
 #[test]
-fn ledger_persists_and_reindexes() {
+fn ledger_persists_with_immediate_validated_index() {
     let shards = encode(b"persist and reindex the ledger", 3, 4, "origin-persist");
     let (_p, receipt) =
         reconstruct_with_receipt(&data_shards(&shards), node("recon-persist"), 83_000).unwrap();
@@ -380,14 +431,56 @@ fn ledger_persists_and_reindexes() {
     let mut restored: ReconstructionReceiptLedger = serde_json::from_str(&json).unwrap();
     assert_eq!(restored.len(), 1);
     assert_eq!(restored.summary_hash(), summary_before);
-    // Every persisted receipt still verifies.
+    assert!(restored.contains(&receipt.receipt_commitment));
+    // Every persisted receipt still passes legacy intrinsic validation.
     for r in restored.receipts() {
         r.verify().unwrap();
     }
-    restored.reindex();
-    // Dedup semantics are restored post-reindex.
+    // Dedup semantics are restored atomically during deserialization.
     assert!(!restored.record(receipt).unwrap());
     assert_eq!(restored.len(), 1);
+}
+
+#[test]
+fn ledger_deserialization_rejects_tampered_json() {
+    let shards = encode(b"reject tampered ledger JSON", 2, 3, "origin-json-tamper");
+    let (_payload, receipt) =
+        reconstruct_with_receipt(&data_shards(&shards), node("recon-json-tamper"), 83_100).unwrap();
+    let mut ledger = ReconstructionReceiptLedger::new();
+    ledger.record(receipt).unwrap();
+    let mut value = serde_json::to_value(&ledger).unwrap();
+    value["receipts"][0]["payload_len"] = serde_json::Value::from(123_456u64);
+    assert!(serde_json::from_value::<ReconstructionReceiptLedger>(value).is_err());
+}
+
+#[test]
+fn ledger_deserialization_rejects_duplicate_json_and_hides_index() {
+    let shards = encode(
+        b"reject duplicate ledger JSON",
+        2,
+        3,
+        "origin-json-duplicate",
+    );
+    let (_payload, receipt) =
+        reconstruct_with_receipt(&data_shards(&shards), node("recon-json-duplicate"), 83_200)
+            .unwrap();
+    let mut ledger = ReconstructionReceiptLedger::new();
+    ledger.record(receipt).unwrap();
+    let mut value = serde_json::to_value(&ledger).unwrap();
+    assert_eq!(value.as_object().unwrap().len(), 1);
+    assert!(value.get("receipts").is_some());
+    assert!(value.get("seen").is_none());
+    let mut shadowed = value.clone();
+    shadowed["seen"] = serde_json::json!([]);
+    assert!(serde_json::from_value::<ReconstructionReceiptLedger>(shadowed).is_err());
+    let duplicate = value["receipts"][0].clone();
+    value["receipts"].as_array_mut().unwrap().push(duplicate);
+    let error = serde_json::from_value::<ReconstructionReceiptLedger>(value).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("duplicate reconstruction receipt")
+    );
 }
 
 #[test]
@@ -673,4 +766,14 @@ fn receipt_json_is_self_describing_snake_case() {
             "missing field {key} in receipt JSON"
         );
     }
+    let mut top_level_shadow = value.clone();
+    top_level_shadow["shadow_field"] = serde_json::Value::from("unsigned");
+    assert!(serde_json::from_value::<ReconstructionReceipt>(top_level_shadow).is_err());
+
+    let mut nested_shadow = value;
+    nested_shadow["contributing_shards"]
+        .as_array_mut()
+        .expect("contributing_shards is an array")[0]["shadow_field"] =
+        serde_json::Value::from("unsigned");
+    assert!(serde_json::from_value::<ReconstructionReceipt>(nested_shadow).is_err());
 }

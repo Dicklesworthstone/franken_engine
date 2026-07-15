@@ -8071,8 +8071,13 @@ impl InterpreterCore {
         let previous_bytes = Self::estimate_writable_state_bytes(state);
         let previous_label_bytes = Self::estimate_label_bytes(&state.lifecycle_label);
         let label_dominates = label > state.lifecycle_label;
+        let mut label = Some(label);
         let next_label_bytes = if label_dominates {
-            Self::estimate_label_bytes(&label)
+            Self::estimate_label_bytes(
+                label
+                    .as_ref()
+                    .expect("candidate Writable label remained available"),
+            )
         } else {
             previous_label_bytes
         };
@@ -8094,6 +8099,13 @@ impl InterpreterCore {
             .saturating_add(next_label_bytes)
             .saturating_add(record_bytes)
             .saturating_add(end_callback_bytes);
+        if !label_dominates {
+            // The lower incoming aggregate is not retained. Drop it before the
+            // retained lifecycle label is cloned into the write record so the
+            // strict physical peak contains only the allocation charged by
+            // `record_bytes`.
+            drop(label.take());
+        }
         self.apply_memory_component_delta(previous_bytes, next_bytes)?;
 
         let state = self
@@ -8101,8 +8113,11 @@ impl InterpreterCore {
             .get_mut(&object_id)
             .expect("Writable state survived atomic write preflight");
         if label_dominates {
-            state.lifecycle_label = label;
+            state.lifecycle_label = label
+                .take()
+                .expect("dominant Writable label remained owned through preflight");
         }
+        debug_assert!(label.is_none());
         let record = WritableWriteRecord {
             value,
             label: state.lifecycle_label.clone(),
@@ -8138,7 +8153,7 @@ impl InterpreterCore {
         object_id: ObjectId,
         callback: WritableCallbackRecord,
         registered_after_end: bool,
-        args_label: &Label,
+        args_label: Label,
     ) -> Result<(), InterpreterError> {
         let state = self.writable_streams.get(&object_id).ok_or_else(|| {
             InterpreterError::InternalError {
@@ -8147,9 +8162,14 @@ impl InterpreterCore {
         })?;
         let previous_state_bytes = Self::estimate_writable_state_bytes(state);
         let previous_label_bytes = Self::estimate_label_bytes(&state.lifecycle_label);
-        let label_dominates = args_label > &state.lifecycle_label;
+        let label_dominates = args_label > state.lifecycle_label;
+        let mut args_label = Some(args_label);
         let next_label_bytes = if label_dominates {
-            Self::estimate_label_bytes(args_label)
+            Self::estimate_label_bytes(
+                args_label
+                    .as_ref()
+                    .expect("candidate Writable end label remained available"),
+            )
         } else {
             previous_label_bytes
         };
@@ -8167,6 +8187,11 @@ impl InterpreterCore {
             .saturating_add(next_label_bytes)
             .saturating_add(callback_bytes)
             .saturating_add(MEMORY_ESTIMATE_WRITABLE_END_CALLBACK_BYTES);
+        if !label_dominates {
+            // The caller aggregate is a checked temporary, not retained state.
+            // Release it before committing the larger callback FIFO component.
+            drop(args_label.take());
+        }
         self.apply_memory_component_delta(previous_state_bytes, next_state_bytes)?;
 
         let state = self
@@ -8174,11 +8199,11 @@ impl InterpreterCore {
             .get_mut(&object_id)
             .expect("Writable state was retained through terminal callback preflight");
         if label_dominates {
-            // Drop an attacker-sized lower label before cloning its dominant
-            // replacement so the transient peak never contains both strings.
-            state.lifecycle_label = Label::Public;
-            state.lifecycle_label = args_label.clone();
+            state.lifecycle_label = args_label
+                .take()
+                .expect("dominant Writable end label remained owned through preflight");
         }
+        debug_assert!(args_label.is_none());
         state.end_callbacks.push_back(WritableEndCallbackRecord {
             callback,
             registered_after_end,
@@ -8361,9 +8386,9 @@ impl InterpreterCore {
     }
 
     fn writable_invocation_label(&self, args: RegRange) -> Result<Label, InterpreterError> {
-        let mut label = self.join_arg_range_label(args)?;
+        let label = self.join_arg_range_label(args)?;
         if let Some(context) = &self.active_inline_callback_context_label {
-            label = label.join(context);
+            return self.join_owned_label_with_temporary_budget(label, context);
         }
         Ok(label)
     }
@@ -8376,7 +8401,7 @@ impl InterpreterCore {
         let object_id = self.writable_receiver_id(receiver)?;
         let trigger_label = self.writable_invocation_label(args)?;
         if self.writable_terminal_states.contains_key(&object_id) {
-            self.join_writable_terminal_label(object_id, &trigger_label)?;
+            self.join_writable_terminal_label(object_id, trigger_label)?;
             return Ok(Value::Undefined);
         }
         let Some(state) = self.writable_streams.get(&object_id) else {
@@ -8403,6 +8428,8 @@ impl InterpreterCore {
             state.cork_depth = next_depth;
             if replace_label {
                 state.lifecycle_label = trigger_label;
+            } else {
+                drop(trigger_label);
             }
         }
         self.mirror_writable_cork_depth(object_id, next_depth);
@@ -8418,7 +8445,7 @@ impl InterpreterCore {
         let object_id = self.writable_receiver_id(receiver)?;
         let trigger_label = self.writable_invocation_label(args)?;
         if self.writable_terminal_states.contains_key(&object_id) {
-            self.join_writable_terminal_label(object_id, &trigger_label)?;
+            self.join_writable_terminal_label(object_id, trigger_label)?;
             return Ok(Value::Undefined);
         }
         let Some(state) = self.writable_streams.get(&object_id) else {
@@ -8439,6 +8466,8 @@ impl InterpreterCore {
             state.cork_depth = next_depth;
             if replace_label {
                 state.lifecycle_label = trigger_label;
+            } else {
+                drop(trigger_label);
             }
         }
         self.mirror_writable_cork_depth(object_id, next_depth);
@@ -8458,10 +8487,13 @@ impl InterpreterCore {
         let mut trigger_label = self.writable_invocation_label(args)?;
         let error = error_register.map(|reg| &self.registers[self.register_base + reg as usize]);
         if let Some(Value::Object(error_id)) = error {
-            trigger_label = trigger_label.join(&self.binary_storage_label(*error_id));
+            if let Some(storage_label) = self.binary_storage_label_ref(*error_id) {
+                trigger_label =
+                    self.join_owned_label_with_temporary_budget(trigger_label, storage_label)?;
+            }
         }
         if self.writable_terminal_states.contains_key(&object_id) {
-            self.join_writable_terminal_label(object_id, &trigger_label)?;
+            self.join_writable_terminal_label(object_id, trigger_label)?;
             return Ok(receiver);
         }
         let Some(current) = self.writable_streams.get(&object_id) else {
@@ -8541,7 +8573,14 @@ impl InterpreterCore {
                     })
                     .unwrap_or(0),
             );
-        let released_argument_bytes = error.map(Self::estimate_value_bytes).unwrap_or(0);
+        let released_argument_bytes = if let Some(reg) = error_register {
+            error
+                .map(Self::estimate_value_bytes)
+                .unwrap_or(0)
+                .saturating_add(Self::estimate_label_bytes(self.get_register_label(reg)?))
+        } else {
+            0
+        };
         let requested_bytes = self
             .estimated_memory_bytes
             .saturating_sub(released_argument_bytes)
@@ -8647,6 +8686,7 @@ impl InterpreterCore {
         &self,
         args: RegRange,
         indices: &[u32],
+        temporary_label_bytes: u64,
     ) -> Result<Option<WritableCallbackRecord>, InterpreterError> {
         for index in indices {
             if let Some(value) = self.builtin_arg(args, *index)?
@@ -8658,9 +8698,13 @@ impl InterpreterCore {
                         max: self.config.max_registers,
                     },
                 )?;
+                let label = self.get_register_label(register)?;
+                self.check_temporary_memory_budget(
+                    temporary_label_bytes.saturating_add(Self::estimate_label_bytes(label)),
+                )?;
                 return Ok(Some(WritableCallbackRecord {
                     value,
-                    label: self.get_register_label(register)?.clone(),
+                    label: label.clone(),
                     module_specifier: self.current_module_specifier.clone(),
                 }));
             }
@@ -8693,12 +8737,18 @@ impl InterpreterCore {
                 expected: "Writable chunk".to_string(),
                 got: "missing argument".to_string(),
             })?;
-        let mut label = self.get_register_label(args.start)?.clone();
-        if let Value::Object(chunk_id) = &value {
-            label = label.join(&self.binary_storage_label(*chunk_id));
-        }
-        label = label.join(&self.join_arg_range_label(args)?);
-        let callback = self.writable_callback_arg(args, &[1, 2])?;
+        let label = self.join_arg_range_label(args)?;
+        let label = if let Value::Object(chunk_id) = &value {
+            if let Some(storage_label) = self.binary_storage_label_ref(*chunk_id) {
+                self.join_owned_label_with_temporary_budget(label, storage_label)?
+            } else {
+                label
+            }
+        } else {
+            label
+        };
+        let callback =
+            self.writable_callback_arg(args, &[1, 2], Self::estimate_label_bytes(&label))?;
         if let Some(finished) = self
             .writable_terminal_states
             .get(&object_id)
@@ -8710,9 +8760,9 @@ impl InterpreterCore {
                 WritableTerminalCallbackError::WriteAfterDestroy
             };
             if let Some(callback) = callback {
-                self.append_writable_terminal_callback(object_id, callback, error, &label)?;
+                self.append_writable_terminal_callback(object_id, callback, error, label)?;
             } else {
-                self.join_writable_terminal_label(object_id, &label)?;
+                self.join_writable_terminal_label(object_id, label)?;
             }
             return Ok(Value::Bool(false));
         }
@@ -8729,59 +8779,53 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let object_id = self.writable_receiver_id(receiver)?;
         let first = self.builtin_arg(args, 0)?;
-        let callback = self.writable_callback_arg(args, &[0, 1, 2])?;
         let chunk = first.filter(|value| {
             !value.is_callable() && !matches!(value, Value::Undefined | Value::Null)
         });
-        let args_label = self.join_arg_range_label(args)?;
-        let terminal_args_label = if let Some(Value::Object(chunk_id)) = chunk.as_ref() {
-            args_label.join(&self.binary_storage_label(*chunk_id))
-        } else {
-            args_label.clone()
-        };
+        let mut args_label = self.writable_invocation_label(args)?;
+        // Resolve backing-store taint before cloning a callback label. The
+        // callback preflight can then charge the one true aggregate peak rather
+        // than overlooking a later, dominant object-chunk label.
+        if let Some(Value::Object(chunk_id)) = chunk.as_ref()
+            && let Some(storage_label) = self.binary_storage_label_ref(*chunk_id)
+        {
+            args_label = self.join_owned_label_with_temporary_budget(args_label, storage_label)?;
+        }
+        let callback =
+            self.writable_callback_arg(args, &[0, 1, 2], Self::estimate_label_bytes(&args_label))?;
         if let Some((finished, accepts_late_end_callback)) = self
             .writable_terminal_states
             .get(&object_id)
             .map(|state| (state.finished, state.accepts_late_end_callback))
         {
             if let Some(callback) = callback {
-                if chunk.is_some() {
-                    self.append_writable_terminal_callback(
-                        object_id,
-                        callback,
-                        if finished {
-                            WritableTerminalCallbackError::WriteAfterFinish
-                        } else {
-                            WritableTerminalCallbackError::WriteAfterDestroy
-                        },
-                        &terminal_args_label,
-                    )?;
+                let error = if chunk.is_some() {
+                    Some(if finished {
+                        WritableTerminalCallbackError::WriteAfterFinish
+                    } else {
+                        WritableTerminalCallbackError::WriteAfterDestroy
+                    })
                 } else if finished || accepts_late_end_callback {
-                    self.append_writable_terminal_callback(
-                        object_id,
-                        callback,
-                        if finished {
-                            WritableTerminalCallbackError::EndAfterFinish
-                        } else {
-                            WritableTerminalCallbackError::EndAfterDestroy
-                        },
-                        &terminal_args_label,
-                    )?;
+                    Some(if finished {
+                        WritableTerminalCallbackError::EndAfterFinish
+                    } else {
+                        WritableTerminalCallbackError::EndAfterDestroy
+                    })
                 } else {
-                    self.join_writable_terminal_label(object_id, &terminal_args_label)?;
+                    None
+                };
+                if let Some(error) = error {
+                    self.append_writable_terminal_callback(object_id, callback, error, args_label)?;
+                } else {
+                    self.join_writable_terminal_label(object_id, args_label)?;
                 }
             } else {
-                self.join_writable_terminal_label(object_id, &terminal_args_label)?;
+                self.join_writable_terminal_label(object_id, args_label)?;
             }
             return Ok(Value::Object(object_id));
         }
         if let Some(value) = chunk {
-            let mut label = self.get_register_label(args.start)?.clone();
-            if let Value::Object(chunk_id) = &value {
-                label = label.join(&self.binary_storage_label(*chunk_id));
-            }
-            label = label.join(&args_label);
-            self.append_writable_write(object_id, value, label, None, callback, true)?;
+            self.append_writable_write(object_id, value, args_label, None, callback, true)?;
         } else {
             let Some(state) = self.writable_streams.get(&object_id) else {
                 return Ok(Value::Object(object_id));
@@ -8793,18 +8837,41 @@ impl InterpreterCore {
                     object_id,
                     callback,
                     already_ended || already_destroyed,
-                    &args_label,
+                    args_label,
                 )?;
             } else if !already_ended && !already_destroyed {
-                let next_lifecycle_label = state.lifecycle_label.join(&args_label);
                 let old_label_bytes = Self::estimate_label_bytes(&state.lifecycle_label);
-                let next_label_bytes = Self::estimate_label_bytes(&next_lifecycle_label);
+                let label_dominates = args_label > state.lifecycle_label;
+                let mut args_label = Some(args_label);
+                let next_label_bytes = if label_dominates {
+                    Self::estimate_label_bytes(
+                        args_label
+                            .as_ref()
+                            .expect("candidate Writable end label remained available"),
+                    )
+                } else {
+                    old_label_bytes
+                };
+                if !label_dominates {
+                    // Nothing retains this invocation aggregate. Release it
+                    // before mirrors and the fallible drive phase run.
+                    drop(args_label.take());
+                }
                 self.apply_memory_component_delta(old_label_bytes, next_label_bytes)?;
                 if let Some(state) = self.writable_streams.get_mut(&object_id) {
                     state.cork_depth = 0;
                     state.end_requested = true;
-                    state.lifecycle_label = next_lifecycle_label;
+                    if label_dominates {
+                        state.lifecycle_label = args_label
+                            .take()
+                            .expect("dominant Writable end label remained owned through preflight");
+                    }
                 }
+                debug_assert!(args_label.is_none());
+            } else {
+                // A repeated end without a callback retains no new state.
+                // Dispose its checked aggregate before mirrors and drive.
+                drop(args_label);
             }
         }
         self.mirror_writable_bool(object_id, "writable", false);
@@ -8864,10 +8931,15 @@ impl InterpreterCore {
             });
         }
         let actual_reg = self.register_base + reg as usize;
-        let previous_bytes = self
+        let previous_value_bytes = self
             .registers
             .get(actual_reg)
             .map(Self::estimate_value_bytes)
+            .unwrap_or(0);
+        let previous_label_bytes = self
+            .register_labels
+            .get(actual_reg)
+            .map(Self::estimate_label_bytes)
             .unwrap_or(0);
         let value = self.mutate_registers(|registers| {
             registers
@@ -8880,7 +8952,10 @@ impl InterpreterCore {
             .get_mut(actual_reg)
             .map(|slot| std::mem::replace(slot, Label::Public))
             .unwrap_or(Label::Public);
-        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(previous_bytes);
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_value_bytes)
+            .saturating_sub(previous_label_bytes);
         Ok((value, label))
     }
 
@@ -8919,7 +8994,8 @@ impl InterpreterCore {
                 Self::estimate_label_bytes(next_lifecycle_label)
                     .saturating_add(Self::estimate_writable_value_bytes(error))
                     .saturating_add(Self::estimate_label_bytes(error_label)),
-                Self::estimate_value_bytes(error),
+                Self::estimate_value_bytes(error)
+                    .saturating_add(Self::estimate_label_bytes(error_label)),
             )
         } else {
             (old_dynamic, 0)
@@ -9027,7 +9103,8 @@ impl InterpreterCore {
                 Self::estimate_label_bytes(next_lifecycle_label)
                     .saturating_add(Self::estimate_writable_value_bytes(error))
                     .saturating_add(Self::estimate_label_bytes(error_label)),
-                Self::estimate_value_bytes(error),
+                Self::estimate_value_bytes(error)
+                    .saturating_add(Self::estimate_label_bytes(error_label)),
             )
         } else {
             (old_dynamic, 0)
@@ -9382,7 +9459,7 @@ impl InterpreterCore {
     fn join_writable_terminal_label(
         &mut self,
         object_id: ObjectId,
-        trigger_label: &Label,
+        trigger_label: Label,
     ) -> Result<(), InterpreterError> {
         let state = self
             .writable_terminal_states
@@ -9391,16 +9468,30 @@ impl InterpreterCore {
                 details: "terminal Writable label update lost its tombstone".to_string(),
             })?;
         let previous_bytes = Self::estimate_writable_terminal_state_bytes(state);
-        let next_label = state.lifecycle_label.join(trigger_label);
+        let trigger_dominates = trigger_label > state.lifecycle_label;
+        let next_label_bytes = if trigger_dominates {
+            Self::estimate_label_bytes(&trigger_label)
+        } else {
+            Self::estimate_label_bytes(&state.lifecycle_label)
+        };
         let next_bytes = previous_bytes
             .saturating_sub(Self::estimate_label_bytes(&state.lifecycle_label))
-            .saturating_add(Self::estimate_label_bytes(&next_label));
+            .saturating_add(next_label_bytes);
+        let mut trigger_label = Some(trigger_label);
+        if !trigger_dominates {
+            drop(trigger_label.take());
+        }
         self.apply_memory_component_delta(previous_bytes, next_bytes)?;
         let state = self
             .writable_terminal_states
             .get_mut(&object_id)
             .expect("terminal Writable tombstone survived label preflight");
-        state.lifecycle_label = next_label;
+        if trigger_dominates {
+            state.lifecycle_label = trigger_label
+                .take()
+                .expect("dominant terminal Writable label remained owned through preflight");
+        }
+        debug_assert!(trigger_label.is_none());
         debug_assert_eq!(
             Self::estimate_writable_terminal_state_bytes(state),
             next_bytes
@@ -9413,7 +9504,7 @@ impl InterpreterCore {
         object_id: ObjectId,
         callback: WritableCallbackRecord,
         error: WritableTerminalCallbackError,
-        trigger_label: &Label,
+        trigger_label: Label,
     ) -> Result<(), InterpreterError> {
         let state = self
             .writable_terminal_states
@@ -9430,10 +9521,15 @@ impl InterpreterCore {
                     .to_string(),
             })?;
         let previous_bytes = Self::estimate_writable_terminal_state_bytes(state);
-        let next_label = state.lifecycle_label.join(trigger_label);
+        let trigger_dominates = trigger_label > state.lifecycle_label;
+        let next_label_bytes = if trigger_dominates {
+            Self::estimate_label_bytes(&trigger_label)
+        } else {
+            Self::estimate_label_bytes(&state.lifecycle_label)
+        };
         let next_bytes = previous_bytes
             .saturating_sub(Self::estimate_label_bytes(&state.lifecycle_label))
-            .saturating_add(Self::estimate_label_bytes(&next_label))
+            .saturating_add(next_label_bytes)
             .saturating_add(Self::estimate_writable_callback_bytes(&callback))
             .saturating_add(MEMORY_ESTIMATE_WRITABLE_END_CALLBACK_BYTES);
         let scheduled_sequence = if state.tick_sequence.is_none() {
@@ -9455,15 +9551,26 @@ impl InterpreterCore {
             None
         };
 
+        let mut trigger_label = Some(trigger_label);
+        if !trigger_dominates {
+            drop(trigger_label.take());
+        }
         self.apply_memory_component_delta(previous_bytes, next_bytes)?;
         let state = self
             .writable_terminal_states
             .get_mut(&object_id)
             .expect("terminal Writable tombstone survived callback preflight");
+        if trigger_dominates {
+            state.lifecycle_label = trigger_label
+                .take()
+                .expect("dominant terminal callback label remained owned through preflight");
+        }
+        debug_assert!(trigger_label.is_none());
+        // Replace/drop the old lifecycle String before the linked-list node is
+        // allocated; `next_bytes` already subtracts that old resident label.
         state
             .callbacks
             .push_back(WritableTerminalCallbackRecord { callback, error });
-        state.lifecycle_label = next_label;
         if let Some((sequence, next_sequence, next_pending)) = scheduled_sequence {
             state.tick_sequence = Some(sequence);
             self.next_writable_tick_sequence = next_sequence;
@@ -11630,7 +11737,11 @@ impl InterpreterCore {
         // seeded heap. Otherwise a reused id can inherit callbacks, listeners,
         // or static `events.once` links from the preceding execution.
         self.clear_writable_execution_state();
-        self.active_inline_callback_context_label = None;
+        if let Some(context) = self.active_inline_callback_context_label.take() {
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(Self::estimate_label_bytes(&context));
+        }
         let restore = {
             let snapshot = seed.borrow();
             match &*snapshot {
@@ -11709,17 +11820,49 @@ impl InterpreterCore {
             });
         }
         let actual_reg = self.register_base + reg as usize;
-        let effective_label = match &self.active_inline_callback_context_label {
-            Some(context) => label.join(context),
-            None => label,
-        };
-        let Some(slot) = self.register_labels.get_mut(actual_reg) else {
+        let Some(previous_label) = self.register_labels.get(actual_reg) else {
             return Err(InterpreterError::RegisterOutOfBounds {
                 register: reg,
                 max: self.config.max_registers,
             });
         };
-        *slot = effective_label;
+        let previous_label_bytes = Self::estimate_label_bytes(previous_label);
+        let context_dominates = self
+            .active_inline_callback_context_label
+            .as_ref()
+            .is_some_and(|context| context > &label);
+        let next_label_bytes = if context_dominates {
+            self.active_inline_callback_context_label
+                .as_ref()
+                .map(Self::estimate_label_bytes)
+                .unwrap_or(0)
+        } else {
+            Self::estimate_label_bytes(&label)
+        };
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_label_bytes)
+            .saturating_add(next_label_bytes);
+        if requested_bytes > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
+
+        // Refusal above is atomic. On success, release the old attacker-sized
+        // name before cloning a dominant callback context so the physical peak
+        // never contains both the dead destination name and its replacement.
+        let previous_label =
+            std::mem::replace(&mut self.register_labels[actual_reg], Label::Public);
+        drop(previous_label);
+        self.register_labels[actual_reg] = if context_dominates {
+            drop(label);
+            self.active_inline_callback_context_label
+                .as_ref()
+                .expect("dominant inline callback context was checked")
+                .clone()
+        } else {
+            label
+        };
+        self.estimated_memory_bytes = requested_bytes;
         Ok(())
     }
 
@@ -11734,16 +11877,21 @@ impl InterpreterCore {
         }
     }
 
-    fn binary_storage_label(&self, object_id: ObjectId) -> Label {
+    fn binary_storage_label_ref(&self, object_id: ObjectId) -> Option<&Label> {
         self.array_buffer_id_for_object(object_id)
             .and_then(|buffer_id| self.heap.get(buffer_id.0 as usize))
             .and_then(|object| object.array_buffer.as_ref())
-            .map(|backing| backing.label.clone())
+            .map(|backing| &backing.label)
+    }
+
+    fn binary_storage_label(&self, object_id: ObjectId) -> Label {
+        self.binary_storage_label_ref(object_id)
+            .cloned()
             .unwrap_or(Label::Public)
     }
 
-    fn stream_state_label(&self, object_id: ObjectId) -> Label {
-        let mut label = Label::Public;
+    fn stream_state_label_ref(&self, object_id: ObjectId) -> Option<&Label> {
+        let mut label: Option<&Label> = None;
         let mut current = Some(object_id);
         let mut depth = 0u32;
         let mut visited = BTreeSet::new();
@@ -11752,13 +11900,22 @@ impl InterpreterCore {
                 break;
             }
             if let Some(state) = self.readable_from_streams.get(&id) {
-                label = label.join(&state.lifecycle_label);
+                let candidate = &state.lifecycle_label;
+                if label.is_none_or(|winner| candidate > winner) {
+                    label = Some(candidate);
+                }
             }
             if let Some(state) = self.writable_streams.get(&id) {
-                label = label.join(&state.lifecycle_label);
+                let candidate = &state.lifecycle_label;
+                if label.is_none_or(|winner| candidate > winner) {
+                    label = Some(candidate);
+                }
             }
             if let Some(state) = self.writable_terminal_states.get(&id) {
-                label = label.join(&state.lifecycle_label);
+                let candidate = &state.lifecycle_label;
+                if label.is_none_or(|winner| candidate > winner) {
+                    label = Some(candidate);
+                }
             }
             if let Some(object) = self.heap.get(id.0 as usize) {
                 let active_proxy_target = matches!(
@@ -11782,6 +11939,26 @@ impl InterpreterCore {
             depth += 1;
         }
         label
+    }
+
+    fn stream_state_label(&self, object_id: ObjectId) -> Label {
+        self.stream_state_label_ref(object_id)
+            .cloned()
+            .unwrap_or(Label::Public)
+    }
+
+    fn stream_state_label_with_temporary_budget(
+        &self,
+        object_id: ObjectId,
+        additional_temporary_bytes: u64,
+    ) -> Result<Label, InterpreterError> {
+        let Some(label) = self.stream_state_label_ref(object_id) else {
+            return Ok(Label::Public);
+        };
+        self.check_temporary_memory_budget(
+            additional_temporary_bytes.saturating_add(Self::estimate_label_bytes(label)),
+        )?;
+        Ok(label.clone())
     }
 
     fn join_binary_storage_label(&mut self, object_id: ObjectId, label: &Label) {
@@ -11860,28 +12037,37 @@ impl InterpreterCore {
         Ok(())
     }
 
-    /// Propagate IFC labels through binary operations (join of operand labels).
-    fn propagate_binary_operation_label(
-        &mut self,
-        lhs: u32,
-        rhs: u32,
-        dst: u32,
-    ) -> Result<(), InterpreterError> {
-        // perf: hot path - avoid cloning labels, join() already clones internally
-        let result_label = self
-            .get_register_label(lhs)?
-            .join(self.get_register_label(rhs)?);
-        self.set_register_label(dst, result_label)
+    /// Clone one binary-operation label winner after a strict temporary peak
+    /// preflight. The caller can then commit value+label through
+    /// `write_reg_with_label` as one transaction.
+    fn binary_operation_label(&self, lhs: u32, rhs: u32) -> Result<Label, InterpreterError> {
+        let lhs_label = self.get_register_label(lhs)?;
+        let rhs_label = self.get_register_label(rhs)?;
+        let winner = if lhs_label >= rhs_label {
+            lhs_label
+        } else {
+            rhs_label
+        };
+        self.check_temporary_memory_budget(Self::estimate_label_bytes(winner))?;
+        Ok(winner.clone())
     }
 
-    /// Propagate IFC labels through unary operations (preserve operand label).
-    fn propagate_unary_operation_label(
-        &mut self,
-        src: u32,
-        dst: u32,
-    ) -> Result<(), InterpreterError> {
-        // perf: hot path - clone only when setting, not for intermediate variable
-        self.set_register_label(dst, self.get_register_label(src)?.clone())
+    /// Clone one unary-operation label after a strict temporary peak preflight.
+    fn unary_operation_label(&self, src: u32) -> Result<Label, InterpreterError> {
+        self.clone_register_label_with_temporary_budget(src)
+    }
+
+    /// Clone one register label only after charging the attacker-controlled
+    /// name as a strict temporary. Isolated callback results use this helper
+    /// before restoring the caller snapshot, so cleanup still runs when the
+    /// clone itself is refused.
+    fn clone_register_label_with_temporary_budget(
+        &self,
+        reg: u32,
+    ) -> Result<Label, InterpreterError> {
+        let label = self.get_register_label(reg)?;
+        self.check_temporary_memory_budget(Self::estimate_label_bytes(label))?;
+        Ok(label.clone())
     }
 
     /// Join (least-upper-bound) of the IFC labels on every register in a
@@ -11892,7 +12078,7 @@ impl InterpreterCore {
         &self,
         args: crate::ir_contract::RegRange,
     ) -> Result<Label, InterpreterError> {
-        let mut joined = Label::Public;
+        let mut joined: Option<&Label> = None;
         for i in 0..args.count {
             let reg = args
                 .start
@@ -11901,9 +12087,59 @@ impl InterpreterCore {
                     register: args.start,
                     max: u32::MAX,
                 })?;
-            joined = joined.join(self.get_register_label(reg)?);
+            let candidate = self.get_register_label(reg)?;
+            if joined.is_none_or(|current| candidate > current) {
+                joined = Some(candidate);
+            }
         }
-        Ok(joined)
+        let Some(joined) = joined else {
+            return Ok(Label::Public);
+        };
+        // Scan borrowed labels and clone only the single winner. This turns an
+        // attacker-sized N-argument join from N repeated String allocations
+        // into one explicitly preflighted temporary allocation.
+        self.check_temporary_memory_budget(Self::estimate_label_bytes(joined))?;
+        Ok(joined.clone())
+    }
+
+    /// Join an argument range with one receiver register while borrowing every
+    /// candidate and cloning only the full-`Ord` winner. In particular, a
+    /// foreign method call never holds separate receiver and argument Custom
+    /// strings while entering its isolated wrapper.
+    fn join_arg_range_with_register_label(
+        &self,
+        args: crate::ir_contract::RegRange,
+        register: u32,
+    ) -> Result<Label, InterpreterError> {
+        let mut joined = self.get_register_label(register)?;
+        for i in 0..args.count {
+            let reg = args
+                .start
+                .checked_add(i)
+                .ok_or(InterpreterError::RegisterOutOfBounds {
+                    register: args.start,
+                    max: u32::MAX,
+                })?;
+            let candidate = self.get_register_label(reg)?;
+            if candidate > joined {
+                joined = candidate;
+            }
+        }
+        self.check_temporary_memory_budget(Self::estimate_label_bytes(joined))?;
+        Ok(joined.clone())
+    }
+
+    fn join_owned_label_with_temporary_budget(
+        &self,
+        owned: Label,
+        other: &Label,
+    ) -> Result<Label, InterpreterError> {
+        if &owned >= other {
+            return Ok(owned);
+        }
+        drop(owned);
+        self.check_temporary_memory_budget(Self::estimate_label_bytes(other))?;
+        Ok(other.clone())
     }
 
     // ---------------------------------------------------------------------------
@@ -12455,6 +12691,7 @@ impl InterpreterCore {
     fn prepare_module_execution(&mut self, module_specifier: &str) -> Result<(), InterpreterError> {
         let max_regs = self.config.max_registers as usize;
         let previous_register_bytes = self.registers_memory_bytes();
+        let previous_register_context_label_bytes = self.register_context_labels_memory_bytes();
         let previous_scope_bytes = self.scope_chain_memory_bytes();
         let previous_call_stack_bytes = self.call_stack_memory_bytes();
         self.mutate_registers(|r| {
@@ -12477,8 +12714,9 @@ impl InterpreterCore {
         self.pending_captures.clear();
         self.generated_functions.clear();
         self.current_module_specifier = Some(module_specifier.to_string());
-        self.apply_register_scope_call_stack_memory_delta(
+        self.apply_register_context_scope_call_stack_memory_delta(
             previous_register_bytes,
+            previous_register_context_label_bytes,
             previous_scope_bytes,
             previous_call_stack_bytes,
         )?;
@@ -13609,6 +13847,8 @@ impl InterpreterCore {
         let snapshot = self.snapshot_module_execution();
         let saved_active_cjs_context = self.active_cjs_context.clone();
         let setup_previous_register_bytes = self.registers_memory_bytes();
+        let setup_previous_register_context_label_bytes =
+            self.register_context_labels_memory_bytes();
         let setup_previous_scope_bytes = self.scope_chain_memory_bytes();
         let setup_previous_call_stack_bytes = self.call_stack_memory_bytes();
         let mut wrapper_memory_committed = false;
@@ -13631,8 +13871,9 @@ impl InterpreterCore {
             for capability in &generated_capabilities {
                 self.config.granted_capabilities.insert(*capability);
             }
-            self.apply_register_scope_call_stack_memory_delta(
+            self.apply_register_context_scope_call_stack_memory_delta(
                 setup_previous_register_bytes,
+                setup_previous_register_context_label_bytes,
                 setup_previous_scope_bytes,
                 setup_previous_call_stack_bytes,
             )?;
@@ -13662,14 +13903,16 @@ impl InterpreterCore {
             _ => None,
         };
         let previous_register_bytes = self.registers_memory_bytes();
+        let previous_register_context_label_bytes = self.register_context_labels_memory_bytes();
         let previous_scope_bytes = self.scope_chain_memory_bytes();
         let previous_call_stack_bytes = self.call_stack_memory_bytes();
         self.restore_module_execution(snapshot);
         self.active_cjs_context = saved_active_cjs_context;
         self.config.granted_capabilities = previous_granted_capabilities;
         if wrapper_memory_committed {
-            self.apply_register_scope_call_stack_memory_delta(
+            self.apply_register_context_scope_call_stack_memory_delta(
                 previous_register_bytes,
+                previous_register_context_label_bytes,
                 previous_scope_bytes,
                 previous_call_stack_bytes,
             )?;
@@ -16527,11 +16770,11 @@ impl InterpreterCore {
         self.push_event("top_level_await_resumed", "ok", None);
         match settled {
             Ok(argument) => {
-                self.write_reg(
+                self.write_reg_with_label(
                     resumption_context.result_register,
                     Self::js_value_to_value(&argument),
+                    label,
                 )?;
-                self.set_register_label(resumption_context.result_register, label)?;
             }
             Err(reason) => {
                 let error_value = Self::js_value_to_value(&reason);
@@ -17717,36 +17960,36 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::Add { dst, lhs, rhs } => {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_add(lhs, rhs)?;
-                    self.write_reg(dst, result)?;
-                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Sub { dst, lhs, rhs } => {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_arith(lhs, rhs, "sub")?;
-                    self.write_reg(dst, result)?;
-                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Mul { dst, lhs, rhs } => {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_arith(lhs, rhs, "mul")?;
-                    self.write_reg(dst, result)?;
-                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Div { dst, lhs, rhs } => {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_div(lhs, rhs)?;
-                    self.write_reg(dst, result)?;
-                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::ForInInit { src, dst } => {
+                    let result_label = self.unary_operation_label(src)?;
                     let value = self.read_reg(src)?;
                     let iterator = self.init_for_in_iterator(value)?;
-                    self.write_reg(dst, iterator)?;
                     // Carry the iterable's IFC label onto the iterator register
                     // so the keys it yields stay tainted.
-                    self.propagate_unary_operation_label(src, dst)?;
+                    self.write_reg_with_label(dst, iterator, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::ForInNext {
@@ -17755,24 +17998,24 @@ impl InterpreterCore {
                     done_target,
                 } => {
                     let iterator_reg = iterator;
+                    let result_label = self.unary_operation_label(iterator_reg)?;
                     let iterator = self.read_reg(iterator_reg)?;
                     if let Some(value) = self.advance_for_in_iterator(iterator)? {
-                        self.write_reg(value_dst, value)?;
                         // Each bound key derives from the iterable; carry its
                         // IFC label onto the loop variable (sibling of the
                         // reduce/array-from callback-lane fix, bd-ooaka.1).
-                        self.propagate_unary_operation_label(iterator_reg, value_dst)?;
+                        self.write_reg_with_label(value_dst, value, result_label)?;
                         self.ip += 1;
                     } else {
                         self.ip = done_target as usize;
                     }
                 }
                 Ir3Instruction::ForOfInit { src, dst } => {
+                    let result_label = self.unary_operation_label(src)?;
                     let value = self.read_reg(src)?;
                     let iterator = self.init_for_of_iterator(Some(module), value)?;
-                    self.write_reg(dst, iterator)?;
                     // Carry the iterable's IFC label onto the iterator register.
-                    self.propagate_unary_operation_label(src, dst)?;
+                    self.write_reg_with_label(dst, iterator, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::ForOfNext {
@@ -17781,15 +18024,15 @@ impl InterpreterCore {
                     done_target,
                 } => {
                     let iterator_reg = iterator;
+                    let result_label = self.unary_operation_label(iterator_reg)?;
                     let iterator = self.read_reg(iterator_reg)?;
                     match self.advance_for_of_iterator(Some(module), iterator) {
                         Ok(Some(value)) => {
-                            self.write_reg(value_dst, value)?;
                             // Each bound element derives from the iterable; carry
                             // its label onto the loop variable so a
                             // `for (const x of secret) egress(x)` cannot launder
                             // the taint (sibling of bd-ooaka.1).
-                            self.propagate_unary_operation_label(iterator_reg, value_dst)?;
+                            self.write_reg_with_label(value_dst, value, result_label)?;
                             self.ip += 1;
                         }
                         Ok(None) => {
@@ -17835,9 +18078,9 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::Move { dst, src } => {
+                    let result_label = self.unary_operation_label(src)?;
                     let val = self.read_reg(src)?;
-                    self.write_reg(dst, val)?;
-                    self.propagate_unary_operation_label(src, dst)?;
+                    self.write_reg_with_label(dst, val, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Jump { target } => {
@@ -17942,7 +18185,6 @@ impl InterpreterCore {
                             .pending_hostcall_result_label
                             .take()
                             .unwrap_or(Label::Public);
-                        self.write_reg(dst, result)?;
                         // IFC: builtin results derive entirely from the arg
                         // registers (incl. any callback lanes the builtin runs,
                         // which see only values seeded from these args), so the
@@ -17950,7 +18192,11 @@ impl InterpreterCore {
                         // HostCall propagation (bd-ooaka.1, fourth member of
                         // the bd-n2mjy/bd-0zybl under-tainting family).
                         let args_label = self.join_arg_range_label(args)?;
-                        self.set_register_label(dst, args_label.join(&callback_result_label))?;
+                        self.write_reg_with_label(
+                            dst,
+                            result,
+                            args_label.join(&callback_result_label),
+                        )?;
                         self.ip += 1;
                         continue;
                     }
@@ -17966,20 +18212,20 @@ impl InterpreterCore {
                                 callee_val.clone(),
                                 Value::Undefined,
                                 arguments,
-                                Some(argument_label.clone()),
+                                Some(argument_label),
                             ) {
                             Ok(value) => value,
                             Err(err) => match self.route_isolated_explicit_throw(err)? {
-                                None => {
-                                    self.pending_exception_label =
-                                        self.pending_exception_label.join(&argument_label);
-                                    continue;
-                                }
+                                None => continue,
                                 Some(err) => return Err(err),
                             },
                         };
-                        self.write_reg(dst, result)?;
-                        self.set_register_label(dst, result_label.join(&argument_label))?;
+                        // The isolated wrapper installs `argument_label` as its
+                        // active context, so every successful result register
+                        // and every re-armed explicit throw already carries the
+                        // aggregate. Moving it into the wrapper avoids retaining
+                        // a second attacker-sized String in the caller.
+                        self.write_reg_with_label(dst, result, result_label)?;
                         self.ip += 1;
                         continue;
                     }
@@ -18243,8 +18489,7 @@ impl InterpreterCore {
                                         .take()
                                         .unwrap_or(Label::Public)
                                         .join(&self.join_arg_range_label(args)?);
-                                    self.write_reg(dst, result)?;
-                                    self.set_register_label(dst, result_label)?;
+                                    self.write_reg_with_label(dst, result, result_label)?;
                                     self.ip += 1;
                                     continue;
                                 } else {
@@ -18396,7 +18641,6 @@ impl InterpreterCore {
                     dst,
                 } => {
                     let receiver_val = self.read_reg(receiver)?;
-                    let receiver_label = self.get_register_label(receiver)?.clone();
                     let callee_val = self.read_reg(callee)?;
 
                     // Generator `.next()` method-call: step the generator
@@ -18456,7 +18700,6 @@ impl InterpreterCore {
                             .pending_hostcall_result_label
                             .take()
                             .unwrap_or(Label::Public);
-                        self.write_reg(dst, result)?;
                         // IFC: a receiver-aware builtin's result derives from
                         // the receiver and the arg registers (e.g. a Secret
                         // array's reduce/map/from result is at least Secret) —
@@ -18484,7 +18727,7 @@ impl InterpreterCore {
                             args,
                             &result_label,
                         )?;
-                        self.set_register_label(dst, result_label)?;
+                        self.write_reg_with_label(dst, result, result_label)?;
                         self.ip += 1;
                         continue;
                     }
@@ -18493,27 +18736,23 @@ impl InterpreterCore {
                         self.foreign_closure_module(&callee_val, module)?
                     {
                         let arguments = self.call_arguments(args)?;
-                        let argument_label = self.join_arg_range_label(args)?.join(&receiver_label);
+                        let argument_label =
+                            self.join_arg_range_with_register_label(args, receiver)?;
                         let (result, result_label) = match self
                             .invoke_inline_method_call_with_argument_label(
                                 Some(module),
                                 callee_val.clone(),
                                 receiver_val,
                                 arguments,
-                                Some(argument_label.clone()),
+                                Some(argument_label),
                             ) {
                             Ok(value) => value,
                             Err(err) => match self.route_isolated_explicit_throw(err)? {
-                                None => {
-                                    self.pending_exception_label =
-                                        self.pending_exception_label.join(&argument_label);
-                                    continue;
-                                }
+                                None => continue,
                                 Some(err) => return Err(err),
                             },
                         };
-                        self.write_reg(dst, result)?;
-                        self.set_register_label(dst, result_label.join(&argument_label))?;
+                        self.write_reg_with_label(dst, result, result_label)?;
                         self.ip += 1;
                         continue;
                     }
@@ -18630,6 +18869,8 @@ impl InterpreterCore {
                         let previous_scope_bytes = self.scope_chain_memory_bytes();
                         let previous_closure_bytes = self.closures_memory_bytes();
                         let previous_call_stack_bytes = self.call_stack_memory_bytes();
+                        let receiver_label =
+                            self.clone_register_label_with_temporary_budget(receiver)?;
 
                         self.call_stack.push(CallFrame {
                             return_ip: self.ip + 1,
@@ -18637,7 +18878,7 @@ impl InterpreterCore {
                             register_base: self.register_base,
                             function_index: Some(func_idx),
                             this_value: receiver_val.clone(),
-                            this_label: receiver_label.clone(),
+                            this_label: receiver_label,
                             new_target_value: Value::Undefined,
                             super_value: Value::Undefined,
                             construct_this: None,
@@ -18759,6 +19000,8 @@ impl InterpreterCore {
                     let previous_scope_bytes = self.scope_chain_memory_bytes();
                     let previous_closure_bytes = self.closures_memory_bytes();
                     let previous_call_stack_bytes = self.call_stack_memory_bytes();
+                    let receiver_label =
+                        self.clone_register_label_with_temporary_budget(receiver)?;
                     self.call_stack.push(CallFrame {
                         return_ip: self.ip + 1,
                         return_reg: dst,
@@ -18941,8 +19184,7 @@ impl InterpreterCore {
                         .take()
                         .unwrap_or(Label::Public)
                         .join(&args_label);
-                    self.write_reg(dst, result)?;
-                    self.set_register_label(dst, result_label)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::ImportModule { specifier, dst } => {
@@ -18974,55 +19216,66 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::GetProperty { obj, key, dst } => {
                     let obj_val = self.read_reg(obj)?;
-                    let binary_storage_label = match &obj_val {
-                        Value::Object(object_id) => self.binary_storage_label(*object_id),
-                        _ => Label::Public,
-                    };
-                    let stream_state_label = match &obj_val {
-                        Value::Object(object_id) => self.stream_state_label(*object_id),
-                        _ => Label::Public,
+                    let object_id = match &obj_val {
+                        Value::Object(object_id) => Some(*object_id),
+                        _ => None,
                     };
                     let key_val = self.read_reg(key)?;
                     let key_str = self.property_key_from_value(&key_val);
 
-                    match obj_val {
+                    let mut result_label = self.binary_operation_label(dst, obj)?;
+                    if let Some(binary_storage_label) =
+                        object_id.and_then(|id| self.binary_storage_label_ref(id))
+                    {
+                        result_label = self.join_owned_label_with_temporary_budget(
+                            result_label,
+                            binary_storage_label,
+                        )?;
+                    }
+                    let stream_state_label = if let Some(object_id) = object_id {
+                        self.stream_state_label_with_temporary_budget(
+                            object_id,
+                            Self::estimate_label_bytes(&result_label),
+                        )?
+                    } else {
+                        Label::Public
+                    };
+                    result_label = if result_label >= stream_state_label {
+                        result_label
+                    } else {
+                        stream_state_label
+                    };
+
+                    let prop = match obj_val {
                         Value::Object(oid) => {
                             self.run_pre_property_access_hook(module, oid, &key_str)?;
                             if key_str == "__proto__" {
                                 // `__proto__` reads the internal prototype link
                                 // (set by class `extends` and `o.__proto__ = p`),
                                 // not a data property (bd-ppfds).
-                                let proto = self
-                                    .heap
+                                self.heap
                                     .get(oid.0 as usize)
                                     .and_then(|o| o.prototype)
                                     .map(Value::Object)
-                                    .unwrap_or(Value::Null);
-                                self.write_reg(dst, proto)?;
+                                    .unwrap_or(Value::Null)
                             } else {
-                                let prop = self.proxy_aware_get_property(
+                                self.proxy_aware_get_property(
                                     Some(module),
                                     oid,
                                     &key_str,
                                     Value::Object(oid),
                                     0,
-                                )?;
-                                self.write_reg(dst, prop)?;
+                                )?
                             }
                         }
                         Value::Iterator(iterator_handle) => {
-                            let prop = self.iterator_property_value(iterator_handle, &key_str);
-                            self.write_reg(dst, prop)?;
+                            self.iterator_property_value(iterator_handle, &key_str)
                         }
-                        Value::Str(s) => {
-                            let prop = Self::string_property_value(&s, &key_str);
-                            self.write_reg(dst, prop)?;
-                        }
+                        Value::Str(s) => Self::string_property_value(&s, &key_str),
                         Value::Int(_) | Value::Float(_) => {
                             // Member access on a number primitive resolves
                             // Number.prototype methods, else undefined (bd-i08nh).
-                            let prop = Self::number_property_value(&key_str);
-                            self.write_reg(dst, prop)?;
+                            Self::number_property_value(&key_str)
                         }
                         // Functions are objects: reading `fn.prototype` returns the
                         // function's prototype object (where class instance methods
@@ -19030,13 +19283,9 @@ impl InterpreterCore {
                         // `new C().m()` resolves up the chain (bd-62un6).
                         Value::Closure(closure_id) => {
                             let func_idx = self.closure_function_index(closure_id)?;
-                            let prop = self.function_property_value(func_idx, &key_str)?;
-                            self.write_reg(dst, prop)?;
+                            self.function_property_value(func_idx, &key_str)?
                         }
-                        Value::Function(idx) => {
-                            let prop = self.function_property_value(idx, &key_str)?;
-                            self.write_reg(dst, prop)?;
-                        }
+                        Value::Function(idx) => self.function_property_value(idx, &key_str)?,
                         Value::Generator(gen_id) => {
                             // Generator iterator-protocol member access (bd-v6cv1).
                             // Previously a generator had no arm here, so `it.next`
@@ -19049,23 +19298,19 @@ impl InterpreterCore {
                             // exposing `.next` AS the generator itself routes
                             // `it.next()` through that existing path. Unknown
                             // members resolve to `undefined`.
-                            let prop = match key_str.as_str() {
+                            match key_str.as_str() {
                                 "next" => Value::Generator(gen_id),
                                 _ => Value::Undefined,
-                            };
-                            self.write_reg(dst, prop)?;
+                            }
                         }
-                        Value::Promise(_) => {
-                            let prop = Self::promise_property_value(&key_str);
-                            self.write_reg(dst, prop)?;
-                        }
-                        _ => {
+                        Value::Promise(_) => Self::promise_property_value(&key_str),
+                        other => {
                             return Err(InterpreterError::TypeError {
                                 expected: "object".to_string(),
-                                got: obj_val.type_name().to_string(),
+                                got: other.type_name().to_string(),
                             });
                         }
-                    }
+                    };
                     // IFC: the read value's confidentiality is bounded below by
                     // the source object's label — a property of a Secret object
                     // is itself at least Secret. Join the object register's
@@ -19076,12 +19321,7 @@ impl InterpreterCore {
                     // of the HostCall gap bd-n2mjy). Conservative join (not bare
                     // overwrite) so a dst already carrying higher taint is never
                     // lowered by a property read.
-                    let joined_label = self
-                        .get_register_label(dst)?
-                        .join(self.get_register_label(obj)?)
-                        .join(&binary_storage_label)
-                        .join(&stream_state_label);
-                    self.set_register_label(dst, joined_label)?;
+                    self.write_reg_with_label(dst, prop, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::SetProperty { obj, key, val } => {
@@ -19280,6 +19520,7 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::ArraySlice { array, start, dst } => {
+                    let result_label = self.binary_operation_label(array, start)?;
                     let arr_val = self.read_reg(array)?;
                     let start_val = self.read_reg(start)?;
                     let Value::Object(arr_id) = arr_val else {
@@ -19347,13 +19588,12 @@ impl InterpreterCore {
 
                     let result_values: Vec<Value> = elements.into_iter().skip(start_idx).collect();
                     let result_id = self.alloc_array_from_values(&result_values)?;
-                    self.write_reg(dst, Value::Object(result_id))?;
                     // IFC: the sliced array derives its contents from `array`
                     // and its length from `start`, so join both source labels
                     // onto dst (mirrors GetProperty joining the container
                     // label). Without this, `secretArr.slice(0)` would read as
                     // Public.
-                    self.propagate_binary_operation_label(array, start, dst)?;
+                    self.write_reg_with_label(dst, Value::Object(result_id), result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::SpreadIntoArray { array, iterable } => {
@@ -19476,42 +19716,43 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::Mod { dst, lhs, rhs } => {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_mod(lhs, rhs)?;
-                    self.write_reg(dst, result)?;
-                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Exp { dst, lhs, rhs } => {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_exp(lhs, rhs)?;
-                    self.write_reg(dst, result)?;
-                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::UnaryNeg { dst, src } => {
+                    let result_label = self.unary_operation_label(src)?;
                     let result = self.eval_unary_neg(src)?;
-                    self.write_reg(dst, result)?;
-                    self.propagate_unary_operation_label(src, dst)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::UnaryPlus { dst, src } => {
+                    let result_label = self.unary_operation_label(src)?;
                     let result = self.eval_unary_plus(src)?;
-                    self.write_reg(dst, result)?;
-                    self.propagate_unary_operation_label(src, dst)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::LogicalNot { dst, src } => {
+                    let result_label = self.unary_operation_label(src)?;
                     let val = self.read_reg(src)?;
-                    self.write_reg(dst, Value::Bool(!val.is_truthy()))?;
-                    self.propagate_unary_operation_label(src, dst)?;
+                    self.write_reg_with_label(dst, Value::Bool(!val.is_truthy()), result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::BitNot { dst, src } => {
+                    let result_label = self.unary_operation_label(src)?;
                     let result = self.eval_bit_not(src)?;
-                    self.write_reg(dst, result)?;
-                    self.propagate_unary_operation_label(src, dst)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::TypeOf { dst, src } => {
+                    let result_label = self.unary_operation_label(src)?;
                     let val = self.read_reg(src)?;
                     // A symbol value is represented as a heap object tagged
                     // `__type:"symbol"` (builtin:Symbol); JS `typeof` of it must be
@@ -19531,110 +19772,109 @@ impl InterpreterCore {
                         },
                         _ => val.typeof_name(),
                     };
-                    self.write_reg(dst, Value::str(name))?;
-                    self.propagate_unary_operation_label(src, dst)?;
+                    self.write_reg_with_label(dst, Value::str(name), result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Void { dst, src } => {
+                    let result_label = self.unary_operation_label(src)?;
                     let _ = self.read_reg(src)?;
-                    self.write_reg(dst, Value::Undefined)?;
-                    self.propagate_unary_operation_label(src, dst)?;
+                    self.write_reg_with_label(dst, Value::Undefined, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Lt { dst, lhs, rhs } => {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_relational(lhs, rhs, "<")?;
-                    self.write_reg(dst, result)?;
-                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Lte { dst, lhs, rhs } => {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_relational(lhs, rhs, "<=")?;
-                    self.write_reg(dst, result)?;
-                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Gt { dst, lhs, rhs } => {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_relational(lhs, rhs, ">")?;
-                    self.write_reg(dst, result)?;
-                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Gte { dst, lhs, rhs } => {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_relational(lhs, rhs, ">=")?;
-                    self.write_reg(dst, result)?;
-                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Eq { dst, lhs, rhs } => {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_equality(lhs, rhs, false, false)?;
-                    self.write_reg(dst, result)?;
-                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::StrictEq { dst, lhs, rhs } => {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_equality(lhs, rhs, true, false)?;
-                    self.write_reg(dst, result)?;
-                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::NotEq { dst, lhs, rhs } => {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_equality(lhs, rhs, false, true)?;
-                    self.write_reg(dst, result)?;
-                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::StrictNotEq { dst, lhs, rhs } => {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_equality(lhs, rhs, true, true)?;
-                    self.write_reg(dst, result)?;
-                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::BitAnd { dst, lhs, rhs } => {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_bitwise(lhs, rhs, "&")?;
-                    self.write_reg(dst, result)?;
-                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::BitOr { dst, lhs, rhs } => {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_bitwise(lhs, rhs, "|")?;
-                    self.write_reg(dst, result)?;
-                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::BitXor { dst, lhs, rhs } => {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_bitwise(lhs, rhs, "^")?;
-                    self.write_reg(dst, result)?;
-                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Shl { dst, lhs, rhs } => {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_bitwise(lhs, rhs, "<<")?;
-                    self.write_reg(dst, result)?;
-                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Shr { dst, lhs, rhs } => {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_bitwise(lhs, rhs, ">>")?;
-                    self.write_reg(dst, result)?;
-                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Ushr { dst, lhs, rhs } => {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_bitwise(lhs, rhs, ">>>")?;
-                    self.write_reg(dst, result)?;
-                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::InstanceOf { dst, lhs, rhs } => {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_instanceof(lhs, rhs)?;
-                    self.write_reg(dst, result)?;
-                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::InOp { dst, lhs, rhs } => {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_in_operator(module, lhs, rhs)?;
-                    self.write_reg(dst, result)?;
-                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Construct { callee, args, dst } => {
@@ -19665,7 +19905,6 @@ impl InterpreterCore {
 
                     if let Value::BuiltinFunction(builtin) = &callee_val {
                         let result = self.dispatch_builtin_function(module, builtin, args, None)?;
-                        self.write_reg(dst, result)?;
                         // IFC: a `new Builtin(...)` result derives entirely from
                         // its argument registers, so the dst label is the join
                         // of the arg labels — same contract as the `Call`
@@ -19674,7 +19913,7 @@ impl InterpreterCore {
                         // a later egress hostcall (same under-tainting family as
                         // bd-n2mjy / bd-0zybl / bd-ooaka.1).
                         let args_label = self.join_arg_range_label(args)?;
-                        self.set_register_label(dst, args_label)?;
+                        self.write_reg_with_label(dst, result, args_label)?;
                         self.ip += 1;
                         continue;
                     }
@@ -19900,7 +20139,6 @@ impl InterpreterCore {
                         self.check_string_limit(result.len().saturating_add(part_str.len()))?;
                         result = result.concat(&part_str);
                     }
-                    self.write_reg(dst, Value::Str(result))?;
                     // IFC: the concatenated string is derived from every part —
                     // `` `${secret}` `` must carry the secret's label, not the
                     // dst register's stale prior label (the bd-0zybl / bd-n2mjy
@@ -19908,7 +20146,7 @@ impl InterpreterCore {
                     // arguments: the new value depends exactly on the parts, so
                     // overwrite dst's label with the join of all part labels.
                     let parts_label = self.join_arg_range_label(parts)?;
-                    self.set_register_label(dst, parts_label)?;
+                    self.write_reg_with_label(dst, Value::Str(result), parts_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Halt => {
@@ -19997,8 +20235,7 @@ impl InterpreterCore {
                     let exception_label =
                         std::mem::replace(&mut self.pending_exception_label, Label::Public);
                     self.restore_suspended_abrupt_completion();
-                    self.write_reg(dst, exception)?;
-                    self.set_register_label(dst, exception_label)?;
+                    self.write_reg_with_label(dst, exception, exception_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::EnterFinally => {
@@ -20333,8 +20570,11 @@ impl InterpreterCore {
                         match promise_state {
                             crate::promise_model::PromiseState::Fulfilled(js_val) => {
                                 let result_value = Self::js_value_to_value(&js_val);
-                                self.write_reg(promise_reg, result_value)?;
-                                self.set_register_label(promise_reg, promise_label)?;
+                                self.write_reg_with_label(
+                                    promise_reg,
+                                    result_value,
+                                    promise_label,
+                                )?;
                                 self.ip += 1;
                             }
                             crate::promise_model::PromiseState::Rejected(js_reason) => {
@@ -21921,12 +22161,11 @@ impl InterpreterCore {
             Ok(label) => label,
             Err(error) => return Some(Err(error)),
         };
-        if let Err(error) = self.write_reg(dst, value) {
-            return Some(Err(error));
-        }
-        if let Some(label) = label
-            && let Err(error) = self.set_register_label(dst, label)
-        {
+        let write_result = match label {
+            Some(label) => self.write_reg_with_label(dst, value, label),
+            None => self.write_reg(dst, value),
+        };
+        if let Err(error) = write_result {
             return Some(Err(error));
         }
         Some(Ok(()))
@@ -29461,13 +29700,47 @@ impl InterpreterCore {
         let transient_wrapper_bytes = Self::transient_module_wrapper_bytes(module);
         let snapshot_retained_bytes = self
             .registers_memory_bytes()
+            .saturating_add(self.register_context_labels_memory_bytes())
             .saturating_add(self.scope_chain_memory_bytes())
             .saturating_add(self.call_stack_memory_bytes());
         let transient_execution_bytes =
             transient_wrapper_bytes.saturating_add(snapshot_retained_bytes);
+        let inherited_context_dominates = match (
+            self.active_inline_callback_context_label.as_ref(),
+            argument_label.as_ref(),
+        ) {
+            (Some(inherited), Some(argument)) => inherited >= argument,
+            (Some(_), None) => true,
+            (None, _) => false,
+        };
         // The wrapper and caller snapshot coexist with the isolated callee
         // state. Charge both before either clone so a near-budget guest cannot
         // make the re-entrant module seam temporarily exceed containment.
+        let callback_context_label = if inherited_context_dominates {
+            // The lower owned argument aggregate is dead. Release it before
+            // cloning the inherited winner so the strict physical peak
+            // contains exactly one temporary context name, not both.
+            drop(argument_label);
+            let inherited = self
+                .active_inline_callback_context_label
+                .as_ref()
+                .expect("dominant inherited callback context was checked");
+            self.check_temporary_memory_budget(
+                transient_execution_bytes.saturating_add(Self::estimate_label_bytes(inherited)),
+            )?;
+            Some(inherited.clone())
+        } else {
+            let argument_bytes = argument_label
+                .as_ref()
+                .map(Self::estimate_label_bytes)
+                .unwrap_or(0);
+            self.check_temporary_memory_budget(
+                transient_execution_bytes.saturating_add(argument_bytes),
+            )?;
+            // Move the argument aggregate directly into the isolated context;
+            // no second attacker-sized String allocation is needed.
+            argument_label
+        };
         self.apply_memory_component_delta(0, transient_execution_bytes)?;
         let mut wrapper = module.clone();
         let wrapper_start = wrapper.instructions.len();
@@ -29485,17 +29758,10 @@ impl InterpreterCore {
             .push(Ir3Instruction::Return { value: 0 });
 
         let snapshot = self.snapshot_module_execution();
-        let callback_context_label = match (
-            snapshot.active_inline_callback_context_label.as_ref(),
-            argument_label.as_ref(),
-        ) {
-            (Some(inherited), Some(argument)) => Some(inherited.join(argument)),
-            (Some(inherited), None) => Some(inherited.clone()),
-            (None, Some(argument)) => Some(argument.clone()),
-            (None, None) => None,
-        };
         let saved_active_cjs_context = self.active_cjs_context.clone();
         let setup_previous_register_bytes = self.registers_memory_bytes();
+        let setup_previous_register_context_label_bytes =
+            self.register_context_labels_memory_bytes();
         let setup_previous_scope_bytes = self.scope_chain_memory_bytes();
         let setup_previous_call_stack_bytes = self.call_stack_memory_bytes();
         let mut wrapper_memory_committed = false;
@@ -29503,7 +29769,7 @@ impl InterpreterCore {
             self.registers =
                 SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
             self.register_labels.fill(Label::Public);
-            self.active_inline_callback_context_label = callback_context_label.clone();
+            self.active_inline_callback_context_label = callback_context_label;
             self.call_stack.clear();
             self.ip = wrapper_start;
             self.register_base = 0;
@@ -29513,8 +29779,9 @@ impl InterpreterCore {
             self.suspended_abrupt_completions.clear();
             self.finally_modes.clear();
             self.current_module_specifier = Some(module.header.source_label.clone());
-            self.apply_register_scope_call_stack_memory_delta(
+            self.apply_register_context_scope_call_stack_memory_delta(
                 setup_previous_register_bytes,
+                setup_previous_register_context_label_bytes,
                 setup_previous_scope_bytes,
                 setup_previous_call_stack_bytes,
             )?;
@@ -29536,12 +29803,6 @@ impl InterpreterCore {
                         got: format!("r2 + argument index {index}"),
                     })?;
                 self.write_reg(register, argument)?;
-                if let Some(label) = &argument_label {
-                    // Keep explicit callback parameters at the same aggregate
-                    // context label; set_register_label also joins the active
-                    // PC-style context fail-closed.
-                    self.set_register_label(register, label.clone())?;
-                }
             }
             if is_foreign_call {
                 let previous_reentrant_depth = self.module_reentrant_call_depth;
@@ -29558,9 +29819,9 @@ impl InterpreterCore {
             }
         })();
         let result_label = if result.is_ok() {
-            self.get_register_label(0).cloned().unwrap_or(Label::Public)
+            self.clone_register_label_with_temporary_budget(0)
         } else {
-            Label::Public
+            Ok(Label::Public)
         };
         // If the callee threw and nothing inside it caught the exception, the
         // isolated run cleared `catch_frames` so an *enclosing* try/catch was
@@ -29580,13 +29841,15 @@ impl InterpreterCore {
             .estimated_memory_bytes
             .saturating_sub(transient_execution_bytes);
         let previous_register_bytes = self.registers_memory_bytes();
+        let previous_register_context_label_bytes = self.register_context_labels_memory_bytes();
         let previous_scope_bytes = self.scope_chain_memory_bytes();
         let previous_call_stack_bytes = self.call_stack_memory_bytes();
         self.restore_module_execution(snapshot);
         self.active_cjs_context = saved_active_cjs_context;
         let restore_memory_result = if wrapper_memory_committed {
-            Some(self.apply_register_scope_call_stack_memory_delta(
+            Some(self.apply_register_context_scope_call_stack_memory_delta(
                 previous_register_bytes,
+                previous_register_context_label_bytes,
                 previous_scope_bytes,
                 previous_call_stack_bytes,
             ))
@@ -29600,6 +29863,7 @@ impl InterpreterCore {
             self.pending_exception = Some(value);
             self.pending_exception_label = label;
         }
+        let result_label = result_label?;
         result.map(|value| (value, result_label))
     }
 
@@ -29644,6 +29908,7 @@ impl InterpreterCore {
         let transient_wrapper_bytes = Self::transient_module_wrapper_bytes(module);
         let snapshot_retained_bytes = self
             .registers_memory_bytes()
+            .saturating_add(self.register_context_labels_memory_bytes())
             .saturating_add(self.scope_chain_memory_bytes())
             .saturating_add(self.call_stack_memory_bytes());
         let transient_execution_bytes =
@@ -29666,6 +29931,8 @@ impl InterpreterCore {
         let snapshot = self.snapshot_module_execution();
         let saved_active_cjs_context = self.active_cjs_context.clone();
         let setup_previous_register_bytes = self.registers_memory_bytes();
+        let setup_previous_register_context_label_bytes =
+            self.register_context_labels_memory_bytes();
         let setup_previous_scope_bytes = self.scope_chain_memory_bytes();
         let setup_previous_call_stack_bytes = self.call_stack_memory_bytes();
         let mut wrapper_memory_committed = false;
@@ -29682,8 +29949,9 @@ impl InterpreterCore {
             self.suspended_abrupt_completions.clear();
             self.finally_modes.clear();
             self.current_module_specifier = Some(module.header.source_label.clone());
-            self.apply_register_scope_call_stack_memory_delta(
+            self.apply_register_context_scope_call_stack_memory_delta(
                 setup_previous_register_bytes,
+                setup_previous_register_context_label_bytes,
                 setup_previous_scope_bytes,
                 setup_previous_call_stack_bytes,
             )?;
@@ -29710,13 +29978,15 @@ impl InterpreterCore {
             .estimated_memory_bytes
             .saturating_sub(transient_execution_bytes);
         let previous_register_bytes = self.registers_memory_bytes();
+        let previous_register_context_label_bytes = self.register_context_labels_memory_bytes();
         let previous_scope_bytes = self.scope_chain_memory_bytes();
         let previous_call_stack_bytes = self.call_stack_memory_bytes();
         self.restore_module_execution(snapshot);
         self.active_cjs_context = saved_active_cjs_context;
         let restore_memory_result = if wrapper_memory_committed {
-            Some(self.apply_register_scope_call_stack_memory_delta(
+            Some(self.apply_register_context_scope_call_stack_memory_delta(
                 previous_register_bytes,
+                previous_register_context_label_bytes,
                 previous_scope_bytes,
                 previous_call_stack_bytes,
             ))
@@ -39968,20 +40238,6 @@ impl InterpreterCore {
             });
         }
         let actual_reg = self.register_base + reg as usize;
-        self.mutate_registers(|r| {
-            if actual_reg >= r.len() {
-                // The new slots are `Value::Undefined`. `estimate_value_bytes`
-                // returns 0 for non-string values, so the resize itself does
-                // not change the running memory total.
-                let new_len = actual_reg + 1;
-                // Pre-allocate capacity to avoid O(n log n) reallocations during
-                // repeated register writes. Reserve 25% growth buffer for subsequent
-                // calls within the same function frame.
-                let growth_capacity = new_len + (new_len >> 2);
-                r.reserve(growth_capacity.saturating_sub(r.capacity()));
-                r.resize(new_len, Value::Undefined);
-            }
-        });
         // bd-31ijt: the previous implementation called sync_estimated_memory_bytes()
         // after every register write, walking the full heap, registers, scope chain,
         // closures, call stack, iterators, and generators each time — turning every
@@ -39990,23 +40246,61 @@ impl InterpreterCore {
         // still rebuilt by full recompute on the slower paths (heap operations,
         // call setup/teardown, scope mutations) so any drift is bounded by the
         // distance between two non-register mutations.
-        let previous_bytes = Self::estimate_value_bytes(&self.registers[actual_reg]);
-        let new_bytes = Self::estimate_value_bytes(&value);
+        let previous_value_bytes = self
+            .registers
+            .get(actual_reg)
+            .map(Self::estimate_value_bytes)
+            .unwrap_or(0);
+        let previous_label = self.register_labels.get(actual_reg);
+        let previous_label_bytes = previous_label.map(Self::estimate_label_bytes).unwrap_or(0);
+        let context_dominates = self
+            .active_inline_callback_context_label
+            .as_ref()
+            .is_some_and(|context| previous_label.is_none_or(|current| context > current));
+        let next_label_bytes = if context_dominates {
+            self.active_inline_callback_context_label
+                .as_ref()
+                .map(Self::estimate_label_bytes)
+                .unwrap_or(0)
+        } else {
+            previous_label_bytes
+        };
+        let new_value_bytes = Self::estimate_value_bytes(&value);
         let projected = self
             .estimated_memory_bytes
-            .saturating_sub(previous_bytes)
-            .saturating_add(new_bytes);
+            .saturating_sub(previous_value_bytes)
+            .saturating_sub(previous_label_bytes)
+            .saturating_add(new_value_bytes)
+            .saturating_add(next_label_bytes);
         if projected > self.config.max_total_memory_bytes {
             return Err(self.memory_budget_error(projected, self.heap_object_count_u32()));
         }
-        self.mutate_registers(|r| r[actual_reg] = value);
-        self.estimated_memory_bytes = projected;
-        if let Some(context) = &self.active_inline_callback_context_label {
-            if actual_reg >= self.register_labels.len() {
-                self.register_labels.resize(actual_reg + 1, Label::Public);
+
+        // Refusal above leaves both parallel files and their lengths intact.
+        // Resize only after the combined value+effective-label projection fits.
+        self.mutate_registers(|registers| {
+            if actual_reg >= registers.len() {
+                let new_len = actual_reg + 1;
+                let growth_capacity = new_len + (new_len >> 2);
+                registers.reserve(growth_capacity.saturating_sub(registers.capacity()));
+                registers.resize(new_len, Value::Undefined);
             }
-            self.register_labels[actual_reg] = self.register_labels[actual_reg].join(context);
+            registers[actual_reg] = value;
+        });
+        if actual_reg >= self.register_labels.len() {
+            self.register_labels.resize(actual_reg + 1, Label::Public);
         }
+        if context_dominates {
+            let previous_label =
+                std::mem::replace(&mut self.register_labels[actual_reg], Label::Public);
+            drop(previous_label);
+            self.register_labels[actual_reg] = self
+                .active_inline_callback_context_label
+                .as_ref()
+                .expect("dominant inline callback context was checked")
+                .clone();
+        }
+        self.estimated_memory_bytes = projected;
         Ok(())
     }
 
@@ -40016,8 +40310,68 @@ impl InterpreterCore {
         value: Value,
         label: Label,
     ) -> Result<(), InterpreterError> {
-        self.write_reg(reg, value)?;
-        self.set_register_label(reg, label)
+        if reg >= self.config.max_registers {
+            return Err(InterpreterError::RegisterOutOfBounds {
+                register: reg,
+                max: self.config.max_registers,
+            });
+        }
+        let actual_reg = self.register_base + reg as usize;
+        let previous_value_bytes = self
+            .registers
+            .get(actual_reg)
+            .map(Self::estimate_value_bytes)
+            .unwrap_or(0);
+        let previous_label_bytes = self
+            .register_labels
+            .get(actual_reg)
+            .map(Self::estimate_label_bytes)
+            .unwrap_or(0);
+        let context_dominates = self
+            .active_inline_callback_context_label
+            .as_ref()
+            .is_some_and(|context| context > &label);
+        let next_label_bytes = if context_dominates {
+            self.active_inline_callback_context_label
+                .as_ref()
+                .map(Self::estimate_label_bytes)
+                .unwrap_or(0)
+        } else {
+            Self::estimate_label_bytes(&label)
+        };
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_value_bytes)
+            .saturating_sub(previous_label_bytes)
+            .saturating_add(Self::estimate_value_bytes(&value))
+            .saturating_add(next_label_bytes);
+        if requested_bytes > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
+
+        self.mutate_registers(|registers| {
+            if actual_reg >= registers.len() {
+                registers.resize(actual_reg + 1, Value::Undefined);
+            }
+            registers[actual_reg] = value;
+        });
+        if actual_reg >= self.register_labels.len() {
+            self.register_labels.resize(actual_reg + 1, Label::Public);
+        }
+        let previous_label =
+            std::mem::replace(&mut self.register_labels[actual_reg], Label::Public);
+        drop(previous_label);
+        self.register_labels[actual_reg] = if context_dominates {
+            drop(label);
+            self.active_inline_callback_context_label
+                .as_ref()
+                .expect("dominant inline callback context was checked")
+                .clone()
+        } else {
+            label
+        };
+        self.estimated_memory_bytes = requested_bytes;
+        Ok(())
     }
 
     /// Reset the active stacked register frame as one value+label unit.
@@ -40035,11 +40389,21 @@ impl InterpreterCore {
                 registers[frame_start..frame_end].fill(Value::Undefined);
             }
         });
+        let released_label_bytes = self
+            .register_labels
+            .get(frame_start..frame_end.min(self.register_labels.len()))
+            .unwrap_or(&[])
+            .iter()
+            .map(Self::estimate_label_bytes)
+            .sum::<u64>();
         if frame_end > self.register_labels.len() {
             self.register_labels.resize(frame_end, Label::Public);
         } else {
             self.register_labels[frame_start..frame_end].fill(Label::Public);
         }
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(released_label_bytes);
     }
 
     // -- Heap operations ---------------------------------------------------
@@ -40413,6 +40777,25 @@ impl InterpreterCore {
         self.registers.iter().map(Self::estimate_value_bytes).sum()
     }
 
+    fn register_labels_memory_bytes(&self) -> u64 {
+        self.register_labels
+            .iter()
+            .map(Self::estimate_label_bytes)
+            .sum()
+    }
+
+    fn active_inline_callback_context_memory_bytes(&self) -> u64 {
+        self.active_inline_callback_context_label
+            .as_ref()
+            .map(Self::estimate_label_bytes)
+            .unwrap_or(0)
+    }
+
+    fn register_context_labels_memory_bytes(&self) -> u64 {
+        self.register_labels_memory_bytes()
+            .saturating_add(self.active_inline_callback_context_memory_bytes())
+    }
+
     fn heap_memory_bytes(&self) -> u64 {
         self.heap.iter().map(Self::estimate_heap_object_bytes).sum()
     }
@@ -40533,6 +40916,7 @@ impl InterpreterCore {
                     .map(Self::estimate_value_bytes)
                     .sum::<u64>(),
             )
+            .saturating_add(self.register_context_labels_memory_bytes())
             .saturating_add(Self::estimate_scope_chain_bytes(&self.scope_chain.frames))
             .saturating_add(self.closures_memory_bytes())
             .saturating_add(
@@ -40637,17 +41021,20 @@ impl InterpreterCore {
         )
     }
 
-    fn apply_register_scope_call_stack_memory_delta(
+    fn apply_register_context_scope_call_stack_memory_delta(
         &mut self,
         previous_register_bytes: u64,
+        previous_register_context_label_bytes: u64,
         previous_scope_bytes: u64,
         previous_call_stack_bytes: u64,
     ) -> Result<u64, InterpreterError> {
         self.apply_memory_component_delta(
             previous_register_bytes
+                .saturating_add(previous_register_context_label_bytes)
                 .saturating_add(previous_scope_bytes)
                 .saturating_add(previous_call_stack_bytes),
             self.registers_memory_bytes()
+                .saturating_add(self.register_context_labels_memory_bytes())
                 .saturating_add(self.scope_chain_memory_bytes())
                 .saturating_add(self.call_stack_memory_bytes()),
         )
@@ -49279,6 +49666,839 @@ mod async_runtime_tests_current {
     }
 
     #[test]
+    fn register_and_callback_context_labels_are_exact_and_atomic_bd_8hv4e() {
+        let mut core = test_interpreter();
+        core.sync_estimated_memory_bytes()
+            .expect("initial register accounting");
+
+        let direct = Label::Custom {
+            name: "direct-register-label".repeat(12),
+            level: 7,
+        };
+        let direct_bytes = InterpreterCore::estimate_label_bytes(&direct);
+        let before_direct = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = before_direct.saturating_add(direct_bytes - 1);
+        assert!(matches!(
+            core.set_register_label(0, direct.clone()),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(
+            core.get_register_label(0).expect("r0 label"),
+            &Label::Public
+        );
+        assert_eq!(core.estimated_memory_bytes(), before_direct);
+
+        core.config.max_total_memory_bytes = before_direct.saturating_add(direct_bytes);
+        core.set_register_label(0, direct.clone())
+            .expect("exact direct-label ceiling");
+        assert_eq!(core.get_register_label(0).expect("r0 label"), &direct);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.config.max_total_memory_bytes = u64::MAX;
+        let lower = Label::Custom {
+            name: "same-level-a".repeat(4),
+            level: 11,
+        };
+        let context = Label::Custom {
+            name: "same-level-z-context".repeat(10),
+            level: 11,
+        };
+        core.set_register_label(1, lower.clone())
+            .expect("lower same-level destination");
+        core.active_inline_callback_context_label = Some(context.clone());
+        core.sync_estimated_memory_bytes()
+            .expect("active callback-context accounting");
+        let before_context_join = core.estimated_memory_bytes();
+        let context_delta = InterpreterCore::estimate_label_bytes(&context)
+            .saturating_sub(InterpreterCore::estimate_label_bytes(&lower));
+        assert!(context_delta > 0);
+
+        core.config.max_total_memory_bytes = before_context_join
+            .saturating_add(context_delta)
+            .saturating_sub(1);
+        assert!(matches!(
+            core.set_register_label(1, lower.clone()),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.get_register_label(1).expect("r1 label"), &lower);
+        assert_eq!(core.estimated_memory_bytes(), before_context_join);
+
+        core.config.max_total_memory_bytes = before_context_join.saturating_add(context_delta);
+        core.set_register_label(1, lower)
+            .expect("exact same-level context join");
+        assert_eq!(core.get_register_label(1).expect("r1 label"), &context);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.config.max_total_memory_bytes = u64::MAX;
+        let value = Value::str("combined-value-and-label".repeat(12));
+        let write_delta = InterpreterCore::estimate_value_bytes(&value)
+            .saturating_add(InterpreterCore::estimate_label_bytes(&context));
+        let before_write = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = before_write.saturating_add(write_delta - 1);
+        assert!(matches!(
+            core.write_reg(2, value.clone()),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.read_reg(2).expect("r2 value"), Value::Undefined);
+        assert_eq!(
+            core.get_register_label(2).expect("r2 label"),
+            &Label::Public
+        );
+        assert_eq!(core.estimated_memory_bytes(), before_write);
+
+        core.config.max_total_memory_bytes = before_write.saturating_add(write_delta);
+        core.write_reg(2, value.clone())
+            .expect("exact combined value and context-label ceiling");
+        assert_eq!(core.read_reg(2).expect("r2 value"), value);
+        assert_eq!(core.get_register_label(2).expect("r2 label"), &context);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn inline_callback_context_uses_full_custom_order_and_restores_bd_8hv4e() {
+        let module = test_module_with_functions(
+            vec![Ir3Instruction::Return { value: 0 }],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 1,
+                frame_size: 2,
+                name: Some("custom_context_identity".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let cases = [
+            (
+                Label::Custom {
+                    name: "same-level-z-inherited".to_string(),
+                    level: 13,
+                },
+                Label::Custom {
+                    name: "same-level-a-argument".to_string(),
+                    level: 13,
+                },
+            ),
+            (
+                Label::Custom {
+                    name: "same-level-a-inherited".to_string(),
+                    level: 13,
+                },
+                Label::Custom {
+                    name: "same-level-z-argument".to_string(),
+                    level: 13,
+                },
+            ),
+        ];
+
+        for (inherited, argument) in cases {
+            let expected = if inherited >= argument {
+                inherited.clone()
+            } else {
+                argument.clone()
+            };
+            let mut core = test_interpreter();
+            core.active_inline_callback_context_label = Some(inherited.clone());
+            core.sync_estimated_memory_bytes()
+                .expect("outer callback-context accounting");
+            let (value, label) = core
+                .invoke_inline_method_call_with_argument_label(
+                    Some(&module),
+                    Value::Function(0),
+                    Value::Undefined,
+                    vec![Value::Int(29)],
+                    Some(argument),
+                )
+                .expect("same-level Custom callback invocation");
+            assert_eq!(value, Value::Int(29));
+            assert_eq!(label, expected);
+            assert_eq!(
+                core.active_inline_callback_context_label,
+                Some(inherited),
+                "the outer callback context must be restored after the isolated call"
+            );
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn arg_label_join_temporary_has_an_exact_transient_ceiling_bd_8hv4e() {
+        let mut core = test_interpreter();
+        let Value::Object(writable) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("transient-label Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        let label = Label::Custom {
+            name: "transient-only-join-label".repeat(12),
+            level: 15,
+        };
+        core.writable_streams
+            .get_mut(&writable)
+            .expect("live Writable")
+            .lifecycle_label = label.clone();
+        core.write_reg_with_label(0, Value::Int(1), label.clone())
+            .expect("labeled cork argument");
+        core.sync_estimated_memory_bytes()
+            .expect("dominant lifecycle accounting");
+        let before = core.estimated_memory_bytes();
+        let temporary_bytes = InterpreterCore::estimate_label_bytes(&label);
+
+        core.config.max_total_memory_bytes = before.saturating_add(temporary_bytes - 1);
+        assert!(matches!(
+            core.writable_cork(Value::Object(writable), RegRange { start: 0, count: 1 }),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.writable_streams[&writable].cork_depth, 0);
+        assert_eq!(core.writable_streams[&writable].lifecycle_label, label);
+        assert_eq!(core.estimated_memory_bytes(), before);
+
+        core.config.max_total_memory_bytes = before.saturating_add(temporary_bytes);
+        core.writable_cork(Value::Object(writable), RegRange { start: 0, count: 1 })
+            .expect("exact transient label clone ceiling");
+        assert_eq!(core.writable_streams[&writable].cork_depth, 1);
+        assert_eq!(core.writable_streams[&writable].lifecycle_label, label);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            before,
+            "the joined label was temporary because lifecycle already retained the winner"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.config.max_total_memory_bytes = u64::MAX;
+        core.terminalize_writable_state_storage(writable)
+            .expect("terminalize dominant-label Writable");
+        let before_terminal = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = before_terminal.saturating_add(temporary_bytes - 1);
+        assert!(matches!(
+            core.writable_cork(Value::Object(writable), RegRange { start: 0, count: 1 }),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(
+            core.writable_terminal_states[&writable].lifecycle_label,
+            label
+        );
+        assert_eq!(core.estimated_memory_bytes(), before_terminal);
+
+        core.config.max_total_memory_bytes = before_terminal.saturating_add(temporary_bytes);
+        core.writable_cork(Value::Object(writable), RegRange { start: 0, count: 1 })
+            .expect("exact terminal transient-label ceiling");
+        assert_eq!(
+            core.writable_terminal_states[&writable].lifecycle_label,
+            label
+        );
+        assert_eq!(core.estimated_memory_bytes(), before_terminal);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn ordinary_ir_label_commits_are_exact_and_atomic_bd_8hv4e() {
+        let label = Label::Custom {
+            name: "ordinary-ir-register-label".repeat(12),
+            level: 17,
+        };
+        let label_bytes = InterpreterCore::estimate_label_bytes(&label);
+
+        let unary_module = test_module_with_functions(
+            vec![
+                Ir3Instruction::TypeOf { dst: 1, src: 0 },
+                Ir3Instruction::Halt,
+            ],
+            Vec::new(),
+        );
+        let mut unary_core = test_interpreter();
+        unary_core
+            .write_reg_with_label(0, Value::Int(1), label.clone())
+            .expect("labeled unary source");
+        unary_core
+            .write_reg(1, Value::Int(99))
+            .expect("sentinel unary destination");
+        unary_core
+            .sync_estimated_memory_bytes()
+            .expect("initial unary accounting");
+        let before_unary = unary_core.estimated_memory_bytes();
+        let unary_result = Value::str("number");
+        let unary_delta =
+            label_bytes.saturating_add(InterpreterCore::estimate_value_bytes(&unary_result));
+        assert!(unary_delta > label_bytes);
+        unary_core.config.max_total_memory_bytes = before_unary.saturating_add(unary_delta - 1);
+        assert!(matches!(
+            unary_core.run_loop(&unary_module),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(unary_core.read_reg(1).expect("r1 sentinel"), Value::Int(99));
+        assert_eq!(
+            unary_core.get_register_label(1).expect("r1 label"),
+            &Label::Public
+        );
+        assert_eq!(unary_core.estimated_memory_bytes(), before_unary);
+
+        unary_core.config.max_total_memory_bytes = before_unary.saturating_add(unary_delta);
+        assert_eq!(
+            unary_core.run_loop(&unary_module),
+            Err(InterpreterError::Halted)
+        );
+        assert_eq!(unary_core.read_reg(1).expect("r1 result"), unary_result);
+        assert_eq!(unary_core.get_register_label(1).expect("r1 label"), &label);
+        assert_eq!(
+            unary_core.estimated_memory_bytes(),
+            unary_core.recompute_estimated_memory_bytes()
+        );
+
+        let property_module = test_module_with_functions(
+            vec![
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 2,
+                },
+                Ir3Instruction::Halt,
+            ],
+            Vec::new(),
+        );
+        let mut property_core = test_interpreter();
+        let object = property_core
+            .alloc_object_with_prototype(None)
+            .expect("property source object");
+        let property_result = Value::str("property-result-value".repeat(12));
+        property_core
+            .set_object_property(object, "answer".to_string(), property_result.clone())
+            .expect("property source value");
+        property_core
+            .write_reg_with_label(0, Value::Object(object), label.clone())
+            .expect("labeled property receiver");
+        property_core
+            .write_reg(1, Value::str("answer"))
+            .expect("property key");
+        property_core
+            .write_reg(2, Value::Int(99))
+            .expect("sentinel property destination");
+        property_core
+            .sync_estimated_memory_bytes()
+            .expect("initial property accounting");
+        let before_property = property_core.estimated_memory_bytes();
+        let property_delta =
+            label_bytes.saturating_add(InterpreterCore::estimate_value_bytes(&property_result));
+        assert!(property_delta > label_bytes);
+        property_core.config.max_total_memory_bytes =
+            before_property.saturating_add(property_delta - 1);
+        assert!(matches!(
+            property_core.run_loop(&property_module),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(
+            property_core.read_reg(2).expect("r2 sentinel"),
+            Value::Int(99)
+        );
+        assert_eq!(
+            property_core.get_register_label(2).expect("r2 label"),
+            &Label::Public
+        );
+        assert_eq!(property_core.estimated_memory_bytes(), before_property);
+
+        property_core.config.max_total_memory_bytes =
+            before_property.saturating_add(property_delta);
+        assert_eq!(
+            property_core.run_loop(&property_module),
+            Err(InterpreterError::Halted)
+        );
+        assert_eq!(
+            property_core.read_reg(2).expect("r2 result"),
+            property_result
+        );
+        assert_eq!(
+            property_core.get_register_label(2).expect("r2 label"),
+            &label
+        );
+        assert_eq!(
+            property_core.estimated_memory_bytes(),
+            property_core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn isolated_result_label_clone_has_an_exact_transient_ceiling_bd_8hv4e() {
+        let mut core = test_interpreter();
+        let label = Label::Custom {
+            name: "isolated-result-register-label".repeat(12),
+            level: 19,
+        };
+        core.write_reg_with_label(0, Value::Int(7), label.clone())
+            .expect("isolated result register");
+        core.sync_estimated_memory_bytes()
+            .expect("initial isolated-result accounting");
+        let before = core.estimated_memory_bytes();
+        let temporary_bytes = InterpreterCore::estimate_label_bytes(&label);
+
+        core.config.max_total_memory_bytes = before.saturating_add(temporary_bytes - 1);
+        assert!(matches!(
+            core.clone_register_label_with_temporary_budget(0),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.estimated_memory_bytes(), before);
+        assert_eq!(core.get_register_label(0).expect("r0 label"), &label);
+
+        core.config.max_total_memory_bytes = before.saturating_add(temporary_bytes);
+        assert_eq!(
+            core.clone_register_label_with_temporary_budget(0)
+                .expect("exact isolated-result clone ceiling"),
+            label
+        );
+        assert_eq!(core.estimated_memory_bytes(), before);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        let module = test_module_with_functions(
+            vec![Ir3Instruction::Return { value: 0 }],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 1,
+                frame_size: 2,
+                name: Some("isolated_result_identity".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let argument_label = Label::Custom {
+            name: "isolated-wrapper-result-context".repeat(24),
+            level: 31,
+        };
+        let caller_label = Label::Custom {
+            name: "caller-snapshot-label".repeat(4),
+            level: 5,
+        };
+        let caller_value = Value::str("caller-snapshot-value");
+        let baseline = {
+            let mut core = test_interpreter();
+            core.write_reg_with_label(7, caller_value.clone(), caller_label.clone())
+                .expect("caller snapshot register");
+            core.sync_estimated_memory_bytes()
+                .expect("caller snapshot accounting")
+        };
+        let attempt = |budget: u64| {
+            let mut core = test_interpreter();
+            core.write_reg_with_label(7, caller_value.clone(), caller_label.clone())
+                .expect("caller snapshot register");
+            assert_eq!(
+                core.sync_estimated_memory_bytes()
+                    .expect("caller snapshot accounting"),
+                baseline
+            );
+            core.config.max_total_memory_bytes = budget;
+            let result = core.invoke_inline_method_call_with_argument_label(
+                Some(&module),
+                Value::Function(0),
+                Value::Undefined,
+                vec![Value::Int(29)],
+                Some(argument_label.clone()),
+            );
+            (core, result)
+        };
+
+        let mut distance = 1u64;
+        let mut upper = loop {
+            let budget = baseline.saturating_add(distance);
+            if attempt(budget).1.is_ok() {
+                break budget;
+            }
+            distance = distance
+                .checked_mul(2)
+                .expect("isolated wrapper ceiling search remains bounded");
+            assert!(
+                distance <= (1 << 32),
+                "isolated wrapper ceiling is implausible"
+            );
+        };
+        let mut lower = baseline;
+        while lower < upper {
+            let midpoint = lower + (upper - lower) / 2;
+            if attempt(midpoint).1.is_ok() {
+                upper = midpoint;
+            } else {
+                lower = midpoint + 1;
+            }
+        }
+        let exact_ceiling = lower;
+        let (refused_core, refusal) = attempt(exact_ceiling - 1);
+        assert!(matches!(
+            refusal,
+            Err(InterpreterError::MemoryBudgetExceeded {
+                requested_bytes,
+                max_bytes,
+                ..
+            }) if requested_bytes == exact_ceiling && max_bytes == exact_ceiling - 1
+        ));
+        assert_eq!(
+            refused_core.read_reg(7).expect("restored caller value"),
+            caller_value
+        );
+        assert_eq!(
+            refused_core
+                .get_register_label(7)
+                .expect("restored caller label"),
+            &caller_label
+        );
+        assert_eq!(refused_core.active_inline_callback_context_label, None);
+        assert_eq!(refused_core.ip, 0);
+        assert_eq!(refused_core.estimated_memory_bytes(), baseline);
+        assert_eq!(
+            refused_core.estimated_memory_bytes(),
+            refused_core.recompute_estimated_memory_bytes()
+        );
+
+        let (exact_core, exact_result) = attempt(exact_ceiling);
+        assert_eq!(
+            exact_result.expect("exact isolated-wrapper result ceiling"),
+            (Value::Int(29), argument_label.clone())
+        );
+        assert_eq!(
+            exact_core.read_reg(7).expect("restored caller value"),
+            caller_value
+        );
+        assert_eq!(
+            exact_core
+                .get_register_label(7)
+                .expect("restored caller label"),
+            &caller_label
+        );
+        assert_eq!(exact_core.active_inline_callback_context_label, None);
+        assert_eq!(exact_core.estimated_memory_bytes(), baseline);
+        assert_eq!(
+            exact_core.estimated_memory_bytes(),
+            exact_core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn writable_discarded_and_terminal_label_peaks_are_exact_bd_8hv4e() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut write_core = test_interpreter();
+        let Value::Object(writable) = write_core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("non-dominant-label Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        let dominant = Label::Custom {
+            name: "z".to_string(),
+            level: 23,
+        };
+        let discarded = Label::Custom {
+            name: "lower-but-longer-incoming-label".repeat(2),
+            level: 22,
+        };
+        {
+            let state = write_core
+                .writable_streams
+                .get_mut(&writable)
+                .expect("live non-dominant-label Writable");
+            state.object_mode = true;
+            state.cork_depth = 1;
+            state.lifecycle_label = dominant.clone();
+        }
+        write_core
+            .write_reg_with_label(0, Value::Int(31), discarded.clone())
+            .expect("lower labeled chunk");
+        write_core
+            .sync_estimated_memory_bytes()
+            .expect("initial non-dominant write accounting");
+        let record = WritableWriteRecord {
+            value: Value::Int(31),
+            label: dominant.clone(),
+            units: 1,
+            callback: None,
+            status: WritableWriteStatus::Pending,
+            completion_failed: false,
+        };
+        let write_delta = InterpreterCore::estimate_writable_write_record_bytes(&record);
+        let discarded_temporary = InterpreterCore::estimate_label_bytes(&discarded);
+        assert!(
+            write_delta > discarded_temporary,
+            "the final write-record charge must be the controlling ceiling"
+        );
+        let before_write = write_core.estimated_memory_bytes();
+        let before_state = format!("{:?}", write_core.writable_streams[&writable]);
+        write_core.config.max_total_memory_bytes = before_write.saturating_add(write_delta - 1);
+        assert!(matches!(
+            write_core.writable_write(
+                &module,
+                Value::Object(writable),
+                RegRange { start: 0, count: 1 },
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(
+            format!("{:?}", write_core.writable_streams[&writable]),
+            before_state
+        );
+        assert_eq!(write_core.estimated_memory_bytes(), before_write);
+
+        write_core.config.max_total_memory_bytes = before_write.saturating_add(write_delta);
+        assert_eq!(
+            write_core
+                .writable_write(
+                    &module,
+                    Value::Object(writable),
+                    RegRange { start: 0, count: 1 },
+                )
+                .expect("exact non-dominant write ceiling"),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            write_core.writable_streams[&writable].lifecycle_label,
+            dominant
+        );
+        assert_eq!(write_core.writable_streams[&writable].writes.len(), 1);
+        assert_eq!(
+            write_core.estimated_memory_bytes(),
+            write_core.recompute_estimated_memory_bytes()
+        );
+
+        let mut end_core = test_interpreter();
+        let Value::Object(end_writable) = end_core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("terminal backing-label Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        let old_terminal_label = Label::Custom {
+            name: "lower-terminal-label".repeat(6),
+            level: 28,
+        };
+        {
+            let state = end_core
+                .writable_streams
+                .get_mut(&end_writable)
+                .expect("live Writable before terminalization");
+            state.end_requested = true;
+            state.finished = true;
+            state.lifecycle_label = old_terminal_label.clone();
+        }
+        end_core
+            .sync_estimated_memory_bytes()
+            .expect("pre-terminal lower lifecycle accounting");
+        end_core
+            .terminalize_writable_state_storage(end_writable)
+            .expect("terminal backing-label tombstone");
+        let chunk = end_core
+            .alloc_zeroed_buffer(4, 0)
+            .expect("Buffer-like terminal chunk");
+        let backing_label = Label::Custom {
+            name: "dominant-backing-label".repeat(12),
+            level: 29,
+        };
+        end_core.join_binary_storage_label(chunk, &backing_label);
+        let callback_value =
+            Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayIsArray));
+        let callback_label = Label::Custom {
+            name: "callback-label".repeat(8),
+            level: 27,
+        };
+        end_core
+            .write_reg(0, Value::Object(chunk))
+            .expect("terminal object chunk");
+        end_core
+            .write_reg_with_label(1, callback_value.clone(), callback_label.clone())
+            .expect("terminal callback label");
+        end_core
+            .sync_estimated_memory_bytes()
+            .expect("terminal backing+callback accounting");
+        let callback_record = WritableCallbackRecord {
+            value: callback_value,
+            label: callback_label.clone(),
+            module_specifier: end_core.current_module_specifier.clone(),
+        };
+        let callback_charge = MEMORY_ESTIMATE_WRITABLE_END_CALLBACK_BYTES.saturating_add(
+            InterpreterCore::estimate_writable_callback_bytes(&callback_record),
+        );
+        let retained_delta = InterpreterCore::estimate_label_bytes(&backing_label)
+            .saturating_sub(InterpreterCore::estimate_label_bytes(&old_terminal_label))
+            .saturating_add(callback_charge);
+        let temporary_peak = InterpreterCore::estimate_label_bytes(&backing_label)
+            .saturating_add(InterpreterCore::estimate_label_bytes(&callback_label));
+        let required = retained_delta.max(temporary_peak);
+        let before_end = end_core.estimated_memory_bytes();
+        let before_terminal = end_core.writable_terminal_states[&end_writable].clone();
+        end_core.config.max_total_memory_bytes = before_end.saturating_add(required - 1);
+        assert!(matches!(
+            end_core.writable_end(
+                &module,
+                Value::Object(end_writable),
+                RegRange { start: 0, count: 2 },
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(
+            end_core.writable_terminal_states[&end_writable],
+            before_terminal
+        );
+        assert_eq!(end_core.estimated_memory_bytes(), before_end);
+
+        end_core.config.max_total_memory_bytes = before_end.saturating_add(required);
+        assert_eq!(
+            end_core
+                .writable_end(
+                    &module,
+                    Value::Object(end_writable),
+                    RegRange { start: 0, count: 2 },
+                )
+                .expect("exact terminal backing+callback ceiling"),
+            Value::Object(end_writable)
+        );
+        let terminal = &end_core.writable_terminal_states[&end_writable];
+        assert_eq!(terminal.lifecycle_label, backing_label);
+        assert_eq!(terminal.callbacks.len(), 1);
+        assert_eq!(
+            end_core.estimated_memory_bytes(),
+            end_core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn writable_write_and_end_custom_labels_are_exact_and_atomic_bd_8hv4e() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let Value::Object(writable) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("strict-label Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        let label = Label::Custom {
+            name: "writable-register-label".repeat(10),
+            level: 9,
+        };
+        let chunk = Value::Int(17);
+        core.writable_streams
+            .get_mut(&writable)
+            .expect("live Writable")
+            .object_mode = true;
+        core.writable_streams
+            .get_mut(&writable)
+            .expect("live Writable")
+            .cork_depth = 1;
+        core.write_reg_with_label(0, chunk.clone(), label.clone())
+            .expect("labeled chunk register");
+        let record = WritableWriteRecord {
+            value: chunk,
+            label: label.clone(),
+            units: 1,
+            callback: None,
+            status: WritableWriteStatus::Pending,
+            completion_failed: false,
+        };
+        let previous_state_bytes =
+            InterpreterCore::estimate_writable_state_bytes(&core.writable_streams[&writable]);
+        let next_state_bytes = previous_state_bytes
+            .saturating_add(InterpreterCore::estimate_writable_write_record_bytes(
+                &record,
+            ))
+            .saturating_add(InterpreterCore::estimate_label_bytes(&label));
+        let write_delta = next_state_bytes.saturating_sub(previous_state_bytes);
+        let before_write = core.estimated_memory_bytes();
+        let before_write_state = format!("{:?}", core.writable_streams[&writable]);
+
+        core.config.max_total_memory_bytes = before_write.saturating_add(write_delta - 1);
+        assert!(matches!(
+            core.writable_write(
+                &module,
+                Value::Object(writable),
+                RegRange { start: 0, count: 1 },
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(
+            format!("{:?}", core.writable_streams[&writable]),
+            before_write_state
+        );
+        assert_eq!(core.estimated_memory_bytes(), before_write);
+
+        core.config.max_total_memory_bytes = before_write.saturating_add(write_delta);
+        assert_eq!(
+            core.writable_write(
+                &module,
+                Value::Object(writable),
+                RegRange { start: 0, count: 1 },
+            )
+            .expect("exact labeled write transaction"),
+            Value::Bool(true)
+        );
+        assert_eq!(core.writable_streams[&writable].writes.len(), 1);
+        assert_eq!(core.writable_streams[&writable].lifecycle_label, label);
+        assert_eq!(core.estimated_memory_bytes(), before_write + write_delta);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        let mut end_core = test_interpreter();
+        let Value::Object(end_writable) = end_core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("context-label Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        let context = Label::Custom {
+            name: "same-level-z-end-context".repeat(10),
+            level: 9,
+        };
+        end_core.active_inline_callback_context_label = Some(context.clone());
+        end_core
+            .sync_estimated_memory_bytes()
+            .expect("end context accounting");
+        let before_end = end_core.estimated_memory_bytes();
+        let end_delta = InterpreterCore::estimate_label_bytes(&context);
+        end_core.config.max_total_memory_bytes = before_end.saturating_add(end_delta - 1);
+        assert!(matches!(
+            end_core.writable_end(
+                &module,
+                Value::Object(end_writable),
+                RegRange { start: 0, count: 0 },
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(!end_core.writable_streams[&end_writable].end_requested);
+        assert_eq!(end_core.estimated_memory_bytes(), before_end);
+
+        end_core.config.max_total_memory_bytes = before_end.saturating_add(end_delta);
+        assert_eq!(
+            end_core
+                .writable_end(
+                    &module,
+                    Value::Object(end_writable),
+                    RegRange { start: 0, count: 0 },
+                )
+                .expect("exact zero-argument end context"),
+            Value::Object(end_writable)
+        );
+        assert_eq!(end_core.stream_state_label(end_writable), context);
+        assert_eq!(
+            end_core.estimated_memory_bytes(),
+            end_core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
     fn repeated_writable_end_callback_has_exact_node_charge_and_atomic_refusal_bd_fw7zd_1() {
         let module = test_module_with_functions(Vec::new(), Vec::new());
         let mut core = test_interpreter();
@@ -49547,7 +50767,7 @@ mod async_runtime_tests_current {
                 writable,
                 callback.clone(),
                 WritableTerminalCallbackError::EndAfterFinish,
-                &Label::Secret,
+                Label::Secret,
             ),
             Err(InterpreterError::MemoryBudgetExceeded { .. })
         ));
@@ -49561,7 +50781,7 @@ mod async_runtime_tests_current {
             writable,
             callback,
             WritableTerminalCallbackError::EndAfterFinish,
-            &Label::Secret,
+            Label::Secret,
         )
         .expect("exact callback charge must fit");
         assert_eq!(
@@ -66495,6 +67715,11 @@ mod memory_accounting_tests {
             reg: u32,
             value: H8MemoryValue,
         },
+        SetRegisterLabel {
+            reg: u32,
+            name: String,
+            level: u32,
+        },
         AllocObject,
         SetProperty {
             object_slot: usize,
@@ -66531,6 +67756,13 @@ mod memory_accounting_tests {
         ) -> Result<(), InterpreterError> {
             match self {
                 Self::WriteReg { reg, value } => core.write_reg(*reg, value.to_runtime_value()),
+                Self::SetRegisterLabel { reg, name, level } => core.set_register_label(
+                    *reg,
+                    Label::Custom {
+                        name: name.clone(),
+                        level: *level,
+                    },
+                ),
                 Self::AllocObject => {
                     let id = core.alloc_object_with_prototype(None)?;
                     object_ids.push(id);
@@ -66680,6 +67912,9 @@ mod memory_accounting_tests {
         prop_oneof![
             (0_u32..16, value.clone())
                 .prop_map(|(reg, value)| { H8MemoryAccountingOp::WriteReg { reg, value } }),
+            (0_u32..16, "[a-z]{0,32}", 0_u32..16).prop_map(|(reg, name, level)| {
+                H8MemoryAccountingOp::SetRegisterLabel { reg, name, level }
+            }),
             Just(H8MemoryAccountingOp::AllocObject),
             (0_usize..32, key.clone(), value.clone()).prop_map(|(object_slot, key, value)| {
                 H8MemoryAccountingOp::SetProperty {

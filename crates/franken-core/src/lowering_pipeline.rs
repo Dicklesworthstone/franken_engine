@@ -10222,9 +10222,14 @@ fn lower_expression_to_ir1(
                             root_scope_id,
                             label_counter,
                         )?;
-                        ops.push(Ir1Op::SetProperty {
-                            key: Ir1PropertyKey::Dynamic,
-                        });
+                        // Build a single-property object and merge it into the
+                        // target. A bare SetProperty would consume the target
+                        // and leave the assigned value on the stack, which is
+                        // correct for assignment expressions but breaks mixed
+                        // object literals such as {...source, key: value}
+                        // (bd-oca1s, bd-ibsn4).
+                        ops.push(Ir1Op::NewObject { count: 1 });
+                        ops.push(Ir1Op::SpreadIntoObject);
                     }
                 }
             } else {
@@ -15599,6 +15604,54 @@ mod tests {
              picked * 100 + order;",
         );
         assert_eq!(order, Value::Int(712));
+    }
+
+    #[test]
+    fn mixed_object_spread_preserves_target_and_override_order_bd_ibsn4() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let {a, b, c} = {...{a: 1, b: 2}, b: 9, c: 3};\
+             let {'a': after} = {...{a: 1}, a: 9};\
+             let {'a': before} = {a: 9, ...{a: 1}};\
+             a * 10000 + b * 1000 + c * 100 + after * 10 + before;",
+        );
+        assert_eq!(value, Value::Int(19_391));
+    }
+
+    #[test]
+    fn mixed_object_spread_preserves_computed_keys_and_evaluation_order_bd_ibsn4() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let order = 0;\
+             function key() { order = order * 10 + 1; return 'a'; }\
+             function value() { order = order * 10 + 2; return 9; }\
+             let {'a': after} = {...{a: 1}, [key()]: value()};\
+             let name = 'a';\
+             let {'a': before} = {[name]: 9, ...{a: 1}};\
+             after * 1000 + before * 100 + order;",
+        );
+        assert_eq!(value, Value::Int(9_112));
+    }
+
+    #[test]
+    fn mixed_object_spread_uses_canonical_static_property_names_bd_ibsn4() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let {'16': radix, '1.5': decimal} = {...{}, 0x10: 7, 1.5: 8};\
+             radix * 10 + decimal;",
+        );
+        assert_eq!(value, Value::Int(78));
+    }
+
+    #[test]
+    fn mixed_object_spread_executes_in_deferred_function_body_bd_ibsn4() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let order = 0;\
+             function source() { order = order * 10 + 1; return {a: 1}; }\
+             function key() { order = order * 10 + 2; return 'b'; }\
+             function propertyValue() { order = order * 10 + 3; return 9; }\
+             function build() { return {...source(), [key()]: propertyValue()}; }\
+             let {a, b} = build();\
+             a * 10000 + b * 1000 + order;",
+        );
+        assert_eq!(value, Value::Int(19_123));
     }
 
     #[test]

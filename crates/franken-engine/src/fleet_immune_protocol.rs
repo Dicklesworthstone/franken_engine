@@ -27,6 +27,14 @@ use crate::signature_preimage::{
     SIGNATURE_SENTINEL, Signature, SignatureError, SigningKey, VerificationKey, build_preimage,
     sign_preimage, verify_signature,
 };
+use crate::storage_adapter::{
+    CompareAndSwapOutcome, EventContext, FleetTrustStateCasAuthorization, StorageAdapter,
+    StorageError, StoreKind, StoreRecord,
+};
+use crate::typed_persistence_models::{
+    FLEET_TRUST_STATE_RECORD_ID, FLEET_TRUST_STATE_SCHEMA_VERSION, FleetTrustStateEntry,
+    TypedStoreRecord,
+};
 
 // ---------------------------------------------------------------------------
 // ContainmentAction — severity-ordered containment actions
@@ -176,6 +184,18 @@ pub const FLEET_V2_MAX_TOTAL_COLLECTION_ITEMS: usize = 1024;
 /// Maximum inclusive reconciliation range accepted from one peer.
 pub const FLEET_V2_MAX_SEQUENCE_RANGE_LEN: u64 = 65_536;
 
+/// Maximum encoded durable registry snapshot accepted before deserialization.
+pub const FLEET_REGISTRY_MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
+
+/// Maximum distinct node histories retained by one registry snapshot.
+pub const FLEET_REGISTRY_MAX_NODES: usize = 4_096;
+
+/// Maximum retained verification keys and key tombstones.
+pub const FLEET_REGISTRY_MAX_KEYS: usize = 16_384;
+
+/// Maximum append-only revocation decisions retained in one snapshot.
+pub const FLEET_REGISTRY_MAX_REVOCATIONS: usize = 32_768;
+
 /// Stable identifier for a fleet verification key.
 ///
 /// The identifier is derived from the verification-key bytes rather than
@@ -309,63 +329,414 @@ impl FleetSigner {
 }
 
 /// Lifecycle state of a key retained by the trusted fleet registry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FleetVerificationKeyStatus {
     Active,
-    Rotated,
-    Revoked,
+    Retired,
+    Revoked {
+        policy: FleetRevocationPolicy,
+        transition_epoch: SecurityEpoch,
+        effective_epoch: SecurityEpoch,
+        revoked_generation: u64,
+    },
 }
 
+/// Historical effect of a trusted fleet-key revocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FleetRevocationPolicy {
+    /// Compromise or an unknown effective boundary invalidates all history.
+    Retroactive,
+    /// Only authenticated artifacts before the effective boundary may survive.
+    Prospective,
+}
+
+/// Durable projection of one trusted fleet verification key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetVerificationKeySnapshot {
+    pub identity: FleetSigningIdentity,
+    pub verification_key: VerificationKey,
+    pub activation_epoch: SecurityEpoch,
+    pub activation_generation: u64,
+    pub retirement_epoch: Option<SecurityEpoch>,
+    pub retirement_generation: Option<u64>,
+    pub status: FleetVerificationKeyStatus,
+}
+
+/// Canonically ordered tombstone preventing verification-key reuse.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetKeyTombstoneSnapshot {
+    pub key_id: FleetKeyId,
+    pub node_id: NodeId,
+    pub key_sequence: u64,
+}
+
+/// One append-only revocation decision retained for monotonic replay.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetRevocationSnapshot {
+    pub identity: FleetSigningIdentity,
+    pub generation: u64,
+    pub transition_epoch: SecurityEpoch,
+    pub effective_epoch: SecurityEpoch,
+    pub policy: FleetRevocationPolicy,
+}
+
+/// Persistence-neutral authority snapshot.
+///
+/// Derived indexes are deliberately omitted and rebuilt only after every
+/// invariant and the independently trusted anchor have been validated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetVerificationRegistrySnapshot {
+    pub schema_version: u32,
+    pub generation: u64,
+    pub authority_epoch: SecurityEpoch,
+    pub revocation_epoch_floor: SecurityEpoch,
+    pub keys: Vec<FleetVerificationKeySnapshot>,
+    pub key_sequence_floors: BTreeMap<NodeId, u64>,
+    pub node_tombstones: BTreeSet<NodeId>,
+    pub key_tombstones: Vec<FleetKeyTombstoneSnapshot>,
+    pub revocation_history: Vec<FleetRevocationSnapshot>,
+}
+
+impl FleetVerificationRegistrySnapshot {
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// Canonical digest that must be vouched for by an independent anchor.
+    pub fn digest(&self) -> Result<ContentHash, FleetIdentityError> {
+        validate_registry_snapshot_shape_budget(self)?;
+        let bytes = serde_json::to_vec(self).map_err(|error| {
+            FleetIdentityError::InvalidRegistrySnapshot {
+                detail: format!("snapshot serialization failed: {error}"),
+            }
+        })?;
+        validate_fleet_registry_snapshot_payload_len(bytes.len())?;
+        Ok(ContentHash::compute(&bytes))
+    }
+}
+
+/// Reject oversized persisted authority bytes before deserialization.
+pub fn validate_fleet_registry_snapshot_payload_len(
+    payload_len: usize,
+) -> Result<(), FleetIdentityError> {
+    if payload_len > FLEET_REGISTRY_MAX_SNAPSHOT_BYTES {
+        return Err(FleetIdentityError::InvalidRegistrySnapshot {
+            detail: format!(
+                "snapshot payload {payload_len} exceeds {} bytes",
+                FLEET_REGISTRY_MAX_SNAPSHOT_BYTES
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn validate_registry_snapshot_shape_budget(
+    snapshot: &FleetVerificationRegistrySnapshot,
+) -> Result<(), FleetIdentityError> {
+    let bounded = |field: &str, actual: usize, limit: usize| {
+        if actual > limit {
+            Err(FleetIdentityError::InvalidRegistrySnapshot {
+                detail: format!("snapshot {field} count {actual} exceeds {limit}"),
+            })
+        } else {
+            Ok(())
+        }
+    };
+    bounded("keys", snapshot.keys.len(), FLEET_REGISTRY_MAX_KEYS)?;
+    bounded(
+        "key_tombstones",
+        snapshot.key_tombstones.len(),
+        FLEET_REGISTRY_MAX_KEYS,
+    )?;
+    bounded(
+        "revocation_history",
+        snapshot.revocation_history.len(),
+        FLEET_REGISTRY_MAX_REVOCATIONS,
+    )?;
+    bounded(
+        "key_sequence_floors",
+        snapshot.key_sequence_floors.len(),
+        FLEET_REGISTRY_MAX_NODES,
+    )?;
+    bounded(
+        "node_tombstones",
+        snapshot.node_tombstones.len(),
+        FLEET_REGISTRY_MAX_NODES,
+    )?;
+    for record in &snapshot.keys {
+        validate_fleet_node_id(&record.identity.signer)?;
+        validate_key_sequence(record.identity.key_sequence)?;
+    }
+    for node_id in snapshot.key_sequence_floors.keys() {
+        validate_fleet_node_id(node_id)?;
+    }
+    for node_id in &snapshot.node_tombstones {
+        validate_fleet_node_id(node_id)?;
+    }
+    for tombstone in &snapshot.key_tombstones {
+        validate_fleet_node_id(&tombstone.node_id)?;
+        validate_key_sequence(tombstone.key_sequence)?;
+    }
+    for revocation in &snapshot.revocation_history {
+        validate_fleet_node_id(&revocation.identity.signer)?;
+        validate_key_sequence(revocation.identity.key_sequence)?;
+    }
+    Ok(())
+}
+
+/// Untrusted claim presented to an independent rollback-anchor authority.
+///
+/// Persisting this beside the snapshot is not rollback resistance. Restore
+/// accepts only the opaque verified form minted after an external monotonic or
+/// quorum authority authenticates this claim outside the snapshot rollback
+/// domain.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetRegistrySnapshotAnchorClaim {
+    pub generation: u64,
+    pub snapshot_hash: ContentHash,
+    pub prior_snapshot_hash: ContentHash,
+    pub authority_head: ContentHash,
+}
+
+/// External trust boundary for current-anchor checks and recoverable advances.
+pub trait FleetRegistryAnchorAuthority {
+    /// Authenticate that this exact claim is the authority's current anchor.
+    ///
+    /// A cached result is not a freshness proof: restore and verification
+    /// surfaces must call this method again whenever current authority matters.
+    fn authenticate_current_registry_anchor(
+        &self,
+        claim: &FleetRegistrySnapshotAnchorClaim,
+    ) -> Result<String, FleetIdentityError>;
+
+    /// Prepare an idempotent, authenticated transition permit without
+    /// advancing the current anchor.
+    ///
+    /// The returned bytes are untrusted after persistence. Implementations
+    /// must cryptographically or equivalently authenticate their complete
+    /// contents during finalization, including the expected and next claims.
+    fn prepare_registry_anchor_advance(
+        &self,
+        _expected_current: Option<&FleetRegistrySnapshotAnchorClaim>,
+        _next: &FleetRegistrySnapshotAnchorClaim,
+    ) -> Result<Vec<u8>, FleetIdentityError> {
+        Err(FleetIdentityError::UnverifiedRegistryAnchor {
+            detail: "anchor authority does not implement recoverable advance preparation"
+                .to_string(),
+        })
+    }
+
+    /// Idempotently finalize a previously prepared transition.
+    ///
+    /// This must succeed when the exact permit was already finalized and the
+    /// exact next claim is still current, so a lost response or restart can be
+    /// reconciled safely.
+    fn finalize_registry_anchor_advance(
+        &self,
+        _permit: &[u8],
+        _next: &FleetRegistrySnapshotAnchorClaim,
+    ) -> Result<String, FleetIdentityError> {
+        Err(FleetIdentityError::UnverifiedRegistryAnchor {
+            detail: "anchor authority does not implement recoverable advance finalization"
+                .to_string(),
+        })
+    }
+}
+
+/// Opaque proof that an external authority authenticated an anchor claim.
+#[derive(Debug)]
+pub struct VerifiedFleetRegistrySnapshotAnchor {
+    claim: FleetRegistrySnapshotAnchorClaim,
+    authority_receipt_id: String,
+}
+
+impl VerifiedFleetRegistrySnapshotAnchor {
+    pub fn authenticate_current<A: FleetRegistryAnchorAuthority>(
+        claim: FleetRegistrySnapshotAnchorClaim,
+        authority: &A,
+    ) -> Result<Self, FleetIdentityError> {
+        let authority_receipt_id = authority.authenticate_current_registry_anchor(&claim)?;
+        Self::from_authority_receipt(claim, authority_receipt_id)
+    }
+
+    pub fn finalize_advance<A: FleetRegistryAnchorAuthority>(
+        claim: FleetRegistrySnapshotAnchorClaim,
+        permit: &[u8],
+        authority: &A,
+    ) -> Result<Self, FleetIdentityError> {
+        let authority_receipt_id = authority.finalize_registry_anchor_advance(permit, &claim)?;
+        Self::from_authority_receipt(claim, authority_receipt_id)
+    }
+
+    fn from_authority_receipt(
+        claim: FleetRegistrySnapshotAnchorClaim,
+        authority_receipt_id: String,
+    ) -> Result<Self, FleetIdentityError> {
+        if authority_receipt_id.trim().is_empty() {
+            return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                detail: "anchor authority returned an empty receipt id".to_string(),
+            });
+        }
+        Ok(Self {
+            claim,
+            authority_receipt_id,
+        })
+    }
+
+    pub fn claim(&self) -> &FleetRegistrySnapshotAnchorClaim {
+        &self.claim
+    }
+
+    pub fn authority_receipt_id(&self) -> &str {
+        &self.authority_receipt_id
+    }
+}
+
+/// Authenticated historical-acceptance context supplied by a finalized log or checkpoint.
+///
+/// The context is intentionally not deserializable as trusted authority. A
+/// future atomic-ingress API must mint it only after authenticating the
+/// referenced checkpoint and its exact accepted-message digests. There is no
+/// production constructor until that proof carrier lands, so this lifecycle
+/// foundation fails closed instead of letting callers self-assert acceptance.
 #[derive(Debug, Clone)]
+pub struct FleetHistoricalAcceptanceContext {
+    trusted_registry_generation: u64,
+    trusted_authority_head: ContentHash,
+    accepted_preimage_hashes: BTreeSet<ContentHash>,
+}
+
+impl FleetHistoricalAcceptanceContext {
+    #[cfg(test)]
+    fn new(trusted_registry_generation: u64, trusted_authority_head: ContentHash) -> Self {
+        Self {
+            trusted_registry_generation,
+            trusted_authority_head,
+            accepted_preimage_hashes: BTreeSet::new(),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_accepted_preimage_hash(mut self, preimage_hash: ContentHash) -> Self {
+        self.accepted_preimage_hashes.insert(preimage_hash);
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct TrustedFleetVerificationKey {
     identity: FleetSigningIdentity,
     key: VerificationKey,
+    activation_epoch: SecurityEpoch,
+    activation_generation: u64,
+    retirement_epoch: Option<SecurityEpoch>,
+    retirement_generation: Option<u64>,
     status: FleetVerificationKeyStatus,
 }
 
 /// Separately provisioned trust roots for fleet message verification.
 ///
-/// The registry intentionally has no serde implementation. Restored protocol
-/// state therefore starts with an empty registry and fails closed until an
-/// operator reprovisions trusted keys. That authority must enforce durable
-/// sequence floors and revocation freshness so a restart cannot roll trust
-/// back to an older key.
-#[derive(Debug, Default)]
-pub struct FleetVerificationRegistry {
+/// The registry itself has no serde implementation. Restore accepts only the
+/// validated snapshot DTO plus an independently trusted generation/hash anchor.
+#[derive(Debug)]
+struct FleetVerificationRegistry {
     keys: BTreeMap<(NodeId, u64), TrustedFleetVerificationKey>,
     active_sequences: BTreeMap<NodeId, u64>,
     key_owners: BTreeMap<FleetKeyId, (NodeId, u64)>,
     node_history: BTreeSet<NodeId>,
+    key_sequence_floors: BTreeMap<NodeId, u64>,
+    revocation_history: Vec<FleetRevocationSnapshot>,
+    generation: u64,
+    authority_epoch: SecurityEpoch,
+    revocation_epoch_floor: SecurityEpoch,
+}
+
+impl Default for FleetVerificationRegistry {
+    fn default() -> Self {
+        Self {
+            keys: BTreeMap::new(),
+            active_sequences: BTreeMap::new(),
+            key_owners: BTreeMap::new(),
+            node_history: BTreeSet::new(),
+            key_sequence_floors: BTreeMap::new(),
+            revocation_history: Vec::new(),
+            generation: 0,
+            authority_epoch: SecurityEpoch::GENESIS,
+            revocation_epoch_floor: SecurityEpoch::GENESIS,
+        }
+    }
 }
 
 impl FleetVerificationRegistry {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self::default()
     }
 
-    pub fn register_signer(&mut self, signer: &FleetSigner) -> Result<(), FleetIdentityError> {
-        self.register(
+    fn clone_for_durable_transition(&self) -> Self {
+        Self {
+            keys: self.keys.clone(),
+            active_sequences: self.active_sequences.clone(),
+            key_owners: self.key_owners.clone(),
+            node_history: self.node_history.clone(),
+            key_sequence_floors: self.key_sequence_floors.clone(),
+            revocation_history: self.revocation_history.clone(),
+            generation: self.generation,
+            authority_epoch: self.authority_epoch,
+            revocation_epoch_floor: self.revocation_epoch_floor,
+        }
+    }
+
+    #[cfg(test)]
+    fn register_signer(&mut self, signer: &FleetSigner) -> Result<(), FleetIdentityError> {
+        self.register_at(
             signer.identity.signer.clone(),
             signer.identity.key_sequence,
             signer.verification_key.clone(),
+            self.authority_epoch,
+            self.generation,
         )
     }
 
-    pub fn register(
+    #[cfg(test)]
+    fn register(
         &mut self,
         node_id: NodeId,
         key_sequence: u64,
         verification_key: VerificationKey,
     ) -> Result<(), FleetIdentityError> {
+        self.register_at(
+            node_id,
+            key_sequence,
+            verification_key,
+            self.authority_epoch,
+            self.generation,
+        )
+    }
+
+    fn register_at(
+        &mut self,
+        node_id: NodeId,
+        key_sequence: u64,
+        verification_key: VerificationKey,
+        activation_epoch: SecurityEpoch,
+        expected_generation: u64,
+    ) -> Result<(), FleetIdentityError> {
         validate_fleet_node_id(&node_id)?;
         validate_key_sequence(key_sequence)?;
         let verification_key = revalidate_verification_key(&verification_key)?;
+        let next_generation =
+            self.validate_authority_transition(expected_generation, activation_epoch)?;
         let key_id = FleetKeyId::from_verification_key(&verification_key);
 
         if self.node_history.contains(&node_id) {
             return Err(FleetIdentityError::NodeAlreadyRegistered { node_id });
         }
         self.ensure_unbound_key(key_id, &node_id, key_sequence)?;
+        ensure_registry_capacity(self.node_history.len(), FLEET_REGISTRY_MAX_NODES, "nodes")?;
+        ensure_registry_capacity(self.keys.len(), FLEET_REGISTRY_MAX_KEYS, "keys")?;
+        ensure_registry_capacity(
+            self.key_owners.len(),
+            FLEET_REGISTRY_MAX_KEYS,
+            "key tombstones",
+        )?;
 
         let identity = FleetSigningIdentity {
             signer: node_id.clone(),
@@ -377,25 +748,36 @@ impl FleetVerificationRegistry {
             TrustedFleetVerificationKey {
                 identity,
                 key: verification_key,
+                activation_epoch,
+                activation_generation: next_generation,
+                retirement_epoch: None,
+                retirement_generation: None,
                 status: FleetVerificationKeyStatus::Active,
             },
         );
         self.active_sequences.insert(node_id.clone(), key_sequence);
         self.node_history.insert(node_id.clone());
+        self.key_sequence_floors
+            .insert(node_id.clone(), key_sequence);
         self.key_owners.insert(key_id, (node_id, key_sequence));
+        self.commit_authority_transition(next_generation, activation_epoch);
         Ok(())
     }
 
-    pub fn rotate(
+    fn rotate_at(
         &mut self,
         node_id: &NodeId,
         expected_active_sequence: u64,
+        expected_generation: u64,
         new_sequence: u64,
         verification_key: VerificationKey,
+        cutover_epoch: SecurityEpoch,
     ) -> Result<(), FleetIdentityError> {
         validate_fleet_node_id(node_id)?;
         validate_key_sequence(new_sequence)?;
         let verification_key = revalidate_verification_key(&verification_key)?;
+        let next_generation =
+            self.validate_authority_transition(expected_generation, cutover_epoch)?;
         let current_sequence = self
             .active_sequences
             .get(node_id)
@@ -408,10 +790,15 @@ impl FleetVerificationRegistry {
                 actual: current_sequence,
             });
         }
-        if new_sequence <= current_sequence {
+        let sequence_floor = self
+            .key_sequence_floors
+            .get(node_id)
+            .copied()
+            .unwrap_or(current_sequence);
+        if new_sequence <= sequence_floor {
             return Err(FleetIdentityError::SequenceRegression {
                 node_id: node_id.clone(),
-                existing: current_sequence,
+                existing: sequence_floor,
                 attempted: new_sequence,
             });
         }
@@ -425,10 +812,9 @@ impl FleetVerificationRegistry {
             });
         }
 
-        // All fallible validation is complete before the old key is changed.
         let current = self
             .keys
-            .get_mut(&(node_id.clone(), current_sequence))
+            .get(&(node_id.clone(), current_sequence))
             .ok_or_else(|| FleetIdentityError::UnknownKey {
                 node_id: node_id.clone(),
                 key_sequence: current_sequence,
@@ -436,58 +822,244 @@ impl FleetVerificationRegistry {
         if current.status != FleetVerificationKeyStatus::Active {
             return Err(status_error(current));
         }
-        current.status = FleetVerificationKeyStatus::Rotated;
+        if cutover_epoch <= current.activation_epoch {
+            return Err(FleetIdentityError::InvalidKeyWindow {
+                node_id: node_id.clone(),
+                key_sequence: current_sequence,
+                detail: format!(
+                    "cutover {cutover_epoch} must be after activation {}",
+                    current.activation_epoch
+                ),
+            });
+        }
+        ensure_registry_capacity(self.keys.len(), FLEET_REGISTRY_MAX_KEYS, "keys")?;
+        ensure_registry_capacity(
+            self.key_owners.len(),
+            FLEET_REGISTRY_MAX_KEYS,
+            "key tombstones",
+        )?;
 
         let identity = FleetSigningIdentity {
             signer: node_id.clone(),
             key_id: new_key_id,
             key_sequence: new_sequence,
         };
+
+        // Every fallible check is complete before the old key is retired.
+        let current = self
+            .keys
+            .get_mut(&(node_id.clone(), current_sequence))
+            .expect("current key was validated immediately above");
+        current.retirement_epoch = Some(cutover_epoch);
+        current.retirement_generation = Some(next_generation);
+        current.status = FleetVerificationKeyStatus::Retired;
         self.keys.insert(
             (node_id.clone(), new_sequence),
             TrustedFleetVerificationKey {
                 identity,
                 key: verification_key,
+                activation_epoch: cutover_epoch,
+                activation_generation: next_generation,
+                retirement_epoch: None,
+                retirement_generation: None,
                 status: FleetVerificationKeyStatus::Active,
             },
         );
         self.active_sequences.insert(node_id.clone(), new_sequence);
+        self.key_sequence_floors
+            .insert(node_id.clone(), new_sequence);
         self.key_owners
             .insert(new_key_id, (node_id.clone(), new_sequence));
+        self.commit_authority_transition(next_generation, cutover_epoch);
         Ok(())
     }
 
-    pub fn revoke(
+    fn revoke_at(
         &mut self,
         node_id: &NodeId,
         key_sequence: u64,
+        expected_generation: u64,
+        transition_epoch: SecurityEpoch,
+        effective_epoch: SecurityEpoch,
+        policy: FleetRevocationPolicy,
     ) -> Result<(), FleetIdentityError> {
-        if !self.keys.contains_key(&(node_id.clone(), key_sequence)) {
-            return Err(self.missing_key_error(node_id, key_sequence));
+        validate_fleet_node_id(node_id)?;
+        validate_key_sequence(key_sequence)?;
+        let next_generation =
+            self.validate_authority_transition(expected_generation, transition_epoch)?;
+        if effective_epoch > transition_epoch {
+            return Err(FleetIdentityError::InvalidKeyWindow {
+                node_id: node_id.clone(),
+                key_sequence,
+                detail: format!(
+                    "effective revocation {effective_epoch} exceeds transition {transition_epoch}"
+                ),
+            });
         }
+        let current = self
+            .keys
+            .get(&(node_id.clone(), key_sequence))
+            .ok_or_else(|| self.missing_key_error(node_id, key_sequence))?;
+        if effective_epoch < current.activation_epoch {
+            return Err(FleetIdentityError::InvalidKeyWindow {
+                node_id: node_id.clone(),
+                key_sequence,
+                detail: format!(
+                    "revocation {effective_epoch} precedes activation {}",
+                    current.activation_epoch
+                ),
+            });
+        }
+        if let FleetVerificationKeyStatus::Revoked {
+            policy: current_policy,
+            effective_epoch: current_effective_epoch,
+            ..
+        } = current.status
+        {
+            let strengthens = matches!(
+                (current_policy, policy),
+                (
+                    FleetRevocationPolicy::Prospective,
+                    FleetRevocationPolicy::Retroactive
+                )
+            ) || (current_policy == FleetRevocationPolicy::Prospective
+                && policy == FleetRevocationPolicy::Prospective
+                && effective_epoch < current_effective_epoch);
+            if !strengthens {
+                return Err(FleetIdentityError::RevocationPolicyNotStrengthened {
+                    identity: current.identity.clone(),
+                });
+            }
+        }
+        ensure_registry_capacity(
+            self.revocation_history.len(),
+            FLEET_REGISTRY_MAX_REVOCATIONS,
+            "revocation history",
+        )?;
+
+        // Every fallible check is complete before authority state changes.
         let entry = self
             .keys
             .get_mut(&(node_id.clone(), key_sequence))
-            .expect("key existence checked immediately above");
-        match entry.status {
-            FleetVerificationKeyStatus::Active => {
-                entry.status = FleetVerificationKeyStatus::Revoked;
-                if self.active_sequences.get(node_id) == Some(&key_sequence) {
-                    self.active_sequences.remove(node_id);
-                }
-                Ok(())
-            }
-            FleetVerificationKeyStatus::Rotated => {
-                entry.status = FleetVerificationKeyStatus::Revoked;
-                Ok(())
-            }
-            FleetVerificationKeyStatus::Revoked => Err(FleetIdentityError::RevokedKey {
-                identity: entry.identity.clone(),
-            }),
+            .expect("key was validated immediately above");
+        entry.status = FleetVerificationKeyStatus::Revoked {
+            policy,
+            transition_epoch,
+            effective_epoch,
+            revoked_generation: next_generation,
+        };
+        if self.active_sequences.get(node_id) == Some(&key_sequence) {
+            self.active_sequences.remove(node_id);
         }
+        self.revocation_epoch_floor = self.revocation_epoch_floor.max(transition_epoch);
+        self.revocation_history.push(FleetRevocationSnapshot {
+            identity: entry.identity.clone(),
+            generation: next_generation,
+            transition_epoch,
+            effective_epoch,
+            policy,
+        });
+        self.commit_authority_transition(next_generation, transition_epoch);
+        Ok(())
     }
 
-    pub fn active_identity(
+    /// Install a stronger replacement after active-key revocation.
+    fn recover_revoked_node_at(
+        &mut self,
+        node_id: &NodeId,
+        expected_generation: u64,
+        new_sequence: u64,
+        verification_key: VerificationKey,
+        recovery_epoch: SecurityEpoch,
+    ) -> Result<(), FleetIdentityError> {
+        validate_fleet_node_id(node_id)?;
+        validate_key_sequence(new_sequence)?;
+        let verification_key = revalidate_verification_key(&verification_key)?;
+        let next_generation =
+            self.validate_authority_transition(expected_generation, recovery_epoch)?;
+        if self.active_sequences.contains_key(node_id) {
+            return Err(FleetIdentityError::NodeAlreadyRegistered {
+                node_id: node_id.clone(),
+            });
+        }
+        let sequence_floor = self
+            .key_sequence_floors
+            .get(node_id)
+            .copied()
+            .ok_or_else(|| self.missing_active_key_error(node_id))?;
+        if new_sequence <= sequence_floor {
+            return Err(FleetIdentityError::SequenceRegression {
+                node_id: node_id.clone(),
+                existing: sequence_floor,
+                attempted: new_sequence,
+            });
+        }
+        let previous = self
+            .keys
+            .get(&(node_id.clone(), sequence_floor))
+            .ok_or_else(|| FleetIdentityError::UnknownKey {
+                node_id: node_id.clone(),
+                key_sequence: sequence_floor,
+            })?;
+        if !matches!(previous.status, FleetVerificationKeyStatus::Revoked { .. }) {
+            return Err(status_error(previous));
+        }
+        if recovery_epoch <= previous.activation_epoch {
+            return Err(FleetIdentityError::InvalidKeyWindow {
+                node_id: node_id.clone(),
+                key_sequence: sequence_floor,
+                detail: "recovery epoch must follow the revoked key activation".to_string(),
+            });
+        }
+        if previous.retirement_epoch.is_some() || previous.retirement_generation.is_some() {
+            return Err(FleetIdentityError::InvalidKeyWindow {
+                node_id: node_id.clone(),
+                key_sequence: sequence_floor,
+                detail: "terminal revoked key already has a retirement boundary".to_string(),
+            });
+        }
+        let key_id = FleetKeyId::from_verification_key(&verification_key);
+        self.ensure_unbound_key(key_id, node_id, new_sequence)?;
+        ensure_registry_capacity(self.keys.len(), FLEET_REGISTRY_MAX_KEYS, "keys")?;
+        ensure_registry_capacity(
+            self.key_owners.len(),
+            FLEET_REGISTRY_MAX_KEYS,
+            "key tombstones",
+        )?;
+
+        let identity = FleetSigningIdentity {
+            signer: node_id.clone(),
+            key_id,
+            key_sequence: new_sequence,
+        };
+        let previous = self
+            .keys
+            .get_mut(&(node_id.clone(), sequence_floor))
+            .expect("revoked key was validated immediately above");
+        previous.retirement_epoch = Some(recovery_epoch);
+        previous.retirement_generation = Some(next_generation);
+        self.keys.insert(
+            (node_id.clone(), new_sequence),
+            TrustedFleetVerificationKey {
+                identity,
+                key: verification_key,
+                activation_epoch: recovery_epoch,
+                activation_generation: next_generation,
+                retirement_epoch: None,
+                retirement_generation: None,
+                status: FleetVerificationKeyStatus::Active,
+            },
+        );
+        self.active_sequences.insert(node_id.clone(), new_sequence);
+        self.key_sequence_floors
+            .insert(node_id.clone(), new_sequence);
+        self.key_owners
+            .insert(key_id, (node_id.clone(), new_sequence));
+        self.commit_authority_transition(next_generation, recovery_epoch);
+        Ok(())
+    }
+
+    fn active_identity(
         &self,
         node_id: &NodeId,
     ) -> Result<&FleetSigningIdentity, FleetIdentityError> {
@@ -496,7 +1068,7 @@ impl FleetVerificationRegistry {
             .get(node_id)
             .copied()
             .ok_or_else(|| self.missing_active_key_error(node_id))?;
-        let entry = self.resolve_entry(node_id, sequence, None)?;
+        let entry = self.resolve_live_entry(node_id, sequence, None, self.authority_epoch)?;
         Ok(&entry.identity)
     }
 
@@ -506,11 +1078,19 @@ impl FleetVerificationRegistry {
     /// not the serialized legacy `MessageSignature` or checkpoint signature
     /// map. It is not a complete ingress-authentication API until the parent
     /// migration replaces those v1 carriers atomically.
-    pub fn verify_live_detached_message_v2<T: FleetSignaturePreimageV2>(
+    fn verify_live_detached_message_v2<T: FleetSignaturePreimageV2>(
         &self,
         message: &T,
         signature: &FleetSignatureV2,
+        trusted_epoch: SecurityEpoch,
     ) -> Result<(), FleetIdentityError> {
+        let message_epoch = message.fleet_security_epoch();
+        if message_epoch != trusted_epoch {
+            return Err(FleetIdentityError::UntrustedMessageEpoch {
+                message_epoch,
+                trusted_epoch,
+            });
+        }
         validate_ingress_limit(
             "fleet-detached-signature-v2",
             "signer",
@@ -522,10 +1102,11 @@ impl FleetVerificationRegistry {
         // revoked keys fail without traversing an attacker-controlled payload.
         // Registry lookup is bounded and read-only; canonical-tree allocation
         // and cryptographic verification remain behind the message budget.
-        let entry = self.resolve_entry(
+        let entry = self.resolve_live_entry(
             &signature.signer,
             signature.key_sequence,
             Some(signature.key_id),
+            trusted_epoch,
         )?;
         message.validate_fleet_ingress_limits()?;
         message.validate_fleet_structure()?;
@@ -536,12 +1117,402 @@ impl FleetVerificationRegistry {
             .map_err(FleetIdentityError::from_signature_error)
     }
 
+    /// Verify an exactly committed historical artifact under a retired key.
+    ///
+    /// Epoch-window membership alone is insufficient because a compromised old
+    /// key can backdate a fresh message. The authenticated context must contain
+    /// the exact preimage digest accepted by a finalized pre-cutover log or
+    /// checkpoint. The resulting success is historical evidence only and must
+    /// never be reused as live authorization.
+    fn verify_historical_detached_message_v2<T: FleetSignaturePreimageV2>(
+        &self,
+        message: &T,
+        signature: &FleetSignatureV2,
+        acceptance: &FleetHistoricalAcceptanceContext,
+    ) -> Result<(), FleetIdentityError> {
+        if acceptance.trusted_registry_generation > self.generation {
+            return Err(FleetIdentityError::FutureHistoricalAnchor {
+                accepted_generation: acceptance.trusted_registry_generation,
+                registry_generation: self.generation,
+            });
+        }
+        let actual_authority_head =
+            self.authority_head_at(acceptance.trusted_registry_generation)?;
+        if actual_authority_head != acceptance.trusted_authority_head {
+            return Err(FleetIdentityError::HistoricalAuthorityFork {
+                generation: acceptance.trusted_registry_generation,
+                expected_head: acceptance.trusted_authority_head,
+                actual_head: actual_authority_head,
+            });
+        }
+        validate_ingress_limit(
+            "fleet-detached-signature-v2",
+            "signer",
+            signature.signer.as_str().len(),
+            FLEET_V2_MAX_IDENTIFIER_BYTES,
+        )?;
+        validate_fleet_node_id(&signature.signer)?;
+        let entry = self.resolve_historical_entry(
+            &signature.signer,
+            signature.key_sequence,
+            Some(signature.key_id),
+            message.fleet_security_epoch(),
+        )?;
+        let exclusive_end_generation = match entry.status {
+            FleetVerificationKeyStatus::Active => None,
+            FleetVerificationKeyStatus::Retired => entry.retirement_generation,
+            FleetVerificationKeyStatus::Revoked {
+                policy: FleetRevocationPolicy::Prospective,
+                revoked_generation,
+                ..
+            } => Some(
+                entry
+                    .retirement_generation
+                    .map_or(revoked_generation, |retirement| {
+                        retirement.min(revoked_generation)
+                    }),
+            ),
+            FleetVerificationKeyStatus::Revoked {
+                policy: FleetRevocationPolicy::Retroactive,
+                ..
+            } => unreachable!("retroactively revoked keys fail during resolution"),
+        };
+        if acceptance.trusted_registry_generation < entry.activation_generation
+            || exclusive_end_generation
+                .is_some_and(|end| acceptance.trusted_registry_generation >= end)
+        {
+            return Err(FleetIdentityError::HistoricalGenerationOutsideKeyWindow {
+                accepted_generation: acceptance.trusted_registry_generation,
+                activation_generation: entry.activation_generation,
+                exclusive_end_generation,
+            });
+        }
+        message.validate_fleet_ingress_limits()?;
+        message.validate_fleet_structure()?;
+        message.validate_fleet_signer(&signature.signer)?;
+        let identity = signature.identity();
+        let preimage = message.fleet_signature_preimage_v2(&identity)?;
+        let preimage_hash = ContentHash::compute(&preimage);
+        if !acceptance.accepted_preimage_hashes.contains(&preimage_hash) {
+            return Err(FleetIdentityError::MissingHistoricalAcceptance { preimage_hash });
+        }
+        verify_signature(&entry.key, &preimage, &signature.signature)
+            .map_err(FleetIdentityError::from_signature_error)
+    }
+
     /// Number of nodes that currently have an active verification key.
     ///
     /// Revoked node histories remain tombstoned in the registry but are not
     /// included in this count.
-    pub fn active_node_count(&self) -> usize {
+    fn active_node_count(&self) -> usize {
         self.active_sequences.len()
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    fn authority_epoch(&self) -> SecurityEpoch {
+        self.authority_epoch
+    }
+
+    /// Deterministic authority-chain head after one committed generation.
+    fn authority_head_at(&self, generation: u64) -> Result<ContentHash, FleetIdentityError> {
+        if generation > self.generation {
+            return Err(FleetIdentityError::FutureHistoricalAnchor {
+                accepted_generation: generation,
+                registry_generation: self.generation,
+            });
+        }
+        let snapshot = self.snapshot();
+        authority_head_for_snapshot(&snapshot, generation)
+    }
+
+    fn snapshot(&self) -> FleetVerificationRegistrySnapshot {
+        FleetVerificationRegistrySnapshot {
+            schema_version: FleetVerificationRegistrySnapshot::SCHEMA_VERSION,
+            generation: self.generation,
+            authority_epoch: self.authority_epoch,
+            revocation_epoch_floor: self.revocation_epoch_floor,
+            keys: self
+                .keys
+                .values()
+                .map(|entry| FleetVerificationKeySnapshot {
+                    identity: entry.identity.clone(),
+                    verification_key: entry.key.clone(),
+                    activation_epoch: entry.activation_epoch,
+                    activation_generation: entry.activation_generation,
+                    retirement_epoch: entry.retirement_epoch,
+                    retirement_generation: entry.retirement_generation,
+                    status: entry.status,
+                })
+                .collect(),
+            key_sequence_floors: self.key_sequence_floors.clone(),
+            node_tombstones: self.node_history.clone(),
+            key_tombstones: self
+                .key_owners
+                .iter()
+                .map(
+                    |(key_id, (node_id, key_sequence))| FleetKeyTombstoneSnapshot {
+                        key_id: *key_id,
+                        node_id: node_id.clone(),
+                        key_sequence: *key_sequence,
+                    },
+                )
+                .collect(),
+            revocation_history: self.revocation_history.clone(),
+        }
+    }
+
+    #[cfg(test)]
+    fn snapshot_anchor_claim(
+        &self,
+    ) -> Result<FleetRegistrySnapshotAnchorClaim, FleetIdentityError> {
+        self.snapshot_anchor_claim_with_prior(ContentHash::default())
+    }
+
+    fn snapshot_anchor_claim_with_prior(
+        &self,
+        prior_snapshot_hash: ContentHash,
+    ) -> Result<FleetRegistrySnapshotAnchorClaim, FleetIdentityError> {
+        let snapshot = self.snapshot();
+        Ok(FleetRegistrySnapshotAnchorClaim {
+            generation: snapshot.generation,
+            snapshot_hash: snapshot.digest()?,
+            prior_snapshot_hash,
+            authority_head: self.authority_head_at(snapshot.generation)?,
+        })
+    }
+
+    /// Internal half of restore. Public callers cannot replay a cached verified
+    /// token because they must go through the current-authority check above.
+    fn restore_snapshot_from_verified(
+        snapshot: &FleetVerificationRegistrySnapshot,
+        anchor: &VerifiedFleetRegistrySnapshotAnchor,
+    ) -> Result<Self, FleetIdentityError> {
+        let anchor = anchor.claim();
+        if snapshot.schema_version != FleetVerificationRegistrySnapshot::SCHEMA_VERSION {
+            return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                detail: format!(
+                    "schema version {} != {}",
+                    snapshot.schema_version,
+                    FleetVerificationRegistrySnapshot::SCHEMA_VERSION
+                ),
+            });
+        }
+        if snapshot.generation != anchor.generation {
+            return Err(FleetIdentityError::SnapshotAnchorMismatch {
+                expected_generation: anchor.generation,
+                actual_generation: snapshot.generation,
+            });
+        }
+        if snapshot.digest()? != anchor.snapshot_hash {
+            return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                detail: "snapshot digest is not accepted by the independent anchor".to_string(),
+            });
+        }
+        if snapshot.revocation_epoch_floor > snapshot.authority_epoch {
+            return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                detail: "revocation freshness floor exceeds the authority epoch".to_string(),
+            });
+        }
+        if snapshot.generation == 0
+            && (!snapshot.keys.is_empty()
+                || !snapshot.key_sequence_floors.is_empty()
+                || !snapshot.node_tombstones.is_empty()
+                || !snapshot.key_tombstones.is_empty()
+                || !snapshot.revocation_history.is_empty())
+        {
+            return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                detail: "generation zero cannot contain authority state".to_string(),
+            });
+        }
+
+        let mut registry = Self::default();
+        registry.generation = snapshot.generation;
+        registry.authority_epoch = snapshot.authority_epoch;
+        registry.revocation_epoch_floor = snapshot.revocation_epoch_floor;
+        registry.node_history = snapshot.node_tombstones.clone();
+        registry.key_sequence_floors = snapshot.key_sequence_floors.clone();
+        registry.revocation_history = snapshot.revocation_history.clone();
+
+        let mut previous_tombstone: Option<FleetKeyId> = None;
+        for tombstone in &snapshot.key_tombstones {
+            validate_fleet_node_id(&tombstone.node_id)?;
+            validate_key_sequence(tombstone.key_sequence)?;
+            if previous_tombstone.is_some_and(|previous| previous >= tombstone.key_id) {
+                return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                    detail: "key tombstones are not strictly ordered and unique".to_string(),
+                });
+            }
+            previous_tombstone = Some(tombstone.key_id);
+            if registry
+                .key_owners
+                .insert(
+                    tombstone.key_id,
+                    (tombstone.node_id.clone(), tombstone.key_sequence),
+                )
+                .is_some()
+            {
+                return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                    detail: "duplicate key tombstone".to_string(),
+                });
+            }
+        }
+
+        let mut previous_key: Option<(NodeId, u64)> = None;
+        for record in &snapshot.keys {
+            validate_fleet_node_id(&record.identity.signer)?;
+            validate_key_sequence(record.identity.key_sequence)?;
+            let verification_key = revalidate_verification_key(&record.verification_key)?;
+            let key_id = FleetKeyId::from_verification_key(&verification_key);
+            if key_id != record.identity.key_id {
+                return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                    detail: format!(
+                        "key id mismatch for {}@{}",
+                        record.identity.signer, record.identity.key_sequence
+                    ),
+                });
+            }
+            let coordinate = (record.identity.signer.clone(), record.identity.key_sequence);
+            if previous_key
+                .as_ref()
+                .is_some_and(|previous| previous >= &coordinate)
+            {
+                return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                    detail: "key records are not strictly ordered and unique".to_string(),
+                });
+            }
+            previous_key = Some(coordinate.clone());
+            if !registry.node_history.contains(&record.identity.signer) {
+                return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                    detail: format!("missing node tombstone for {}", record.identity.signer),
+                });
+            }
+            if registry.key_owners.get(&key_id)
+                != Some(&(record.identity.signer.clone(), record.identity.key_sequence))
+            {
+                return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                    detail: format!("missing or conflicting key tombstone for {key_id}"),
+                });
+            }
+            if registry
+                .key_sequence_floors
+                .get(&record.identity.signer)
+                .copied()
+                .unwrap_or(0)
+                < record.identity.key_sequence
+            {
+                return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                    detail: format!(
+                        "sequence floor regresses below {}@{}",
+                        record.identity.signer, record.identity.key_sequence
+                    ),
+                });
+            }
+            validate_snapshot_key_window(record, snapshot.authority_epoch, snapshot.generation)?;
+            if matches!(record.status, FleetVerificationKeyStatus::Active)
+                && registry
+                    .active_sequences
+                    .insert(record.identity.signer.clone(), record.identity.key_sequence)
+                    .is_some()
+            {
+                return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                    detail: format!("multiple active keys for {}", record.identity.signer),
+                });
+            }
+            if let FleetVerificationKeyStatus::Revoked {
+                transition_epoch, ..
+            } = record.status
+                && transition_epoch > snapshot.revocation_epoch_floor
+            {
+                return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                    detail: "revocation freshness floor regresses below a key event".to_string(),
+                });
+            }
+            if registry
+                .keys
+                .insert(
+                    coordinate,
+                    TrustedFleetVerificationKey {
+                        identity: record.identity.clone(),
+                        key: verification_key,
+                        activation_epoch: record.activation_epoch,
+                        activation_generation: record.activation_generation,
+                        retirement_epoch: record.retirement_epoch,
+                        retirement_generation: record.retirement_generation,
+                        status: record.status,
+                    },
+                )
+                .is_some()
+            {
+                return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                    detail: "duplicate key coordinate".to_string(),
+                });
+            }
+        }
+        validate_restored_node_windows(&registry.keys)?;
+        validate_snapshot_transition_chain(snapshot, &registry.keys)?;
+        for node_id in &registry.node_history {
+            let maximum_sequence = registry
+                .keys
+                .range((node_id.clone(), 0)..=(node_id.clone(), u64::MAX))
+                .map(|((_, sequence), _)| *sequence)
+                .next_back()
+                .ok_or_else(|| FleetIdentityError::InvalidRegistrySnapshot {
+                    detail: format!("node tombstone {node_id} has no retained key history"),
+                })?;
+            if registry.key_sequence_floors.get(node_id) != Some(&maximum_sequence) {
+                return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                    detail: format!(
+                        "sequence floor for {node_id} does not equal retained maximum {maximum_sequence}"
+                    ),
+                });
+            }
+            match registry.keys.get(&(node_id.clone(), maximum_sequence)) {
+                Some(entry) if entry.status == FleetVerificationKeyStatus::Active => {
+                    if registry.active_sequences.get(node_id) != Some(&maximum_sequence) {
+                        return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                            detail: format!(
+                                "active index disagrees with terminal key for {node_id}"
+                            ),
+                        });
+                    }
+                }
+                Some(_) if registry.active_sequences.contains_key(node_id) => {
+                    return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                        detail: format!("inactive terminal key is indexed as active for {node_id}"),
+                    });
+                }
+                Some(_) => {}
+                None => unreachable!("maximum retained sequence came from the key map"),
+            }
+        }
+        if registry.key_sequence_floors.len() != registry.node_history.len() {
+            return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                detail: "sequence floors and node tombstones have different domains".to_string(),
+            });
+        }
+        for (key_id, (node_id, key_sequence)) in &registry.key_owners {
+            if !registry.node_history.contains(node_id)
+                || registry
+                    .key_sequence_floors
+                    .get(node_id)
+                    .copied()
+                    .unwrap_or(0)
+                    < *key_sequence
+            {
+                return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                    detail: format!("invalid tombstone coordinate for key {key_id}"),
+                });
+            }
+        }
+        if registry.authority_head_at(registry.generation)? != anchor.authority_head {
+            return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                detail: "snapshot authority head does not match the verified anchor".to_string(),
+            });
+        }
+        Ok(registry)
     }
 
     fn ensure_unbound_key(
@@ -562,7 +1533,7 @@ impl FleetVerificationRegistry {
         Ok(())
     }
 
-    fn resolve_entry(
+    fn resolve_exact_entry(
         &self,
         node_id: &NodeId,
         key_sequence: u64,
@@ -578,15 +1549,77 @@ impl FleetVerificationRegistry {
                 key_sequence,
             });
         }
-        match entry.status {
-            FleetVerificationKeyStatus::Active => Ok(entry),
-            FleetVerificationKeyStatus::Rotated => Err(FleetIdentityError::RotatedKey {
-                identity: entry.identity.clone(),
-            }),
-            FleetVerificationKeyStatus::Revoked => Err(FleetIdentityError::RevokedKey {
-                identity: entry.identity.clone(),
-            }),
+        Ok(entry)
+    }
+
+    fn resolve_live_entry(
+        &self,
+        node_id: &NodeId,
+        key_sequence: u64,
+        key_id: Option<FleetKeyId>,
+        message_epoch: SecurityEpoch,
+    ) -> Result<&TrustedFleetVerificationKey, FleetIdentityError> {
+        let entry = self.resolve_exact_entry(node_id, key_sequence, key_id)?;
+        if entry.status != FleetVerificationKeyStatus::Active {
+            return Err(status_error(entry));
         }
+        validate_entry_epoch_window(entry, message_epoch)?;
+        Ok(entry)
+    }
+
+    fn resolve_historical_entry(
+        &self,
+        node_id: &NodeId,
+        key_sequence: u64,
+        key_id: Option<FleetKeyId>,
+        message_epoch: SecurityEpoch,
+    ) -> Result<&TrustedFleetVerificationKey, FleetIdentityError> {
+        let entry = self.resolve_exact_entry(node_id, key_sequence, key_id)?;
+        validate_entry_epoch_window(entry, message_epoch)?;
+        match entry.status {
+            FleetVerificationKeyStatus::Active | FleetVerificationKeyStatus::Retired => Ok(entry),
+            FleetVerificationKeyStatus::Revoked {
+                policy: FleetRevocationPolicy::Retroactive,
+                ..
+            } => Err(status_error(entry)),
+            FleetVerificationKeyStatus::Revoked {
+                policy: FleetRevocationPolicy::Prospective,
+                effective_epoch,
+                ..
+            } if message_epoch < effective_epoch => Ok(entry),
+            FleetVerificationKeyStatus::Revoked { .. } => Err(status_error(entry)),
+        }
+    }
+
+    fn validate_authority_transition(
+        &self,
+        expected_generation: u64,
+        transition_epoch: SecurityEpoch,
+    ) -> Result<u64, FleetIdentityError> {
+        if expected_generation != self.generation {
+            return Err(FleetIdentityError::UnexpectedRegistryGeneration {
+                expected: expected_generation,
+                actual: self.generation,
+            });
+        }
+        if transition_epoch < self.authority_epoch {
+            return Err(FleetIdentityError::AuthorityEpochRegression {
+                current: self.authority_epoch,
+                attempted: transition_epoch,
+            });
+        }
+        self.generation
+            .checked_add(1)
+            .ok_or(FleetIdentityError::RegistryGenerationExhausted)
+    }
+
+    fn commit_authority_transition(
+        &mut self,
+        next_generation: u64,
+        transition_epoch: SecurityEpoch,
+    ) {
+        self.generation = next_generation;
+        self.authority_epoch = transition_epoch;
     }
 
     fn missing_key_error(&self, node_id: &NodeId, key_sequence: u64) -> FleetIdentityError {
@@ -613,6 +1646,1099 @@ impl FleetVerificationRegistry {
             }
         }
     }
+}
+
+/// Raw typed-envelope ceiling applied before outer JSON deserialization.
+pub const FLEET_TRUST_STATE_MAX_RECORD_BYTES: usize =
+    FLEET_REGISTRY_MAX_SNAPSHOT_BYTES * 2 + 256 * 1024;
+
+/// Persistence/publication failures for fleet verification authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FleetRegistryPersistenceError {
+    Identity(FleetIdentityError),
+    Storage(StorageError),
+    MissingState,
+    EnvelopeTooLarge {
+        actual: usize,
+        limit: usize,
+    },
+    ConcurrentUpdate {
+        expected_revision: Option<u64>,
+        actual_revision: Option<u64>,
+    },
+    InvalidDurableState {
+        detail: String,
+    },
+}
+
+impl fmt::Display for FleetRegistryPersistenceError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Identity(error) => write!(f, "fleet authority identity failure: {error}"),
+            Self::Storage(error) => write!(f, "fleet authority storage failure: {error}"),
+            Self::MissingState => write!(f, "durable fleet trust state is missing"),
+            Self::EnvelopeTooLarge { actual, limit } => write!(
+                f,
+                "fleet trust-state envelope is too large: {actual} > {limit} bytes"
+            ),
+            Self::ConcurrentUpdate {
+                expected_revision,
+                actual_revision,
+            } => write!(
+                f,
+                "fleet trust-state CAS conflict: expected revision {expected_revision:?}, current revision {actual_revision:?}"
+            ),
+            Self::InvalidDurableState { detail } => {
+                write!(f, "invalid durable fleet trust state: {detail}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for FleetRegistryPersistenceError {}
+
+impl From<FleetIdentityError> for FleetRegistryPersistenceError {
+    fn from(error: FleetIdentityError) -> Self {
+        Self::Identity(error)
+    }
+}
+
+impl From<StorageError> for FleetRegistryPersistenceError {
+    fn from(error: StorageError) -> Self {
+        Self::Storage(error)
+    }
+}
+
+/// Live fleet authority that is both durable and externally anchored.
+///
+/// The inner registry is intentionally not exposed or cloneable. Every live
+/// verification rechecks that this exact claim remains current at the external
+/// authority, so an old wrapper stops authorizing after a concurrent advance.
+#[derive(Debug)]
+pub struct DurableFleetVerificationRegistry {
+    registry: FleetVerificationRegistry,
+    anchor_claim: FleetRegistrySnapshotAnchorClaim,
+    authority_receipt_id: String,
+    store_revision: u64,
+}
+
+impl DurableFleetVerificationRegistry {
+    pub fn generation(&self) -> u64 {
+        self.registry.generation()
+    }
+
+    pub fn authority_epoch(&self) -> SecurityEpoch {
+        self.registry.authority_epoch()
+    }
+
+    pub fn snapshot_hash(&self) -> ContentHash {
+        self.anchor_claim.snapshot_hash
+    }
+
+    pub fn store_revision(&self) -> u64 {
+        self.store_revision
+    }
+
+    pub fn authority_receipt_id(&self) -> &str {
+        &self.authority_receipt_id
+    }
+
+    fn ensure_current<A: FleetRegistryAnchorAuthority>(
+        &self,
+        authority: &A,
+    ) -> Result<(), FleetIdentityError> {
+        VerifiedFleetRegistrySnapshotAnchor::authenticate_current(
+            self.anchor_claim.clone(),
+            authority,
+        )?;
+        Ok(())
+    }
+
+    pub fn active_identity<A: FleetRegistryAnchorAuthority>(
+        &self,
+        node_id: &NodeId,
+        authority: &A,
+    ) -> Result<&FleetSigningIdentity, FleetIdentityError> {
+        self.ensure_current(authority)?;
+        self.registry.active_identity(node_id)
+    }
+
+    pub fn verify_live_detached_message_v2<
+        T: FleetSignaturePreimageV2,
+        A: FleetRegistryAnchorAuthority,
+    >(
+        &self,
+        message: &T,
+        signature: &FleetSignatureV2,
+        trusted_epoch: SecurityEpoch,
+        authority: &A,
+    ) -> Result<(), FleetIdentityError> {
+        self.ensure_current(authority)?;
+        self.registry
+            .verify_live_detached_message_v2(message, signature, trusted_epoch)
+    }
+
+    /// Verify exact historical evidence while this durable authority remains current.
+    pub fn verify_historical_detached_message_v2<
+        T: FleetSignaturePreimageV2,
+        A: FleetRegistryAnchorAuthority,
+    >(
+        &self,
+        message: &T,
+        signature: &FleetSignatureV2,
+        acceptance: &FleetHistoricalAcceptanceContext,
+        authority: &A,
+    ) -> Result<(), FleetIdentityError> {
+        self.ensure_current(authority)?;
+        self.registry
+            .verify_historical_detached_message_v2(message, signature, acceptance)
+    }
+}
+
+/// Durably stored candidate awaiting idempotent external-anchor finalization.
+///
+/// This type deliberately exposes no verifier and no registry extraction API.
+#[derive(Debug)]
+pub struct PendingFleetRegistryPublication {
+    registry: FleetVerificationRegistry,
+    anchor_claim: FleetRegistrySnapshotAnchorClaim,
+    anchor_advance_permit: Vec<u8>,
+    store_revision: u64,
+}
+
+impl PendingFleetRegistryPublication {
+    pub fn claim(&self) -> &FleetRegistrySnapshotAnchorClaim {
+        &self.anchor_claim
+    }
+
+    pub fn store_revision(&self) -> u64 {
+        self.store_revision
+    }
+
+    /// Finalize the persisted prepare permit, then expose immutable live state.
+    pub fn finalize_and_publish<A: FleetRegistryAnchorAuthority>(
+        self,
+        authority: &A,
+    ) -> Result<DurableFleetVerificationRegistry, FleetRegistryPersistenceError> {
+        let verified = VerifiedFleetRegistrySnapshotAnchor::finalize_advance(
+            self.anchor_claim.clone(),
+            &self.anchor_advance_permit,
+            authority,
+        )?;
+        Ok(DurableFleetVerificationRegistry {
+            registry: self.registry,
+            anchor_claim: self.anchor_claim,
+            authority_receipt_id: verified.authority_receipt_id().to_string(),
+            store_revision: self.store_revision,
+        })
+    }
+}
+
+/// Typed, recoverable persistence boundary for fleet verification authority.
+pub struct FleetVerificationRegistryPersistence<'a, S: StorageAdapter> {
+    storage: &'a mut S,
+    context: &'a EventContext,
+}
+
+impl<'a, S: StorageAdapter> FleetVerificationRegistryPersistence<'a, S> {
+    pub fn new(storage: &'a mut S, context: &'a EventContext) -> Self {
+        Self { storage, context }
+    }
+
+    pub fn prepare_initial_registration<A: FleetRegistryAnchorAuthority>(
+        &mut self,
+        node_id: NodeId,
+        key_sequence: u64,
+        verification_key: VerificationKey,
+        activation_epoch: SecurityEpoch,
+        authority: &A,
+    ) -> Result<PendingFleetRegistryPublication, FleetRegistryPersistenceError> {
+        let mut registry = FleetVerificationRegistry::new();
+        registry.register_at(node_id, key_sequence, verification_key, activation_epoch, 0)?;
+        self.persist_candidate(registry, None, None, authority)
+    }
+
+    pub fn prepare_register_node<A: FleetRegistryAnchorAuthority>(
+        &mut self,
+        current: &DurableFleetVerificationRegistry,
+        node_id: NodeId,
+        key_sequence: u64,
+        verification_key: VerificationKey,
+        activation_epoch: SecurityEpoch,
+        authority: &A,
+    ) -> Result<PendingFleetRegistryPublication, FleetRegistryPersistenceError> {
+        let expected_generation = current.generation();
+        self.prepare_transition(current, authority, move |registry| {
+            registry.register_at(
+                node_id,
+                key_sequence,
+                verification_key,
+                activation_epoch,
+                expected_generation,
+            )
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_rotation<A: FleetRegistryAnchorAuthority>(
+        &mut self,
+        current: &DurableFleetVerificationRegistry,
+        node_id: NodeId,
+        expected_active_sequence: u64,
+        new_sequence: u64,
+        verification_key: VerificationKey,
+        cutover_epoch: SecurityEpoch,
+        authority: &A,
+    ) -> Result<PendingFleetRegistryPublication, FleetRegistryPersistenceError> {
+        let expected_generation = current.generation();
+        self.prepare_transition(current, authority, move |registry| {
+            registry.rotate_at(
+                &node_id,
+                expected_active_sequence,
+                expected_generation,
+                new_sequence,
+                verification_key,
+                cutover_epoch,
+            )
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_revocation<A: FleetRegistryAnchorAuthority>(
+        &mut self,
+        current: &DurableFleetVerificationRegistry,
+        node_id: NodeId,
+        key_sequence: u64,
+        transition_epoch: SecurityEpoch,
+        effective_epoch: SecurityEpoch,
+        policy: FleetRevocationPolicy,
+        authority: &A,
+    ) -> Result<PendingFleetRegistryPublication, FleetRegistryPersistenceError> {
+        let expected_generation = current.generation();
+        self.prepare_transition(current, authority, move |registry| {
+            registry.revoke_at(
+                &node_id,
+                key_sequence,
+                expected_generation,
+                transition_epoch,
+                effective_epoch,
+                policy,
+            )
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_recovery<A: FleetRegistryAnchorAuthority>(
+        &mut self,
+        current: &DurableFleetVerificationRegistry,
+        node_id: NodeId,
+        new_sequence: u64,
+        verification_key: VerificationKey,
+        recovery_epoch: SecurityEpoch,
+        authority: &A,
+    ) -> Result<PendingFleetRegistryPublication, FleetRegistryPersistenceError> {
+        let expected_generation = current.generation();
+        self.prepare_transition(current, authority, move |registry| {
+            registry.recover_revoked_node_at(
+                &node_id,
+                expected_generation,
+                new_sequence,
+                verification_key,
+                recovery_epoch,
+            )
+        })
+    }
+
+    fn prepare_transition<A, F>(
+        &mut self,
+        current: &DurableFleetVerificationRegistry,
+        authority: &A,
+        transition: F,
+    ) -> Result<PendingFleetRegistryPublication, FleetRegistryPersistenceError>
+    where
+        A: FleetRegistryAnchorAuthority,
+        F: FnOnce(&mut FleetVerificationRegistry) -> Result<(), FleetIdentityError>,
+    {
+        current.ensure_current(authority)?;
+        let mut staged = current.registry.clone_for_durable_transition();
+        transition(&mut staged)?;
+        let expected_generation = current
+            .generation()
+            .checked_add(1)
+            .ok_or(FleetIdentityError::RegistryGenerationExhausted)?;
+        if staged.generation() != expected_generation {
+            return Err(FleetRegistryPersistenceError::InvalidDurableState {
+                detail: format!(
+                    "one durable publication must contain exactly one authority transition: expected generation {expected_generation}, got {}",
+                    staged.generation()
+                ),
+            });
+        }
+        self.persist_candidate(
+            staged,
+            Some(current),
+            Some(current.store_revision),
+            authority,
+        )
+    }
+
+    fn persist_candidate<A: FleetRegistryAnchorAuthority>(
+        &mut self,
+        registry: FleetVerificationRegistry,
+        expected_current: Option<&DurableFleetVerificationRegistry>,
+        expected_revision: Option<u64>,
+        authority: &A,
+    ) -> Result<PendingFleetRegistryPublication, FleetRegistryPersistenceError> {
+        let snapshot = registry.snapshot();
+        let snapshot_json = serde_json::to_string(&snapshot).map_err(|error| {
+            FleetRegistryPersistenceError::InvalidDurableState {
+                detail: format!("snapshot serialization failed: {error}"),
+            }
+        })?;
+        validate_fleet_registry_snapshot_payload_len(snapshot_json.len())?;
+        let prior_snapshot_hash = expected_current
+            .map(DurableFleetVerificationRegistry::snapshot_hash)
+            .unwrap_or_default();
+        let anchor_claim = registry.snapshot_anchor_claim_with_prior(prior_snapshot_hash)?;
+        let expected_claim = expected_current.map(|current| &current.anchor_claim);
+        let anchor_advance_permit =
+            authority.prepare_registry_anchor_advance(expected_claim, &anchor_claim)?;
+        let model = FleetTrustStateEntry {
+            state_id: FLEET_TRUST_STATE_RECORD_ID,
+            schema_version: FLEET_TRUST_STATE_SCHEMA_VERSION.to_string(),
+            generation_decimal: format!("{:020}", snapshot.generation),
+            authority_epoch_decimal: format!("{:020}", snapshot.authority_epoch.as_u64()),
+            snapshot_hash: anchor_claim.snapshot_hash.to_hex(),
+            prior_snapshot_hash: anchor_claim.prior_snapshot_hash.to_hex(),
+            authority_head_hash: anchor_claim.authority_head.to_hex(),
+            anchor_advance_permit_hex: hex::encode(&anchor_advance_permit),
+            snapshot_json,
+        };
+        let entry = model.to_batch_put_entry()?;
+        let authorization = FleetTrustStateCasAuthorization::new(
+            expected_current.map(|current| current.snapshot_hash().to_hex()),
+            anchor_claim.snapshot_hash.to_hex(),
+        );
+        let stored_record = self.commit_candidate(
+            &authorization,
+            expected_revision,
+            entry.key,
+            entry.value,
+            entry.metadata,
+        )?;
+        Ok(PendingFleetRegistryPublication {
+            registry,
+            anchor_claim,
+            anchor_advance_permit,
+            store_revision: stored_record.revision,
+        })
+    }
+
+    fn commit_candidate(
+        &mut self,
+        authorization: &FleetTrustStateCasAuthorization,
+        expected_revision: Option<u64>,
+        key: String,
+        value: Vec<u8>,
+        metadata: BTreeMap<String, String>,
+    ) -> Result<StoreRecord, FleetRegistryPersistenceError> {
+        let outcome = self.storage.compare_and_swap_fleet_trust_state(
+            authorization,
+            key.clone(),
+            expected_revision,
+            value.clone(),
+            metadata.clone(),
+            self.context,
+        );
+        let readback = self
+            .storage
+            .get(StoreKind::FleetTrustState, &key, self.context)?;
+        let exact_readback = readback.as_ref().is_some_and(|record| {
+            record.store == StoreKind::FleetTrustState
+                && record.key == key
+                && record.value == value
+                && record.metadata == metadata
+                && record.revision != 0
+        });
+        match outcome {
+            Ok(CompareAndSwapOutcome::Applied(applied)) if exact_readback => {
+                let readback = readback.expect("exact readback was checked as present");
+                if applied != readback {
+                    return Err(FleetRegistryPersistenceError::InvalidDurableState {
+                        detail:
+                            "storage CAS reported an Applied record that disagrees with readback"
+                                .to_string(),
+                    });
+                }
+                Ok(readback)
+            }
+            Ok(CompareAndSwapOutcome::Conflict { .. }) | Err(_) if exact_readback => {
+                Ok(readback.expect("exact readback was checked as present"))
+            }
+            Ok(CompareAndSwapOutcome::Applied(_)) => {
+                Err(FleetRegistryPersistenceError::InvalidDurableState {
+                    detail: "storage CAS reported success without exact durable readback"
+                        .to_string(),
+                })
+            }
+            Ok(CompareAndSwapOutcome::Conflict { current }) => {
+                Err(FleetRegistryPersistenceError::ConcurrentUpdate {
+                    expected_revision,
+                    actual_revision: current.as_ref().map(|record| record.revision),
+                })
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Recover a prepared candidate and idempotently finalize its external anchor.
+    pub fn restore<A: FleetRegistryAnchorAuthority>(
+        &mut self,
+        authority: &A,
+    ) -> Result<DurableFleetVerificationRegistry, FleetRegistryPersistenceError> {
+        let key = FleetTrustStateEntry::typed_record_key_for_id(FLEET_TRUST_STATE_RECORD_ID)?;
+        let record = self
+            .storage
+            .get(StoreKind::FleetTrustState, &key, self.context)?
+            .ok_or(FleetRegistryPersistenceError::MissingState)?;
+        if record.value.len() > FLEET_TRUST_STATE_MAX_RECORD_BYTES {
+            return Err(FleetRegistryPersistenceError::EnvelopeTooLarge {
+                actual: record.value.len(),
+                limit: FLEET_TRUST_STATE_MAX_RECORD_BYTES,
+            });
+        }
+        let model = FleetTrustStateEntry::from_store_record(&record)?;
+        let canonical = model.to_store_record(record.revision)?;
+        if canonical.key != record.key
+            || canonical.value != record.value
+            || canonical.metadata != record.metadata
+        {
+            return Err(FleetRegistryPersistenceError::InvalidDurableState {
+                detail: "fleet trust-state record is not the canonical typed envelope".to_string(),
+            });
+        }
+        validate_fleet_registry_snapshot_payload_len(model.snapshot_json.len())?;
+        let snapshot: FleetVerificationRegistrySnapshot =
+            serde_json::from_str(&model.snapshot_json).map_err(|error| {
+                FleetRegistryPersistenceError::InvalidDurableState {
+                    detail: format!("snapshot deserialization failed: {error}"),
+                }
+            })?;
+        let generation = parse_fleet_trust_u64("generation_decimal", &model.generation_decimal)?;
+        let authority_epoch =
+            parse_fleet_trust_u64("authority_epoch_decimal", &model.authority_epoch_decimal)?;
+        let snapshot_hash = parse_fleet_trust_hash("snapshot_hash", &model.snapshot_hash)?;
+        let prior_snapshot_hash =
+            parse_fleet_trust_hash("prior_snapshot_hash", &model.prior_snapshot_hash)?;
+        let authority_head =
+            parse_fleet_trust_hash("authority_head_hash", &model.authority_head_hash)?;
+        if snapshot.generation != generation
+            || snapshot.authority_epoch.as_u64() != authority_epoch
+            || snapshot.digest()? != snapshot_hash
+            || authority_head_for_snapshot(&snapshot, snapshot.generation)? != authority_head
+        {
+            return Err(FleetRegistryPersistenceError::InvalidDurableState {
+                detail: "typed counters or hashes disagree with the embedded registry snapshot"
+                    .to_string(),
+            });
+        }
+        let claim = FleetRegistrySnapshotAnchorClaim {
+            generation,
+            snapshot_hash,
+            prior_snapshot_hash,
+            authority_head,
+        };
+        let permit = hex::decode(&model.anchor_advance_permit_hex).map_err(|error| {
+            FleetRegistryPersistenceError::InvalidDurableState {
+                detail: format!("anchor permit is not valid hex: {error}"),
+            }
+        })?;
+        let verified = VerifiedFleetRegistrySnapshotAnchor::finalize_advance(
+            claim.clone(),
+            &permit,
+            authority,
+        )?;
+        let registry =
+            FleetVerificationRegistry::restore_snapshot_from_verified(&snapshot, &verified)?;
+        Ok(DurableFleetVerificationRegistry {
+            registry,
+            anchor_claim: claim,
+            authority_receipt_id: verified.authority_receipt_id().to_string(),
+            store_revision: record.revision,
+        })
+    }
+}
+
+fn parse_fleet_trust_u64(field: &str, value: &str) -> Result<u64, FleetRegistryPersistenceError> {
+    value
+        .parse::<u64>()
+        .map_err(|error| FleetRegistryPersistenceError::InvalidDurableState {
+            detail: format!("{field} is not a valid u64: {error}"),
+        })
+}
+
+fn parse_fleet_trust_hash(
+    field: &str,
+    value: &str,
+) -> Result<ContentHash, FleetRegistryPersistenceError> {
+    let bytes =
+        hex::decode(value).map_err(|error| FleetRegistryPersistenceError::InvalidDurableState {
+            detail: format!("{field} is not valid hex: {error}"),
+        })?;
+    let bytes: [u8; 32] = bytes.try_into().map_err(|bytes: Vec<u8>| {
+        FleetRegistryPersistenceError::InvalidDurableState {
+            detail: format!("{field} has {} decoded bytes instead of 32", bytes.len()),
+        }
+    })?;
+    Ok(ContentHash::from_bytes(bytes))
+}
+
+fn validate_entry_epoch_window(
+    entry: &TrustedFleetVerificationKey,
+    message_epoch: SecurityEpoch,
+) -> Result<(), FleetIdentityError> {
+    if message_epoch < entry.activation_epoch {
+        return Err(FleetIdentityError::InvalidKeyWindow {
+            node_id: entry.identity.signer.clone(),
+            key_sequence: entry.identity.key_sequence,
+            detail: format!(
+                "message epoch {message_epoch} precedes activation {}",
+                entry.activation_epoch
+            ),
+        });
+    }
+    if entry
+        .retirement_epoch
+        .is_some_and(|retirement| message_epoch >= retirement)
+    {
+        return Err(FleetIdentityError::InvalidKeyWindow {
+            node_id: entry.identity.signer.clone(),
+            key_sequence: entry.identity.key_sequence,
+            detail: format!(
+                "message epoch {message_epoch} is outside retirement boundary {}",
+                entry
+                    .retirement_epoch
+                    .expect("retirement was checked above")
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn ensure_registry_capacity(
+    current_len: usize,
+    limit: usize,
+    resource: &'static str,
+) -> Result<(), FleetIdentityError> {
+    if current_len >= limit {
+        Err(FleetIdentityError::RegistryCapacityExceeded {
+            resource: resource.to_string(),
+            limit,
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_snapshot_key_window(
+    record: &FleetVerificationKeySnapshot,
+    authority_epoch: SecurityEpoch,
+    registry_generation: u64,
+) -> Result<(), FleetIdentityError> {
+    let invalid = |detail: String| FleetIdentityError::InvalidKeyWindow {
+        node_id: record.identity.signer.clone(),
+        key_sequence: record.identity.key_sequence,
+        detail,
+    };
+    if record.activation_epoch > authority_epoch {
+        return Err(invalid(format!(
+            "activation {} exceeds authority epoch {authority_epoch}",
+            record.activation_epoch
+        )));
+    }
+    if !(1..=registry_generation).contains(&record.activation_generation) {
+        return Err(invalid(format!(
+            "activation generation {} is outside 1..={registry_generation}",
+            record.activation_generation
+        )));
+    }
+    if record.retirement_epoch.is_some() != record.retirement_generation.is_some() {
+        return Err(invalid(
+            "retirement epoch and generation must either both be present or both be absent"
+                .to_string(),
+        ));
+    }
+    if record
+        .retirement_epoch
+        .is_some_and(|retirement| retirement <= record.activation_epoch)
+    {
+        return Err(invalid(
+            "retirement must be strictly after activation".to_string(),
+        ));
+    }
+    if record
+        .retirement_epoch
+        .is_some_and(|retirement| retirement > authority_epoch)
+    {
+        return Err(invalid(format!(
+            "retirement exceeds authority epoch {authority_epoch}"
+        )));
+    }
+    if record.retirement_generation.is_some_and(|generation| {
+        record
+            .activation_generation
+            .checked_add(1)
+            .is_none_or(|first_valid| !(first_valid..=registry_generation).contains(&generation))
+    }) {
+        return Err(invalid(format!(
+            "retirement generation must be after activation and at most {registry_generation}"
+        )));
+    }
+    match record.status {
+        FleetVerificationKeyStatus::Active
+            if record.retirement_epoch.is_some() || record.retirement_generation.is_some() =>
+        {
+            Err(invalid(
+                "active key cannot have a retirement boundary".to_string(),
+            ))
+        }
+        FleetVerificationKeyStatus::Retired
+            if record.retirement_epoch.is_none() || record.retirement_generation.is_none() =>
+        {
+            Err(invalid(
+                "retired key must have an epoch and generation retirement boundary".to_string(),
+            ))
+        }
+        FleetVerificationKeyStatus::Revoked {
+            transition_epoch,
+            effective_epoch,
+            revoked_generation,
+            ..
+        } if !(record.activation_epoch..=transition_epoch).contains(&effective_epoch)
+            || transition_epoch > authority_epoch
+            || record
+                .activation_generation
+                .checked_add(1)
+                .is_none_or(|first_valid| {
+                    !(first_valid..=registry_generation).contains(&revoked_generation)
+                }) =>
+        {
+            Err(invalid(format!(
+                "revocation effective {effective_epoch}, transition {transition_epoch}, generation {revoked_generation} is outside the authority window"
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
+fn validate_restored_node_windows(
+    keys: &BTreeMap<(NodeId, u64), TrustedFleetVerificationKey>,
+) -> Result<(), FleetIdentityError> {
+    let mut previous: Option<&TrustedFleetVerificationKey> = None;
+    for entry in keys.values() {
+        if let Some(prior) = previous.filter(|prior| prior.identity.signer == entry.identity.signer)
+        {
+            if entry.activation_epoch <= prior.activation_epoch {
+                return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                    detail: format!(
+                        "non-increasing activation epochs for {}",
+                        entry.identity.signer
+                    ),
+                });
+            }
+            if prior.retirement_epoch != Some(entry.activation_epoch) {
+                return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                    detail: format!(
+                        "non-contiguous key windows for {}@{} and {}@{}",
+                        prior.identity.signer,
+                        prior.identity.key_sequence,
+                        entry.identity.signer,
+                        entry.identity.key_sequence
+                    ),
+                });
+            }
+            if prior.retirement_generation != Some(entry.activation_generation) {
+                return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                    detail: format!(
+                        "non-contiguous key generations for {}@{} and {}@{}",
+                        prior.identity.signer,
+                        prior.identity.key_sequence,
+                        entry.identity.signer,
+                        entry.identity.key_sequence
+                    ),
+                });
+            }
+        } else if let Some(prior) = previous
+            && (prior.retirement_epoch.is_some() || prior.retirement_generation.is_some())
+        {
+            return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                detail: format!(
+                    "terminal key {}@{} has a retirement boundary but no successor",
+                    prior.identity.signer, prior.identity.key_sequence
+                ),
+            });
+        }
+        previous = Some(entry);
+    }
+    if let Some(prior) = previous
+        && (prior.retirement_epoch.is_some() || prior.retirement_generation.is_some())
+    {
+        return Err(FleetIdentityError::InvalidRegistrySnapshot {
+            detail: format!(
+                "terminal key {}@{} has a retirement boundary but no successor",
+                prior.identity.signer, prior.identity.key_sequence
+            ),
+        });
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct RestoredTransitionEvents {
+    activations: Vec<(NodeId, u64, SecurityEpoch)>,
+    retirements: Vec<(NodeId, u64, SecurityEpoch)>,
+    revocations: Vec<(NodeId, u64, SecurityEpoch)>,
+}
+
+#[derive(Serialize)]
+enum FleetAuthorityHeadEvent {
+    Register {
+        identity: FleetSigningIdentity,
+        verification_key: VerificationKey,
+        activation_epoch: SecurityEpoch,
+    },
+    KeyChange {
+        retired_identity: FleetSigningIdentity,
+        activated_identity: FleetSigningIdentity,
+        verification_key: VerificationKey,
+        cutover_epoch: SecurityEpoch,
+    },
+    Revocation(FleetRevocationSnapshot),
+}
+
+#[derive(Serialize)]
+struct FleetAuthorityHeadLink {
+    generation: u64,
+    previous_head: ContentHash,
+    event: FleetAuthorityHeadEvent,
+}
+
+fn authority_head_events(
+    snapshot: &FleetVerificationRegistrySnapshot,
+) -> Result<BTreeMap<u64, FleetAuthorityHeadEvent>, FleetIdentityError> {
+    let mut activations = BTreeMap::<u64, &FleetVerificationKeySnapshot>::new();
+    let mut retirements = BTreeMap::<u64, &FleetVerificationKeySnapshot>::new();
+    let mut revocations = BTreeMap::<u64, &FleetRevocationSnapshot>::new();
+    let mut generations = BTreeSet::new();
+    for record in &snapshot.keys {
+        if activations
+            .insert(record.activation_generation, record)
+            .is_some()
+        {
+            return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                detail: format!(
+                    "multiple key activations at generation {}",
+                    record.activation_generation
+                ),
+            });
+        }
+        generations.insert(record.activation_generation);
+        if let Some(retirement_generation) = record.retirement_generation {
+            if retirements.insert(retirement_generation, record).is_some() {
+                return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                    detail: format!(
+                        "multiple key retirements at generation {retirement_generation}"
+                    ),
+                });
+            }
+            generations.insert(retirement_generation);
+        }
+    }
+    for revocation in &snapshot.revocation_history {
+        if revocations
+            .insert(revocation.generation, revocation)
+            .is_some()
+        {
+            return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                detail: format!(
+                    "multiple revocations at generation {}",
+                    revocation.generation
+                ),
+            });
+        }
+        generations.insert(revocation.generation);
+    }
+
+    let mut events = BTreeMap::new();
+    for generation in generations {
+        let event = match (
+            activations.get(&generation),
+            retirements.get(&generation),
+            revocations.get(&generation),
+        ) {
+            (Some(activated), None, None) => FleetAuthorityHeadEvent::Register {
+                identity: activated.identity.clone(),
+                verification_key: activated.verification_key.clone(),
+                activation_epoch: activated.activation_epoch,
+            },
+            (Some(activated), Some(retired), None)
+                if activated.identity.signer == retired.identity.signer
+                    && activated.identity.key_sequence > retired.identity.key_sequence
+                    && Some(activated.activation_epoch) == retired.retirement_epoch =>
+            {
+                FleetAuthorityHeadEvent::KeyChange {
+                    retired_identity: retired.identity.clone(),
+                    activated_identity: activated.identity.clone(),
+                    verification_key: activated.verification_key.clone(),
+                    cutover_epoch: activated.activation_epoch,
+                }
+            }
+            (None, None, Some(revocation)) => {
+                FleetAuthorityHeadEvent::Revocation((**revocation).clone())
+            }
+            _ => {
+                return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                    detail: format!(
+                        "unreachable authority-head event shape at generation {generation}"
+                    ),
+                });
+            }
+        };
+        events.insert(generation, event);
+    }
+    Ok(events)
+}
+
+fn authority_head_for_snapshot(
+    snapshot: &FleetVerificationRegistrySnapshot,
+    generation: u64,
+) -> Result<ContentHash, FleetIdentityError> {
+    if generation > snapshot.generation {
+        return Err(FleetIdentityError::FutureHistoricalAnchor {
+            accepted_generation: generation,
+            registry_generation: snapshot.generation,
+        });
+    }
+    let events = authority_head_events(snapshot)?;
+    let mut head = ContentHash::compute(b"FrankenEngine.FleetAuthorityChain.v1/genesis");
+    for (event_generation, event) in events {
+        if event_generation > generation {
+            break;
+        }
+        let link = FleetAuthorityHeadLink {
+            generation: event_generation,
+            previous_head: head,
+            event,
+        };
+        let bytes = serde_json::to_vec(&link).map_err(|error| {
+            FleetIdentityError::InvalidRegistrySnapshot {
+                detail: format!("authority-head serialization failed: {error}"),
+            }
+        })?;
+        head = ContentHash::compute(&bytes);
+    }
+    Ok(head)
+}
+
+fn validate_snapshot_transition_chain(
+    snapshot: &FleetVerificationRegistrySnapshot,
+    keys: &BTreeMap<(NodeId, u64), TrustedFleetVerificationKey>,
+) -> Result<(), FleetIdentityError> {
+    if snapshot.generation == 0 {
+        if snapshot.authority_epoch != SecurityEpoch::GENESIS
+            || snapshot.revocation_epoch_floor != SecurityEpoch::GENESIS
+        {
+            return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                detail: "generation-zero authority epochs must be genesis".to_string(),
+            });
+        }
+        return Ok(());
+    }
+
+    let mut events = BTreeMap::<u64, RestoredTransitionEvents>::new();
+    for entry in keys.values() {
+        events
+            .entry(entry.activation_generation)
+            .or_default()
+            .activations
+            .push((
+                entry.identity.signer.clone(),
+                entry.identity.key_sequence,
+                entry.activation_epoch,
+            ));
+        if let (Some(retirement_generation), Some(retirement_epoch)) =
+            (entry.retirement_generation, entry.retirement_epoch)
+        {
+            events
+                .entry(retirement_generation)
+                .or_default()
+                .retirements
+                .push((
+                    entry.identity.signer.clone(),
+                    entry.identity.key_sequence,
+                    retirement_epoch,
+                ));
+        }
+    }
+
+    let mut last_revocation = BTreeMap::<(NodeId, u64), &FleetRevocationSnapshot>::new();
+    let mut previous_revocation_generation = 0;
+    let mut maximum_revocation_epoch = SecurityEpoch::GENESIS;
+    for revocation in &snapshot.revocation_history {
+        if revocation.generation <= previous_revocation_generation
+            || revocation.generation > snapshot.generation
+        {
+            return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                detail: "revocation history is not strictly generation ordered".to_string(),
+            });
+        }
+        previous_revocation_generation = revocation.generation;
+        let coordinate = (
+            revocation.identity.signer.clone(),
+            revocation.identity.key_sequence,
+        );
+        let entry =
+            keys.get(&coordinate)
+                .ok_or_else(|| FleetIdentityError::InvalidRegistrySnapshot {
+                    detail: format!(
+                        "revocation references unknown key {}@{}",
+                        revocation.identity.signer, revocation.identity.key_sequence
+                    ),
+                })?;
+        if entry.identity != revocation.identity
+            || !(entry.activation_epoch..=revocation.transition_epoch)
+                .contains(&revocation.effective_epoch)
+        {
+            return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                detail: format!(
+                    "invalid revocation event for {}@{}",
+                    revocation.identity.signer, revocation.identity.key_sequence
+                ),
+            });
+        }
+        if let Some(previous) = last_revocation.get(&coordinate) {
+            let strengthens = matches!(
+                (previous.policy, revocation.policy),
+                (
+                    FleetRevocationPolicy::Prospective,
+                    FleetRevocationPolicy::Retroactive
+                )
+            ) || (previous.policy == FleetRevocationPolicy::Prospective
+                && revocation.policy == FleetRevocationPolicy::Prospective
+                && revocation.effective_epoch < previous.effective_epoch);
+            if !strengthens {
+                return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                    detail: format!(
+                        "non-monotonic revocation history for {}@{}",
+                        revocation.identity.signer, revocation.identity.key_sequence
+                    ),
+                });
+            }
+        }
+        last_revocation.insert(coordinate.clone(), revocation);
+        maximum_revocation_epoch = maximum_revocation_epoch.max(revocation.transition_epoch);
+        events
+            .entry(revocation.generation)
+            .or_default()
+            .revocations
+            .push((coordinate.0, coordinate.1, revocation.transition_epoch));
+    }
+
+    for entry in keys.values() {
+        let coordinate = (entry.identity.signer.clone(), entry.identity.key_sequence);
+        match (entry.status, last_revocation.get(&coordinate)) {
+            (
+                FleetVerificationKeyStatus::Revoked {
+                    policy,
+                    transition_epoch,
+                    effective_epoch,
+                    revoked_generation,
+                },
+                Some(last),
+            ) if last.policy == policy
+                && last.transition_epoch == transition_epoch
+                && last.effective_epoch == effective_epoch
+                && last.generation == revoked_generation => {}
+            (FleetVerificationKeyStatus::Revoked { .. }, _) => {
+                return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                    detail: format!(
+                        "final revocation state disagrees with history for {}@{}",
+                        entry.identity.signer, entry.identity.key_sequence
+                    ),
+                });
+            }
+            (_, Some(_)) => {
+                return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                    detail: format!(
+                        "revocation history exists for non-revoked key {}@{}",
+                        entry.identity.signer, entry.identity.key_sequence
+                    ),
+                });
+            }
+            (_, None) => {}
+        }
+    }
+
+    let mut expected_generation = 1u64;
+    let mut previous_epoch = SecurityEpoch::GENESIS;
+    let transition_count = events.len();
+    for (transition_index, (generation, transition)) in events.iter().enumerate() {
+        if *generation != expected_generation {
+            return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                detail: format!(
+                    "authority transition generation gap: expected {expected_generation}, got {generation}"
+                ),
+            });
+        }
+        let transition_epoch = match (
+            transition.activations.as_slice(),
+            transition.retirements.as_slice(),
+            transition.revocations.as_slice(),
+        ) {
+            ([(_, _, activation_epoch)], [], []) => *activation_epoch,
+            (
+                [(new_node, new_sequence, activation_epoch)],
+                [(old_node, old_sequence, retirement_epoch)],
+                [],
+            ) if new_node == old_node
+                && new_sequence > old_sequence
+                && activation_epoch == retirement_epoch =>
+            {
+                *activation_epoch
+            }
+            ([], [], [(_, _, revocation_epoch)]) => *revocation_epoch,
+            _ => {
+                return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                    detail: format!(
+                        "unreachable authority transition shape at generation {generation}"
+                    ),
+                });
+            }
+        };
+        if transition_epoch < previous_epoch {
+            return Err(FleetIdentityError::InvalidRegistrySnapshot {
+                detail: format!("authority epoch regresses at generation {generation}"),
+            });
+        }
+        previous_epoch = transition_epoch;
+        if transition_index + 1 < transition_count {
+            expected_generation = expected_generation.checked_add(1).ok_or(
+                FleetIdentityError::InvalidRegistrySnapshot {
+                    detail: "authority transition generation overflow".to_string(),
+                },
+            )?;
+        }
+    }
+    if events.keys().next_back().copied() != Some(snapshot.generation)
+        || previous_epoch != snapshot.authority_epoch
+        || maximum_revocation_epoch != snapshot.revocation_epoch_floor
+    {
+        return Err(FleetIdentityError::InvalidRegistrySnapshot {
+            detail: "authority generation or epoch maxima are unreachable from transition history"
+                .to_string(),
+        });
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -648,6 +2774,55 @@ pub enum FleetIdentityError {
         expected: u64,
         actual: u64,
     },
+    UnexpectedRegistryGeneration {
+        expected: u64,
+        actual: u64,
+    },
+    AuthorityEpochRegression {
+        current: SecurityEpoch,
+        attempted: SecurityEpoch,
+    },
+    RegistryGenerationExhausted,
+    RegistryCapacityExceeded {
+        resource: String,
+        limit: usize,
+    },
+    InvalidKeyWindow {
+        node_id: NodeId,
+        key_sequence: u64,
+        detail: String,
+    },
+    UntrustedMessageEpoch {
+        message_epoch: SecurityEpoch,
+        trusted_epoch: SecurityEpoch,
+    },
+    FutureHistoricalAnchor {
+        accepted_generation: u64,
+        registry_generation: u64,
+    },
+    HistoricalAuthorityFork {
+        generation: u64,
+        expected_head: ContentHash,
+        actual_head: ContentHash,
+    },
+    HistoricalGenerationOutsideKeyWindow {
+        accepted_generation: u64,
+        activation_generation: u64,
+        exclusive_end_generation: Option<u64>,
+    },
+    MissingHistoricalAcceptance {
+        preimage_hash: ContentHash,
+    },
+    InvalidRegistrySnapshot {
+        detail: String,
+    },
+    SnapshotAnchorMismatch {
+        expected_generation: u64,
+        actual_generation: u64,
+    },
+    UnverifiedRegistryAnchor {
+        detail: String,
+    },
     UnknownNode {
         node_id: NodeId,
     },
@@ -662,6 +2837,9 @@ pub enum FleetIdentityError {
         identity: FleetSigningIdentity,
     },
     RevokedKey {
+        identity: FleetSigningIdentity,
+    },
+    RevocationPolicyNotStrengthened {
         identity: FleetSigningIdentity,
     },
     SignerMismatch {
@@ -728,6 +2906,75 @@ impl fmt::Display for FleetIdentityError {
                 f,
                 "unexpected active fleet key for {node_id}: expected={expected}, actual={actual}"
             ),
+            Self::UnexpectedRegistryGeneration { expected, actual } => write!(
+                f,
+                "unexpected fleet registry generation: expected={expected}, actual={actual}"
+            ),
+            Self::AuthorityEpochRegression { current, attempted } => write!(
+                f,
+                "fleet authority epoch regression: current={current}, attempted={attempted}"
+            ),
+            Self::RegistryGenerationExhausted => {
+                write!(f, "fleet registry generation exhausted")
+            }
+            Self::RegistryCapacityExceeded { resource, limit } => {
+                write!(f, "fleet registry {resource} capacity {limit} exhausted")
+            }
+            Self::InvalidKeyWindow {
+                node_id,
+                key_sequence,
+                detail,
+            } => write!(
+                f,
+                "invalid fleet key window for {node_id}@{key_sequence}: {detail}"
+            ),
+            Self::UntrustedMessageEpoch {
+                message_epoch,
+                trusted_epoch,
+            } => write!(
+                f,
+                "fleet message epoch {message_epoch} does not match trusted ingress epoch {trusted_epoch}"
+            ),
+            Self::FutureHistoricalAnchor {
+                accepted_generation,
+                registry_generation,
+            } => write!(
+                f,
+                "historical acceptance generation {accepted_generation} exceeds registry generation {registry_generation}"
+            ),
+            Self::HistoricalAuthorityFork {
+                generation,
+                expected_head,
+                actual_head,
+            } => write!(
+                f,
+                "historical authority fork at generation {generation}: expected {expected_head}, got {actual_head}"
+            ),
+            Self::HistoricalGenerationOutsideKeyWindow {
+                accepted_generation,
+                activation_generation,
+                exclusive_end_generation,
+            } => write!(
+                f,
+                "historical acceptance generation {accepted_generation} is outside key-generation window [{activation_generation}, {exclusive_end_generation:?})"
+            ),
+            Self::MissingHistoricalAcceptance { preimage_hash } => write!(
+                f,
+                "fleet preimage {preimage_hash} is absent from the authenticated historical acceptance set"
+            ),
+            Self::InvalidRegistrySnapshot { detail } => {
+                write!(f, "invalid fleet registry snapshot: {detail}")
+            }
+            Self::SnapshotAnchorMismatch {
+                expected_generation,
+                actual_generation,
+            } => write!(
+                f,
+                "fleet snapshot generation does not match its independent anchor: expected={expected_generation}, actual={actual_generation}"
+            ),
+            Self::UnverifiedRegistryAnchor { detail } => {
+                write!(f, "unverified fleet registry anchor: {detail}")
+            }
             Self::UnknownNode { node_id } => write!(f, "unknown fleet node {node_id}"),
             Self::NoActiveKey { node_id } => {
                 write!(f, "fleet node {node_id} has no active key")
@@ -744,6 +2991,11 @@ impl fmt::Display for FleetIdentityError {
             Self::RevokedKey { identity } => write!(
                 f,
                 "revoked fleet key {}@{}",
+                identity.signer, identity.key_sequence
+            ),
+            Self::RevocationPolicyNotStrengthened { identity } => write!(
+                f,
+                "fleet revocation for {}@{} is not a monotonic strengthening",
                 identity.signer, identity.key_sequence
             ),
             Self::SignerMismatch {
@@ -1011,10 +3263,10 @@ fn revalidate_verification_key(
 fn status_error(entry: &TrustedFleetVerificationKey) -> FleetIdentityError {
     match entry.status {
         FleetVerificationKeyStatus::Active => unreachable!("active key has no status error"),
-        FleetVerificationKeyStatus::Rotated => FleetIdentityError::RotatedKey {
+        FleetVerificationKeyStatus::Retired => FleetIdentityError::RotatedKey {
             identity: entry.identity.clone(),
         },
-        FleetVerificationKeyStatus::Revoked => FleetIdentityError::RevokedKey {
+        FleetVerificationKeyStatus::Revoked { .. } => FleetIdentityError::RevokedKey {
             identity: entry.identity.clone(),
         },
     }
@@ -1685,6 +3937,8 @@ pub trait FleetSignaturePreimageV2: fleet_signature_preimage_v2_sealed::Sealed {
 
     fn fleet_signature_schema_v2(&self) -> &SchemaHash;
 
+    fn fleet_security_epoch(&self) -> SecurityEpoch;
+
     fn fleet_unsigned_view_v2(
         &self,
         identity: &FleetSigningIdentity,
@@ -1723,6 +3977,10 @@ impl FleetSignaturePreimageV2 for EvidencePacket {
 
     fn fleet_signature_schema_v2(&self) -> &SchemaHash {
         &EVIDENCE_SIGNATURE_SCHEMA_HASH_V2
+    }
+
+    fn fleet_security_epoch(&self) -> SecurityEpoch {
+        self.epoch
     }
 
     fn fleet_unsigned_view_v2(
@@ -1813,6 +4071,10 @@ impl FleetSignaturePreimageV2 for ContainmentIntent {
 
     fn fleet_signature_schema_v2(&self) -> &SchemaHash {
         &INTENT_SIGNATURE_SCHEMA_HASH_V2
+    }
+
+    fn fleet_security_epoch(&self) -> SecurityEpoch {
+        self.epoch
     }
 
     fn fleet_unsigned_view_v2(
@@ -1925,6 +4187,10 @@ impl FleetSignaturePreimageV2 for HeartbeatLiveness {
         &HEARTBEAT_SIGNATURE_SCHEMA_HASH_V2
     }
 
+    fn fleet_security_epoch(&self) -> SecurityEpoch {
+        self.epoch
+    }
+
     fn fleet_unsigned_view_v2(
         &self,
         identity: &FleetSigningIdentity,
@@ -2004,6 +4270,10 @@ impl FleetSignaturePreimageV2 for ReconciliationRequest {
 
     fn fleet_signature_schema_v2(&self) -> &SchemaHash {
         &RECONCILIATION_SIGNATURE_SCHEMA_HASH_V2
+    }
+
+    fn fleet_security_epoch(&self) -> SecurityEpoch {
+        self.epoch
     }
 
     fn fleet_unsigned_view_v2(
@@ -2128,6 +4398,10 @@ impl FleetSignaturePreimageV2 for QuorumCheckpoint {
 
     fn fleet_signature_schema_v2(&self) -> &SchemaHash {
         &CHECKPOINT_SIGNATURE_SCHEMA_HASH_V2
+    }
+
+    fn fleet_security_epoch(&self) -> SecurityEpoch {
+        self.epoch
     }
 
     fn fleet_unsigned_view_v2(
@@ -3521,6 +5795,7 @@ impl FleetProtocolState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::{Cell, RefCell};
 
     // -- Helpers --
 
@@ -5149,6 +7424,108 @@ mod tests {
         .expect("valid fleet signer")
     }
 
+    struct TestFleetRegistryAnchorAuthority;
+
+    impl FleetRegistryAnchorAuthority for TestFleetRegistryAnchorAuthority {
+        fn authenticate_current_registry_anchor(
+            &self,
+            claim: &FleetRegistrySnapshotAnchorClaim,
+        ) -> Result<String, FleetIdentityError> {
+            Ok(format!("test-anchor-generation-{}", claim.generation))
+        }
+    }
+
+    fn authenticate_test_anchor(
+        claim: FleetRegistrySnapshotAnchorClaim,
+    ) -> VerifiedFleetRegistrySnapshotAnchor {
+        VerifiedFleetRegistrySnapshotAnchor::authenticate_current(
+            claim,
+            &TestFleetRegistryAnchorAuthority,
+        )
+        .expect("test authority authenticates anchor")
+    }
+
+    struct RecoverableTestAnchorAuthority {
+        current: RefCell<Option<FleetRegistrySnapshotAnchorClaim>>,
+        fail_after_advance_once: Cell<bool>,
+    }
+
+    impl RecoverableTestAnchorAuthority {
+        fn new(fail_after_advance_once: bool) -> Self {
+            Self {
+                current: RefCell::new(None),
+                fail_after_advance_once: Cell::new(fail_after_advance_once),
+            }
+        }
+    }
+
+    impl FleetRegistryAnchorAuthority for RecoverableTestAnchorAuthority {
+        fn authenticate_current_registry_anchor(
+            &self,
+            claim: &FleetRegistrySnapshotAnchorClaim,
+        ) -> Result<String, FleetIdentityError> {
+            if self.current.borrow().as_ref() != Some(claim) {
+                return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "test authority claim is not current".to_string(),
+                });
+            }
+            Ok(format!("test-current-generation-{}", claim.generation))
+        }
+
+        fn prepare_registry_anchor_advance(
+            &self,
+            expected_current: Option<&FleetRegistrySnapshotAnchorClaim>,
+            next: &FleetRegistrySnapshotAnchorClaim,
+        ) -> Result<Vec<u8>, FleetIdentityError> {
+            if self.current.borrow().as_ref() != expected_current {
+                return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "test authority prepare expected a different current claim".to_string(),
+                });
+            }
+            serde_json::to_vec(&(expected_current.cloned(), next.clone())).map_err(|error| {
+                FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: format!("test permit serialization failed: {error}"),
+                }
+            })
+        }
+
+        fn finalize_registry_anchor_advance(
+            &self,
+            permit: &[u8],
+            next: &FleetRegistrySnapshotAnchorClaim,
+        ) -> Result<String, FleetIdentityError> {
+            let (expected, permitted_next): (
+                Option<FleetRegistrySnapshotAnchorClaim>,
+                FleetRegistrySnapshotAnchorClaim,
+            ) = serde_json::from_slice(permit).map_err(|error| {
+                FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: format!("test permit authentication failed: {error}"),
+                }
+            })?;
+            if &permitted_next != next {
+                return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "test permit is bound to a different next claim".to_string(),
+                });
+            }
+            let mut current = self.current.borrow_mut();
+            if current.as_ref() == Some(next) {
+                return Ok(format!("test-finalized-generation-{}", next.generation));
+            }
+            if current.as_ref() != expected.as_ref() {
+                return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "test permit expected a different current claim".to_string(),
+                });
+            }
+            *current = Some(next.clone());
+            if self.fail_after_advance_once.replace(false) {
+                return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "injected lost finalize response".to_string(),
+                });
+            }
+            Ok(format!("test-finalized-generation-{}", next.generation))
+        }
+    }
+
     fn v2_test_reconciliation(node_id: &str) -> ReconciliationRequest {
         ReconciliationRequest {
             node_id: NodeId::new(node_id),
@@ -5193,7 +7570,7 @@ mod tests {
             .sign_detached_message_v2(message)
             .expect("sign v2 message");
         registry
-            .verify_live_detached_message_v2(message, &signature)
+            .verify_live_detached_message_v2(message, &signature, message.fleet_security_epoch())
             .expect("verify v2 message");
     }
 
@@ -5207,7 +7584,11 @@ mod tests {
             .sign_detached_message_v2(original)
             .expect("sign original v2 message");
         assert!(matches!(
-            registry.verify_live_detached_message_v2(tampered, &signature),
+            registry.verify_live_detached_message_v2(
+                tampered,
+                &signature,
+                original.fleet_security_epoch(),
+            ),
             Err(FleetIdentityError::CryptographicFailure { .. })
         ));
     }
@@ -5222,7 +7603,11 @@ mod tests {
             .sign_detached_message_v2(original)
             .expect("sign original v2 projection");
         registry
-            .verify_live_detached_message_v2(legacy_carrier_changed, &signature)
+            .verify_live_detached_message_v2(
+                legacy_carrier_changed,
+                &signature,
+                original.fleet_security_epoch(),
+            )
             .expect("legacy carrier is outside the staged v2 projection");
     }
 
@@ -5466,7 +7851,7 @@ mod tests {
         );
         assert_v2_ingress_limit(
             registry
-                .verify_live_detached_message_v2(&evidence, &signature)
+                .verify_live_detached_message_v2(&evidence, &signature, evidence.epoch)
                 .unwrap_err(),
             "extensions",
         );
@@ -5494,7 +7879,7 @@ mod tests {
         oversized_identity.signer = NodeId::new("s".repeat(FLEET_V2_MAX_IDENTIFIER_BYTES + 1));
         assert_v2_ingress_limit(
             registry
-                .verify_live_detached_message_v2(&evidence, &oversized_identity)
+                .verify_live_detached_message_v2(&evidence, &oversized_identity, evidence.epoch)
                 .unwrap_err(),
             "signer",
         );
@@ -5572,7 +7957,7 @@ mod tests {
 
         let empty_registry = FleetVerificationRegistry::new();
         assert!(matches!(
-            empty_registry.verify_live_detached_message_v2(&evidence, &signature),
+            empty_registry.verify_live_detached_message_v2(&evidence, &signature, evidence.epoch,),
             Err(FleetIdentityError::UnknownNode { .. })
         ));
 
@@ -5589,21 +7974,25 @@ mod tests {
             .sign_preimage(&forged_preimage)
             .expect("sign deliberately wrong identity preimage");
         assert!(matches!(
-            registry.verify_live_detached_message_v2(&evidence, &forged_identity_signature),
+            registry.verify_live_detached_message_v2(
+                &evidence,
+                &forged_identity_signature,
+                evidence.epoch,
+            ),
             Err(FleetIdentityError::SignerMismatch { .. })
         ));
 
         let mut tampered = evidence.clone();
         tampered.posterior_delta_millionths += 1;
         assert!(matches!(
-            registry.verify_live_detached_message_v2(&tampered, &signature),
+            registry.verify_live_detached_message_v2(&tampered, &signature, evidence.epoch),
             Err(FleetIdentityError::CryptographicFailure { .. })
         ));
 
         let mut intent = test_intent("node-a", "ext-a", ContainmentAction::Suspend, 2, 1);
         intent.protocol_version = ProtocolVersion::V2;
         assert!(matches!(
-            registry.verify_live_detached_message_v2(&intent, &signature),
+            registry.verify_live_detached_message_v2(&intent, &signature, intent.epoch),
             Err(FleetIdentityError::CryptographicFailure { .. })
         ));
     }
@@ -5623,7 +8012,8 @@ mod tests {
             .sign_detached_message_v2(&evidence)
             .expect("sign with unregistered sequence");
         assert!(matches!(
-            registry.verify_live_detached_message_v2(&evidence, &unknown_signature),
+            registry
+                .verify_live_detached_message_v2(&evidence, &unknown_signature, evidence.epoch,),
             Err(FleetIdentityError::UnknownKey { .. })
         ));
 
@@ -5632,7 +8022,7 @@ mod tests {
             .expect("sign with registered key");
         wrong_key_id.key_id = unknown_sequence.identity().key_id;
         assert!(matches!(
-            registry.verify_live_detached_message_v2(&evidence, &wrong_key_id),
+            registry.verify_live_detached_message_v2(&evidence, &wrong_key_id, evidence.epoch,),
             Err(FleetIdentityError::UnknownKey { .. })
         ));
 
@@ -5641,7 +8031,8 @@ mod tests {
             .expect("sign with spoofed key");
         spoofed_signature.key_id = signer.identity().key_id;
         assert!(matches!(
-            registry.verify_live_detached_message_v2(&evidence, &spoofed_signature),
+            registry
+                .verify_live_detached_message_v2(&evidence, &spoofed_signature, evidence.epoch,),
             Err(FleetIdentityError::CryptographicFailure { .. })
         ));
     }
@@ -5799,18 +8190,23 @@ mod tests {
         registry
             .register_signer(&old_signer)
             .expect("register old key");
+        assert_eq!(registry.generation(), 1);
 
+        let before_failed_rotation = registry.snapshot();
         assert!(matches!(
-            registry.rotate(
+            registry.rotate_at(
                 &NodeId::new("node-a"),
                 9,
+                1,
                 2,
                 new_signer.verification_key().clone(),
+                SecurityEpoch::from_raw(2),
             ),
             Err(FleetIdentityError::UnexpectedActiveSequence { .. })
         ));
+        assert_eq!(registry.snapshot(), before_failed_rotation);
         registry
-            .verify_live_detached_message_v2(&evidence, &old_signature)
+            .verify_live_detached_message_v2(&evidence, &old_signature, evidence.epoch)
             .expect("failed rotation leaves old key active");
         assert_eq!(
             registry
@@ -5823,67 +8219,868 @@ mod tests {
             .sign_detached_message_v2(&evidence)
             .expect("sign with prospective key");
         assert!(matches!(
-            registry.verify_live_detached_message_v2(&evidence, &not_yet_registered),
+            registry.verify_live_detached_message_v2(
+                &evidence,
+                &not_yet_registered,
+                evidence.epoch,
+            ),
             Err(FleetIdentityError::UnknownKey { .. })
         ));
 
         assert!(matches!(
-            registry.rotate(
+            registry.rotate_at(
                 &NodeId::new("node-a"),
+                1,
                 1,
                 2,
                 old_signer.verification_key().clone(),
+                SecurityEpoch::from_raw(2),
             ),
             Err(FleetIdentityError::KeyAlreadyBound { .. })
         ));
+        assert_eq!(registry.snapshot(), before_failed_rotation);
         registry
-            .verify_live_detached_message_v2(&evidence, &old_signature)
+            .verify_live_detached_message_v2(&evidence, &old_signature, evidence.epoch)
             .expect("key-reuse rejection leaves old key active");
 
         registry
-            .rotate(
+            .rotate_at(
                 &NodeId::new("node-a"),
+                1,
                 1,
                 2,
                 new_signer.verification_key().clone(),
+                SecurityEpoch::from_raw(2),
             )
             .expect("rotate to new key");
+        assert_eq!(registry.generation(), 2);
         assert!(matches!(
-            registry.verify_live_detached_message_v2(&evidence, &old_signature),
+            registry.verify_live_detached_message_v2(&evidence, &old_signature, evidence.epoch),
             Err(FleetIdentityError::RotatedKey { .. })
         ));
 
+        let old_preimage = evidence
+            .fleet_signature_preimage_v2(&old_signature.identity())
+            .expect("old preimage");
+        let old_acceptance = FleetHistoricalAcceptanceContext::new(
+            1,
+            registry.authority_head_at(1).expect("generation-one head"),
+        )
+        .with_accepted_preimage_hash(ContentHash::compute(&old_preimage));
+        registry
+            .verify_historical_detached_message_v2(&evidence, &old_signature, &old_acceptance)
+            .expect("exact pre-cutover artifact remains historical evidence");
+        let forked_acceptance = FleetHistoricalAcceptanceContext::new(
+            1,
+            ContentHash::compute(b"different-authority-fork"),
+        )
+        .with_accepted_preimage_hash(ContentHash::compute(&old_preimage));
+        assert!(matches!(
+            registry.verify_historical_detached_message_v2(
+                &evidence,
+                &old_signature,
+                &forked_acceptance,
+            ),
+            Err(FleetIdentityError::HistoricalAuthorityFork { .. })
+        ));
+        let mut uncommitted_backdate = evidence.clone();
+        uncommitted_backdate.policy_version += 1;
+        assert!(matches!(
+            registry.verify_historical_detached_message_v2(
+                &uncommitted_backdate,
+                &old_signature,
+                &old_acceptance,
+            ),
+            Err(FleetIdentityError::MissingHistoricalAcceptance { .. })
+        ));
+
+        let mut new_evidence = evidence.clone();
+        new_evidence.epoch = SecurityEpoch::from_raw(2);
         let new_signature = new_signer
-            .sign_detached_message_v2(&evidence)
+            .sign_detached_message_v2(&new_evidence)
             .expect("sign with new key");
         registry
-            .verify_live_detached_message_v2(&evidence, &new_signature)
+            .verify_live_detached_message_v2(&new_evidence, &new_signature, new_evidence.epoch)
             .expect("new key verifies");
         registry
-            .revoke(&NodeId::new("node-a"), 2)
+            .revoke_at(
+                &NodeId::new("node-a"),
+                2,
+                2,
+                SecurityEpoch::from_raw(3),
+                SecurityEpoch::from_raw(3),
+                FleetRevocationPolicy::Prospective,
+            )
             .expect("revoke active key");
+        assert_eq!(registry.generation(), 3);
         assert!(matches!(
-            registry.verify_live_detached_message_v2(&evidence, &new_signature),
+            registry.verify_live_detached_message_v2(
+                &new_evidence,
+                &new_signature,
+                new_evidence.epoch,
+            ),
             Err(FleetIdentityError::RevokedKey { .. })
+        ));
+        let new_preimage = new_evidence
+            .fleet_signature_preimage_v2(&new_signature.identity())
+            .expect("new preimage");
+        let prospective_acceptance = FleetHistoricalAcceptanceContext::new(
+            2,
+            registry.authority_head_at(2).expect("generation-two head"),
+        )
+        .with_accepted_preimage_hash(ContentHash::compute(&new_preimage));
+        registry
+            .verify_historical_detached_message_v2(
+                &new_evidence,
+                &new_signature,
+                &prospective_acceptance,
+            )
+            .expect("prospective revocation preserves exact pre-revocation history");
+        let boundary_acceptance = FleetHistoricalAcceptanceContext::new(
+            3,
+            registry
+                .authority_head_at(3)
+                .expect("generation-three head"),
+        )
+        .with_accepted_preimage_hash(ContentHash::compute(&new_preimage));
+        assert!(matches!(
+            registry.verify_historical_detached_message_v2(
+                &new_evidence,
+                &new_signature,
+                &boundary_acceptance,
+            ),
+            Err(FleetIdentityError::HistoricalGenerationOutsideKeyWindow { .. })
         ));
         assert!(matches!(
             registry.active_identity(&NodeId::new("node-a")),
             Err(FleetIdentityError::NoActiveKey { .. })
         ));
+        let before_failed_recovery = registry.snapshot();
         assert!(matches!(
-            registry.rotate(
+            registry.rotate_at(
                 &NodeId::new("node-a"),
                 2,
                 3,
+                3,
                 v2_test_signer("node-a", 3, 16).verification_key().clone(),
+                SecurityEpoch::from_raw(4),
             ),
             Err(FleetIdentityError::NoActiveKey { .. })
         ));
+        assert_eq!(registry.snapshot(), before_failed_recovery);
+        let recovered_signer = v2_test_signer("node-a", 3, 16);
+        registry
+            .recover_revoked_node_at(
+                &NodeId::new("node-a"),
+                3,
+                3,
+                recovered_signer.verification_key().clone(),
+                SecurityEpoch::from_raw(4),
+            )
+            .expect("recover with a stronger replacement key");
+        assert_eq!(registry.generation(), 4);
         assert!(matches!(
-            registry.register_signer(&v2_test_signer("node-a", 3, 16)),
+            registry.register_signer(&v2_test_signer("node-a", 4, 17)),
             Err(FleetIdentityError::NodeAlreadyRegistered { .. })
         ));
-        assert_eq!(registry.active_node_count(), 0);
+        assert_eq!(registry.active_node_count(), 1);
+        assert_eq!(
+            registry
+                .active_identity(&NodeId::new("node-a"))
+                .expect("recovered key active"),
+            recovered_signer.identity()
+        );
+    }
+
+    #[test]
+    fn v2_registry_generation_and_epoch_cas_fail_without_partial_mutation() {
+        let old_signer = v2_test_signer("node-a", 1, 31);
+        let new_signer = v2_test_signer("node-a", 2, 32);
+        let mut registry = FleetVerificationRegistry::new();
+        registry
+            .register_at(
+                NodeId::new("node-a"),
+                1,
+                old_signer.verification_key().clone(),
+                SecurityEpoch::from_raw(4),
+                0,
+            )
+            .expect("register at authority epoch");
+        let before = registry.snapshot();
+
+        assert!(matches!(
+            registry.rotate_at(
+                &NodeId::new("node-a"),
+                1,
+                0,
+                2,
+                new_signer.verification_key().clone(),
+                SecurityEpoch::from_raw(5),
+            ),
+            Err(FleetIdentityError::UnexpectedRegistryGeneration { .. })
+        ));
+        assert_eq!(registry.snapshot(), before);
+
+        assert!(matches!(
+            registry.rotate_at(
+                &NodeId::new("node-a"),
+                1,
+                1,
+                2,
+                new_signer.verification_key().clone(),
+                SecurityEpoch::from_raw(3),
+            ),
+            Err(FleetIdentityError::AuthorityEpochRegression { .. })
+        ));
+        assert_eq!(registry.snapshot(), before);
+    }
+
+    #[test]
+    fn v2_registry_live_verification_rejects_untrusted_epoch_without_mutation() {
+        let signer = v2_test_signer("node-a", 1, 34);
+        let mut evidence = test_evidence("node-a", "ext-a", 1, 100_000);
+        evidence.protocol_version = ProtocolVersion::V2;
+        let signature = signer
+            .sign_detached_message_v2(&evidence)
+            .expect("sign evidence at its declared epoch");
+        let mut registry = FleetVerificationRegistry::new();
+        registry
+            .register_at(
+                NodeId::new("node-a"),
+                1,
+                signer.verification_key().clone(),
+                evidence.epoch,
+                0,
+            )
+            .expect("register signer at evidence epoch");
+        let before = registry.snapshot();
+        let trusted_epoch = SecurityEpoch::from_raw(evidence.epoch.as_u64() + 1);
+
+        assert!(matches!(
+            registry.verify_live_detached_message_v2(&evidence, &signature, trusted_epoch),
+            Err(FleetIdentityError::UntrustedMessageEpoch {
+                message_epoch,
+                trusted_epoch: rejected_epoch,
+            }) if message_epoch == evidence.epoch && rejected_epoch == trusted_epoch
+        ));
+        assert_eq!(registry.snapshot(), before);
+    }
+
+    #[test]
+    fn v2_registry_revocation_strengthening_is_monotonic_and_retroactive() {
+        let signer = v2_test_signer("node-a", 1, 35);
+        let mut evidence = test_evidence("node-a", "ext-a", 1, 100_000);
+        evidence.protocol_version = ProtocolVersion::V2;
+        let signature = signer
+            .sign_detached_message_v2(&evidence)
+            .expect("sign historical evidence");
+        let mut registry = FleetVerificationRegistry::new();
+        registry
+            .register_at(
+                NodeId::new("node-a"),
+                1,
+                signer.verification_key().clone(),
+                evidence.epoch,
+                0,
+            )
+            .expect("register signer");
+        let preimage = evidence
+            .fleet_signature_preimage_v2(&signature.identity())
+            .expect("historical preimage");
+        let acceptance = FleetHistoricalAcceptanceContext::new(
+            1,
+            registry.authority_head_at(1).expect("generation-one head"),
+        )
+        .with_accepted_preimage_hash(ContentHash::compute(&preimage));
+
+        registry
+            .revoke_at(
+                &NodeId::new("node-a"),
+                1,
+                1,
+                SecurityEpoch::from_raw(5),
+                SecurityEpoch::from_raw(4),
+                FleetRevocationPolicy::Prospective,
+            )
+            .expect("prospectively revoke key");
+        registry
+            .verify_historical_detached_message_v2(&evidence, &signature, &acceptance)
+            .expect("accepted evidence predates prospective cutoff");
+
+        for rejected_effective_epoch in [4, 5] {
+            let before = registry.snapshot();
+            assert!(matches!(
+                registry.revoke_at(
+                    &NodeId::new("node-a"),
+                    1,
+                    2,
+                    SecurityEpoch::from_raw(6),
+                    SecurityEpoch::from_raw(rejected_effective_epoch),
+                    FleetRevocationPolicy::Prospective,
+                ),
+                Err(FleetIdentityError::RevocationPolicyNotStrengthened { .. })
+            ));
+            assert_eq!(registry.snapshot(), before);
+        }
+
+        registry
+            .revoke_at(
+                &NodeId::new("node-a"),
+                1,
+                2,
+                SecurityEpoch::from_raw(6),
+                SecurityEpoch::from_raw(3),
+                FleetRevocationPolicy::Prospective,
+            )
+            .expect("move prospective cutoff earlier");
+        assert_eq!(registry.generation(), 3);
+        registry
+            .verify_historical_detached_message_v2(&evidence, &signature, &acceptance)
+            .expect("accepted evidence still predates strengthened cutoff");
+
+        let before_duplicate = registry.snapshot();
+        assert!(matches!(
+            registry.revoke_at(
+                &NodeId::new("node-a"),
+                1,
+                3,
+                SecurityEpoch::from_raw(7),
+                SecurityEpoch::from_raw(3),
+                FleetRevocationPolicy::Prospective,
+            ),
+            Err(FleetIdentityError::RevocationPolicyNotStrengthened { .. })
+        ));
+        assert_eq!(registry.snapshot(), before_duplicate);
+
+        registry
+            .revoke_at(
+                &NodeId::new("node-a"),
+                1,
+                3,
+                SecurityEpoch::from_raw(7),
+                evidence.epoch,
+                FleetRevocationPolicy::Retroactive,
+            )
+            .expect("strengthen prospective revocation to retroactive");
+        assert_eq!(registry.generation(), 4);
+        assert!(matches!(
+            registry.verify_historical_detached_message_v2(&evidence, &signature, &acceptance),
+            Err(FleetIdentityError::RevokedKey { .. })
+        ));
+
+        for rejected_policy in [
+            FleetRevocationPolicy::Retroactive,
+            FleetRevocationPolicy::Prospective,
+        ] {
+            let before = registry.snapshot();
+            assert!(matches!(
+                registry.revoke_at(
+                    &NodeId::new("node-a"),
+                    1,
+                    4,
+                    SecurityEpoch::from_raw(8),
+                    evidence.epoch,
+                    rejected_policy,
+                ),
+                Err(FleetIdentityError::RevocationPolicyNotStrengthened { .. })
+            ));
+            assert_eq!(registry.snapshot(), before);
+        }
+    }
+
+    #[test]
+    fn v2_registry_restore_rejects_genesis_with_revocation_history() {
+        let signer = v2_test_signer("node-a", 1, 35);
+        let registry = FleetVerificationRegistry::new();
+        let mut snapshot = registry.snapshot();
+        snapshot.revocation_history.push(FleetRevocationSnapshot {
+            identity: signer.identity().clone(),
+            generation: 1,
+            transition_epoch: SecurityEpoch::from_raw(1),
+            effective_epoch: SecurityEpoch::from_raw(1),
+            policy: FleetRevocationPolicy::Retroactive,
+        });
+        let anchor = authenticate_test_anchor(FleetRegistrySnapshotAnchorClaim {
+            generation: 0,
+            snapshot_hash: snapshot
+                .digest()
+                .expect("digest malformed genesis snapshot"),
+            prior_snapshot_hash: ContentHash::default(),
+            authority_head: registry
+                .authority_head_at(0)
+                .expect("genesis authority head"),
+        });
+
+        let error = FleetVerificationRegistry::restore_snapshot_from_verified(&snapshot, &anchor)
+            .expect_err("genesis revocation history must fail restore");
+        assert!(matches!(
+            error,
+            FleetIdentityError::InvalidRegistrySnapshot { ref detail }
+                if detail.contains("generation zero")
+        ));
+    }
+
+    #[test]
+    fn v2_registry_restore_rejects_transition_generation_gap_and_duplicate() {
+        let signer_a = v2_test_signer("node-a", 1, 36);
+        let signer_b = v2_test_signer("node-b", 1, 37);
+        let mut registry = FleetVerificationRegistry::new();
+        registry
+            .register_at(
+                NodeId::new("node-a"),
+                1,
+                signer_a.verification_key().clone(),
+                SecurityEpoch::from_raw(1),
+                0,
+            )
+            .expect("register node a");
+        registry
+            .register_at(
+                NodeId::new("node-b"),
+                1,
+                signer_b.verification_key().clone(),
+                SecurityEpoch::from_raw(1),
+                1,
+            )
+            .expect("register node b");
+        let snapshot = registry.snapshot();
+        let authority_head = registry
+            .authority_head_at(registry.generation())
+            .expect("valid authority head");
+
+        let mut gap = snapshot.clone();
+        gap.generation = 3;
+        gap.keys
+            .iter_mut()
+            .find(|record| record.identity.signer == NodeId::new("node-b"))
+            .expect("node b key")
+            .activation_generation = 3;
+        let gap_anchor = authenticate_test_anchor(FleetRegistrySnapshotAnchorClaim {
+            generation: gap.generation,
+            snapshot_hash: gap.digest().expect("digest gap snapshot"),
+            prior_snapshot_hash: ContentHash::default(),
+            authority_head,
+        });
+        let gap_error =
+            FleetVerificationRegistry::restore_snapshot_from_verified(&gap, &gap_anchor)
+                .expect_err("generation gap must fail restore");
+        assert!(matches!(
+            gap_error,
+            FleetIdentityError::InvalidRegistrySnapshot { ref detail }
+                if detail.contains("generation gap")
+        ));
+
+        let mut duplicate = snapshot;
+        duplicate
+            .keys
+            .iter_mut()
+            .find(|record| record.identity.signer == NodeId::new("node-b"))
+            .expect("node b key")
+            .activation_generation = 1;
+        let duplicate_anchor = authenticate_test_anchor(FleetRegistrySnapshotAnchorClaim {
+            generation: duplicate.generation,
+            snapshot_hash: duplicate.digest().expect("digest duplicate snapshot"),
+            prior_snapshot_hash: ContentHash::default(),
+            authority_head,
+        });
+        let duplicate_error = FleetVerificationRegistry::restore_snapshot_from_verified(
+            &duplicate,
+            &duplicate_anchor,
+        )
+        .expect_err("duplicate transition generation must fail restore");
+        assert!(matches!(
+            duplicate_error,
+            FleetIdentityError::InvalidRegistrySnapshot { ref detail }
+                if detail.contains("unreachable authority transition shape")
+        ));
+    }
+
+    #[test]
+    fn v2_registry_restore_rejects_terminal_revoked_retirement_boundary() {
+        let signer = v2_test_signer("node-a", 1, 38);
+        let mut registry = FleetVerificationRegistry::new();
+        registry
+            .register_at(
+                NodeId::new("node-a"),
+                1,
+                signer.verification_key().clone(),
+                SecurityEpoch::from_raw(1),
+                0,
+            )
+            .expect("register node");
+        registry
+            .revoke_at(
+                &NodeId::new("node-a"),
+                1,
+                1,
+                SecurityEpoch::from_raw(3),
+                SecurityEpoch::from_raw(2),
+                FleetRevocationPolicy::Prospective,
+            )
+            .expect("revoke terminal key");
+        let mut snapshot = registry.snapshot();
+        let terminal = snapshot.keys.last_mut().expect("terminal key");
+        terminal.retirement_epoch = Some(SecurityEpoch::from_raw(3));
+        terminal.retirement_generation = Some(2);
+        let anchor = authenticate_test_anchor(FleetRegistrySnapshotAnchorClaim {
+            generation: snapshot.generation,
+            snapshot_hash: snapshot.digest().expect("digest malformed snapshot"),
+            prior_snapshot_hash: ContentHash::default(),
+            authority_head: registry
+                .authority_head_at(registry.generation())
+                .expect("valid authority head"),
+        });
+
+        let error = FleetVerificationRegistry::restore_snapshot_from_verified(&snapshot, &anchor)
+            .expect_err("terminal retirement boundary must fail restore");
+        assert!(matches!(
+            error,
+            FleetIdentityError::InvalidRegistrySnapshot { ref detail }
+                if detail.contains("retirement boundary but no successor")
+        ));
+    }
+
+    #[test]
+    fn v2_registry_anchor_authentication_rejects_empty_receipt() {
+        struct EmptyReceiptAuthority;
+
+        impl FleetRegistryAnchorAuthority for EmptyReceiptAuthority {
+            fn authenticate_current_registry_anchor(
+                &self,
+                _claim: &FleetRegistrySnapshotAnchorClaim,
+            ) -> Result<String, FleetIdentityError> {
+                Ok("  ".to_string())
+            }
+        }
+
+        let claim = FleetVerificationRegistry::new()
+            .snapshot_anchor_claim()
+            .expect("genesis anchor claim");
+        assert!(matches!(
+            VerifiedFleetRegistrySnapshotAnchor::authenticate_current(
+                claim,
+                &EmptyReceiptAuthority,
+            ),
+            Err(FleetIdentityError::UnverifiedRegistryAnchor { .. })
+        ));
+    }
+
+    #[test]
+    fn v2_registry_snapshot_payload_len_guard_rejects_max_plus_one() {
+        validate_fleet_registry_snapshot_payload_len(FLEET_REGISTRY_MAX_SNAPSHOT_BYTES)
+            .expect("exact payload ceiling is accepted");
+        assert!(matches!(
+            validate_fleet_registry_snapshot_payload_len(
+                FLEET_REGISTRY_MAX_SNAPSHOT_BYTES + 1,
+            ),
+            Err(FleetIdentityError::InvalidRegistrySnapshot { ref detail })
+                if detail.contains("snapshot payload")
+        ));
+    }
+
+    #[test]
+    fn v2_registry_snapshot_restore_requires_anchor_and_rebuilds_indexes() {
+        let signer_a1 = v2_test_signer("node-a", 1, 41);
+        let signer_a2 = v2_test_signer("node-a", 2, 42);
+        let signer_b1 = v2_test_signer("node-b", 1, 43);
+        let mut registry = FleetVerificationRegistry::new();
+        registry
+            .register_at(
+                NodeId::new("node-a"),
+                1,
+                signer_a1.verification_key().clone(),
+                SecurityEpoch::from_raw(1),
+                0,
+            )
+            .expect("register node a");
+        registry
+            .register_at(
+                NodeId::new("node-b"),
+                1,
+                signer_b1.verification_key().clone(),
+                SecurityEpoch::from_raw(1),
+                1,
+            )
+            .expect("register node b");
+        registry
+            .rotate_at(
+                &NodeId::new("node-a"),
+                1,
+                2,
+                2,
+                signer_a2.verification_key().clone(),
+                SecurityEpoch::from_raw(2),
+            )
+            .expect("rotate node a");
+        registry
+            .revoke_at(
+                &NodeId::new("node-a"),
+                1,
+                3,
+                SecurityEpoch::from_raw(3),
+                SecurityEpoch::from_raw(3),
+                FleetRevocationPolicy::Retroactive,
+            )
+            .expect("invalidate compromised historical key");
+
+        let snapshot = registry.snapshot();
+        let anchor_claim = registry
+            .snapshot_anchor_claim()
+            .expect("snapshot anchor claim");
+        let anchor = authenticate_test_anchor(anchor_claim.clone());
+        let encoded = serde_json::to_vec(&snapshot).expect("serialize snapshot DTO");
+        let decoded: FleetVerificationRegistrySnapshot =
+            serde_json::from_slice(&encoded).expect("deserialize untrusted snapshot DTO");
+        let restored = FleetVerificationRegistry::restore_snapshot_from_verified(&decoded, &anchor)
+            .expect("validate and restore snapshot");
+        assert_eq!(restored.snapshot(), snapshot);
+        assert_eq!(
+            restored
+                .active_identity(&NodeId::new("node-a"))
+                .expect("restored active node a"),
+            signer_a2.identity()
+        );
+        assert_eq!(
+            restored
+                .active_identity(&NodeId::new("node-b"))
+                .expect("restored active node b"),
+            signer_b1.identity()
+        );
+
+        let mut wrong_generation_claim = anchor_claim.clone();
+        wrong_generation_claim.generation += 1;
+        let wrong_generation_anchor = authenticate_test_anchor(wrong_generation_claim);
+        assert!(matches!(
+            FleetVerificationRegistry::restore_snapshot_from_verified(
+                &snapshot,
+                &wrong_generation_anchor,
+            ),
+            Err(FleetIdentityError::SnapshotAnchorMismatch { .. })
+        ));
+
+        let mut digest_tamper = snapshot.clone();
+        digest_tamper.authority_epoch = SecurityEpoch::from_raw(4);
+        assert!(matches!(
+            FleetVerificationRegistry::restore_snapshot_from_verified(&digest_tamper, &anchor),
+            Err(FleetIdentityError::InvalidRegistrySnapshot { .. })
+        ));
+
+        let mut invalid_window = snapshot.clone();
+        let active = invalid_window
+            .keys
+            .iter_mut()
+            .find(|record| record.status == FleetVerificationKeyStatus::Active)
+            .expect("active record");
+        active.retirement_epoch = Some(invalid_window.authority_epoch);
+        let matching_bad_claim = FleetRegistrySnapshotAnchorClaim {
+            generation: invalid_window.generation,
+            snapshot_hash: invalid_window
+                .digest()
+                .expect("digest malformed snapshot DTO"),
+            prior_snapshot_hash: ContentHash::default(),
+            authority_head: anchor_claim.authority_head,
+        };
+        let matching_bad_anchor = authenticate_test_anchor(matching_bad_claim);
+        assert!(matches!(
+            FleetVerificationRegistry::restore_snapshot_from_verified(
+                &invalid_window,
+                &matching_bad_anchor,
+            ),
+            Err(FleetIdentityError::InvalidKeyWindow { .. })
+        ));
+    }
+
+    #[test]
+    fn durable_registry_recovers_prepared_rotation_and_rejects_stale_wrapper() {
+        let context = EventContext::new(
+            "trace-fleet-durable",
+            "decision-fleet-durable",
+            "policy-fleet-durable",
+        )
+        .expect("valid storage context");
+        let authority = RecoverableTestAnchorAuthority::new(false);
+        let old_signer = v2_test_signer("node-a", 1, 61);
+        let new_signer = v2_test_signer("node-a", 2, 62);
+        let losing_signer = v2_test_signer("node-a", 3, 63);
+        let mut storage = crate::storage_adapter::InMemoryStorageAdapter::new();
+
+        let initial = {
+            let mut persistence = FleetVerificationRegistryPersistence::new(&mut storage, &context);
+            persistence
+                .prepare_initial_registration(
+                    NodeId::new("node-a"),
+                    1,
+                    old_signer.verification_key().clone(),
+                    SecurityEpoch::from_raw(1),
+                    &authority,
+                )
+                .expect("initial authority candidate is durable")
+        };
+        let old_live = initial
+            .finalize_and_publish(&authority)
+            .expect("initial anchor finalizes");
+        assert_eq!(old_live.generation(), 1);
+        assert_eq!(old_live.store_revision(), 1);
+
+        let mut old_message = test_evidence("node-a", "ext-a", 1, 100_000);
+        old_message.protocol_version = ProtocolVersion::V2;
+        old_message.epoch = SecurityEpoch::from_raw(1);
+        let old_signature = old_signer
+            .sign_detached_message_v2(&old_message)
+            .expect("old signer signs");
+        old_live
+            .verify_live_detached_message_v2(
+                &old_message,
+                &old_signature,
+                old_message.epoch,
+                &authority,
+            )
+            .expect("durable current wrapper verifies");
+
+        let prepared_rotation = {
+            let mut persistence = FleetVerificationRegistryPersistence::new(&mut storage, &context);
+            let prepared = persistence
+                .prepare_rotation(
+                    &old_live,
+                    NodeId::new("node-a"),
+                    1,
+                    2,
+                    new_signer.verification_key().clone(),
+                    SecurityEpoch::from_raw(2),
+                    &authority,
+                )
+                .expect("winning rotation candidate is durable");
+            let conflict = persistence
+                .prepare_rotation(
+                    &old_live,
+                    NodeId::new("node-a"),
+                    1,
+                    3,
+                    losing_signer.verification_key().clone(),
+                    SecurityEpoch::from_raw(2),
+                    &authority,
+                )
+                .expect_err("only one concurrent generation-two candidate may commit");
+            assert!(matches!(
+                conflict,
+                FleetRegistryPersistenceError::ConcurrentUpdate { .. }
+            ));
+            prepared
+        };
+        assert_eq!(prepared_rotation.claim().generation, 2);
+        assert_eq!(prepared_rotation.store_revision(), 2);
+        old_live
+            .verify_live_detached_message_v2(
+                &old_message,
+                &old_signature,
+                old_message.epoch,
+                &authority,
+            )
+            .expect("prepared but unfinalized state is not live");
+
+        // Simulate a crash after the DB CAS but before anchor finalization by
+        // discarding the in-memory Pending value. Restore must resume from the
+        // authenticated permit persisted inside the typed row.
+        drop(prepared_rotation);
+        let restored = {
+            let mut persistence = FleetVerificationRegistryPersistence::new(&mut storage, &context);
+            persistence
+                .restore(&authority)
+                .expect("restart finalizes the persisted permit")
+        };
+        assert_eq!(restored.generation(), 2);
+        assert_eq!(restored.store_revision(), 2);
+        assert!(matches!(
+            old_live.verify_live_detached_message_v2(
+                &old_message,
+                &old_signature,
+                old_message.epoch,
+                &authority,
+            ),
+            Err(FleetIdentityError::UnverifiedRegistryAnchor { .. })
+        ));
+
+        let mut new_message = old_message.clone();
+        new_message.epoch = SecurityEpoch::from_raw(2);
+        let new_signature = new_signer
+            .sign_detached_message_v2(&new_message)
+            .expect("new signer signs");
+        restored
+            .verify_live_detached_message_v2(
+                &new_message,
+                &new_signature,
+                new_message.epoch,
+                &authority,
+            )
+            .expect("restored durable rotation verifies only the new key");
+    }
+
+    #[test]
+    fn durable_registry_reconciles_lost_anchor_finalize_response() {
+        let context = EventContext::new(
+            "trace-fleet-finalize-retry",
+            "decision-fleet-finalize-retry",
+            "policy-fleet-finalize-retry",
+        )
+        .expect("valid storage context");
+        let authority = RecoverableTestAnchorAuthority::new(true);
+        let signer = v2_test_signer("node-a", 1, 64);
+        let mut storage = crate::storage_adapter::InMemoryStorageAdapter::new();
+        let pending = {
+            let mut persistence = FleetVerificationRegistryPersistence::new(&mut storage, &context);
+            persistence
+                .prepare_initial_registration(
+                    NodeId::new("node-a"),
+                    1,
+                    signer.verification_key().clone(),
+                    SecurityEpoch::from_raw(1),
+                    &authority,
+                )
+                .expect("initial candidate is durable")
+        };
+        assert!(matches!(
+            pending.finalize_and_publish(&authority),
+            Err(FleetRegistryPersistenceError::Identity(
+                FleetIdentityError::UnverifiedRegistryAnchor { .. }
+            ))
+        ));
+
+        let restored = {
+            let mut persistence = FleetVerificationRegistryPersistence::new(&mut storage, &context);
+            persistence
+                .restore(&authority)
+                .expect("idempotent finalize reconciles a lost response")
+        };
+        assert_eq!(restored.generation(), 1);
+        assert_eq!(restored.store_revision(), 1);
+    }
+
+    #[test]
+    fn durable_registry_write_failure_never_advances_external_anchor() {
+        let context = EventContext::new(
+            "trace-fleet-write-failure",
+            "decision-fleet-write-failure",
+            "policy-fleet-write-failure",
+        )
+        .expect("valid storage context");
+        let authority = RecoverableTestAnchorAuthority::new(false);
+        let signer = v2_test_signer("node-a", 1, 65);
+        let mut storage =
+            crate::storage_adapter::InMemoryStorageAdapter::new().with_fail_writes(true);
+        let error = FleetVerificationRegistryPersistence::new(&mut storage, &context)
+            .prepare_initial_registration(
+                NodeId::new("node-a"),
+                1,
+                signer.verification_key().clone(),
+                SecurityEpoch::from_raw(1),
+                &authority,
+            )
+            .expect_err("durability failure must block publication");
+        assert!(matches!(
+            error,
+            FleetRegistryPersistenceError::Storage(StorageError::WriteRejected { .. })
+        ));
+        assert!(authority.current.borrow().is_none());
     }
 
     #[test]
@@ -5932,7 +9129,6 @@ mod tests {
         ));
         assert_eq!(registry.active_node_count(), 1);
     }
-
     #[test]
     fn v2_engine_and_core_common_preimages_and_signatures_match() {
         use frankenengine_core::fleet_immune_protocol as core_fleet;

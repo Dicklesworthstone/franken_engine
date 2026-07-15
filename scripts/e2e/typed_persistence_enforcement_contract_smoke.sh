@@ -65,14 +65,17 @@ run_check() {
     .schema_version == "franken-engine.typed-persistence-enforcement-contract.v1"
     and .bead_id == "bd-gvnex"
     and .parent_bead_id == "bd-xyku0"
+    and (.extension_bead_ids | index("bd-q8x8x.5") != null)
     and .inventory_doc == "docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md"
-    and (.scope_store_kinds | sort == ["IfcProvenance", "ReplacementLineage", "SpecializationIndex"])
-    and (.scope_inventory_rows | length == 3)
+    and (.scope_store_kinds | sort == ["FleetTrustState", "IfcProvenance", "ReplacementLineage", "SpecializationIndex"])
+    and (.scope_inventory_rows | length == 4)
     and (.typed_boundary_requirements.primary_authority_required == true)
     and (.typed_boundary_requirements.generic_authority_must_become_non_authoritative == true)
     and (.typed_boundary_requirements.legacy_inputs_allowed_only_for_explicit_lossless_backfill_planning == true)
     and (.typed_boundary_requirements.implicit_legacy_acceptance_forbidden == true)
     and (.typed_boundary_requirements.ambiguous_legacy_data_fails_closed == true)
+    and (.typed_boundary_requirements.authoritative_helpers | index("FleetVerificationRegistryPersistence") != null)
+    and (.typed_boundary_requirements.authoritative_helpers | index("StorageAdapter.compare_and_swap_fleet_trust_state") != null)
     and (.typed_boundary_requirements.authoritative_helpers | index("TypedStorageAdapterExt.put_typed") != null)
     and (.typed_boundary_requirements.authoritative_helpers | index("TypedStorageAdapterExt.get_typed_by_id") != null)
     and (.typed_boundary_requirements.authoritative_helpers | index("TypedStorageAdapterExt.query_typed") != null)
@@ -88,6 +91,7 @@ run_check() {
 
   grep -Fq '| replacement lineage log | sqlmodel_rust on frankensqlite |' "$inventory_path" || record_failure "inventory missing replacement lineage typed row"
   grep -Fq '| IFC provenance index | sqlmodel_rust on frankensqlite |' "$inventory_path" || record_failure "inventory missing IFC provenance typed row"
+  grep -Fq '| fleet trust state | sqlmodel_rust on frankensqlite |' "$inventory_path" || record_failure "inventory missing fleet trust-state typed row"
   grep -Fq '| specialization index | sqlmodel_rust on frankensqlite |' "$inventory_path" || record_failure "inventory missing specialization index typed row"
 
   check_no_forbidden_claims "$docs_path"

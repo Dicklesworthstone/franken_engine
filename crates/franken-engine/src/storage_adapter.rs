@@ -15,7 +15,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::typed_persistence_models::{
-    IfcProvenanceEntry, ReplacementLineageEntry, ShadowEvidenceJournalEntry,
+    FleetTrustStateEntry, IfcProvenanceEntry, ReplacementLineageEntry, ShadowEvidenceJournalEntry,
     SpecializationIndexEntry, TypedFrankenSqliteSession, TypedStoreRecord,
     open_typed_frankensqlite_memory_session,
 };
@@ -43,6 +43,7 @@ pub enum StoreKind {
     ReplacementLineage,
     IfcProvenance,
     SpecializationIndex,
+    FleetTrustState,
 }
 
 impl StoreKind {
@@ -58,6 +59,7 @@ impl StoreKind {
             Self::ReplacementLineage => "replacement_lineage",
             Self::IfcProvenance => "ifc_provenance",
             Self::SpecializationIndex => "specialization_index",
+            Self::FleetTrustState => "fleet_trust_state",
         }
     }
 
@@ -77,6 +79,7 @@ impl StoreKind {
             Self::ReplacementLineage => "sqlmodel_rust::ReplacementLineageEntry",
             Self::IfcProvenance => "sqlmodel_rust::IfcProvenanceEntry",
             Self::SpecializationIndex => "sqlmodel_rust::SpecializationIndexEntry",
+            Self::FleetTrustState => "sqlmodel_rust::FleetTrustStateEntry",
         }
     }
 }
@@ -101,6 +104,7 @@ fn is_typed_heavy_store(store: StoreKind) -> bool {
             | StoreKind::ReplacementLineage
             | StoreKind::IfcProvenance
             | StoreKind::SpecializationIndex
+            | StoreKind::FleetTrustState
     )
 }
 
@@ -114,6 +118,7 @@ fn typed_heavy_expected_model(store: StoreKind) -> Option<&'static str> {
         StoreKind::ReplacementLineage => Some("ReplacementLineageEntry"),
         StoreKind::IfcProvenance => Some("IfcProvenanceEntry"),
         StoreKind::SpecializationIndex => Some("SpecializationIndexEntry"),
+        StoreKind::FleetTrustState => Some("FleetTrustStateEntry"),
         _ => None,
     }
 }
@@ -141,6 +146,7 @@ fn typed_heavy_legacy_prefixes(store: StoreKind) -> &'static [&'static str] {
         ],
         StoreKind::SpecializationIndex => &["receipt:", "benchmark:", "invalidation:"],
         StoreKind::ShadowEvidenceJournal => &[],
+        StoreKind::FleetTrustState => &[],
         _ => &[],
     }
 }
@@ -232,6 +238,7 @@ fn typed_heavy_payload_matches_typed_model(
         StoreKind::SpecializationIndex => {
             SpecializationIndexEntry::from_store_record(&record).is_ok()
         }
+        StoreKind::FleetTrustState => FleetTrustStateEntry::from_store_record(&record).is_ok(),
         _ => false,
     }
 }
@@ -259,6 +266,7 @@ fn typed_heavy_read_policy_error(
 
 fn enforce_typed_heavy_put_policy(
     store: StoreKind,
+    operation: &str,
     key: &str,
     value: &[u8],
     metadata: &BTreeMap<String, String>,
@@ -266,13 +274,65 @@ fn enforce_typed_heavy_put_policy(
     if !is_typed_heavy_store(store) {
         return Ok(());
     }
+    if store == StoreKind::FleetTrustState {
+        return Err(StorageError::WriteRejected {
+            detail: format!(
+                "{operation} on rollback-sensitive store {store} for key `{key}` is forbidden; use the specialized fleet trust-state compare-and-swap path"
+            ),
+        });
+    }
     if typed_heavy_put_is_current_typed_envelope(store, key, value, metadata) {
         return Ok(());
     }
     if typed_heavy_put_is_explicit_generic_compat_row(store, key, metadata) {
         return Ok(());
     }
-    Err(typed_heavy_write_policy_error(store, "put", key))
+    Err(typed_heavy_write_policy_error(store, operation, key))
+}
+
+fn enforce_fleet_trust_state_cas_policy(
+    authorization: &FleetTrustStateCasAuthorization,
+    key: &str,
+    value: &[u8],
+    metadata: &BTreeMap<String, String>,
+) -> Result<FleetTrustStateEntry, StorageError> {
+    let record = StoreRecord {
+        store: StoreKind::FleetTrustState,
+        key: key.to_string(),
+        value: value.to_vec(),
+        metadata: metadata.clone(),
+        revision: 0,
+    };
+    let model = FleetTrustStateEntry::from_store_record(&record).map_err(|_| {
+        StorageError::WriteRejected {
+            detail: format!(
+                "specialized fleet trust-state compare-and-swap requires a valid FleetTrustStateEntry envelope for key `{key}`"
+            ),
+        }
+    })?;
+    let canonical = model.to_store_record(0)?;
+    if canonical.key != key || canonical.value != value || canonical.metadata != *metadata {
+        return Err(StorageError::WriteRejected {
+            detail: "fleet trust-state envelope and metadata must use the canonical typed encoding"
+                .to_string(),
+        });
+    }
+    if model.snapshot_hash.as_str() != authorization.next_snapshot_hash() {
+        return Err(StorageError::WriteRejected {
+            detail: "fleet trust-state CAS authorization is bound to a different next snapshot"
+                .to_string(),
+        });
+    }
+    let expected_prior_snapshot_hash = authorization
+        .expected_current_snapshot_hash()
+        .unwrap_or("0000000000000000000000000000000000000000000000000000000000000000");
+    if model.prior_snapshot_hash != expected_prior_snapshot_hash {
+        return Err(StorageError::WriteRejected {
+            detail: "fleet trust-state candidate is not chained to the authorized prior snapshot"
+                .to_string(),
+        });
+    }
+    Ok(model)
 }
 
 fn enforce_typed_heavy_key_access_policy(
@@ -300,6 +360,13 @@ fn enforce_typed_heavy_delete_policy(
 ) -> Result<(), StorageError> {
     if !is_typed_heavy_store(store) {
         return Ok(());
+    }
+    if store == StoreKind::FleetTrustState {
+        return Err(StorageError::WriteRejected {
+            detail: format!(
+                "delete on rollback-sensitive store {store} for key `{key}` is forbidden; fleet authority history is append-only through the specialized compare-and-swap path"
+            ),
+        });
     }
 
     if !typed_heavy_key_is_recognized(store, key) {
@@ -413,6 +480,50 @@ pub struct StoreRecord {
     pub value: Vec<u8>,
     pub metadata: BTreeMap<String, String>,
     pub revision: u64,
+}
+
+/// Atomic single-record compare-and-swap outcome.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CompareAndSwapOutcome {
+    Applied(StoreRecord),
+    Conflict { current: Option<StoreRecord> },
+}
+
+/// Opaque authorization required for rollback-sensitive fleet-state CAS.
+///
+/// Only the fleet lifecycle persistence surface can mint this token. Generic
+/// typed and generic adapter callers therefore cannot overwrite authority
+/// state even when they can construct a structurally valid envelope.
+#[derive(Debug)]
+pub struct FleetTrustStateCasAuthorization {
+    expected_current_snapshot_hash: Option<String>,
+    next_snapshot_hash: String,
+}
+
+impl FleetTrustStateCasAuthorization {
+    pub(crate) fn new(
+        expected_current_snapshot_hash: Option<String>,
+        next_snapshot_hash: String,
+    ) -> Self {
+        Self {
+            expected_current_snapshot_hash,
+            next_snapshot_hash,
+        }
+    }
+
+    /// Snapshot hash that must still identify the current singleton row.
+    ///
+    /// The token remains impossible to mint outside this crate, while external
+    /// [`StorageAdapter`] implementations can enforce the required hash-bound
+    /// transactional CAS instead of trusting only a database revision.
+    pub fn expected_current_snapshot_hash(&self) -> Option<&str> {
+        self.expected_current_snapshot_hash.as_deref()
+    }
+
+    /// Snapshot hash of the only candidate authorized by this token.
+    pub fn next_snapshot_hash(&self) -> &str {
+        &self.next_snapshot_hash
+    }
 }
 
 /// Query selector for deterministic reads.
@@ -537,6 +648,41 @@ pub trait StorageAdapter {
         metadata: BTreeMap<String, String>,
         context: &EventContext,
     ) -> Result<StoreRecord, StorageError>;
+
+    /// Atomically replace one record only when its revision still matches.
+    ///
+    /// `None` requires the record to be absent. Backends that cannot provide
+    /// one transactional compare-and-swap must fail closed rather than emulate
+    /// it with a read followed by a write.
+    fn compare_and_swap(
+        &mut self,
+        store: StoreKind,
+        key: String,
+        expected_revision: Option<u64>,
+        value: Vec<u8>,
+        metadata: BTreeMap<String, String>,
+        context: &EventContext,
+    ) -> Result<CompareAndSwapOutcome, StorageError>;
+
+    /// Atomically replace the single rollback-sensitive fleet authority row.
+    ///
+    /// Implementations must require a real transactional CAS. The opaque
+    /// authorization prevents public generic storage helpers from becoming an
+    /// authority-state mutation path.
+    fn compare_and_swap_fleet_trust_state(
+        &mut self,
+        _authorization: &FleetTrustStateCasAuthorization,
+        _key: String,
+        _expected_revision: Option<u64>,
+        _value: Vec<u8>,
+        _metadata: BTreeMap<String, String>,
+        _context: &EventContext,
+    ) -> Result<CompareAndSwapOutcome, StorageError> {
+        Err(StorageError::WriteRejected {
+            detail: "specialized fleet trust-state CAS is not implemented by this storage adapter"
+                .to_string(),
+        })
+    }
 
     fn get(
         &mut self,
@@ -751,7 +897,7 @@ impl StorageAdapter for InMemoryStorageAdapter {
                 });
             }
             Self::validate_key(&key)?;
-            enforce_typed_heavy_put_policy(store, &key, &value, &metadata)?;
+            enforce_typed_heavy_put_policy(store, "put", &key, &value, &metadata)?;
             Ok(self
                 .get_or_insert_state(store)
                 .put(store, key, value, metadata))
@@ -760,6 +906,96 @@ impl StorageAdapter for InMemoryStorageAdapter {
         self.record_event(
             context,
             "put",
+            if result.is_ok() { "ok" } else { "error" },
+            result.as_ref().err(),
+        );
+        result
+    }
+
+    fn compare_and_swap(
+        &mut self,
+        store: StoreKind,
+        key: String,
+        expected_revision: Option<u64>,
+        value: Vec<u8>,
+        metadata: BTreeMap<String, String>,
+        context: &EventContext,
+    ) -> Result<CompareAndSwapOutcome, StorageError> {
+        let result = (|| {
+            if self.fail_writes {
+                return Err(StorageError::WriteRejected {
+                    detail: "write failure injected".to_string(),
+                });
+            }
+            Self::validate_key(&key)?;
+            enforce_typed_heavy_put_policy(store, "compare_and_swap", &key, &value, &metadata)?;
+            let current = self
+                .stores
+                .get(&store)
+                .and_then(|state| state.records.get(&key).cloned());
+            if current.as_ref().map(|record| record.revision) != expected_revision {
+                return Ok(CompareAndSwapOutcome::Conflict { current });
+            }
+            let record = self
+                .get_or_insert_state(store)
+                .put(store, key, value, metadata);
+            Ok(CompareAndSwapOutcome::Applied(record))
+        })();
+
+        self.record_event(
+            context,
+            "compare_and_swap",
+            if result.is_ok() { "ok" } else { "error" },
+            result.as_ref().err(),
+        );
+        result
+    }
+
+    fn compare_and_swap_fleet_trust_state(
+        &mut self,
+        authorization: &FleetTrustStateCasAuthorization,
+        key: String,
+        expected_revision: Option<u64>,
+        value: Vec<u8>,
+        metadata: BTreeMap<String, String>,
+        context: &EventContext,
+    ) -> Result<CompareAndSwapOutcome, StorageError> {
+        let result = (|| {
+            if self.fail_writes {
+                return Err(StorageError::WriteRejected {
+                    detail: "write failure injected".to_string(),
+                });
+            }
+            Self::validate_key(&key)?;
+            enforce_fleet_trust_state_cas_policy(authorization, &key, &value, &metadata)?;
+            let current = self
+                .stores
+                .get(&StoreKind::FleetTrustState)
+                .and_then(|state| state.records.get(&key).cloned());
+            let current_snapshot_hash = current
+                .as_ref()
+                .map(FleetTrustStateEntry::from_store_record)
+                .transpose()?
+                .map(|entry| entry.snapshot_hash);
+            if current.as_ref().map(|record| record.revision) != expected_revision
+                || current_snapshot_hash.as_deref()
+                    != authorization.expected_current_snapshot_hash()
+            {
+                return Ok(CompareAndSwapOutcome::Conflict { current });
+            }
+            let state = self.get_or_insert_state(StoreKind::FleetTrustState);
+            if state.next_revision == u64::MAX {
+                return Err(StorageError::WriteRejected {
+                    detail: "fleet trust-state revision space is exhausted".to_string(),
+                });
+            }
+            let record = state.put(StoreKind::FleetTrustState, key, value, metadata);
+            Ok(CompareAndSwapOutcome::Applied(record))
+        })();
+
+        self.record_event(
+            context,
+            "compare_and_swap_fleet_trust_state",
             if result.is_ok() { "ok" } else { "error" },
             result.as_ref().err(),
         );
@@ -890,7 +1126,13 @@ impl StorageAdapter for InMemoryStorageAdapter {
             let mut out = Vec::with_capacity(entries.len());
             for entry in entries {
                 Self::validate_key(&entry.key)?;
-                enforce_typed_heavy_put_policy(store, &entry.key, &entry.value, &entry.metadata)?;
+                enforce_typed_heavy_put_policy(
+                    store,
+                    "put_batch",
+                    &entry.key,
+                    &entry.value,
+                    &entry.metadata,
+                )?;
                 out.push(staged.put(store, entry.key, entry.value, entry.metadata));
             }
             self.stores.insert(store, staged);
@@ -931,6 +1173,29 @@ pub trait FrankensqliteBackend {
         value: &[u8],
         metadata: &BTreeMap<String, String>,
     ) -> Result<StoreRecord, String>;
+    fn compare_and_swap_record(
+        &mut self,
+        _store: StoreKind,
+        _key: &str,
+        _expected_revision: Option<u64>,
+        _value: &[u8],
+        _metadata: &BTreeMap<String, String>,
+    ) -> Result<CompareAndSwapOutcome, String> {
+        Err("atomic compare-and-swap is not implemented by this frankensqlite backend".to_string())
+    }
+    fn compare_and_swap_fleet_trust_state_record(
+        &mut self,
+        _key: &str,
+        _expected_revision: Option<u64>,
+        _expected_current_snapshot_hash: Option<&str>,
+        _value: &[u8],
+        _metadata: &BTreeMap<String, String>,
+    ) -> Result<CompareAndSwapOutcome, String> {
+        Err(
+            "atomic fleet trust-state revision-plus-snapshot CAS is not implemented by this frankensqlite backend"
+                .to_string(),
+        )
+    }
     fn get_record(&self, store: StoreKind, key: &str) -> Result<Option<StoreRecord>, String>;
     fn query_records(
         &self,
@@ -1137,7 +1402,7 @@ impl<B: FrankensqliteBackend> StorageAdapter for FrankensqliteStorageAdapter<B> 
     ) -> Result<StoreRecord, StorageError> {
         let result = (|| {
             InMemoryStorageAdapter::validate_key(&key)?;
-            enforce_typed_heavy_put_policy(store, &key, &value, &metadata)?;
+            enforce_typed_heavy_put_policy(store, "put", &key, &value, &metadata)?;
             self.backend
                 .put_record(store, &key, &value, &metadata)
                 .map_err(Self::map_backend_error)
@@ -1146,6 +1411,64 @@ impl<B: FrankensqliteBackend> StorageAdapter for FrankensqliteStorageAdapter<B> 
         self.record_event(
             context,
             "put",
+            if result.is_ok() { "ok" } else { "error" },
+            result.as_ref().err(),
+        );
+        result
+    }
+
+    fn compare_and_swap(
+        &mut self,
+        store: StoreKind,
+        key: String,
+        expected_revision: Option<u64>,
+        value: Vec<u8>,
+        metadata: BTreeMap<String, String>,
+        context: &EventContext,
+    ) -> Result<CompareAndSwapOutcome, StorageError> {
+        let result = (|| {
+            InMemoryStorageAdapter::validate_key(&key)?;
+            enforce_typed_heavy_put_policy(store, "compare_and_swap", &key, &value, &metadata)?;
+            self.backend
+                .compare_and_swap_record(store, &key, expected_revision, &value, &metadata)
+                .map_err(Self::map_backend_error)
+        })();
+
+        self.record_event(
+            context,
+            "compare_and_swap",
+            if result.is_ok() { "ok" } else { "error" },
+            result.as_ref().err(),
+        );
+        result
+    }
+
+    fn compare_and_swap_fleet_trust_state(
+        &mut self,
+        authorization: &FleetTrustStateCasAuthorization,
+        key: String,
+        expected_revision: Option<u64>,
+        value: Vec<u8>,
+        metadata: BTreeMap<String, String>,
+        context: &EventContext,
+    ) -> Result<CompareAndSwapOutcome, StorageError> {
+        let result = (|| {
+            InMemoryStorageAdapter::validate_key(&key)?;
+            enforce_fleet_trust_state_cas_policy(authorization, &key, &value, &metadata)?;
+            self.backend
+                .compare_and_swap_fleet_trust_state_record(
+                    &key,
+                    expected_revision,
+                    authorization.expected_current_snapshot_hash(),
+                    &value,
+                    &metadata,
+                )
+                .map_err(Self::map_backend_error)
+        })();
+
+        self.record_event(
+            context,
+            "compare_and_swap_fleet_trust_state",
             if result.is_ok() { "ok" } else { "error" },
             result.as_ref().err(),
         );
@@ -1251,7 +1574,13 @@ impl<B: FrankensqliteBackend> StorageAdapter for FrankensqliteStorageAdapter<B> 
         let result = (|| {
             for entry in &entries {
                 InMemoryStorageAdapter::validate_key(&entry.key)?;
-                enforce_typed_heavy_put_policy(store, &entry.key, &entry.value, &entry.metadata)?;
+                enforce_typed_heavy_put_policy(
+                    store,
+                    "put_batch",
+                    &entry.key,
+                    &entry.value,
+                    &entry.metadata,
+                )?;
             }
             self.backend
                 .put_batch(store, &entries)
@@ -1597,6 +1926,7 @@ mod tests {
             (StoreKind::ReplacementLineage, "replacement_lineage"),
             (StoreKind::IfcProvenance, "ifc_provenance"),
             (StoreKind::SpecializationIndex, "specialization_index"),
+            (StoreKind::FleetTrustState, "fleet_trust_state"),
         ];
         for (kind, expected) in cases {
             assert_eq!(kind.as_str(), expected, "StoreKind::{kind:?}");
@@ -1642,6 +1972,10 @@ mod tests {
                 StoreKind::SpecializationIndex,
                 "sqlmodel_rust::SpecializationIndexEntry",
             ),
+            (
+                StoreKind::FleetTrustState,
+                "sqlmodel_rust::FleetTrustStateEntry",
+            ),
         ];
         for (kind, expected) in cases {
             assert_eq!(kind.integration_point(), expected, "StoreKind::{kind:?}");
@@ -1660,6 +1994,7 @@ mod tests {
             StoreKind::ReplacementLineage,
             StoreKind::IfcProvenance,
             StoreKind::SpecializationIndex,
+            StoreKind::FleetTrustState,
         ] {
             assert_eq!(format!("{kind}"), kind.as_str());
         }
@@ -2807,6 +3142,7 @@ mod tests {
             StoreKind::ReplacementLineage,
             StoreKind::IfcProvenance,
             StoreKind::SpecializationIndex,
+            StoreKind::FleetTrustState,
         ];
         let displays: Vec<String> = kinds.iter().map(|k| k.to_string()).collect();
         let mut deduped = displays.clone();
@@ -2834,6 +3170,7 @@ mod tests {
             StoreKind::ReplacementLineage,
             StoreKind::IfcProvenance,
             StoreKind::SpecializationIndex,
+            StoreKind::FleetTrustState,
         ] {
             let json = serde_json::to_string(&kind).expect("serde serialization should succeed");
             let back: StoreKind =
@@ -3698,5 +4035,356 @@ mod tests {
             )
             .expect("recognized compatibility query should succeed");
         assert!(rows.is_empty());
+    }
+
+    fn fleet_trust_state_entry(generation: u64, authority_epoch: u64) -> FleetTrustStateEntry {
+        FleetTrustStateEntry {
+            state_id: crate::typed_persistence_models::FLEET_TRUST_STATE_RECORD_ID,
+            schema_version: crate::typed_persistence_models::FLEET_TRUST_STATE_SCHEMA_VERSION
+                .to_string(),
+            generation_decimal: format!("{generation:020}"),
+            authority_epoch_decimal: format!("{authority_epoch:020}"),
+            snapshot_hash: "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+                .to_string(),
+            prior_snapshot_hash: if generation <= 1 {
+                "0000000000000000000000000000000000000000000000000000000000000000".to_string()
+            } else {
+                "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a".to_string()
+            },
+            authority_head_hash: "1111111111111111111111111111111111111111111111111111111111111111"
+                .to_string(),
+            anchor_advance_permit_hex: "a1b2c3d4".to_string(),
+            snapshot_json: "{}".to_string(),
+        }
+    }
+
+    #[test]
+    fn fleet_trust_state_rejects_generic_put_batch_and_delete() {
+        let mut adapter = InMemoryStorageAdapter::new();
+        let entry = fleet_trust_state_entry(1, 1);
+        let authorization = FleetTrustStateCasAuthorization::new(None, entry.snapshot_hash.clone());
+        let encoded = entry
+            .to_batch_put_entry()
+            .expect("valid fleet trust state should encode");
+
+        let put_error = adapter
+            .put(
+                StoreKind::FleetTrustState,
+                encoded.key.clone(),
+                encoded.value.clone(),
+                encoded.metadata.clone(),
+                &ctx(),
+            )
+            .expect_err("generic put must not bypass fleet authority CAS");
+        assert!(matches!(put_error, StorageError::WriteRejected { .. }));
+        assert!(
+            put_error
+                .to_string()
+                .contains("specialized fleet trust-state")
+        );
+
+        let batch_error = adapter
+            .put_batch(StoreKind::FleetTrustState, vec![encoded.clone()], &ctx())
+            .expect_err("generic batch must not bypass fleet authority CAS");
+        assert!(matches!(batch_error, StorageError::WriteRejected { .. }));
+
+        let generic_cas_error = adapter
+            .compare_and_swap(
+                StoreKind::FleetTrustState,
+                encoded.key.clone(),
+                None,
+                encoded.value.clone(),
+                encoded.metadata.clone(),
+                &ctx(),
+            )
+            .expect_err("generic CAS must not bypass the opaque authorization");
+        assert!(matches!(
+            generic_cas_error,
+            StorageError::WriteRejected { .. }
+        ));
+
+        let noncanonical_key_error = adapter
+            .compare_and_swap_fleet_trust_state(
+                &authorization,
+                "typed/fleet_trust_state/+1".to_string(),
+                None,
+                encoded.value.clone(),
+                encoded.metadata.clone(),
+                &ctx(),
+            )
+            .expect_err("alternate singleton key spelling must fail closed");
+        assert!(matches!(
+            noncanonical_key_error,
+            StorageError::WriteRejected { .. }
+        ));
+        assert!(
+            noncanonical_key_error
+                .to_string()
+                .contains("canonical typed encoding")
+        );
+
+        let applied = match adapter
+            .compare_and_swap_fleet_trust_state(
+                &authorization,
+                encoded.key.clone(),
+                None,
+                encoded.value,
+                encoded.metadata,
+                &ctx(),
+            )
+            .expect("fleet CAS should be available")
+        {
+            CompareAndSwapOutcome::Applied(record) => record,
+            CompareAndSwapOutcome::Conflict { .. } => panic!("initial fleet CAS must apply"),
+        };
+        let delete_error = adapter
+            .delete(StoreKind::FleetTrustState, &applied.key, &ctx())
+            .expect_err("fleet authority state must be append-only");
+        assert!(matches!(delete_error, StorageError::WriteRejected { .. }));
+        assert!(delete_error.to_string().contains("append-only"));
+    }
+
+    #[test]
+    fn fleet_trust_state_compare_and_swap_rejects_stale_concurrent_writer() {
+        let mut adapter = InMemoryStorageAdapter::new();
+        let first_model = fleet_trust_state_entry(1, 10);
+        let first_authorization =
+            FleetTrustStateCasAuthorization::new(None, first_model.snapshot_hash.clone());
+        let first = first_model
+            .to_batch_put_entry()
+            .expect("first fleet state should encode");
+        let first_record = match adapter
+            .compare_and_swap_fleet_trust_state(
+                &first_authorization,
+                first.key.clone(),
+                None,
+                first.value,
+                first.metadata,
+                &ctx(),
+            )
+            .expect("initial fleet CAS should execute")
+        {
+            CompareAndSwapOutcome::Applied(record) => record,
+            CompareAndSwapOutcome::Conflict { .. } => panic!("initial fleet CAS must apply"),
+        };
+
+        let second_model = fleet_trust_state_entry(2, 11);
+        let second_authorization = FleetTrustStateCasAuthorization::new(
+            Some(first_model.snapshot_hash.clone()),
+            second_model.snapshot_hash.clone(),
+        );
+        let second = second_model
+            .to_batch_put_entry()
+            .expect("second fleet state should encode");
+        let second_record = match adapter
+            .compare_and_swap_fleet_trust_state(
+                &second_authorization,
+                second.key.clone(),
+                Some(first_record.revision),
+                second.value,
+                second.metadata,
+                &ctx(),
+            )
+            .expect("winning rotation CAS should execute")
+        {
+            CompareAndSwapOutcome::Applied(record) => record,
+            CompareAndSwapOutcome::Conflict { .. } => panic!("fresh fleet CAS must apply"),
+        };
+
+        let stale_model = fleet_trust_state_entry(3, 12);
+        let stale_authorization = FleetTrustStateCasAuthorization::new(
+            Some(first_model.snapshot_hash),
+            stale_model.snapshot_hash.clone(),
+        );
+        let stale = stale_model
+            .to_batch_put_entry()
+            .expect("stale fleet state should encode");
+        let conflict = adapter
+            .compare_and_swap_fleet_trust_state(
+                &stale_authorization,
+                stale.key,
+                Some(first_record.revision),
+                stale.value,
+                stale.metadata,
+                &ctx(),
+            )
+            .expect("stale fleet CAS should return a conflict");
+        assert_eq!(
+            conflict,
+            CompareAndSwapOutcome::Conflict {
+                current: Some(second_record.clone())
+            }
+        );
+        let stored = adapter
+            .get(StoreKind::FleetTrustState, &second_record.key, &ctx())
+            .expect("fleet state read should succeed")
+            .expect("winning fleet state should remain");
+        assert_eq!(stored, second_record);
+    }
+
+    #[test]
+    fn fleet_trust_state_failed_compare_and_swap_leaves_prior_state_intact() {
+        let mut adapter = InMemoryStorageAdapter::new();
+        let initial_model = fleet_trust_state_entry(1, 10);
+        let initial_authorization =
+            FleetTrustStateCasAuthorization::new(None, initial_model.snapshot_hash.clone());
+        let initial = initial_model
+            .to_batch_put_entry()
+            .expect("initial fleet state should encode");
+        let initial_record = match adapter
+            .compare_and_swap_fleet_trust_state(
+                &initial_authorization,
+                initial.key.clone(),
+                None,
+                initial.value,
+                initial.metadata,
+                &ctx(),
+            )
+            .expect("initial fleet CAS should execute")
+        {
+            CompareAndSwapOutcome::Applied(record) => record,
+            CompareAndSwapOutcome::Conflict { .. } => panic!("initial fleet CAS must apply"),
+        };
+
+        adapter = adapter.with_fail_writes(true);
+        let next_model = fleet_trust_state_entry(2, 11);
+        let next_authorization = FleetTrustStateCasAuthorization::new(
+            Some(initial_model.snapshot_hash),
+            next_model.snapshot_hash.clone(),
+        );
+        let next = next_model
+            .to_batch_put_entry()
+            .expect("next fleet state should encode");
+        let error = adapter
+            .compare_and_swap_fleet_trust_state(
+                &next_authorization,
+                next.key,
+                Some(initial_record.revision),
+                next.value,
+                next.metadata,
+                &ctx(),
+            )
+            .expect_err("injected durability failure must fail closed");
+        assert!(matches!(error, StorageError::WriteRejected { .. }));
+
+        adapter = adapter.with_fail_writes(false);
+        let stored = adapter
+            .get(StoreKind::FleetTrustState, &initial_record.key, &ctx())
+            .expect("fleet state read should succeed")
+            .expect("prior fleet state should remain");
+        assert_eq!(stored, initial_record);
+    }
+
+    #[test]
+    fn fleet_trust_state_revision_overflow_and_misbound_authorization_fail_closed() {
+        let mut adapter = InMemoryStorageAdapter::new();
+        let initial_model = fleet_trust_state_entry(1, 10);
+        let initial = initial_model
+            .to_batch_put_entry()
+            .expect("initial fleet state should encode");
+        let initial_record = match adapter
+            .compare_and_swap_fleet_trust_state(
+                &FleetTrustStateCasAuthorization::new(None, initial_model.snapshot_hash.clone()),
+                initial.key.clone(),
+                None,
+                initial.value,
+                initial.metadata,
+                &ctx(),
+            )
+            .expect("initial fleet CAS should execute")
+        {
+            CompareAndSwapOutcome::Applied(record) => record,
+            CompareAndSwapOutcome::Conflict { .. } => panic!("initial fleet CAS must apply"),
+        };
+
+        let next_model = fleet_trust_state_entry(2, 11);
+        let next = next_model
+            .to_batch_put_entry()
+            .expect("next fleet state should encode");
+
+        let wrong_prior_hash = "33".repeat(32);
+        let mut wrong_prior_model = fleet_trust_state_entry(2, 11);
+        wrong_prior_model.prior_snapshot_hash = wrong_prior_hash.clone();
+        let wrong_prior = wrong_prior_model
+            .to_batch_put_entry()
+            .expect("wrong-prior candidate should still be a valid typed envelope");
+        let hash_conflict = adapter
+            .compare_and_swap_fleet_trust_state(
+                &FleetTrustStateCasAuthorization::new(
+                    Some(wrong_prior_hash),
+                    wrong_prior_model.snapshot_hash,
+                ),
+                wrong_prior.key,
+                Some(initial_record.revision),
+                wrong_prior.value,
+                wrong_prior.metadata,
+                &ctx(),
+            )
+            .expect("hash-mismatched CAS should return a conflict");
+        assert_eq!(
+            hash_conflict,
+            CompareAndSwapOutcome::Conflict {
+                current: Some(initial_record.clone())
+            }
+        );
+
+        let misbound_error = adapter
+            .compare_and_swap_fleet_trust_state(
+                &FleetTrustStateCasAuthorization::new(
+                    Some(initial_model.snapshot_hash.clone()),
+                    "22".repeat(32),
+                ),
+                next.key.clone(),
+                Some(initial_record.revision),
+                next.value.clone(),
+                next.metadata.clone(),
+                &ctx(),
+            )
+            .expect_err("authorization for another candidate must fail closed");
+        assert!(matches!(misbound_error, StorageError::WriteRejected { .. }));
+
+        adapter
+            .stores
+            .get_mut(&StoreKind::FleetTrustState)
+            .expect("fleet store exists")
+            .next_revision = u64::MAX;
+        let overflow_error = adapter
+            .compare_and_swap_fleet_trust_state(
+                &FleetTrustStateCasAuthorization::new(
+                    Some(initial_model.snapshot_hash),
+                    next_model.snapshot_hash,
+                ),
+                next.key,
+                Some(initial_record.revision),
+                next.value,
+                next.metadata,
+                &ctx(),
+            )
+            .expect_err("revision exhaustion must not reuse u64::MAX");
+        assert!(matches!(overflow_error, StorageError::WriteRejected { .. }));
+        assert!(overflow_error.to_string().contains("revision space"));
+    }
+
+    #[test]
+    fn frankensqlite_backend_without_atomic_cas_fails_closed() {
+        let backend = MockFrankenSqlite::default();
+        let mut adapter = FrankensqliteStorageAdapter::new(backend).expect("adapter init");
+        let model = fleet_trust_state_entry(1, 1);
+        let authorization = FleetTrustStateCasAuthorization::new(None, model.snapshot_hash.clone());
+        let entry = model
+            .to_batch_put_entry()
+            .expect("fleet state should encode");
+        let error = adapter
+            .compare_and_swap_fleet_trust_state(
+                &authorization,
+                entry.key,
+                None,
+                entry.value,
+                entry.metadata,
+                &ctx(),
+            )
+            .expect_err("backend without transactional CAS must fail closed");
+        assert!(matches!(error, StorageError::BackendUnavailable { .. }));
+        assert!(error.to_string().contains("revision-plus-snapshot"));
     }
 }

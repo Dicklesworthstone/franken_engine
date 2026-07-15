@@ -1143,6 +1143,7 @@ mod tests {
             StoreKind::ReplacementLineage,
             StoreKind::IfcProvenance,
             StoreKind::SpecializationIndex,
+            StoreKind::FleetTrustState,
         ];
 
         let mut seen_names = BTreeSet::new();
@@ -1173,6 +1174,7 @@ mod tests {
             (StoreKind::ReplacementLineage, "ReplacementLineage"),
             (StoreKind::IfcProvenance, "IfcProvenance"),
             (StoreKind::SpecializationIndex, "SpecializationIndex"),
+            (StoreKind::FleetTrustState, "FleetTrustState"),
         ];
         for (kind, expected_json) in &kinds {
             let json = serde_json::to_value(kind).expect("serialization should succeed");

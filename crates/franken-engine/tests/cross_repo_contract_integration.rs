@@ -1168,12 +1168,14 @@ fn frankensqlite_store_kind_serialization_stable() {
     let pairs = [
         (StoreKind::ReplayIndex, "ReplayIndex"),
         (StoreKind::EvidenceIndex, "EvidenceIndex"),
+        (StoreKind::ShadowEvidenceJournal, "ShadowEvidenceJournal"),
         (StoreKind::BenchmarkLedger, "BenchmarkLedger"),
         (StoreKind::PolicyCache, "PolicyCache"),
         (StoreKind::PlasWitness, "PlasWitness"),
         (StoreKind::ReplacementLineage, "ReplacementLineage"),
         (StoreKind::IfcProvenance, "IfcProvenance"),
         (StoreKind::SpecializationIndex, "SpecializationIndex"),
+        (StoreKind::FleetTrustState, "FleetTrustState"),
     ];
     for (kind, expected) in &pairs {
         let json = serde_json::to_value(kind).unwrap();

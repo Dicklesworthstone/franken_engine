@@ -5,9 +5,12 @@
 //! as mandated by AGENTS.md and documented in FRANKENSQLITE_PERSISTENCE_INVENTORY.md.
 //!
 //! Implements typed boundaries for:
+//! - FleetTrustState: schema-validated rollback-sensitive authority snapshots;
+//!   intentionally excluded from generic SQLModel unit-of-work mutation
 //! - ReplacementLineage: replacement/promotion lineage + signed receipts
 //! - IfcProvenance: label-flow provenance edges + declassification references
 //! - ProofEvidenceIndex: proof artifact, command receipt, validation plan, and gate outcome rows
+//! - ShadowEvidenceJournal: durable evidence-ingestion and lineage rows
 //! - SpecializationIndex: proof-specialization mapping + invalidation markers
 
 #![forbid(unsafe_code)]
@@ -30,7 +33,8 @@ use crate::replacement_lineage_log::{
 };
 use crate::specialization_index::SpecializationRecord;
 use crate::storage_adapter::{
-    BatchPutEntry, EventContext, StorageAdapter, StorageError, StoreKind, StoreQuery, StoreRecord,
+    BatchPutEntry, CompareAndSwapOutcome, EventContext, StorageAdapter, StorageError, StoreKind,
+    StoreQuery, StoreRecord,
 };
 
 const TYPED_RECORD_FORMAT_KEY: &str = "record_format";
@@ -1313,6 +1317,24 @@ pub trait TypedStorageAdapterExt: StorageAdapter {
         )
     }
 
+    /// Atomically replace one typed row under the adapter revision CAS.
+    fn compare_and_swap_typed<T: TypedStoreRecord>(
+        &mut self,
+        expected_revision: Option<u64>,
+        record: &T,
+        context: &EventContext,
+    ) -> StorageResult<CompareAndSwapOutcome> {
+        let entry = record.to_batch_put_entry()?;
+        self.compare_and_swap(
+            T::STORE_KIND,
+            entry.key,
+            expected_revision,
+            entry.value,
+            entry.metadata,
+            context,
+        )
+    }
+
     /// Put typed models as a single adapter batch.
     fn put_typed_batch<T: TypedStoreRecord>(
         &mut self,
@@ -1372,7 +1394,10 @@ pub fn typed_sqlmodel_session_config() -> SessionConfig {
     }
 }
 
-/// SQLModel CREATE TABLE statements for all typed persistence models.
+/// SQLModel CREATE TABLE statements for generic typed persistence models.
+///
+/// Fleet trust state is deliberately excluded: its isolated authority database
+/// must be initialized and mutated only by the specialized durable CAS backend.
 pub fn typed_persistence_create_table_sql() -> Vec<String> {
     vec![
         create_table::<ReplacementLineageEntry>()
@@ -1389,6 +1414,147 @@ pub fn typed_persistence_create_table_sql() -> Vec<String> {
             .if_not_exists()
             .build(),
     ]
+}
+
+/// SQLModel schema bootstrap for the isolated fleet-authority database.
+///
+/// This is intentionally separate from [`typed_persistence_create_table_sql`]
+/// so a generic typed session never creates the rollback-sensitive table. A
+/// specialized fleet CAS backend may execute this statement while retaining
+/// exclusive control of authority mutations.
+pub fn fleet_trust_state_create_table_sql() -> String {
+    create_table::<FleetTrustStateEntry>()
+        .if_not_exists()
+        .build()
+}
+
+// ---------------------------------------------------------------------------
+// FleetTrustState: rollback-sensitive aggregate authority snapshot
+// ---------------------------------------------------------------------------
+
+pub const FLEET_TRUST_STATE_SCHEMA_VERSION: &str = "fleet_trust_state_v1";
+pub const FLEET_TRUST_STATE_RECORD_ID: i64 = 1;
+const FLEET_TRUST_STATE_MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
+const FLEET_TRUST_STATE_MAX_ANCHOR_PERMIT_BYTES: usize = 64 * 1024;
+
+/// Single-row typed authority snapshot committed through a specialized CAS.
+///
+/// The aggregate row keeps registry generation, hash-chain head, tombstones,
+/// and key windows in one atomic durability unit. Storage policy rejects
+/// generic typed `put`; fleet authority accepts only the generation-and-revision
+/// CAS path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Model)]
+#[serde(deny_unknown_fields)]
+#[sqlmodel(table = "fleet_trust_state")]
+pub struct FleetTrustStateEntry {
+    #[sqlmodel(primary_key)]
+    pub state_id: i64,
+    pub schema_version: String,
+    /// Fixed-width unsigned decimal avoids lossy u64-to-SQL-i64 conversion.
+    pub generation_decimal: String,
+    pub authority_epoch_decimal: String,
+    pub snapshot_hash: String,
+    pub prior_snapshot_hash: String,
+    pub authority_head_hash: String,
+    /// Hex-encoded external-authority prepare permit, reauthenticated at finalize.
+    pub anchor_advance_permit_hex: String,
+    pub snapshot_json: String,
+}
+
+impl TypedStoreRecord for FleetTrustStateEntry {
+    const STORE_KIND: StoreKind = StoreKind::FleetTrustState;
+    const MODEL_NAME: &'static str = "FleetTrustStateEntry";
+
+    fn typed_record_id(&self) -> i64 {
+        self.state_id
+    }
+
+    fn typed_record_extra_metadata(&self) -> BTreeMap<String, String> {
+        BTreeMap::from([
+            (
+                "authority_head_hash".to_string(),
+                self.authority_head_hash.clone(),
+            ),
+            (
+                "generation_decimal".to_string(),
+                self.generation_decimal.clone(),
+            ),
+            ("snapshot_hash".to_string(), self.snapshot_hash.clone()),
+        ])
+    }
+
+    fn validate_typed_record(&self) -> StorageResult<()> {
+        if self.state_id != FLEET_TRUST_STATE_RECORD_ID {
+            return Err(typed_integrity_error::<Self>(format!(
+                "`state_id` must be {FLEET_TRUST_STATE_RECORD_ID}"
+            )));
+        }
+        if self.schema_version != FLEET_TRUST_STATE_SCHEMA_VERSION {
+            return Err(typed_integrity_error::<Self>(format!(
+                "unsupported schema version `{}`",
+                self.schema_version
+            )));
+        }
+        validate_fixed_width_u64::<Self>("generation_decimal", &self.generation_decimal)?;
+        validate_fixed_width_u64::<Self>("authority_epoch_decimal", &self.authority_epoch_decimal)?;
+        for (field, digest) in [
+            ("snapshot_hash", &self.snapshot_hash),
+            ("prior_snapshot_hash", &self.prior_snapshot_hash),
+            ("authority_head_hash", &self.authority_head_hash),
+        ] {
+            let normalized = normalize_sha256_typed::<Self>(field, digest)?;
+            if normalized != *digest {
+                return Err(typed_integrity_error::<Self>(format!(
+                    "`{field}` must use canonical lowercase hex without a prefix"
+                )));
+            }
+        }
+        if self.anchor_advance_permit_hex.is_empty()
+            || self.anchor_advance_permit_hex.len() % 2 != 0
+            || !self
+                .anchor_advance_permit_hex
+                .as_bytes()
+                .iter()
+                .all(u8::is_ascii_hexdigit)
+            || self
+                .anchor_advance_permit_hex
+                .as_bytes()
+                .iter()
+                .any(u8::is_ascii_uppercase)
+        {
+            return Err(typed_integrity_error::<Self>(
+                "`anchor_advance_permit_hex` must be non-empty canonical lowercase hex",
+            ));
+        }
+        if self.anchor_advance_permit_hex.len() / 2 > FLEET_TRUST_STATE_MAX_ANCHOR_PERMIT_BYTES {
+            return Err(typed_integrity_error::<Self>(format!(
+                "`anchor_advance_permit_hex` exceeds {FLEET_TRUST_STATE_MAX_ANCHOR_PERMIT_BYTES} decoded bytes"
+            )));
+        }
+        if self.snapshot_json.len() > FLEET_TRUST_STATE_MAX_SNAPSHOT_BYTES {
+            return Err(typed_integrity_error::<Self>(format!(
+                "`snapshot_json` exceeds {FLEET_TRUST_STATE_MAX_SNAPSHOT_BYTES} bytes"
+            )));
+        }
+        require_json_object_typed::<Self>("snapshot_json", &self.snapshot_json)?;
+        if sha256_hex_typed(self.snapshot_json.as_bytes()) != self.snapshot_hash {
+            return Err(typed_integrity_error::<Self>(
+                "`snapshot_hash` does not authenticate `snapshot_json`",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn validate_fixed_width_u64<T: TypedStoreRecord>(field: &str, value: &str) -> StorageResult<u64> {
+    if value.len() != 20 || !value.as_bytes().iter().all(u8::is_ascii_digit) {
+        return Err(typed_integrity_error::<T>(format!(
+            "`{field}` must be a 20-digit unsigned decimal"
+        )));
+    }
+    value
+        .parse::<u64>()
+        .map_err(|error| typed_integrity_error::<T>(format!("`{field}` is outside u64: {error}")))
 }
 
 /// Thin typed wrapper around the real SQLModel ORM session.
@@ -1419,11 +1585,6 @@ impl<C: Connection> TypedSqlModelSession<C> {
         &self.inner
     }
 
-    /// Mutably borrow the underlying SQLModel session for advanced callers.
-    pub fn inner_mut(&mut self) -> &mut Session<C> {
-        &mut self.inner
-    }
-
     /// Borrow the concrete SQLModel connection used by this session.
     pub fn connection(&self) -> &C {
         self.inner.connection()
@@ -1439,8 +1600,12 @@ impl<C: Connection> TypedSqlModelSession<C> {
         self.inner.debug_state()
     }
 
-    /// Add any typed persistence model to the SQLModel unit of work.
-    pub fn add_typed<T>(&mut self, record: &T)
+    /// Add an approved generic typed model to the SQLModel unit of work.
+    ///
+    /// Public callers use the model-specific helpers below. Fleet trust state
+    /// intentionally has no helper because it must use the durable lifecycle
+    /// CAS rather than the generic SQLModel unit of work.
+    pub(crate) fn add_typed<T>(&mut self, record: &T)
     where
         T: TypedStoreRecord + Model + Clone + Send + Sync + 'static,
     {
@@ -2452,6 +2617,20 @@ mod tests {
         }
     }
 
+    fn fleet_trust_state_entry(snapshot_json: &str) -> FleetTrustStateEntry {
+        FleetTrustStateEntry {
+            state_id: FLEET_TRUST_STATE_RECORD_ID,
+            schema_version: FLEET_TRUST_STATE_SCHEMA_VERSION.to_string(),
+            generation_decimal: format!("{:020}", 7_u64),
+            authority_epoch_decimal: format!("{:020}", 4_u64),
+            snapshot_hash: sha256_hex_typed(snapshot_json.as_bytes()),
+            prior_snapshot_hash: "00".repeat(32),
+            authority_head_hash: "11".repeat(32),
+            anchor_advance_permit_hex: "a1b2c3d4".to_string(),
+            snapshot_json: snapshot_json.to_string(),
+        }
+    }
+
     fn ifc_entry(provenance_id: i64, trace_id: &str) -> IfcProvenanceEntry {
         IfcProvenanceEntry {
             provenance_id,
@@ -2756,6 +2935,32 @@ mod tests {
     }
 
     #[test]
+    fn fleet_trust_state_model_exports_sqlmodel_metadata_and_round_trips_row() {
+        assert_eq!(FleetTrustStateEntry::TABLE_NAME, "fleet_trust_state");
+        assert_eq!(FleetTrustStateEntry::PRIMARY_KEY, &["state_id"]);
+
+        let fields = FleetTrustStateEntry::fields();
+        assert_eq!(fields.len(), 9);
+        assert!(field::<FleetTrustStateEntry>("state_id").primary_key);
+        assert_eq!(
+            field::<FleetTrustStateEntry>("generation_decimal").sql_type,
+            SqlType::Text
+        );
+        assert_eq!(
+            field::<FleetTrustStateEntry>("snapshot_json").sql_type,
+            SqlType::Text
+        );
+        assert_eq!(
+            field::<FleetTrustStateEntry>("anchor_advance_permit_hex").sql_type,
+            SqlType::Text
+        );
+
+        assert_round_trips(fleet_trust_state_entry(
+            r#"{"generation":7,"authority_epoch":4}"#,
+        ));
+    }
+
+    #[test]
     fn replacement_lineage_model_exports_sqlmodel_metadata() {
         assert_eq!(ReplacementLineageEntry::TABLE_NAME, "replacement_lineage");
         assert_eq!(ReplacementLineageEntry::PRIMARY_KEY, &["sequence_id"]);
@@ -2938,9 +3143,22 @@ mod tests {
     }
 
     #[test]
-    fn typed_session_schema_sql_lists_all_typed_tables() {
+    fn typed_session_schema_sql_excludes_isolated_fleet_authority_table() {
         let sql = typed_persistence_create_table_sql();
         assert_eq!(sql.len(), 5);
+        assert!(
+            sql.iter()
+                .all(|statement| !statement.contains("\"fleet_trust_state\"")),
+            "generic typed sessions must not initialize fleet authority storage: {sql:#?}"
+        );
+        let fleet_sql = fleet_trust_state_create_table_sql();
+        assert!(
+            fleet_sql.contains("\"fleet_trust_state\"")
+                && fleet_sql.contains("\"state_id\" BIGINT NOT NULL")
+                && fleet_sql.contains("\"snapshot_json\" TEXT NOT NULL")
+                && fleet_sql.contains("PRIMARY KEY (\"state_id\")"),
+            "isolated fleet authority DDL should expose the aggregate typed row: {fleet_sql}"
+        );
         assert!(
             sql.iter()
                 .all(|statement| statement.starts_with("CREATE TABLE IF NOT EXISTS ")),
@@ -3029,12 +3247,12 @@ mod tests {
         assert!(!session.config().auto_flush);
         assert!(!session.config().expire_on_commit);
 
-        for (table, primary_key) in [
-            ("replacement_lineage", "sequence_id"),
-            ("ifc_provenance", "provenance_id"),
-            ("proof_evidence_index", "evidence_id"),
-            ("shadow_evidence_journal", "journal_event_id"),
-            ("specialization_index", "specialization_id"),
+        for (table, primary_key, minimum_columns) in [
+            ("replacement_lineage", "sequence_id", 9),
+            ("ifc_provenance", "provenance_id", 9),
+            ("proof_evidence_index", "evidence_id", 9),
+            ("shadow_evidence_journal", "journal_event_id", 9),
+            ("specialization_index", "specialization_id", 9),
         ] {
             let sql = format!("PRAGMA table_info({table})");
             let rows = session
@@ -3051,7 +3269,7 @@ mod tests {
                 "{table} schema should include primary key {primary_key}; columns={columns:#?}"
             );
             assert!(
-                columns.len() >= 9,
+                columns.len() >= minimum_columns,
                 "{table} schema should include the typed model fields; columns={columns:#?}"
             );
         }
@@ -3087,6 +3305,168 @@ mod tests {
         let restored = ReplacementLineageEntry::from_store_record(&record)
             .expect("typed record should deserialize");
         assert_eq!(restored, model);
+    }
+
+    #[test]
+    fn fleet_trust_state_store_record_envelope_round_trips() {
+        let model =
+            fleet_trust_state_entry(r#"{"generation":7,"authority_epoch":4,"tombstones":[]}"#);
+        let record = model
+            .to_store_record(42)
+            .expect("valid fleet trust state should serialize");
+
+        assert_eq!(record.store, StoreKind::FleetTrustState);
+        assert_eq!(record.key, "typed/fleet_trust_state/00000000000000000001");
+        assert_eq!(record.revision, 42);
+        assert_eq!(
+            record
+                .metadata
+                .get(TYPED_RECORD_FORMAT_KEY)
+                .map(String::as_str),
+            Some(TYPED_RECORD_FORMAT_VALUE)
+        );
+        assert_eq!(
+            record.metadata.get(TYPED_MODEL_KEY).map(String::as_str),
+            Some("FleetTrustStateEntry")
+        );
+        assert_eq!(
+            record
+                .metadata
+                .get("generation_decimal")
+                .map(String::as_str),
+            Some(model.generation_decimal.as_str())
+        );
+        assert_eq!(
+            record.metadata.get("snapshot_hash").map(String::as_str),
+            Some(model.snapshot_hash.as_str())
+        );
+        assert_eq!(
+            record
+                .metadata
+                .get("authority_head_hash")
+                .map(String::as_str),
+            Some(model.authority_head_hash.as_str())
+        );
+
+        let restored = FleetTrustStateEntry::from_store_record(&record)
+            .expect("fleet trust state envelope should deserialize");
+        assert_eq!(restored, model);
+    }
+
+    #[test]
+    fn fleet_trust_state_rejects_non_fixed_width_or_out_of_range_counters() {
+        let invalid_counters = [
+            format!("{:019}", 7_u64),
+            format!("{:021}", 7_u64),
+            "0000000000000000000x".to_string(),
+            (u128::from(u64::MAX) + 1).to_string(),
+        ];
+
+        for invalid in invalid_counters {
+            let mut generation = fleet_trust_state_entry("{}");
+            generation.generation_decimal = invalid.clone();
+            let error = generation
+                .to_store_record(0)
+                .expect_err("invalid generation must fail closed");
+            assert!(
+                error.to_string().contains("`generation_decimal`"),
+                "unexpected generation error for {invalid}: {error}"
+            );
+
+            let mut authority = fleet_trust_state_entry("{}");
+            authority.authority_epoch_decimal = invalid.clone();
+            let error = authority
+                .to_store_record(0)
+                .expect_err("invalid authority epoch must fail closed");
+            assert!(
+                error.to_string().contains("`authority_epoch_decimal`"),
+                "unexpected authority epoch error for {invalid}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn fleet_trust_state_rejects_noncanonical_or_mismatched_digests() {
+        let mut prefixed = fleet_trust_state_entry("{}");
+        prefixed.prior_snapshot_hash = format!("sha256:{}", prefixed.prior_snapshot_hash);
+        let error = prefixed
+            .to_store_record(0)
+            .expect_err("prefixed digest must be rejected as noncanonical");
+        assert!(error.to_string().contains("canonical lowercase hex"));
+
+        let mut uppercase = fleet_trust_state_entry("{}");
+        uppercase.authority_head_hash = "AA".repeat(32);
+        let error = uppercase
+            .to_store_record(0)
+            .expect_err("uppercase digest must be rejected as noncanonical");
+        assert!(error.to_string().contains("canonical lowercase hex"));
+
+        let mut mismatched = fleet_trust_state_entry(r#"{"generation":7}"#);
+        mismatched.snapshot_hash = "00".repeat(32);
+        let error = mismatched
+            .to_store_record(0)
+            .expect_err("mismatched snapshot digest must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("does not authenticate `snapshot_json`")
+        );
+    }
+
+    #[test]
+    fn fleet_trust_state_rejects_oversized_or_non_object_snapshot_json() {
+        let mut oversized = fleet_trust_state_entry("{}");
+        oversized.snapshot_json = "x".repeat(FLEET_TRUST_STATE_MAX_SNAPSHOT_BYTES + 1);
+        let error = oversized
+            .to_store_record(0)
+            .expect_err("oversized snapshot must fail closed");
+        assert!(error.to_string().contains("`snapshot_json` exceeds"));
+
+        for snapshot_json in ["[]", "null", r#""scalar""#] {
+            let non_object = fleet_trust_state_entry(snapshot_json);
+            let error = non_object
+                .to_store_record(0)
+                .expect_err("non-object snapshot must fail closed");
+            assert!(
+                error.to_string().contains("must be a JSON object"),
+                "unexpected non-object error for {snapshot_json}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn fleet_trust_state_rejects_malformed_or_oversized_anchor_permit_and_unknown_fields() {
+        for invalid in ["", "abc", "A1b2", "not-hex"] {
+            let mut model = fleet_trust_state_entry("{}");
+            model.anchor_advance_permit_hex = invalid.to_string();
+            let error = model
+                .to_store_record(0)
+                .expect_err("noncanonical anchor permit must fail closed");
+            assert!(error.to_string().contains("anchor_advance_permit_hex"));
+        }
+
+        let mut oversized = fleet_trust_state_entry("{}");
+        oversized.anchor_advance_permit_hex =
+            "aa".repeat(FLEET_TRUST_STATE_MAX_ANCHOR_PERMIT_BYTES + 1);
+        let error = oversized
+            .to_store_record(0)
+            .expect_err("oversized anchor permit must fail closed");
+        assert!(error.to_string().contains("decoded bytes"));
+
+        let model = fleet_trust_state_entry("{}");
+        let mut record = model
+            .to_store_record(1)
+            .expect("valid fleet envelope should serialize");
+        let mut payload: serde_json::Value =
+            serde_json::from_slice(&record.value).expect("typed payload is JSON");
+        payload
+            .as_object_mut()
+            .expect("typed payload is an object")
+            .insert("unrecognized_authority_field".to_string(), true.into());
+        record.value = serde_json::to_vec(&payload).expect("tampered payload serializes");
+        let error = FleetTrustStateEntry::from_store_record(&record)
+            .expect_err("unknown fleet authority fields must fail closed");
+        assert!(error.to_string().contains("unknown field"));
     }
 
     #[test]

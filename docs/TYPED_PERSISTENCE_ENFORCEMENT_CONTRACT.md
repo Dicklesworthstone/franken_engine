@@ -4,7 +4,8 @@ This contract defines the required end state for `bd-gvnex` and the broader
 `SQLMODEL-TYPED-P0` track. It records which FrankenEngine persistence stores
 are inventory-mandated to use `sqlmodel_rust on frankensqlite`, what current
 typed evidence already exists in-tree, and what future implementation beads
-must enforce before the AGENTS.md deviation can be considered closed.
+must enforce before the AGENTS.md deviation can be considered closed. Bead
+`bd-q8x8x.5` extends the contract with rollback-sensitive fleet trust state.
 
 Machine-readable contract:
 `docs/typed_persistence_enforcement_contract_v1.json`.
@@ -26,12 +27,14 @@ inventory already marks `sqlmodel_rust on frankensqlite`:
 - replacement lineage log
 - IFC provenance index
 - specialization index
+- fleet trust state
 
 These correspond to:
 
 - `StoreKind::ReplacementLineage` -> `ReplacementLineageEntry`
 - `StoreKind::IfcProvenance` -> `IfcProvenanceEntry`
 - `StoreKind::SpecializationIndex` -> `SpecializationIndexEntry`
+- `StoreKind::FleetTrustState` -> `FleetTrustStateEntry`
 
 The contract does not require rewriting unrelated `raw frankensqlite` stores
 such as replay index, evidence index, benchmark ledger, policy cache, or PLAS
@@ -39,7 +42,7 @@ witness storage.
 
 ## Required End State
 
-Primary authoritative writes and reads for the three stores above must use the
+Primary authoritative writes and reads for the four stores above must use the
 typed boundary built around `TypedStoreRecord` and `TypedStorageAdapterExt`.
 That means future implementation beads must treat the typed helpers as the
 authoritative path for normal store mutations and lookups, not as optional
@@ -51,6 +54,25 @@ needed for deterministic migration planning, low-level test fixtures, or
 carefully bounded compatibility shims that do not bypass typed schema
 validation.
 
+Fleet trust state has a stricter mutation rule than the other typed-heavy
+stores. `put_typed`, `put_typed_batch`, generic `compare_and_swap`, and delete
+must all fail closed for `StoreKind::FleetTrustState`. Its only mutation path is
+the specialized `FleetVerificationRegistryPersistence` revision-plus-prior-hash
+CAS, guarded by an opaque transition-bound authorization token. The external
+monotonic or quorum authority first prepares an authenticated old-to-new permit
+without advancing. The surface persists that permit with the complete staged
+snapshot, idempotently finalizes the external anchor, and only then permits live
+publication. Restart can resume finalization from the authenticated persisted
+permit after a lost process or response without trusting the database as
+authority.
+Backends without one transactional CAS must reject the operation; a read then
+write emulation is forbidden.
+The fleet model and its `fleet_trust_state_create_table_sql` bootstrap are
+therefore excluded from the generic typed-session DDL and unit-of-work writer.
+The current generic `FrankensqliteBackend` default remains fail closed until a
+concrete sibling-backed implementation supplies the revision-plus-snapshot CAS;
+the in-memory adapter is test evidence, not the production durability proof.
+
 Legacy `StoreRecord` inputs are allowed only for explicit lossless backfill planning
 and store-specific mapping. Implicit acceptance of untyped or
 partially typed envelopes is forbidden. Ambiguous legacy data must fail closed.
@@ -60,9 +82,10 @@ partially typed envelopes is forbidden. Ambiguous legacy data must fail closed.
 Current in-tree evidence that this track must build on:
 
 - `typed_persistence_models.rs` defines `TypedStoreRecord`, typed models for
-  the three stores, explicit lossless legacy mappers, and
-  `plan_typed_store_backfill`.
-- `storage_adapter.rs` already maps the three store kinds to
+  the four stores, explicit lossless legacy mappers for pre-existing stores, and
+  `plan_typed_store_backfill`; fleet schema bootstrap is isolated from its
+  generic typed-session bootstrap.
+- `storage_adapter.rs` maps the four store kinds to
   `sqlmodel_rust::*Entry` integration points.
 - `replacement_lineage_log.rs`, `ifc_provenance_index.rs`, and
   `specialization_index.rs` already expose typed helper entrypoints alongside
@@ -75,12 +98,15 @@ exists today, but end-to-end boundary enforcement is not yet complete.
 
 The full track is not complete until future beads prove all of the following:
 
-- the three primary store surfaces route normal writes through typed entries
-- the three primary store surfaces route authoritative reads through typed
+- the four primary store surfaces route normal writes through typed entries or,
+  for fleet trust state, its stricter opaque-authorized revision CAS
+- the four primary store surfaces route authoritative reads through typed
   lookups or typed queries
 - unsupported legacy rows are rejected with deterministic fail-closed errors
 - generic authority is blocked for these stores when it would bypass typed
   schema validation
+- fleet live state cannot advance before its complete snapshot is durable and
+  its external rollback-anchor claim is authenticated
 - no-mock end-to-end proof exercises the real stores and migration-planning
   seams together
 

@@ -33,6 +33,9 @@ is materially different:
 - `benchmark_ledger.db` for benchmark runs and score history
 - `plas_witness.db` for PLAS witness artifacts
 - `replacement_lineage.db` for replacement/promotion lineage artifacts
+- `fleet_trust_state.db` for rollback-sensitive fleet verification authority;
+  its external monotonic/quorum anchor must remain outside this database's
+  rollback domain
 
 ## Store Inventory
 
@@ -47,6 +50,12 @@ is materially different:
 | replacement lineage log | sqlmodel_rust on frankensqlite | slot promotion/demotion lineage + signed receipts | append-only + lineage walk by slot | append-only integrity + monotonic sequence | long-lived, never destructive delete | `frankensqlite::replacement::lineage_log` | append-only table family with compatibility views | required; promotion audits must reconstruct exactly |
 | IFC provenance index | sqlmodel_rust on frankensqlite | label-flow provenance edges + declassification references | append + graph-style filtered retrieval | strong consistency for enforcement traceability | long-lived with compaction of redundant edges | `frankensqlite::control_plane::ifc_provenance` | additive edge metadata + index migrations | required for non-interference incident replay |
 | specialization index | sqlmodel_rust on frankensqlite | proof-specialization mapping + invalidation markers | read-heavy, update on proof churn | read-after-write consistency for invalidation | medium retention with archived snapshots | `frankensqlite::control_plane::specialization_index` | epoch-aware migration with backfill checks | required; fallback/invalidation must replay deterministically |
+| fleet trust state | sqlmodel_rust on frankensqlite | one canonical authority snapshot containing key activation/retirement windows, revocation history, key-sequence floors, node/key tombstones, generation, authority epoch, prior snapshot hash, authority-chain head, and an authenticated external-anchor advance permit | external authority prepares an old-to-new permit without advancing; a single-row revision-plus-prior-hash CAS persists the candidate and permit; idempotent permit finalization advances the external anchor; only then may immutable live state publish | transactional compare-and-swap is mandatory; read-then-write emulation, generic put/batch/delete, live-before-durable publication, and unpermitted anchor advancement fail closed | long-lived authority history; no destructive delete; every persisted candidate remains restart-recoverable through its authenticated prepare permit and external anchor | `sqlmodel_rust::FleetTrustStateEntry` through the specialized `FleetVerificationRegistryPersistence` surface | additive typed fields only; bounded raw envelope before outer deserialization and bounded snapshot bytes before inner deserialization; restore reauthenticates/finalizes the permit and rebuilds derived indexes only after schema, canonical-envelope, hash, transition-chain, and external-anchor validation | required; restart and historical verification must reproduce exact key windows and revocation decisions, stale or forked snapshots are rejected, and crash after DB commit resumes idempotent anchor finalization |
+
+Fleet authority schema bootstrap is intentionally isolated from the generic
+typed SQLModel session. The in-tree generic FrankenSQLite backend currently
+rejects fleet CAS until a concrete sibling-backed revision-plus-snapshot CAS is
+provided; that fail-closed default is not production persistence completion.
 
 ## Decision Boundary: Shared Vs Isolated
 
@@ -78,6 +87,8 @@ Before implementing a new store:
 - Benchmark governance workflows -> benchmark ledger
 - Replay/evidence governance workflows -> replay index + evidence index
 - Shadow-daemon advisory workflows -> shadow evidence journal
+- Fleet signing, rotation, revocation, restart, and historical replay workflows
+  -> fleet trust state plus an external rollback anchor
 
 ## Operator Verification
 

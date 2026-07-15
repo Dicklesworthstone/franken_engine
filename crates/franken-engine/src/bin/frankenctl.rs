@@ -68,6 +68,10 @@ use frankenengine_engine::non_use_certificate::{
 };
 use frankenengine_engine::package_intake::{PackageIntakeReport, onboard_package};
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParseEventIr, ParserOptions};
+use frankenengine_engine::parser_oracle::{
+    DEFAULT_FIXTURE_CATALOG_PATH, OracleGateMode, OraclePartition, ParserOracleConfig,
+    run_parser_oracle,
+};
 use frankenengine_engine::react_compilation_pipeline::{
     ReactCompileConfig, ReactCompileEvidence, ReactCompileResult,
     ReactInputLanguage as ReactPipelineInputLanguage, compile_react_source,
@@ -692,7 +696,13 @@ struct ReportsArgs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ReportsMode {
     ParserOracle {
-        config: Option<PathBuf>,
+        partition: OraclePartition,
+        gate_mode: OracleGateMode,
+        seed: u64,
+        fixture_catalog: PathBuf,
+        trace_id: Option<String>,
+        decision_id: Option<String>,
+        policy_id: Option<String>,
         out: Option<PathBuf>,
     },
     ParserPhase0 {
@@ -3460,14 +3470,45 @@ fn parse_reports_command(args: &[String]) -> Result<CommandSpec, String> {
     match args[0].as_str() {
         "help" | "--help" | "-h" => Ok(CommandSpec::HelpTopic(HelpTopic::Reports)),
         "parser-oracle" => {
-            let mut config: Option<PathBuf> = None;
+            let mut partition = OraclePartition::Smoke;
+            let mut gate_mode = OracleGateMode::ReportOnly;
+            let mut seed = 1u64;
+            let mut fixture_catalog = PathBuf::from(DEFAULT_FIXTURE_CATALOG_PATH);
+            let mut trace_id = None;
+            let mut decision_id = None;
+            let mut policy_id = None;
             let mut out: Option<PathBuf> = None;
 
             let mut index = 1; // Skip "parser-oracle"
             while index < args.len() {
                 match args[index].as_str() {
-                    "--config" => {
-                        config = Some(PathBuf::from(next_arg(args, &mut index, "--config")?))
+                    "--partition" => {
+                        let value = next_arg(args, &mut index, "--partition")?;
+                        partition = value.parse::<OraclePartition>()?;
+                    }
+                    "--gate-mode" => {
+                        let value = next_arg(args, &mut index, "--gate-mode")?;
+                        gate_mode = value.parse::<OracleGateMode>()?;
+                    }
+                    "--seed" => {
+                        let value = next_arg(args, &mut index, "--seed")?;
+                        seed = value
+                            .parse::<u64>()
+                            .map_err(|error| format!("invalid --seed `{value}`: {error}"))?;
+                    }
+                    "--fixture-catalog" => {
+                        fixture_catalog =
+                            PathBuf::from(next_arg(args, &mut index, "--fixture-catalog")?);
+                    }
+                    "--trace-id" => {
+                        trace_id = Some(next_arg(args, &mut index, "--trace-id")?.to_string());
+                    }
+                    "--decision-id" => {
+                        decision_id =
+                            Some(next_arg(args, &mut index, "--decision-id")?.to_string());
+                    }
+                    "--policy-id" => {
+                        policy_id = Some(next_arg(args, &mut index, "--policy-id")?.to_string());
                     }
                     "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
                     flag => return Err(format!("unknown parser-oracle flag `{flag}`")),
@@ -3476,7 +3517,16 @@ fn parse_reports_command(args: &[String]) -> Result<CommandSpec, String> {
             }
 
             Ok(CommandSpec::Reports(ReportsArgs {
-                mode: ReportsMode::ParserOracle { config, out },
+                mode: ReportsMode::ParserOracle {
+                    partition,
+                    gate_mode,
+                    seed,
+                    fixture_catalog,
+                    trace_id,
+                    decision_id,
+                    policy_id,
+                    out,
+                },
             }))
         }
         "lowering-gap" => {
@@ -10136,36 +10186,39 @@ fn execute_gates(args: GatesArgs) -> Result<i32, String> {
 
 fn execute_reports(args: ReportsArgs) -> Result<i32, String> {
     match args.mode {
-        ReportsMode::ParserOracle { config, out } => {
-            // Try to find the installed franken_parser_oracle_report binary
-            let mut cmd = Command::new("franken_parser_oracle_report");
-
-            // Add config file if specified
-            if let Some(config_path) = &config {
-                cmd.arg("--config").arg(path_to_str(config_path)?);
+        ReportsMode::ParserOracle {
+            partition,
+            gate_mode,
+            seed,
+            fixture_catalog,
+            trace_id,
+            decision_id,
+            policy_id,
+            out,
+        } => {
+            let mut config = ParserOracleConfig::with_defaults(partition, gate_mode, seed);
+            config.fixture_catalog_path = fixture_catalog;
+            if let Some(value) = trace_id {
+                config.trace_id = value;
+            }
+            if let Some(value) = decision_id {
+                config.decision_id = value;
+            }
+            if let Some(value) = policy_id {
+                config.policy_id = value;
             }
 
-            // Add output file if specified
-            if let Some(out_path) = &out {
-                cmd.arg("--out").arg(path_to_str(out_path)?);
+            let report = run_parser_oracle(&config)
+                .map_err(|error| format!("parser oracle report failed: {error}"))?;
+            if let Some(path) = &out {
+                write_json_file(path, &report)?;
             }
+            print_json(&report)?;
 
-            // Execute the command
-            let status = cmd
-                .status()
-                .map_err(|e| format!("Failed to execute franken_parser_oracle_report (is it installed?): {e}"))?;
-
-            if status.success() {
-                println!("✅ Parser oracle report completed successfully");
-                if let Some(path) = &out {
-                    println!("📄 Report written to: {}", path.display());
-                }
-                Ok(0)
+            if gate_mode == OracleGateMode::FailClosed && report.decision.promotion_blocked {
+                Ok(2)
             } else {
-                let code = status.code().unwrap_or(-1);
-                Err(format!(
-                    "Parser oracle report failed with exit code: {code}"
-                ))
+                Ok(0)
             }
         }
         ReportsMode::LoweringGap { out } => {
@@ -11967,7 +12020,7 @@ fn gates_usage() -> String {
 fn reports_usage() -> String {
     [
         "reports usage:",
-        "  frankenctl reports parser-oracle [--config <file>] [--out <file>]",
+        "  frankenctl reports parser-oracle [--partition <smoke|full|nightly>] [--gate-mode <report_only|fail_closed>] [--seed <u64>] [--fixture-catalog <path>] [--trace-id <id>] [--decision-id <id>] [--policy-id <id>] [--out <path>]",
         "  frankenctl reports parser-phase0 [--out <file>]",
         "  frankenctl reports lowering-gap [--out <file>]",
         "  frankenctl reports parser-gap [--out <file>]",
@@ -14620,15 +14673,43 @@ mod tests {
         let args = vec![
             "reports".to_string(),
             "parser-oracle".to_string(),
-            "--config".to_string(),
-            "oracle.json".to_string(),
+            "--partition".to_string(),
+            "nightly".to_string(),
+            "--gate-mode".to_string(),
+            "fail_closed".to_string(),
+            "--seed".to_string(),
+            "42".to_string(),
+            "--fixture-catalog".to_string(),
+            "fixtures.json".to_string(),
+            "--trace-id".to_string(),
+            "trace-42".to_string(),
+            "--decision-id".to_string(),
+            "decision-42".to_string(),
+            "--policy-id".to_string(),
+            "policy-42".to_string(),
             "--out".to_string(),
             "report.json".to_string(),
         ];
         let result = parse_command(&args).expect("should parse valid reports command");
         if let CommandSpec::Reports(reports_args) = result {
-            if let ReportsMode::ParserOracle { config, out } = reports_args.mode {
-                assert_eq!(config, Some(PathBuf::from("oracle.json")));
+            if let ReportsMode::ParserOracle {
+                partition,
+                gate_mode,
+                seed,
+                fixture_catalog,
+                trace_id,
+                decision_id,
+                policy_id,
+                out,
+            } = reports_args.mode
+            {
+                assert_eq!(partition, OraclePartition::Nightly);
+                assert_eq!(gate_mode, OracleGateMode::FailClosed);
+                assert_eq!(seed, 42);
+                assert_eq!(fixture_catalog, PathBuf::from("fixtures.json"));
+                assert_eq!(trace_id.as_deref(), Some("trace-42"));
+                assert_eq!(decision_id.as_deref(), Some("decision-42"));
+                assert_eq!(policy_id.as_deref(), Some("policy-42"));
                 assert_eq!(out, Some(PathBuf::from("report.json")));
             } else {
                 panic!("expected ParserOracle mode");
@@ -14636,6 +14717,20 @@ mod tests {
         } else {
             panic!("expected Reports command");
         }
+    }
+
+    #[test]
+    fn parse_reports_parser_oracle_rejects_undefined_config_flag() {
+        let args = vec![
+            "reports".to_string(),
+            "parser-oracle".to_string(),
+            "--config".to_string(),
+            "oracle.json".to_string(),
+        ];
+
+        let error = parse_command(&args).expect_err("undefined config schema must not be accepted");
+
+        assert_eq!(error, "unknown parser-oracle flag `--config`");
     }
 
     #[test]

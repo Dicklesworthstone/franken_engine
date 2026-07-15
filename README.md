@@ -1560,7 +1560,7 @@ If you only learn these seven, you can produce a complete signed artifact bundle
 | `frankenctl react contract [--out …]` | Emit the React compile/build contract artifact. |
 | `frankenctl gates zero-placeholder --out-dir <dir> [--waivers <path>]` | Enforce release-time placeholder/mock/stub absence. |
 | `frankenctl gates signature-drift --out-dir <dir> [--config <path>]` | Detect signature drift across release artifacts. |
-| `frankenctl reports parser-oracle [--config …] [--out …]` | Emit parser-oracle report. |
+| `frankenctl reports parser-oracle [--partition …] [--gate-mode …] [--seed …] [--fixture-catalog …] [--trace-id …] [--decision-id …] [--policy-id …] [--out …]` | Emit a parser-oracle report directly from the documented options. |
 | `frankenctl reports lowering-gap [--out …]` | Emit lowering-gap inventory report. |
 | `frankenctl test test262 --out-dir <dir> [--suite-path <path>]` | Run the real Test262 conformance harness. |
 | `frankenctl test lockstep [--config …] [--out …]` | Run the lockstep differential harness. |

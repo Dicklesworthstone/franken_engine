@@ -25,6 +25,10 @@ use frankenengine_engine::deterministic_replay::{NondeterminismSource, Nondeterm
 use frankenengine_engine::engine_object_id::EngineObjectId;
 use frankenengine_engine::hash_tiers::{AuthenticityHash, ContentHash};
 use frankenengine_engine::mmr_proof::MerkleMountainRange;
+use frankenengine_engine::parser_oracle::{
+    DEFAULT_FIXTURE_CATALOG_PATH, PARSER_ORACLE_REPORT_SCHEMA_VERSION,
+    PARSER_ORACLE_TAXONOMY_VERSION,
+};
 use frankenengine_engine::proof_schema::{
     AttestationValidityWindow, OptReceipt, OptimizationClass, ReceiptAttestationBindings,
     proof_schema_version_current,
@@ -108,6 +112,91 @@ fn write_react_mismatch_catalog(path: &Path) {
 
 fn parse_stdout_json(output: &std::process::Output) -> serde_json::Value {
     serde_json::from_slice(&output.stdout).expect("stdout should contain valid json")
+}
+
+#[test]
+fn frankenctl_reports_parser_oracle_executes_documented_options_end_to_end() {
+    let root = repo_root();
+    let fixture_catalog = root.join(DEFAULT_FIXTURE_CATALOG_PATH);
+    let report_path = temp_path("frankenctl_parser_oracle_report", "json");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "reports",
+            "parser-oracle",
+            "--partition",
+            "smoke",
+            "--gate-mode",
+            "report_only",
+            "--seed",
+            "4242",
+            "--fixture-catalog",
+            fixture_catalog
+                .to_str()
+                .expect("fixture catalog path should be valid UTF-8"),
+            "--trace-id",
+            "trace-frankenctl-parser-oracle-e2e",
+            "--decision-id",
+            "decision-frankenctl-parser-oracle-e2e",
+            "--policy-id",
+            "policy-frankenctl-parser-oracle-e2e",
+            "--out",
+            report_path
+                .to_str()
+                .expect("report path should be valid UTF-8"),
+        ])
+        .current_dir(&root)
+        .output()
+        .expect("documented parser-oracle report command should execute");
+
+    assert!(
+        output.status.success(),
+        "parser-oracle report failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(report_path.is_file(), "report artifact should be written");
+
+    let report: serde_json::Value = serde_json::from_slice(
+        &fs::read(&report_path).expect("parser-oracle report should be readable"),
+    )
+    .expect("parser-oracle report should contain JSON");
+    assert_eq!(
+        report["schema_version"],
+        PARSER_ORACLE_REPORT_SCHEMA_VERSION
+    );
+    assert_eq!(report["taxonomy_version"], PARSER_ORACLE_TAXONOMY_VERSION);
+    assert_eq!(report["partition"], "smoke");
+    assert_eq!(report["gate_mode"], "report_only");
+    assert_eq!(report["seed"], 4242);
+    assert_eq!(
+        report["fixture_catalog_path"],
+        fixture_catalog.display().to_string()
+    );
+    assert_eq!(report["trace_id"], "trace-frankenctl-parser-oracle-e2e");
+    assert_eq!(
+        report["decision_id"],
+        "decision-frankenctl-parser-oracle-e2e"
+    );
+    assert_eq!(report["policy_id"], "policy-frankenctl-parser-oracle-e2e");
+    assert_eq!(report["summary"]["total_fixtures"], 4);
+    assert!(
+        report["fixture_results"]
+            .as_array()
+            .is_some_and(|results| results.len() == 4),
+        "smoke report should contain exactly four fixture results"
+    );
+    let catalog_hash = report["fixture_catalog_hash"]
+        .as_str()
+        .expect("fixture catalog hash should be a string");
+    assert!(catalog_hash.starts_with("sha256:"));
+    assert_eq!(catalog_hash.len(), "sha256:".len() + 64);
+
+    let stdout_report = parse_stdout_json(&output);
+    assert_eq!(
+        stdout_report, report,
+        "stdout and file artifact should match"
+    );
 }
 
 fn digest_hex(byte: u8, byte_len: usize) -> String {

@@ -2099,6 +2099,11 @@ struct ParseExecutionContext<'a> {
     source_label: &'a str,
     options: &'a ParserOptions,
     goal: ParseGoal,
+    strict_mode: bool,
+    await_identifier_reserved: bool,
+    yield_identifier_reserved: bool,
+    allow_await_expression: bool,
+    allow_yield_expression: bool,
     source_bytes: u64,
     token_count: u64,
     max_recursion_observed: u64,
@@ -2126,6 +2131,36 @@ impl<'a> ParseExecutionContext<'a> {
             max_recursion_depth: self.options.budget.max_recursion_depth,
         }
     }
+}
+
+fn with_grammar_context<'a, T>(
+    context: &mut ParseExecutionContext<'a>,
+    strict_mode: bool,
+    await_identifier_reserved: bool,
+    yield_identifier_reserved: bool,
+    allow_await_expression: bool,
+    allow_yield_expression: bool,
+    parse: impl FnOnce(&mut ParseExecutionContext<'a>) -> ParseResult<T>,
+) -> ParseResult<T> {
+    let previous = (
+        context.strict_mode,
+        context.await_identifier_reserved,
+        context.yield_identifier_reserved,
+        context.allow_await_expression,
+        context.allow_yield_expression,
+    );
+    context.strict_mode = strict_mode;
+    context.await_identifier_reserved = await_identifier_reserved;
+    context.yield_identifier_reserved = yield_identifier_reserved;
+    context.allow_await_expression = allow_await_expression;
+    context.allow_yield_expression = allow_yield_expression;
+    let result = parse(context);
+    context.strict_mode = previous.0;
+    context.await_identifier_reserved = previous.1;
+    context.yield_identifier_reserved = previous.2;
+    context.allow_await_expression = previous.3;
+    context.allow_yield_expression = previous.4;
+    result
 }
 
 /// A logical line that may span multiple physical lines (for block statements).
@@ -2209,14 +2244,18 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             current_start_line = line_no;
             last_significant = None;
             trailing_identifier.clear();
-        } else if in_quote.is_some() {
+        } else if let Some(quote) = in_quote {
             if escaped {
-                // A backslash immediately followed by a physical line ending
-                // is a string/template LineContinuation. Both disappear from
-                // the cooked source; leaving the backslash would reinterpret
-                // the first character of the next line as an escape.
-                let continuation = current_text.pop();
-                debug_assert_eq!(continuation, Some('\\'));
+                if quote == '`' {
+                    // Template cooked values discard LineContinuations here.
+                    let continuation = current_text.pop();
+                    debug_assert_eq!(continuation, Some('\\'));
+                } else {
+                    // Keep string-literal LineContinuation provenance until
+                    // token cooking. Directive recognition must distinguish
+                    // `"use \\` newline `strict"` from a Use Strict Directive.
+                    current_text.push('\n');
+                }
                 escaped = false;
             } else {
                 // Preserve an unescaped line ending so the literal parser can
@@ -2225,7 +2264,10 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 current_text.push('\n');
             }
         } else {
-            current_text.push(' ');
+            // Preserve physical line boundaries inside balanced constructs.
+            // Besides ASI, directive prologues and line comments depend on
+            // LineTerminator provenance; flattening this to a space loses it.
+            current_text.push('\n');
         }
         current_text.push_str(line);
 
@@ -2399,6 +2441,136 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
     result
 }
 
+fn starts_identifier_part(source: &str) -> bool {
+    source.chars().next().is_some_and(|ch| {
+        matches!(ch, '$' | '_' | '\\' | '\u{200C}' | '\u{200D}')
+            || unicode_id_start::is_id_continue(ch)
+    })
+}
+
+fn starts_directive_expression_continuation(source: &str) -> bool {
+    let source = source.trim_start_matches(|ch: char| ch.is_whitespace() || ch == '\u{FEFF}');
+    if source.starts_with("++") || source.starts_with("--") {
+        return false;
+    }
+    if source.starts_with("!=") {
+        return true;
+    }
+    matches!(
+        source.chars().next(),
+        Some(
+            '(' | '['
+                | '`'
+                | '.'
+                | '+'
+                | '-'
+                | '*'
+                | '/'
+                | '%'
+                | '<'
+                | '>'
+                | '='
+                | '&'
+                | '|'
+                | '^'
+                | '?'
+                | ','
+        )
+    ) || source
+        .strip_prefix("in")
+        .is_some_and(|rest| !starts_identifier_part(rest))
+        || source
+            .strip_prefix("instanceof")
+            .is_some_and(|rest| !starts_identifier_part(rest))
+}
+
+fn trim_directive_trivia(mut source: &str) -> (&str, bool) {
+    let mut saw_line_terminator = false;
+    loop {
+        let mut whitespace_end = 0usize;
+        for (index, ch) in source.char_indices() {
+            if ch.is_whitespace() || ch == '\u{FEFF}' {
+                saw_line_terminator |= matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}');
+                whitespace_end = index + ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+        source = &source[whitespace_end..];
+
+        if let Some(line_comment) = source.strip_prefix("//") {
+            let newline = line_comment
+                .char_indices()
+                .find(|(_, ch)| matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}'))
+                .map(|(index, _)| index);
+            let Some(newline) = newline else {
+                return ("", saw_line_terminator);
+            };
+            source = &line_comment[newline..];
+            continue;
+        }
+        if let Some(block_comment) = source.strip_prefix("/*") {
+            let Some(end) = block_comment.find("*/") else {
+                return (source, saw_line_terminator);
+            };
+            let comment = &block_comment[..end];
+            saw_line_terminator |= comment
+                .chars()
+                .any(|ch| matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}'));
+            source = &block_comment[end + 2..];
+            continue;
+        }
+        return (source, saw_line_terminator);
+    }
+}
+
+fn has_use_strict_directive(mut source: &str) -> bool {
+    loop {
+        (source, _) = trim_directive_trivia(source);
+        let Some(delimiter) = source.chars().next().filter(|ch| matches!(ch, '\'' | '"')) else {
+            return false;
+        };
+
+        let mut escaped = false;
+        let mut closing_index = None;
+        for (index, ch) in source[delimiter.len_utf8()..].char_indices() {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == delimiter {
+                closing_index = Some(delimiter.len_utf8() + index);
+                break;
+            } else if matches!(ch, '\n' | '\r') {
+                return false;
+            }
+        }
+        let Some(closing_index) = closing_index else {
+            return false;
+        };
+        let directive = &source[delimiter.len_utf8()..closing_index];
+        let after_literal = &source[closing_index + delimiter.len_utf8()..];
+        let (after_trivia, saw_line_terminator) = trim_directive_trivia(after_literal);
+        let terminated = after_trivia.is_empty()
+            || after_trivia.starts_with(';')
+            || (saw_line_terminator && !starts_directive_expression_continuation(after_trivia));
+        if !terminated {
+            return false;
+        }
+        if directive == "use strict" {
+            return true;
+        }
+
+        source = if let Some(rest) = after_trivia.strip_prefix(';') {
+            rest
+        } else if saw_line_terminator {
+            after_trivia
+        } else {
+            return false;
+        };
+    }
+}
+
 fn parse_source(
     text: &str,
     source_label: &str,
@@ -2420,6 +2592,11 @@ fn parse_source(
         source_label,
         options,
         goal,
+        strict_mode: goal == ParseGoal::Module || has_use_strict_directive(text),
+        await_identifier_reserved: goal == ParseGoal::Module,
+        yield_identifier_reserved: false,
+        allow_await_expression: goal == ParseGoal::Module,
+        allow_yield_expression: false,
         source_bytes,
         token_count,
         max_recursion_observed: 0,
@@ -3149,6 +3326,142 @@ fn validate_named_export_specifiers(
 // Binding pattern parser (destructuring)
 // ---------------------------------------------------------------------------
 
+fn canonical_source_identifier_name(source: &str) -> Option<String> {
+    let identifier = if source.contains('\\') {
+        decode_binding_property_identifier_escapes(source)?
+    } else {
+        source.to_string()
+    };
+    is_binding_property_identifier_name(&identifier).then_some(identifier)
+}
+
+fn decode_identifier_unicode_escape_prefix(source: &str) -> Option<(char, usize)> {
+    let unicode = source.strip_prefix(r"\u")?;
+    if let Some(braced) = unicode.strip_prefix('{') {
+        let closing = braced.find('}')?;
+        let digits = &braced[..closing];
+        if digits.is_empty() || !digits.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            return None;
+        }
+        let value = u32::from_str_radix(digits, 16).ok()?;
+        return Some((char::from_u32(value)?, 3 + closing + 1));
+    }
+
+    let digits = unicode.get(..4)?;
+    if !digits.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some((char::from_u32(u32::from_str_radix(digits, 16).ok()?)?, 6))
+}
+
+fn canonical_leading_source_identifier(source: &str) -> Option<(String, usize)> {
+    let mut canonical = String::new();
+    let mut offset = 0usize;
+    while offset < source.len() {
+        let remaining = &source[offset..];
+        let (ch, consumed) = if remaining.starts_with('\\') {
+            let Some(decoded) = decode_identifier_unicode_escape_prefix(remaining) else {
+                break;
+            };
+            decoded
+        } else {
+            let ch = remaining.chars().next()?;
+            (ch, ch.len_utf8())
+        };
+        let valid = if canonical.is_empty() {
+            matches!(ch, '$' | '_') || unicode_id_start::is_id_start(ch)
+        } else {
+            matches!(ch, '$' | '_' | '\u{200C}' | '\u{200D}')
+                || unicode_id_start::is_id_continue(ch)
+        };
+        if !valid {
+            break;
+        }
+        canonical.push(ch);
+        offset = offset.saturating_add(consumed);
+    }
+    (!canonical.is_empty()).then_some((canonical, offset))
+}
+
+fn looks_like_malformed_identifier_escape(source: &str) -> bool {
+    source.starts_with('\\')
+        || canonical_leading_source_identifier(source).is_some_and(|(_, end)| {
+            source
+                .as_bytes()
+                .get(end)
+                .is_some_and(|byte| *byte == b'\\')
+        })
+}
+
+fn starts_with_invalid_identifier_continue(source: &str) -> bool {
+    source.chars().next().is_some_and(|ch| {
+        matches!(ch, '\u{200C}' | '\u{200D}')
+            || (!ch.is_ascii_digit()
+                && !unicode_id_start::is_id_start(ch)
+                && unicode_id_start::is_id_continue(ch))
+    })
+}
+
+fn is_reserved_contextual_identifier_prefix(
+    source: &str,
+    context: &ParseExecutionContext<'_>,
+) -> bool {
+    canonical_leading_source_identifier(source).is_some_and(|(identifier, _)| {
+        (identifier == "await"
+            && (context.goal == ParseGoal::Module || context.await_identifier_reserved))
+            || (identifier == "yield" && context.yield_identifier_reserved)
+    })
+}
+
+fn parse_simple_binding_identifier(
+    source: &str,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<Option<String>> {
+    let Some(identifier) = canonical_source_identifier_name(source) else {
+        return Ok(None);
+    };
+    if !is_context_binding_identifier(&identifier, context) {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            format!("invalid binding identifier: `{source}` canonicalizes to `{identifier}`"),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+    Ok(Some(identifier))
+}
+
+fn parse_identifier_reference(
+    source: &str,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<Option<String>> {
+    let Some(identifier) = canonical_source_identifier_name(source) else {
+        if starts_with_invalid_identifier_continue(source)
+            || is_reserved_contextual_identifier_prefix(source, context)
+            || looks_like_malformed_identifier_escape(source)
+        {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                format!("invalid identifier reference: `{source}`"),
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
+        }
+        return Ok(None);
+    };
+    if !is_context_identifier_reference(&identifier, context) {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            format!("invalid identifier reference: `{source}` canonicalizes to `{identifier}`"),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+    Ok(Some(identifier))
+}
+
 /// Parse a binding pattern: identifier, `{ ... }` object, or `[ ... ]` array.
 fn parse_binding_pattern(
     source: &str,
@@ -3198,9 +3511,10 @@ fn parse_binding_pattern(
         return parse_array_binding_pattern(inner.trim(), span, context);
     }
 
-    // Simple identifier binding
-    if is_identifier(trimmed) {
-        return Ok(BindingPattern::Identifier(trimmed.to_string()));
+    // Simple BindingIdentifier: decode permitted Unicode escapes before
+    // allocating the binding so escaped and literal spellings share one name.
+    if let Some(identifier) = parse_simple_binding_identifier(trimmed, span, context)? {
+        return Ok(BindingPattern::Identifier(identifier));
     }
 
     Err(ParseError::new(
@@ -3881,6 +4195,23 @@ fn parse_variable_declaration_kind(statement: &str) -> Option<VariableDeclaratio
     None
 }
 
+fn validate_lexical_binding_names(
+    kind: VariableDeclarationKind,
+    pattern: &BindingPattern,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    if kind != VariableDeclarationKind::Var && pattern.binding_names().contains(&"let") {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "lexical declarations cannot bind the name `let`",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+    Ok(())
+}
+
 fn parse_variable_declaration(
     statement: &str,
     kind: VariableDeclarationKind,
@@ -3916,6 +4247,7 @@ fn parse_variable_declaration(
         let (name_raw, initializer_raw) = split_var_declarator_assignment(declarator);
         let name = name_raw.trim();
         let pattern = parse_binding_pattern(name, &span, context)?;
+        validate_lexical_binding_names(kind, &pattern, &span, context)?;
 
         let initializer = match initializer_raw {
             Some(initializer_source) => {
@@ -4103,6 +4435,14 @@ fn parse_expression(
         return result;
     }
 
+    // YieldExpression is an AssignmentExpression form, so it must claim the
+    // whole trailing assignment before the higher-precedence binary scanner.
+    if context.allow_yield_expression
+        && let Some(rest) = strip_contextual_keyword(expression, "yield")
+    {
+        return parse_yield_expression(expression, rest, span, context, recursion_depth);
+    }
+
     // Try assignment first (lowest precedence apart from comma).
     if let Some(result) = try_parse_assignment(expression, span, context, recursion_depth) {
         return result;
@@ -4133,6 +4473,64 @@ fn parse_expression(
     // Postfix: call and member access on a primary expression.
     let primary = parse_primary_expression(expression, span, context, recursion_depth)?;
     Ok(primary)
+}
+
+fn strip_contextual_keyword<'a>(source: &'a str, keyword: &str) -> Option<&'a str> {
+    let rest = source.strip_prefix(keyword)?;
+    if starts_identifier_part(rest) {
+        None
+    } else {
+        Some(rest)
+    }
+}
+
+fn parse_yield_expression(
+    expression: &str,
+    rest: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+    recursion_depth: u64,
+) -> ParseResult<Expression> {
+    let (rest, saw_line_terminator) = trim_directive_trivia(rest);
+    if rest.starts_with(',') {
+        // SequenceExpression does not yet have a dedicated AST carrier. Keep
+        // the legacy deterministic fallback without misattaching the sequence
+        // tail as YieldExpression's argument.
+        return Ok(Expression::Raw(canonicalize_whitespace(expression)));
+    }
+    if saw_line_terminator
+        && !rest.is_empty()
+        && !rest.starts_with(';')
+        && !rest.starts_with(')')
+        && !rest.starts_with('}')
+    {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "a yield expression cannot attach an argument across a LineTerminator",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+    let (delegate, rest) = if let Some(after_star) = rest.strip_prefix('*') {
+        (true, after_star.trim_start())
+    } else {
+        (false, rest)
+    };
+    let argument = if rest.is_empty()
+        || rest.starts_with(';')
+        || rest.starts_with(')')
+        || rest.starts_with('}')
+    {
+        None
+    } else {
+        Some(Box::new(parse_expression(
+            rest,
+            span,
+            context,
+            recursion_depth + 1,
+        )?))
+    };
+    Ok(Expression::Yield { argument, delegate })
 }
 
 /// Parse a primary (atomic) expression — literals, identifiers, grouping, etc.
@@ -4181,43 +4579,15 @@ fn parse_primary_expression(
         return Ok(Expression::Super);
     }
 
-    if let Some(rest) = expression.strip_prefix("await")
-        && (rest.starts_with(' ') || rest.starts_with('('))
+    if let Some(rest) = strip_contextual_keyword(expression, "await")
+        && !rest.is_empty()
+        && (context.allow_await_expression
+            || (context.goal == ParseGoal::Script
+                && !context.await_identifier_reserved
+                && rest.chars().next().is_some_and(char::is_whitespace)))
     {
         let nested = parse_expression(rest.trim_start(), span, context, recursion_depth + 1)?;
         return Ok(Expression::Await(Box::new(nested)));
-    }
-
-    // yield expression: `yield expr` or `yield* expr` (delegation)
-    if let Some(rest) = expression.strip_prefix("yield")
-        && (rest.starts_with(' ')
-            || rest.starts_with('*')
-            || rest.is_empty()
-            || rest.starts_with(';')
-            || rest.starts_with(')')
-            || rest.starts_with('}'))
-    {
-        let rest = rest.trim_start();
-        let (delegate, rest) = if let Some(after_star) = rest.strip_prefix('*') {
-            (true, after_star.trim_start())
-        } else {
-            (false, rest)
-        };
-        let argument = if rest.is_empty()
-            || rest.starts_with(';')
-            || rest.starts_with(')')
-            || rest.starts_with('}')
-        {
-            None
-        } else {
-            Some(Box::new(parse_expression(
-                rest,
-                span,
-                context,
-                recursion_depth + 1,
-            )?))
-        };
-        return Ok(Expression::Yield { argument, delegate });
     }
 
     // spread element: `...expr`
@@ -4235,10 +4605,9 @@ fn parse_primary_expression(
     }
 
     // Function expression: `function(a, b) { ... }` or `function name(a, b) { ... }`
-    if let Some(rest) = expression
-        .strip_prefix("function")
-        .filter(|r| r.starts_with('(') || r.starts_with(' ') || r.starts_with('\t'))
-    {
+    if let Some(rest) = expression.strip_prefix("function").filter(|r| {
+        r.starts_with('(') || r.starts_with('*') || trim_directive_trivia(r).0.len() < r.len()
+    }) {
         return parse_function_expression(rest, span, context, recursion_depth);
     }
 
@@ -4286,8 +4655,8 @@ fn parse_primary_expression(
         return result;
     }
 
-    if is_identifier(expression) {
-        return Ok(Expression::Identifier(expression.to_string()));
+    if let Some(identifier) = parse_identifier_reference(expression, span, context)? {
+        return Ok(Expression::Identifier(identifier));
     }
 
     Ok(Expression::Raw(canonicalize_whitespace(expression)))
@@ -4314,8 +4683,10 @@ fn try_parse_arrow_function(
 ) -> Option<ParseResult<Expression>> {
     let (is_async, rest) = if let Some(after_async) = expr.strip_prefix("async") {
         let trimmed = after_async.trim_start();
-        let starts_with_identifier =
-            matches!(trimmed.chars().next(), Some(ch) if is_identifier_start(ch));
+        let starts_with_identifier = matches!(
+            trimmed.chars().next(),
+            Some(ch) if matches!(ch, '$' | '_') || unicode_id_start::is_id_start(ch)
+        ) || trimmed.starts_with(r"\u");
         // `async(` could be a call, so require whitespace before `(`.
         if after_async.starts_with(|c: char| c.is_ascii_whitespace())
             && (trimmed.starts_with('(') || starts_with_identifier)
@@ -4335,7 +4706,18 @@ fn try_parse_arrow_function(
         let body_src = after.strip_prefix("=>")?;
         let body_src = body_src.trim();
 
-        let params = match parse_arrow_params(params_src, span, context) {
+        let arrow_param_strict_mode = context.strict_mode;
+        let arrow_param_await_reserved = context.await_identifier_reserved || is_async;
+        let arrow_param_yield_reserved = context.yield_identifier_reserved;
+        let params = match with_grammar_context(
+            context,
+            arrow_param_strict_mode,
+            arrow_param_await_reserved,
+            arrow_param_yield_reserved,
+            false,
+            false,
+            |context| parse_arrow_params(params_src, span, context),
+        ) {
             Ok(p) => p,
             Err(e) => return Some(Err(e)),
         };
@@ -4352,12 +4734,21 @@ fn try_parse_arrow_function(
         // Find `=>` that isn't inside quotes/brackets.
         let arrow_pos = find_top_level_arrow(rest)?;
         let param_name = rest[..arrow_pos].trim();
-        if !is_identifier(param_name) {
-            return None;
-        }
+        let param_name = match parse_simple_binding_identifier(param_name, span, context) {
+            Ok(Some(name)) => name,
+            Ok(None) => {
+                return Some(Err(ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    format!("invalid unparenthesized arrow parameter: `{param_name}`"),
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                )));
+            }
+            Err(error) => return Some(Err(error)),
+        };
         let body_src = rest[arrow_pos + 2..].trim();
         let params = vec![FunctionParam {
-            pattern: BindingPattern::Identifier(param_name.to_string()),
+            pattern: BindingPattern::Identifier(param_name),
             span: span.clone(),
         }];
         Some(parse_arrow_body(
@@ -4396,6 +4787,55 @@ fn parse_arrow_params(
     Ok(params)
 }
 
+fn validate_parameter_binding_names(
+    params: &[FunctionParam],
+    strict_mode: bool,
+    is_async: bool,
+    is_generator: bool,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    for name in params
+        .iter()
+        .flat_map(|parameter| parameter.pattern.binding_names())
+    {
+        let invalid = (is_async && name == "await")
+            || (is_generator && name == "yield")
+            || (strict_mode
+                && (is_strict_reserved_word(name) || matches!(name, "eval" | "arguments")));
+        if invalid {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                format!("invalid function parameter binding `{name}` in its grammar context"),
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_use_strict_parameter_list(
+    params: &[FunctionParam],
+    has_own_use_strict_directive: bool,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    if has_own_use_strict_directive
+        && params
+            .iter()
+            .any(|parameter| !matches!(&parameter.pattern, BindingPattern::Identifier(_)))
+    {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "a function with non-simple parameters cannot contain a use strict directive",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+    Ok(())
+}
+
 /// Parse the body of an arrow function — either `{ block }` or expression.
 fn parse_arrow_body(
     body_src: &str,
@@ -4405,30 +4845,50 @@ fn parse_arrow_body(
     context: &mut ParseExecutionContext<'_>,
     recursion_depth: u64,
 ) -> ParseResult<Expression> {
-    let body = if body_src.starts_with('{') {
-        if let Some((block_src, _)) = extract_balanced(body_src, '{', '}') {
-            let stmts = parse_body_statements(block_src, ParseGoal::Script, span, context)?;
-            ArrowBody::Block(BlockStatement {
-                body: stmts,
-                span: span.clone(),
-            })
-        } else {
-            return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                "arrow function block has unbalanced braces",
-                context.source_label.to_string(),
-                Some(span.clone()),
-            ));
-        }
-    } else {
-        let expr = parse_expression(body_src, span, context, recursion_depth + 1)?;
-        ArrowBody::Expression(Box::new(expr))
-    };
-    Ok(Expression::ArrowFunction {
-        params,
-        body,
+    let block_source = body_src
+        .starts_with('{')
+        .then(|| extract_balanced(body_src, '{', '}'))
+        .flatten();
+    if body_src.starts_with('{') && block_source.is_none() {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "arrow function block has unbalanced braces",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+    let has_own_use_strict_directive =
+        block_source.is_some_and(|(block_src, _)| has_use_strict_directive(block_src));
+    let strict_mode = context.strict_mode || has_own_use_strict_directive;
+    validate_parameter_binding_names(&params, strict_mode, is_async, false, span, context)?;
+    validate_use_strict_parameter_list(&params, has_own_use_strict_directive, span, context)?;
+
+    with_grammar_context(
+        context,
+        strict_mode,
         is_async,
-    })
+        false,
+        is_async,
+        false,
+        |context| {
+            let body = if let Some((block_src, _)) = block_source {
+                let statements =
+                    parse_body_statements(block_src, ParseGoal::Script, span, context)?;
+                ArrowBody::Block(BlockStatement {
+                    body: statements,
+                    span: span.clone(),
+                })
+            } else {
+                let expression = parse_expression(body_src, span, context, recursion_depth + 1)?;
+                ArrowBody::Expression(Box::new(expression))
+            };
+            Ok(Expression::ArrowFunction {
+                params,
+                body,
+                is_async,
+            })
+        },
+    )
 }
 
 /// Find `=>` at the top level (not inside quotes/brackets/parens).
@@ -5143,6 +5603,92 @@ fn is_operator_context_byte(b: u8) -> bool {
     )
 }
 
+fn generator_function_marker_prefix(prefix: &str) -> bool {
+    let bytes = prefix.as_bytes();
+    let mut in_quote: Option<u8> = None;
+    let mut escaped = false;
+    let mut last_significant_end = 0usize;
+    let mut index = 0usize;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if let Some(quote) = in_quote {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == quote {
+                in_quote = None;
+                last_significant_end = index + 1;
+            }
+            index += 1;
+            continue;
+        }
+        if byte == b'/' && bytes.get(index + 1) == Some(&b'*') {
+            let Some(comment_end) = prefix[index + 2..].find("*/") else {
+                return false;
+            };
+            index += 2 + comment_end + 2;
+            continue;
+        }
+        if byte == b'/' && bytes.get(index + 1) == Some(&b'/') {
+            index = prefix[index + 2..]
+                .char_indices()
+                .find(|(_, ch)| matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}'))
+                .map_or(bytes.len(), |(offset, ch)| {
+                    index + 2 + offset + ch.len_utf8()
+                });
+            continue;
+        }
+        if matches!(byte, b'\'' | b'"' | b'`') {
+            in_quote = Some(byte);
+            index += 1;
+            continue;
+        }
+        if prefix.is_char_boundary(index)
+            && prefix[index..].starts_with("function")
+            && trim_directive_trivia(&prefix[index + "function".len()..])
+                .0
+                .is_empty()
+        {
+            let boundary = prefix[..last_significant_end].trim_end();
+            if boundary.is_empty()
+                || boundary
+                    .as_bytes()
+                    .last()
+                    .is_some_and(|byte| is_operator_context_byte(*byte))
+                || [
+                    "async", "await", "yield", "typeof", "void", "delete", "return", "throw", "new",
+                ]
+                .iter()
+                .any(|keyword| {
+                    boundary.strip_suffix(keyword).is_some_and(|before| {
+                        let before = before.trim_end();
+                        before.is_empty()
+                            || before
+                                .as_bytes()
+                                .last()
+                                .is_some_and(|byte| is_operator_context_byte(*byte))
+                    })
+                })
+            {
+                return true;
+            }
+        }
+        if prefix.is_char_boundary(index) {
+            let Some(ch) = prefix[index..].chars().next() else {
+                break;
+            };
+            if !ch.is_whitespace() && ch != '\u{FEFF}' {
+                last_significant_end = index + ch.len_utf8();
+            }
+            index += ch.len_utf8();
+        } else {
+            index += 1;
+        }
+    }
+    false
+}
+
 /// Try to find and parse a binary expression by locating the lowest-precedence
 /// top-level operator and recursively parsing left and right operands.
 fn try_parse_binary(
@@ -5181,6 +5727,18 @@ fn try_parse_binary(
                 in_quote = None;
             }
             i += 1;
+            continue;
+        }
+        if b == b'/' && bytes.get(i + 1) == Some(&b'*') {
+            let comment_end = expr[i + 2..].find("*/")?;
+            i += 2 + comment_end + 2;
+            continue;
+        }
+        if b == b'/' && bytes.get(i + 1) == Some(&b'/') {
+            i = expr[i + 2..]
+                .char_indices()
+                .find(|(_, ch)| matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}'))
+                .map_or(bytes.len(), |(offset, ch)| i + 2 + offset + ch.len_utf8());
             continue;
         }
         match b {
@@ -5233,6 +5791,12 @@ fn try_parse_binary(
             continue;
         }
         if let Some((op, len)) = match_binary_operator_at(bytes, i) {
+            let generator_function_marker = matches!(op, BinaryOperator::Multiply)
+                && generator_function_marker_prefix(&expr[..i]);
+            if generator_function_marker {
+                i += len;
+                continue;
+            }
             // For the same precedence, prefer the rightmost for right-associative,
             // leftmost for left-associative.
             let dominated = if let Some(ref prev) = best_op {
@@ -5666,9 +6230,16 @@ fn try_parse_postfix(
                 context,
             )));
         }
-        let callee = match parse_expression(callee_src, span, context, recursion_depth + 1) {
-            Ok(e) => e,
-            Err(e) => return Some(Err(e)),
+        // Preserve the scaffold's pre-existing dynamic-import carrier until
+        // the AST grows a dedicated ImportCall node. A bare `import` remains
+        // a reserved IdentifierReference everywhere else.
+        let callee = if !optional && callee_src == "import" {
+            Expression::Identifier("import".to_string())
+        } else {
+            match parse_expression(callee_src, span, context, recursion_depth + 1) {
+                Ok(e) => e,
+                Err(e) => return Some(Err(e)),
+            }
         };
         let arguments =
             match parse_comma_separated_exprs(args_src, span, context, recursion_depth + 1) {
@@ -6535,7 +7106,7 @@ fn parse_object_literal(
             else {
                 return Err(invalid_shorthand());
             };
-            if !is_object_shorthand_identifier_reference(&name, context.goal) {
+            if !is_context_identifier_reference(&name, context) {
                 return Err(invalid_shorthand());
             }
             let key = Expression::Identifier(name.clone());
@@ -6744,20 +7315,45 @@ fn parse_f64_numeric_literal(input: &str) -> Option<f64> {
     digits_ref.parse::<f64>().ok()
 }
 
+fn cook_quoted_string_line_continuations(inner: &str) -> Option<String> {
+    let mut cooked = String::with_capacity(inner.len());
+    let mut chars = inner.chars().peekable();
+    let mut escaped = false;
+    while let Some(ch) = chars.next() {
+        if matches!(ch, '\n' | '\r') || (escaped && matches!(ch, '\u{2028}' | '\u{2029}')) {
+            if !escaped {
+                return None;
+            }
+            let continuation = cooked.pop();
+            debug_assert_eq!(continuation, Some('\\'));
+            if ch == '\r' && chars.peek() == Some(&'\n') {
+                chars.next();
+            }
+            escaped = false;
+            continue;
+        }
+
+        cooked.push(ch);
+        if escaped {
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        }
+    }
+    Some(cooked)
+}
+
 fn parse_quoted_string(input: &str) -> Option<String> {
     if input.len() < 2 {
         return None;
     }
-    let first = input.as_bytes()[0];
-    let last = input.as_bytes()[input.len() - 1];
-    if (first == b'\'' && last == b'\'') || (first == b'"' && last == b'"') {
-        let inner = &input[1..input.len() - 1];
-        if inner.contains('\n') || inner.contains('\r') {
-            return None;
-        }
-        return Some(inner.to_string());
+    let delimiter = input.chars().next()?;
+    if !matches!(delimiter, '\'' | '"') || input.chars().next_back()? != delimiter {
+        return None;
     }
-    None
+    cook_quoted_string_line_continuations(
+        &input[delimiter.len_utf8()..input.len() - delimiter.len_utf8()],
+    )
 }
 
 /// Parse a regex literal: `/pattern/flags`.
@@ -7258,32 +7854,15 @@ fn is_identifier(input: &str) -> bool {
 }
 
 fn is_module_binding_identifier(input: &str) -> bool {
-    is_identifier(input) && !is_disallowed_module_binding_name(input)
+    is_identifier(input)
+        && !is_disallowed_module_binding_name(input)
+        && !matches!(input, "eval" | "arguments")
 }
 
-fn is_object_shorthand_identifier_reference(name: &str, goal: ParseGoal) -> bool {
-    let script_contextual_name = matches!(
-        name,
-        "await"
-            | "implements"
-            | "interface"
-            | "let"
-            | "package"
-            | "private"
-            | "protected"
-            | "public"
-            | "static"
-            | "yield"
-    );
-    (goal == ParseGoal::Script && script_contextual_name)
-        || !is_disallowed_module_binding_name(name)
-}
-
-fn is_disallowed_module_binding_name(name: &str) -> bool {
+fn is_always_reserved_word(name: &str) -> bool {
     matches!(
         name,
-        "await"
-            | "break"
+        "break"
             | "case"
             | "catch"
             | "class"
@@ -7302,20 +7881,12 @@ fn is_disallowed_module_binding_name(name: &str) -> bool {
             | "for"
             | "function"
             | "if"
-            | "implements"
             | "import"
             | "in"
             | "instanceof"
-            | "interface"
-            | "let"
             | "new"
             | "null"
-            | "package"
-            | "private"
-            | "protected"
-            | "public"
             | "return"
-            | "static"
             | "super"
             | "switch"
             | "this"
@@ -7327,8 +7898,39 @@ fn is_disallowed_module_binding_name(name: &str) -> bool {
             | "void"
             | "while"
             | "with"
+    )
+}
+
+fn is_strict_reserved_word(name: &str) -> bool {
+    matches!(
+        name,
+        "implements"
+            | "interface"
+            | "let"
+            | "package"
+            | "private"
+            | "protected"
+            | "public"
+            | "static"
             | "yield"
     )
+}
+
+fn is_context_identifier_reference(name: &str, context: &ParseExecutionContext<'_>) -> bool {
+    !is_always_reserved_word(name)
+        && !(context.strict_mode && is_strict_reserved_word(name))
+        && !(context.yield_identifier_reserved && name == "yield")
+        && !((context.goal == ParseGoal::Module || context.await_identifier_reserved)
+            && name == "await")
+}
+
+fn is_context_binding_identifier(name: &str, context: &ParseExecutionContext<'_>) -> bool {
+    is_context_identifier_reference(name, context)
+        && !(context.strict_mode && matches!(name, "eval" | "arguments"))
+}
+
+fn is_disallowed_module_binding_name(name: &str) -> bool {
+    is_always_reserved_word(name) || is_strict_reserved_word(name) || name == "await"
 }
 
 fn canonicalize_whitespace(input: &str) -> String {
@@ -7719,6 +8321,134 @@ fn extract_balanced(s: &str, open_char: char, close_char: char) -> Option<(&str,
     None
 }
 
+fn top_level_yield_asi_split(source: &str) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let mut paren_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut brace_depth = 0usize;
+    let mut in_quote: Option<u8> = None;
+    let mut in_line_comment = false;
+    let mut in_block_comment = false;
+    let mut escaped = false;
+    let mut last_significant: Option<char> = None;
+    let mut index = 0usize;
+
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if in_line_comment {
+            let line_terminator = source
+                .is_char_boundary(index)
+                .then(|| source[index..].chars().next())
+                .flatten()
+                .filter(|ch| matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}'));
+            if let Some(line_terminator) = line_terminator {
+                in_line_comment = false;
+                index += line_terminator.len_utf8();
+            } else {
+                index += 1;
+            }
+            continue;
+        }
+        if in_block_comment {
+            if byte == b'*' && bytes.get(index + 1) == Some(&b'/') {
+                in_block_comment = false;
+                index += 2;
+            } else {
+                index += 1;
+            }
+            continue;
+        }
+        if let Some(quote) = in_quote {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == quote {
+                in_quote = None;
+            }
+            index += 1;
+            continue;
+        }
+
+        if byte == b'/' && bytes.get(index + 1) == Some(&b'/') {
+            in_line_comment = true;
+            index += 2;
+            continue;
+        }
+        if byte == b'/' && bytes.get(index + 1) == Some(&b'*') {
+            in_block_comment = true;
+            index += 2;
+            continue;
+        }
+        match byte {
+            b'\'' | b'"' | b'`' => {
+                in_quote = Some(byte);
+                last_significant = Some(char::from(byte));
+                index += 1;
+                continue;
+            }
+            b'(' => paren_depth = paren_depth.saturating_add(1),
+            b')' => paren_depth = paren_depth.saturating_sub(1),
+            b'[' => bracket_depth = bracket_depth.saturating_add(1),
+            b']' => bracket_depth = bracket_depth.saturating_sub(1),
+            b'{' => brace_depth = brace_depth.saturating_add(1),
+            b'}' => brace_depth = brace_depth.saturating_sub(1),
+            _ => {}
+        }
+
+        if paren_depth == 0
+            && bracket_depth == 0
+            && brace_depth == 0
+            && source.is_char_boundary(index)
+            && source[index..].starts_with("yield")
+            && last_significant != Some('.')
+            && source[..index].chars().next_back().is_none_or(|ch| {
+                !matches!(ch, '$' | '_' | '\u{200C}' | '\u{200D}')
+                    && !unicode_id_start::is_id_continue(ch)
+            })
+            && !starts_identifier_part(&source[index + "yield".len()..])
+        {
+            let rest = &source[index + "yield".len()..];
+            let (after_trivia, saw_line_terminator) = trim_directive_trivia(rest);
+            if saw_line_terminator
+                && !after_trivia.is_empty()
+                && !after_trivia.starts_with(',')
+                && !after_trivia.starts_with(';')
+            {
+                return Some(index + "yield".len() + rest.len() - after_trivia.len());
+            }
+            index += "yield".len();
+            continue;
+        }
+        if source.is_char_boundary(index)
+            && let Some(ch) = source[index..].chars().next()
+            && !ch.is_whitespace()
+            && ch != '\u{FEFF}'
+        {
+            last_significant = Some(ch);
+        }
+        index += 1;
+    }
+    None
+}
+
+fn split_top_level_yield_asi_segments(mut source: &str) -> Vec<&str> {
+    let mut segments = Vec::new();
+    while let Some(split) = top_level_yield_asi_split(source) {
+        let (before, after) = source.split_at(split);
+        let before = before.trim();
+        if !before.is_empty() {
+            segments.push(before);
+        }
+        source = after.trim_start();
+    }
+    let source = source.trim();
+    if !source.is_empty() {
+        segments.push(source);
+    }
+    segments
+}
+
 /// Parse a block `{ ... }` body into a list of statements.
 fn parse_body_statements(
     body_src: &str,
@@ -7734,8 +8464,15 @@ fn parse_body_statements(
     let mut stmts = Vec::new();
     for ll in &logical_lines {
         for (_start, _end, text) in split_statement_segments(&ll.text) {
-            let inner_span = span.clone();
-            stmts.push(parse_statement(text, goal, inner_span, context)?);
+            if context.allow_yield_expression {
+                for text in split_top_level_yield_asi_segments(text) {
+                    let inner_span = span.clone();
+                    stmts.push(parse_statement(text, goal, inner_span, context)?);
+                }
+            } else {
+                let inner_span = span.clone();
+                stmts.push(parse_statement(text, goal, inner_span, context)?);
+            }
         }
     }
     Ok(stmts)
@@ -8082,6 +8819,9 @@ fn try_parse_for_in_of(
         Ok(pat) => pat,
         Err(_) => return Ok(None),
     };
+    if let Some(kind) = binding_kind {
+        validate_lexical_binding_names(kind, &binding, span, context)?;
+    }
 
     let body_src = rest.trim();
     let body = parse_statement(body_src, goal, span.clone(), context)?;
@@ -8575,9 +9315,10 @@ fn parse_function_expression(
     context: &mut ParseExecutionContext<'_>,
     _recursion_depth: u64,
 ) -> ParseResult<Expression> {
-    let rest = rest.trim_start();
+    let (rest, _) = trim_directive_trivia(rest);
     let is_generator = rest.starts_with('*');
-    let rest = if is_generator { &rest[1..] } else { rest }.trim_start();
+    let rest = if is_generator { &rest[1..] } else { rest };
+    let (rest, _) = trim_directive_trivia(rest);
 
     // Parse optional name (function expressions can be anonymous).
     let (name, rest) = if rest.starts_with('(') {
@@ -8611,8 +9352,6 @@ fn parse_function_expression(
             Some(span.clone()),
         )
     })?;
-    let params = parse_arrow_params(params_src, span, context)?;
-
     // Parse body.
     let rest = rest.trim_start();
     let (body_src, _) = extract_balanced(rest, '{', '}').ok_or_else(|| {
@@ -8624,7 +9363,28 @@ fn parse_function_expression(
         )
     })?;
     let goal = ParseGoal::Script;
-    let body_stmts = parse_body_statements(body_src, goal, span, context)?;
+    let has_own_use_strict_directive = has_use_strict_directive(body_src);
+    let strict_mode = context.strict_mode || has_own_use_strict_directive;
+    let params = with_grammar_context(
+        context,
+        strict_mode,
+        false,
+        is_generator,
+        false,
+        false,
+        |context| parse_arrow_params(params_src, span, context),
+    )?;
+    validate_parameter_binding_names(&params, strict_mode, false, is_generator, span, context)?;
+    validate_use_strict_parameter_list(&params, has_own_use_strict_directive, span, context)?;
+    let body_stmts = with_grammar_context(
+        context,
+        strict_mode,
+        false,
+        is_generator,
+        false,
+        is_generator,
+        |context| parse_body_statements(body_src, goal, span, context),
+    )?;
 
     Ok(Expression::Function {
         name,
@@ -8813,8 +9573,6 @@ fn parse_class_body(
                 Some(span.clone()),
             )
         })?;
-        let params = parse_arrow_params(params_src, span, context)?;
-
         // Parse method body.
         let rest = rest.trim_start();
         let (body_src, _) = extract_balanced(rest, '{', '}').ok_or_else(|| {
@@ -8826,7 +9584,16 @@ fn parse_class_body(
             )
         })?;
         let goal = ParseGoal::Script;
-        let body_stmts = parse_body_statements(body_src, goal, span, context)?;
+        let has_own_use_strict_directive = has_use_strict_directive(body_src);
+        let params = with_grammar_context(context, true, false, false, false, false, |context| {
+            parse_arrow_params(params_src, span, context)
+        })?;
+        validate_parameter_binding_names(&params, true, false, false, span, context)?;
+        validate_use_strict_parameter_list(&params, has_own_use_strict_directive, span, context)?;
+        let body_stmts =
+            with_grammar_context(context, true, false, false, false, false, |context| {
+                parse_body_statements(body_src, goal, span, context)
+            })?;
 
         methods.push(MethodDefinition {
             key,
@@ -8959,8 +9726,6 @@ fn parse_function_declaration(
         )
     })?;
 
-    let params = parse_arrow_params(params_src, &span, context)?;
-
     // Parse body.
     let rest = rest.trim_start();
     let (body_src, _) = extract_balanced(rest, '{', '}').ok_or_else(|| {
@@ -8972,7 +9737,28 @@ fn parse_function_declaration(
         )
     })?;
     let goal = ParseGoal::Script; // Function bodies use script goal.
-    let body_stmts = parse_body_statements(body_src, goal, &span, context)?;
+    let has_own_use_strict_directive = has_use_strict_directive(body_src);
+    let strict_mode = context.strict_mode || has_own_use_strict_directive;
+    let params = with_grammar_context(
+        context,
+        strict_mode,
+        is_async,
+        is_generator,
+        false,
+        false,
+        |context| parse_arrow_params(params_src, &span, context),
+    )?;
+    validate_parameter_binding_names(&params, strict_mode, is_async, is_generator, &span, context)?;
+    validate_use_strict_parameter_list(&params, has_own_use_strict_directive, &span, context)?;
+    let body_stmts = with_grammar_context(
+        context,
+        strict_mode,
+        is_async,
+        is_generator,
+        is_async,
+        is_generator,
+        |context| parse_body_statements(body_src, goal, &span, context),
+    )?;
 
     Ok(Statement::FunctionDeclaration(FunctionDeclaration {
         name,
@@ -9863,6 +10649,394 @@ mod tests {
                 .expect_err("invalid Unicode identifier class must be rejected");
             assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
             assert!(error.message.contains("object-binding property key"));
+        }
+    }
+
+    #[test]
+    fn unicode_and_escaped_binding_names_canonicalize_bd_t4947() {
+        let parser = CanonicalEs2020Parser;
+        let tree = parser
+            .parse(
+                r"var {π, \u0076alue, a\u037A} = source; var [\u03C0] = values; var \u0064irect = 1",
+                ParseGoal::Script,
+            )
+            .expect("literal and escaped binding names should parse");
+
+        let Statement::VariableDeclaration(object_declaration) = &tree.body[0] else {
+            panic!("expected object-binding declaration");
+        };
+        let BindingPattern::ObjectPattern(properties) = &object_declaration.declarations[0].pattern
+        else {
+            panic!("expected object-binding pattern");
+        };
+        assert_eq!(properties.len(), 3);
+        for (property, expected) in properties.iter().zip(["π", "value", "aͺ"]) {
+            assert!(property.shorthand);
+            assert!(matches!(
+                &property.key,
+                Expression::Identifier(name) if name == expected
+            ));
+            assert!(matches!(
+                &property.value,
+                BindingPattern::Identifier(name) if name == expected
+            ));
+        }
+
+        let Statement::VariableDeclaration(array_declaration) = &tree.body[1] else {
+            panic!("expected array-binding declaration");
+        };
+        assert!(matches!(
+            &array_declaration.declarations[0].pattern,
+            BindingPattern::ArrayPattern(elements)
+                if matches!(
+                    &elements[0],
+                    Some(BindingPattern::Identifier(name)) if name == "π"
+                )
+        ));
+
+        let Statement::VariableDeclaration(direct_declaration) = &tree.body[2] else {
+            panic!("expected direct binding declaration");
+        };
+        assert!(matches!(
+            &direct_declaration.declarations[0].pattern,
+            BindingPattern::Identifier(name) if name == "direct"
+        ));
+    }
+
+    #[test]
+    fn unicode_and_escaped_identifier_references_canonicalize_bd_t4947() {
+        let tree = parse_script(r"π + \u0076alue");
+        let Expression::Binary { left, right, .. } = first_expr(&tree) else {
+            panic!("expected binary expression");
+        };
+        assert!(matches!(
+            left.as_ref(),
+            Expression::Identifier(name) if name == "π"
+        ));
+        assert!(matches!(
+            right.as_ref(),
+            Expression::Identifier(name) if name == "value"
+        ));
+
+        let tree = parse_script(r"\u0066n(π)");
+        let Expression::Call { callee, arguments } = first_expr(&tree) else {
+            panic!("expected call expression");
+        };
+        assert!(matches!(
+            callee.as_ref(),
+            Expression::Identifier(name) if name == "fn"
+        ));
+        assert!(matches!(
+            &arguments[0],
+            Expression::Identifier(name) if name == "π"
+        ));
+    }
+
+    #[test]
+    fn unicode_and_escaped_arrow_parameters_canonicalize_bd_t4947() {
+        let parser = CanonicalEs2020Parser;
+        for (source, expected, expected_async) in [
+            (r"let arrow = \u03C0 => ({π})", "π", false),
+            (r"let arrow = (\u0076alue) => ({value})", "value", false),
+            ("let arrow = async π => ({π})", "π", true),
+        ] {
+            let tree = parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("`{source}` should parse: {error:?}"));
+            let Statement::VariableDeclaration(declaration) = &tree.body[0] else {
+                panic!("expected arrow variable declaration");
+            };
+            let Some(Expression::ArrowFunction {
+                params, is_async, ..
+            }) = declaration.declarations[0].initializer.as_ref()
+            else {
+                panic!("expected arrow initializer for `{source}`");
+            };
+            assert_eq!(*is_async, expected_async);
+            assert!(matches!(
+                &params[0].pattern,
+                BindingPattern::Identifier(name) if name == expected
+            ));
+        }
+    }
+
+    #[test]
+    fn binding_names_apply_goal_reserved_word_rules_after_decoding_bd_t4947() {
+        let parser = CanonicalEs2020Parser;
+        parser
+            .parse(
+                "var {await, static, yield} = source; var let = 1; (let) => let",
+                ParseGoal::Script,
+            )
+            .expect("sloppy Script bindings should allow contextual names");
+
+        for source in [
+            "var {if} = source",
+            r"var {\u0069f} = source",
+            "var if = 1",
+            r"var \u0069f = 1",
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("reserved binding name must be rejected");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
+        }
+
+        for source in [
+            "var {await} = source",
+            r"var {\u0061wait} = source",
+            "var {static} = source",
+            "var eval = 1",
+            "var arguments = 1",
+            "import eval from 'pkg'",
+            "import * as arguments from 'pkg'",
+            "import {value as eval} from 'pkg'",
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Module)
+                .expect_err("Module bindings must apply strict identifier restrictions");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
+        }
+    }
+
+    #[test]
+    fn binding_names_apply_lexical_and_function_context_rules_bd_t4947() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "let let = 1",
+            "let {let} = source",
+            "const {let} = source",
+            "for (let let of values) {}",
+            "for (const {let} of values) {}",
+            "let arrow = async await => 1",
+            r"let arrow = async (\u0061wait) => 1",
+            "async function invalid(value = await 1) {}",
+            r"async function invalid(value = \u0061wait(1)) {}",
+            "let arrow = async (value = await(1)) => value",
+            "async function outer() { let invalid = (value = await 1) => value; }",
+            "function* generator(yield) {}",
+            "function* invalid(value = yield 1) {}",
+            r"function* invalid(value = \u0079ield(1)) {}",
+            "let generator = function*(value = yield(1)) {}",
+            "function* outer() { let invalid = (value = yield 1) => value; }",
+            "function* invalid() { let value = (yield\n1); }",
+            "function* invalid() { let value = (yield\n*items); }",
+            "function* invalid() { let value = (yield/* line\nterm */1); }",
+            r"let generator = function*(\u0079ield) {}",
+            "function strict(eval) {'use strict';}",
+            "function strictDefault(value = 1) {'use strict';}",
+            "let strictArrow = (value = 1) => {'use strict';}",
+            "class StrictMethod { method(value = 1) {'use strict';} }",
+            "'use strict'; var static = 1",
+            "'use strict'; var arguments = 1",
+            "function strictAsi() {\n'use strict'\nvar static = 1;\n}",
+            "function strictLeading() { /* lead */ 'use strict'; var static = 1; }",
+            "function strictTrailing() { 'use strict' /* tail */; var static = 1; }",
+            "/* lead */ 'use strict' /* tail */; var static = 1",
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("binding name must honor its lexical and function context");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
+        }
+    }
+
+    #[test]
+    fn identifier_references_track_strict_async_and_generator_context_bd_4d60a() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "'use strict'; ({static})",
+            r"'use strict'; ({\u0073tatic})",
+            "'not strict'; 'use strict'; ({static})",
+            "'use strict'\n++value; ({static})",
+            "let arrow = async () => ({await})",
+            r"let arrow = async () => ({\u0061wait})",
+            "function* generator() { return {yield}; }",
+            r"function* generator() { return {\u0079ield}; }",
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("identifier reference must honor its grammar context");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
+        }
+
+        parser
+            .parse(r#""\x75se strict"; ({static})"#, ParseGoal::Script)
+            .expect("escaped directive text must not enable strict mode");
+        parser
+            .parse("\"use strict\"\n({static})", ParseGoal::Script)
+            .expect("a continued string-literal expression is not a directive");
+        parser
+            .parse(
+                r#"function notStrict() { "use \
+strict"; var static = 1; }"#,
+                ParseGoal::Script,
+            )
+            .expect("a string containing a LineContinuation is not a use strict directive");
+        for continued in [
+            "\"use strict\"\nin({})",
+            "\"use strict\"\ninstanceof/* comment */ value",
+            "\"use strict\"\n!= value",
+        ] {
+            assert!(
+                !has_use_strict_directive(continued),
+                "continued expression must not become a directive: {continued}"
+            );
+        }
+
+        parser
+            .parse(
+                "var await = value => value; var yield = 3; await(yield)",
+                ParseGoal::Script,
+            )
+            .expect("sloppy Script should treat await and yield as identifier references");
+        parser
+            .parse(
+                "async function wait(value) { return await value; } function* items() { yield 1; }",
+                ParseGoal::Script,
+            )
+            .expect("async and generator bodies should parse their contextual expressions");
+        parser
+            .parse(
+                "async function waits() { return await[1]; } \
+                 async function waitsOnObject() { return await{value: 1}; } \
+                 function* yields() { yield(1); yield[1]; yield{value: 1}; }",
+                ParseGoal::Script,
+            )
+            .expect("contextual expressions should accept adjacent primary-expression forms");
+        parser
+            .parse(
+                "async function outerAsync() { function inner(await) { return await; } } \
+                 function* outerGenerator() { function inner(yield) { return yield; } } \
+                 function* splitYield() { yield\n1; yield/* line\nterm */2; \
+                     yield/* line\u{2028}separator */3; } \
+                 function* commaYield() { let first = (yield, 1); \
+                     let second = (yield\n, 2); }",
+                ParseGoal::Script,
+            )
+            .expect(
+                "nested functions reset grammar parameters and bare yield honors restricted ASI",
+            );
+        for member_expression in [
+            "return obj.yield /* line\nterm */ + 1",
+            "return obj . yield /* line\nterm */ * 2",
+            "return obj?.yield /* line\nterm */ + 1",
+            "return obj.yield /* line\nterm */ (1)",
+            "return obj. /* member */ yield /* line\nterm */ (1)",
+            "return obj?. /* member */ yield /* line\nterm */ (1)",
+            "return obj.\u{00A0}yield /* line\nterm */ (1)",
+            "return obj.\u{FEFF}yield /* line\nterm */ (1)",
+        ] {
+            assert!(
+                top_level_yield_asi_split(member_expression).is_none(),
+                "member property `yield` is not a YieldExpression: {member_expression}"
+            );
+        }
+        parser
+            .parse(
+                "function* memberYield() { return obj.yield /* line\nterm */ + 1; \
+                    return obj . yield /* line\nterm */ * 2; \
+                    return obj.yield /* line\nterm */ (1); \
+                    return obj. /* member */ yield /* line\nterm */ (1); }",
+                ParseGoal::Script,
+            )
+            .expect("member properties named yield must not trigger restricted-production ASI");
+    }
+
+    #[test]
+    fn malformed_unicode_binding_names_fail_closed_bd_t4947() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            r"var {\u0030bad} = source",
+            r"var {\x61} = source",
+            r"var \u{110000} = 1",
+            r"\u0030bad => 1",
+            r"\x61 => 1",
+            r"let value = \u0030bad",
+            r"let value = \x61",
+            r"let value = \u{110000}",
+            r"let value = \u{+61}",
+            r"let value = a\u{61-}",
+            "let value = \u{0300}bad",
+            "let value = \u{200C}bad",
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("malformed binding name must be rejected");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
+        }
+    }
+
+    #[test]
+    fn unsupported_raw_expressions_remain_compatible_bd_t4947() {
+        let parser = CanonicalEs2020Parser;
+        let tree = parser
+            .parse(
+                "let bigint = 1n; let dynamic = import('pkg'); \
+                 let generator = function*(){ yield 1; }; \
+                 let commented = function /* function marker */ * /* params */ () { yield 2; }; \
+                 let product = obj . function * 2",
+                ParseGoal::Script,
+            )
+            .expect("legacy valid-expression carriers should remain parse-compatible");
+        let Statement::VariableDeclaration(declaration) = &tree.body[0] else {
+            panic!("expected variable declaration");
+        };
+        assert!(matches!(
+            declaration.declarations[0].initializer.as_ref(),
+            Some(Expression::Raw(source)) if source == "1n"
+        ));
+
+        let Statement::VariableDeclaration(declaration) = &tree.body[1] else {
+            panic!("expected dynamic-import declaration");
+        };
+        assert!(matches!(
+            declaration.declarations[0].initializer.as_ref(),
+            Some(Expression::Call { callee, .. })
+                if matches!(callee.as_ref(), Expression::Identifier(name) if name == "import")
+        ));
+
+        let Statement::VariableDeclaration(declaration) = &tree.body[2] else {
+            panic!("expected generator declaration");
+        };
+        assert!(matches!(
+            declaration.declarations[0].initializer.as_ref(),
+            Some(Expression::Function {
+                is_generator: true,
+                ..
+            })
+        ));
+
+        let Statement::VariableDeclaration(declaration) = &tree.body[3] else {
+            panic!("expected trivia-separated generator declaration");
+        };
+        assert!(matches!(
+            declaration.declarations[0].initializer.as_ref(),
+            Some(Expression::Function {
+                is_generator: true,
+                ..
+            })
+        ));
+
+        let Statement::VariableDeclaration(declaration) = &tree.body[4] else {
+            panic!("expected member-product declaration");
+        };
+        assert!(matches!(
+            declaration.declarations[0].initializer.as_ref(),
+            Some(Expression::Binary {
+                operator: BinaryOperator::Multiply,
+                ..
+            })
+        ));
+
+        assert!(generator_function_marker_prefix(
+            "function /* function marker */ "
+        ));
+        for property_prefix in ["obj. /* member */ function ", "obj.function // function\n "] {
+            assert!(
+                !generator_function_marker_prefix(property_prefix),
+                "property named function is not a generator marker: {property_prefix:?}"
+            );
         }
     }
 
@@ -11835,6 +13009,17 @@ mod tests {
         assert_eq!(parse_quoted_string("'abc'"), Some("abc".to_string()));
         assert_eq!(parse_quoted_string("\"xyz\""), Some("xyz".to_string()));
         assert_eq!(parse_quoted_string("''"), Some(String::new()));
+        assert_eq!(parse_quoted_string("'a\\\nb'"), Some("ab".to_string()));
+        assert_eq!(
+            parse_quoted_string("'a\u{2028}b'"),
+            Some("a\u{2028}b".to_string()),
+            "ES2020 permits unescaped line and paragraph separators in string literals"
+        );
+        assert_eq!(
+            parse_quoted_string(r"'a\nb'"),
+            Some(r"a\nb".to_string()),
+            "ordinary escape spelling remains raw for the legacy AST contract"
+        );
     }
 
     // -- parse_i64_numeric_literal edge cases --
@@ -13182,14 +14367,18 @@ mod tests {
     }
 
     #[test]
-    fn merge_logical_lines_cooks_string_line_continuations_bd_h4esx() {
+    fn merge_logical_lines_preserves_string_line_continuations_bd_4d60a() {
+        let parser = CanonicalEs2020Parser;
         for source in [
             "var {'a\\\nb': value} = source;",
             "var {'a\\\r\nb': value} = source;",
         ] {
             let lines = merge_logical_lines(source);
             assert_eq!(lines.len(), 1);
-            assert_eq!(lines[0].text, "var {'ab': value} = source;");
+            assert!(lines[0].text.contains("\\\n"));
+            parser
+                .parse(source, ParseGoal::Script)
+                .expect("string token cooking should consume the preserved continuation");
         }
 
         let lines = merge_logical_lines("var {'a\nb': value} = source;");
@@ -13210,6 +14399,10 @@ mod tests {
         let lines = merge_logical_lines("if (x) {\n  y;\n}");
         assert_eq!(lines.len(), 1);
         assert!(lines[0].text.contains("if (x) {"));
+        assert!(
+            lines[0].text.contains('\n'),
+            "balanced logical lines must retain LineTerminator provenance"
+        );
     }
 
     #[test]

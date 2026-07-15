@@ -15563,6 +15563,49 @@ mod tests {
     }
 
     #[test]
+    fn unicode_and_escaped_binding_names_execute_canonically_bd_t4947() {
+        let (_, _, direct) = lower_and_execute_deferred_source_bd_6pvhn(
+            r"let π = 7;
+              let \u0076alue = 3;
+              π * 10 + \u0076alue;",
+        );
+        assert_eq!(direct, Value::Int(73));
+
+        let (_, _, destructured) = lower_and_execute_deferred_source_bd_6pvhn(
+            r"let {π, \u0076alue, a\u037A} = {'π': 7, value: 3, 'aͺ': 2};
+              π * 100 + \u0076alue * 10 + a\u037A;",
+        );
+        assert_eq!(destructured, Value::Int(732));
+
+        let (_, _, arrows) = lower_and_execute_deferred_source_bd_6pvhn(
+            r"let make = \u03C0 => π + 1;
+              let take = ([\u0076alue]) => value;
+              make(9) * 10 + take([4]);",
+        );
+        assert_eq!(arrows, Value::Int(104));
+
+        let (_, _, escaped_call) = lower_and_execute_deferred_source_bd_6pvhn(
+            r"let \u0066n = value => value + 1; \u0066n(4);",
+        );
+        assert_eq!(escaped_call, Value::Int(5));
+
+        let (_, _, rest_bindings) = lower_and_execute_deferred_source_bd_6pvhn(
+            r"let [head, ...\u0074ail] = [1, 2, 3];
+              function pair(...\u0076alues) { return values[0] * 10 + values[1]; }
+              head * 1000 + tail[0] * 100 + tail[1] * 10 + pair(4, 5);",
+        );
+        assert_eq!(rest_bindings, Value::Int(1_275));
+    }
+
+    #[test]
+    fn sloppy_script_await_and_yield_bindings_execute_as_identifiers_bd_4d60a() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "var await = value => value + 1; var yield = 3; await(yield);",
+        );
+        assert_eq!(value, Value::Int(4));
+    }
+
+    #[test]
     fn static_object_literal_keys_execute_with_canonical_property_names_bd_y74cd() {
         for (object_key, canonical_key) in static_property_key_cases_bd_h4esx() {
             let source = format!("let {{'{canonical_key}': value}} = {{{object_key}: 7}}; value;");

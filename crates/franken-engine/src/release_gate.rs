@@ -620,6 +620,15 @@ impl ReleaseGate {
     }
 
     fn check_evidence_replay(&mut self, suite: &ScenarioSuiteResult) -> GateCheckResult {
+        let replay = Self::frankenlab_lifecycle_replay_evaluator();
+        self.check_evidence_replay_with_evaluator(suite, &replay)
+    }
+
+    fn check_evidence_replay_with_evaluator(
+        &mut self,
+        suite: &ScenarioSuiteResult,
+        replay: &DecisionReplayFn,
+    ) -> GateCheckResult {
         let replay_entries = match self.build_replay_entries_from_scenarios(suite) {
             Ok(entries) => entries,
             Err(detail) => {
@@ -662,8 +671,7 @@ impl ReleaseGate {
 
         let config = ReplayConfig::default();
         let mut checker = EvidenceReplayChecker::new(config);
-        let replay = Self::frankenlab_lifecycle_replay_evaluator();
-        let artifact = checker.replay_and_collect(&replay_entries, Some(&replay));
+        let artifact = checker.replay_and_collect(&replay_entries, Some(replay));
 
         let passed = artifact.gate_passed
             && artifact.outcome_checked_count == usize_to_u64_saturating(replay_entries.len());
@@ -700,8 +708,18 @@ impl ReleaseGate {
                 failure_details.push(GateFailureDetail {
                     item_id: violation.entry_id.clone(),
                     failure_type: format!("{}", violation.violation_type),
-                    expected: "no violation".to_string(),
-                    actual: format!("{}", violation.violation_type),
+                    expected: violation
+                        .expected
+                        .clone()
+                        .unwrap_or_else(|| "<absent>".to_string()),
+                    actual: format!(
+                        "{} ({})",
+                        violation
+                            .actual
+                            .clone()
+                            .unwrap_or_else(|| "<absent>".to_string()),
+                        violation.detail
+                    ),
                 });
             }
         }
@@ -809,21 +827,29 @@ impl ReleaseGate {
     fn frankenlab_lifecycle_replay_evaluator() -> DecisionReplayFn {
         Box::new(|entry: &CanonicalEvidenceEntry| {
             let Some(outcome) = entry.metadata.get("outcome") else {
+                let chosen_expected_loss = f64::INFINITY;
                 return ReplayedOutcome {
                     action: entry.action_name.clone(),
-                    chosen_expected_loss: f64::INFINITY,
+                    chosen_expected_loss,
                     calibration_score: f64::INFINITY,
                     fallback_active: true,
-                    expected_losses: BTreeMap::new(),
+                    expected_losses: BTreeMap::from([(
+                        entry.action_name.clone(),
+                        chosen_expected_loss,
+                    )]),
                 };
             };
             let fallback_active = outcome != "ok";
+            let chosen_expected_loss = if fallback_active { 1.0 } else { 0.0 };
             ReplayedOutcome {
                 action: entry.action_name.clone(),
-                chosen_expected_loss: if fallback_active { 1.0 } else { 0.0 },
+                chosen_expected_loss,
                 calibration_score: 1.0,
                 fallback_active,
-                expected_losses: BTreeMap::new(),
+                expected_losses: BTreeMap::from([(
+                    entry.action_name.clone(),
+                    chosen_expected_loss,
+                )]),
             }
         })
     }
@@ -1212,6 +1238,26 @@ mod tests {
             .build_replay_entries_from_scenarios(&suite)
             .expect("operation should succeed for valid inputs");
         let replay = ReleaseGate::frankenlab_lifecycle_replay_evaluator();
+        for entry in &replay_entries {
+            let replayed = replay(entry);
+            let fallback_active = entry
+                .metadata
+                .get("outcome")
+                .is_none_or(|outcome| outcome != "ok");
+            let expected_chosen_loss = if fallback_active { 1.0 } else { 0.0 };
+            let independently_reconstructed =
+                BTreeMap::from([(entry.action_name.clone(), expected_chosen_loss)]);
+            assert_eq!(replayed.chosen_expected_loss, expected_chosen_loss);
+            assert_eq!(
+                entry.ledger_entry.chosen_expected_loss,
+                expected_chosen_loss
+            );
+            assert_eq!(&replayed.expected_losses, &independently_reconstructed);
+            assert_eq!(
+                &entry.ledger_entry.expected_loss_by_action,
+                &independently_reconstructed
+            );
+        }
         let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
         let artifact = checker.replay_and_collect(&replay_entries, Some(&replay));
 
@@ -1220,6 +1266,75 @@ mod tests {
         assert_eq!(
             artifact.outcome_checked_count,
             usize_to_u64_saturating(replay_entries.len())
+        );
+    }
+
+    #[test]
+    fn bd_3geqn_release_replay_rejects_empty_expected_loss_surface() {
+        let mut gate = ReleaseGate::new(42);
+        let mut cx = mock_cx(200000);
+        let suite = run_all_scenarios(42, &mut cx);
+        let replay_entries = gate
+            .build_replay_entries_from_scenarios(&suite)
+            .expect("valid lifecycle scenarios must produce replay entries");
+        let incomplete_replay: DecisionReplayFn = Box::new(|entry: &CanonicalEvidenceEntry| {
+            let fallback_active = entry
+                .metadata
+                .get("outcome")
+                .is_none_or(|outcome| outcome != "ok");
+            ReplayedOutcome {
+                action: entry.action_name.clone(),
+                chosen_expected_loss: if fallback_active { 1.0 } else { 0.0 },
+                calibration_score: 1.0,
+                fallback_active,
+                expected_losses: BTreeMap::new(),
+            }
+        });
+        let replay_check = gate.check_evidence_replay_with_evaluator(&suite, &incomplete_replay);
+        let expected_loss_failures: Vec<_> = replay_check
+            .failure_details
+            .iter()
+            .filter(|detail| detail.failure_type == "expected_loss_divergence")
+            .cloned()
+            .collect();
+
+        assert!(!replay_check.passed);
+        assert_eq!(expected_loss_failures.len(), replay_entries.len());
+        for (detail, entry) in expected_loss_failures.iter().zip(&replay_entries) {
+            assert_ne!(detail.expected, "<absent>");
+            assert!(detail.actual.contains("<absent>"));
+            assert!(detail.actual.contains("missing action"));
+            assert!(detail.actual.contains(&format!("{:?}", entry.action_name)));
+        }
+
+        let result = gate.build_result(vec![replay_check]);
+        assert!(result.is_blocked());
+        assert!(matches!(&result.verdict, Verdict::Fail { .. }));
+        assert_eq!(result.failure_report().details, expected_loss_failures);
+    }
+
+    #[test]
+    fn bd_3geqn_release_replay_missing_outcome_is_fail_closed() {
+        let gate = ReleaseGate::new(42);
+        let mut cx = mock_cx(200000);
+        let suite = run_all_scenarios(42, &mut cx);
+        let mut entry = gate
+            .build_replay_entries_from_scenarios(&suite)
+            .expect("valid lifecycle scenarios must produce replay entries")
+            .into_iter()
+            .next()
+            .expect("lifecycle suite must emit replay evidence");
+        assert!(entry.metadata.remove("outcome").is_some());
+
+        let replay = ReleaseGate::frankenlab_lifecycle_replay_evaluator();
+        let replayed = replay(&entry);
+
+        assert!(replayed.fallback_active);
+        assert!(!replayed.chosen_expected_loss.is_finite());
+        assert!(!replayed.calibration_score.is_finite());
+        assert_eq!(
+            replayed.expected_losses.get(&entry.action_name),
+            Some(&f64::INFINITY)
         );
     }
 

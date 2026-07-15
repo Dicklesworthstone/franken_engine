@@ -49,6 +49,13 @@ fn values_diverge(recorded: f64, replayed: f64, tolerance: f64) -> bool {
     (replayed - recorded).abs() > tolerance
 }
 
+fn expected_loss_values_diverge(recorded: f64, replayed: f64, tolerance: f64) -> bool {
+    // EvidenceLedger accepts only non-negative expected losses. Replay must
+    // preserve that semantic domain independently of numeric tolerance, while
+    // still treating IEEE-754 negative zero as zero.
+    recorded < 0.0 || replayed < 0.0 || values_diverge(recorded, replayed, tolerance)
+}
+
 // ---------------------------------------------------------------------------
 // ReplayErrorCode — machine-readable error codes
 // ---------------------------------------------------------------------------
@@ -1024,7 +1031,7 @@ impl EvidenceReplayChecker {
         }
 
         // Chosen expected loss.
-        if values_diverge(
+        if expected_loss_values_diverge(
             recorded.chosen_expected_loss,
             replayed.chosen_expected_loss,
             self.config.loss_tolerance,
@@ -1037,6 +1044,61 @@ impl EvidenceReplayChecker {
                 detail: "chosen expected loss divergence".to_string(),
                 expected: Some(format!("{}", recorded.chosen_expected_loss)),
                 actual: Some(format!("{}", replayed.chosen_expected_loss)),
+            });
+            if self.config.halt_on_first {
+                return;
+            }
+        }
+
+        // Complete expected-loss surface. Iterate the union so missing and
+        // extra actions cannot be hidden by comparing only shared keys. Both
+        // maps are ordered, and the BTreeSet preserves one deterministic
+        // violation order across every mismatch kind.
+        let expected_loss_actions: BTreeSet<&str> = recorded
+            .expected_loss_by_action
+            .keys()
+            .map(String::as_str)
+            .chain(replayed.expected_losses.keys().map(String::as_str))
+            .collect();
+        for action in expected_loss_actions {
+            let (detail, expected, actual) = match (
+                recorded.expected_loss_by_action.get(action),
+                replayed.expected_losses.get(action),
+            ) {
+                (Some(recorded_loss), Some(replayed_loss))
+                    if expected_loss_values_diverge(
+                        *recorded_loss,
+                        *replayed_loss,
+                        self.config.loss_tolerance,
+                    ) =>
+                {
+                    (
+                        format!("expected loss divergence for action {action:?}"),
+                        Some(format!("{recorded_loss}")),
+                        Some(format!("{replayed_loss}")),
+                    )
+                }
+                (Some(recorded_loss), None) => (
+                    format!("replayed expected losses missing action {action:?}"),
+                    Some(format!("{recorded_loss}")),
+                    None,
+                ),
+                (None, Some(replayed_loss)) => (
+                    format!("replayed expected losses contain extra action {action:?}"),
+                    None,
+                    Some(format!("{replayed_loss}")),
+                ),
+                _ => continue,
+            };
+
+            violations.push(ReplayViolation {
+                sequence: entry.sequence,
+                entry_id: entry.entry_id.to_string(),
+                violation_type: ReplayViolationType::ExpectedLossDivergence,
+                error_code: ReplayErrorCode::ExpectedLossDivergence,
+                detail,
+                expected,
+                actual,
             });
             if self.config.halt_on_first {
                 return;
@@ -1523,6 +1585,215 @@ mod tests {
         let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
         let result = checker.replay(&ledger, Some(&replay));
         assert!(result.has_violation(&ReplayViolationType::ExpectedLossDivergence));
+    }
+
+    #[test]
+    fn bd_3geqn_expected_loss_surface_reports_missing_extra_and_delta_in_key_order() {
+        let ledger = build_ledger(1);
+        let replay: DecisionReplayFn = Box::new(|entry: &CanonicalEvidenceEntry| {
+            let mut expected_losses = entry.ledger_entry.expected_loss_by_action.clone();
+            expected_losses.remove("allow");
+            expected_losses.insert("deny".to_string(), 0.4);
+            expected_losses.insert("z-extra".to_string(), 0.2);
+            ReplayedOutcome {
+                action: entry.ledger_entry.action.clone(),
+                chosen_expected_loss: entry.ledger_entry.chosen_expected_loss,
+                calibration_score: entry.ledger_entry.calibration_score,
+                fallback_active: entry.ledger_entry.fallback_active,
+                expected_losses,
+            }
+        });
+
+        let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
+        let result = checker.replay(&ledger, Some(&replay));
+        let loss_violations: Vec<_> = result
+            .violations
+            .iter()
+            .filter(|violation| {
+                violation.violation_type == ReplayViolationType::ExpectedLossDivergence
+            })
+            .collect();
+
+        assert_eq!(loss_violations.len(), 3);
+        assert_eq!(
+            loss_violations[0].detail,
+            "replayed expected losses missing action \"allow\""
+        );
+        assert_eq!(loss_violations[0].expected.as_deref(), Some("0.1"));
+        assert!(loss_violations[0].actual.is_none());
+        assert_eq!(
+            loss_violations[1].detail,
+            "expected loss divergence for action \"deny\""
+        );
+        assert_eq!(loss_violations[1].expected.as_deref(), Some("0.9"));
+        assert_eq!(loss_violations[1].actual.as_deref(), Some("0.4"));
+        assert_eq!(
+            loss_violations[2].detail,
+            "replayed expected losses contain extra action \"z-extra\""
+        );
+        assert!(loss_violations[2].expected.is_none());
+        assert_eq!(loss_violations[2].actual.as_deref(), Some("0.2"));
+    }
+
+    #[test]
+    fn bd_3geqn_expected_loss_surface_uses_exact_tolerance_boundary() {
+        let mut ledger = build_ledger(1);
+        ledger[0]
+            .ledger_entry
+            .expected_loss_by_action
+            .insert("deny".to_string(), 0.5);
+        reseal_ledger(&mut ledger);
+        let at_boundary: DecisionReplayFn = Box::new(|entry: &CanonicalEvidenceEntry| {
+            let mut expected_losses = entry.ledger_entry.expected_loss_by_action.clone();
+            let deny = expected_losses
+                .get_mut("deny")
+                .expect("test ledger must include deny expected loss");
+            *deny += 0.125;
+            ReplayedOutcome {
+                action: entry.ledger_entry.action.clone(),
+                chosen_expected_loss: entry.ledger_entry.chosen_expected_loss,
+                calibration_score: entry.ledger_entry.calibration_score,
+                fallback_active: entry.ledger_entry.fallback_active,
+                expected_losses,
+            }
+        });
+        let config = ReplayConfig {
+            loss_tolerance: 0.125,
+            ..ReplayConfig::default()
+        };
+        let mut checker = EvidenceReplayChecker::new(config.clone());
+        let at_boundary_result = checker.replay(&ledger, Some(&at_boundary));
+        assert!(!at_boundary_result.has_violation(&ReplayViolationType::ExpectedLossDivergence));
+
+        let over_boundary: DecisionReplayFn = Box::new(|entry: &CanonicalEvidenceEntry| {
+            let mut expected_losses = entry.ledger_entry.expected_loss_by_action.clone();
+            let deny = expected_losses
+                .get_mut("deny")
+                .expect("test ledger must include deny expected loss");
+            *deny += 0.125_000_001;
+            ReplayedOutcome {
+                action: entry.ledger_entry.action.clone(),
+                chosen_expected_loss: entry.ledger_entry.chosen_expected_loss,
+                calibration_score: entry.ledger_entry.calibration_score,
+                fallback_active: entry.ledger_entry.fallback_active,
+                expected_losses,
+            }
+        });
+        let mut checker = EvidenceReplayChecker::new(config);
+        let over_boundary_result = checker.replay(&ledger, Some(&over_boundary));
+        assert!(over_boundary_result.has_violation(&ReplayViolationType::ExpectedLossDivergence));
+    }
+
+    #[test]
+    fn bd_3geqn_expected_loss_surface_fails_closed_on_non_finite_values() {
+        let ledger = build_ledger(1);
+        for non_finite in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let replay: DecisionReplayFn = Box::new(move |entry: &CanonicalEvidenceEntry| {
+                let mut expected_losses = entry.ledger_entry.expected_loss_by_action.clone();
+                expected_losses.insert("deny".to_string(), non_finite);
+                ReplayedOutcome {
+                    action: entry.ledger_entry.action.clone(),
+                    chosen_expected_loss: entry.ledger_entry.chosen_expected_loss,
+                    calibration_score: entry.ledger_entry.calibration_score,
+                    fallback_active: entry.ledger_entry.fallback_active,
+                    expected_losses,
+                }
+            });
+            let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
+            let result = checker.replay(&ledger, Some(&replay));
+            assert!(result.has_violation(&ReplayViolationType::ExpectedLossDivergence));
+        }
+    }
+
+    #[test]
+    fn bd_3geqn_expected_losses_reject_negative_replay_inside_tolerance() {
+        let ledger = build_ledger(1);
+        let config = ReplayConfig {
+            loss_tolerance: 1.0,
+            ..ReplayConfig::default()
+        };
+
+        let negative_chosen: DecisionReplayFn =
+            Box::new(|entry: &CanonicalEvidenceEntry| ReplayedOutcome {
+                action: entry.ledger_entry.action.clone(),
+                chosen_expected_loss: -0.01,
+                calibration_score: entry.ledger_entry.calibration_score,
+                fallback_active: entry.ledger_entry.fallback_active,
+                expected_losses: entry.ledger_entry.expected_loss_by_action.clone(),
+            });
+        let mut checker = EvidenceReplayChecker::new(config.clone());
+        let chosen_result = checker.replay(&ledger, Some(&negative_chosen));
+        assert!(chosen_result.violations.iter().any(|violation| {
+            violation.violation_type == ReplayViolationType::ExpectedLossDivergence
+                && violation.detail == "chosen expected loss divergence"
+        }));
+
+        let negative_surface: DecisionReplayFn = Box::new(|entry: &CanonicalEvidenceEntry| {
+            let mut expected_losses = entry.ledger_entry.expected_loss_by_action.clone();
+            expected_losses.insert("deny".to_string(), -0.01);
+            ReplayedOutcome {
+                action: entry.ledger_entry.action.clone(),
+                chosen_expected_loss: entry.ledger_entry.chosen_expected_loss,
+                calibration_score: entry.ledger_entry.calibration_score,
+                fallback_active: entry.ledger_entry.fallback_active,
+                expected_losses,
+            }
+        });
+        let mut checker = EvidenceReplayChecker::new(config);
+        let surface_result = checker.replay(&ledger, Some(&negative_surface));
+        assert!(surface_result.violations.iter().any(|violation| {
+            violation.violation_type == ReplayViolationType::ExpectedLossDivergence
+                && violation.detail == "expected loss divergence for action \"deny\""
+        }));
+    }
+
+    #[test]
+    fn bd_3geqn_expected_loss_surface_treats_signed_zero_as_equal() {
+        let mut ledger = build_ledger(1);
+        ledger[0]
+            .ledger_entry
+            .expected_loss_by_action
+            .insert("zero".to_string(), 0.0);
+        reseal_ledger(&mut ledger);
+        let replay: DecisionReplayFn = Box::new(|entry: &CanonicalEvidenceEntry| {
+            let mut expected_losses = entry.ledger_entry.expected_loss_by_action.clone();
+            expected_losses.insert("zero".to_string(), -0.0);
+            ReplayedOutcome {
+                action: entry.ledger_entry.action.clone(),
+                chosen_expected_loss: entry.ledger_entry.chosen_expected_loss,
+                calibration_score: entry.ledger_entry.calibration_score,
+                fallback_active: entry.ledger_entry.fallback_active,
+                expected_losses,
+            }
+        });
+
+        let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
+        let result = checker.replay(&ledger, Some(&replay));
+        assert!(!result.has_violation(&ReplayViolationType::ExpectedLossDivergence));
+    }
+
+    #[test]
+    fn bd_3geqn_expected_loss_surface_halt_is_union_ordered() {
+        let ledger = build_ledger(1);
+        let replay: DecisionReplayFn = Box::new(|entry: &CanonicalEvidenceEntry| ReplayedOutcome {
+            action: entry.ledger_entry.action.clone(),
+            chosen_expected_loss: entry.ledger_entry.chosen_expected_loss,
+            calibration_score: entry.ledger_entry.calibration_score,
+            fallback_active: entry.ledger_entry.fallback_active,
+            expected_losses: BTreeMap::new(),
+        });
+        let config = ReplayConfig {
+            halt_on_first: true,
+            ..ReplayConfig::default()
+        };
+        let mut checker = EvidenceReplayChecker::new(config);
+        let result = checker.replay(&ledger, Some(&replay));
+
+        assert_eq!(result.violations.len(), 1);
+        assert_eq!(
+            result.violations[0].detail,
+            "replayed expected losses missing action \"action_0\""
+        );
     }
 
     #[test]

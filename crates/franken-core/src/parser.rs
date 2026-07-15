@@ -2098,6 +2098,7 @@ impl Es2020Parser for CanonicalEs2020Parser {
 struct ParseExecutionContext<'a> {
     source_label: &'a str,
     options: &'a ParserOptions,
+    goal: ParseGoal,
     source_bytes: u64,
     token_count: u64,
     max_recursion_observed: u64,
@@ -2418,6 +2419,7 @@ fn parse_source(
     let mut context = ParseExecutionContext {
         source_label,
         options,
+        goal,
         source_bytes,
         token_count,
         max_recursion_observed: 0,
@@ -3368,24 +3370,41 @@ fn parse_object_binding_pattern(
     Ok(BindingPattern::ObjectPattern(properties))
 }
 
-/// Parse a non-computed object-binding property name into its semantic form.
-///
-/// Keeping the source spelling in an `Identifier` is observably wrong for
-/// quoted, escaped, numeric, and BigInt names: lowering would ask the runtime
-/// for a property literally named `0x10` or `'value'`.  Store quoted and BigInt
-/// names as their exact string keys, numeric names as canonical numeric or
-/// string AST forms, and decode `IdentifierName` Unicode escapes before
-/// lowering (bd-h4esx).
 fn parse_static_binding_property_key(
     source: &str,
     span: &SourceSpan,
     context: &ParseExecutionContext<'_>,
 ) -> ParseResult<Expression> {
+    parse_static_property_name(source, span, context, "object-binding")
+}
+
+fn parse_static_object_property_key(
+    source: &str,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<Expression> {
+    parse_static_property_name(source, span, context, "object-literal")
+}
+
+/// Parse a non-computed object property name into its semantic form.
+///
+/// Keeping the source spelling in an `Identifier` is observably wrong for
+/// quoted, escaped, numeric, and BigInt names: lowering would ask the runtime
+/// for a property literally named `0x10` or `'value'`. Store quoted and BigInt
+/// names as their exact string keys, numeric names as canonical numeric or
+/// string AST forms, and decode `IdentifierName` Unicode escapes before
+/// lowering (bd-h4esx, bd-y74cd).
+fn parse_static_property_name(
+    source: &str,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+    construct: &str,
+) -> ParseResult<Expression> {
     let source = source.trim();
     let invalid_key = || {
         ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
-            format!("invalid static object-binding property key: `{source}`"),
+            format!("invalid static {construct} property key: `{source}`"),
             context.source_label.to_string(),
             Some(span.clone()),
         )
@@ -6469,9 +6488,32 @@ fn parse_object_literal(
             // Split on first top-level colon for key:value.
             let key_src = p[..colon_idx].trim();
             let value_src = p[colon_idx + 1..].trim();
-            let key = parse_expression(key_src, span, context, recursion_depth + 1)?;
-            let value = parse_expression(value_src, span, context, recursion_depth + 1)?;
             let computed = key_src.starts_with('[');
+            let key = if computed {
+                let error_source_label = context.source_label.to_string();
+                let error_span = span.clone();
+                let invalid_computed_key = || {
+                    ParseError::new(
+                        ParseErrorCode::UnsupportedSyntax,
+                        format!("invalid computed object-literal property key: `{key_src}`"),
+                        error_source_label.clone(),
+                        Some(error_span.clone()),
+                    )
+                };
+                let (inner, rest) =
+                    extract_balanced(key_src, '[', ']').ok_or_else(&invalid_computed_key)?;
+                if inner.trim().is_empty() || !rest.trim().is_empty() {
+                    return Err(invalid_computed_key());
+                }
+                let key = parse_expression(inner.trim(), span, context, recursion_depth + 1)?;
+                if matches!(&key, Expression::Raw(_) | Expression::SpreadElement(_)) {
+                    return Err(invalid_computed_key());
+                }
+                key
+            } else {
+                parse_static_object_property_key(key_src, span, context)?
+            };
+            let value = parse_expression(value_src, span, context, recursion_depth + 1)?;
             properties.push(ObjectProperty {
                 key,
                 value,
@@ -6480,8 +6522,24 @@ fn parse_object_literal(
             });
         } else {
             // Shorthand property: { x } means { x: x }
-            let key = Expression::Identifier(p.to_string());
-            let value = Expression::Identifier(p.to_string());
+            let invalid_shorthand = || {
+                ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    format!("invalid object-literal shorthand property: `{p}`"),
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                )
+            };
+            let Expression::Identifier(name) = parse_static_object_property_key(p, span, context)
+                .map_err(|_| invalid_shorthand())?
+            else {
+                return Err(invalid_shorthand());
+            };
+            if !is_object_shorthand_identifier_reference(&name, context.goal) {
+                return Err(invalid_shorthand());
+            }
+            let key = Expression::Identifier(name.clone());
+            let value = Expression::Identifier(name);
             properties.push(ObjectProperty {
                 key,
                 value,
@@ -7201,6 +7259,24 @@ fn is_identifier(input: &str) -> bool {
 
 fn is_module_binding_identifier(input: &str) -> bool {
     is_identifier(input) && !is_disallowed_module_binding_name(input)
+}
+
+fn is_object_shorthand_identifier_reference(name: &str, goal: ParseGoal) -> bool {
+    let script_contextual_name = matches!(
+        name,
+        "await"
+            | "implements"
+            | "interface"
+            | "let"
+            | "package"
+            | "private"
+            | "protected"
+            | "public"
+            | "static"
+            | "yield"
+    );
+    (goal == ParseGoal::Script && script_contextual_name)
+        || !is_disallowed_module_binding_name(name)
 }
 
 fn is_disallowed_module_binding_name(name: &str) -> bool {
@@ -9809,6 +9885,148 @@ mod tests {
                 .expect_err("malformed static property key must be rejected");
             assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
             assert!(error.message.contains("object-binding property key"));
+        }
+    }
+
+    #[test]
+    fn static_object_literal_keys_use_canonical_ast_forms_bd_y74cd() {
+        let tree = parse_script(r#"({"v\x61lue": 1, 1e3: 2, 0x10n: 3, \u03C0: 4})"#);
+        let Expression::ObjectLiteral(properties) = first_expr(&tree) else {
+            panic!("expected object literal");
+        };
+        assert_eq!(properties.len(), 4);
+        assert!(matches!(
+            &properties[0].key,
+            Expression::StringLiteral(key) if key == "value"
+        ));
+        assert!(matches!(
+            &properties[1].key,
+            Expression::NumericLiteral(1000)
+        ));
+        assert!(matches!(
+            &properties[2].key,
+            Expression::StringLiteral(key) if key == "16"
+        ));
+        assert!(matches!(
+            &properties[3].key,
+            Expression::Identifier(key) if key == "π"
+        ));
+    }
+
+    #[test]
+    fn computed_object_literal_key_parses_the_inner_expression_bd_y74cd() {
+        let tree = parse_script("({[null]: 7})");
+        let Expression::ObjectLiteral(properties) = first_expr(&tree) else {
+            panic!("expected object literal");
+        };
+        assert!(properties[0].computed);
+        assert!(matches!(&properties[0].key, Expression::NullLiteral));
+    }
+
+    #[test]
+    fn object_literal_shorthand_uses_canonical_identifier_bd_y74cd() {
+        let tree = parse_script(r"({\u0076alue, await, static})");
+        let Expression::ObjectLiteral(properties) = first_expr(&tree) else {
+            panic!("expected object literal");
+        };
+        assert_eq!(properties.len(), 3);
+        for (property, expected) in properties.iter().zip(["value", "await", "static"]) {
+            assert!(property.shorthand);
+            assert!(matches!(
+                &property.key,
+                Expression::Identifier(name) if name == expected
+            ));
+            assert!(matches!(
+                &property.value,
+                Expression::Identifier(name) if name == expected
+            ));
+        }
+    }
+
+    #[test]
+    fn reserved_words_remain_valid_static_object_literal_keys_bd_y74cd() {
+        let tree = parse_script("({if: 1, true: 2, null: 3})");
+        let Expression::ObjectLiteral(properties) = first_expr(&tree) else {
+            panic!("expected object literal");
+        };
+        for (property, expected) in properties.iter().zip(["if", "true", "null"]) {
+            assert!(!property.shorthand);
+            assert!(matches!(
+                &property.key,
+                Expression::Identifier(name) if name == expected
+            ));
+        }
+    }
+
+    #[test]
+    fn malformed_static_object_literal_keys_fail_closed_bd_y74cd() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "let value = {0_1: 7}",
+            "let value = {a-b: 7}",
+            r#"let value = {"a""b": 7}"#,
+            r"let value = {'a''b': 7}",
+            r"let value = {'\01': 7}",
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("malformed static object key must be rejected");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
+            assert!(error.message.contains("object-literal property key"));
+        }
+    }
+
+    #[test]
+    fn malformed_computed_object_literal_keys_fail_closed_bd_y74cd() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "let value = {[]: 7}",
+            "let value = {[key] trailing: 7}",
+            "let value = {[1, 2]: 7}",
+            "let value = {[...items]: 7}",
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("malformed computed object key must be rejected");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
+            assert!(
+                error
+                    .message
+                    .contains("computed object-literal property key")
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_object_literal_shorthand_fails_closed_bd_y74cd() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "let value = {[key: 7}",
+            r#"let value = {"key"}"#,
+            "let value = {1}",
+            "let value = {if}",
+            "let value = {class}",
+            "let value = {null}",
+            "let value = {true}",
+            "let value = {this}",
+            "let value = {return}",
+            "let value = {super}",
+            r"let value = {\u0069f}",
+            r"let value = {\u0063lass}",
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("non-identifier shorthand must be rejected");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
+            assert!(error.message.contains("object-literal shorthand property"));
+        }
+
+        for source in ["({await})", "({static})"] {
+            let error = parser
+                .parse(source, ParseGoal::Module)
+                .expect_err("module shorthand must apply strict identifier restrictions");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
+            assert!(error.message.contains("object-literal shorthand property"));
         }
     }
 

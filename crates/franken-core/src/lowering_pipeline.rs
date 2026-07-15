@@ -8543,6 +8543,24 @@ fn lower_class_expression_to_ir1(
     Ok(())
 }
 
+fn canonical_static_object_property_key(key: &Expression) -> Result<String, LoweringPipelineError> {
+    match key {
+        Expression::Identifier(name) | Expression::StringLiteral(name) => Ok(name.clone()),
+        Expression::NumericLiteral(value) => Ok(value.to_string()),
+        Expression::FloatLiteral(bits) => {
+            let mut buffer = ryu_js::Buffer::new();
+            Ok(buffer.format(f64::from_bits(*bits)).to_string())
+        }
+        _ => Err(unsupported_frontier_expression_error(
+            "object_literal_static_property_key",
+            "FE-LOWER-UNSUPPORTED-STATIC-OBJECT-KEY-0001",
+            "core.object_literal_static_property_key",
+            "static object property keys require a canonical property-name AST form",
+            None,
+        )),
+    }
+}
+
 fn lower_expression_to_ir1(
     expression: &Expression,
     ops: &mut Vec<Ir1Op>,
@@ -10190,12 +10208,7 @@ fn lower_expression_to_ir1(
                                 label_counter,
                             )?;
                         } else {
-                            let key_str = match &prop.key {
-                                Expression::Identifier(name) => name.clone(),
-                                Expression::StringLiteral(s) => s.clone(),
-                                Expression::NumericLiteral(n) => n.to_string(),
-                                other => format!("{other:?}"),
-                            };
+                            let key_str = canonical_static_object_property_key(&prop.key)?;
                             ops.push(Ir1Op::LoadLiteral {
                                 value: Ir1Literal::String(key_str),
                             });
@@ -10228,12 +10241,7 @@ fn lower_expression_to_ir1(
                             label_counter,
                         )?;
                     } else {
-                        let key_str = match &prop.key {
-                            Expression::Identifier(name) => name.clone(),
-                            Expression::StringLiteral(s) => s.clone(),
-                            Expression::NumericLiteral(n) => n.to_string(),
-                            other => format!("{other:?}"),
-                        };
+                        let key_str = canonical_static_object_property_key(&prop.key)?;
                         ops.push(Ir1Op::LoadLiteral {
                             value: Ir1Literal::String(key_str),
                         });
@@ -14093,6 +14101,64 @@ mod tests {
     }
 
     #[test]
+    fn static_object_literal_keys_fail_closed_without_canonical_ast_bd_y74cd() {
+        for with_spread in [false, true] {
+            let mut properties = vec![ObjectProperty {
+                key: Expression::BooleanLiteral(true),
+                value: Expression::NumericLiteral(1),
+                computed: false,
+                shorthand: false,
+            }];
+            if with_spread {
+                let spread =
+                    Expression::SpreadElement(Box::new(Expression::Identifier("source".into())));
+                properties.push(ObjectProperty {
+                    key: spread.clone(),
+                    value: spread,
+                    computed: false,
+                    shorthand: true,
+                });
+            }
+
+            let error = lower_ir0_to_ir1(&expr_ir0(Expression::ObjectLiteral(properties)))
+                .expect_err("noncanonical static keys must not use debug formatting");
+            let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
+                panic!("expected unsupported static object-key diagnostic");
+            };
+            assert_eq!(
+                diagnostic.diagnostic_code,
+                "FE-LOWER-UNSUPPORTED-STATIC-OBJECT-KEY-0001"
+            );
+            assert_eq!(
+                diagnostic.site_id,
+                "core.object_literal_static_property_key"
+            );
+        }
+    }
+
+    #[test]
+    fn float_object_literal_ast_key_uses_javascript_number_spelling_bd_y74cd() {
+        for (value, expected) in [
+            (1e20f64, "100000000000000000000"),
+            (667_082_108_456_853.2, "667082108456853.2"),
+        ] {
+            let ir0 = expr_ir0(Expression::ObjectLiteral(vec![ObjectProperty {
+                key: Expression::FloatLiteral(value.to_bits()),
+                value: Expression::NumericLiteral(1),
+                computed: false,
+                shorthand: false,
+            }]));
+            let result = lower_ir0_to_ir1(&ir0).expect("canonical float property key should lower");
+            assert!(result.module.ops.iter().any(|op| matches!(
+                op,
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String(key)
+                } if key == expected
+            )));
+        }
+    }
+
+    #[test]
     fn lower_arrow_function_expression_body() {
         let ir0 = expr_ir0(Expression::ArrowFunction {
             params: vec![FunctionParam {
@@ -15434,9 +15500,8 @@ mod tests {
         assert_eq!(diagnostic.site_id, "core.function_parameter_computed_key");
     }
 
-    #[test]
-    fn static_object_binding_keys_execute_with_canonical_property_names_bd_h4esx() {
-        for (binding_key, canonical_key) in [
+    fn static_property_key_cases_bd_h4esx() -> Vec<(&'static str, &'static str)> {
+        vec![
             (r#""value""#, "value"),
             (r"'v\x61lue'", "value"),
             (r"'v\u0061lue'", "value"),
@@ -15472,7 +15537,12 @@ mod tests {
                 "123456789012345678901234567890n",
                 "123456789012345678901234567890",
             ),
-        ] {
+        ]
+    }
+
+    #[test]
+    fn static_object_binding_keys_execute_with_canonical_property_names_bd_h4esx() {
+        for (binding_key, canonical_key) in static_property_key_cases_bd_h4esx() {
             let source = format!(
                 "function pick({{{binding_key}: parameter}}) {{ return parameter; }}\
                  let {{{binding_key}: variable}} = {{'{canonical_key}': 7}};\
@@ -15485,6 +15555,50 @@ mod tests {
                 "binding key `{binding_key}` must resolve canonical property `{canonical_key}`"
             );
         }
+    }
+
+    #[test]
+    fn static_object_literal_keys_execute_with_canonical_property_names_bd_y74cd() {
+        for (object_key, canonical_key) in static_property_key_cases_bd_h4esx() {
+            let source = format!("let {{'{canonical_key}': value}} = {{{object_key}: 7}}; value;");
+            let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(&source);
+            assert_eq!(
+                value,
+                Value::Int(7),
+                "object key `{object_key}` must produce canonical property `{canonical_key}`"
+            );
+        }
+    }
+
+    #[test]
+    fn object_literal_shorthand_uses_canonical_identifier_bd_y74cd() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            r"let value = 7;
+              let {'value': escaped} = {\u0076alue};
+              var await = 3;
+              let {'await': contextual} = {await};
+              escaped * 10 + contextual;",
+        );
+        assert_eq!(value, Value::Int(73));
+    }
+
+    #[test]
+    fn computed_object_literal_keys_evaluate_inner_expression_once_bd_y74cd() {
+        let (_, _, primitive_keys) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let {'null': null_value} = {[null]: 3};\
+             let {'undefined': undefined_value} = {[undefined]: 4};\
+             null_value * 10 + undefined_value;",
+        );
+        assert_eq!(primitive_keys, Value::Int(34));
+
+        let (_, _, order) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let order = 0;\
+             function key() { order = order * 10 + 1; return 'value'; }\
+             function value() { order = order * 10 + 2; return 7; }\
+             let {'value': picked} = {[key()]: value()};\
+             picked * 100 + order;",
+        );
+        assert_eq!(order, Value::Int(712));
     }
 
     #[test]

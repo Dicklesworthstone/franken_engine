@@ -2112,6 +2112,113 @@ struct ParseExecutionContext<'a> {
     statement_depth: u64,
 }
 
+/// The lexical meaning of a contextual keyword while a delimiter scan is in
+/// progress.  A scanner needs three states rather than a boolean: ordinary
+/// functions treat `await`/`yield` as identifiers, async/generator parameter
+/// lists reserve them without permitting expressions, and the corresponding
+/// function bodies enable the prefix-expression grammar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContextualKeywordScanMode {
+    Identifier,
+    Reserved,
+    PrefixExpression,
+}
+
+/// The grammar parameters needed by lexical-goal scans.  Keep this private and
+/// deliberately smaller than `ParseExecutionContext`: delimiter discovery must
+/// not acquire parser budgets, diagnostics, or source ownership.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ScanGrammarContext {
+    strict: bool,
+    starts_in_statement_position: bool,
+    await_mode: ContextualKeywordScanMode,
+    yield_mode: ContextualKeywordScanMode,
+}
+
+impl ScanGrammarContext {
+    const SLOPPY_SCRIPT: Self = Self {
+        strict: false,
+        starts_in_statement_position: true,
+        await_mode: ContextualKeywordScanMode::Identifier,
+        yield_mode: ContextualKeywordScanMode::Identifier,
+    };
+
+    const STRICT_SCRIPT: Self = Self {
+        strict: true,
+        starts_in_statement_position: true,
+        await_mode: ContextualKeywordScanMode::Identifier,
+        yield_mode: ContextualKeywordScanMode::Reserved,
+    };
+
+    fn from_execution_context(context: &ParseExecutionContext<'_>) -> Self {
+        Self {
+            strict: context.strict_mode,
+            starts_in_statement_position: true,
+            await_mode: if context.allow_await_expression {
+                ContextualKeywordScanMode::PrefixExpression
+            } else if context.await_identifier_reserved {
+                ContextualKeywordScanMode::Reserved
+            } else {
+                ContextualKeywordScanMode::Identifier
+            },
+            yield_mode: if context.allow_yield_expression {
+                ContextualKeywordScanMode::PrefixExpression
+            } else if context.yield_identifier_reserved || context.strict_mode {
+                ContextualKeywordScanMode::Reserved
+            } else {
+                ContextualKeywordScanMode::Identifier
+            },
+        }
+    }
+
+    const fn expression(mut self) -> Self {
+        self.starts_in_statement_position = false;
+        self
+    }
+
+    const fn function_parameters(is_async: bool, is_generator: bool, strict: bool) -> Self {
+        Self {
+            strict,
+            starts_in_statement_position: false,
+            await_mode: if is_async {
+                ContextualKeywordScanMode::Reserved
+            } else {
+                ContextualKeywordScanMode::Identifier
+            },
+            yield_mode: if is_generator || strict {
+                ContextualKeywordScanMode::Reserved
+            } else {
+                ContextualKeywordScanMode::Identifier
+            },
+        }
+    }
+
+    const fn function_body(is_async: bool, is_generator: bool, strict: bool) -> Self {
+        Self {
+            strict,
+            starts_in_statement_position: true,
+            await_mode: if is_async {
+                ContextualKeywordScanMode::PrefixExpression
+            } else {
+                ContextualKeywordScanMode::Identifier
+            },
+            yield_mode: if is_generator {
+                ContextualKeywordScanMode::PrefixExpression
+            } else if strict {
+                ContextualKeywordScanMode::Reserved
+            } else {
+                ContextualKeywordScanMode::Identifier
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SlashGoal {
+    RegExp,
+    Div,
+}
+
 impl<'a> ParseExecutionContext<'a> {
     fn next_depth(&mut self, depth: u64) {
         if depth > self.max_recursion_observed {
@@ -2168,26 +2275,8 @@ struct LogicalLine {
     text: String,
     byte_offset: u64,
     start_line: u64,
+    #[cfg_attr(not(test), allow(dead_code))]
     end_line: u64,
-}
-
-fn merge_logical_lines_keyword_allows_regex(identifier: &str) -> bool {
-    matches!(
-        identifier,
-        "case"
-            | "delete"
-            | "do"
-            | "else"
-            | "in"
-            | "instanceof"
-            | "new"
-            | "of"
-            | "return"
-            | "throw"
-            | "typeof"
-            | "void"
-            | "yield"
-    )
 }
 
 fn merge_logical_lines_identifier_opens_control_header(identifier: &str) -> bool {
@@ -2201,10 +2290,11 @@ fn merge_logical_lines_identifier_awaits_statement(identifier: &str) -> bool {
     matches!(identifier, "catch" | "do" | "else" | "finally" | "try")
 }
 
-fn merge_logical_lines_slash_starts_regex(
+fn merge_logical_lines_update_is_prefix(
     last_significant: Option<char>,
     trailing_identifier: &str,
     trailing_identifier_is_member: bool,
+    grammar_context: ScanGrammarContext,
 ) -> bool {
     match last_significant {
         None => true,
@@ -2213,8 +2303,12 @@ fn merge_logical_lines_slash_starts_regex(
             | '+' | '-' | '<' | '>' | '/',
         ) => true,
         Some(ch) if ch.is_ascii_alphabetic() || ch == '_' || ch == '$' => {
-            !trailing_identifier_is_member
-                && merge_logical_lines_keyword_allows_regex(trailing_identifier)
+            identifier_slash_goal(
+                trailing_identifier,
+                trailing_identifier_is_member,
+                grammar_context,
+            )
+            .0 == SlashGoal::RegExp
         }
         _ => false,
     }
@@ -2273,30 +2367,38 @@ fn pending_clause_after_statement(
     })
 }
 
-fn clause_keyword_tail<'a>(source: &'a str, keyword: &str) -> Option<&'a str> {
-    let source = trim_binding_pattern_leading_trivia(source)?;
+fn clause_keyword_tail<'a>(
+    source: &'a str,
+    keyword: &str,
+    grammar_context: ScanGrammarContext,
+) -> Option<&'a str> {
+    let source = trim_binding_pattern_leading_trivia_with_context(source, grammar_context)?;
     if !starts_with_keyword(source, keyword) {
         return None;
     }
-    trim_binding_pattern_leading_trivia(source.strip_prefix(keyword)?)
+    trim_binding_pattern_leading_trivia_with_context(source.strip_prefix(keyword)?, grammar_context)
 }
 
-fn catch_clause_is_complete(fragment: &str) -> bool {
-    let Some(after_catch) = clause_keyword_tail(fragment, "catch") else {
+fn catch_clause_is_complete(fragment: &str, grammar_context: ScanGrammarContext) -> bool {
+    let Some(after_catch) = clause_keyword_tail(fragment, "catch", grammar_context) else {
         return false;
     };
     if after_catch.is_empty() {
         return false;
     }
     let body_source = if after_catch.starts_with('(') {
-        let Some((_, remaining)) = extract_balanced(after_catch, '(', ')') else {
+        let Some((_, remaining)) =
+            extract_balanced_with_context(after_catch, '(', ')', grammar_context)
+        else {
             return false;
         };
-        trim_binding_pattern_leading_trivia(remaining).unwrap_or_default()
+        trim_binding_pattern_leading_trivia_with_context(remaining, grammar_context)
+            .unwrap_or_default()
     } else {
         after_catch
     };
-    body_source.starts_with('{') && extract_balanced(body_source, '{', '}').is_some()
+    body_source.starts_with('{')
+        && extract_balanced_with_context(body_source, '{', '}', grammar_context).is_some()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2310,18 +2412,20 @@ enum ParenthesizedStatementStatus {
 fn parenthesized_statement_status(
     source: &str,
     keyword: &str,
+    grammar_context: ScanGrammarContext,
 ) -> Option<ParenthesizedStatementStatus> {
-    let tail = clause_keyword_tail(source, keyword)?;
+    let tail = clause_keyword_tail(source, keyword, grammar_context)?;
     if tail.is_empty() {
         return Some(ParenthesizedStatementStatus::MissingCondition);
     }
     if !tail.starts_with('(') {
         return Some(ParenthesizedStatementStatus::Invalid);
     }
-    let Some((_, body)) = extract_balanced(tail, '(', ')') else {
+    let Some((_, body)) = extract_balanced_with_context(tail, '(', ')', grammar_context) else {
         return Some(ParenthesizedStatementStatus::Invalid);
     };
-    let body = trim_binding_pattern_leading_trivia(body).unwrap_or_default();
+    let body =
+        trim_binding_pattern_leading_trivia_with_context(body, grammar_context).unwrap_or_default();
     if body.is_empty() {
         Some(ParenthesizedStatementStatus::MissingBody)
     } else {
@@ -2329,11 +2433,12 @@ fn parenthesized_statement_status(
     }
 }
 
-fn source_ends_expression_continuation(source: &str) -> bool {
-    let Some(source) = trim_binding_pattern_trivia(source) else {
+fn source_ends_expression_continuation(source: &str, grammar_context: ScanGrammarContext) -> bool {
+    let Some(source) = trim_binding_pattern_trivia_with_context(source, grammar_context) else {
         return false;
     };
-    let state = scan_binding_pattern_source_until(source, |_, _, _, _| true);
+    let state =
+        scan_binding_pattern_source_until_with_context(source, grammar_context, |_, _, _, _| true);
     if !state.complete {
         return false;
     }
@@ -2407,11 +2512,12 @@ fn signed_decimal_exponent_precedes(prefix: &str, trailing_digits_start: usize) 
     parse_f64_numeric_literal(&prefix[mantissa_start..]).is_some()
 }
 
-fn source_ends_postfix_update(source: &str) -> bool {
-    let Some(source) = trim_binding_pattern_trivia(source) else {
+fn source_ends_postfix_update(source: &str, grammar_context: ScanGrammarContext) -> bool {
+    let Some(source) = trim_binding_pattern_trivia_with_context(source, grammar_context) else {
         return false;
     };
-    let state = scan_binding_pattern_source_until(source, |_, _, _, _| true);
+    let state =
+        scan_binding_pattern_source_until_with_context(source, grammar_context, |_, _, _, _| true);
     state.complete && state.ends_postfix_update
 }
 
@@ -2420,20 +2526,29 @@ fn starts_postfix_expression_continuation(source: &str) -> bool {
     source.starts_with("?.") || matches!(source.chars().next(), Some('(' | '[' | '.' | '`'))
 }
 
-fn restricted_statement_ends_at_line_terminator(source: &str) -> bool {
+fn restricted_statement_ends_at_line_terminator(
+    source: &str,
+    grammar_context: ScanGrammarContext,
+) -> bool {
     ["return", "throw", "break", "continue"]
         .into_iter()
-        .any(|keyword| clause_keyword_tail(source, keyword).is_some_and(str::is_empty))
+        .any(|keyword| {
+            clause_keyword_tail(source, keyword, grammar_context).is_some_and(str::is_empty)
+        })
 }
 
-fn expression_statement_continues(source: &str, next_after_trivia: &str) -> bool {
-    if restricted_statement_ends_at_line_terminator(source)
-        || (source_ends_postfix_update(source)
+fn expression_statement_continues(
+    source: &str,
+    next_after_trivia: &str,
+    grammar_context: ScanGrammarContext,
+) -> bool {
+    if restricted_statement_ends_at_line_terminator(source, grammar_context)
+        || (source_ends_postfix_update(source, grammar_context)
             && starts_postfix_expression_continuation(next_after_trivia))
     {
         return false;
     }
-    source_ends_expression_continuation(source)
+    source_ends_expression_continuation(source, grammar_context)
         || starts_directive_expression_continuation(next_after_trivia)
 }
 
@@ -2463,10 +2578,11 @@ fn advance_clause_statement(
     next_after_trivia: &str,
     current_len: usize,
     mut await_else_after_completion: bool,
+    grammar_context: ScanGrammarContext,
 ) -> Option<PendingClauseContinuation> {
     loop {
         if starts_with_keyword(statement, "if") {
-            match parenthesized_statement_status(statement, "if") {
+            match parenthesized_statement_status(statement, "if", grammar_context) {
                 Some(ParenthesizedStatementStatus::MissingCondition)
                     if next_after_trivia.starts_with('(') =>
                 {
@@ -2479,9 +2595,10 @@ fn advance_clause_statement(
                     ));
                 }
                 Some(ParenthesizedStatementStatus::Complete) => {
-                    let tail = clause_keyword_tail(statement, "if")?;
-                    let (_, body) = extract_balanced(tail, '(', ')')?;
-                    statement = trim_binding_pattern_leading_trivia(body)?;
+                    let tail = clause_keyword_tail(statement, "if", grammar_context)?;
+                    let (_, body) = extract_balanced_with_context(tail, '(', ')', grammar_context)?;
+                    statement =
+                        trim_binding_pattern_leading_trivia_with_context(body, grammar_context)?;
                     await_else_after_completion = true;
                     continue;
                 }
@@ -2497,7 +2614,7 @@ fn advance_clause_statement(
                 continue;
             }
             matched_parenthesized_statement = true;
-            match parenthesized_statement_status(statement, keyword) {
+            match parenthesized_statement_status(statement, keyword, grammar_context) {
                 Some(ParenthesizedStatementStatus::MissingCondition)
                     if next_after_trivia.starts_with('(') =>
                 {
@@ -2512,9 +2629,10 @@ fn advance_clause_statement(
                     return Some(pending_clause_with_kind(kind, current_len));
                 }
                 Some(ParenthesizedStatementStatus::Complete) => {
-                    let tail = clause_keyword_tail(statement, keyword)?;
-                    let (_, body) = extract_balanced(tail, '(', ')')?;
-                    statement = trim_binding_pattern_leading_trivia(body)?;
+                    let tail = clause_keyword_tail(statement, keyword, grammar_context)?;
+                    let (_, body) = extract_balanced_with_context(tail, '(', ')', grammar_context)?;
+                    statement =
+                        trim_binding_pattern_leading_trivia_with_context(body, grammar_context)?;
                     break;
                 }
                 Some(ParenthesizedStatementStatus::Invalid)
@@ -2542,7 +2660,7 @@ fn advance_clause_statement(
             ));
         }
 
-        if declaration_source_needs_continuation(statement, next_after_trivia) {
+        if declaration_source_needs_continuation(statement, next_after_trivia, grammar_context) {
             let kind = if await_else_after_completion {
                 PendingClauseKind::ElseIfDeclarationContinuation
             } else {
@@ -2550,7 +2668,7 @@ fn advance_clause_statement(
             };
             return Some(pending_clause_with_kind(kind, current_len));
         }
-        if expression_statement_continues(statement, next_after_trivia) {
+        if expression_statement_continues(statement, next_after_trivia, grammar_context) {
             let kind = if await_else_after_completion {
                 PendingClauseKind::ElseIfExpressionContinuation
             } else {
@@ -2570,9 +2688,10 @@ fn advance_pending_clause(
     pending: PendingClauseContinuation,
     current_text: &str,
     next_after_trivia: &str,
+    grammar_context: ScanGrammarContext,
 ) -> Option<PendingClauseContinuation> {
     let fragment = current_text.get(pending.fragment_start..)?;
-    let fragment = trim_binding_pattern_trivia(fragment)?;
+    let fragment = trim_binding_pattern_trivia_with_context(fragment, grammar_context)?;
     if fragment.is_empty() {
         return Some(pending);
     }
@@ -2582,7 +2701,7 @@ fn advance_pending_clause(
             if !starts_with_keyword(fragment, "else") {
                 return None;
             }
-            let alternate = clause_keyword_tail(fragment, "else")?;
+            let alternate = clause_keyword_tail(fragment, "else", grammar_context)?;
             if alternate.is_empty() {
                 return Some(pending_clause_with_kind(
                     PendingClauseKind::ElseAwaitStatement,
@@ -2595,6 +2714,7 @@ fn advance_pending_clause(
                 next_after_trivia,
                 current_text.len(),
                 false,
+                grammar_context,
             )
         }
         PendingClauseKind::ElseAwaitStatement => advance_clause_statement(
@@ -2603,9 +2723,10 @@ fn advance_pending_clause(
             next_after_trivia,
             current_text.len(),
             false,
+            grammar_context,
         ),
         PendingClauseKind::ElseExpressionContinuation => {
-            if expression_statement_continues(fragment, next_after_trivia) {
+            if expression_statement_continues(fragment, next_after_trivia, grammar_context) {
                 Some(pending_clause_with_kind(
                     PendingClauseKind::ElseExpressionContinuation,
                     current_text.len(),
@@ -2620,6 +2741,7 @@ fn advance_pending_clause(
                 fragment,
                 line_ends_continuation,
                 next_after_trivia,
+                grammar_context,
             ) {
                 Some(pending_clause_with_kind(
                     PendingClauseKind::ElseDeclarationContinuation,
@@ -2635,9 +2757,10 @@ fn advance_pending_clause(
             next_after_trivia,
             current_text.len(),
             true,
+            grammar_context,
         ),
         PendingClauseKind::ElseIfExpressionContinuation => {
-            if expression_statement_continues(fragment, next_after_trivia) {
+            if expression_statement_continues(fragment, next_after_trivia, grammar_context) {
                 Some(pending_clause_with_kind(
                     PendingClauseKind::ElseIfExpressionContinuation,
                     current_text.len(),
@@ -2657,6 +2780,7 @@ fn advance_pending_clause(
                 fragment,
                 line_ends_continuation,
                 next_after_trivia,
+                grammar_context,
             ) {
                 Some(pending_clause_with_kind(
                     PendingClauseKind::ElseIfDeclarationContinuation,
@@ -2673,7 +2797,7 @@ fn advance_pending_clause(
         }
         PendingClauseKind::TryAwaitHandler => {
             if starts_with_keyword(fragment, "catch") {
-                let after_catch = clause_keyword_tail(fragment, "catch")?;
+                let after_catch = clause_keyword_tail(fragment, "catch", grammar_context)?;
                 if after_catch.is_empty() {
                     return if next_after_trivia.starts_with('{') {
                         Some(pending_clause_with_kind(
@@ -2687,15 +2811,18 @@ fn advance_pending_clause(
                     };
                 }
                 if after_catch.starts_with('(') {
-                    let (_, body) = extract_balanced(after_catch, '(', ')')?;
-                    if trim_binding_pattern_leading_trivia(body).is_some_and(str::is_empty) {
+                    let (_, body) =
+                        extract_balanced_with_context(after_catch, '(', ')', grammar_context)?;
+                    if trim_binding_pattern_leading_trivia_with_context(body, grammar_context)
+                        .is_some_and(str::is_empty)
+                    {
                         return Some(pending_clause_with_kind(
                             PendingClauseKind::CatchAwaitBody,
                             current_text.len(),
                         ));
                     }
                 }
-                if !catch_clause_is_complete(fragment) {
+                if !catch_clause_is_complete(fragment, grammar_context) {
                     return None;
                 }
                 starts_with_keyword(next_after_trivia, "finally").then_some(
@@ -2705,7 +2832,7 @@ fn advance_pending_clause(
                     ),
                 )
             } else if starts_with_keyword(fragment, "finally") {
-                let body = clause_keyword_tail(fragment, "finally")?;
+                let body = clause_keyword_tail(fragment, "finally", grammar_context)?;
                 if body.is_empty() && next_after_trivia.starts_with('{') {
                     Some(pending_clause_with_kind(
                         PendingClauseKind::FinallyAwaitBody,
@@ -2719,7 +2846,9 @@ fn advance_pending_clause(
             }
         }
         PendingClauseKind::CatchAwaitBody => {
-            if !fragment.starts_with('{') || extract_balanced(fragment, '{', '}').is_none() {
+            if !fragment.starts_with('{')
+                || extract_balanced_with_context(fragment, '{', '}', grammar_context).is_none()
+            {
                 return None;
             }
             starts_with_keyword(next_after_trivia, "finally").then_some(pending_clause_with_kind(
@@ -2731,7 +2860,7 @@ fn advance_pending_clause(
             if !starts_with_keyword(fragment, "finally") {
                 return None;
             }
-            let body = clause_keyword_tail(fragment, "finally")?;
+            let body = clause_keyword_tail(fragment, "finally", grammar_context)?;
             if body.is_empty() && next_after_trivia.starts_with('{') {
                 Some(pending_clause_with_kind(
                     PendingClauseKind::FinallyAwaitBody,
@@ -2746,7 +2875,7 @@ fn advance_pending_clause(
             if !starts_with_keyword(fragment, "while") {
                 return None;
             }
-            let condition = clause_keyword_tail(fragment, "while")?;
+            let condition = clause_keyword_tail(fragment, "while", grammar_context)?;
             if condition.is_empty() && next_after_trivia.starts_with('(') {
                 Some(pending_clause_with_kind(
                     PendingClauseKind::DoWhileAwaitCondition,
@@ -2815,6 +2944,7 @@ fn physical_line_segments(source: &str) -> Vec<PhysicalLine<'_>> {
 fn next_significant_offsets_after_physical_lines(
     text: &str,
     physical_lines: &[PhysicalLine<'_>],
+    grammar_context: ScanGrammarContext,
 ) -> Vec<Option<usize>> {
     let mut boundaries = Vec::new();
     let mut boundary = 0usize;
@@ -2825,7 +2955,7 @@ fn next_significant_offsets_after_physical_lines(
 
     let mut next_offsets = vec![None; boundaries.len()];
     let mut next_boundary = 0usize;
-    scan_binding_pattern_source(text, |index, ch, _, quoted| {
+    scan_binding_pattern_source_with_context(text, grammar_context, |index, ch, _, quoted| {
         if !quoted && is_binding_pattern_whitespace(ch) {
             return;
         }
@@ -2837,24 +2967,28 @@ fn next_significant_offsets_after_physical_lines(
     next_offsets
 }
 
-fn trailing_statement_source(source: &str) -> Option<&str> {
-    trim_binding_pattern_trivia(source)
+fn trailing_statement_source(source: &str, grammar_context: ScanGrammarContext) -> Option<&str> {
+    trim_binding_pattern_trivia_with_context(source, grammar_context)
         .filter(|source| !source.ends_with(';'))
         .and_then(|_| {
-            split_statement_segments(source)
+            split_statement_segments_with_context(source, grammar_context)
                 .last()
                 .map(|(_, _, statement)| *statement)
         })
-        .and_then(trim_binding_pattern_trivia)
+        .and_then(|source| trim_binding_pattern_trivia_with_context(source, grammar_context))
 }
 
-fn declaration_source_needs_continuation(source: &str, next_after_trivia: &str) -> bool {
+fn declaration_source_needs_continuation(
+    source: &str,
+    next_after_trivia: &str,
+    grammar_context: ScanGrammarContext,
+) -> bool {
     let Some(kind) = variable_declaration_prefix_kind(source) else {
         return false;
     };
     let body = source
         .strip_prefix(kind.as_str())
-        .and_then(trim_binding_pattern_trivia)
+        .and_then(|source| trim_binding_pattern_trivia_with_context(source, grammar_context))
         .unwrap_or_default();
     let next = next_after_trivia.chars().next();
     let next_starts_binding = matches!(next, Some('{' | '['))
@@ -2878,11 +3012,12 @@ fn pending_declaration_fragment_needs_continuation(
     line: &str,
     line_ends_continuation: bool,
     next_after_trivia: &str,
+    grammar_context: ScanGrammarContext,
 ) -> bool {
     let next = next_after_trivia.chars().next();
     let next_continues_declaration =
         !next_after_trivia.is_empty() && matches!(next, Some(',' | '='));
-    let Some(source) = trim_binding_pattern_trivia(line) else {
+    let Some(source) = trim_binding_pattern_trivia_with_context(line, grammar_context) else {
         // The opening quote/comment can be on an earlier physical line, so a
         // closing fragment need not be self-contained lexical input.
         return line_ends_continuation || next_continues_declaration;
@@ -2890,10 +3025,10 @@ fn pending_declaration_fragment_needs_continuation(
     if source.is_empty() {
         return true;
     }
-    let Some(trailing_source) = trailing_statement_source(source) else {
+    let Some(trailing_source) = trailing_statement_source(source, grammar_context) else {
         return false;
     };
-    if declaration_source_needs_continuation(trailing_source, next_after_trivia) {
+    if declaration_source_needs_continuation(trailing_source, next_after_trivia, grammar_context) {
         return true;
     }
     !next_after_trivia.is_empty()
@@ -2904,10 +3039,26 @@ fn pending_declaration_fragment_needs_continuation(
 
 /// Merge physical lines into logical lines by tracking brace/paren/bracket depth.
 /// When a line ends with unbalanced delimiters, subsequent lines are merged until balance.
-fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
+fn merge_logical_lines_with_context(
+    text: &str,
+    grammar_context: ScanGrammarContext,
+) -> Vec<LogicalLine> {
     let physical_lines = physical_line_segments(text);
     let next_significant_offsets =
-        next_significant_offsets_after_physical_lines(text, &physical_lines);
+        next_significant_offsets_after_physical_lines(text, &physical_lines, grammar_context);
+    let mut regexp_slash_positions = BTreeSet::new();
+    let scan_state = scan_binding_pattern_source_until_with_context(
+        text,
+        grammar_context,
+        |index, ch, _depth, quoted| {
+            if quoted && ch == '/' && parse_regexp_literal_prefix(&text[index..]).is_some() {
+                regexp_slash_positions.insert(index);
+            }
+            true
+        },
+    );
+    let template_literal_ends: BTreeMap<usize, usize> =
+        scan_state.template_literal_ranges.into_iter().collect();
     let mut result = Vec::new();
     let mut current_text = String::new();
     let mut current_byte_offset: u64 = 0;
@@ -2919,6 +3070,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
     let mut in_quote: Option<char> = None;
     let mut in_block_comment = false;
     let mut in_regex_literal = false;
+    let mut in_template_literal: Option<usize> = None;
     let mut regex_in_char_class = false;
     let mut escaped = false;
     let mut accumulating = false;
@@ -2979,10 +3131,13 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
         current_text.push_str(line);
 
         let mut line_has_significant_code = false;
-        let mut chars = line.chars().peekable();
-        while let Some(ch) = chars.next() {
+        let mut chars = line.char_indices().peekable();
+        while let Some((line_byte_index, ch)) = chars.next() {
+            let absolute_index = usize::try_from(byte_offset)
+                .unwrap_or(usize::MAX)
+                .saturating_add(line_byte_index);
             if in_block_comment {
-                if ch == '*' && matches!(chars.peek(), Some('/')) {
+                if ch == '*' && matches!(chars.peek(), Some((_, '/'))) {
                     chars.next();
                     in_block_comment = false;
                 }
@@ -3031,6 +3186,27 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 }
                 continue;
             }
+            if let Some(template_end) = in_template_literal {
+                line_has_significant_code = true;
+                if absolute_index.saturating_add(ch.len_utf8()) >= template_end {
+                    in_template_literal = None;
+                    last_significant = Some(')');
+                    trailing_identifier.clear();
+                    trailing_identifier_is_member = false;
+                    identifier_token_open = false;
+                    statement_goal = false;
+                }
+                continue;
+            }
+            if let Some(template_end) = template_literal_ends.get(&absolute_index).copied() {
+                line_has_significant_code = true;
+                in_template_literal = Some(template_end);
+                trailing_identifier.clear();
+                trailing_identifier_is_member = false;
+                identifier_token_open = false;
+                statement_goal = false;
+                continue;
+            }
             let identifier_continues = ch.is_ascii_alphabetic()
                 || matches!(ch, '_' | '$')
                 || (ch.is_ascii_digit() && identifier_token_open);
@@ -3042,12 +3218,13 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 }
                 identifier_token_open = false;
             }
-            if matches!(ch, '+' | '-') && chars.peek().is_some_and(|next| *next == ch) {
+            if matches!(ch, '+' | '-') && chars.peek().is_some_and(|(_, next)| *next == ch) {
                 let prefix_position = (line_idx > 0 && !line_has_significant_code)
-                    || merge_logical_lines_slash_starts_regex(
+                    || merge_logical_lines_update_is_prefix(
                         last_significant,
                         trailing_identifier.as_str(),
                         trailing_identifier_is_member,
+                        grammar_context,
                     );
                 chars.next();
                 line_has_significant_code = true;
@@ -3060,21 +3237,16 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             }
             match ch {
                 '/' => match chars.peek() {
-                    Some('/') => {
+                    Some((_, '/')) => {
                         identifier_token_open = false;
                         break;
                     }
-                    Some('*') => {
+                    Some((_, '*')) => {
                         chars.next();
                         in_block_comment = true;
                         identifier_token_open = false;
                     }
-                    _ if merge_logical_lines_slash_starts_regex(
-                        last_significant,
-                        trailing_identifier.as_str(),
-                        trailing_identifier_is_member,
-                    ) =>
-                    {
+                    _ if regexp_slash_positions.contains(&absolute_index) => {
                         line_has_significant_code = true;
                         in_regex_literal = true;
                         regex_in_char_class = false;
@@ -3214,7 +3386,8 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             && bracket_depth <= 0
             && in_quote.is_none()
             && !in_block_comment
-            && !in_regex_literal;
+            && !in_regex_literal
+            && in_template_literal.is_none();
         // Only inspect the accumulated statement list once its lexical state
         // is otherwise flushable. A pending declaration is updated from the
         // newly appended physical-line fragment, so neither comments nor one
@@ -3238,6 +3411,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                             line,
                             line_ends_continuation,
                             next_after_trivia,
+                            grammar_context,
                         ),
                     None,
                 )
@@ -3248,14 +3422,23 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                         pending_clause_continuation
                     } else {
                         pending_clause_continuation.and_then(|pending| {
-                            advance_pending_clause(pending, &current_text, next_after_trivia)
+                            advance_pending_clause(
+                                pending,
+                                &current_text,
+                                next_after_trivia,
+                                grammar_context,
+                            )
                         })
                     },
                 )
             } else {
-                let trailing_source = trailing_statement_source(&current_text);
+                let trailing_source = trailing_statement_source(&current_text, grammar_context);
                 let declaration_needs_binding = trailing_source.is_some_and(|source| {
-                    declaration_source_needs_continuation(source, next_after_trivia)
+                    declaration_source_needs_continuation(
+                        source,
+                        next_after_trivia,
+                        grammar_context,
+                    )
                 });
                 let clause_continues = trailing_source.and_then(|source| {
                     pending_clause_after_statement(source, next_after_trivia, current_text.len())
@@ -3284,6 +3467,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             escaped = false;
             in_regex_literal = false;
             regex_in_char_class = false;
+            in_template_literal = None;
             last_significant = None;
             trailing_identifier.clear();
             trailing_identifier_is_member = false;
@@ -3315,6 +3499,11 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
     }
 
     result
+}
+
+#[cfg(test)]
+fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
+    merge_logical_lines_with_context(text, ScanGrammarContext::SLOPPY_SCRIPT)
 }
 
 fn is_identifier_part_character(ch: char) -> bool {
@@ -3509,15 +3698,19 @@ fn parse_source(
         ));
     }
 
-    let logical_lines = merge_logical_lines(text);
+    let logical_lines = merge_logical_lines_with_context(
+        text,
+        ScanGrammarContext::from_execution_context(&context),
+    );
     let source_line_starts = source_line_start_offsets(text);
     let mut statements = Vec::new();
 
     for logical_line in &logical_lines {
         let logical_line_starts = logical_line_start_offsets(&logical_line.text);
-        for (start_in_line, end_in_line, statement_text) in
-            split_statement_segments(&logical_line.text)
-        {
+        for (start_in_line, end_in_line, statement_text) in split_statement_segments_with_context(
+            &logical_line.text,
+            ScanGrammarContext::from_execution_context(&context),
+        ) {
             let (start_line, start_column) =
                 logical_line_position(&logical_line_starts, logical_line.start_line, start_in_line);
             let (end_line, end_column) =
@@ -3592,19 +3785,22 @@ fn line_count(source: &str) -> u64 {
     (source_line_terminator_ranges(source).len() as u64).saturating_add(1)
 }
 
-fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
+fn split_statement_segments_with_context(
+    line: &str,
+    grammar_context: ScanGrammarContext,
+) -> Vec<(usize, usize, &str)> {
     let mut out = Vec::new();
     let mut segment_start = 0usize;
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;
     let mut brace_depth = 0usize;
 
-    scan_binding_pattern_source(line, |index, ch, depth, quoted| {
+    scan_binding_pattern_source_with_context(line, grammar_context, |index, ch, depth, quoted| {
         if quoted {
             return;
         }
-        if depth == 0 && async_function_asi_boundary(line, segment_start, index) {
-            push_segment(&mut out, line, segment_start, index);
+        if depth == 0 && async_function_asi_boundary(line, segment_start, index, grammar_context) {
+            push_segment(&mut out, line, segment_start, index, grammar_context);
             segment_start = index;
         }
         match ch {
@@ -3639,29 +3835,41 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
                         let rest = trim_directive_trivia(rest_with_trivia).0;
                         let continues = statement_clause_continues(seg, rest);
                         if !rest_with_trivia.trim_start().is_empty() && !continues {
-                            push_segment(&mut out, line, segment_start, after);
+                            push_segment(&mut out, line, segment_start, after, grammar_context);
                             segment_start = after;
                         }
                     }
                 }
             }
             ';' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
-                push_segment(&mut out, line, segment_start, index);
+                push_segment(&mut out, line, segment_start, index, grammar_context);
                 segment_start = index.saturating_add(ch.len_utf8());
             }
             _ => {}
         }
     });
-    push_segment(&mut out, line, segment_start, line.len());
+    push_segment(&mut out, line, segment_start, line.len(), grammar_context);
     out
 }
 
-fn async_function_asi_boundary(line: &str, segment_start: usize, function_start: usize) -> bool {
+#[cfg(test)]
+fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
+    split_statement_segments_with_context(line, ScanGrammarContext::SLOPPY_SCRIPT)
+}
+
+fn async_function_asi_boundary(
+    line: &str,
+    segment_start: usize,
+    function_start: usize,
+    grammar_context: ScanGrammarContext,
+) -> bool {
     if !starts_with_keyword(&line[function_start..], "function") {
         return false;
     }
     let prefix = &line[segment_start..function_start];
-    let Some((_, significant_end)) = binding_pattern_trivia_bounds(prefix) else {
+    let Some((_, significant_end)) =
+        binding_pattern_trivia_bounds_with_context(prefix, grammar_context)
+    else {
         return false;
     };
     let significant = &prefix[..significant_end];
@@ -3699,24 +3907,26 @@ fn push_segment<'a>(
     line: &'a str,
     start: usize,
     end: usize,
+    grammar_context: ScanGrammarContext,
 ) {
     if end < start {
         return;
     }
     let raw = &line[start..end];
-    let (trimmed_start, trimmed_end) =
-        if let Some((lexical_start, lexical_end)) = binding_pattern_trivia_bounds(raw) {
-            (
-                start.saturating_add(lexical_start),
-                start.saturating_add(lexical_end),
-            )
-        } else {
-            // Preserve incomplete lexical input for the parser's diagnostic
-            // path instead of dropping it as if it were complete trivia.
-            let leading = raw.len().saturating_sub(raw.trim_start().len());
-            let trailing = raw.len().saturating_sub(raw.trim_end().len());
-            (start.saturating_add(leading), end.saturating_sub(trailing))
-        };
+    let (trimmed_start, trimmed_end) = if let Some((lexical_start, lexical_end)) =
+        binding_pattern_trivia_bounds_with_context(raw, grammar_context)
+    {
+        (
+            start.saturating_add(lexical_start),
+            start.saturating_add(lexical_end),
+        )
+    } else {
+        // Preserve incomplete lexical input for the parser's diagnostic
+        // path instead of dropping it as if it were complete trivia.
+        let leading = raw.len().saturating_sub(raw.trim_start().len());
+        let trailing = raw.len().saturating_sub(raw.trim_end().len());
+        (start.saturating_add(leading), end.saturating_sub(trailing))
+    };
     if trimmed_end <= trimmed_start {
         return;
     }
@@ -4448,36 +4658,170 @@ fn parse_identifier_reference(
     Ok(Some(identifier))
 }
 
-fn binding_pattern_slash_starts_regexp(
-    last_significant: Option<char>,
-    trailing_identifier: &str,
-    trailing_identifier_is_member: bool,
-) -> bool {
-    match last_significant {
-        None => true,
-        Some(
-            '(' | '{' | '[' | ',' | ';' | ':' | '=' | '!' | '?' | '&' | '|' | '^' | '~' | '*' | '%'
-            | '+' | '-' | '<' | '>' | '/',
-        ) => true,
-        Some(ch) if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '$') => {
-            !trailing_identifier_is_member
-                && matches!(
-                    trailing_identifier,
-                    "case"
-                        | "delete"
-                        | "do"
-                        | "else"
-                        | "in"
-                        | "instanceof"
-                        | "new"
-                        | "return"
-                        | "throw"
-                        | "typeof"
-                        | "void"
-                )
-        }
-        _ => false,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingFunctionScan {
+    is_async: bool,
+    is_generator: bool,
+    is_expression: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FunctionParameterScan {
+    function: PendingFunctionScan,
+    outer_context: ScanGrammarContext,
+    strict: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FunctionBodyScan {
+    function: PendingFunctionScan,
+    outer_context: ScanGrammarContext,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingArrowBodyScan {
+    function: PendingFunctionScan,
+    outer_context: ScanGrammarContext,
+    body_depth: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ArrowExpressionScan {
+    outer_context: ScanGrammarContext,
+    body_depth: usize,
+    conditional_depth: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingClassScan {
+    is_expression: bool,
+    header_depth: usize,
+    in_heritage: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ForHeadScan {
+    body_depth: usize,
+    declaration_seen: bool,
+    binding_seen: bool,
+    separator_seen: bool,
+    initializer_seen: bool,
+    classic: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParenScanRole {
+    Group,
+    ControlHead,
+    ForHead(ForHeadScan),
+}
+
+fn identifier_slash_goal(
+    identifier: &str,
+    is_member_name: bool,
+    grammar_context: ScanGrammarContext,
+) -> (SlashGoal, bool) {
+    if is_member_name {
+        return (SlashGoal::Div, false);
     }
+
+    let contextual_mode = match identifier {
+        "await" => Some(grammar_context.await_mode),
+        "yield" => Some(grammar_context.yield_mode),
+        _ => None,
+    };
+    if let Some(mode) = contextual_mode {
+        return match mode {
+            ContextualKeywordScanMode::Identifier => (SlashGoal::Div, false),
+            ContextualKeywordScanMode::Reserved => (SlashGoal::RegExp, true),
+            ContextualKeywordScanMode::PrefixExpression => (SlashGoal::RegExp, false),
+        };
+    }
+
+    if matches!(
+        identifier,
+        "case"
+            | "delete"
+            | "do"
+            | "else"
+            | "in"
+            | "instanceof"
+            | "new"
+            | "return"
+            | "throw"
+            | "typeof"
+            | "void"
+    ) {
+        (SlashGoal::RegExp, false)
+    } else {
+        (SlashGoal::Div, false)
+    }
+}
+
+fn numeric_literal_prefix_len(source: &str) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let first = *bytes.first()?;
+    if first == b'.' && !bytes.get(1).is_some_and(u8::is_ascii_digit) {
+        return None;
+    }
+    if !first.is_ascii_digit() && first != b'.' {
+        return None;
+    }
+
+    if first == b'0'
+        && let Some(radix_prefix) = bytes.get(1).copied()
+        && matches!(radix_prefix, b'x' | b'X' | b'o' | b'O' | b'b' | b'B')
+    {
+        let mut index = 2usize;
+        while bytes
+            .get(index)
+            .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+        {
+            index = index.saturating_add(1);
+        }
+        if bytes.get(index) == Some(&b'n') {
+            index = index.saturating_add(1);
+        }
+        return Some(index);
+    }
+
+    let mut index = 0usize;
+    while bytes
+        .get(index)
+        .is_some_and(|byte| byte.is_ascii_digit() || *byte == b'_')
+    {
+        index = index.saturating_add(1);
+    }
+    if bytes.get(index) == Some(&b'.') {
+        index = index.saturating_add(1);
+        while bytes
+            .get(index)
+            .is_some_and(|byte| byte.is_ascii_digit() || *byte == b'_')
+        {
+            index = index.saturating_add(1);
+        }
+    }
+    if matches!(bytes.get(index), Some(b'e' | b'E')) {
+        let exponent_start = index;
+        index = index.saturating_add(1);
+        if matches!(bytes.get(index), Some(b'+' | b'-')) {
+            index = index.saturating_add(1);
+        }
+        let digit_start = index;
+        while bytes
+            .get(index)
+            .is_some_and(|byte| byte.is_ascii_digit() || *byte == b'_')
+        {
+            index = index.saturating_add(1);
+        }
+        if index == digit_start {
+            index = exponent_start;
+        }
+    }
+    if bytes.get(index) == Some(&b'n') {
+        index = index.saturating_add(1);
+    }
+    Some(index.max(1))
 }
 
 /// Visit lexical code points in a binding-pattern source slice.
@@ -4491,14 +4835,18 @@ fn binding_pattern_slash_starts_regexp(
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BindingPatternScanState {
     complete: bool,
+    lexically_complete: bool,
     last_significant: Option<char>,
     trailing_identifier: String,
     trailing_identifier_is_member: bool,
     ends_postfix_update: bool,
+    template_literal_ranges: Vec<(usize, usize)>,
 }
 
-fn scan_binding_pattern_source_until(
+fn scan_binding_pattern_source_until_with_context_seeded(
     source: &str,
+    initial_grammar_context: ScanGrammarContext,
+    initial_class_body_depth: Option<usize>,
     mut visit: impl FnMut(usize, char, usize, bool) -> bool,
 ) -> BindingPatternScanState {
     let mut chars = source.char_indices().peekable();
@@ -4513,20 +4861,137 @@ fn scan_binding_pattern_source_until(
     let mut identifier_token_open = false;
     let mut ends_postfix_update = false;
     let mut line_terminator_since_significant = false;
-    let mut control_paren_stack = Vec::new();
+    let mut delimiter_stack = Vec::new();
+    let mut control_paren_stack: Vec<ParenScanRole> = Vec::new();
     let mut block_brace_stack = Vec::new();
-    let mut statement_goal = true;
+    let mut function_parameter_stack: Vec<Option<FunctionParameterScan>> = Vec::new();
+    let mut function_body_stack: Vec<Option<FunctionBodyScan>> = Vec::new();
+    let mut arrow_paren_head_stack: Vec<Option<bool>> = Vec::new();
+    let mut arrow_expression_stack: Vec<ArrowExpressionScan> = Vec::new();
+    let mut grammar_context = initial_grammar_context;
+    let mut slash_goal = SlashGoal::RegExp;
+    let mut invalid_contextual_keyword = false;
+    let mut lexically_complete = true;
+    let mut template_literal_ranges = Vec::new();
+    let mut identifier_started_at_statement_goal =
+        initial_grammar_context.starts_in_statement_position;
+    let mut identifier_preceded_by_line_terminator = false;
+    let mut previous_identifier = String::new();
+    let mut previous_identifier_started_at_statement_goal =
+        initial_grammar_context.starts_in_statement_position;
+    let mut pending_function: Option<PendingFunctionScan> = None;
+    let mut pending_function_body: Option<FunctionParameterScan> = None;
+    let mut pending_arrow_head: Option<bool> = None;
+    let mut pending_arrow_body: Option<PendingArrowBodyScan> = None;
+    let mut pending_classes: Vec<PendingClassScan> = Vec::new();
+    let mut class_body_stack: Vec<Option<PendingClassScan>> = Vec::new();
+    let mut active_class_body_depths: Vec<usize> = initial_class_body_depth.into_iter().collect();
+    let mut statement_goal = initial_grammar_context.starts_in_statement_position;
 
     macro_rules! visit_or_stop {
         ($index:expr, $ch:expr, $depth:expr, $quoted:expr) => {
             if !visit($index, $ch, $depth, $quoted) {
                 return BindingPatternScanState {
-                    complete: true,
+                    complete: lexically_complete && !invalid_contextual_keyword,
+                    lexically_complete,
                     last_significant,
                     trailing_identifier,
                     trailing_identifier_is_member,
                     ends_postfix_update,
+                    template_literal_ranges,
                 };
+            }
+        };
+    }
+
+    macro_rules! finish_identifier {
+        () => {
+            if identifier_token_open {
+                let identifier = trailing_identifier.as_str();
+                let in_class_method_header = active_class_body_depths.last() == Some(&depth);
+                let (next_goal, invalid) =
+                    if in_class_method_header && !trailing_identifier_is_member {
+                        (SlashGoal::Div, false)
+                    } else {
+                        identifier_slash_goal(
+                            identifier,
+                            trailing_identifier_is_member,
+                            grammar_context,
+                        )
+                    };
+                invalid_contextual_keyword |= invalid;
+
+                let mut for_head_goal = None;
+                if !trailing_identifier_is_member
+                    && let Some(ParenScanRole::ForHead(for_head)) = control_paren_stack.last_mut()
+                    && depth == for_head.body_depth
+                    && !for_head.classic
+                {
+                    if !for_head.declaration_seen
+                        && !for_head.binding_seen
+                        && matches!(identifier, "let" | "const" | "var")
+                    {
+                        for_head.declaration_seen = true;
+                        for_head_goal = Some(SlashGoal::RegExp);
+                    } else if !for_head.binding_seen {
+                        for_head.binding_seen = true;
+                    } else if !for_head.separator_seen
+                        && !for_head.initializer_seen
+                        && matches!(identifier, "in" | "of")
+                    {
+                        for_head.separator_seen = true;
+                        for_head_goal = Some(SlashGoal::RegExp);
+                    }
+                }
+
+                if !trailing_identifier_is_member && identifier == "function" {
+                    let is_async =
+                        previous_identifier == "async" && !identifier_preceded_by_line_terminator;
+                    pending_function = Some(PendingFunctionScan {
+                        is_async,
+                        is_generator: false,
+                        is_expression: if is_async {
+                            !previous_identifier_started_at_statement_goal
+                        } else {
+                            !identifier_started_at_statement_goal
+                        },
+                    });
+                    slash_goal = SlashGoal::RegExp;
+                } else if !trailing_identifier_is_member && identifier == "class" {
+                    pending_classes.push(PendingClassScan {
+                        is_expression: !identifier_started_at_statement_goal,
+                        header_depth: depth,
+                        in_heritage: false,
+                    });
+                    slash_goal = SlashGoal::RegExp;
+                } else {
+                    slash_goal = for_head_goal.unwrap_or(next_goal);
+                }
+
+                if !trailing_identifier_is_member
+                    && identifier == "extends"
+                    && let Some(class) = pending_classes.last_mut()
+                    && class.header_depth == depth
+                {
+                    class.in_heritage = true;
+                    slash_goal = SlashGoal::RegExp;
+                }
+
+                if !trailing_identifier_is_member
+                    && merge_logical_lines_identifier_awaits_statement(identifier)
+                {
+                    statement_goal = true;
+                }
+
+                pending_arrow_head = (!trailing_identifier_is_member).then_some(
+                    previous_identifier == "async" && !identifier_preceded_by_line_terminator,
+                );
+
+                previous_identifier.clear();
+                previous_identifier.push_str(identifier);
+                previous_identifier_started_at_statement_goal =
+                    identifier_started_at_statement_goal;
+                identifier_token_open = false;
             }
         };
     }
@@ -4565,21 +5030,170 @@ fn scan_binding_pattern_source_until(
             || matches!(ch, '_' | '$')
             || (ch.is_ascii_digit() && identifier_token_open);
         if identifier_token_open && !identifier_continues {
-            if !trailing_identifier_is_member
-                && merge_logical_lines_identifier_awaits_statement(&trailing_identifier)
-            {
-                statement_goal = true;
+            finish_identifier!();
+        }
+
+        if ch == '?'
+            && !chars
+                .peek()
+                .is_some_and(|(_, next)| matches!(*next, '?' | '.'))
+            && let Some(arrow) = arrow_expression_stack.last_mut()
+            && arrow.body_depth == depth
+        {
+            arrow.conditional_depth = arrow.conditional_depth.saturating_add(1);
+        }
+        let mut arrow_boundary = matches!(ch, ')' | ']' | '}' | ',' | ';');
+        if ch == ':'
+            && let Some(arrow) = arrow_expression_stack.last_mut()
+            && arrow.body_depth == depth
+        {
+            if arrow.conditional_depth > 0 {
+                arrow.conditional_depth = arrow.conditional_depth.saturating_sub(1);
+            } else {
+                arrow_boundary = true;
             }
+        }
+        if arrow_boundary {
+            while arrow_expression_stack
+                .last()
+                .is_some_and(|arrow| arrow.body_depth == depth)
+            {
+                let arrow = arrow_expression_stack
+                    .pop()
+                    .expect("the arrow expression frame was just observed");
+                grammar_context = arrow.outer_context;
+            }
+        }
+
+        if ch == '='
+            && chars.peek().is_some_and(|(_, next)| *next == '>')
+            && let Some(is_async) = pending_arrow_head.take()
+        {
+            visit_or_stop!(index, ch, depth, false);
+            if let Some((next_index, next_ch)) = chars.next() {
+                visit_or_stop!(next_index, next_ch, depth, false);
+            }
+            pending_arrow_body = Some(PendingArrowBodyScan {
+                function: PendingFunctionScan {
+                    is_async,
+                    is_generator: false,
+                    is_expression: true,
+                },
+                outer_context: grammar_context,
+                body_depth: depth,
+            });
+            last_significant = Some('>');
+            trailing_identifier.clear();
+            trailing_identifier_is_member = false;
             identifier_token_open = false;
+            ends_postfix_update = false;
+            line_terminator_since_significant = false;
+            statement_goal = false;
+            slash_goal = SlashGoal::RegExp;
+            previous_identifier.clear();
+            continue;
+        }
+
+        let begins_comment = ch == '/'
+            && chars
+                .peek()
+                .is_some_and(|(_, next)| matches!(*next, '/' | '*'));
+        if !is_binding_pattern_whitespace(ch)
+            && !begins_comment
+            && let Some(arrow) = pending_arrow_body.take()
+        {
+            if ch == '{' {
+                pending_function_body = Some(FunctionParameterScan {
+                    function: arrow.function,
+                    outer_context: arrow.outer_context,
+                    strict: arrow.outer_context.strict,
+                });
+            } else {
+                grammar_context = ScanGrammarContext::function_body(
+                    arrow.function.is_async,
+                    false,
+                    arrow.outer_context.strict,
+                );
+                arrow_expression_stack.push(ArrowExpressionScan {
+                    outer_context: arrow.outer_context,
+                    body_depth: arrow.body_depth,
+                    conditional_depth: 0,
+                });
+                slash_goal = SlashGoal::RegExp;
+            }
+        }
+
+        let starts_identifier = matches!(ch, '$' | '_' | '\\') || unicode_id_start::is_id_start(ch);
+        if starts_identifier {
+            if let Some((identifier, consumed)) =
+                canonical_leading_source_identifier(&source[index..])
+            {
+                let identifier_end = index.saturating_add(consumed);
+                let is_member_name = last_significant == Some('.');
+                let next_token = trim_directive_trivia(&source[identifier_end..]).0;
+                let is_object_property_name = block_brace_stack.last() == Some(&false)
+                    && (next_token.starts_with(':') || next_token.starts_with('('));
+                let started_at_statement_goal = statement_goal;
+                let preceded_by_line_terminator = line_terminator_since_significant;
+                visit_or_stop!(index, ch, depth, false);
+                while let Some((next_index, next_ch)) = chars.peek().copied() {
+                    if next_index >= identifier_end {
+                        break;
+                    }
+                    chars.next();
+                    // The canonical identifier lexer has already validated
+                    // this entire token. Keep its remaining source spelling
+                    // opaque to delimiter visitors so braces in a braced
+                    // Unicode escape (for example `\u{61}wait`) cannot close
+                    // the surrounding interpolation or computed key.
+                    visit_or_stop!(next_index, next_ch, depth, true);
+                }
+                trailing_identifier = identifier;
+                trailing_identifier_is_member = is_member_name || is_object_property_name;
+                identifier_started_at_statement_goal = started_at_statement_goal;
+                identifier_preceded_by_line_terminator = preceded_by_line_terminator;
+                identifier_token_open = true;
+                last_significant = Some('a');
+                statement_goal = false;
+                finish_identifier!();
+                ends_postfix_update = false;
+                line_terminator_since_significant = false;
+                continue;
+            }
+            if ch == '\\' {
+                lexically_complete = false;
+            }
+        }
+
+        if (ch.is_ascii_digit()
+            || (ch == '.' && chars.peek().is_some_and(|(_, next)| next.is_ascii_digit())))
+            && let Some(consumed) = numeric_literal_prefix_len(&source[index..])
+        {
+            let literal_end = index.saturating_add(consumed);
+            visit_or_stop!(index, ch, depth, false);
+            while let Some((next_index, next_ch)) = chars.peek().copied() {
+                if next_index >= literal_end {
+                    break;
+                }
+                chars.next();
+                visit_or_stop!(next_index, next_ch, depth, false);
+            }
+            last_significant = Some(')');
+            trailing_identifier.clear();
+            trailing_identifier_is_member = false;
+            identifier_token_open = false;
+            ends_postfix_update = false;
+            line_terminator_since_significant = false;
+            statement_goal = false;
+            slash_goal = SlashGoal::Div;
+            previous_identifier.clear();
+            pending_arrow_head = None;
+            continue;
         }
 
         if matches!(ch, '+' | '-') && chars.peek().is_some_and(|(_, next)| *next == ch) {
-            let prefix_position = line_terminator_since_significant
-                || binding_pattern_slash_starts_regexp(
-                    last_significant,
-                    &trailing_identifier,
-                    trailing_identifier_is_member,
-                );
+            let prefix_position =
+                line_terminator_since_significant || slash_goal == SlashGoal::RegExp;
             visit_or_stop!(index, ch, depth, false);
             if let Some((next_index, next_ch)) = chars.next() {
                 visit_or_stop!(next_index, next_ch, depth, false);
@@ -4593,6 +5207,12 @@ fn scan_binding_pattern_source_until(
             identifier_token_open = false;
             line_terminator_since_significant = false;
             statement_goal = false;
+            slash_goal = if prefix_position {
+                SlashGoal::RegExp
+            } else {
+                SlashGoal::Div
+            };
+            previous_identifier.clear();
             continue;
         }
 
@@ -4612,34 +5232,61 @@ fn scan_binding_pattern_source_until(
                 }
                 _ => {}
             }
-            if binding_pattern_slash_starts_regexp(
-                last_significant,
-                &trailing_identifier,
-                trailing_identifier_is_member,
-            ) && let Some((_pattern, _flags, consumed)) =
-                parse_regexp_literal_prefix(&source[index..])
+            if slash_goal == SlashGoal::RegExp {
+                if let Some((_pattern, _flags, consumed)) =
+                    parse_regexp_literal_prefix(&source[index..])
+                {
+                    let regexp_end = index.saturating_add(consumed);
+                    visit_or_stop!(index, ch, depth, true);
+                    while let Some((next_index, next_ch)) = chars.peek().copied() {
+                        if next_index >= regexp_end {
+                            break;
+                        }
+                        chars.next();
+                        visit_or_stop!(next_index, next_ch, depth, true);
+                    }
+                    // A completed RegExp literal is an operand. Use an operand
+                    // sentinel rather than its closing slash, which would make a
+                    // following division slash look like another RegExp opener.
+                    last_significant = Some(')');
+                    ends_postfix_update = false;
+                    trailing_identifier.clear();
+                    trailing_identifier_is_member = false;
+                    identifier_token_open = false;
+                    line_terminator_since_significant = false;
+                    statement_goal = false;
+                    slash_goal = SlashGoal::Div;
+                    previous_identifier.clear();
+                    continue;
+                }
+                lexically_complete = false;
+            }
+        }
+        if ch == '`' {
+            if let Some(template_end) =
+                skip_template_literal_with_context(source, index, grammar_context)
             {
-                let regexp_end = index.saturating_add(consumed);
+                template_literal_ranges.push((index, template_end));
                 visit_or_stop!(index, ch, depth, true);
                 while let Some((next_index, next_ch)) = chars.peek().copied() {
-                    if next_index >= regexp_end {
+                    if next_index >= template_end {
                         break;
                     }
                     chars.next();
                     visit_or_stop!(next_index, next_ch, depth, true);
                 }
-                // A completed RegExp literal is an operand. Use an operand
-                // sentinel rather than its closing slash, which would make a
-                // following division slash look like another RegExp opener.
-                last_significant = Some(')');
+                last_significant = Some('`');
                 ends_postfix_update = false;
                 trailing_identifier.clear();
                 trailing_identifier_is_member = false;
                 identifier_token_open = false;
                 line_terminator_since_significant = false;
                 statement_goal = false;
+                slash_goal = SlashGoal::Div;
+                previous_identifier.clear();
                 continue;
             }
+            lexically_complete = false;
         }
         if matches!(ch, '\'' | '"' | '`') {
             visit_or_stop!(index, ch, depth, true);
@@ -4652,6 +5299,8 @@ fn scan_binding_pattern_source_until(
             identifier_token_open = false;
             line_terminator_since_significant = false;
             statement_goal = false;
+            slash_goal = SlashGoal::Div;
+            previous_identifier.clear();
             continue;
         }
 
@@ -4660,57 +5309,206 @@ fn scan_binding_pattern_source_until(
             '(' => {
                 let is_control_header = !trailing_identifier_is_member
                     && merge_logical_lines_identifier_opens_control_header(&trailing_identifier);
-                control_paren_stack.push(is_control_header);
+                let paren_role = if !trailing_identifier_is_member && trailing_identifier == "for" {
+                    ParenScanRole::ForHead(ForHeadScan {
+                        body_depth: depth.saturating_add(1),
+                        declaration_seen: false,
+                        binding_seen: false,
+                        separator_seen: false,
+                        initializer_seen: false,
+                        classic: false,
+                    })
+                } else if is_control_header {
+                    ParenScanRole::ControlHead
+                } else {
+                    ParenScanRole::Group
+                };
+                let arrow_head = (paren_role == ParenScanRole::Group).then(|| {
+                    !trailing_identifier_is_member
+                        && trailing_identifier == "async"
+                        && !line_terminator_since_significant
+                });
+                let arrow_head = arrow_head.and_then(|is_async| {
+                    (is_async || slash_goal == SlashGoal::RegExp).then_some(is_async)
+                });
+                control_paren_stack.push(paren_role);
+                arrow_paren_head_stack.push(arrow_head);
+                let class_method_parameters = (active_class_body_depths.last() == Some(&depth)
+                    && pending_function.is_none()
+                    && paren_role == ParenScanRole::Group)
+                    .then_some(PendingFunctionScan {
+                        is_async: false,
+                        is_generator: false,
+                        is_expression: false,
+                    });
+                let function_parameters =
+                    pending_function
+                        .take()
+                        .or(class_method_parameters)
+                        .map(|function| {
+                            let strict =
+                                class_method_parameters.is_some() || grammar_context.strict;
+                            let parameters = FunctionParameterScan {
+                                function,
+                                outer_context: grammar_context,
+                                strict,
+                            };
+                            grammar_context = ScanGrammarContext::function_parameters(
+                                function.is_async,
+                                function.is_generator,
+                                strict,
+                            );
+                            parameters
+                        });
+                function_parameter_stack.push(function_parameters);
+                delimiter_stack.push('(');
                 depth = depth.saturating_add(1);
                 trailing_identifier.clear();
                 trailing_identifier_is_member = false;
                 identifier_token_open = false;
                 last_significant = Some(ch);
                 statement_goal = false;
+                slash_goal = SlashGoal::RegExp;
+                previous_identifier.clear();
             }
             ')' => {
-                let is_control_header = control_paren_stack.pop().unwrap_or(false);
+                if delimiter_stack.last() == Some(&'(') {
+                    delimiter_stack.pop();
+                } else {
+                    lexically_complete = false;
+                }
+                pending_arrow_head = arrow_paren_head_stack.pop().flatten();
+                let is_control_header = matches!(
+                    control_paren_stack.pop(),
+                    Some(ParenScanRole::ControlHead | ParenScanRole::ForHead(_))
+                );
+                if let Some(parameters) = function_parameter_stack.pop().flatten() {
+                    grammar_context = parameters.outer_context;
+                    pending_function_body = Some(parameters);
+                }
                 depth = depth.saturating_sub(1);
                 trailing_identifier.clear();
                 trailing_identifier_is_member = false;
                 identifier_token_open = false;
                 last_significant = Some(if is_control_header { '{' } else { ch });
                 statement_goal = is_control_header;
+                slash_goal = if is_control_header || pending_function_body.is_some() {
+                    SlashGoal::RegExp
+                } else {
+                    SlashGoal::Div
+                };
+                previous_identifier.clear();
             }
             '{' => {
-                let is_block = statement_goal;
+                if let Some(ParenScanRole::ForHead(for_head)) = control_paren_stack.last_mut()
+                    && depth == for_head.body_depth
+                    && !for_head.classic
+                    && !for_head.binding_seen
+                {
+                    for_head.binding_seen = true;
+                }
+                let function_body = pending_function_body.take().map(|parameters| {
+                    grammar_context = ScanGrammarContext::function_body(
+                        parameters.function.is_async,
+                        parameters.function.is_generator,
+                        parameters.strict,
+                    );
+                    FunctionBodyScan {
+                        function: parameters.function,
+                        outer_context: parameters.outer_context,
+                    }
+                });
+                let class_body = (function_body.is_none()
+                    && pending_classes.last().is_some_and(|class| {
+                        class.header_depth == depth
+                            && (!class.in_heritage || slash_goal == SlashGoal::Div)
+                    }))
+                .then(|| {
+                    pending_classes
+                        .pop()
+                        .expect("the pending class header was just observed")
+                });
+                let is_block = function_body.is_some() || class_body.is_some() || statement_goal;
                 block_brace_stack.push(is_block);
+                function_body_stack.push(function_body);
+                class_body_stack.push(class_body);
+                if class_body.is_some() {
+                    active_class_body_depths.push(depth.saturating_add(1));
+                }
+                delimiter_stack.push('{');
                 depth = depth.saturating_add(1);
                 trailing_identifier.clear();
                 trailing_identifier_is_member = false;
                 identifier_token_open = false;
                 last_significant = Some(ch);
-                statement_goal = is_block;
+                statement_goal = true;
+                slash_goal = SlashGoal::RegExp;
+                previous_identifier.clear();
             }
             '}' => {
+                if delimiter_stack.last() == Some(&'{') {
+                    delimiter_stack.pop();
+                } else {
+                    lexically_complete = false;
+                }
                 let is_block = block_brace_stack.pop().unwrap_or(false);
+                let function_body = function_body_stack.pop().flatten();
+                let class_body = class_body_stack.pop().flatten();
+                if class_body.is_some() {
+                    active_class_body_depths.pop();
+                }
+                if let Some(function_body) = function_body {
+                    grammar_context = function_body.outer_context;
+                }
                 depth = depth.saturating_sub(1);
                 trailing_identifier.clear();
                 trailing_identifier_is_member = false;
                 identifier_token_open = false;
-                last_significant = Some(if is_block { '{' } else { ch });
-                statement_goal = is_block;
+                let closes_expression = function_body
+                    .is_some_and(|body| body.function.is_expression)
+                    || class_body.is_some_and(|body| body.is_expression)
+                    || (!is_block && function_body.is_none());
+                last_significant = Some(if closes_expression { ch } else { '{' });
+                statement_goal = !closes_expression;
+                slash_goal = if closes_expression {
+                    SlashGoal::Div
+                } else {
+                    SlashGoal::RegExp
+                };
+                previous_identifier.clear();
             }
             '[' => {
+                if let Some(ParenScanRole::ForHead(for_head)) = control_paren_stack.last_mut()
+                    && depth == for_head.body_depth
+                    && !for_head.classic
+                    && !for_head.binding_seen
+                {
+                    for_head.binding_seen = true;
+                }
+                delimiter_stack.push('[');
                 depth = depth.saturating_add(1);
                 trailing_identifier.clear();
                 trailing_identifier_is_member = false;
                 identifier_token_open = false;
                 last_significant = Some(ch);
                 statement_goal = false;
+                slash_goal = SlashGoal::RegExp;
+                previous_identifier.clear();
             }
             ']' => {
+                if delimiter_stack.last() == Some(&'[') {
+                    delimiter_stack.pop();
+                } else {
+                    lexically_complete = false;
+                }
                 depth = depth.saturating_sub(1);
                 trailing_identifier.clear();
                 trailing_identifier_is_member = false;
                 identifier_token_open = false;
                 last_significant = Some(ch);
                 statement_goal = false;
+                slash_goal = SlashGoal::Div;
+                previous_identifier.clear();
             }
             ch if is_binding_pattern_whitespace(ch) => {
                 if matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}') {
@@ -4722,6 +5520,8 @@ fn scan_binding_pattern_source_until(
                 if !identifier_token_open {
                     trailing_identifier.clear();
                     trailing_identifier_is_member = last_significant == Some('.');
+                    identifier_started_at_statement_goal = statement_goal;
+                    identifier_preceded_by_line_terminator = line_terminator_since_significant;
                 }
                 trailing_identifier.push(ch);
                 identifier_token_open = true;
@@ -4737,26 +5537,87 @@ fn scan_binding_pattern_source_until(
                 }
                 last_significant = Some(ch);
                 statement_goal = false;
+                slash_goal = SlashGoal::Div;
+                previous_identifier.clear();
             }
             ch => {
+                if let Some(ParenScanRole::ForHead(for_head)) = control_paren_stack.last_mut()
+                    && depth == for_head.body_depth
+                {
+                    if ch == ';' {
+                        for_head.classic = true;
+                    } else if ch == '=' && !for_head.separator_seen {
+                        for_head.initializer_seen = true;
+                    }
+                }
+                if ch == '*'
+                    && let Some(function) = pending_function.as_mut()
+                {
+                    function.is_generator = true;
+                } else if !matches!(ch, '.') {
+                    previous_identifier.clear();
+                }
                 trailing_identifier.clear();
                 trailing_identifier_is_member = false;
                 identifier_token_open = false;
                 last_significant = Some(ch);
                 statement_goal = ch == ';' && control_paren_stack.is_empty();
+                slash_goal = if matches!(ch, ')' | ']' | '}') {
+                    SlashGoal::Div
+                } else {
+                    SlashGoal::RegExp
+                };
             }
         }
         ends_postfix_update = false;
         line_terminator_since_significant = false;
     }
 
+    // At end of input only the contextual-keyword validity contributes to
+    // the returned scan state. Expanding `finish_identifier!` here would also
+    // update slash/statement/function lookahead state that no later token can
+    // observe, producing unused-assignment warnings in non-test builds.
+    if identifier_token_open {
+        let in_class_method_header = active_class_body_depths.last() == Some(&depth);
+        let invalid = if in_class_method_header && !trailing_identifier_is_member {
+            false
+        } else {
+            identifier_slash_goal(
+                trailing_identifier.as_str(),
+                trailing_identifier_is_member,
+                grammar_context,
+            )
+            .1
+        };
+        invalid_contextual_keyword |= invalid;
+    }
+
+    let lexically_complete =
+        lexically_complete && !in_block_comment && in_quote.is_none() && delimiter_stack.is_empty();
     BindingPatternScanState {
-        complete: !in_block_comment && in_quote.is_none(),
+        complete: lexically_complete && !invalid_contextual_keyword,
+        lexically_complete,
         last_significant,
         trailing_identifier,
         trailing_identifier_is_member,
         ends_postfix_update,
+        template_literal_ranges,
     }
+}
+
+fn scan_binding_pattern_source_until_with_context(
+    source: &str,
+    grammar_context: ScanGrammarContext,
+    visit: impl FnMut(usize, char, usize, bool) -> bool,
+) -> BindingPatternScanState {
+    scan_binding_pattern_source_until_with_context_seeded(source, grammar_context, None, visit)
+}
+
+fn scan_binding_pattern_source_until(
+    source: &str,
+    visit: impl FnMut(usize, char, usize, bool) -> bool,
+) -> BindingPatternScanState {
+    scan_binding_pattern_source_until_with_context(source, ScanGrammarContext::SLOPPY_SCRIPT, visit)
 }
 
 fn scan_binding_pattern_source(
@@ -4767,6 +5628,40 @@ fn scan_binding_pattern_source(
         visit(index, ch, depth, quoted);
         true
     })
+    .complete
+}
+
+fn scan_binding_pattern_source_with_context(
+    source: &str,
+    grammar_context: ScanGrammarContext,
+    mut visit: impl FnMut(usize, char, usize, bool),
+) -> bool {
+    scan_binding_pattern_source_until_with_context(
+        source,
+        grammar_context,
+        |index, ch, depth, quoted| {
+            visit(index, ch, depth, quoted);
+            true
+        },
+    )
+    .complete
+}
+
+fn scan_binding_pattern_source_with_context_seeded(
+    source: &str,
+    grammar_context: ScanGrammarContext,
+    initial_class_body_depth: usize,
+    mut visit: impl FnMut(usize, char, usize, bool),
+) -> bool {
+    scan_binding_pattern_source_until_with_context_seeded(
+        source,
+        grammar_context,
+        Some(initial_class_body_depth),
+        |index, ch, depth, quoted| {
+            visit(index, ch, depth, quoted);
+            true
+        },
+    )
     .complete
 }
 
@@ -4792,9 +5687,12 @@ fn is_binding_pattern_whitespace(ch: char) -> bool {
     )
 }
 
-fn contains_non_ecmascript_whitespace(source: &str) -> bool {
+fn contains_non_ecmascript_whitespace_with_context(
+    source: &str,
+    grammar_context: ScanGrammarContext,
+) -> bool {
     let mut found = false;
-    scan_binding_pattern_source_until(source, |_, ch, _, quoted| {
+    scan_binding_pattern_source_until_with_context(source, grammar_context, |_, ch, _, quoted| {
         if !quoted && ch.is_whitespace() && !is_binding_pattern_whitespace(ch) {
             found = true;
             false
@@ -4806,15 +5704,26 @@ fn contains_non_ecmascript_whitespace(source: &str) -> bool {
 }
 
 fn trim_binding_pattern_leading_trivia(source: &str) -> Option<&str> {
+    trim_binding_pattern_leading_trivia_with_context(source, ScanGrammarContext::SLOPPY_SCRIPT)
+}
+
+fn trim_binding_pattern_leading_trivia_with_context(
+    source: &str,
+    grammar_context: ScanGrammarContext,
+) -> Option<&str> {
     let mut first_significant = None;
-    let state = scan_binding_pattern_source_until(source, |index, ch, _, quoted| {
-        if quoted || !is_binding_pattern_whitespace(ch) {
-            first_significant = Some(index);
-            false
-        } else {
-            true
-        }
-    });
+    let state = scan_binding_pattern_source_until_with_context(
+        source,
+        grammar_context,
+        |index, ch, _, quoted| {
+            if quoted || !is_binding_pattern_whitespace(ch) {
+                first_significant = Some(index);
+                false
+            } else {
+                true
+            }
+        },
+    );
     if let Some(first_significant) = first_significant {
         Some(&source[first_significant..])
     } else if state.complete {
@@ -4829,14 +5738,25 @@ fn trim_binding_pattern_leading_trivia(source: &str) -> Option<&str> {
 /// so invalid token splices such as `va/*c*/lue` are rejected rather than
 /// silently concatenated.
 fn binding_pattern_trivia_bounds(source: &str) -> Option<(usize, usize)> {
+    binding_pattern_trivia_bounds_with_context(source, ScanGrammarContext::SLOPPY_SCRIPT)
+}
+
+fn binding_pattern_trivia_bounds_with_context(
+    source: &str,
+    grammar_context: ScanGrammarContext,
+) -> Option<(usize, usize)> {
     let mut first_significant = None;
     let mut last_significant_end = 0usize;
-    let complete = scan_binding_pattern_source(source, |index, ch, _, quoted| {
-        if quoted || !is_binding_pattern_whitespace(ch) {
-            first_significant.get_or_insert(index);
-            last_significant_end = index.saturating_add(ch.len_utf8());
-        }
-    });
+    let complete = scan_binding_pattern_source_with_context(
+        source,
+        grammar_context,
+        |index, ch, _, quoted| {
+            if quoted || !is_binding_pattern_whitespace(ch) {
+                first_significant.get_or_insert(index);
+                last_significant_end = index.saturating_add(ch.len_utf8());
+            }
+        },
+    );
     if !complete {
         return None;
     }
@@ -4848,20 +5768,30 @@ fn trim_binding_pattern_trivia(source: &str) -> Option<&str> {
     Some(&source[start..end])
 }
 
+fn trim_binding_pattern_trivia_with_context(
+    source: &str,
+    grammar_context: ScanGrammarContext,
+) -> Option<&str> {
+    let (start, end) = binding_pattern_trivia_bounds_with_context(source, grammar_context)?;
+    Some(&source[start..end])
+}
+
 /// Parse a binding pattern: identifier, `{ ... }` object, or `[ ... ]` array.
 fn parse_binding_pattern(
     source: &str,
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
+    grammar_context: ScanGrammarContext,
 ) -> ParseResult<BindingPattern> {
-    let trimmed = trim_binding_pattern_trivia(source).ok_or_else(|| {
-        ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
-            "unterminated comment or quoted literal in binding pattern",
-            context.source_label.to_string(),
-            Some(span.clone()),
-        )
-    })?;
+    let trimmed =
+        trim_binding_pattern_trivia_with_context(source, grammar_context).ok_or_else(|| {
+            ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "unterminated comment or quoted literal in binding pattern",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            )
+        })?;
     if trimmed.is_empty() {
         return Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
@@ -4873,20 +5803,22 @@ fn parse_binding_pattern(
 
     // Rest element: `...pattern`
     if let Some(rest_source) = trimmed.strip_prefix("...") {
-        let inner = parse_binding_pattern(rest_source, span, context)?;
+        let inner = parse_binding_pattern(rest_source, span, context, grammar_context)?;
         return Ok(BindingPattern::Rest(Box::new(inner)));
     }
 
     // Default value: `pattern = expr` (only at top level of a pattern element)
     // We need to be careful not to match `=` inside nested patterns.
-    if let Some(eq_pos) = find_top_level_eq(trimmed) {
-        let left_src = trim_binding_pattern_trivia(&trimmed[..eq_pos]);
-        let right_src = trim_binding_pattern_trivia(&trimmed[eq_pos + 1..]);
+    if let Some(eq_pos) = find_top_level_eq(trimmed, grammar_context) {
+        let left_src =
+            trim_binding_pattern_trivia_with_context(&trimmed[..eq_pos], grammar_context);
+        let right_src =
+            trim_binding_pattern_trivia_with_context(&trimmed[eq_pos + 1..], grammar_context);
         if let (Some(left_src), Some(right_src)) = (left_src, right_src)
             && !left_src.is_empty()
             && !right_src.is_empty()
         {
-            let left = parse_binding_pattern(left_src, span, context)?;
+            let left = parse_binding_pattern(left_src, span, context, grammar_context)?;
             let right = parse_expression(right_src, span, context, 1)?;
             return Ok(BindingPattern::AssignmentPattern {
                 left: Box::new(left),
@@ -4898,13 +5830,13 @@ fn parse_binding_pattern(
     // Object pattern: `{ ... }`
     if trimmed.starts_with('{') && trimmed.ends_with('}') {
         let inner = &trimmed[1..trimmed.len() - 1];
-        return parse_object_binding_pattern(inner, span, context);
+        return parse_object_binding_pattern(inner, span, context, grammar_context);
     }
 
     // Array pattern: `[ ... ]`
     if trimmed.starts_with('[') && trimmed.ends_with(']') {
         let inner = &trimmed[1..trimmed.len() - 1];
-        return parse_array_binding_pattern(inner, span, context);
+        return parse_array_binding_pattern(inner, span, context, grammar_context);
     }
 
     // Simple BindingIdentifier: decode permitted Unicode escapes before
@@ -4922,31 +5854,37 @@ fn parse_binding_pattern(
 }
 
 /// Find `=` at the top level (not inside brackets, parens, braces, or strings).
-fn find_top_level_eq(source: &str) -> Option<usize> {
+fn find_top_level_eq(source: &str, grammar_context: ScanGrammarContext) -> Option<usize> {
     let mut found = None;
     let mut previous_significant = None;
-    scan_binding_pattern_source(source, |index, ch, depth, quoted| {
-        if found.is_some() || quoted {
-            return;
-        }
-        if depth == 0 && ch == '=' {
-            // Comments and whitespace are trivia, so use the previous
-            // significant code point rather than the raw byte before `=`.
-            // This accepts `x/* trivia */=1` without mistaking the comment's
-            // closing slash for a `/=` compound assignment.
-            let next = source.as_bytes().get(index + 1).copied();
-            let is_compound = matches!(
-                previous_significant,
-                Some('<' | '>' | '!' | '=' | '+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '~')
-            );
-            if next != Some(b'=') && next != Some(b'>') && !is_compound {
-                found = Some(index);
+    scan_binding_pattern_source_with_context(
+        source,
+        grammar_context,
+        |index, ch, depth, quoted| {
+            if found.is_some() || quoted {
+                return;
             }
-        }
-        if !is_binding_pattern_whitespace(ch) {
-            previous_significant = Some(ch);
-        }
-    });
+            if depth == 0 && ch == '=' {
+                // Comments and whitespace are trivia, so use the previous
+                // significant code point rather than the raw byte before `=`.
+                // This accepts `x/* trivia */=1` without mistaking the comment's
+                // closing slash for a `/=` compound assignment.
+                let next = source.as_bytes().get(index + 1).copied();
+                let is_compound = matches!(
+                    previous_significant,
+                    Some(
+                        '<' | '>' | '!' | '=' | '+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '~'
+                    )
+                );
+                if next != Some(b'=') && next != Some(b'>') && !is_compound {
+                    found = Some(index);
+                }
+            }
+            if !is_binding_pattern_whitespace(ch) {
+                previous_significant = Some(ch);
+            }
+        },
+    );
     found
 }
 
@@ -4955,33 +5893,37 @@ fn parse_object_binding_pattern(
     inner: &str,
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
+    grammar_context: ScanGrammarContext,
 ) -> ParseResult<BindingPattern> {
-    let inner = trim_binding_pattern_trivia(inner).ok_or_else(|| {
-        ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
-            "unterminated comment or quoted literal in object binding pattern",
-            context.source_label.to_string(),
-            Some(span.clone()),
-        )
-    })?;
+    let inner =
+        trim_binding_pattern_trivia_with_context(inner, grammar_context).ok_or_else(|| {
+            ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "unterminated comment or quoted literal in object binding pattern",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            )
+        })?;
     if inner.is_empty() {
         return Ok(BindingPattern::ObjectPattern(Vec::new()));
     }
 
     let has_trailing_comma = inner.ends_with(',');
-    let segments = split_pattern_elements(inner);
+    let segments = split_pattern_elements_with_context(inner, grammar_context);
     let mut properties = Vec::with_capacity(segments.len());
     let mut seen_rest = false;
 
     for segment in &segments {
-        let seg = trim_binding_pattern_trivia(segment).ok_or_else(|| {
-            ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                "unterminated comment or quoted literal in object binding property",
-                context.source_label.to_string(),
-                Some(span.clone()),
-            )
-        })?;
+        let seg = trim_binding_pattern_trivia_with_context(segment, grammar_context).ok_or_else(
+            || {
+                ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    "unterminated comment or quoted literal in object binding property",
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                )
+            },
+        )?;
 
         if seen_rest {
             return Err(ParseError::new(
@@ -5004,7 +5946,7 @@ fn parse_object_binding_pattern(
         // Rest element in object pattern: `...rest`
         if let Some(rest_src) = seg.strip_prefix("...") {
             seen_rest = true;
-            let inner_pat = parse_binding_pattern(rest_src, span, context)?;
+            let inner_pat = parse_binding_pattern(rest_src, span, context, grammar_context)?;
             let key_name = inner_pat
                 .as_identifier()
                 .unwrap_or_else(|| rest_src.trim())
@@ -5020,28 +5962,31 @@ fn parse_object_binding_pattern(
 
         // Computed key: `[expr]: pattern`
         if seg.starts_with('[')
-            && let Some(bracket_end) = find_binding_pattern_computed_key_end(seg)
+            && let Some(bracket_end) = find_binding_pattern_computed_key_end(seg, grammar_context)
         {
-            let key_src = trim_binding_pattern_trivia(&seg[1..bracket_end]).ok_or_else(|| {
-                ParseError::new(
-                    ParseErrorCode::UnsupportedSyntax,
-                    "unterminated trivia in computed object binding key",
-                    context.source_label.to_string(),
-                    Some(span.clone()),
-                )
-            })?;
+            let key_src =
+                trim_binding_pattern_trivia_with_context(&seg[1..bracket_end], grammar_context)
+                    .ok_or_else(|| {
+                        ParseError::new(
+                            ParseErrorCode::UnsupportedSyntax,
+                            "unterminated trivia in computed object binding key",
+                            context.source_label.to_string(),
+                            Some(span.clone()),
+                        )
+                    })?;
             let after_bracket =
-                trim_binding_pattern_trivia(&seg[bracket_end + 1..]).ok_or_else(|| {
-                    ParseError::new(
-                        ParseErrorCode::UnsupportedSyntax,
-                        "unterminated trivia after computed object binding key",
-                        context.source_label.to_string(),
-                        Some(span.clone()),
-                    )
-                })?;
+                trim_binding_pattern_trivia_with_context(&seg[bracket_end + 1..], grammar_context)
+                    .ok_or_else(|| {
+                        ParseError::new(
+                            ParseErrorCode::UnsupportedSyntax,
+                            "unterminated trivia after computed object binding key",
+                            context.source_label.to_string(),
+                            Some(span.clone()),
+                        )
+                    })?;
             if let Some(value_src) = after_bracket.strip_prefix(':') {
                 let key = parse_expression(key_src, span, context, 1)?;
-                let value = parse_binding_pattern(value_src, span, context)?;
+                let value = parse_binding_pattern(value_src, span, context, grammar_context)?;
                 properties.push(ObjectPatternProperty {
                     key,
                     value,
@@ -5053,11 +5998,11 @@ fn parse_object_binding_pattern(
         }
 
         // Key-value: `key: pattern` or shorthand: `key` or `key = default`
-        if let Some(colon_pos) = find_top_level_colon_in_pattern(seg) {
+        if let Some(colon_pos) = find_top_level_colon_in_pattern(seg, grammar_context) {
             let key_src = &seg[..colon_pos];
             let value_src = &seg[colon_pos + 1..];
-            let key = parse_static_binding_property_key(key_src, span, context)?;
-            let value = parse_binding_pattern(value_src, span, context)?;
+            let key = parse_static_binding_property_key(key_src, span, context, grammar_context)?;
+            let value = parse_binding_pattern(value_src, span, context, grammar_context)?;
             properties.push(ObjectPatternProperty {
                 key,
                 value,
@@ -5066,7 +6011,7 @@ fn parse_object_binding_pattern(
             });
         } else {
             // Shorthand: `x` or `x = default`
-            let value = parse_binding_pattern(seg, span, context)?;
+            let value = parse_binding_pattern(seg, span, context, grammar_context)?;
             let key_name = match &value {
                 BindingPattern::Identifier(n) => n.clone(),
                 BindingPattern::AssignmentPattern { left, .. } => {
@@ -5103,15 +6048,17 @@ fn parse_static_binding_property_key(
     source: &str,
     span: &SourceSpan,
     context: &ParseExecutionContext<'_>,
+    grammar_context: ScanGrammarContext,
 ) -> ParseResult<Expression> {
-    let source = trim_binding_pattern_trivia(source).ok_or_else(|| {
-        ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
-            format!("invalid static object-binding property key: `{source}`"),
-            context.source_label.to_string(),
-            Some(span.clone()),
-        )
-    })?;
+    let source =
+        trim_binding_pattern_trivia_with_context(source, grammar_context).ok_or_else(|| {
+            ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                format!("invalid static object-binding property key: `{source}`"),
+                context.source_label.to_string(),
+                Some(span.clone()),
+            )
+        })?;
     parse_static_property_name(source, span, context, "object-binding")
 }
 
@@ -5469,27 +6416,41 @@ fn decode_binding_property_identifier_escapes(source: &str) -> Option<String> {
     Some(out)
 }
 
-fn find_binding_pattern_computed_key_end(source: &str) -> Option<usize> {
+fn find_binding_pattern_computed_key_end(
+    source: &str,
+    grammar_context: ScanGrammarContext,
+) -> Option<usize> {
     if !source.starts_with('[') {
         return None;
     }
     let mut closing_index = None;
-    scan_binding_pattern_source(source, |index, ch, depth, quoted| {
-        if closing_index.is_none() && !quoted && ch == ']' && depth == 1 {
-            closing_index = Some(index);
-        }
-    });
+    scan_binding_pattern_source_with_context(
+        source,
+        grammar_context,
+        |index, ch, depth, quoted| {
+            if closing_index.is_none() && !quoted && ch == ']' && depth == 1 {
+                closing_index = Some(index);
+            }
+        },
+    );
     closing_index
 }
 
 /// Find `:` at the top level of a pattern element.
-fn find_top_level_colon_in_pattern(source: &str) -> Option<usize> {
+fn find_top_level_colon_in_pattern(
+    source: &str,
+    grammar_context: ScanGrammarContext,
+) -> Option<usize> {
     let mut found = None;
-    scan_binding_pattern_source(source, |index, ch, depth, quoted| {
-        if found.is_none() && !quoted && depth == 0 && ch == ':' {
-            found = Some(index);
-        }
-    });
+    scan_binding_pattern_source_with_context(
+        source,
+        grammar_context,
+        |index, ch, depth, quoted| {
+            if found.is_none() && !quoted && depth == 0 && ch == ':' {
+                found = Some(index);
+            }
+        },
+    );
     found
 }
 
@@ -5498,36 +6459,45 @@ fn parse_array_binding_pattern(
     inner: &str,
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
+    grammar_context: ScanGrammarContext,
 ) -> ParseResult<BindingPattern> {
-    let inner = trim_binding_pattern_trivia(inner).ok_or_else(|| {
-        ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
-            "unterminated comment or quoted literal in array binding pattern",
-            context.source_label.to_string(),
-            Some(span.clone()),
-        )
-    })?;
+    let inner =
+        trim_binding_pattern_trivia_with_context(inner, grammar_context).ok_or_else(|| {
+            ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "unterminated comment or quoted literal in array binding pattern",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            )
+        })?;
     if inner.is_empty() {
         return Ok(BindingPattern::ArrayPattern(Vec::new()));
     }
 
     let has_trailing_comma = inner.ends_with(',');
-    let segments = split_pattern_elements(inner);
+    let segments = split_pattern_elements_with_context(inner, grammar_context);
     let mut elements = Vec::with_capacity(segments.len());
 
     for segment in &segments {
-        let seg = trim_binding_pattern_trivia(segment).ok_or_else(|| {
-            ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                "unterminated comment or quoted literal in array binding element",
-                context.source_label.to_string(),
-                Some(span.clone()),
-            )
-        })?;
+        let seg = trim_binding_pattern_trivia_with_context(segment, grammar_context).ok_or_else(
+            || {
+                ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    "unterminated comment or quoted literal in array binding element",
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                )
+            },
+        )?;
         if seg.is_empty() {
             elements.push(None); // hole
         } else {
-            elements.push(Some(parse_binding_pattern(seg, span, context)?));
+            elements.push(Some(parse_binding_pattern(
+                seg,
+                span,
+                context,
+                grammar_context,
+            )?));
         }
     }
 
@@ -5562,19 +6532,33 @@ fn parse_array_binding_pattern(
 }
 
 /// Split pattern elements on commas at the top level.
+#[cfg(test)]
 fn split_pattern_elements(source: &str) -> Vec<&str> {
+    split_pattern_elements_with_context(source, ScanGrammarContext::SLOPPY_SCRIPT)
+}
+
+fn split_pattern_elements_with_context(
+    source: &str,
+    grammar_context: ScanGrammarContext,
+) -> Vec<&str> {
     let mut out = Vec::new();
     let mut start = 0;
-    scan_binding_pattern_source(source, |index, ch, depth, quoted| {
-        if !quoted && depth == 0 && ch == ',' {
-            out.push(&source[start..index]);
-            start = index.saturating_add(ch.len_utf8());
-        }
-    });
+    scan_binding_pattern_source_with_context(
+        source,
+        grammar_context,
+        |index, ch, depth, quoted| {
+            if !quoted && depth == 0 && ch == ',' {
+                out.push(&source[start..index]);
+                start = index.saturating_add(ch.len_utf8());
+            }
+        },
+    );
     out.push(&source[start..]);
     if let Some(last) = out.last()
-        && trim_binding_pattern_trivia(last).is_some_and(str::is_empty)
-        && trim_binding_pattern_trivia(source).is_some_and(|trimmed| trimmed.ends_with(','))
+        && trim_binding_pattern_trivia_with_context(last, grammar_context)
+            .is_some_and(str::is_empty)
+        && trim_binding_pattern_trivia_with_context(source, grammar_context)
+            .is_some_and(|trimmed| trimmed.ends_with(','))
     {
         out.pop();
     }
@@ -5656,15 +6640,17 @@ fn parse_variable_declaration(
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<VariableDeclaration> {
     let keyword = kind.as_str();
+    let grammar_context = ScanGrammarContext::from_execution_context(context).expression();
     let body_source = statement.strip_prefix(keyword).unwrap();
-    let body = trim_binding_pattern_leading_trivia(body_source).ok_or_else(|| {
-        ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
-            format!("{keyword} declaration has unterminated leading trivia"),
-            context.source_label.to_string(),
-            Some(span.clone()),
-        )
-    })?;
+    let body = trim_binding_pattern_leading_trivia_with_context(body_source, grammar_context)
+        .ok_or_else(|| {
+            ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                format!("{keyword} declaration has unterminated leading trivia"),
+                context.source_label.to_string(),
+                Some(span.clone()),
+            )
+        })?;
     if body.is_empty() {
         return Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
@@ -5674,7 +6660,7 @@ fn parse_variable_declaration(
         ));
     }
 
-    let declarator_segments = split_var_declarator_segments(body);
+    let declarator_segments = split_var_declarator_segments_with_context(body, grammar_context);
     if declarator_segments.is_empty() {
         return Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
@@ -5686,14 +6672,16 @@ fn parse_variable_declaration(
 
     let mut declarations = Vec::with_capacity(declarator_segments.len());
     for declarator in declarator_segments {
-        let (name_raw, initializer_raw) = split_var_declarator_assignment(declarator);
-        let pattern = parse_binding_pattern(name_raw, &span, context)?;
+        let (name_raw, initializer_raw) =
+            split_var_declarator_assignment(declarator, grammar_context);
+        let pattern = parse_binding_pattern(name_raw, &span, context, grammar_context)?;
         validate_lexical_binding_names(kind, &pattern, &span, context)?;
 
         let initializer = match initializer_raw {
             Some(initializer_source) => {
-                let initializer_source = trim_binding_pattern_trivia(initializer_source)
-                    .ok_or_else(|| {
+                let initializer_source =
+                    trim_binding_pattern_trivia_with_context(initializer_source, grammar_context)
+                        .ok_or_else(|| {
                         ParseError::new(
                             ParseErrorCode::UnsupportedSyntax,
                             format!("{keyword} initializer has unterminated lexical trivia"),
@@ -5736,15 +6724,27 @@ fn parse_variable_declaration(
     })
 }
 
+#[cfg(test)]
 fn split_var_declarator_segments(source: &str) -> Vec<&str> {
+    split_var_declarator_segments_with_context(source, ScanGrammarContext::SLOPPY_SCRIPT)
+}
+
+fn split_var_declarator_segments_with_context(
+    source: &str,
+    grammar_context: ScanGrammarContext,
+) -> Vec<&str> {
     let mut out = Vec::new();
     let mut segment_start = 0usize;
-    scan_binding_pattern_source(source, |index, ch, depth, quoted| {
-        if !quoted && depth == 0 && ch == ',' {
-            push_var_declarator_segment(&mut out, source, segment_start, index);
-            segment_start = index.saturating_add(ch.len_utf8());
-        }
-    });
+    scan_binding_pattern_source_with_context(
+        source,
+        grammar_context,
+        |index, ch, depth, quoted| {
+            if !quoted && depth == 0 && ch == ',' {
+                push_var_declarator_segment(&mut out, source, segment_start, index);
+                segment_start = index.saturating_add(ch.len_utf8());
+            }
+        },
+    );
     push_var_declarator_segment(&mut out, source, segment_start, source.len());
     out
 }
@@ -5765,29 +6765,36 @@ fn push_var_declarator_segment<'a>(
     out.push(raw);
 }
 
-fn split_var_declarator_assignment(segment: &str) -> (&str, Option<&str>) {
+fn split_var_declarator_assignment(
+    segment: &str,
+    grammar_context: ScanGrammarContext,
+) -> (&str, Option<&str>) {
     let mut assignment = None;
     let mut previous_significant = None;
-    scan_binding_pattern_source(segment, |index, ch, depth, quoted| {
-        if assignment.is_some() || quoted {
-            return;
-        }
-        if depth == 0 && ch == '=' {
-            let next = segment[index.saturating_add(ch.len_utf8())..]
-                .chars()
-                .next();
-            let part_of_comparison = matches!(
-                previous_significant,
-                Some('=') | Some('!') | Some('<') | Some('>')
-            ) || matches!(next, Some('='));
-            if !part_of_comparison {
-                assignment = Some(index);
+    scan_binding_pattern_source_with_context(
+        segment,
+        grammar_context,
+        |index, ch, depth, quoted| {
+            if assignment.is_some() || quoted {
+                return;
             }
-        }
-        if !is_binding_pattern_whitespace(ch) {
-            previous_significant = Some(ch);
-        }
-    });
+            if depth == 0 && ch == '=' {
+                let next = segment[index.saturating_add(ch.len_utf8())..]
+                    .chars()
+                    .next();
+                let part_of_comparison = matches!(
+                    previous_significant,
+                    Some('=') | Some('!') | Some('<') | Some('>')
+                ) || matches!(next, Some('='));
+                if !part_of_comparison {
+                    assignment = Some(index);
+                }
+            }
+            if !is_binding_pattern_whitespace(ch) {
+                previous_significant = Some(ch);
+            }
+        },
+    );
     if let Some(index) = assignment {
         let rhs_start = index.saturating_add('='.len_utf8());
         return (&segment[..index], Some(&segment[rhs_start..]));
@@ -5820,14 +6827,16 @@ fn parse_expression(
     // expression boundary. Keep internal trivia in place so it cannot join
     // identifier tokens, but discard leading/trailing trivia before recursive
     // postfix and binary parsing (for example `let/**/(4)` and `let\u{FEFF}(4)`).
-    let expression = trim_binding_pattern_trivia(expression).ok_or_else(|| {
-        ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
-            "unterminated lexical trivia at expression boundary",
-            context.source_label.to_string(),
-            Some(span.clone()),
-        )
-    })?;
+    let scan_context = ScanGrammarContext::from_execution_context(context).expression();
+    let expression = trim_binding_pattern_trivia_with_context(expression, scan_context)
+        .ok_or_else(|| {
+            ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "unterminated lexical trivia at expression boundary",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            )
+        })?;
     if expression.is_empty() {
         return Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
@@ -5836,7 +6845,7 @@ fn parse_expression(
             Some(span.clone()),
         ));
     }
-    if contains_non_ecmascript_whitespace(expression) {
+    if contains_non_ecmascript_whitespace_with_context(expression, scan_context) {
         return Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "non-ECMAScript whitespace at expression boundary",
@@ -6083,7 +7092,12 @@ fn parse_primary_expression(
     // Parenthesized expression.
     if expression.starts_with('(')
         && expression.ends_with(')')
-        && let Some((inner, rest)) = extract_balanced(expression, '(', ')')
+        && let Some((inner, rest)) = extract_balanced_with_context(
+            expression,
+            '(',
+            ')',
+            ScanGrammarContext::from_execution_context(context).expression(),
+        )
         && rest.trim().is_empty()
     {
         return parse_expression(inner.trim(), span, context, recursion_depth + 1);
@@ -6092,7 +7106,12 @@ fn parse_primary_expression(
     // Array literal: [a, b, c]
     if expression.starts_with('[')
         && expression.ends_with(']')
-        && let Some((inner, rest)) = extract_balanced(expression, '[', ']')
+        && let Some((inner, rest)) = extract_balanced_with_context(
+            expression,
+            '[',
+            ']',
+            ScanGrammarContext::from_execution_context(context).expression(),
+        )
         && rest.trim().is_empty()
     {
         return parse_array_literal(inner, span, context, recursion_depth);
@@ -6101,7 +7120,12 @@ fn parse_primary_expression(
     // Object literal: {a: 1, b: 2}
     if expression.starts_with('{')
         && expression.ends_with('}')
-        && let Some((inner, rest)) = extract_balanced(expression, '{', '}')
+        && let Some((inner, rest)) = extract_balanced_with_context(
+            expression,
+            '{',
+            '}',
+            ScanGrammarContext::from_execution_context(context).expression(),
+        )
         && rest.trim().is_empty()
     {
         return parse_object_literal(inner, span, context, recursion_depth);
@@ -6147,9 +7171,8 @@ fn try_parse_arrow_function(
         ) || trimmed.starts_with(r"\u");
         // `async(` could be a call. An async-arrow head requires separating
         // lexical trivia and forbids a LineTerminator before its parameter.
-        if consumed_trivia
-            && !saw_line_terminator
-            && (trimmed.starts_with('(') || starts_with_identifier)
+        if !saw_line_terminator
+            && (trimmed.starts_with('(') || (consumed_trivia && starts_with_identifier))
         {
             (true, trimmed)
         } else {
@@ -6161,7 +7184,10 @@ fn try_parse_arrow_function(
 
     if rest.starts_with('(') {
         // (params) => body
-        let (params_src, after_params) = extract_balanced(rest, '(', ')')?;
+        let parameter_scan_context =
+            ScanGrammarContext::function_parameters(is_async, false, context.strict_mode);
+        let (params_src, after_params) =
+            extract_balanced_with_context(rest, '(', ')', parameter_scan_context)?;
         let (after, saw_line_terminator) = trim_directive_trivia(after_params);
         if saw_line_terminator && after.starts_with("=>") {
             return Some(Err(ParseError::new(
@@ -6200,7 +7226,10 @@ fn try_parse_arrow_function(
     } else {
         // ident => body (single param, no parens)
         // Find `=>` that isn't inside lexical trivia or nested delimiters.
-        let arrow_pos = find_top_level_arrow(rest)?;
+        let arrow_pos = find_top_level_arrow(
+            rest,
+            ScanGrammarContext::from_execution_context(context).expression(),
+        )?;
         let (param_with_trailing_trivia, _) = trim_directive_trivia(&rest[..arrow_pos]);
         let param_name = match trim_binding_pattern_trivia(param_with_trailing_trivia) {
             Some(param_name) => param_name,
@@ -6259,29 +7288,33 @@ fn parse_arrow_params(
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<Vec<FunctionParam>> {
-    let params_src = trim_binding_pattern_trivia(params_src).ok_or_else(|| {
-        ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
-            "unterminated comment or quoted literal in function parameters",
-            context.source_label.to_string(),
-            Some(span.clone()),
-        )
-    })?;
-    if params_src.is_empty() {
-        return Ok(Vec::new());
-    }
-    let has_trailing_comma = params_src.ends_with(',');
-    let segments = split_pattern_elements(params_src);
-    let mut params = Vec::with_capacity(segments.len());
-    for segment in &segments {
-        let seg = trim_binding_pattern_trivia(segment).ok_or_else(|| {
+    let grammar_context = ScanGrammarContext::from_execution_context(context).expression();
+    let params_src = trim_binding_pattern_trivia_with_context(params_src, grammar_context)
+        .ok_or_else(|| {
             ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
-                "unterminated comment or quoted literal in function parameter",
+                "unterminated comment or quoted literal in function parameters",
                 context.source_label.to_string(),
                 Some(span.clone()),
             )
         })?;
+    if params_src.is_empty() {
+        return Ok(Vec::new());
+    }
+    let has_trailing_comma = params_src.ends_with(',');
+    let segments = split_pattern_elements_with_context(params_src, grammar_context);
+    let mut params = Vec::with_capacity(segments.len());
+    for segment in &segments {
+        let seg = trim_binding_pattern_trivia_with_context(segment, grammar_context).ok_or_else(
+            || {
+                ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    "unterminated comment or quoted literal in function parameter",
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                )
+            },
+        )?;
         if seg.is_empty() {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
@@ -6290,7 +7323,7 @@ fn parse_arrow_params(
                 Some(span.clone()),
             ));
         }
-        let pattern = parse_binding_pattern(seg, span, context)?;
+        let pattern = parse_binding_pattern(seg, span, context, grammar_context)?;
         params.push(FunctionParam {
             pattern,
             span: span.clone(),
@@ -6385,7 +7418,14 @@ fn parse_arrow_body(
 ) -> ParseResult<Expression> {
     let block_source = body_src
         .starts_with('{')
-        .then(|| extract_balanced(body_src, '{', '}'))
+        .then(|| {
+            extract_balanced_with_context(
+                body_src,
+                '{',
+                '}',
+                ScanGrammarContext::function_body(is_async, false, context.strict_mode),
+            )
+        })
         .flatten();
     if body_src.starts_with('{') && block_source.is_none() {
         return Err(ParseError::new(
@@ -6430,9 +7470,9 @@ fn parse_arrow_body(
 }
 
 /// Find `=>` at the top level (not inside quotes/brackets/parens).
-fn find_top_level_arrow(s: &str) -> Option<usize> {
+fn find_top_level_arrow(s: &str, grammar_context: ScanGrammarContext) -> Option<usize> {
     let mut found = None;
-    scan_binding_pattern_source(s, |index, _, depth, quoted| {
+    scan_binding_pattern_source_with_context(s, grammar_context, |index, _, depth, quoted| {
         if found.is_none() && !quoted && depth == 0 && s[index..].starts_with("=>") {
             found = Some(index);
         }
@@ -6462,7 +7502,9 @@ fn parse_new_expression(
     // The parenthesized form is known-good, so this is a faithful regrouping
     // rather than new parsing logic.
     let (nested_new_count, _) = strip_leading_new_operators(rest);
-    if let Some((_open, close)) = find_constructor_arguments_before_postfix(rest, nested_new_count)
+    let grammar_context = ScanGrammarContext::from_execution_context(context).expression();
+    if let Some((_open, close)) =
+        find_constructor_arguments_before_postfix(rest, nested_new_count, grammar_context)
     {
         let trailing = strip_leading_new_postfix_trivia(&rest[close + 1..]);
         let grouped = format!("(new {}){}", &rest[..=close], trailing);
@@ -6472,7 +7514,7 @@ fn parse_new_expression(
     // Find the arguments list at the end, if any.
     if rest.ends_with(')')
         && let Some((callee_src, args_inner)) = {
-            let open = find_matching_open_paren(rest);
+            let open = find_matching_open_paren_with_context(rest, grammar_context);
             open.map(|pos| (rest[..pos].trim(), &rest[pos + 1..rest.len() - 1]))
                 .filter(|(callee_src, _)| !callee_src.is_empty())
         }
@@ -6524,6 +7566,63 @@ fn parse_new_expression(
 // Template literal parsing
 // ---------------------------------------------------------------------------
 
+fn skip_template_literal_with_context(
+    source: &str,
+    start: usize,
+    grammar_context: ScanGrammarContext,
+) -> Option<usize> {
+    if source.as_bytes().get(start) != Some(&b'`') {
+        return None;
+    }
+
+    let mut index = start.saturating_add(1);
+    while index < source.len() {
+        let ch = source[index..].chars().next()?;
+        match ch {
+            '\\' => {
+                index = index.saturating_add(ch.len_utf8());
+                if index < source.len() {
+                    let escaped = source[index..].chars().next()?;
+                    index = index.saturating_add(escaped.len_utf8());
+                }
+            }
+            '`' => return Some(index.saturating_add(ch.len_utf8())),
+            '$' if source.as_bytes().get(index + 1) == Some(&b'{') => {
+                let expression_start = index.saturating_add(2);
+                let relative_end = find_template_interpolation_end(
+                    &source[expression_start..],
+                    grammar_context.expression(),
+                )?;
+                index = expression_start
+                    .saturating_add(relative_end)
+                    .saturating_add('}'.len_utf8());
+            }
+            _ => index = index.saturating_add(ch.len_utf8()),
+        }
+    }
+    None
+}
+
+fn find_template_interpolation_end(
+    source: &str,
+    grammar_context: ScanGrammarContext,
+) -> Option<usize> {
+    let mut closing_index = None;
+    let state = scan_binding_pattern_source_until_with_context(
+        source,
+        grammar_context,
+        |index, ch, depth, quoted| {
+            if !quoted && depth == 0 && ch == '}' {
+                closing_index = Some(index);
+                false
+            } else {
+                true
+            }
+        },
+    );
+    state.complete.then_some(closing_index).flatten()
+}
+
 fn parse_template_literal(
     expression: &str,
     span: &SourceSpan,
@@ -6537,8 +7636,7 @@ fn parse_template_literal(
     let mut expressions = Vec::new();
     let mut current_quasi = String::new();
     let mut i = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
+    let grammar_context = ScanGrammarContext::from_execution_context(context).expression();
 
     while i < bytes.len() {
         if bytes[i] == b'\\' && i + 1 < bytes.len() {
@@ -6598,49 +7696,17 @@ fn parse_template_literal(
             current_quasi.clear();
             i += 2; // skip `${`
             let start = i;
-            let mut depth = 1i32;
-            while i < bytes.len() {
-                if let Some(q) = in_quote {
-                    if escaped {
-                        escaped = false;
-                        i += 1;
-                        continue;
-                    }
-                    if bytes[i] == b'\\' {
-                        escaped = true;
-                        i += 1;
-                        continue;
-                    }
-                    if bytes[i] == q {
-                        in_quote = None;
-                    }
-                    i += 1;
-                    continue;
-                }
-
-                match bytes[i] {
-                    b'\'' | b'"' | b'`' => {
-                        in_quote = Some(bytes[i]);
-                    }
-                    b'{' => depth += 1,
-                    b'}' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-                i += 1;
-            }
-            if depth != 0 {
+            let Some(relative_end) =
+                find_template_interpolation_end(&inner[start..], grammar_context)
+            else {
                 return Err(ParseError::new(
                     ParseErrorCode::UnsupportedSyntax,
-                    "template literal interpolation has unbalanced braces",
+                    "template literal interpolation is lexically incomplete or has unbalanced braces",
                     context.source_label.to_string(),
                     Some(span.clone()),
                 ));
-            }
+            };
+            i = start.saturating_add(relative_end);
             let expr_src = &inner[start..i];
             let expr = parse_expression(expr_src.trim(), span, context, recursion_depth + 1)?;
             expressions.push(expr);
@@ -6685,108 +7751,54 @@ fn try_parse_assignment(
 ) -> Option<ParseResult<Expression>> {
     // Scan for assignment operators at top-level (depth 0).
     let bytes = expr.as_bytes();
-    let mut depth_paren: i64 = 0;
-    let mut depth_bracket: i64 = 0;
-    let mut depth_brace: i64 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
-    let mut i: usize = 0;
-
-    while i < bytes.len() {
-        let b = bytes[i];
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                i += 1;
-                continue;
+    let mut assignment = None;
+    let complete = scan_binding_pattern_source_with_context(
+        expr,
+        ScanGrammarContext::from_execution_context(context).expression(),
+        |index, _ch, depth, quoted| {
+            if assignment.is_some() || quoted || depth != 0 {
+                return;
             }
-            if b == b'\\' {
-                escaped = true;
-                i += 1;
-                continue;
-            }
-            if b == q {
-                in_quote = None;
-            }
-            i += 1;
-            continue;
-        }
-        match b {
-            b'\'' | b'"' | b'`' => {
-                in_quote = Some(b);
-                i += 1;
-                continue;
-            }
-            b'(' => {
-                depth_paren += 1;
-                i += 1;
-                continue;
-            }
-            b')' => {
-                depth_paren -= 1;
-                i += 1;
-                continue;
-            }
-            b'[' => {
-                depth_bracket += 1;
-                i += 1;
-                continue;
-            }
-            b']' => {
-                depth_bracket -= 1;
-                i += 1;
-                continue;
-            }
-            b'{' => {
-                depth_brace += 1;
-                i += 1;
-                continue;
-            }
-            b'}' => {
-                depth_brace -= 1;
-                i += 1;
-                continue;
-            }
-            _ => {}
-        }
-        if depth_paren != 0 || depth_bracket != 0 || depth_brace != 0 {
-            i += 1;
-            continue;
-        }
-        // Try matching assignment operators (must check longer ones first).
-        if let Some((op, len)) = match_assignment_operator_at(bytes, i) {
-            // Avoid matching == or === as assignment.
-            let lhs = expr[..i].trim();
-            let rhs = expr[i + len..].trim();
-            if lhs.is_empty() || rhs.is_empty() {
-                i += 1;
-                continue;
-            }
-            let left = match parse_expression(lhs, span, context, recursion_depth + 1) {
-                Ok(e) => e,
-                Err(e) => return Some(Err(e)),
+            let Some((operator, len)) = match_assignment_operator_at(bytes, index) else {
+                return;
             };
-            if contains_optional_chain(&left) {
-                return Some(Err(ParseError::new(
-                    ParseErrorCode::UnsupportedSyntax,
-                    "optional chaining cannot be used as an assignment target",
-                    context.source_label.to_string(),
-                    Some(span.clone()),
-                )));
+            if !expr[..index].trim().is_empty() && !expr[index + len..].trim().is_empty() {
+                assignment = Some((operator, index, len));
             }
-            let right = match parse_expression(rhs, span, context, recursion_depth + 1) {
-                Ok(e) => e,
-                Err(e) => return Some(Err(e)),
-            };
-            return Some(Ok(Expression::Assignment {
-                operator: op,
-                left: Box::new(left),
-                right: Box::new(right),
-            }));
-        }
-        i += 1;
+        },
+    );
+    if !complete {
+        return Some(Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "lexically incomplete expression while scanning assignment operators",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )));
     }
-    None
+    let (op, index, len) = assignment?;
+    let lhs = expr[..index].trim();
+    let rhs = expr[index + len..].trim();
+    let left = match parse_expression(lhs, span, context, recursion_depth + 1) {
+        Ok(e) => e,
+        Err(e) => return Some(Err(e)),
+    };
+    if contains_optional_chain(&left) {
+        return Some(Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "optional chaining cannot be used as an assignment target",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )));
+    }
+    let right = match parse_expression(rhs, span, context, recursion_depth + 1) {
+        Ok(e) => e,
+        Err(e) => return Some(Err(e)),
+    };
+    Some(Ok(Expression::Assignment {
+        operator: op,
+        left: Box::new(left),
+        right: Box::new(right),
+    }))
 }
 
 /// Match an assignment operator at byte position `i`. Returns (operator, byte_length).
@@ -6857,124 +7869,84 @@ fn try_parse_conditional(
 ) -> Option<ParseResult<Expression>> {
     // Find top-level `?` that is not `?.` (optional chaining) or `??` (nullish).
     let bytes = expr.as_bytes();
-    let mut depth_paren: i64 = 0;
-    let mut depth_bracket: i64 = 0;
-    let mut depth_brace: i64 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
-    let mut i: usize = 0;
-
-    while i < bytes.len() {
-        let b = bytes[i];
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                i += 1;
-                continue;
+    let grammar_context = ScanGrammarContext::from_execution_context(context).expression();
+    let mut question = None;
+    let complete = scan_binding_pattern_source_with_context(
+        expr,
+        grammar_context,
+        |index, ch, depth, quoted| {
+            if question.is_none()
+                && !quoted
+                && depth == 0
+                && ch == '?'
+                && bytes.get(index + 1) != Some(&b'.')
+                && bytes.get(index + 1) != Some(&b'?')
+            {
+                question = Some(index);
             }
-            if b == b'\\' {
-                escaped = true;
-                i += 1;
-                continue;
-            }
-            if b == q {
-                in_quote = None;
-            }
-            i += 1;
-            continue;
-        }
-        match b {
-            b'\'' | b'"' | b'`' => {
-                in_quote = Some(b);
-                i += 1;
-                continue;
-            }
-            b'(' => {
-                depth_paren += 1;
-                i += 1;
-                continue;
-            }
-            b')' => {
-                depth_paren -= 1;
-                i += 1;
-                continue;
-            }
-            b'[' => {
-                depth_bracket += 1;
-                i += 1;
-                continue;
-            }
-            b']' => {
-                depth_bracket -= 1;
-                i += 1;
-                continue;
-            }
-            b'{' => {
-                depth_brace += 1;
-                i += 1;
-                continue;
-            }
-            b'}' => {
-                depth_brace -= 1;
-                i += 1;
-                continue;
-            }
-            _ => {}
-        }
-        if depth_paren != 0 || depth_bracket != 0 || depth_brace != 0 {
-            i += 1;
-            continue;
-        }
-        if b == b'?' && i + 1 < bytes.len() && bytes[i + 1] != b'.' && bytes[i + 1] != b'?' {
-            // Found ternary `?`. Now find the matching `:` at the same depth.
-            let test_src = expr[..i].trim();
-            let rest = &expr[i + 1..];
-            if let Some(colon_idx) = find_ternary_colon(rest) {
-                let consequent_src = rest[..colon_idx].trim();
-                let alternate_src = rest[colon_idx + 1..].trim();
-                if test_src.is_empty() || consequent_src.is_empty() || alternate_src.is_empty() {
-                    i += 1;
-                    continue;
-                }
-                let test = match parse_expression(test_src, span, context, recursion_depth + 1) {
-                    Ok(e) => e,
-                    Err(e) => return Some(Err(e)),
-                };
-                let consequent =
-                    match parse_expression(consequent_src, span, context, recursion_depth + 1) {
-                        Ok(e) => e,
-                        Err(e) => return Some(Err(e)),
-                    };
-                let alternate =
-                    match parse_expression(alternate_src, span, context, recursion_depth + 1) {
-                        Ok(e) => e,
-                        Err(e) => return Some(Err(e)),
-                    };
-                return Some(Ok(Expression::Conditional {
-                    test: Box::new(test),
-                    consequent: Box::new(consequent),
-                    alternate: Box::new(alternate),
-                }));
-            }
-        }
-        i += 1;
+        },
+    );
+    if !complete {
+        return Some(Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "lexically incomplete expression while scanning a conditional expression",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )));
     }
-    None
+    let question = question?;
+    let test_src = expr[..question].trim();
+    let rest = &expr[question + 1..];
+    let colon_idx = find_ternary_colon(rest, grammar_context)?;
+    let consequent_src = rest[..colon_idx].trim();
+    let alternate_src = rest[colon_idx + 1..].trim();
+    if test_src.is_empty() || consequent_src.is_empty() || alternate_src.is_empty() {
+        return None;
+    }
+    let test = match parse_expression(test_src, span, context, recursion_depth + 1) {
+        Ok(e) => e,
+        Err(e) => return Some(Err(e)),
+    };
+    let consequent = match parse_expression(consequent_src, span, context, recursion_depth + 1) {
+        Ok(e) => e,
+        Err(e) => return Some(Err(e)),
+    };
+    let alternate = match parse_expression(alternate_src, span, context, recursion_depth + 1) {
+        Ok(e) => e,
+        Err(e) => return Some(Err(e)),
+    };
+    Some(Ok(Expression::Conditional {
+        test: Box::new(test),
+        consequent: Box::new(consequent),
+        alternate: Box::new(alternate),
+    }))
 }
 
 /// Find the index of a top-level `:` outside nested delimiters and lexical
 /// literals. In particular, RegExp character classes and escapes may contain
 /// bracket/colon bytes that must not close a computed object key.
+#[cfg(test)]
 fn find_top_level_colon(s: &str) -> Option<usize> {
+    find_top_level_colon_with_context(s, ScanGrammarContext::SLOPPY_SCRIPT)
+}
+
+fn find_top_level_colon_with_context(
+    s: &str,
+    grammar_context: ScanGrammarContext,
+) -> Option<usize> {
     let mut colon = None;
-    scan_binding_pattern_source_until(s, |index, ch, depth, quoted| {
-        if !quoted && depth == 0 && ch == ':' {
-            colon = Some(index);
-            false
-        } else {
-            true
-        }
-    });
+    scan_binding_pattern_source_until_with_context(
+        s,
+        grammar_context,
+        |index, ch, depth, quoted| {
+            if !quoted && depth == 0 && ch == ':' {
+                colon = Some(index);
+                false
+            } else {
+                true
+            }
+        },
+    );
     colon
 }
 
@@ -6985,64 +7957,32 @@ fn find_top_level_colon(s: &str) -> Option<usize> {
 /// `a ? (b ? c : d) : e`. `?.` (optional chaining) and `??` (nullish) are not
 /// ternary `?`. (A dedicated finder rather than changing `find_top_level_colon`,
 /// which labeled statements and object/type patterns also rely on.)
-fn find_ternary_colon(s: &str) -> Option<usize> {
+fn find_ternary_colon(s: &str, grammar_context: ScanGrammarContext) -> Option<usize> {
     let bytes = s.as_bytes();
-    let mut depth_paren: i64 = 0;
-    let mut depth_bracket: i64 = 0;
-    let mut depth_brace: i64 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
-    let mut question_depth: i64 = 0;
-    let mut i: usize = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-            } else if b == b'\\' {
-                escaped = true;
-            } else if b == q {
-                in_quote = None;
+    let mut question_depth = 0usize;
+    let mut colon = None;
+    let complete =
+        scan_binding_pattern_source_with_context(s, grammar_context, |index, ch, depth, quoted| {
+            if quoted || depth != 0 || colon.is_some() {
+                return;
             }
-            i += 1;
-            continue;
-        }
-        match b {
-            b'\'' | b'"' | b'`' => {
-                in_quote = Some(b);
-                i += 1;
-                continue;
-            }
-            b'(' => depth_paren += 1,
-            b')' => depth_paren -= 1,
-            b'[' => depth_bracket += 1,
-            b']' => depth_bracket -= 1,
-            b'{' => depth_brace += 1,
-            b'}' => depth_brace -= 1,
-            _ => {}
-        }
-        if depth_paren == 0 && depth_bracket == 0 && depth_brace == 0 {
-            if b == b'?' {
-                match bytes.get(i + 1).copied() {
+            if ch == '?' {
+                match bytes.get(index + 1).copied() {
                     // Nullish `??` — skip both bytes, not a ternary `?`.
-                    Some(b'?') => {
-                        i += 2;
-                        continue;
-                    }
+                    Some(b'?') => {}
                     // Optional chaining `?.` — not a ternary `?`.
                     Some(b'.') => {}
                     _ => question_depth += 1,
                 }
-            } else if b == b':' {
+            } else if ch == ':' {
                 if question_depth == 0 {
-                    return Some(i);
+                    colon = Some(index);
+                    return;
                 }
                 question_depth -= 1;
             }
-        }
-        i += 1;
-    }
-    None
+        });
+    if complete { colon } else { None }
 }
 
 // ---------------------------------------------------------------------------
@@ -7172,104 +8112,26 @@ fn try_parse_binary(
     recursion_depth: u64,
 ) -> Option<ParseResult<Expression>> {
     let bytes = expr.as_bytes();
-    let mut depth_paren: i64 = 0;
-    let mut depth_bracket: i64 = 0;
-    let mut depth_brace: i64 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
 
     // Track the lowest-precedence operator found at top level.
     let mut best_op: Option<BinaryOperator> = None;
     let mut best_pos: usize = 0;
     let mut best_len: usize = 0;
-
-    let mut i: usize = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                i += 1;
-                continue;
+    let mut skip_until = 0usize;
+    let grammar_context = ScanGrammarContext::from_execution_context(context).expression();
+    let complete =
+        scan_binding_pattern_source_with_context(expr, grammar_context, |i, _ch, depth, quoted| {
+            if quoted || depth != 0 || i < skip_until {
+                return;
             }
-            if b == b'\\' {
-                escaped = true;
-                i += 1;
-                continue;
-            }
-            if b == q {
-                in_quote = None;
-            }
-            i += 1;
-            continue;
-        }
-        if b == b'/' && bytes.get(i + 1) == Some(&b'*') {
-            let comment_end = expr[i + 2..].find("*/")?;
-            i += 2 + comment_end + 2;
-            continue;
-        }
-        if b == b'/' && bytes.get(i + 1) == Some(&b'/') {
-            i = expr[i + 2..]
-                .char_indices()
-                .find(|(_, ch)| matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}'))
-                .map_or(bytes.len(), |(offset, ch)| i + 2 + offset + ch.len_utf8());
-            continue;
-        }
-        match b {
-            b'\'' | b'"' | b'`' => {
-                in_quote = Some(b);
-                i += 1;
-                continue;
-            }
-            b'(' => {
-                depth_paren += 1;
-                i += 1;
-                continue;
-            }
-            b')' => {
-                depth_paren -= 1;
-                i += 1;
-                continue;
-            }
-            b'[' => {
-                depth_bracket += 1;
-                i += 1;
-                continue;
-            }
-            b']' => {
-                depth_bracket -= 1;
-                i += 1;
-                continue;
-            }
-            b'{' => {
-                depth_brace += 1;
-                i += 1;
-                continue;
-            }
-            b'}' => {
-                depth_brace -= 1;
-                i += 1;
-                continue;
-            }
-            _ => {}
-        }
-        if depth_paren != 0 || depth_bracket != 0 || depth_brace != 0 {
-            i += 1;
-            continue;
-        }
-        if b == b'/'
-            && slash_can_start_regexp(expr, i)
-            && let Some((_pattern, _flags, consumed)) = parse_regexp_literal_prefix(&expr[i..])
-        {
-            i += consumed;
-            continue;
-        }
-        if let Some((op, len)) = match_binary_operator_at(bytes, i) {
+            let Some((op, len)) = match_binary_operator_at(bytes, i) else {
+                return;
+            };
             let generator_function_marker = matches!(op, BinaryOperator::Multiply)
                 && generator_function_marker_prefix(&expr[..i]);
             if generator_function_marker {
-                i += len;
-                continue;
+                skip_until = i.saturating_add(len);
+                return;
             }
             // For the same precedence, prefer the rightmost for right-associative,
             // leftmost for left-associative.
@@ -7307,10 +8169,15 @@ fn try_parse_binary(
                     best_len = len;
                 }
             }
-            i += len;
-            continue;
-        }
-        i += 1;
+            skip_until = i.saturating_add(len);
+        });
+    if !complete {
+        return Some(Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "lexically incomplete expression while scanning binary operators",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )));
     }
 
     let op = best_op?;
@@ -7329,35 +8196,6 @@ fn try_parse_binary(
         left: Box::new(left),
         right: Box::new(right),
     }))
-}
-
-fn slash_can_start_regexp(expr: &str, slash_pos: usize) -> bool {
-    let Some(prev) = expr[..slash_pos].trim_end().as_bytes().last().copied() else {
-        return true;
-    };
-
-    matches!(
-        prev,
-        b'(' | b'['
-            | b'{'
-            | b','
-            | b':'
-            | b'?'
-            | b'='
-            | b'!'
-            | b'~'
-            | b'&'
-            | b'|'
-            | b'^'
-            | b'+'
-            | b'-'
-            | b'*'
-            | b'/'
-            | b'%'
-            | b'<'
-            | b'>'
-            | b';'
-    )
 }
 
 /// Match a binary operator at byte position `i`. Returns (operator, byte_length).
@@ -7666,12 +8504,13 @@ fn try_parse_postfix(
     if bytes.is_empty() {
         return None;
     }
+    let grammar_context = ScanGrammarContext::from_execution_context(context).expression();
 
     // Tagged template (scaffold form): `tag`...`` or `obj.tag`...``.
     // The current AST does not have a dedicated tagged-template variant,
     // so we preserve deterministic structure as a call with one template arg.
     if bytes[bytes.len() - 1] == b'`'
-        && let Some(template_start) = find_top_level_template_start(expr)
+        && let Some(template_start) = find_top_level_template_start(expr, grammar_context)
         && template_start > 0
     {
         let callee_src = expr[..template_start].trim();
@@ -7687,19 +8526,20 @@ fn try_parse_postfix(
 
     // Call expression: ends with `)`
     if bytes[bytes.len() - 1] == b')'
-        && let Some(open_paren) = find_matching_open_paren(expr)
+        && let Some(open_paren) = find_matching_open_paren_with_context(expr, grammar_context)
         && open_paren > 0
     {
-        let callee_src = match trim_binding_pattern_trivia(&expr[..open_paren]) {
-            Some(callee_src) => callee_src,
-            None => {
-                return Some(Err(unsupported_expression_syntax_error(
-                    "unterminated lexical trivia in call callee",
-                    span,
-                    context,
-                )));
-            }
-        };
+        let callee_src =
+            match trim_binding_pattern_trivia_with_context(&expr[..open_paren], grammar_context) {
+                Some(callee_src) => callee_src,
+                None => {
+                    return Some(Err(unsupported_expression_syntax_error(
+                        "unterminated lexical trivia in call callee",
+                        span,
+                        context,
+                    )));
+                }
+            };
         let args_src = &expr[open_paren + 1..expr.len() - 1]; // between ( and )
         let (callee_src, optional) = if let Some(stripped) = callee_src.strip_suffix("?.") {
             (stripped.trim(), true)
@@ -7744,10 +8584,13 @@ fn try_parse_postfix(
 
     // Computed member: ends with `]`
     if bytes[bytes.len() - 1] == b']'
-        && let Some(open_bracket) = find_matching_open_bracket(expr)
+        && let Some(open_bracket) = find_matching_open_bracket_with_context(expr, grammar_context)
         && open_bracket > 0
     {
-        let object_src = match trim_binding_pattern_trivia(&expr[..open_bracket]) {
+        let object_src = match trim_binding_pattern_trivia_with_context(
+            &expr[..open_bracket],
+            grammar_context,
+        ) {
             Some(object_src) => object_src,
             None => {
                 return Some(Err(unsupported_expression_syntax_error(
@@ -7794,7 +8637,7 @@ fn try_parse_postfix(
     }
 
     // Dot member access: a.b
-    if let Some(dot_pos) = find_last_top_level_dot(expr) {
+    if let Some(dot_pos) = find_last_top_level_dot(expr, grammar_context) {
         let raw_object_src = &expr[..dot_pos];
         // IdentifierName is the one postfix operand that is not recursively
         // parsed as an Expression, so normalize its lexical boundary here.
@@ -7814,7 +8657,7 @@ fn try_parse_postfix(
             (stripped.trim(), true)
         } else {
             let object_src = raw_object_src.trim();
-            if trim_binding_pattern_trivia(object_src)
+            if trim_binding_pattern_trivia_with_context(object_src, grammar_context)
                 .is_some_and(|lexical_object_src| lexical_object_src.ends_with('?'))
             {
                 return Some(Err(optional_chaining_syntax_error(
@@ -7861,7 +8704,7 @@ fn try_parse_postfix(
         }
     }
 
-    if find_last_top_level_optional_chain(expr).is_some() {
+    if find_last_top_level_optional_chain(expr, grammar_context).is_some() {
         return Some(Err(optional_chaining_syntax_error(
             "unsupported optional chaining form",
             span,
@@ -7968,45 +8811,26 @@ fn contains_optional_chain(expression: &Expression) -> bool {
 }
 
 /// Find the first top-level backtick that begins a trailing template literal.
-fn find_top_level_template_start(s: &str) -> Option<usize> {
-    let mut in_quote: Option<char> = None;
-    let mut escaped = false;
-    let mut paren_depth = 0usize;
-    let mut bracket_depth = 0usize;
-    let mut brace_depth = 0usize;
-
-    for (index, ch) in s.char_indices() {
-        if let Some(quote) = in_quote {
-            if escaped {
-                escaped = false;
-                continue;
+fn find_top_level_template_start(
+    source: &str,
+    grammar_context: ScanGrammarContext,
+) -> Option<usize> {
+    let mut top_level_backticks = BTreeSet::new();
+    let state = scan_binding_pattern_source_until_with_context(
+        source,
+        grammar_context,
+        |index, ch, depth, quoted| {
+            if quoted && ch == '`' && depth == 0 {
+                top_level_backticks.insert(index);
             }
-            if ch == '\\' {
-                escaped = true;
-                continue;
-            }
-            if ch == quote {
-                in_quote = None;
-            }
-            continue;
-        }
-
-        match ch {
-            '\'' | '"' => in_quote = Some(ch),
-            '(' => paren_depth = paren_depth.saturating_add(1),
-            ')' => paren_depth = paren_depth.saturating_sub(1),
-            '[' => bracket_depth = bracket_depth.saturating_add(1),
-            ']' => bracket_depth = bracket_depth.saturating_sub(1),
-            '{' => brace_depth = brace_depth.saturating_add(1),
-            '}' => brace_depth = brace_depth.saturating_sub(1),
-            '`' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
-                return Some(index);
-            }
-            _ => {}
-        }
-    }
-
-    None
+            true
+        },
+    );
+    state
+        .template_literal_ranges
+        .into_iter()
+        .map(|(start, _)| start)
+        .find(|start| top_level_backticks.contains(start))
 }
 
 /// Find the top-level constructor-argument pair immediately before a result-side
@@ -8031,36 +8855,6 @@ fn strip_leading_new_operators(mut input: &str) -> (usize, &str) {
     }
 }
 
-fn regexp_can_start_in_delimiter_scan(source: &str, slash_pos: usize) -> bool {
-    if slash_can_start_regexp(source, slash_pos) {
-        return true;
-    }
-    let prefix = source[..slash_pos].trim_end();
-    let keyword_start = prefix
-        .char_indices()
-        .rev()
-        .find_map(|(index, ch)| (!is_identifier_continue(ch)).then_some(index + ch.len_utf8()))
-        .unwrap_or(0);
-    if prefix[..keyword_start].trim_end().ends_with('.') {
-        return false;
-    }
-    matches!(
-        &prefix[keyword_start..],
-        "await"
-            | "case"
-            | "delete"
-            | "in"
-            | "instanceof"
-            | "new"
-            | "of"
-            | "return"
-            | "throw"
-            | "typeof"
-            | "void"
-            | "yield"
-    )
-}
-
 fn strip_leading_new_postfix_trivia(mut input: &str) -> &str {
     loop {
         input = input.trim_start();
@@ -8082,232 +8876,88 @@ fn strip_leading_new_postfix_trivia(mut input: &str) -> &str {
     }
 }
 
-fn skip_quoted_literal_for_delimiter_scan(bytes: &[u8], start: usize, quote: u8) -> usize {
-    let mut i = start.saturating_add(1);
-    while i < bytes.len() {
-        match bytes[i] {
-            b'\\' => i = i.saturating_add(2),
-            byte if byte == quote => return i.saturating_add(1),
-            _ => i = i.saturating_add(1),
-        }
-    }
-    bytes.len()
-}
-
-#[derive(Clone, Copy)]
-enum TemplateDelimiterState {
-    Template,
-    Interpolation { brace_depth: usize },
-}
-
-fn skip_template_literal_for_delimiter_scan(source: &str, start: usize) -> Option<usize> {
-    let bytes = source.as_bytes();
-    if bytes.get(start) != Some(&b'`') {
-        return None;
-    }
-
-    let mut states = vec![TemplateDelimiterState::Template];
-    let mut i = start.saturating_add(1);
-    while let Some(state) = states.last().copied() {
-        if i >= bytes.len() {
-            return None;
-        }
-
-        match state {
-            TemplateDelimiterState::Template => match bytes[i] {
-                b'\\' => i = i.saturating_add(2),
-                b'`' => {
-                    states.pop();
-                    i += 1;
-                    if states.is_empty() {
-                        return Some(i);
-                    }
-                }
-                b'$' if bytes.get(i + 1) == Some(&b'{') => {
-                    states.push(TemplateDelimiterState::Interpolation { brace_depth: 1 });
-                    i += 2;
-                }
-                _ => i += 1,
-            },
-            TemplateDelimiterState::Interpolation { brace_depth } => match bytes[i] {
-                b'\'' | b'"' => {
-                    i = skip_quoted_literal_for_delimiter_scan(bytes, i, bytes[i]);
-                }
-                b'`' => {
-                    states.push(TemplateDelimiterState::Template);
-                    i += 1;
-                }
-                b'/' if bytes.get(i + 1) == Some(&b'/') => {
-                    i += 2;
-                    while i < bytes.len() && !matches!(bytes[i], b'\n' | b'\r') {
-                        i += 1;
-                    }
-                }
-                b'/' if bytes.get(i + 1) == Some(&b'*') => {
-                    i += 2;
-                    while i + 1 < bytes.len() && &bytes[i..i + 2] != b"*/" {
-                        i += 1;
-                    }
-                    i = i.saturating_add(2).min(bytes.len());
-                }
-                b'/' if regexp_can_start_in_delimiter_scan(source, i)
-                    && let Some((_pattern, _flags, consumed)) =
-                        parse_regexp_literal_prefix(&source[i..]) =>
-                {
-                    i += consumed;
-                }
-                b'{' => {
-                    *states.last_mut()? = TemplateDelimiterState::Interpolation {
-                        brace_depth: brace_depth.saturating_add(1),
-                    };
-                    i += 1;
-                }
-                b'}' => {
-                    if brace_depth == 1 {
-                        states.pop();
-                    } else {
-                        *states.last_mut()? = TemplateDelimiterState::Interpolation {
-                            brace_depth: brace_depth - 1,
-                        };
-                    }
-                    i += 1;
-                }
-                _ => i += 1,
-            },
-        }
-    }
-    None
-}
-
 fn find_constructor_arguments_before_postfix(
     s: &str,
     mut argument_pairs_to_skip: usize,
+    grammar_context: ScanGrammarContext,
 ) -> Option<(usize, usize)> {
-    let bytes = s.as_bytes();
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
     let mut open: Option<usize> = None;
-    let mut paren: i64 = 0;
-    let mut bracket: i64 = 0;
-    let mut brace: i64 = 0;
-    let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-            } else if b == b'\\' {
-                escaped = true;
-            } else if b == q {
-                in_quote = None;
+    let mut found = None;
+    let complete =
+        scan_binding_pattern_source_with_context(s, grammar_context, |index, ch, depth, quoted| {
+            if quoted || found.is_some() {
+                return;
             }
-            i += 1;
-            continue;
-        }
-        if b == b'`'
-            && let Some(next) = skip_template_literal_for_delimiter_scan(s, i)
-        {
-            i = next;
-            continue;
-        }
-        if b == b'/' && bytes.get(i + 1) == Some(&b'/') {
-            i += 2;
-            while i < bytes.len() && !matches!(bytes[i], b'\n' | b'\r') {
-                i += 1;
+            if ch == '(' && depth == 0 {
+                open = Some(index);
+                return;
             }
-            continue;
-        }
-        if b == b'/' && bytes.get(i + 1) == Some(&b'*') {
-            i += 2;
-            while i + 1 < bytes.len() && &bytes[i..i + 2] != b"*/" {
-                i += 1;
+            if ch != ')' || depth != 1 {
+                return;
             }
-            i = i.saturating_add(2).min(bytes.len());
-            continue;
-        }
-        if b == b'/'
-            && regexp_can_start_in_delimiter_scan(s, i)
-            && let Some((_pattern, _flags, consumed)) = parse_regexp_literal_prefix(&s[i..])
-        {
-            i += consumed;
-            continue;
-        }
-        match b {
-            b'\'' | b'"' | b'`' => in_quote = Some(b),
-            b'[' => bracket += 1,
-            b']' => bracket -= 1,
-            b'{' => brace += 1,
-            b'}' => brace -= 1,
-            b'(' => {
-                if open.is_none() {
-                    if bracket == 0 && brace == 0 {
-                        open = Some(i);
-                        paren = 1;
-                    }
-                } else {
-                    paren += 1;
-                }
+            let Some(open_index) = open.take() else {
+                return;
+            };
+            let (_, callee_src) = strip_leading_new_operators(s[..open_index].trim());
+            let trailing = strip_leading_new_postfix_trivia(&s[index + 1..]);
+            if callee_src.is_empty()
+                || !(trailing.starts_with('.')
+                    || trailing.starts_with('[')
+                    || trailing.starts_with('(')
+                    || trailing.starts_with("?."))
+            {
+                return;
             }
-            b')' if open.is_some() => {
-                paren -= 1;
-                if paren == 0
-                    && let Some(open_index) = open.take()
-                {
-                    let (_, callee_src) = strip_leading_new_operators(s[..open_index].trim());
-                    let trailing = strip_leading_new_postfix_trivia(&s[i + 1..]);
-                    if !callee_src.is_empty()
-                        && (trailing.starts_with('.')
-                            || trailing.starts_with('[')
-                            || trailing.starts_with('(')
-                            || trailing.starts_with("?."))
-                    {
-                        if argument_pairs_to_skip > 0 {
-                            argument_pairs_to_skip -= 1;
-                            i += 1;
-                            continue;
-                        }
-                        return Some((open_index, i));
-                    }
-                }
+            if argument_pairs_to_skip > 0 {
+                argument_pairs_to_skip -= 1;
+            } else {
+                found = Some((open_index, index));
             }
-            _ => {}
-        }
-        i += 1;
-    }
-    None
+        });
+    if complete { found } else { None }
 }
 
-/// Find the position of the opening `(` that matches the final `)`.
-fn find_matching_open_paren(s: &str) -> Option<usize> {
-    find_matching_final_delimiter(s, '(', ')')
+fn find_matching_open_paren_with_context(
+    s: &str,
+    grammar_context: ScanGrammarContext,
+) -> Option<usize> {
+    find_matching_final_delimiter_with_context(s, '(', ')', grammar_context)
 }
 
-/// Find the position of the opening `[` that matches the final `]`.
-fn find_matching_open_bracket(s: &str) -> Option<usize> {
-    find_matching_final_delimiter(s, '[', ']')
+fn find_matching_open_bracket_with_context(
+    s: &str,
+    grammar_context: ScanGrammarContext,
+) -> Option<usize> {
+    find_matching_final_delimiter_with_context(s, '[', ']', grammar_context)
 }
 
-fn find_matching_final_delimiter(s: &str, open: char, close: char) -> Option<usize> {
+fn find_matching_final_delimiter_with_context(
+    s: &str,
+    open: char,
+    close: char,
+    grammar_context: ScanGrammarContext,
+) -> Option<usize> {
     let final_index = s.len().checked_sub(close.len_utf8())?;
     let mut stack = Vec::new();
     let mut matching_open = None;
     let mut imbalanced = false;
-    let complete = scan_binding_pattern_source(s, |index, ch, _, quoted| {
-        if quoted || imbalanced {
-            return;
-        }
-        if ch == open {
-            stack.push(index);
-        } else if ch == close {
-            let Some(open_index) = stack.pop() else {
-                imbalanced = true;
+    let complete =
+        scan_binding_pattern_source_with_context(s, grammar_context, |index, ch, _, quoted| {
+            if quoted || imbalanced {
                 return;
-            };
-            if index == final_index {
-                matching_open = Some(open_index);
             }
-        }
-    });
+            if ch == open {
+                stack.push(index);
+            } else if ch == close {
+                let Some(open_index) = stack.pop() else {
+                    imbalanced = true;
+                    return;
+                };
+                if index == final_index {
+                    matching_open = Some(open_index);
+                }
+            }
+        });
     if complete && !imbalanced && stack.is_empty() {
         matching_open
     } else {
@@ -8316,11 +8966,11 @@ fn find_matching_final_delimiter(s: &str, open: char, close: char) -> Option<usi
 }
 
 /// Find the last top-level `.` (not inside delimiters, quotes, or numeric literals).
-fn find_last_top_level_dot(s: &str) -> Option<usize> {
+fn find_last_top_level_dot(s: &str, grammar_context: ScanGrammarContext) -> Option<usize> {
     let bytes = s.as_bytes();
     let mut last_dot: Option<usize> = None;
 
-    scan_binding_pattern_source(s, |index, ch, depth, quoted| {
+    scan_binding_pattern_source_with_context(s, grammar_context, |index, ch, depth, quoted| {
         if !quoted && depth == 0 && ch == '.' {
             // Make sure this isn't a numeric dot (e.g., "3.14").
             let before_digit = index > 0 && bytes[index - 1].is_ascii_digit();
@@ -8333,11 +8983,14 @@ fn find_last_top_level_dot(s: &str) -> Option<usize> {
     last_dot
 }
 
-fn find_last_top_level_optional_chain(s: &str) -> Option<usize> {
+fn find_last_top_level_optional_chain(
+    s: &str,
+    grammar_context: ScanGrammarContext,
+) -> Option<usize> {
     let bytes = s.as_bytes();
     let mut last_optional: Option<usize> = None;
 
-    scan_binding_pattern_source(s, |index, ch, depth, quoted| {
+    scan_binding_pattern_source_with_context(s, grammar_context, |index, ch, depth, quoted| {
         if !quoted
             && depth == 0
             && ch == '?'
@@ -8364,7 +9017,10 @@ fn parse_array_literal(
     if trimmed.is_empty() {
         return Ok(Expression::ArrayLiteral(Vec::new()));
     }
-    let parts = split_top_level_commas(trimmed);
+    let parts = split_top_level_commas_with_context(
+        trimmed,
+        ScanGrammarContext::from_execution_context(context).expression(),
+    );
     let mut elements = Vec::new();
     for part in &parts {
         let p = part.trim();
@@ -8397,7 +9053,10 @@ fn parse_object_literal(
     if trimmed.is_empty() {
         return Ok(Expression::ObjectLiteral(Vec::new()));
     }
-    let parts = split_top_level_commas(trimmed);
+    let parts = split_top_level_commas_with_context(
+        trimmed,
+        ScanGrammarContext::from_execution_context(context).expression(),
+    );
     let mut properties = Vec::new();
     for part in &parts {
         let p = part.trim();
@@ -8414,7 +9073,10 @@ fn parse_object_literal(
                 computed: false,
                 shorthand: true,
             });
-        } else if let Some(colon_idx) = find_top_level_colon(p) {
+        } else if let Some(colon_idx) = find_top_level_colon_with_context(
+            p,
+            ScanGrammarContext::from_execution_context(context).expression(),
+        ) {
             // Split on first top-level colon for key:value.
             let key_src = p[..colon_idx].trim();
             let value_src = p[colon_idx + 1..].trim();
@@ -8430,8 +9092,13 @@ fn parse_object_literal(
                         Some(error_span.clone()),
                     )
                 };
-                let (inner, rest) =
-                    extract_balanced(key_src, '[', ']').ok_or_else(&invalid_computed_key)?;
+                let (inner, rest) = extract_balanced_with_context(
+                    key_src,
+                    '[',
+                    ']',
+                    ScanGrammarContext::from_execution_context(context).expression(),
+                )
+                .ok_or_else(&invalid_computed_key)?;
                 if inner.trim().is_empty() || !rest.trim().is_empty() {
                     return Err(invalid_computed_key());
                 }
@@ -8487,10 +9154,14 @@ fn parse_object_literal(
 
 /// Split a string by top-level commas (not inside delimiters or quotes).
 fn split_top_level_commas(s: &str) -> Vec<&str> {
+    split_top_level_commas_with_context(s, ScanGrammarContext::SLOPPY_SCRIPT)
+}
+
+fn split_top_level_commas_with_context(s: &str, grammar_context: ScanGrammarContext) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut start = 0;
 
-    scan_binding_pattern_source(s, |index, ch, depth, quoted| {
+    scan_binding_pattern_source_with_context(s, grammar_context, |index, ch, depth, quoted| {
         if !quoted && depth == 0 && ch == ',' {
             parts.push(&s[start..index]);
             start = index + ch.len_utf8();
@@ -8507,28 +9178,31 @@ fn parse_comma_separated_exprs(
     context: &mut ParseExecutionContext<'_>,
     recursion_depth: u64,
 ) -> ParseResult<Vec<Expression>> {
-    let trimmed = trim_binding_pattern_trivia(s).ok_or_else(|| {
-        ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
-            "unterminated lexical trivia in call arguments",
-            context.source_label.to_string(),
-            Some(span.clone()),
-        )
-    })?;
-    if trimmed.is_empty() {
-        return Ok(Vec::new());
-    }
-    let parts = split_top_level_commas(trimmed);
-    let mut exprs = Vec::new();
-    for (index, part) in parts.iter().enumerate() {
-        let p = trim_binding_pattern_trivia(part).ok_or_else(|| {
+    let grammar_context = ScanGrammarContext::from_execution_context(context).expression();
+    let trimmed =
+        trim_binding_pattern_trivia_with_context(s, grammar_context).ok_or_else(|| {
             ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
-                "unterminated lexical trivia in call argument",
+                "unterminated lexical trivia in call arguments",
                 context.source_label.to_string(),
                 Some(span.clone()),
             )
         })?;
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let parts = split_top_level_commas_with_context(trimmed, grammar_context);
+    let mut exprs = Vec::new();
+    for (index, part) in parts.iter().enumerate() {
+        let p =
+            trim_binding_pattern_trivia_with_context(part, grammar_context).ok_or_else(|| {
+                ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    "unterminated lexical trivia in call argument",
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                )
+            })?;
         if p.is_empty() {
             if index + 1 == parts.len() && parts.len() > 1 {
                 continue;
@@ -8708,6 +9382,14 @@ fn parse_regexp_literal_prefix(input: &str) -> Option<(String, String, usize)> {
     let mut prev_escape = false;
 
     while i < bytes.len() {
+        if input.is_char_boundary(i)
+            && input[i..]
+                .chars()
+                .next()
+                .is_some_and(|ch| matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}'))
+        {
+            return None;
+        }
         let c = bytes[i];
         if prev_escape {
             prev_escape = false;
@@ -9649,19 +10331,47 @@ impl Default for SemanticValidationResult {
 
 /// Extract the content between balanced delimiters starting at `open_char`.
 /// Returns (content_inside, rest_after_close). `s` must start with `open_char`.
+#[cfg(test)]
 fn extract_balanced(s: &str, open_char: char, close_char: char) -> Option<(&str, &str)> {
+    extract_balanced_with_context(s, open_char, close_char, ScanGrammarContext::SLOPPY_SCRIPT)
+}
+
+fn extract_balanced_with_context(
+    s: &str,
+    open_char: char,
+    close_char: char,
+    grammar_context: ScanGrammarContext,
+) -> Option<(&str, &str)> {
+    extract_balanced_with_context_seeded(s, open_char, close_char, grammar_context, None)
+}
+
+fn extract_balanced_with_context_seeded(
+    s: &str,
+    open_char: char,
+    close_char: char,
+    grammar_context: ScanGrammarContext,
+    initial_class_body_depth: Option<usize>,
+) -> Option<(&str, &str)> {
     if !s.starts_with(open_char) {
         return None;
     }
     let mut closing_index = None;
-    scan_binding_pattern_source_until(s, |index, ch, depth, quoted| {
-        if closing_index.is_none() && !quoted && ch == close_char && depth == 1 {
-            closing_index = Some(index);
-            false
-        } else {
-            true
-        }
-    });
+    let state = scan_binding_pattern_source_until_with_context_seeded(
+        s,
+        grammar_context,
+        initial_class_body_depth,
+        |index, ch, depth, quoted| {
+            if closing_index.is_none() && !quoted && ch == close_char && depth == 1 {
+                closing_index = Some(index);
+                false
+            } else {
+                true
+            }
+        },
+    );
+    if !state.lexically_complete {
+        return None;
+    }
     let closing_index = closing_index?;
     let inner_start = open_char.len_utf8();
     let rest_start = closing_index.saturating_add(close_char.len_utf8());
@@ -9806,10 +10516,16 @@ fn parse_body_statements(
     if trimmed.is_empty() {
         return Ok(Vec::new());
     }
-    let logical_lines = merge_logical_lines(trimmed);
+    let logical_lines = merge_logical_lines_with_context(
+        trimmed,
+        ScanGrammarContext::from_execution_context(context),
+    );
     let mut stmts = Vec::new();
     for ll in &logical_lines {
-        for (_start, _end, text) in split_statement_segments(&ll.text) {
+        for (_start, _end, text) in split_statement_segments_with_context(
+            &ll.text,
+            ScanGrammarContext::from_execution_context(context),
+        ) {
             if context.allow_yield_expression {
                 for text in split_top_level_yield_asi_segments(text) {
                     let inner_span = span.clone();
@@ -9830,7 +10546,13 @@ fn parse_block_statement(
     span: SourceSpan,
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<Statement> {
-    let (inner, _rest) = extract_balanced(statement, '{', '}').ok_or_else(|| {
+    let (inner, _rest) = extract_balanced_with_context(
+        statement,
+        '{',
+        '}',
+        ScanGrammarContext::from_execution_context(context),
+    )
+    .ok_or_else(|| {
         ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "unbalanced braces in block statement",
@@ -9853,7 +10575,13 @@ fn parse_if_statement(
         .strip_prefix("if")
         .unwrap_or(statement)
         .trim_start();
-    let (condition_src, rest) = extract_balanced(after_if, '(', ')').ok_or_else(|| {
+    let (condition_src, rest) = extract_balanced_with_context(
+        after_if,
+        '(',
+        ')',
+        ScanGrammarContext::from_execution_context(context),
+    )
+    .ok_or_else(|| {
         ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "if statement requires a parenthesized condition",
@@ -9866,7 +10594,12 @@ fn parse_if_statement(
     let rest = rest.trim();
     // Split consequent from optional else.
     let (consequent_src, alternate_src) = if rest.starts_with('{') {
-        if let Some((block_inner, after_block)) = extract_balanced(rest, '{', '}') {
+        if let Some((block_inner, after_block)) = extract_balanced_with_context(
+            rest,
+            '{',
+            '}',
+            ScanGrammarContext::from_execution_context(context),
+        ) {
             let after = trim_directive_trivia(after_block).0;
             (
                 format!("{{{block_inner}}}"),
@@ -10051,7 +10784,13 @@ fn parse_for_statement(
         .strip_prefix("for")
         .unwrap_or(statement)
         .trim_start();
-    let (header_src, rest) = extract_balanced(after_for, '(', ')').ok_or_else(|| {
+    let (header_src, rest) = extract_balanced_with_context(
+        after_for,
+        '(',
+        ')',
+        ScanGrammarContext::from_execution_context(context),
+    )
+    .ok_or_else(|| {
         ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "for statement requires a parenthesized header",
@@ -10127,11 +10866,18 @@ fn try_parse_for_in_of(
     // values)`). Try top-level keyword-token candidates in source order and
     // keep the first whose left side is a complete binding.
     let mut selected = None;
-    for (keyword, split_pos) in find_top_level_for_in_of_keywords(header) {
-        let Some(lhs) = trim_binding_pattern_trivia(&header[..split_pos]) else {
+    let statement_context = ScanGrammarContext::from_execution_context(context);
+    let grammar_context = statement_context.expression();
+    for (keyword, split_pos) in find_top_level_for_in_of_keywords(header, statement_context) {
+        let Some(lhs) =
+            trim_binding_pattern_trivia_with_context(&header[..split_pos], grammar_context)
+        else {
             continue;
         };
-        let Some(rhs) = trim_binding_pattern_trivia(&header[split_pos + keyword.len()..]) else {
+        let Some(rhs) = trim_binding_pattern_trivia_with_context(
+            &header[split_pos + keyword.len()..],
+            grammar_context,
+        ) else {
             continue;
         };
         if lhs.is_empty() || rhs.is_empty() {
@@ -10150,10 +10896,9 @@ fn try_parse_for_in_of(
             continue;
         }
         let binding_src = if let Some(kind) = binding_kind {
-            let Some(binding_src) = lhs
-                .strip_prefix(kind.as_str())
-                .and_then(trim_binding_pattern_trivia)
-            else {
+            let Some(binding_src) = lhs.strip_prefix(kind.as_str()).and_then(|source| {
+                trim_binding_pattern_trivia_with_context(source, grammar_context)
+            }) else {
                 continue;
             };
             if binding_src.is_empty()
@@ -10172,7 +10917,8 @@ fn try_parse_for_in_of(
         } else {
             lhs
         };
-        let Ok(parsed_binding) = parse_binding_pattern(binding_src, span, context) else {
+        let Ok(parsed_binding) = parse_binding_pattern(binding_src, span, context, grammar_context)
+        else {
             continue;
         };
         // Annex B.3.5 permits exactly one legacy loop-head initializer:
@@ -10189,7 +10935,8 @@ fn try_parse_for_in_of(
                     && goal == ParseGoal::Script
                     && !context.strict_mode
                     && matches!(
-                        split_var_declarator_segments(binding_src).as_slice(),
+                        split_var_declarator_segments_with_context(binding_src, grammar_context)
+                            .as_slice(),
                         [declarator] if *declarator == binding_src
                     )
                     && !matches!(&right, Expression::Raw(_)) =>
@@ -10248,10 +10995,13 @@ fn try_parse_for_in_of(
 /// Find top-level `in`/`of` IdentifierName tokens in source order. Comments,
 /// BOM, and other whitespace may separate either side of the token; member
 /// names such as `object.of` are not loop delimiters.
-fn find_top_level_for_in_of_keywords(src: &str) -> Vec<(&'static str, usize)> {
+fn find_top_level_for_in_of_keywords(
+    src: &str,
+    grammar_context: ScanGrammarContext,
+) -> Vec<(&'static str, usize)> {
     let mut found = Vec::new();
     let mut previous_significant = None;
-    scan_binding_pattern_source(src, |index, ch, depth, quoted| {
+    scan_binding_pattern_source_with_context(src, grammar_context, |index, ch, depth, quoted| {
         if quoted {
             return;
         }
@@ -10288,7 +11038,13 @@ fn parse_while_statement(
         .strip_prefix("while")
         .unwrap_or(statement)
         .trim_start();
-    let (condition_src, rest) = extract_balanced(after_while, '(', ')').ok_or_else(|| {
+    let (condition_src, rest) = extract_balanced_with_context(
+        after_while,
+        '(',
+        ')',
+        ScanGrammarContext::from_execution_context(context),
+    )
+    .ok_or_else(|| {
         ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "while statement requires a parenthesized condition",
@@ -10317,7 +11073,13 @@ fn parse_do_while_statement(
         .trim_start();
     // Body is a block or single statement, followed by "while(condition)"
     let (body_src, rest) = if after_do.starts_with('{') {
-        let (inner, r) = extract_balanced(after_do, '{', '}').ok_or_else(|| {
+        let (inner, r) = extract_balanced_with_context(
+            after_do,
+            '{',
+            '}',
+            ScanGrammarContext::from_execution_context(context),
+        )
+        .ok_or_else(|| {
             ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "do-while body has unbalanced braces",
@@ -10347,7 +11109,13 @@ fn parse_do_while_statement(
     let rest = trim_directive_trivia(&rest).0;
     let rest = rest.strip_prefix("while").unwrap_or(rest);
     let rest = trim_directive_trivia(rest).0;
-    let (condition_src, _) = extract_balanced(rest, '(', ')').ok_or_else(|| {
+    let (condition_src, _) = extract_balanced_with_context(
+        rest,
+        '(',
+        ')',
+        ScanGrammarContext::from_execution_context(context),
+    )
+    .ok_or_else(|| {
         ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "do-while requires a parenthesized condition after 'while'",
@@ -10410,7 +11178,13 @@ fn parse_try_catch_statement(
         .trim_start();
 
     // Parse the try block.
-    let (try_inner, rest) = extract_balanced(after_try, '{', '}').ok_or_else(|| {
+    let (try_inner, rest) = extract_balanced_with_context(
+        after_try,
+        '{',
+        '}',
+        ScanGrammarContext::from_execution_context(context),
+    )
+    .ok_or_else(|| {
         ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "try statement requires a braced block",
@@ -10431,7 +11205,13 @@ fn parse_try_catch_statement(
         let after_catch = rest.strip_prefix("catch").unwrap_or(rest);
         let after_catch = trim_directive_trivia(after_catch).0;
         let (param, after_param) = if after_catch.starts_with('(') {
-            let (p, r) = extract_balanced(after_catch, '(', ')').ok_or_else(|| {
+            let (p, r) = extract_balanced_with_context(
+                after_catch,
+                '(',
+                ')',
+                ScanGrammarContext::from_execution_context(context),
+            )
+            .ok_or_else(|| {
                 ParseError::new(
                     ParseErrorCode::UnsupportedSyntax,
                     "catch clause has unbalanced parentheses",
@@ -10439,15 +11219,18 @@ fn parse_try_catch_statement(
                     Some(span.clone()),
                 )
             })?;
-            let parameter_source = trim_binding_pattern_trivia(p).ok_or_else(|| {
-                ParseError::new(
-                    ParseErrorCode::UnsupportedSyntax,
-                    "catch binding has unterminated lexical trivia",
-                    context.source_label.to_string(),
-                    Some(span.clone()),
-                )
-            })?;
-            let parameter_pattern = parse_binding_pattern(parameter_source, &span, context)?;
+            let grammar_context = ScanGrammarContext::from_execution_context(context).expression();
+            let parameter_source = trim_binding_pattern_trivia_with_context(p, grammar_context)
+                .ok_or_else(|| {
+                    ParseError::new(
+                        ParseErrorCode::UnsupportedSyntax,
+                        "catch binding has unterminated lexical trivia",
+                        context.source_label.to_string(),
+                        Some(span.clone()),
+                    )
+                })?;
+            let parameter_pattern =
+                parse_binding_pattern(parameter_source, &span, context, grammar_context)?;
             let mut seen_names = BTreeSet::new();
             if parameter_pattern
                 .binding_names()
@@ -10484,7 +11267,13 @@ fn parse_try_catch_statement(
             (None, after_catch)
         };
         let after_param = trim_directive_trivia(after_param).0;
-        let (catch_inner, rest2) = extract_balanced(after_param, '{', '}').ok_or_else(|| {
+        let (catch_inner, rest2) = extract_balanced_with_context(
+            after_param,
+            '{',
+            '}',
+            ScanGrammarContext::from_execution_context(context),
+        )
+        .ok_or_else(|| {
             ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "catch clause requires a braced block",
@@ -10512,7 +11301,13 @@ fn parse_try_catch_statement(
     let finalizer = if rest.starts_with("finally") {
         let after_finally = rest.strip_prefix("finally").unwrap_or(rest);
         let after_finally = trim_directive_trivia(after_finally).0;
-        let (finally_inner, _) = extract_balanced(after_finally, '{', '}').ok_or_else(|| {
+        let (finally_inner, _) = extract_balanced_with_context(
+            after_finally,
+            '{',
+            '}',
+            ScanGrammarContext::from_execution_context(context),
+        )
+        .ok_or_else(|| {
             ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "finally clause requires a braced block",
@@ -10556,7 +11351,13 @@ fn parse_switch_statement(
         .strip_prefix("switch")
         .unwrap_or(statement)
         .trim_start();
-    let (disc_src, rest) = extract_balanced(after_switch, '(', ')').ok_or_else(|| {
+    let (disc_src, rest) = extract_balanced_with_context(
+        after_switch,
+        '(',
+        ')',
+        ScanGrammarContext::from_execution_context(context),
+    )
+    .ok_or_else(|| {
         ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "switch statement requires a parenthesized discriminant",
@@ -10567,7 +11368,13 @@ fn parse_switch_statement(
     let discriminant = parse_expression(disc_src.trim(), &span, context, 1)?;
 
     let rest = rest.trim();
-    let (body_src, _) = extract_balanced(rest, '{', '}').ok_or_else(|| {
+    let (body_src, _) = extract_balanced_with_context(
+        rest,
+        '{',
+        '}',
+        ScanGrammarContext::from_execution_context(context),
+    )
+    .ok_or_else(|| {
         ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "switch statement requires a braced body",
@@ -10752,7 +11559,13 @@ fn parse_function_expression(
     };
 
     // Parse parameters.
-    let (params_src, rest) = extract_balanced(rest, '(', ')').ok_or_else(|| {
+    let (params_src, rest) = extract_balanced_with_context(
+        rest,
+        '(',
+        ')',
+        ScanGrammarContext::function_parameters(is_async, is_generator, context.strict_mode),
+    )
+    .ok_or_else(|| {
         ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "function expression has unbalanced parentheses",
@@ -10762,7 +11575,13 @@ fn parse_function_expression(
     })?;
     // Parse body.
     let rest = rest.trim_start();
-    let (body_src, _) = extract_balanced(rest, '{', '}').ok_or_else(|| {
+    let (body_src, _) = extract_balanced_with_context(
+        rest,
+        '{',
+        '}',
+        ScanGrammarContext::function_body(is_async, is_generator, context.strict_mode),
+    )
+    .ok_or_else(|| {
         ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "function expression requires a braced body",
@@ -10871,6 +11690,23 @@ type ParsedClassParts = (
     Vec<MethodDefinition>,
 );
 
+fn top_level_class_body_candidates(
+    source: &str,
+    grammar_context: ScanGrammarContext,
+) -> Vec<usize> {
+    let mut candidates = Vec::new();
+    scan_binding_pattern_source_with_context(
+        source,
+        grammar_context,
+        |index, ch, depth, quoted| {
+            if !quoted && depth == 0 && ch == '{' {
+                candidates.push(index);
+            }
+        },
+    );
+    candidates
+}
+
 fn parse_class_parts(
     source: &str,
     span: &SourceSpan,
@@ -10913,33 +11749,51 @@ fn parse_class_parts(
 
     // Parse optional extends clause.
     let (super_class, rest) = if let Some(after_extends) = rest.strip_prefix("extends ") {
-        let brace = after_extends.find('{').ok_or_else(|| {
+        let scan_context = ScanGrammarContext::from_execution_context(context).expression();
+        let mut parsed_heritage = None;
+        for brace in top_level_class_body_candidates(after_extends, scan_context) {
+            let super_name = after_extends[..brace].trim();
+            if super_name.is_empty() {
+                continue;
+            }
+            let Ok(super_class) = parse_expression(super_name, span, context, 1) else {
+                continue;
+            };
+            if extract_balanced_with_context_seeded(
+                &after_extends[brace..],
+                '{',
+                '}',
+                scan_context,
+                Some(1),
+            )
+            .is_some()
+            {
+                parsed_heritage = Some((Box::new(super_class), &after_extends[brace..]));
+                break;
+            }
+        }
+        let (super_class, class_body) = parsed_heritage.ok_or_else(|| {
             ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
-                "class extends clause requires a braced body",
+                "class extends clause requires a superclass expression and braced body",
                 context.source_label.to_string(),
                 Some(span.clone()),
             )
         })?;
-        let super_name = after_extends[..brace].trim();
-        if super_name.is_empty() {
-            return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                "class extends clause requires a superclass expression",
-                context.source_label.to_string(),
-                Some(span.clone()),
-            ));
-        }
-        (
-            Some(Box::new(parse_expression(super_name, span, context, 1)?)),
-            &after_extends[brace..],
-        )
+        (Some(super_class), class_body)
     } else {
         (None, rest)
     };
 
     // Parse class body { ... }.
-    let (body_src, _) = extract_balanced(rest, '{', '}').ok_or_else(|| {
+    let (body_src, _) = extract_balanced_with_context_seeded(
+        rest,
+        '{',
+        '}',
+        ScanGrammarContext::from_execution_context(context),
+        Some(1),
+    )
+    .ok_or_else(|| {
         ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "class declaration requires a braced body",
@@ -11015,24 +11869,28 @@ fn parse_class_body(
         let rest = &rest[paren_idx..];
 
         // Parse parameters.
-        let (params_src, rest) = extract_balanced(rest, '(', ')').ok_or_else(|| {
-            ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                "class method has unbalanced parentheses",
-                context.source_label.to_string(),
-                Some(span.clone()),
-            )
-        })?;
+        let (params_src, rest) =
+            extract_balanced_with_context(rest, '(', ')', ScanGrammarContext::STRICT_SCRIPT)
+                .ok_or_else(|| {
+                    ParseError::new(
+                        ParseErrorCode::UnsupportedSyntax,
+                        "class method has unbalanced parentheses",
+                        context.source_label.to_string(),
+                        Some(span.clone()),
+                    )
+                })?;
         // Parse method body.
         let rest = rest.trim_start();
-        let (body_src, _) = extract_balanced(rest, '{', '}').ok_or_else(|| {
-            ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                "class method requires a braced body",
-                context.source_label.to_string(),
-                Some(span.clone()),
-            )
-        })?;
+        let (body_src, _) =
+            extract_balanced_with_context(rest, '{', '}', ScanGrammarContext::STRICT_SCRIPT)
+                .ok_or_else(|| {
+                    ParseError::new(
+                        ParseErrorCode::UnsupportedSyntax,
+                        "class method requires a braced body",
+                        context.source_label.to_string(),
+                        Some(span.clone()),
+                    )
+                })?;
         let goal = ParseGoal::Script;
         let has_own_use_strict_directive = has_use_strict_directive(body_src);
         let params = with_grammar_context(context, true, false, false, false, false, |context| {
@@ -11069,31 +11927,36 @@ fn split_class_members(body: &str) -> Vec<&str> {
     let mut brace_depth = 0usize;
     let mut paren_depth = 0usize;
 
-    scan_binding_pattern_source(body, |index, ch, _, quoted| {
-        if quoted {
-            return;
-        }
-        match ch {
-            '(' => paren_depth = paren_depth.saturating_add(1),
-            ')' => paren_depth = paren_depth.saturating_sub(1),
-            '{' => brace_depth = brace_depth.saturating_add(1),
-            '}' => {
-                if brace_depth > 0 {
-                    brace_depth = brace_depth.saturating_sub(1);
-                }
-                if brace_depth == 0 && paren_depth == 0 {
-                    let end = index.saturating_add(ch.len_utf8());
-                    segments.push(&body[start..end]);
-                    start = end;
-                }
+    scan_binding_pattern_source_with_context_seeded(
+        body,
+        ScanGrammarContext::STRICT_SCRIPT,
+        0,
+        |index, ch, _, quoted| {
+            if quoted {
+                return;
             }
-            ';' if brace_depth == 0 && paren_depth == 0 => {
-                // Semicolons between methods — skip.
-                start = index.saturating_add(ch.len_utf8());
+            match ch {
+                '(' => paren_depth = paren_depth.saturating_add(1),
+                ')' => paren_depth = paren_depth.saturating_sub(1),
+                '{' => brace_depth = brace_depth.saturating_add(1),
+                '}' => {
+                    if brace_depth > 0 {
+                        brace_depth = brace_depth.saturating_sub(1);
+                    }
+                    if brace_depth == 0 && paren_depth == 0 {
+                        let end = index.saturating_add(ch.len_utf8());
+                        segments.push(&body[start..end]);
+                        start = end;
+                    }
+                }
+                ';' if brace_depth == 0 && paren_depth == 0 => {
+                    // Semicolons between methods — skip.
+                    start = index.saturating_add(ch.len_utf8());
+                }
+                _ => {}
             }
-            _ => {}
-        }
-    });
+        },
+    );
     let remaining = body[start..].trim();
     if !remaining.is_empty() {
         segments.push(remaining);
@@ -11149,7 +12012,13 @@ fn parse_function_declaration(
     }
 
     // Parse parameters.
-    let (params_src, rest) = extract_balanced(rest, '(', ')').ok_or_else(|| {
+    let (params_src, rest) = extract_balanced_with_context(
+        rest,
+        '(',
+        ')',
+        ScanGrammarContext::function_parameters(is_async, is_generator, context.strict_mode),
+    )
+    .ok_or_else(|| {
         ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "function declaration has unbalanced parentheses",
@@ -11160,7 +12029,13 @@ fn parse_function_declaration(
 
     // Parse body.
     let rest = rest.trim_start();
-    let (body_src, _) = extract_balanced(rest, '{', '}').ok_or_else(|| {
+    let (body_src, _) = extract_balanced_with_context(
+        rest,
+        '{',
+        '}',
+        ScanGrammarContext::function_body(is_async, is_generator, context.strict_mode),
+    )
+    .ok_or_else(|| {
         ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "function declaration requires a braced body",
@@ -18077,6 +18952,588 @@ strict"; var static = 1; }"#,
             .parse("const s = `value: ${name`", ParseGoal::Script)
             .expect_err("unbalanced interpolation should fail");
         assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    }
+
+    // Donor parity for bd-8fzl3 was checked against Node 20.19.4 and Bun
+    // 1.3.14: both accept the valid sloppy/async/generator/for/control/
+    // nested-template cases below and reject the malformed delimiter and
+    // formal-parameter cases. Keep the matrix local to the regressions so a
+    // future lexical-goal change cannot silently shed its donor evidence.
+    #[test]
+    fn template_interpolation_uses_grammar_aware_slash_goals_bd_8fzl3() {
+        let tree = parse_script(r#"const value = `${await / 2}:${yield / 3}:${of / 5}:${/[}]/}`;"#);
+        let Statement::VariableDeclaration(declaration) = &tree.body[0] else {
+            panic!("expected template variable declaration");
+        };
+        let Some(Expression::TemplateLiteral {
+            quasis,
+            expressions,
+        }) = declaration.declarations[0].initializer.as_ref()
+        else {
+            panic!("expected template initializer");
+        };
+        assert_eq!(quasis, &["", ":", ":", ":", ""]);
+        assert_eq!(expressions.len(), 4);
+        for (expression, identifier, divisor) in [
+            (&expressions[0], "await", 2),
+            (&expressions[1], "yield", 3),
+            (&expressions[2], "of", 5),
+        ] {
+            assert!(matches!(
+                expression,
+                Expression::Binary {
+                    operator: BinaryOperator::Divide,
+                    left,
+                    right,
+                } if matches!(left.as_ref(), Expression::Identifier(name) if name == identifier)
+                    && matches!(right.as_ref(), Expression::NumericLiteral(value) if *value == divisor)
+            ));
+        }
+        assert!(matches!(
+            &expressions[3],
+            Expression::RegExpLiteral { pattern, flags }
+                if pattern == "[}]" && flags.is_empty()
+        ));
+
+        let chained = parse_script(
+            r#"const value = `${await / 2 / /}/}:${yield / 3 / /}/}:${of / 5 / /}/}`;"#,
+        );
+        let Statement::VariableDeclaration(declaration) = &chained.body[0] else {
+            panic!("expected chained template variable declaration");
+        };
+        let Some(Expression::TemplateLiteral { expressions, .. }) =
+            declaration.declarations[0].initializer.as_ref()
+        else {
+            panic!("expected chained template initializer");
+        };
+        assert_eq!(expressions.len(), 3);
+        for expression in expressions {
+            assert!(matches!(
+                expression,
+                Expression::Binary {
+                    operator: BinaryOperator::Divide,
+                    left,
+                    right,
+                } if matches!(left.as_ref(), Expression::Binary {
+                    operator: BinaryOperator::Divide,
+                    ..
+                }) && matches!(right.as_ref(), Expression::RegExpLiteral { pattern, .. } if pattern == "}")
+            ));
+        }
+
+        let token_boundaries = parse_script(
+            r#"const value = `${π / 2 / /}/}:${\u0061wait / 3 / /}/}:${\u{61}wait / 4 / /}/}:${1. / 2 / /}/}`;"#,
+        );
+        let Statement::VariableDeclaration(declaration) = &token_boundaries.body[0] else {
+            panic!("expected token-boundary template declaration");
+        };
+        let Some(Expression::TemplateLiteral { expressions, .. }) =
+            declaration.declarations[0].initializer.as_ref()
+        else {
+            panic!("expected token-boundary template initializer");
+        };
+        assert_eq!(expressions.len(), 4);
+        for expression in expressions {
+            assert!(matches!(
+                expression,
+                Expression::Binary {
+                    operator: BinaryOperator::Divide,
+                    left,
+                    right,
+                } if matches!(left.as_ref(), Expression::Binary {
+                    operator: BinaryOperator::Divide,
+                    ..
+                }) && matches!(right.as_ref(), Expression::RegExpLiteral { pattern, .. } if pattern == "}")
+            ));
+        }
+
+        let strict_property_names =
+            parse_script(r#""use strict"; const value = ({yield: 1, await: 2});"#);
+        let Statement::VariableDeclaration(declaration) = &strict_property_names.body[1] else {
+            panic!("expected strict object declaration");
+        };
+        assert!(matches!(
+            declaration.declarations[0].initializer.as_ref(),
+            Some(Expression::ObjectLiteral(properties)) if properties.len() == 2
+        ));
+
+        assert_eq!(
+            find_top_level_template_start(
+                r#"/`/`tail`"#,
+                ScanGrammarContext::SLOPPY_SCRIPT.expression(),
+            ),
+            Some(3),
+            "a backtick inside a RegExp literal is not a template opener",
+        );
+        let regexp_backtick = parse_script(r#"const value = `${/`/.test("`")}`;"#);
+        let Statement::VariableDeclaration(declaration) = &regexp_backtick.body[0] else {
+            panic!("expected RegExp-backtick template declaration");
+        };
+        assert!(matches!(
+            declaration.declarations[0].initializer.as_ref(),
+            Some(Expression::TemplateLiteral { expressions, .. })
+                if matches!(&expressions[..], [Expression::Call { .. }])
+        ));
+    }
+
+    #[test]
+    fn binding_patterns_preserve_async_and_generator_slash_context_bd_8fzl3() {
+        let async_tree = parse_script(
+            r#"async function f(source) {
+                const { [await /=/]: eq, [await /]/]: close, value = await /:/ } = source;
+                const [item = await /}/,] = source;
+            }"#,
+        );
+        assert!(matches!(
+            &async_tree.body[..],
+            [Statement::FunctionDeclaration(function)] if function.body.body.len() == 2
+        ));
+
+        let generator_tree = parse_script(
+            r#"function* g(source) {
+                const { [yield /=/]: eq, [yield /]/]: close, value = yield /:/ } = source;
+                const [item = yield /}/,] = source;
+            }"#,
+        );
+        assert!(matches!(
+            &generator_tree.body[..],
+            [Statement::FunctionDeclaration(function)] if function.body.body.len() == 2
+        ));
+    }
+
+    #[test]
+    fn postfix_arguments_and_constructors_preserve_slash_context_bd_8fzl3() {
+        let async_tree = parse_script(
+            r#"async function f(C, g) {
+                const call = g(await /}/);
+                const construct = new C(await /}/);
+                const member = (await /}/).test("}");
+                const computed = (await /}/)[0];
+            }"#,
+        );
+        let [Statement::FunctionDeclaration(function)] = &async_tree.body[..] else {
+            panic!("expected async function declaration");
+        };
+        let [
+            Statement::VariableDeclaration(call),
+            Statement::VariableDeclaration(construct),
+            Statement::VariableDeclaration(member),
+            Statement::VariableDeclaration(computed),
+        ] = &function.body.body[..]
+        else {
+            panic!("expected four async-context declarations");
+        };
+        assert!(matches!(
+            call.declarations[0].initializer.as_ref(),
+            Some(Expression::Call { arguments, .. })
+                if matches!(&arguments[..], [Expression::Await(argument)]
+                    if matches!(argument.as_ref(), Expression::RegExpLiteral { pattern, .. } if pattern == "}"))
+        ));
+        assert!(matches!(
+            construct.declarations[0].initializer.as_ref(),
+            Some(Expression::New { arguments, .. })
+                if matches!(&arguments[..], [Expression::Await(argument)]
+                    if matches!(argument.as_ref(), Expression::RegExpLiteral { pattern, .. } if pattern == "}"))
+        ));
+        assert!(matches!(
+            member.declarations[0].initializer.as_ref(),
+            Some(Expression::Call { callee, .. })
+                if matches!(callee.as_ref(), Expression::Member { object, .. }
+                    if matches!(object.as_ref(), Expression::Await(_)))
+        ));
+        assert!(matches!(
+            computed.declarations[0].initializer.as_ref(),
+            Some(Expression::Member { object, computed: true, .. })
+                if matches!(object.as_ref(), Expression::Await(_))
+        ));
+
+        let generator_tree = parse_script(
+            r#"function* g(C, f) {
+                const call = f(yield /}/);
+                const construct = new C(yield /}/);
+            }"#,
+        );
+        let [Statement::FunctionDeclaration(function)] = &generator_tree.body[..] else {
+            panic!("expected generator function declaration");
+        };
+        for statement in &function.body.body {
+            let Statement::VariableDeclaration(declaration) = statement else {
+                panic!("expected generator-context declaration");
+            };
+            let expression = declaration.declarations[0]
+                .initializer
+                .as_ref()
+                .expect("expected initializer");
+            let arguments = match expression {
+                Expression::Call { arguments, .. } | Expression::New { arguments, .. } => arguments,
+                other => panic!("expected call or constructor, got {other:?}"),
+            };
+            assert!(matches!(
+                &arguments[..],
+                [Expression::Yield {
+                    argument: Some(argument),
+                    delegate: false,
+                }] if matches!(argument.as_ref(), Expression::RegExpLiteral { pattern, .. } if pattern == "}")
+            ));
+        }
+    }
+
+    #[test]
+    fn logical_line_continuations_preserve_slash_context_bd_8fzl3() {
+        for source in [
+            "async function f() { const value =\nawait /}/;\nif (\nawait /[)}]/\n) /}/; }",
+            "function* g() { const value =\nyield /}/;\nif (\nyield /[)}]/\n) /}/; }",
+        ] {
+            let tree = parse_script(source);
+            assert!(matches!(
+                &tree.body[..],
+                [Statement::FunctionDeclaration(function)] if function.body.body.len() == 2
+            ));
+        }
+    }
+
+    #[test]
+    fn template_interpolation_scopes_async_generator_and_nested_functions_bd_8fzl3() {
+        let async_tree = parse_script(
+            r#"async function outer() {
+                function normal(await) { return `${await / 2}:${/[}]/}`; }
+                return `${await /[}]/}`;
+            }"#,
+        );
+        let Statement::FunctionDeclaration(async_outer) = &async_tree.body[0] else {
+            panic!("expected async function declaration");
+        };
+        let Statement::FunctionDeclaration(normal) = &async_outer.body.body[0] else {
+            panic!("expected nested ordinary function");
+        };
+        let Statement::Return(normal_return) = &normal.body.body[0] else {
+            panic!("expected nested return statement");
+        };
+        let Some(Expression::TemplateLiteral { expressions, .. }) = &normal_return.argument else {
+            panic!("expected nested template return");
+        };
+        assert!(matches!(
+            &expressions[0],
+            Expression::Binary {
+                operator: BinaryOperator::Divide,
+                left,
+                ..
+            } if matches!(left.as_ref(), Expression::Identifier(name) if name == "await")
+        ));
+        assert!(matches!(&expressions[1], Expression::RegExpLiteral { .. }));
+
+        let Statement::Return(async_return) = &async_outer.body.body[1] else {
+            panic!("expected async return statement");
+        };
+        let Some(Expression::TemplateLiteral { expressions, .. }) = &async_return.argument else {
+            panic!("expected async template return");
+        };
+        assert!(matches!(
+            &expressions[0],
+            Expression::Await(inner)
+                if matches!(inner.as_ref(), Expression::RegExpLiteral { pattern, .. } if pattern == "[}]")
+        ));
+
+        let generator_tree = parse_script(
+            r#"function* outer() {
+                function normal(yield) { return `${yield / 3}:${/[}]/}`; }
+                return `${yield /[}]/}`;
+            }"#,
+        );
+        let Statement::FunctionDeclaration(generator_outer) = &generator_tree.body[0] else {
+            panic!("expected generator function declaration");
+        };
+        let Statement::FunctionDeclaration(normal) = &generator_outer.body.body[0] else {
+            panic!("expected nested ordinary function");
+        };
+        let Statement::Return(normal_return) = &normal.body.body[0] else {
+            panic!("expected nested generator-context reset return");
+        };
+        let Some(Expression::TemplateLiteral { expressions, .. }) = &normal_return.argument else {
+            panic!("expected nested generator-context reset template");
+        };
+        assert!(matches!(
+            &expressions[0],
+            Expression::Binary {
+                operator: BinaryOperator::Divide,
+                left,
+                ..
+            } if matches!(left.as_ref(), Expression::Identifier(name) if name == "yield")
+        ));
+
+        let Statement::Return(generator_return) = &generator_outer.body.body[1] else {
+            panic!("expected generator return statement");
+        };
+        let Some(Expression::TemplateLiteral { expressions, .. }) = &generator_return.argument
+        else {
+            panic!("expected generator template return");
+        };
+        assert!(matches!(
+            &expressions[0],
+            Expression::Yield {
+                argument: Some(argument),
+                delegate: false,
+            } if matches!(argument.as_ref(), Expression::RegExpLiteral { pattern, .. } if pattern == "[}]")
+        ));
+    }
+
+    #[test]
+    fn template_interpolation_scopes_arrow_and_class_method_bodies_bd_8fzl3() {
+        let async_arrow = parse_script(r#"const value = `${async(x) => await /}/}`;"#);
+        let Statement::VariableDeclaration(declaration) = &async_arrow.body[0] else {
+            panic!("expected async-arrow declaration");
+        };
+        let Some(Expression::TemplateLiteral { expressions, .. }) =
+            declaration.declarations[0].initializer.as_ref()
+        else {
+            panic!("expected async-arrow template");
+        };
+        assert!(matches!(
+            &expressions[0],
+            Expression::ArrowFunction {
+                is_async: true,
+                body: ArrowBody::Expression(body),
+                ..
+            } if matches!(body.as_ref(), Expression::Await(argument)
+                if matches!(argument.as_ref(), Expression::RegExpLiteral { pattern, .. } if pattern == "}"))
+        ));
+
+        let nested_arrow = parse_script(
+            r#"async function outer() {
+                return `${true ? () => await / 2 : await /}/}`;
+            }"#,
+        );
+        let Statement::FunctionDeclaration(outer) = &nested_arrow.body[0] else {
+            panic!("expected async outer function");
+        };
+        let Statement::Return(return_statement) = &outer.body.body[0] else {
+            panic!("expected async outer return");
+        };
+        let Some(Expression::TemplateLiteral { expressions, .. }) = &return_statement.argument
+        else {
+            panic!("expected nested-arrow template");
+        };
+        let Expression::Conditional {
+            consequent,
+            alternate,
+            ..
+        } = &expressions[0]
+        else {
+            panic!("expected conditional containing an ordinary arrow");
+        };
+        assert!(matches!(
+            consequent.as_ref(),
+            Expression::ArrowFunction {
+                is_async: false,
+                body: ArrowBody::Expression(body),
+                ..
+            } if matches!(body.as_ref(), Expression::Binary {
+                operator: BinaryOperator::Divide,
+                left,
+                ..
+            } if matches!(left.as_ref(), Expression::Identifier(name) if name == "await"))
+        ));
+        assert!(matches!(
+            alternate.as_ref(),
+            Expression::Await(argument)
+                if matches!(argument.as_ref(), Expression::RegExpLiteral { pattern, .. } if pattern == "}")
+        ));
+
+        let class_method = parse_script(
+            r#"async function outer() {
+                class C { method() { return `${await / 2}`; } }
+            }"#,
+        );
+        let Statement::FunctionDeclaration(outer) = &class_method.body[0] else {
+            panic!("expected async outer function around class");
+        };
+        let Statement::ClassDeclaration(class) = &outer.body.body[0] else {
+            panic!("expected nested class declaration");
+        };
+        let Statement::Return(return_statement) = &class.body[0].body.body[0] else {
+            panic!("expected class-method return");
+        };
+        let Some(Expression::TemplateLiteral { expressions, .. }) = &return_statement.argument
+        else {
+            panic!("expected class-method template");
+        };
+        assert!(matches!(
+            &expressions[0],
+            Expression::Binary {
+                operator: BinaryOperator::Divide,
+                left,
+                ..
+            } if matches!(left.as_ref(), Expression::Identifier(name) if name == "await")
+        ));
+    }
+
+    #[test]
+    fn delimiter_cursor_distinguishes_for_heads_blocks_and_expression_bodies_bd_8fzl3() {
+        let for_tree = parse_script("if (false) for (let of of /r/) {}");
+        let Statement::If(if_statement) = &for_tree.body[0] else {
+            panic!("expected guarding if statement");
+        };
+        let Statement::ForOf(for_of) = if_statement.consequent.as_ref() else {
+            panic!("expected contextual for-of statement");
+        };
+        assert!(matches!(
+            &for_of.binding,
+            BindingPattern::Identifier(name) if name == "of"
+        ));
+        assert!(matches!(
+            &for_of.iterable,
+            Expression::RegExpLiteral { pattern, .. } if pattern == "r"
+        ));
+
+        let destructuring_for = parse_script("if (false) for (let [x] of /}/) {}");
+        let Statement::If(if_statement) = &destructuring_for.body[0] else {
+            panic!("expected guarding if for destructuring for-of");
+        };
+        let Statement::ForOf(for_of) = if_statement.consequent.as_ref() else {
+            panic!("expected destructuring for-of statement");
+        };
+        assert!(matches!(
+            &for_of.iterable,
+            Expression::RegExpLiteral { pattern, .. } if pattern == "}"
+        ));
+
+        let if_tree = parse_script("if (true) /}/;");
+        let Statement::If(if_statement) = &if_tree.body[0] else {
+            panic!("expected if statement");
+        };
+        assert!(matches!(
+            if_statement.consequent.as_ref(),
+            Statement::Expression(statement)
+                if matches!(&statement.expression, Expression::RegExpLiteral { pattern, .. } if pattern == "}")
+        ));
+
+        let else_tree = parse_script("if (false) 0; else /}/;");
+        let Statement::If(if_statement) = &else_tree.body[0] else {
+            panic!("expected if/else statement");
+        };
+        assert!(matches!(
+            if_statement.alternate.as_deref(),
+            Some(Statement::Expression(statement))
+                if matches!(&statement.expression, Expression::RegExpLiteral { pattern, .. } if pattern == "}")
+        ));
+
+        let do_tree = parse_script("do /}/; while (false);");
+        let Statement::DoWhile(do_while) = &do_tree.body[0] else {
+            panic!("expected do/while statement");
+        };
+        assert!(matches!(
+            do_while.body.as_ref(),
+            Statement::Expression(statement)
+                if matches!(&statement.expression, Expression::RegExpLiteral { pattern, .. } if pattern == "}")
+        ));
+
+        let block_tree = parse_script("{} /}/;");
+        assert_eq!(block_tree.body.len(), 2);
+        assert!(matches!(&block_tree.body[0], Statement::Block(_)));
+        assert!(matches!(
+            &block_tree.body[1],
+            Statement::Expression(statement)
+                if matches!(&statement.expression, Expression::RegExpLiteral { pattern, .. } if pattern == "}")
+        ));
+
+        for (source, expected_left) in [
+            ("({value: 12}) / 3", "object"),
+            ("(function(){}) / 2", "function"),
+            ("(class{}) / 2", "class"),
+        ] {
+            let tree = parse_script(source);
+            let Expression::Binary {
+                operator: BinaryOperator::Divide,
+                left,
+                ..
+            } = first_expr(&tree)
+            else {
+                panic!("expected division after {expected_left} expression");
+            };
+            let correct_left = match expected_left {
+                "object" => matches!(left.as_ref(), Expression::ObjectLiteral(_)),
+                "function" => matches!(left.as_ref(), Expression::Function { .. }),
+                "class" => matches!(left.as_ref(), Expression::ClassExpression { .. }),
+                _ => false,
+            };
+            assert!(correct_left, "wrong left operand for {source:?}: {left:?}");
+        }
+    }
+
+    #[test]
+    fn nested_templates_share_the_grammar_aware_delimiter_cursor_bd_8fzl3() {
+        let tree = parse_script(r#"const value = `A${`B${of / 3}:${/[}]/}C`}D`;"#);
+        let Statement::VariableDeclaration(declaration) = &tree.body[0] else {
+            panic!("expected nested-template declaration");
+        };
+        let Some(Expression::TemplateLiteral {
+            quasis,
+            expressions,
+        }) = declaration.declarations[0].initializer.as_ref()
+        else {
+            panic!("expected outer template");
+        };
+        assert_eq!(quasis, &["A", "D"]);
+        let [
+            Expression::TemplateLiteral {
+                quasis: nested_quasis,
+                expressions: nested_expressions,
+            },
+        ] = expressions.as_slice()
+        else {
+            panic!("expected one nested template expression");
+        };
+        assert_eq!(nested_quasis, &["B", ":", "C"]);
+        assert!(matches!(
+            &nested_expressions[0],
+            Expression::Binary {
+                operator: BinaryOperator::Divide,
+                left,
+                ..
+            } if matches!(left.as_ref(), Expression::Identifier(name) if name == "of")
+        ));
+        assert!(matches!(
+            &nested_expressions[1],
+            Expression::RegExpLiteral { pattern, .. } if pattern == "[}]"
+        ));
+
+        let multiline = parse_script(
+            r#"const value = `A${`B
+${/[}]/}C`}D`;"#,
+        );
+        assert_eq!(multiline.body.len(), 1);
+        let Statement::VariableDeclaration(declaration) = &multiline.body[0] else {
+            panic!("expected multiline nested-template declaration");
+        };
+        assert!(matches!(
+            declaration.declarations[0].initializer.as_ref(),
+            Some(Expression::TemplateLiteral { expressions, .. })
+                if matches!(&expressions[0], Expression::TemplateLiteral { expressions, .. }
+                    if matches!(&expressions[0], Expression::RegExpLiteral { pattern, .. } if pattern == "[}]"))
+        ));
+    }
+
+    #[test]
+    fn malformed_grammar_aware_delimiters_fail_closed_bd_8fzl3() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            r#"const value = `${/unterminated}`;"#,
+            r#"const value = `${/[}]/.test("}")`;"#,
+            r#"const value = `${]}`;"#,
+            "const value = `${/unterminated\n/}`;",
+            "for (let of /r/) {}",
+            "async function bad(await) {}",
+            "function* bad(yield) {}",
+            "const bad = async (await) => 0;",
+            "async function bad({[await /]/]: value}) {}",
+            "function* bad({[yield /]/]: value}) {}",
+        ] {
+            let error = match parser.parse(source, ParseGoal::Script) {
+                Ok(tree) => panic!("malformed source parsed as {tree:?}: {source:?}"),
+                Err(error) => error,
+            };
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+        }
     }
 
     // -----------------------------------------------------------------------

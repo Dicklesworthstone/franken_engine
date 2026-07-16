@@ -15820,6 +15820,37 @@ mod tests {
     }
 
     #[test]
+    fn postfix_operand_comment_trivia_lowers_and_executes_bd_56geo() {
+        let (ir1, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let obj = { \
+                 value: 40, \
+                 add: function (amount) { return this.value + amount; } \
+             }; \
+             let read = obj. /* read . */ value; \
+             obj. /* call . */ add /* callee */ \
+                 (/* argument ) , */ read - 38 /* trailing argument */);",
+        );
+        assert!(ir1.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Static(key)
+            } if key == "value"
+        )));
+        assert!(ir1.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Static(key)
+            } if key == "add"
+        )));
+        assert!(
+            ir1.ops
+                .iter()
+                .any(|op| matches!(op, Ir1Op::CallMethod { arg_count: 1 }))
+        );
+        assert_eq!(value, Value::Int(42));
+    }
+
+    #[test]
     fn legacy_var_for_in_initializer_executes_once_before_rhs_bd_1tafi() {
         let (_, _, empty_object) = lower_and_execute_deferred_source_bd_6pvhn(
             "var order = 0; \

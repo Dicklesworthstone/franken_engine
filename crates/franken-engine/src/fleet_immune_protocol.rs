@@ -6623,7 +6623,12 @@ impl FleetProtocolState {
 mod tests {
     use super::*;
     use std::cell::{Cell, RefCell};
-    use std::path::PathBuf;
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+    use std::process::{Child, Command, ExitStatus};
+    use std::time::{Duration, Instant};
+    use wait_timeout::ChildExt;
 
     // -- Helpers --
 
@@ -8458,6 +8463,591 @@ mod tests {
             )
         });
         scenario_root.join(crate::storage_adapter::FLEET_TRUST_STATE_DATABASE_FILENAME)
+    }
+
+    const Q9_2_WORKER_MODE: &str = "FRANKEN_FLEET_Q9_2_WORKER_MODE";
+    const Q9_2_DATABASE_PATH: &str = "FRANKEN_FLEET_Q9_2_DATABASE_PATH";
+    const Q9_2_ANCHOR_PATH: &str = "FRANKEN_FLEET_Q9_2_ANCHOR_PATH";
+    const Q9_2_READY_PATH: &str = "FRANKEN_FLEET_Q9_2_READY_PATH";
+    const Q9_2_GO_PATH: &str = "FRANKEN_FLEET_Q9_2_GO_PATH";
+    const Q9_2_OUTCOME_PATH: &str = "FRANKEN_FLEET_Q9_2_OUTCOME_PATH";
+    const Q9_2_SEQUENCE: &str = "FRANKEN_FLEET_Q9_2_SEQUENCE";
+    const Q9_2_SEED: &str = "FRANKEN_FLEET_Q9_2_SEED";
+    const Q9_2_TEST_NAME: &str = "fleet_immune_protocol::tests::real_frankensqlite_subprocess_crash_and_cross_process_cas_proof";
+    const Q9_2_CHILD_TIMEOUT: Duration = Duration::from_secs(30);
+    // Test-only trust root: compiled into the external-authority harness and
+    // deliberately absent from the rollbackable database and its journal.
+    const Q9_2_ANCHOR_PERMIT_KEY: &[u8] = b"franken-engine/q9.2/retained-test-anchor/permit-key/v1";
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    struct RetainedTestAnchorPermitPayload {
+        expected: Option<FleetRegistrySnapshotAnchorClaim>,
+        next: FleetRegistrySnapshotAnchorClaim,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    struct RetainedTestAnchorPermit {
+        payload: RetainedTestAnchorPermitPayload,
+        authentication: AuthenticityHash,
+    }
+
+    struct RetainedTestAnchorAuthority {
+        state_path: PathBuf,
+        fail_after_advance_once: Cell<bool>,
+    }
+
+    impl RetainedTestAnchorAuthority {
+        fn new(state_path: impl Into<PathBuf>, fail_after_advance_once: bool) -> Self {
+            Self {
+                state_path: state_path.into(),
+                fail_after_advance_once: Cell::new(fail_after_advance_once),
+            }
+        }
+
+        fn read_current(
+            &self,
+        ) -> Result<Option<FleetRegistrySnapshotAnchorClaim>, FleetIdentityError> {
+            let parent = self.state_path.parent().ok_or_else(|| {
+                FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "retained test anchor path has no parent".to_string(),
+                }
+            })?;
+            let file_name = self
+                .state_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "retained test anchor filename is not valid UTF-8".to_string(),
+                })?;
+            let prefix = format!("{file_name}.generation-");
+            let mut claims_by_generation = BTreeMap::<u64, FleetRegistrySnapshotAnchorClaim>::new();
+            for entry in std::fs::read_dir(parent).map_err(|error| {
+                FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: format!(
+                        "retained test anchor journal read failed for {}: {error}",
+                        parent.display()
+                    ),
+                }
+            })? {
+                let entry =
+                    entry.map_err(|error| FleetIdentityError::UnverifiedRegistryAnchor {
+                        detail: format!("retained test anchor journal entry failed: {error}"),
+                    })?;
+                let entry_name = entry.file_name();
+                let Some(entry_name) = entry_name.to_str() else {
+                    continue;
+                };
+                if !entry_name.starts_with(&prefix) || !entry_name.ends_with(".json") {
+                    continue;
+                }
+                let bytes = std::fs::read(entry.path()).map_err(|error| {
+                    FleetIdentityError::UnverifiedRegistryAnchor {
+                        detail: format!(
+                            "retained test anchor read failed for {}: {error}",
+                            entry.path().display()
+                        ),
+                    }
+                })?;
+                let claim: FleetRegistrySnapshotAnchorClaim = serde_json::from_slice(&bytes)
+                    .map_err(|error| FleetIdentityError::UnverifiedRegistryAnchor {
+                        detail: format!(
+                            "retained test anchor decode failed for {}: {error}",
+                            entry.path().display()
+                        ),
+                    })?;
+                if let Some(existing) = claims_by_generation.get(&claim.generation)
+                    && existing != &claim
+                {
+                    return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                        detail: format!(
+                            "retained test anchor journal contains conflicting generation {} claims",
+                            claim.generation
+                        ),
+                    });
+                }
+                claims_by_generation.insert(claim.generation, claim);
+            }
+            Ok(claims_by_generation.into_values().next_back())
+        }
+
+        fn write_current(
+            &self,
+            claim: &FleetRegistrySnapshotAnchorClaim,
+        ) -> Result<(), FleetIdentityError> {
+            let parent = self.state_path.parent().ok_or_else(|| {
+                FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "retained test anchor path has no parent".to_string(),
+                }
+            })?;
+            let file_name = self
+                .state_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "retained test anchor filename is not valid UTF-8".to_string(),
+                })?;
+            let final_path = parent.join(format!(
+                "{file_name}.generation-{:020}-{}-pid-{}.json",
+                claim.generation,
+                claim.snapshot_hash.to_hex(),
+                std::process::id()
+            ));
+            if final_path.exists() {
+                return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: format!(
+                        "retained test anchor generation already exists at {}",
+                        final_path.display()
+                    ),
+                });
+            }
+            let temporary_path = parent.join(format!(
+                "{file_name}.generation-{:020}.{}.pending",
+                claim.generation,
+                std::process::id()
+            ));
+            let bytes = serde_json::to_vec(claim).map_err(|error| {
+                FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: format!("retained test anchor encode failed: {error}"),
+                }
+            })?;
+            let mut temporary = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&temporary_path)
+                .map_err(|error| FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: format!(
+                        "retained test anchor staging failed for {}: {error}",
+                        temporary_path.display()
+                    ),
+                })?;
+            temporary.write_all(&bytes).map_err(|error| {
+                FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: format!("retained test anchor write failed: {error}"),
+                }
+            })?;
+            temporary
+                .sync_all()
+                .map_err(|error| FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: format!("retained test anchor sync failed: {error}"),
+                })?;
+            std::fs::rename(&temporary_path, &final_path).map_err(|error| {
+                FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: format!(
+                        "retained test anchor publish failed from {} to {}: {error}",
+                        temporary_path.display(),
+                        final_path.display()
+                    ),
+                }
+            })?;
+            std::fs::File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|error| FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: format!(
+                        "retained test anchor directory sync failed for {}: {error}",
+                        parent.display()
+                    ),
+                })
+        }
+    }
+
+    impl FleetRegistryAnchorAuthority for RetainedTestAnchorAuthority {
+        fn fleet_authority_id(&self) -> FleetAuthorityId {
+            test_fleet_authority_id()
+        }
+
+        fn authenticate_current_registry_anchor(
+            &self,
+            claim: &FleetRegistrySnapshotAnchorClaim,
+        ) -> Result<String, FleetIdentityError> {
+            if self.read_current()?.as_ref() != Some(claim) {
+                return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "retained test authority claim is not current".to_string(),
+                });
+            }
+            Ok(format!("retained-current-generation-{}", claim.generation))
+        }
+
+        fn prepare_registry_anchor_advance(
+            &self,
+            expected_current: Option<&FleetRegistrySnapshotAnchorClaim>,
+            next: &FleetRegistrySnapshotAnchorClaim,
+        ) -> Result<Vec<u8>, FleetIdentityError> {
+            if self.read_current()?.as_ref() != expected_current {
+                return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "retained test authority prepare expected a different current claim"
+                        .to_string(),
+                });
+            }
+            let payload = RetainedTestAnchorPermitPayload {
+                expected: expected_current.cloned(),
+                next: next.clone(),
+            };
+            let payload_bytes = serde_json::to_vec(&payload).map_err(|error| {
+                FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: format!("retained test permit payload serialization failed: {error}"),
+                }
+            })?;
+            let permit = RetainedTestAnchorPermit {
+                authentication: AuthenticityHash::compute_keyed(
+                    Q9_2_ANCHOR_PERMIT_KEY,
+                    &payload_bytes,
+                ),
+                payload,
+            };
+            serde_json::to_vec(&permit).map_err(|error| {
+                FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: format!("retained test permit serialization failed: {error}"),
+                }
+            })
+        }
+
+        fn finalize_registry_anchor_advance(
+            &self,
+            permit: &[u8],
+            next: &FleetRegistrySnapshotAnchorClaim,
+        ) -> Result<String, FleetIdentityError> {
+            let permit: RetainedTestAnchorPermit =
+                serde_json::from_slice(permit).map_err(|error| {
+                    FleetIdentityError::UnverifiedRegistryAnchor {
+                        detail: format!("retained test permit authentication failed: {error}"),
+                    }
+                })?;
+            let payload_bytes = serde_json::to_vec(&permit.payload).map_err(|error| {
+                FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: format!("retained test permit payload serialization failed: {error}"),
+                }
+            })?;
+            let expected_authentication =
+                AuthenticityHash::compute_keyed(Q9_2_ANCHOR_PERMIT_KEY, &payload_bytes);
+            if !permit
+                .authentication
+                .constant_time_eq(&expected_authentication)
+            {
+                return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "retained test permit has invalid authentication".to_string(),
+                });
+            }
+            if &permit.payload.next != next {
+                return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "retained test permit is bound to a different next claim".to_string(),
+                });
+            }
+            let current = self.read_current()?;
+            if current.as_ref() == Some(next) {
+                return Ok(format!("retained-finalized-generation-{}", next.generation));
+            }
+            if current.as_ref() != permit.payload.expected.as_ref() {
+                return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "retained test permit expected a different current claim".to_string(),
+                });
+            }
+            self.write_current(next)?;
+            if self.fail_after_advance_once.replace(false) {
+                return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "injected retained lost finalize response".to_string(),
+                });
+            }
+            Ok(format!("retained-finalized-generation-{}", next.generation))
+        }
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    struct Q9_2WorkerOutcome {
+        applied: bool,
+        key_sequence: u64,
+        snapshot_hash: Option<String>,
+        store_revision: Option<u64>,
+        store_record: Option<crate::storage_adapter::StoreRecord>,
+        error_kind: Option<String>,
+        error: Option<String>,
+    }
+
+    fn q9_2_required_path(variable: &str) -> PathBuf {
+        std::env::var_os(variable)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| panic!("missing required q9.2 worker variable {variable}"))
+    }
+
+    fn q9_2_write_retained_bytes(path: &Path, bytes: &[u8]) {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(path)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "refusing to overwrite retained q9.2 artifact {}: {error}",
+                    path.display()
+                )
+            });
+        file.write_all(bytes).unwrap_or_else(|error| {
+            panic!("write retained q9.2 artifact {}: {error}", path.display())
+        });
+        file.sync_all().unwrap_or_else(|error| {
+            panic!("sync retained q9.2 artifact {}: {error}", path.display())
+        });
+    }
+
+    fn q9_2_write_outcome(path: &Path, outcome: &Q9_2WorkerOutcome) {
+        let bytes = serde_json::to_vec_pretty(outcome).expect("serialize q9.2 worker outcome");
+        q9_2_write_retained_bytes(path, &bytes);
+    }
+
+    fn q9_2_read_outcome(path: &Path) -> Q9_2WorkerOutcome {
+        let bytes = std::fs::read(path).unwrap_or_else(|error| {
+            panic!("read retained q9.2 outcome {}: {error}", path.display())
+        });
+        serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+            panic!("decode retained q9.2 outcome {}: {error}", path.display())
+        })
+    }
+
+    fn q9_2_wait_for_path(path: &Path, label: &str) {
+        let deadline = Instant::now() + Q9_2_CHILD_TIMEOUT;
+        while !path.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for {label} at {}",
+                path.display()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn q9_2_worker_command(mode: &str, database_path: &Path, anchor_path: &Path) -> Command {
+        let mut command = Command::new(std::env::current_exe().expect("locate q9.2 test binary"));
+        command
+            .arg(Q9_2_TEST_NAME)
+            .arg("--exact")
+            .arg("--ignored")
+            .arg("--nocapture")
+            .env(Q9_2_WORKER_MODE, mode)
+            .env(Q9_2_DATABASE_PATH, database_path)
+            .env(Q9_2_ANCHOR_PATH, anchor_path);
+        command
+    }
+
+    fn q9_2_wait_child(mut child: Child, label: &str) -> ExitStatus {
+        match child
+            .wait_timeout(Q9_2_CHILD_TIMEOUT)
+            .unwrap_or_else(|error| panic!("wait for q9.2 {label}: {error}"))
+        {
+            Some(status) => status,
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("q9.2 {label} exceeded {Q9_2_CHILD_TIMEOUT:?}");
+            }
+        }
+    }
+
+    fn q9_2_context(label: &str) -> EventContext {
+        EventContext::new(
+            format!("trace-q9-2-{label}"),
+            format!("decision-q9-2-{label}"),
+            format!("policy-q9-2-{label}"),
+        )
+        .expect("valid q9.2 storage context")
+    }
+
+    fn q9_2_bootstrap_retained_registry(database_path: &Path, anchor_path: &Path, seed: u8) {
+        let context = q9_2_context("bootstrap");
+        let authority = RetainedTestAnchorAuthority::new(anchor_path, false);
+        let signer = v2_test_signer("node-a", 1, seed);
+        let mut storage = crate::storage_adapter::FleetTrustStateFrankensqliteStorageAdapter::open_fleet_trust_state_file(database_path)
+            .expect("open retained q9.2 bootstrap database");
+        let pending = FleetVerificationRegistryPersistence::new(&mut storage, &context)
+            .prepare_initial_registration(
+                NodeId::new("node-a"),
+                1,
+                signer.verification_key().clone(),
+                SecurityEpoch::from_raw(1),
+                &authority,
+            )
+            .expect("prepare retained q9.2 initial registration");
+        let live = pending
+            .finalize_and_publish(&authority)
+            .expect("finalize retained q9.2 initial registration");
+        assert_eq!(live.generation(), 1);
+        assert_eq!(live.store_revision(), 1);
+    }
+
+    fn q9_2_copy_database_family(source: &Path, destination: &Path) {
+        std::fs::copy(source, destination).unwrap_or_else(|error| {
+            panic!(
+                "copy retained fleet database {} to {}: {error}",
+                source.display(),
+                destination.display()
+            )
+        });
+        std::fs::File::open(destination)
+            .and_then(|file| file.sync_all())
+            .unwrap_or_else(|error| {
+                panic!(
+                    "sync retained fleet database copy {}: {error}",
+                    destination.display()
+                )
+            });
+        for suffix in ["-journal", "-wal", "-wal-fec"] {
+            let mut source_sidecar = source.as_os_str().to_os_string();
+            source_sidecar.push(suffix);
+            let source_sidecar = PathBuf::from(source_sidecar);
+            if !source_sidecar.exists() {
+                continue;
+            }
+            let mut destination_sidecar = destination.as_os_str().to_os_string();
+            destination_sidecar.push(suffix);
+            let destination_sidecar = PathBuf::from(destination_sidecar);
+            std::fs::copy(&source_sidecar, &destination_sidecar).unwrap_or_else(|error| {
+                panic!(
+                    "copy retained fleet sidecar {} to {}: {error}",
+                    source_sidecar.display(),
+                    destination_sidecar.display()
+                )
+            });
+            std::fs::File::open(&destination_sidecar)
+                .and_then(|file| file.sync_all())
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "sync retained fleet sidecar copy {}: {error}",
+                        destination_sidecar.display()
+                    )
+                });
+        }
+        let destination_parent = destination
+            .parent()
+            .expect("retained fleet database copy has a parent directory");
+        std::fs::File::open(destination_parent)
+            .and_then(|directory| directory.sync_all())
+            .unwrap_or_else(|error| {
+                panic!(
+                    "sync retained fleet database copy directory {}: {error}",
+                    destination_parent.display()
+                )
+            });
+    }
+
+    fn q9_2_run_worker(mode: &str) {
+        let database_path = q9_2_required_path(Q9_2_DATABASE_PATH);
+        let anchor_path = q9_2_required_path(Q9_2_ANCHOR_PATH);
+        let context = q9_2_context(mode);
+        let authority = RetainedTestAnchorAuthority::new(&anchor_path, mode == "lost-response");
+        let mut storage = crate::storage_adapter::FleetTrustStateFrankensqliteStorageAdapter::open_fleet_trust_state_file(&database_path)
+            .expect("q9.2 worker opens retained authority database");
+
+        if mode == "lost-response" {
+            let signer = v2_test_signer("node-a", 1, 91);
+            let pending = FleetVerificationRegistryPersistence::new(&mut storage, &context)
+                .prepare_initial_registration(
+                    NodeId::new("node-a"),
+                    1,
+                    signer.verification_key().clone(),
+                    SecurityEpoch::from_raw(1),
+                    &authority,
+                )
+                .expect("lost-response worker commits initial candidate");
+            assert!(matches!(
+                pending.finalize_and_publish(&authority),
+                Err(FleetRegistryPersistenceError::Identity(
+                    FleetIdentityError::UnverifiedRegistryAnchor { .. }
+                ))
+            ));
+            q9_2_write_retained_bytes(&q9_2_required_path(Q9_2_OUTCOME_PATH), b"lost-response");
+            return;
+        }
+
+        let live = FleetVerificationRegistryPersistence::new(&mut storage, &context)
+            .restore(&authority)
+            .expect("q9.2 worker restores current retained authority");
+        let key_sequence = std::env::var(Q9_2_SEQUENCE)
+            .unwrap_or_else(|_| "2".to_string())
+            .parse::<u64>()
+            .expect("q9.2 worker key sequence is a u64");
+        let seed = std::env::var(Q9_2_SEED)
+            .unwrap_or_else(|_| "92".to_string())
+            .parse::<u8>()
+            .expect("q9.2 worker signer seed is a u8");
+        let signer = v2_test_signer("node-a", key_sequence, seed);
+
+        if mode == "race" {
+            let ready_path = q9_2_required_path(Q9_2_READY_PATH);
+            q9_2_write_retained_bytes(&ready_path, b"ready");
+            q9_2_wait_for_path(&q9_2_required_path(Q9_2_GO_PATH), "race release marker");
+        }
+
+        let mut busy_retries = 0_u16;
+        let prepared = loop {
+            let result = FleetVerificationRegistryPersistence::new(&mut storage, &context)
+                .prepare_rotation(
+                    &live,
+                    NodeId::new("node-a"),
+                    1,
+                    key_sequence,
+                    signer.verification_key().clone(),
+                    SecurityEpoch::from_raw(2),
+                    &authority,
+                );
+            let transient_busy = result.as_ref().err().is_some_and(|error| {
+                let detail = error.to_string().to_ascii_lowercase();
+                detail.contains("busy")
+                    || detail.contains("transaction lock admission")
+                    || detail.contains("multi-process")
+            });
+            if mode != "race" || !transient_busy || busy_retries == 100 {
+                break result;
+            }
+            busy_retries += 1;
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let outcome = match prepared {
+            Ok(pending) => {
+                let record_key =
+                    FleetTrustStateEntry::typed_record_key_for_id(FLEET_TRUST_STATE_RECORD_ID)
+                        .expect("derive q9.2 canonical fleet-state record key");
+                let store_record = storage
+                    .get(StoreKind::FleetTrustState, &record_key, &context)
+                    .expect("read q9.2 worker candidate after durable CAS")
+                    .expect("q9.2 worker candidate exists after durable CAS");
+                Q9_2WorkerOutcome {
+                    applied: true,
+                    key_sequence,
+                    snapshot_hash: Some(pending.claim().snapshot_hash.to_hex()),
+                    store_revision: Some(pending.store_revision()),
+                    store_record: Some(store_record),
+                    error_kind: None,
+                    error: None,
+                }
+            }
+            Err(error) => {
+                let error_kind = match &error {
+                    FleetRegistryPersistenceError::ConcurrentUpdate {
+                        expected_revision: Some(1),
+                        actual_revision: Some(2),
+                    } => "concurrent-update-1-2",
+                    _ => "unexpected",
+                };
+                Q9_2WorkerOutcome {
+                    applied: false,
+                    key_sequence,
+                    snapshot_hash: None,
+                    store_revision: None,
+                    store_record: None,
+                    error_kind: Some(error_kind.to_string()),
+                    error: Some(error.to_string()),
+                }
+            }
+        };
+        q9_2_write_outcome(&q9_2_required_path(Q9_2_OUTCOME_PATH), &outcome);
+
+        if mode == "crash-after-commit" {
+            assert!(
+                outcome.applied,
+                "crash worker must commit before process death"
+            );
+            loop {
+                std::thread::park_timeout(Duration::from_secs(1));
+            }
+        }
+        assert_eq!(mode, "race", "unknown q9.2 worker mode {mode}");
     }
 
     fn v2_test_reconciliation(node_id: &str) -> ReconciliationRequest {
@@ -10718,6 +11308,291 @@ mod tests {
             ))
         ));
         assert!(!foreign_authority.finalize_called.get());
+    }
+
+    #[test]
+    #[ignore = "requires an explicit retained FLEET_TRUST_STATE_E2E_ROOT; artifacts are never removed"]
+    fn real_frankensqlite_subprocess_crash_and_cross_process_cas_proof() {
+        if let Some(mode) = std::env::var_os(Q9_2_WORKER_MODE) {
+            q9_2_run_worker(&mode.to_string_lossy());
+            return;
+        }
+
+        // Lost external-finalize responses must survive a real process
+        // boundary. The child advances the separately retained anchor and
+        // observes the injected response loss; this parent process owns no
+        // in-memory authority state and must reconcile from both retained
+        // artifacts.
+        let lost_database = retained_real_fleet_authority_path("q9-2-lost-finalize-response");
+        let lost_anchor = lost_database.with_file_name("fleet_registry_anchor.json");
+        let lost_outcome = lost_database.with_file_name("lost-response.outcome");
+        let mut lost_child = q9_2_worker_command("lost-response", &lost_database, &lost_anchor);
+        lost_child.env(Q9_2_OUTCOME_PATH, &lost_outcome);
+        let lost_status = q9_2_wait_child(
+            lost_child.spawn().expect("spawn q9.2 lost-response worker"),
+            "lost-response worker",
+        );
+        assert!(lost_status.success());
+        assert_eq!(
+            std::fs::read(&lost_outcome).expect("read retained lost-response marker"),
+            b"lost-response"
+        );
+        let lost_authority = RetainedTestAnchorAuthority::new(&lost_anchor, false);
+        let mut lost_reopened = crate::storage_adapter::FleetTrustStateFrankensqliteStorageAdapter::open_fleet_trust_state_file(&lost_database)
+            .expect("reopen lost-response retained database");
+        let lost_restored = FleetVerificationRegistryPersistence::new(
+            &mut lost_reopened,
+            &q9_2_context("lost-response-restart"),
+        )
+        .restore(&lost_authority)
+        .expect("restart idempotently reconciles retained lost finalize response");
+        assert_eq!(lost_restored.generation(), 1);
+        assert_eq!(lost_restored.store_revision(), 1);
+        assert_eq!(
+            lost_authority
+                .read_current()
+                .expect("read retained lost-response anchor")
+                .expect("lost-response anchor is current")
+                .snapshot_hash,
+            lost_restored.snapshot_hash()
+        );
+        drop(lost_reopened);
+
+        // The child aborts after the strict durable CAS and exact readback but
+        // before anchor finalization. No Rust destructors run in the child.
+        // Reopen must recover the committed candidate and finalize its permit.
+        let crash_database = retained_real_fleet_authority_path("q9-2-crash-after-commit");
+        let crash_anchor = crash_database.with_file_name("fleet_registry_anchor.json");
+        q9_2_bootstrap_retained_registry(&crash_database, &crash_anchor, 92);
+        let crash_outcome = crash_database.with_file_name("crash-after-commit.outcome.json");
+        let crash_authority = RetainedTestAnchorAuthority::new(&crash_anchor, false);
+        assert_eq!(
+            crash_authority
+                .read_current()
+                .expect("read pre-crash retained anchor")
+                .expect("pre-crash anchor exists")
+                .generation,
+            1
+        );
+        let mut crash_child =
+            q9_2_worker_command("crash-after-commit", &crash_database, &crash_anchor);
+        crash_child
+            .env(Q9_2_OUTCOME_PATH, &crash_outcome)
+            .env(Q9_2_SEQUENCE, "2")
+            .env(Q9_2_SEED, "93");
+        let mut crash_child = crash_child.spawn().expect("spawn q9.2 crash worker");
+        q9_2_wait_for_path(&crash_outcome, "crash worker durable-commit marker");
+        crash_child
+            .kill()
+            .expect("kill crash worker after durable-commit marker");
+        let crash_status = q9_2_wait_child(crash_child, "crash-after-commit worker");
+        assert!(!crash_status.success(), "crash worker must abort");
+        let committed_before_crash = q9_2_read_outcome(&crash_outcome);
+        assert!(committed_before_crash.applied);
+        assert_eq!(committed_before_crash.store_revision, Some(2));
+        assert_eq!(
+            crash_authority
+                .read_current()
+                .expect("read post-crash retained anchor")
+                .expect("post-crash anchor exists")
+                .generation,
+            1,
+            "child death must precede external-anchor finalization"
+        );
+        let mut crash_reopened = crate::storage_adapter::FleetTrustStateFrankensqliteStorageAdapter::open_fleet_trust_state_file(&crash_database)
+            .expect("reopen database after abrupt child death");
+        let record_key = FleetTrustStateEntry::typed_record_key_for_id(FLEET_TRUST_STATE_RECORD_ID)
+            .expect("derive canonical q9.2 fleet-state record key");
+        let crash_exact_readback = crash_reopened
+            .get(
+                StoreKind::FleetTrustState,
+                &record_key,
+                &q9_2_context("crash-readback"),
+            )
+            .expect("read exact candidate after abrupt child death")
+            .expect("candidate committed before child death remains present");
+        assert_eq!(
+            committed_before_crash.store_record.as_ref(),
+            Some(&crash_exact_readback),
+            "reopen must preserve the complete child-observed StoreRecord byte-for-byte"
+        );
+        let crash_restored = FleetVerificationRegistryPersistence::new(
+            &mut crash_reopened,
+            &q9_2_context("crash-restart"),
+        )
+        .restore(&crash_authority)
+        .expect("restart finalizes candidate committed before child death");
+        assert_eq!(crash_restored.generation(), 2);
+        assert_eq!(crash_restored.store_revision(), 2);
+        assert_eq!(
+            committed_before_crash.snapshot_hash.as_deref(),
+            Some(crash_restored.snapshot_hash().to_hex().as_str())
+        );
+        drop(crash_reopened);
+
+        // Both children restore generation one before the parent publishes a
+        // shared release marker. They then race the real independent-process
+        // revision-plus-snapshot-hash CAS. Exactly one candidate may commit.
+        let race_database = retained_real_fleet_authority_path("q9-2-simultaneous-cas");
+        let race_anchor = race_database.with_file_name("fleet_registry_anchor.json");
+        q9_2_bootstrap_retained_registry(&race_database, &race_anchor, 94);
+        let race_go = race_database.with_file_name("race.go");
+        let race_a_ready = race_database.with_file_name("race-a.ready");
+        let race_b_ready = race_database.with_file_name("race-b.ready");
+        let race_a_outcome = race_database.with_file_name("race-a.outcome.json");
+        let race_b_outcome = race_database.with_file_name("race-b.outcome.json");
+        let mut race_a = q9_2_worker_command("race", &race_database, &race_anchor);
+        race_a
+            .env(Q9_2_READY_PATH, &race_a_ready)
+            .env(Q9_2_GO_PATH, &race_go)
+            .env(Q9_2_OUTCOME_PATH, &race_a_outcome)
+            .env(Q9_2_SEQUENCE, "2")
+            .env(Q9_2_SEED, "95");
+        let mut race_b = q9_2_worker_command("race", &race_database, &race_anchor);
+        race_b
+            .env(Q9_2_READY_PATH, &race_b_ready)
+            .env(Q9_2_GO_PATH, &race_go)
+            .env(Q9_2_OUTCOME_PATH, &race_b_outcome)
+            .env(Q9_2_SEQUENCE, "3")
+            .env(Q9_2_SEED, "96");
+        let race_a_child = race_a.spawn().expect("spawn q9.2 race worker A");
+        let race_b_child = race_b.spawn().expect("spawn q9.2 race worker B");
+        q9_2_wait_for_path(&race_a_ready, "race worker A readiness");
+        q9_2_wait_for_path(&race_b_ready, "race worker B readiness");
+        q9_2_write_retained_bytes(&race_go, b"go");
+        assert!(q9_2_wait_child(race_a_child, "race worker A").success());
+        assert!(q9_2_wait_child(race_b_child, "race worker B").success());
+        let race_outcomes = [
+            q9_2_read_outcome(&race_a_outcome),
+            q9_2_read_outcome(&race_b_outcome),
+        ];
+        let winners = race_outcomes
+            .iter()
+            .filter(|outcome| outcome.applied)
+            .collect::<Vec<_>>();
+        let losers = race_outcomes
+            .iter()
+            .filter(|outcome| !outcome.applied)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            winners.len(),
+            1,
+            "exactly one process must win: {race_outcomes:?}"
+        );
+        assert_eq!(
+            losers.len(),
+            1,
+            "exactly one process must lose: {race_outcomes:?}"
+        );
+        assert_eq!(winners[0].store_revision, Some(2));
+        assert!(
+            losers[0]
+                .error
+                .as_deref()
+                .is_some_and(|error| !error.trim().is_empty()),
+            "losing process must retain an explicit refusal: {race_outcomes:?}"
+        );
+        assert_eq!(
+            losers[0].error_kind.as_deref(),
+            Some("concurrent-update-1-2"),
+            "losing process must observe the exact revision-1/current-2 CAS conflict: {race_outcomes:?}"
+        );
+        let race_authority = RetainedTestAnchorAuthority::new(&race_anchor, false);
+        let mut race_reopened = crate::storage_adapter::FleetTrustStateFrankensqliteStorageAdapter::open_fleet_trust_state_file(&race_database)
+            .expect("reopen simultaneous-CAS database");
+        let race_exact_readback = race_reopened
+            .get(
+                StoreKind::FleetTrustState,
+                &record_key,
+                &q9_2_context("race-readback"),
+            )
+            .expect("read exact simultaneous-CAS winner after reopen")
+            .expect("unique simultaneous-CAS winner remains present");
+        assert_eq!(
+            winners[0].store_record.as_ref(),
+            Some(&race_exact_readback),
+            "reopen must preserve the winning process StoreRecord byte-for-byte"
+        );
+        let race_restored = FleetVerificationRegistryPersistence::new(
+            &mut race_reopened,
+            &q9_2_context("race-reopen"),
+        )
+        .restore(&race_authority)
+        .expect("reopen finalizes the unique winning process candidate");
+        assert_eq!(race_restored.generation(), 2);
+        assert_eq!(race_restored.store_revision(), 2);
+        assert_eq!(
+            winners[0].snapshot_hash.as_deref(),
+            Some(race_restored.snapshot_hash().to_hex().as_str())
+        );
+        drop(race_reopened);
+
+        // Preserve a byte-for-byte generation-one fork, advance the main
+        // database and independent anchor to generation two, then prove the
+        // stale fork cannot be restored or relabeled as current authority.
+        let main_database = retained_real_fleet_authority_path("q9-2-stale-main");
+        let fork_database = retained_real_fleet_authority_path("q9-2-stale-fork");
+        let rollback_anchor = main_database.with_file_name("fleet_registry_anchor.json");
+        q9_2_bootstrap_retained_registry(&main_database, &rollback_anchor, 97);
+        q9_2_copy_database_family(&main_database, &fork_database);
+        let rollback_authority = RetainedTestAnchorAuthority::new(&rollback_anchor, false);
+        let mut main_storage = crate::storage_adapter::FleetTrustStateFrankensqliteStorageAdapter::open_fleet_trust_state_file(&main_database)
+            .expect("reopen main rollback-proof database");
+        let main_live = FleetVerificationRegistryPersistence::new(
+            &mut main_storage,
+            &q9_2_context("rollback-main-restore"),
+        )
+        .restore(&rollback_authority)
+        .expect("restore generation-one main database");
+        let next_signer = v2_test_signer("node-a", 2, 98);
+        let next_pending = FleetVerificationRegistryPersistence::new(
+            &mut main_storage,
+            &q9_2_context("rollback-main-advance"),
+        )
+        .prepare_rotation(
+            &main_live,
+            NodeId::new("node-a"),
+            1,
+            2,
+            next_signer.verification_key().clone(),
+            SecurityEpoch::from_raw(2),
+            &rollback_authority,
+        )
+        .expect("advance retained main database beyond stale fork");
+        let advanced_main = next_pending
+            .finalize_and_publish(&rollback_authority)
+            .expect("advance retained external anchor beyond stale fork");
+        assert_eq!(advanced_main.generation(), 2);
+        assert_eq!(advanced_main.store_revision(), 2);
+        drop(main_storage);
+
+        let mut stale_fork = crate::storage_adapter::FleetTrustStateFrankensqliteStorageAdapter::open_fleet_trust_state_file(&fork_database)
+            .expect("open retained stale database fork");
+        let stale_error = FleetVerificationRegistryPersistence::new(
+            &mut stale_fork,
+            &q9_2_context("rollback-stale-fork"),
+        )
+        .restore(&rollback_authority)
+        .expect_err("external anchor must reject a stale retained database fork");
+        assert!(matches!(
+            stale_error,
+            FleetRegistryPersistenceError::Identity(
+                FleetIdentityError::UnverifiedRegistryAnchor { .. }
+            )
+        ));
+        drop(stale_fork);
+
+        let mut final_main = crate::storage_adapter::FleetTrustStateFrankensqliteStorageAdapter::open_fleet_trust_state_file(&main_database)
+            .expect("reopen advanced main database after stale-fork refusal");
+        let exact_final = FleetVerificationRegistryPersistence::new(
+            &mut final_main,
+            &q9_2_context("rollback-final-main"),
+        )
+        .restore(&rollback_authority)
+        .expect("advanced main database remains exactly durable");
+        assert_eq!(exact_final.generation(), 2);
+        assert_eq!(exact_final.store_revision(), 2);
+        assert_eq!(exact_final.snapshot_hash(), advanced_main.snapshot_hash());
     }
 
     #[test]

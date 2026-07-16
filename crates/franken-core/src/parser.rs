@@ -7603,7 +7603,16 @@ fn try_parse_postfix(
         && let Some(open_paren) = find_matching_open_paren(expr)
         && open_paren > 0
     {
-        let callee_src = expr[..open_paren].trim();
+        let callee_src = match trim_binding_pattern_trivia(&expr[..open_paren]) {
+            Some(callee_src) => callee_src,
+            None => {
+                return Some(Err(unsupported_expression_syntax_error(
+                    "unterminated lexical trivia in call callee",
+                    span,
+                    context,
+                )));
+            }
+        };
         let args_src = &expr[open_paren + 1..expr.len() - 1]; // between ( and )
         let (callee_src, optional) = if let Some(stripped) = callee_src.strip_suffix("?.") {
             (stripped.trim(), true)
@@ -7651,7 +7660,16 @@ fn try_parse_postfix(
         && let Some(open_bracket) = find_matching_open_bracket(expr)
         && open_bracket > 0
     {
-        let object_src = expr[..open_bracket].trim();
+        let object_src = match trim_binding_pattern_trivia(&expr[..open_bracket]) {
+            Some(object_src) => object_src,
+            None => {
+                return Some(Err(unsupported_expression_syntax_error(
+                    "unterminated lexical trivia in computed member object",
+                    span,
+                    context,
+                )));
+            }
+        };
         let prop_src = &expr[open_bracket + 1..expr.len() - 1];
         let (object_src, optional) = if let Some(stripped) = object_src.strip_suffix("?.") {
             (stripped.trim(), true)
@@ -7669,7 +7687,7 @@ fn try_parse_postfix(
             Ok(e) => e,
             Err(e) => return Some(Err(e)),
         };
-        let property = match parse_expression(prop_src.trim(), span, context, recursion_depth + 1) {
+        let property = match parse_expression(prop_src, span, context, recursion_depth + 1) {
             Ok(e) => e,
             Err(e) => return Some(Err(e)),
         };
@@ -7690,11 +7708,34 @@ fn try_parse_postfix(
 
     // Dot member access: a.b
     if let Some(dot_pos) = find_last_top_level_dot(expr) {
-        let object_src = expr[..dot_pos].trim();
-        let property_src = expr[dot_pos + 1..].trim();
-        let (object_src, optional) = if let Some(stripped) = object_src.strip_suffix('?') {
+        let raw_object_src = &expr[..dot_pos];
+        // IdentifierName is the one postfix operand that is not recursively
+        // parsed as an Expression, so normalize its lexical boundary here.
+        // Keep comments *inside* a token slice intact: `va/*c*/lue` must not
+        // be joined into `value`.
+        let property_src = match trim_binding_pattern_trivia(&expr[dot_pos + 1..]) {
+            Some(property_src) => property_src,
+            None => {
+                return Some(Err(unsupported_expression_syntax_error(
+                    "unterminated lexical trivia in member property",
+                    span,
+                    context,
+                )));
+            }
+        };
+        let (object_src, optional) = if let Some(stripped) = raw_object_src.strip_suffix('?') {
             (stripped.trim(), true)
         } else {
+            let object_src = raw_object_src.trim();
+            if trim_binding_pattern_trivia(object_src)
+                .is_some_and(|lexical_object_src| lexical_object_src.ends_with('?'))
+            {
+                return Some(Err(optional_chaining_syntax_error(
+                    "optional chaining punctuator `?.` cannot contain lexical trivia",
+                    span,
+                    context,
+                )));
+            }
             (object_src, false)
         };
         if optional && !is_identifier(property_src) {
@@ -8151,229 +8192,73 @@ fn find_constructor_arguments_before_postfix(
 
 /// Find the position of the opening `(` that matches the final `)`.
 fn find_matching_open_paren(s: &str) -> Option<usize> {
-    let bytes = s.as_bytes();
-    let mut depth: i64 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
-    let mut i = bytes.len();
-    while i > 0 {
-        i -= 1;
-        let b = bytes[i];
-        if let Some(q) = in_quote {
-            if i > 0 && bytes[i - 1] == b'\\' && !escaped {
-                escaped = true;
-                continue;
-            }
-            escaped = false;
-            if b == q {
-                in_quote = None;
-            }
-            continue;
-        }
-        match b {
-            b'\'' | b'"' | b'`' => {
-                in_quote = Some(b);
-                continue;
-            }
-            b')' => depth += 1,
-            b'(' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(i);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
+    find_matching_final_delimiter(s, '(', ')')
 }
 
 /// Find the position of the opening `[` that matches the final `]`.
 fn find_matching_open_bracket(s: &str) -> Option<usize> {
-    let bytes = s.as_bytes();
-    let mut depth: i64 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
-    let mut i = bytes.len();
-    while i > 0 {
-        i -= 1;
-        let b = bytes[i];
-        if let Some(q) = in_quote {
-            if i > 0 && bytes[i - 1] == b'\\' && !escaped {
-                escaped = true;
-                continue;
-            }
-            escaped = false;
-            if b == q {
-                in_quote = None;
-            }
-            continue;
+    find_matching_final_delimiter(s, '[', ']')
+}
+
+fn find_matching_final_delimiter(s: &str, open: char, close: char) -> Option<usize> {
+    let final_index = s.len().checked_sub(close.len_utf8())?;
+    let mut stack = Vec::new();
+    let mut matching_open = None;
+    let mut imbalanced = false;
+    let complete = scan_binding_pattern_source(s, |index, ch, _, quoted| {
+        if quoted || imbalanced {
+            return;
         }
-        match b {
-            b'\'' | b'"' | b'`' => {
-                in_quote = Some(b);
-                continue;
+        if ch == open {
+            stack.push(index);
+        } else if ch == close {
+            let Some(open_index) = stack.pop() else {
+                imbalanced = true;
+                return;
+            };
+            if index == final_index {
+                matching_open = Some(open_index);
             }
-            b']' => depth += 1,
-            b'[' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(i);
-                }
-            }
-            _ => {}
         }
+    });
+    if complete && !imbalanced && stack.is_empty() {
+        matching_open
+    } else {
+        None
     }
-    None
 }
 
 /// Find the last top-level `.` (not inside delimiters, quotes, or numeric literals).
 fn find_last_top_level_dot(s: &str) -> Option<usize> {
     let bytes = s.as_bytes();
-    let mut depth_paren: i64 = 0;
-    let mut depth_bracket: i64 = 0;
-    let mut depth_brace: i64 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
     let mut last_dot: Option<usize> = None;
 
-    for (i, &b) in bytes.iter().enumerate() {
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if b == b'\\' {
-                escaped = true;
-                continue;
-            }
-            if b == q {
-                in_quote = None;
-            }
-            continue;
-        }
-        match b {
-            b'\'' | b'"' | b'`' => {
-                in_quote = Some(b);
-                continue;
-            }
-            b'(' => {
-                depth_paren += 1;
-                continue;
-            }
-            b')' => {
-                depth_paren -= 1;
-                continue;
-            }
-            b'[' => {
-                depth_bracket += 1;
-                continue;
-            }
-            b']' => {
-                depth_bracket -= 1;
-                continue;
-            }
-            b'{' => {
-                depth_brace += 1;
-                continue;
-            }
-            b'}' => {
-                depth_brace -= 1;
-                continue;
-            }
-            _ => {}
-        }
-        if depth_paren == 0 && depth_bracket == 0 && depth_brace == 0 && b == b'.' {
+    scan_binding_pattern_source(s, |index, ch, depth, quoted| {
+        if !quoted && depth == 0 && ch == '.' {
             // Make sure this isn't a numeric dot (e.g., "3.14").
-            let before_digit = i > 0 && bytes[i - 1].is_ascii_digit();
-            let after_digit = i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit();
+            let before_digit = index > 0 && bytes[index - 1].is_ascii_digit();
+            let after_digit = index + 1 < bytes.len() && bytes[index + 1].is_ascii_digit();
             if !(before_digit && after_digit) {
-                last_dot = Some(i);
+                last_dot = Some(index);
             }
         }
-    }
+    });
     last_dot
 }
 
 fn find_last_top_level_optional_chain(s: &str) -> Option<usize> {
     let bytes = s.as_bytes();
-    let mut depth_paren: i64 = 0;
-    let mut depth_bracket: i64 = 0;
-    let mut depth_brace: i64 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
     let mut last_optional: Option<usize> = None;
-    let mut i = 0usize;
 
-    while i + 1 < bytes.len() {
-        let b = bytes[i];
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                i += 1;
-                continue;
-            }
-            if b == b'\\' {
-                escaped = true;
-                i += 1;
-                continue;
-            }
-            if b == q {
-                in_quote = None;
-            }
-            i += 1;
-            continue;
-        }
-        match b {
-            b'\'' | b'"' | b'`' => {
-                in_quote = Some(b);
-                i += 1;
-                continue;
-            }
-            b'(' => {
-                depth_paren += 1;
-                i += 1;
-                continue;
-            }
-            b')' => {
-                depth_paren -= 1;
-                i += 1;
-                continue;
-            }
-            b'[' => {
-                depth_bracket += 1;
-                i += 1;
-                continue;
-            }
-            b']' => {
-                depth_bracket -= 1;
-                i += 1;
-                continue;
-            }
-            b'{' => {
-                depth_brace += 1;
-                i += 1;
-                continue;
-            }
-            b'}' => {
-                depth_brace -= 1;
-                i += 1;
-                continue;
-            }
-            _ => {}
-        }
-        if depth_paren == 0
-            && depth_bracket == 0
-            && depth_brace == 0
-            && b == b'?'
-            && bytes[i + 1] == b'.'
+    scan_binding_pattern_source(s, |index, ch, depth, quoted| {
+        if !quoted
+            && depth == 0
+            && ch == '?'
+            && bytes.get(index + 1).is_some_and(|next| *next == b'.')
         {
-            last_optional = Some(i);
-            i += 2;
-            continue;
+            last_optional = Some(index);
         }
-        i += 1;
-    }
+    });
 
     last_optional
 }
@@ -8515,66 +8400,15 @@ fn parse_object_literal(
 
 /// Split a string by top-level commas (not inside delimiters or quotes).
 fn split_top_level_commas(s: &str) -> Vec<&str> {
-    let bytes = s.as_bytes();
-    let mut depth_paren: i64 = 0;
-    let mut depth_bracket: i64 = 0;
-    let mut depth_brace: i64 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
     let mut parts = Vec::new();
     let mut start = 0;
 
-    for (i, &b) in bytes.iter().enumerate() {
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if b == b'\\' {
-                escaped = true;
-                continue;
-            }
-            if b == q {
-                in_quote = None;
-            }
-            continue;
+    scan_binding_pattern_source(s, |index, ch, depth, quoted| {
+        if !quoted && depth == 0 && ch == ',' {
+            parts.push(&s[start..index]);
+            start = index + ch.len_utf8();
         }
-        match b {
-            b'\'' | b'"' | b'`' => {
-                in_quote = Some(b);
-                continue;
-            }
-            b'(' => {
-                depth_paren += 1;
-                continue;
-            }
-            b')' => {
-                depth_paren -= 1;
-                continue;
-            }
-            b'[' => {
-                depth_bracket += 1;
-                continue;
-            }
-            b']' => {
-                depth_bracket -= 1;
-                continue;
-            }
-            b'{' => {
-                depth_brace += 1;
-                continue;
-            }
-            b'}' => {
-                depth_brace -= 1;
-                continue;
-            }
-            _ => {}
-        }
-        if depth_paren == 0 && depth_bracket == 0 && depth_brace == 0 && b == b',' {
-            parts.push(&s[start..i]);
-            start = i + 1;
-        }
-    }
+    });
     parts.push(&s[start..]);
     parts
 }
@@ -8586,16 +8420,38 @@ fn parse_comma_separated_exprs(
     context: &mut ParseExecutionContext<'_>,
     recursion_depth: u64,
 ) -> ParseResult<Vec<Expression>> {
-    let trimmed = s.trim();
+    let trimmed = trim_binding_pattern_trivia(s).ok_or_else(|| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "unterminated lexical trivia in call arguments",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )
+    })?;
     if trimmed.is_empty() {
         return Ok(Vec::new());
     }
     let parts = split_top_level_commas(trimmed);
     let mut exprs = Vec::new();
-    for part in &parts {
-        let p = part.trim();
+    for (index, part) in parts.iter().enumerate() {
+        let p = trim_binding_pattern_trivia(part).ok_or_else(|| {
+            ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "unterminated lexical trivia in call argument",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            )
+        })?;
         if p.is_empty() {
-            continue;
+            if index + 1 == parts.len() && parts.len() > 1 {
+                continue;
+            }
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "missing expression in call argument list",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
         }
         exprs.push(parse_expression(p, span, context, recursion_depth + 1)?);
     }
@@ -13404,6 +13260,142 @@ strict"; var static = 1; }"#,
             assert!(
                 !generator_function_marker_prefix(property_prefix),
                 "property named function is not a generator marker: {property_prefix:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn postfix_operands_preserve_comment_trivia_bd_56geo() {
+        let tree = parse_script(
+            "let blockProduct = obj. /* member */ function * 2; \
+             let lineProduct = obj.function // trailing member trivia\n * 2; \
+             let memberCall = obj. /* member . */ function /* callee */ \
+                 (/* argument ) , */ 2 /* trailing argument */); \
+             let directCall = callback /* callee */ \
+                 (/* argument */ 3 /* trailing argument */); \
+             let optionalMember = obj?. /* member . */ function; \
+             let computedMember = obj[/* property ] */ 'function']; \
+             let commentOnlyCall = callback(/**/); \
+             let punctuatedArguments = callback(/* delimiters ) , */ 1, 2); \
+             let trailingComment = callback(1, /* trailing */);",
+        );
+        let initializer = |index: usize| {
+            let Statement::VariableDeclaration(declaration) = &tree.body[index] else {
+                panic!("expected variable declaration at index {index}");
+            };
+            declaration.declarations[0]
+                .initializer
+                .as_ref()
+                .unwrap_or_else(|| panic!("missing initializer at index {index}"))
+        };
+
+        for index in [0, 1] {
+            assert!(matches!(
+                initializer(index),
+                Expression::Binary {
+                    operator: BinaryOperator::Multiply,
+                    left,
+                    right,
+                } if matches!(left.as_ref(), Expression::Member {
+                    object,
+                    property,
+                    computed: false,
+                } if matches!(object.as_ref(), Expression::Identifier(name) if name == "obj")
+                    && matches!(property.as_ref(), Expression::Identifier(name) if name == "function"))
+                    && matches!(right.as_ref(), Expression::NumericLiteral(2))
+            ));
+        }
+
+        assert!(matches!(
+            initializer(2),
+            Expression::Call { callee, arguments }
+                if matches!(arguments.as_slice(), [Expression::NumericLiteral(2)])
+                    && matches!(callee.as_ref(), Expression::Member {
+                        object,
+                        property,
+                        computed: false,
+                    } if matches!(object.as_ref(), Expression::Identifier(name) if name == "obj")
+                        && matches!(property.as_ref(), Expression::Identifier(name) if name == "function"))
+        ));
+        assert!(matches!(
+            initializer(3),
+            Expression::Call { callee, arguments }
+                if matches!(callee.as_ref(), Expression::Identifier(name) if name == "callback")
+                    && matches!(arguments.as_slice(), [Expression::NumericLiteral(3)])
+        ));
+        assert!(matches!(
+            initializer(4),
+            Expression::OptionalMember {
+                object,
+                property,
+                computed: false,
+            } if matches!(object.as_ref(), Expression::Identifier(name) if name == "obj")
+                && matches!(property.as_ref(), Expression::Identifier(name) if name == "function")
+        ));
+        assert!(matches!(
+            initializer(5),
+            Expression::Member {
+                object,
+                property,
+                computed: true,
+            } if matches!(object.as_ref(), Expression::Identifier(name) if name == "obj")
+                && matches!(property.as_ref(), Expression::StringLiteral(name) if name == "function")
+        ));
+        assert!(matches!(
+            initializer(6),
+            Expression::Call { callee, arguments }
+                if matches!(callee.as_ref(), Expression::Identifier(name) if name == "callback")
+                    && arguments.is_empty()
+        ));
+        assert!(matches!(
+            initializer(7),
+            Expression::Call { callee, arguments }
+                if matches!(callee.as_ref(), Expression::Identifier(name) if name == "callback")
+                    && matches!(arguments.as_slice(), [
+                        Expression::NumericLiteral(1),
+                        Expression::NumericLiteral(2),
+                    ])
+        ));
+        assert!(matches!(
+            initializer(8),
+            Expression::Call { callee, arguments }
+                if matches!(callee.as_ref(), Expression::Identifier(name) if name == "callback")
+                    && matches!(arguments.as_slice(), [Expression::NumericLiteral(1)])
+        ));
+    }
+
+    #[test]
+    fn unterminated_postfix_comment_trivia_fails_closed_bd_56geo() {
+        let parser = CanonicalEs2020Parser;
+        for source in ["obj./*", "obj[/*]", "callback(/*)"] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("unterminated postfix comment must fail closed");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+        }
+
+        for source in ["obj? .value", "obj?\n.value", "obj?/* trivia */.value"] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("lexical trivia must not be joined into the `?.` punctuator");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn postfix_comment_trivia_does_not_hide_invalid_delimiters_bd_56geo() {
+        let parser = CanonicalEs2020Parser;
+        for source in ["callback(/* trivia */, 1)", "callback(1, /* trivia */, 2)"] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("comment trivia must not hide invalid postfix delimiters");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+        }
+
+        for source in ["callback(1))", "obj['value']]"] {
+            assert!(
+                matches!(first_expr(&parse_script(source)), Expression::Raw(_)),
+                "an unmatched final delimiter must not create a Call or Member: {source:?}"
             );
         }
     }

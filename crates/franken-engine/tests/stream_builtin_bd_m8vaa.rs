@@ -130,6 +130,7 @@ const IMPLEMENTED_FIXTURE_IDS: &[&str] = &[
     "tc::stream::0010",
     "tc::stream::0011",
     "tc::stream::0012",
+    "tc::stream::0017",
     "tc::stream::0022",
     "tc::stream::0023",
     "tc::stream::0029",
@@ -151,6 +152,7 @@ const IMPLEMENTED_FIXTURE_IDS: &[&str] = &[
     "tc::stream::0052",
     "tc::stream::0054",
     "tc::stream::0055",
+    "tc::stream::0062",
 ];
 
 #[test]
@@ -164,7 +166,7 @@ fn target_and_implemented_inventories_are_explicit() {
         .iter()
         .copied()
         .collect::<BTreeSet<_>>();
-    assert_eq!(IMPLEMENTED_FIXTURE_IDS.len(), 32);
+    assert_eq!(IMPLEMENTED_FIXTURE_IDS.len(), 34);
     assert_eq!(implemented.len(), IMPLEMENTED_FIXTURE_IDS.len());
     assert!(IMPLEMENTED_FIXTURE_IDS.iter().all(|id| unique.contains(id)));
 }
@@ -1542,11 +1544,10 @@ fn promise_pipeline_covers_sync_transform_object_mode_and_flush() {
 }
 
 #[test]
-#[ignore = "bd-fw7zd: pipe/unpipe slice not implemented yet"]
-fn pipe_unpipe_and_event_emitter_inheritance() {
+fn readable_pipe_returns_destination_and_preserves_lifecycle_order_bd_7h43f() {
     assert_cases(&[
         EvalCase {
-            ids: &["tc::stream::0017", "tc::stream::0018"],
+            ids: &["tc::stream::0017"],
             description: "pipe returns the destination and finishes after ordered writes",
             source: r#"
                 const { Readable, Writable } = require('stream');
@@ -1557,25 +1558,6 @@ fn pipe_unpipe_and_event_emitter_inheritance() {
                 console.log(source.pipe(sink) === sink);
             "#,
             expected: "true\np1,p2",
-        },
-        EvalCase {
-            ids: &["tc::stream::0021"],
-            description: "unpipe emits on the destination and stops later forwarding",
-            source: r#"
-                const { PassThrough, Writable } = require('stream');
-                const source = new PassThrough();
-                const chunks = [];
-                const sink = new Writable({ write(chunk, encoding, callback) { chunks.push(chunk.toString()); callback(); } });
-                sink.on('unpipe', () => console.log('unpipe-event'));
-                source.pipe(sink);
-                source.write('kept');
-                setImmediate(() => {
-                  source.unpipe(sink);
-                  source.write('dropped');
-                  setImmediate(() => console.log('got:' + chunks.join(',')));
-                });
-            "#,
-            expected: "unpipe-event\ngot:kept",
         },
         EvalCase {
             ids: &["tc::stream::0062"],
@@ -1598,6 +1580,45 @@ fn pipe_unpipe_and_event_emitter_inheritance() {
                 console.log(chunks.join(','));
             "#,
             expected: "pipe,write:north,write:south,finish,close\nnorth,south",
+        },
+    ]);
+}
+
+#[test]
+#[ignore = "bd-fw7zd: PassThrough and unpipe slices not implemented yet"]
+fn pipe_unpipe_and_event_emitter_inheritance() {
+    assert_cases(&[
+        EvalCase {
+            ids: &["tc::stream::0018"],
+            description: "Readable.pipe forwards into a PassThrough destination",
+            source: r#"
+                const { Readable, PassThrough } = require('stream');
+                const source = Readable.from(['z']);
+                const destination = new PassThrough();
+                console.log(source.pipe(destination) === destination);
+                destination.on('data', () => {});
+                destination.on('end', () => console.log('done'));
+            "#,
+            expected: "true\ndone",
+        },
+        EvalCase {
+            ids: &["tc::stream::0021"],
+            description: "unpipe emits on the destination and stops later forwarding",
+            source: r#"
+                const { PassThrough, Writable } = require('stream');
+                const source = new PassThrough();
+                const chunks = [];
+                const sink = new Writable({ write(chunk, encoding, callback) { chunks.push(chunk.toString()); callback(); } });
+                sink.on('unpipe', () => console.log('unpipe-event'));
+                source.pipe(sink);
+                source.write('kept');
+                setImmediate(() => {
+                  source.unpipe(sink);
+                  source.write('dropped');
+                  setImmediate(() => console.log('got:' + chunks.join(',')));
+                });
+            "#,
+            expected: "unpipe-event\ngot:kept",
         },
         EvalCase {
             ids: &["tc::stream::0063"],

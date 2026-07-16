@@ -2344,27 +2344,133 @@ enum PendingClauseKind {
 struct PendingClauseContinuation {
     kind: PendingClauseKind,
     fragment_start: usize,
+    direct_do_depth: usize,
+}
+
+fn direct_do_chain_depth_with_complete_body(
+    statement: &str,
+    grammar_context: ScanGrammarContext,
+    completion_recursion_limit: usize,
+    completion_memo: &mut DoWhileCompletionMemo,
+) -> usize {
+    let Some(mut body) = trim_binding_pattern_trivia_with_context(statement, grammar_context)
+    else {
+        return 0;
+    };
+    let mut do_depth = 0usize;
+    let mut statement_depth = 0usize;
+    loop {
+        if starts_with_keyword(body, "do") {
+            do_depth = do_depth.saturating_add(1);
+            statement_depth = statement_depth.saturating_add(1);
+            if statement_depth >= completion_recursion_limit {
+                return 0;
+            }
+            let Some(next_body) = clause_keyword_tail(body, "do", grammar_context) else {
+                return 0;
+            };
+            body = next_body;
+            continue;
+        }
+        let Some(wrapper) = ["if", "while", "for", "with"]
+            .into_iter()
+            .find(|keyword| starts_with_keyword(body, keyword))
+        else {
+            break;
+        };
+        statement_depth = statement_depth.saturating_add(1);
+        if statement_depth >= completion_recursion_limit {
+            return 0;
+        }
+        let Some(wrapper_tail) = clause_keyword_tail(body, wrapper, grammar_context) else {
+            return 0;
+        };
+        let Some((_, next_body)) =
+            extract_balanced_with_context(wrapper_tail, '(', ')', grammar_context)
+        else {
+            return 0;
+        };
+        let Some(next_body) = trim_binding_pattern_trivia_with_context(next_body, grammar_context)
+        else {
+            return 0;
+        };
+        if wrapper == "if"
+            && !find_top_level_keyword_indices_with_context(next_body, "else", grammar_context)
+                .is_empty()
+        {
+            return 0;
+        }
+        body = next_body;
+    }
+    if do_depth > 0
+        && statement_is_complete_before_clause_with_limit(
+            body,
+            "while",
+            grammar_context,
+            completion_recursion_limit.saturating_sub(statement_depth),
+            completion_memo,
+        )
+    {
+        do_depth
+    } else {
+        0
+    }
 }
 
 fn pending_clause_after_statement(
     statement: &str,
     following: &str,
     fragment_start: usize,
+    grammar_context: ScanGrammarContext,
+    completion_recursion_limit: usize,
+    completion_memo: &mut DoWhileCompletionMemo,
 ) -> Option<PendingClauseContinuation> {
-    let kind = if starts_with_keyword(statement, "if") && starts_with_keyword(following, "else") {
-        PendingClauseKind::IfAwaitElse
+    let (kind, direct_do_depth) = if starts_with_keyword(statement, "if")
+        && starts_with_keyword(following, "else")
+    {
+        (PendingClauseKind::IfAwaitElse, 0)
     } else if starts_with_keyword(statement, "try")
         && (starts_with_keyword(following, "catch") || starts_with_keyword(following, "finally"))
     {
-        PendingClauseKind::TryAwaitHandler
-    } else if starts_with_keyword(statement, "do") && starts_with_keyword(following, "while") {
-        PendingClauseKind::DoAwaitWhile
+        (PendingClauseKind::TryAwaitHandler, 0)
+    } else if starts_with_keyword(statement, "do")
+        && starts_with_keyword(following, "while")
+        && !do_while_statement_is_complete_with_limit(
+            statement,
+            grammar_context,
+            completion_recursion_limit,
+            completion_memo,
+        )
+    {
+        (
+            PendingClauseKind::DoAwaitWhile,
+            direct_do_chain_depth_with_complete_body(
+                statement,
+                grammar_context,
+                completion_recursion_limit,
+                completion_memo,
+            ),
+        )
     } else {
-        return None;
+        return advance_clause_statement(
+            pending_clause_with_kind(PendingClauseKind::ElseAwaitStatement, fragment_start),
+            statement,
+            following,
+            fragment_start,
+            false,
+            (grammar_context, completion_recursion_limit, completion_memo),
+        )
+        .filter(|pending| {
+            matches!(
+                pending.kind,
+                PendingClauseKind::DoAwaitWhile | PendingClauseKind::DoWhileAwaitCondition
+            )
+        });
     };
     Some(PendingClauseContinuation {
         kind,
         fragment_start,
+        direct_do_depth,
     })
 }
 
@@ -2560,6 +2666,7 @@ fn pending_clause_with_kind(
     PendingClauseContinuation {
         kind,
         fragment_start,
+        direct_do_depth: 0,
     }
 }
 
@@ -2579,8 +2686,9 @@ fn advance_clause_statement(
     next_after_trivia: &str,
     current_len: usize,
     mut await_else_after_completion: bool,
-    grammar_context: ScanGrammarContext,
+    completion: (ScanGrammarContext, usize, &mut DoWhileCompletionMemo),
 ) -> Option<PendingClauseContinuation> {
+    let (grammar_context, completion_recursion_limit, completion_memo) = completion;
     loop {
         if starts_with_keyword(statement, "if") {
             match parenthesized_statement_status(statement, "if", grammar_context) {
@@ -2654,11 +2762,25 @@ fn advance_clause_statement(
                 current_len,
             ));
         }
-        if starts_with_keyword(statement, "do") && starts_with_keyword(next_after_trivia, "while") {
-            return Some(pending_clause_with_kind(
-                PendingClauseKind::DoAwaitWhile,
-                current_len,
-            ));
+        if starts_with_keyword(statement, "do") {
+            if do_while_statement_is_complete_with_limit(
+                statement,
+                grammar_context,
+                completion_recursion_limit,
+                completion_memo,
+            ) {
+                return completed_clause_statement(
+                    await_else_after_completion,
+                    next_after_trivia,
+                    current_len,
+                );
+            }
+            if starts_with_keyword(next_after_trivia, "while") {
+                return Some(pending_clause_with_kind(
+                    PendingClauseKind::DoAwaitWhile,
+                    current_len,
+                ));
+            }
         }
 
         if declaration_source_needs_continuation(statement, next_after_trivia, grammar_context) {
@@ -2690,6 +2812,8 @@ fn advance_pending_clause(
     current_text: &str,
     next_after_trivia: &str,
     grammar_context: ScanGrammarContext,
+    completion_recursion_limit: usize,
+    completion_memo: &mut DoWhileCompletionMemo,
 ) -> Option<PendingClauseContinuation> {
     let fragment = current_text.get(pending.fragment_start..)?;
     let fragment = trim_binding_pattern_trivia_with_context(fragment, grammar_context)?;
@@ -2715,7 +2839,7 @@ fn advance_pending_clause(
                 next_after_trivia,
                 current_text.len(),
                 false,
-                grammar_context,
+                (grammar_context, completion_recursion_limit, completion_memo),
             )
         }
         PendingClauseKind::ElseAwaitStatement => advance_clause_statement(
@@ -2724,7 +2848,7 @@ fn advance_pending_clause(
             next_after_trivia,
             current_text.len(),
             false,
-            grammar_context,
+            (grammar_context, completion_recursion_limit, completion_memo),
         ),
         PendingClauseKind::ElseExpressionContinuation => {
             if expression_statement_continues(fragment, next_after_trivia, grammar_context) {
@@ -2743,6 +2867,8 @@ fn advance_pending_clause(
                 line_ends_continuation,
                 next_after_trivia,
                 grammar_context,
+                completion_recursion_limit,
+                completion_memo,
             ) {
                 Some(pending_clause_with_kind(
                     PendingClauseKind::ElseDeclarationContinuation,
@@ -2758,7 +2884,7 @@ fn advance_pending_clause(
             next_after_trivia,
             current_text.len(),
             true,
-            grammar_context,
+            (grammar_context, completion_recursion_limit, completion_memo),
         ),
         PendingClauseKind::ElseIfExpressionContinuation => {
             if expression_statement_continues(fragment, next_after_trivia, grammar_context) {
@@ -2782,6 +2908,8 @@ fn advance_pending_clause(
                 line_ends_continuation,
                 next_after_trivia,
                 grammar_context,
+                completion_recursion_limit,
+                completion_memo,
             ) {
                 Some(pending_clause_with_kind(
                     PendingClauseKind::ElseIfDeclarationContinuation,
@@ -2890,6 +3018,40 @@ fn advance_pending_clause(
     }
 }
 
+fn advance_direct_do_while_clause(
+    pending: PendingClauseContinuation,
+    current_text: &str,
+    next_after_trivia: &str,
+    grammar_context: ScanGrammarContext,
+) -> Option<Option<PendingClauseContinuation>> {
+    if pending.kind != PendingClauseKind::DoAwaitWhile || pending.direct_do_depth == 0 {
+        return None;
+    }
+    let fragment = current_text.get(pending.fragment_start..)?;
+    let fragment = trim_binding_pattern_trivia_with_context(fragment, grammar_context)?;
+    let condition = clause_keyword_tail(fragment, "while", grammar_context)?;
+    let (_, rest) = extract_balanced_with_context(condition, '(', ')', grammar_context)?;
+    let rest = trim_binding_pattern_trivia_with_context(rest, grammar_context)?;
+    let rest = if let Some(rest) = rest.strip_prefix(';') {
+        trim_binding_pattern_trivia_with_context(rest, grammar_context)?
+    } else {
+        rest
+    };
+    if !rest.is_empty() {
+        return None;
+    }
+    if pending.direct_do_depth > 1 {
+        return starts_with_keyword(next_after_trivia, "while").then_some(Some(
+            PendingClauseContinuation {
+                kind: PendingClauseKind::DoAwaitWhile,
+                fragment_start: current_text.len(),
+                direct_do_depth: pending.direct_do_depth.saturating_sub(1),
+            },
+        ));
+    }
+    Some(None)
+}
+
 #[derive(Debug, Clone, Copy)]
 struct PhysicalLine<'a> {
     segment: &'a str,
@@ -2968,13 +3130,23 @@ fn next_significant_offsets_after_physical_lines(
     next_offsets
 }
 
-fn trailing_statement_source(source: &str, grammar_context: ScanGrammarContext) -> Option<&str> {
+fn trailing_statement_source<'a>(
+    source: &'a str,
+    grammar_context: ScanGrammarContext,
+    completion_recursion_limit: usize,
+    completion_memo: &mut DoWhileCompletionMemo,
+) -> Option<&'a str> {
     trim_binding_pattern_trivia_with_context(source, grammar_context)
         .filter(|source| !source.ends_with(';'))
         .and_then(|_| {
-            split_statement_segments_with_context(source, grammar_context)
-                .last()
-                .map(|(_, _, statement)| *statement)
+            split_statement_segments_with_completion_limit_and_memo(
+                source,
+                grammar_context,
+                completion_recursion_limit,
+                completion_memo,
+            )
+            .last()
+            .map(|(_, _, statement)| *statement)
         })
         .and_then(|source| trim_binding_pattern_trivia_with_context(source, grammar_context))
 }
@@ -3014,6 +3186,8 @@ fn pending_declaration_fragment_needs_continuation(
     line_ends_continuation: bool,
     next_after_trivia: &str,
     grammar_context: ScanGrammarContext,
+    completion_recursion_limit: usize,
+    completion_memo: &mut DoWhileCompletionMemo,
 ) -> bool {
     let next = next_after_trivia.chars().next();
     let next_continues_declaration =
@@ -3026,7 +3200,12 @@ fn pending_declaration_fragment_needs_continuation(
     if source.is_empty() {
         return true;
     }
-    let Some(trailing_source) = trailing_statement_source(source, grammar_context) else {
+    let Some(trailing_source) = trailing_statement_source(
+        source,
+        grammar_context,
+        completion_recursion_limit,
+        completion_memo,
+    ) else {
         return false;
     };
     if declaration_source_needs_continuation(trailing_source, next_after_trivia, grammar_context) {
@@ -3040,9 +3219,22 @@ fn pending_declaration_fragment_needs_continuation(
 
 /// Merge physical lines into logical lines by tracking brace/paren/bracket depth.
 /// When a line ends with unbalanced delimiters, subsequent lines are merged until balance.
+#[cfg(test)]
 fn merge_logical_lines_with_context(
     text: &str,
     grammar_context: ScanGrammarContext,
+) -> Vec<LogicalLine> {
+    merge_logical_lines_with_completion_limit(
+        text,
+        grammar_context,
+        STATEMENT_COMPLETION_RECURSION_LIMIT,
+    )
+}
+
+fn merge_logical_lines_with_completion_limit(
+    text: &str,
+    grammar_context: ScanGrammarContext,
+    completion_recursion_limit: usize,
 ) -> Vec<LogicalLine> {
     let physical_lines = physical_line_segments(text);
     let next_significant_offsets =
@@ -3061,7 +3253,8 @@ fn merge_logical_lines_with_context(
     let template_literal_ends: BTreeMap<usize, usize> =
         scan_state.template_literal_ranges.into_iter().collect();
     let mut result = Vec::new();
-    let mut current_text = String::new();
+    let mut current_text = String::with_capacity(text.len());
+    let mut completion_memo = BTreeMap::new();
     let mut current_byte_offset: u64 = 0;
     let mut current_start_line: u64 = 0;
     let mut byte_offset: u64 = 0;
@@ -3092,6 +3285,7 @@ fn merge_logical_lines_with_context(
         let line = physical_line.content;
 
         if !accumulating {
+            completion_memo.clear();
             current_text.clear();
             current_byte_offset = byte_offset;
             current_start_line = line_no;
@@ -3413,6 +3607,8 @@ fn merge_logical_lines_with_context(
                             line_ends_continuation,
                             next_after_trivia,
                             grammar_context,
+                            completion_recursion_limit,
+                            &mut completion_memo,
                         ),
                     None,
                 )
@@ -3422,18 +3618,60 @@ fn merge_logical_lines_with_context(
                     if !line_has_significant_code {
                         pending_clause_continuation
                     } else {
-                        pending_clause_continuation.and_then(|pending| {
+                        let pending = pending_clause_continuation
+                            .expect("pending continuation checked above");
+                        if let Some(direct_continuation) = advance_direct_do_while_clause(
+                            pending,
+                            &current_text,
+                            next_after_trivia,
+                            grammar_context,
+                        ) {
+                            direct_continuation
+                        } else {
                             advance_pending_clause(
                                 pending,
                                 &current_text,
                                 next_after_trivia,
                                 grammar_context,
+                                completion_recursion_limit,
+                                &mut completion_memo,
                             )
-                        })
+                            .or_else(|| {
+                                matches!(
+                                    pending.kind,
+                                    PendingClauseKind::DoAwaitWhile
+                                        | PendingClauseKind::DoWhileAwaitCondition
+                                )
+                                .then(|| {
+                                    trailing_statement_source(
+                                        &current_text,
+                                        grammar_context,
+                                        completion_recursion_limit,
+                                        &mut completion_memo,
+                                    )
+                                    .and_then(|source| {
+                                        pending_clause_after_statement(
+                                            source,
+                                            next_after_trivia,
+                                            current_text.len(),
+                                            grammar_context,
+                                            completion_recursion_limit,
+                                            &mut completion_memo,
+                                        )
+                                    })
+                                })
+                                .flatten()
+                            })
+                        }
                     },
                 )
             } else {
-                let trailing_source = trailing_statement_source(&current_text, grammar_context);
+                let trailing_source = trailing_statement_source(
+                    &current_text,
+                    grammar_context,
+                    completion_recursion_limit,
+                    &mut completion_memo,
+                );
                 let declaration_needs_binding = trailing_source.is_some_and(|source| {
                     declaration_source_needs_continuation(
                         source,
@@ -3442,7 +3680,14 @@ fn merge_logical_lines_with_context(
                     )
                 });
                 let clause_continues = trailing_source.and_then(|source| {
-                    pending_clause_after_statement(source, next_after_trivia, current_text.len())
+                    pending_clause_after_statement(
+                        source,
+                        next_after_trivia,
+                        current_text.len(),
+                        grammar_context,
+                        completion_recursion_limit,
+                        &mut completion_memo,
+                    )
                 });
                 (declaration_needs_binding, clause_continues)
             }
@@ -3699,19 +3944,25 @@ fn parse_source(
         ));
     }
 
-    let logical_lines = merge_logical_lines_with_context(
+    let completion_recursion_limit =
+        usize::try_from(context.options.budget.max_recursion_depth).unwrap_or(usize::MAX);
+    let logical_lines = merge_logical_lines_with_completion_limit(
         text,
         ScanGrammarContext::from_execution_context(&context),
+        completion_recursion_limit,
     );
     let source_line_starts = source_line_start_offsets(text);
     let mut statements = Vec::new();
 
     for logical_line in &logical_lines {
         let logical_line_starts = logical_line_start_offsets(&logical_line.text);
-        for (start_in_line, end_in_line, statement_text) in split_statement_segments_with_context(
-            &logical_line.text,
-            ScanGrammarContext::from_execution_context(&context),
-        ) {
+        for (start_in_line, end_in_line, statement_text) in
+            split_statement_segments_with_completion_limit(
+                &logical_line.text,
+                ScanGrammarContext::from_execution_context(&context),
+                completion_recursion_limit,
+            )
+        {
             let (start_line, start_column) =
                 logical_line_position(&logical_line_starts, logical_line.start_line, start_in_line);
             let (end_line, end_column) =
@@ -3786,27 +4037,612 @@ fn line_count(source: &str) -> u64 {
     (source_line_terminator_ranges(source).len() as u64).saturating_add(1)
 }
 
+fn find_top_level_keyword_indices_with_context(
+    source: &str,
+    keyword: &str,
+    grammar_context: ScanGrammarContext,
+) -> Vec<usize> {
+    let mut found = Vec::new();
+    let mut previous_significant = None;
+    scan_binding_pattern_source_with_context(
+        source,
+        grammar_context,
+        |index, ch, depth, quoted| {
+            if !quoted
+                && depth == 0
+                && previous_significant != Some('.')
+                && source[index..].starts_with(keyword)
+                && !source[..index]
+                    .chars()
+                    .next_back()
+                    .is_some_and(is_identifier_part_character)
+                && !starts_identifier_part(&source[index + keyword.len()..])
+            {
+                found.push(index);
+            }
+            if !quoted && !is_binding_pattern_whitespace(ch) {
+                previous_significant = Some(ch);
+            }
+        },
+    );
+    found
+}
+
+fn find_last_top_level_keyword_with_context(
+    source: &str,
+    keyword: &str,
+    grammar_context: ScanGrammarContext,
+) -> Option<usize> {
+    find_top_level_keyword_indices_with_context(source, keyword, grammar_context)
+        .into_iter()
+        .next_back()
+}
+
+#[cfg(test)]
+const STATEMENT_COMPLETION_RECURSION_LIMIT: usize = 256;
+type DoWhileCompletionMemo = BTreeMap<(usize, usize, usize), Option<usize>>;
+
+fn statement_is_complete_before_clause_with_limit(
+    source: &str,
+    following: &str,
+    grammar_context: ScanGrammarContext,
+    remaining_depth: usize,
+    memo: &mut DoWhileCompletionMemo,
+) -> bool {
+    if remaining_depth == 0 {
+        return false;
+    }
+    let Some(source) = trim_binding_pattern_trivia_with_context(source, grammar_context) else {
+        return false;
+    };
+    if starts_with_keyword(source, "do") {
+        return do_while_statement_is_complete_with_limit(
+            source,
+            grammar_context,
+            remaining_depth,
+            memo,
+        );
+    }
+    if starts_with_keyword(source, "if") {
+        let Some(after_if) = clause_keyword_tail(source, "if", grammar_context) else {
+            return false;
+        };
+        let Some((_, body)) = extract_balanced_with_context(after_if, '(', ')', grammar_context)
+        else {
+            return false;
+        };
+        let Some(body) = trim_binding_pattern_trivia_with_context(body, grammar_context) else {
+            return false;
+        };
+        if body.is_empty() {
+            return false;
+        }
+        for else_index in find_top_level_keyword_indices_with_context(body, "else", grammar_context)
+        {
+            if !statement_is_complete_before_clause_with_limit(
+                &body[..else_index],
+                "else",
+                grammar_context,
+                remaining_depth.saturating_sub(1),
+                memo,
+            ) {
+                continue;
+            }
+            let Some(alternate) = clause_keyword_tail(&body[else_index..], "else", grammar_context)
+            else {
+                return false;
+            };
+            if alternate.is_empty() {
+                return false;
+            }
+            return statement_is_complete_before_clause_with_limit(
+                alternate,
+                following,
+                grammar_context,
+                remaining_depth.saturating_sub(1),
+                memo,
+            );
+        }
+        if starts_with_keyword(following, "else") {
+            return false;
+        }
+        return statement_is_complete_before_clause_with_limit(
+            body,
+            following,
+            grammar_context,
+            remaining_depth.saturating_sub(1),
+            memo,
+        );
+    }
+    for keyword in ["while", "for", "with", "switch"] {
+        if !starts_with_keyword(source, keyword) {
+            continue;
+        }
+        if parenthesized_statement_status(source, keyword, grammar_context)
+            != Some(ParenthesizedStatementStatus::Complete)
+        {
+            return false;
+        }
+        let Some(tail) = clause_keyword_tail(source, keyword, grammar_context) else {
+            return false;
+        };
+        let Some((_, body)) = extract_balanced_with_context(tail, '(', ')', grammar_context) else {
+            return false;
+        };
+        let Some(body) = trim_binding_pattern_trivia_with_context(body, grammar_context) else {
+            return false;
+        };
+        if body.is_empty() {
+            return false;
+        }
+        return statement_is_complete_before_clause_with_limit(
+            body,
+            following,
+            grammar_context,
+            remaining_depth.saturating_sub(1),
+            memo,
+        );
+    }
+    advance_clause_statement(
+        pending_clause_with_kind(PendingClauseKind::ElseAwaitStatement, 0),
+        source,
+        following,
+        source.len(),
+        false,
+        (grammar_context, remaining_depth, memo),
+    )
+    .is_none()
+}
+
+#[cfg(test)]
+fn do_while_statement_is_complete(source: &str, grammar_context: ScanGrammarContext) -> bool {
+    do_while_statement_is_complete_with_recursion_limit(
+        source,
+        grammar_context,
+        STATEMENT_COMPLETION_RECURSION_LIMIT,
+    )
+}
+
+#[cfg(test)]
+fn do_while_statement_is_complete_with_recursion_limit(
+    source: &str,
+    grammar_context: ScanGrammarContext,
+    recursion_limit: usize,
+) -> bool {
+    let mut memo = BTreeMap::new();
+    do_while_statement_is_complete_with_limit(source, grammar_context, recursion_limit, &mut memo)
+}
+
+fn do_while_statement_is_complete_with_limit(
+    source: &str,
+    grammar_context: ScanGrammarContext,
+    remaining_depth: usize,
+    memo: &mut DoWhileCompletionMemo,
+) -> bool {
+    if remaining_depth == 0 {
+        return false;
+    }
+    let source = trim_directive_trivia(source).0;
+    do_while_statement_complete_prefix_with_limit(source, grammar_context, remaining_depth, memo)
+        .is_some_and(|end| {
+            let rest = trim_directive_trivia(&source[end..]).0;
+            rest.is_empty() || rest == ";"
+        })
+}
+
+fn do_while_statement_complete_prefix_with_limit(
+    source: &str,
+    grammar_context: ScanGrammarContext,
+    remaining_depth: usize,
+    memo: &mut DoWhileCompletionMemo,
+) -> Option<usize> {
+    if remaining_depth == 0 {
+        return None;
+    }
+    let source = trim_directive_trivia(source).0;
+    let memo_key = (source.as_ptr() as usize, source.len(), remaining_depth);
+    if let Some(cached) = memo.get(&memo_key) {
+        return *cached;
+    }
+    let result =
+        do_while_statement_complete_prefix_uncached(source, grammar_context, remaining_depth, memo);
+    memo.insert(memo_key, result);
+    result
+}
+
+fn do_while_statement_complete_prefix_uncached(
+    source: &str,
+    grammar_context: ScanGrammarContext,
+    remaining_depth: usize,
+    memo: &mut DoWhileCompletionMemo,
+) -> Option<usize> {
+    let after_do = clause_keyword_tail(source, "do", grammar_context)?;
+    for while_index in
+        find_top_level_keyword_indices_with_context(after_do, "while", grammar_context)
+    {
+        let body =
+            trim_binding_pattern_trivia_with_context(&after_do[..while_index], grammar_context)?;
+        if body.is_empty()
+            || !statement_is_complete_before_clause_with_limit(
+                body,
+                "while",
+                grammar_context,
+                remaining_depth.saturating_sub(1),
+                memo,
+            )
+        {
+            continue;
+        }
+        let Some(after_while) =
+            clause_keyword_tail(&after_do[while_index..], "while", grammar_context)
+        else {
+            continue;
+        };
+        let Some((_, rest)) = extract_balanced_with_context(after_while, '(', ')', grammar_context)
+        else {
+            continue;
+        };
+        return Some((rest.as_ptr() as usize).saturating_sub(source.as_ptr() as usize));
+    }
+    None
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingStatementClauseKind {
+    IfElse,
+    DoWhile,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingStatementClause {
+    kind: PendingStatementClauseKind,
+    start_index: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ActiveDoWhileTrailer {
+    do_start: usize,
+    condition_started: bool,
+    condition_end: Option<usize>,
+}
+
+impl ActiveDoWhileTrailer {
+    fn awaiting_condition(do_start: usize) -> Self {
+        Self {
+            do_start,
+            condition_started: false,
+            condition_end: None,
+        }
+    }
+}
+
+fn direct_statement_wrapper_prefix_owns_child(
+    source: &str,
+    grammar_context: ScanGrammarContext,
+    completion_recursion_limit: usize,
+) -> bool {
+    let Some(mut prefix) = trim_binding_pattern_trivia_with_context(source, grammar_context) else {
+        return false;
+    };
+    for _ in 0..completion_recursion_limit {
+        if prefix.is_empty() {
+            return true;
+        }
+        let Some(wrapper) = ["if", "while", "for", "with"]
+            .into_iter()
+            .find(|keyword| starts_with_keyword(prefix, keyword))
+        else {
+            return false;
+        };
+        let Some(wrapper_tail) = clause_keyword_tail(prefix, wrapper, grammar_context) else {
+            return false;
+        };
+        let Some((_, next_prefix)) =
+            extract_balanced_with_context(wrapper_tail, '(', ')', grammar_context)
+        else {
+            return false;
+        };
+        let Some(next_prefix) =
+            trim_binding_pattern_trivia_with_context(next_prefix, grammar_context)
+        else {
+            return false;
+        };
+        prefix = next_prefix;
+    }
+    false
+}
+
+fn take_pending_statement_clause(
+    pending: &mut Vec<PendingStatementClause>,
+    kind: PendingStatementClauseKind,
+) -> Option<PendingStatementClause> {
+    let index = pending
+        .iter()
+        .rposition(|candidate| candidate.kind == kind)?;
+    let clause = pending[index];
+    pending.truncate(index);
+    Some(clause)
+}
+
+fn consume_pending_statement_clause(
+    pending: &mut Vec<PendingStatementClause>,
+    kind: PendingStatementClauseKind,
+) -> bool {
+    take_pending_statement_clause(pending, kind).is_some()
+}
+
+fn retire_completed_do_while_clauses(
+    pending: &mut Vec<PendingStatementClause>,
+    source: &str,
+    statement_end: usize,
+    grammar_context: ScanGrammarContext,
+    completion_recursion_limit: usize,
+    memo: &mut DoWhileCompletionMemo,
+) {
+    while let Some(index) = pending
+        .iter()
+        .rposition(|clause| clause.kind == PendingStatementClauseKind::DoWhile)
+    {
+        let clause = pending[index];
+        if do_while_statement_complete_prefix_with_limit(
+            &source[clause.start_index..statement_end],
+            grammar_context,
+            completion_recursion_limit,
+            memo,
+        )
+        .is_none()
+        {
+            break;
+        }
+        pending.truncate(index);
+    }
+}
+
+#[cfg(test)]
 fn split_statement_segments_with_context(
     line: &str,
     grammar_context: ScanGrammarContext,
 ) -> Vec<(usize, usize, &str)> {
+    split_statement_segments_with_completion_limit(
+        line,
+        grammar_context,
+        STATEMENT_COMPLETION_RECURSION_LIMIT,
+    )
+}
+
+fn split_statement_segments_with_completion_limit(
+    line: &str,
+    grammar_context: ScanGrammarContext,
+    completion_recursion_limit: usize,
+) -> Vec<(usize, usize, &str)> {
+    let mut completion_memo = BTreeMap::new();
+    split_statement_segments_with_completion_limit_and_memo(
+        line,
+        grammar_context,
+        completion_recursion_limit,
+        &mut completion_memo,
+    )
+}
+
+fn split_statement_segments_with_completion_limit_and_memo<'a>(
+    line: &'a str,
+    grammar_context: ScanGrammarContext,
+    completion_recursion_limit: usize,
+    completion_memo: &mut DoWhileCompletionMemo,
+) -> Vec<(usize, usize, &'a str)> {
     let mut out = Vec::new();
     let mut segment_start = 0usize;
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;
     let mut brace_depth = 0usize;
+    let mut pending_statement_clauses: Vec<PendingStatementClause> = Vec::new();
+    let mut previous_significant = None;
+    let mut previous_significant_end = segment_start;
+    let mut active_do_while_trailer: Option<ActiveDoWhileTrailer> = None;
 
     scan_binding_pattern_source_with_context(line, grammar_context, |index, ch, depth, quoted| {
         if quoted {
+            let begins_comment = line[index..].starts_with("//") || line[index..].starts_with("/*");
+            if !begins_comment
+                && let Some(condition_end) =
+                    active_do_while_trailer.and_then(|active| active.condition_end)
+                && index >= condition_end
+                && trim_binding_pattern_trivia_with_context(
+                    &line[condition_end..index],
+                    grammar_context,
+                )
+                .is_some_and(str::is_empty)
+            {
+                push_segment(&mut out, line, segment_start, index, grammar_context);
+                segment_start = index;
+                pending_statement_clauses.clear();
+                previous_significant = None;
+                previous_significant_end = index;
+                active_do_while_trailer = None;
+            }
             return;
         }
         if depth == 0 && async_function_asi_boundary(line, segment_start, index, grammar_context) {
             push_segment(&mut out, line, segment_start, index, grammar_context);
             segment_start = index;
+            pending_statement_clauses.clear();
+            previous_significant = None;
+            previous_significant_end = index;
+            active_do_while_trailer = None;
         }
+        let starts_do = depth == 0
+            && previous_significant != Some('.')
+            && line[index..].starts_with("do")
+            && !line[..index]
+                .chars()
+                .next_back()
+                .is_some_and(is_identifier_part_character)
+            && !starts_identifier_part(&line[index + "do".len()..]);
+        let starts_while = depth == 0
+            && previous_significant != Some('.')
+            && line[index..].starts_with("while")
+            && !line[..index]
+                .chars()
+                .next_back()
+                .is_some_and(is_identifier_part_character)
+            && !starts_identifier_part(&line[index + "while".len()..]);
+        let starts_if = depth == 0
+            && previous_significant != Some('.')
+            && line[index..].starts_with("if")
+            && !line[..index]
+                .chars()
+                .next_back()
+                .is_some_and(is_identifier_part_character)
+            && !starts_identifier_part(&line[index + "if".len()..]);
+        let starts_else = depth == 0
+            && previous_significant != Some('.')
+            && line[index..].starts_with("else")
+            && !line[..index]
+                .chars()
+                .next_back()
+                .is_some_and(is_identifier_part_character)
+            && !starts_identifier_part(&line[index + "else".len()..]);
+
+        let mut claimed_current_while = false;
+        if !is_binding_pattern_whitespace(ch)
+            && let Some(active) = active_do_while_trailer
+            && let Some(condition_end) = active.condition_end
+            && index >= condition_end
+            && trim_binding_pattern_trivia_with_context(
+                &line[condition_end..index],
+                grammar_context,
+            )
+            .is_some_and(str::is_empty)
+            && ch != ';'
+        {
+            if starts_while {
+                let parent_index = pending_statement_clauses.iter().rposition(|clause| {
+                    clause.kind == PendingStatementClauseKind::DoWhile
+                        && clause.start_index < active.do_start
+                });
+                let parent_body_is_complete = parent_index.is_some_and(|parent_index| {
+                    let parent = pending_statement_clauses[parent_index];
+                    let direct_or_wrapped_body = clause_keyword_tail(
+                        &line[parent.start_index..active.do_start],
+                        "do",
+                        grammar_context,
+                    )
+                    .is_some_and(|body_prefix| {
+                        direct_statement_wrapper_prefix_owns_child(
+                            body_prefix,
+                            grammar_context,
+                            completion_recursion_limit,
+                        )
+                    });
+                    direct_or_wrapped_body
+                        || clause_keyword_tail(
+                            &line[parent.start_index..index],
+                            "do",
+                            grammar_context,
+                        )
+                        .is_some_and(|body| {
+                            statement_is_complete_before_clause_with_limit(
+                                body,
+                                "while",
+                                grammar_context,
+                                completion_recursion_limit,
+                                completion_memo,
+                            )
+                        })
+                });
+                if parent_body_is_complete {
+                    let parent_index =
+                        parent_index.expect("a complete parent body requires a pending do");
+                    let parent = pending_statement_clauses[parent_index];
+                    pending_statement_clauses.truncate(parent_index);
+                    active_do_while_trailer =
+                        Some(ActiveDoWhileTrailer::awaiting_condition(parent.start_index));
+                    claimed_current_while = true;
+                } else {
+                    push_segment(&mut out, line, segment_start, index, grammar_context);
+                    segment_start = index;
+                    pending_statement_clauses.clear();
+                    previous_significant = None;
+                    previous_significant_end = index;
+                    active_do_while_trailer = None;
+                }
+            } else if starts_else
+                && consume_pending_statement_clause(
+                    &mut pending_statement_clauses,
+                    PendingStatementClauseKind::IfElse,
+                )
+            {
+                active_do_while_trailer = None;
+            } else if ch != '}' {
+                push_segment(&mut out, line, segment_start, index, grammar_context);
+                segment_start = index;
+                pending_statement_clauses.clear();
+                previous_significant = None;
+                previous_significant_end = index;
+                active_do_while_trailer = None;
+            }
+        }
+
+        if starts_while
+            && !claimed_current_while
+            && active_do_while_trailer.is_none()
+            && !source_line_terminator_ranges(&line[previous_significant_end..index]).is_empty()
+            && let Some(do_index) = pending_statement_clauses
+                .iter()
+                .rposition(|clause| clause.kind == PendingStatementClauseKind::DoWhile)
+        {
+            let clause = pending_statement_clauses[do_index];
+            let body_is_complete =
+                clause_keyword_tail(&line[clause.start_index..index], "do", grammar_context)
+                    .is_some_and(|body| {
+                        statement_is_complete_before_clause_with_limit(
+                            body,
+                            "while",
+                            grammar_context,
+                            completion_recursion_limit,
+                            completion_memo,
+                        )
+                    });
+            if body_is_complete {
+                pending_statement_clauses.truncate(do_index);
+                active_do_while_trailer =
+                    Some(ActiveDoWhileTrailer::awaiting_condition(clause.start_index));
+            }
+        }
+
+        if starts_do {
+            pending_statement_clauses.push(PendingStatementClause {
+                kind: PendingStatementClauseKind::DoWhile,
+                start_index: index,
+            });
+        }
+        if starts_if {
+            pending_statement_clauses.push(PendingStatementClause {
+                kind: PendingStatementClauseKind::IfElse,
+                start_index: index,
+            });
+        }
+        let mut split_segment = false;
         match ch {
-            '(' => paren_depth = paren_depth.saturating_add(1),
-            ')' => paren_depth = paren_depth.saturating_sub(1),
+            '(' => {
+                if paren_depth == 0
+                    && let Some(active) = active_do_while_trailer.as_mut()
+                    && !active.condition_started
+                {
+                    active.condition_started = true;
+                }
+                paren_depth = paren_depth.saturating_add(1);
+            }
+            ')' => {
+                paren_depth = paren_depth.saturating_sub(1);
+                if paren_depth == 0
+                    && let Some(active) = active_do_while_trailer.as_mut()
+                    && active.condition_started
+                    && active.condition_end.is_none()
+                {
+                    active.condition_end = Some(index.saturating_add(ch.len_utf8()));
+                }
+            }
             '[' => bracket_depth = bracket_depth.saturating_add(1),
             ']' => bracket_depth = bracket_depth.saturating_sub(1),
             '{' => brace_depth = brace_depth.saturating_add(1),
@@ -3823,6 +4659,7 @@ fn split_statement_segments_with_context(
                     let seg = trim_directive_trivia(&line[segment_start..]).0;
                     let starts_with_block = starts_with_keyword(seg, "function")
                         || strip_async_function_keyword(seg).is_some()
+                        || seg.starts_with('{')
                         || starts_with_keyword(seg, "if")
                         || starts_with_keyword(seg, "for")
                         || starts_with_keyword(seg, "while")
@@ -3834,19 +4671,95 @@ fn split_statement_segments_with_context(
                         let after = index.saturating_add(1);
                         let rest_with_trivia = &line[after..];
                         let rest = trim_directive_trivia(rest_with_trivia).0;
-                        let continues = statement_clause_continues(seg, rest);
+                        let pending_clause_continues = if starts_with_keyword(rest, "while") {
+                            let consumed = take_pending_statement_clause(
+                                &mut pending_statement_clauses,
+                                PendingStatementClauseKind::DoWhile,
+                            );
+                            if let Some(clause) = consumed {
+                                active_do_while_trailer = Some(
+                                    ActiveDoWhileTrailer::awaiting_condition(clause.start_index),
+                                );
+                            }
+                            consumed.is_some()
+                        } else if starts_with_keyword(rest, "else") {
+                            consume_pending_statement_clause(
+                                &mut pending_statement_clauses,
+                                PendingStatementClauseKind::IfElse,
+                            )
+                        } else {
+                            false
+                        };
+                        let continues =
+                            statement_clause_continues(seg, rest) || pending_clause_continues;
                         if !rest_with_trivia.trim_start().is_empty() && !continues {
                             push_segment(&mut out, line, segment_start, after, grammar_context);
                             segment_start = after;
+                            pending_statement_clauses.clear();
+                            previous_significant = None;
+                            previous_significant_end = after;
+                            active_do_while_trailer = None;
+                            split_segment = true;
                         }
                     }
                 }
             }
             ';' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
-                push_segment(&mut out, line, segment_start, index, grammar_context);
-                segment_start = index.saturating_add(ch.len_utf8());
+                let after = index.saturating_add(ch.len_utf8());
+                let rest = trim_directive_trivia(&line[after..]).0;
+                let terminates_active_trailer = active_do_while_trailer
+                    .and_then(|active| active.condition_end)
+                    .is_some_and(|condition_end| {
+                        trim_binding_pattern_trivia_with_context(
+                            &line[condition_end..index],
+                            grammar_context,
+                        )
+                        .is_some_and(str::is_empty)
+                    });
+                if !terminates_active_trailer {
+                    retire_completed_do_while_clauses(
+                        &mut pending_statement_clauses,
+                        line,
+                        index,
+                        grammar_context,
+                        completion_recursion_limit,
+                        completion_memo,
+                    );
+                }
+                active_do_while_trailer = None;
+                let continues = if starts_with_keyword(rest, "while") {
+                    let consumed = take_pending_statement_clause(
+                        &mut pending_statement_clauses,
+                        PendingStatementClauseKind::DoWhile,
+                    );
+                    if let Some(clause) = consumed {
+                        active_do_while_trailer =
+                            Some(ActiveDoWhileTrailer::awaiting_condition(clause.start_index));
+                    }
+                    consumed.is_some()
+                } else if starts_with_keyword(rest, "else") {
+                    consume_pending_statement_clause(
+                        &mut pending_statement_clauses,
+                        PendingStatementClauseKind::IfElse,
+                    )
+                } else {
+                    false
+                };
+                if !continues {
+                    push_segment(&mut out, line, segment_start, index, grammar_context);
+                    segment_start = after;
+                    pending_statement_clauses.clear();
+                    previous_significant = None;
+                    previous_significant_end = after;
+                    active_do_while_trailer = None;
+                    split_segment = true;
+                }
             }
             _ => {}
+        }
+        if !split_segment && !is_binding_pattern_whitespace(ch) {
+            previous_significant = Some(ch);
+            previous_significant_end = index.saturating_add(ch.len_utf8());
         }
     });
     push_segment(&mut out, line, segment_start, line.len(), grammar_context);
@@ -7207,7 +8120,7 @@ fn try_parse_arrow_function(
     context: &mut ParseExecutionContext<'_>,
     recursion_depth: u64,
 ) -> Option<ParseResult<Expression>> {
-    let (is_async, rest) = if let Some(after_async) = expr.strip_prefix("async") {
+    let (is_async, rest) = if let Some(after_async) = strip_contextual_keyword(expr, "async") {
         let (trimmed, saw_line_terminator) = trim_directive_trivia(after_async);
         let consumed_trivia = trimmed.len() < after_async.len();
         let starts_with_identifier = matches!(
@@ -7221,7 +8134,7 @@ fn try_parse_arrow_function(
         {
             (true, trimmed)
         } else {
-            return None;
+            (false, expr)
         }
     } else {
         (false, expr)
@@ -7271,10 +8184,8 @@ fn try_parse_arrow_function(
     } else {
         // ident => body (single param, no parens)
         // Find `=>` that isn't inside lexical trivia or nested delimiters.
-        let arrow_pos = find_top_level_arrow(
-            rest,
-            ScanGrammarContext::from_execution_context(context).expression(),
-        )?;
+        let grammar_context = ScanGrammarContext::from_execution_context(context).expression();
+        let arrow_pos = find_top_level_arrow(rest, grammar_context)?;
         let (param_with_trailing_trivia, _) = trim_directive_trivia(&rest[..arrow_pos]);
         let param_name = match trim_binding_pattern_trivia(param_with_trailing_trivia) {
             Some(param_name) => param_name,
@@ -7302,6 +8213,15 @@ fn try_parse_arrow_function(
         let param_name = match parse_simple_binding_identifier(param_name, span, context) {
             Ok(Some(name)) => name,
             Ok(None) => {
+                if !is_async
+                    && (arrow_belongs_to_outer_assignment_or_conditional(
+                        rest,
+                        arrow_pos,
+                        grammar_context,
+                    ) || arrow_belongs_to_outer_yield(rest, arrow_pos, grammar_context))
+                {
+                    return None;
+                }
                 return Some(Err(ParseError::new(
                     ParseErrorCode::UnsupportedSyntax,
                     format!("invalid unparenthesized arrow parameter: `{param_name}`"),
@@ -7523,6 +8443,72 @@ fn find_top_level_arrow(s: &str, grammar_context: ScanGrammarContext) -> Option<
         }
     });
     found
+}
+
+/// Whether the first top-level arrow token belongs to a recursively nested
+/// assignment RHS or ternary branch rather than to the whole expression.
+///
+/// Arrow parsing runs before assignment and conditional parsing. Deferring
+/// these two complete outer forms lets their recursive expression parsing own
+/// the arrow while retaining the direct malformed-head error for expressions
+/// such as `a + b => c`.
+fn arrow_belongs_to_outer_assignment_or_conditional(
+    source: &str,
+    arrow_pos: usize,
+    grammar_context: ScanGrammarContext,
+) -> bool {
+    let prefix = &source[..arrow_pos];
+    let bytes = source.as_bytes();
+    let mut has_assignment = false;
+    let mut conditional_question = None;
+    let complete = scan_binding_pattern_source_with_context(
+        prefix,
+        grammar_context,
+        |index, ch, depth, quoted| {
+            if quoted || depth != 0 {
+                return;
+            }
+            if match_assignment_operator_at(bytes, index).is_some() {
+                has_assignment = true;
+            } else if conditional_question.is_none()
+                && ch == '?'
+                && index
+                    .checked_sub(1)
+                    .and_then(|previous| bytes.get(previous))
+                    != Some(&b'?')
+                && bytes.get(index + 1) != Some(&b'.')
+                && bytes.get(index + 1) != Some(&b'?')
+            {
+                conditional_question = Some(index);
+            }
+        },
+    );
+    complete
+        && (has_assignment
+            || conditional_question.is_some_and(|question| {
+                find_ternary_colon(&source[question + 1..], grammar_context).is_some()
+            }))
+}
+
+fn arrow_belongs_to_outer_yield(
+    source: &str,
+    arrow_pos: usize,
+    grammar_context: ScanGrammarContext,
+) -> bool {
+    if grammar_context.yield_mode != ContextualKeywordScanMode::PrefixExpression {
+        return false;
+    }
+    let Some(rest) = strip_contextual_keyword(&source[..arrow_pos], "yield") else {
+        return false;
+    };
+    let (rest, saw_line_terminator) = trim_directive_trivia(rest);
+    if saw_line_terminator {
+        return false;
+    }
+    let argument = rest
+        .strip_prefix('*')
+        .map_or(rest, |after_star| trim_directive_trivia(after_star).0);
+    !argument.is_empty()
 }
 
 // ---------------------------------------------------------------------------
@@ -8204,6 +9190,7 @@ fn try_parse_binary(
                 // e.g. the `-` in `2 * -3`, `a - -b`, or `2 ** -1`. Skipping it
                 // lets the real binary operator win the split.
                 let unary_sign = matches!(op, BinaryOperator::Add | BinaryOperator::Subtract)
+                    && !source_ends_postfix_update(lhs, grammar_context)
                     && lhs
                         .as_bytes()
                         .last()
@@ -8294,7 +9281,7 @@ fn match_binary_operator_at(bytes: &[u8], i: usize) -> Option<(BinaryOperator, u
             b">>" => Some(BinaryOperator::RightShift),
             // Skip assignment operators.
             b"+=" | b"-=" | b"*=" | b"/=" | b"%=" | b"&=" | b"|=" | b"^=" => return None,
-            b"=>" => return None, // arrow
+            b"=>" | b"++" | b"--" => return None, // arrow/update, not binary
             _ => None,
         };
         if let Some(op) = op {
@@ -10669,15 +11656,19 @@ fn parse_body_statements(
     if trimmed.is_empty() {
         return Ok(Vec::new());
     }
-    let logical_lines = merge_logical_lines_with_context(
+    let completion_recursion_limit =
+        usize::try_from(context.options.budget.max_recursion_depth).unwrap_or(usize::MAX);
+    let logical_lines = merge_logical_lines_with_completion_limit(
         trimmed,
         ScanGrammarContext::from_execution_context(context),
+        completion_recursion_limit,
     );
     let mut stmts = Vec::new();
     for ll in &logical_lines {
-        for (_start, _end, text) in split_statement_segments_with_context(
+        for (_start, _end, text) in split_statement_segments_with_completion_limit(
             &ll.text,
             ScanGrammarContext::from_execution_context(context),
+            completion_recursion_limit,
         ) {
             if context.allow_yield_expression {
                 for text in split_top_level_yield_asi_segments(text) {
@@ -10756,11 +11747,9 @@ fn parse_if_statement(
             let after = trim_directive_trivia(after_block).0;
             (
                 format!("{{{block_inner}}}"),
-                if let Some(after_else) = after.strip_prefix("else") {
-                    Some(trim_directive_trivia(after_else).0.trim_end().to_string())
-                } else {
-                    None
-                },
+                after
+                    .strip_prefix("else")
+                    .map(|after_else| trim_directive_trivia(after_else).0.trim_end().to_string()),
             )
         } else {
             (rest.to_string(), None)
@@ -10927,20 +11916,47 @@ fn split_for_header(header: &str) -> Option<(&str, &str, &str)> {
     ))
 }
 
+fn extract_for_header_with_context(
+    statement: &str,
+    grammar_context: ScanGrammarContext,
+) -> Option<(&str, &str)> {
+    let after_keyword = statement.strip_prefix("for")?;
+    let after_trivia = trim_directive_trivia(after_keyword).0;
+    if !after_trivia.starts_with('(') {
+        return None;
+    }
+    let opening_index = statement.len().saturating_sub(after_trivia.len());
+    let mut closing_index = None;
+    let state = scan_binding_pattern_source_until_with_context(
+        statement,
+        grammar_context,
+        |index, ch, depth, quoted| {
+            if !quoted && ch == ')' && depth == 1 && index > opening_index {
+                closing_index = Some(index);
+                false
+            } else {
+                true
+            }
+        },
+    );
+    if !state.lexically_complete {
+        return None;
+    }
+    let closing_index = closing_index?;
+    Some((
+        &statement[opening_index + '('.len_utf8()..closing_index],
+        &statement[closing_index + ')'.len_utf8()..],
+    ))
+}
+
 fn parse_for_statement(
     statement: &str,
     goal: ParseGoal,
     span: SourceSpan,
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<Statement> {
-    let after_for = statement
-        .strip_prefix("for")
-        .unwrap_or(statement)
-        .trim_start();
-    let (header_src, rest) = extract_balanced_with_context(
-        after_for,
-        '(',
-        ')',
+    let (header_src, rest) = extract_for_header_with_context(
+        statement,
         ScanGrammarContext::from_execution_context(context),
     )
     .ok_or_else(|| {
@@ -11242,15 +12258,17 @@ fn parse_do_while_statement(
         })?;
         (format!("{{{inner}}}"), r.to_string())
     } else {
-        // Find "while" keyword at top level.
-        let while_idx = after_do.find("while").ok_or_else(|| {
-            ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                "do-while statement requires 'while' after body",
-                context.source_label.to_string(),
-                Some(span.clone()),
-            )
-        })?;
+        let statement_context = ScanGrammarContext::from_execution_context(context);
+        let while_idx =
+            find_last_top_level_keyword_with_context(after_do, "while", statement_context)
+                .ok_or_else(|| {
+                    ParseError::new(
+                        ParseErrorCode::UnsupportedSyntax,
+                        "do-while statement requires 'while' after body",
+                        context.source_label.to_string(),
+                        Some(span.clone()),
+                    )
+                })?;
         (
             after_do[..while_idx].trim().to_string(),
             after_do[while_idx..].to_string(),
@@ -13762,14 +14780,31 @@ mod tests {
             2,
             "binary division may continue a completed postfix update without leaking lexical state"
         );
-        assert_eq!(
-            parser
-                .parse(postfix_division, ParseGoal::Script)
-                .expect("postfix update followed by cross-line division remains a clause body")
-                .body
-                .len(),
-            2
-        );
+        let postfix_division_tree = parser
+            .parse(postfix_division, ParseGoal::Script)
+            .expect("postfix update followed by cross-line division remains a clause body");
+        assert_eq!(postfix_division_tree.body.len(), 2);
+        let Statement::If(if_statement) = &postfix_division_tree.body[0] else {
+            panic!("expected the postfix division to remain the alternate statement");
+        };
+        assert!(matches!(
+            if_statement.alternate.as_deref(),
+            Some(Statement::Expression(ExpressionStatement {
+                expression: Expression::Binary {
+                    operator: BinaryOperator::Divide,
+                    left,
+                    right,
+                },
+                ..
+            })) if matches!(
+                left.as_ref(),
+                Expression::Update {
+                    operator: UpdateOperator::Increment,
+                    argument,
+                    prefix: false,
+                } if matches!(argument.as_ref(), Expression::Identifier(name) if name == "x")
+            ) && matches!(right.as_ref(), Expression::Identifier(name) if name == "divisor")
+        ));
 
         for source in [
             "if (false) {}\nelse\n/[{]/;\nx = 2;",
@@ -13781,7 +14816,6 @@ mod tests {
             "if (false) {}\nelse\ndo /[{]/; while (false);\nx = 2;",
             "if (false) {} else while (false) /[{]/;\nx = 2;",
             "if (false) {}\nelse {\nwhile (false) /[{]/;\n}\nx = 2;",
-            "if (false) {}\nelse {} /[{]/;\nx = 2;",
         ] {
             assert_eq!(
                 merge_logical_lines(source).len(),
@@ -13794,9 +14828,21 @@ mod tests {
                     .expect("a pending clause statement starts with the RegExp lexical goal")
                     .body
                     .len(),
-                2
+                2,
+                "source: {source:?}"
             );
         }
+        let regexp_after_else_block = "if (false) {}\nelse {} /[{]/;\nx = 2;";
+        assert_eq!(merge_logical_lines(regexp_after_else_block).len(), 2);
+        assert_eq!(
+            parser
+                .parse(regexp_after_else_block, ParseGoal::Script)
+                .expect("a RegExp after an else block remains an independent statement")
+                .body
+                .len(),
+            3,
+            "the if statement, RegExp expression, and assignment are distinct statements"
+        );
         for member in ["obj.do", "obj.else", "obj.in"] {
             let source = format!("if (false) {{}}\nelse\n{member} / divisor;\nx = 2;");
             assert_eq!(
@@ -13932,6 +14978,448 @@ mod tests {
             1,
             "incremental lexical goals must not rescan nested control prefixes per division"
         );
+    }
+
+    #[test]
+    fn do_while_statement_boundaries_use_statement_phases_bd_rcnxf() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "do /while/; while (false); x();",
+            "if (false) {} else do /[{]/; while (false); x();",
+            "if (false) {} else do {} while (false); x();",
+            "if (false) {} else do switch (value) {} while (false); x();",
+            "do do x(); while (a); while (b); y();",
+            "do do x(); while (a)\nwhile (b); while (c) y();",
+            "do do 0\nwhile (false); while (false); while (false) 1;",
+            "do do 0\nwhile (false)\nwhile (false); while (false) 1;",
+            "if (true) do 0\nwhile (false); while (false) 1;",
+            "do if (q) do x(); while (a)\nwhile (b); while (c) y();",
+            "do if (q) do x(); while (a); else y()\nwhile (b); while (c) y();",
+            "do if (q) do x(); while (a); else while (z) y()\nwhile (b); while (c) y();",
+            "do if (q) do x()\nwhile (a)\nwhile (b)\nwhile (c) y();",
+            "do while (a) do x(); while (b); while (c); while (d) y();",
+            "do while (a) x++; while (b); y();",
+            "do while (a) x()\nwhile (b); y();",
+            "do x()\nwhile (a)\nwhile (b) y();",
+            "do if (condition) x(); else y(); while (false); z();",
+            "if (condition) do x(); while (false); else y(); z();",
+            "do object.while(); /* trailer */ \u{FEFF}while (false); x();",
+            "do value\nwhile (false); while (other) y();",
+        ] {
+            assert_eq!(
+                split_statement_segments(source).len(),
+                2,
+                "do-while body and trailer must remain one statement: {source:?}"
+            );
+            assert_eq!(
+                parser
+                    .parse(source, ParseGoal::Script)
+                    .unwrap_or_else(|error| {
+                        panic!("phase-aware do-while segmentation must parse {source:?}: {error:?}")
+                    })
+                    .body
+                    .len(),
+                2,
+                "source: {source:?}"
+            );
+        }
+
+        let nested_alternate_chain = "do if (false) x(); else do if (false) x(); else do y()\nwhile (a)\nwhile (b)\nwhile (c); z();";
+        assert_eq!(split_statement_segments(nested_alternate_chain).len(), 2);
+        let nested_alternate_first_trailer =
+            "do if (false) x(); else do if (false) x(); else do y()\nwhile (a)";
+        assert_eq!(
+            split_statement_segments(nested_alternate_first_trailer).len(),
+            1
+        );
+        assert!(!do_while_statement_is_complete(
+            nested_alternate_first_trailer,
+            ScanGrammarContext::SLOPPY_SCRIPT,
+        ));
+        assert!(!do_while_statement_is_complete(
+            "do if (false) x(); else do if (false) x(); else do y()\nwhile (a)\nwhile (b)",
+            ScanGrammarContext::SLOPPY_SCRIPT,
+        ));
+        let nested_alternate_lines = merge_logical_lines(nested_alternate_chain);
+        assert_eq!(
+            nested_alternate_lines
+                .iter()
+                .map(|line| split_statement_segments(&line.text).len())
+                .sum::<usize>(),
+            2,
+            "logical lines: {:?}",
+            nested_alternate_lines
+                .iter()
+                .map(|line| line.text.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            parser
+                .parse(nested_alternate_chain, ParseGoal::Script)
+                .expect("nested alternate owners must retain their do-while trailers")
+                .body
+                .len(),
+            2
+        );
+
+        let independent = "foo(); while (condition) bar();";
+        assert_eq!(split_statement_segments(independent).len(), 2);
+        assert_eq!(
+            parser
+                .parse(independent, ParseGoal::Script)
+                .expect("an independent while remains a separate statement")
+                .body
+                .len(),
+            2
+        );
+
+        let else_after_trailer = "do if (condition) x(); while (false); else y();";
+        assert_eq!(
+            split_statement_segments(else_after_trailer).len(),
+            2,
+            "an else after the do-while trailer cannot be merged back into its body"
+        );
+
+        let dangling_else_after_independent_while =
+            "if (true) do 0\nwhile(false); while(false) 1; else 2;";
+        assert_eq!(
+            split_statement_segments(dangling_else_after_independent_while).len(),
+            3,
+            "an independent while cannot inherit the completed do's enclosing if clause"
+        );
+
+        for nested_depth in 1..=20 {
+            let nested_chain = format!(
+                "{}x()\n{}",
+                "do ".repeat(nested_depth),
+                "while (false)\n".repeat(nested_depth)
+            );
+            assert!(
+                do_while_statement_is_complete(&nested_chain, ScanGrammarContext::SLOPPY_SCRIPT,),
+                "memoized phase matching must keep depth {nested_depth} tractable: {nested_chain:?}"
+            );
+        }
+
+        let explicit_depth = 64;
+        let explicit_chain = format!(
+            "{}x(); {}while (true) y();",
+            "do ".repeat(explicit_depth),
+            "while (false); ".repeat(explicit_depth)
+        );
+        assert_eq!(
+            split_statement_segments(&explicit_chain).len(),
+            2,
+            "claimed trailers must retire incrementally across an explicit nested chain"
+        );
+
+        let asi_depth = 128;
+        let asi_chain = format!(
+            "{}x()\n{}while (true) y();",
+            "do ".repeat(asi_depth),
+            "while (false)\n".repeat(asi_depth)
+        );
+        assert_eq!(
+            split_statement_segments(&asi_chain).len(),
+            2,
+            "ASI trailers must retire tractably across a nested chain"
+        );
+        assert_eq!(
+            parser
+                .parse(asi_chain.as_str(), ParseGoal::Script)
+                .expect("a deep ASI trailer chain must remain parseable")
+                .body
+                .len(),
+            2,
+            "logical-line merging must preserve the same ASI boundaries"
+        );
+
+        let shallow_options = ParserOptions {
+            mode: ParserMode::ScalarReference,
+            budget: ParserBudget {
+                max_source_bytes: 1024,
+                max_token_count: 1024,
+                max_recursion_depth: 1,
+            },
+        };
+        let shallow_error = parser
+            .parse_with_options(
+                "do do x(); while (false); while (false);",
+                ParseGoal::Script,
+                &shallow_options,
+            )
+            .expect_err("nested do-while parsing must honor the configured recursion budget");
+        assert_eq!(
+            shallow_error.code,
+            ParseErrorCode::BudgetExceeded,
+            "statement preprocessing must not mask recursion exhaustion"
+        );
+
+        let regexp_named_do = "/do/; while (condition) bar();";
+        assert_eq!(split_statement_segments(regexp_named_do).len(), 2);
+        assert_eq!(
+            parser
+                .parse(regexp_named_do, ParseGoal::Script)
+                .expect("a do token inside a RegExp does not arm a while trailer")
+                .body
+                .len(),
+            2
+        );
+
+        for quoted_follower in [
+            "do x(); while (false) /re/; y();",
+            "do x(); while (false) \"next\"; y();",
+            "do x(); while (false) `next`; y();",
+        ] {
+            assert_eq!(
+                split_statement_segments(quoted_follower).len(),
+                3,
+                "a quoted token after a completed do-while begins a new statement: {quoted_follower:?}"
+            );
+            assert_eq!(
+                parser
+                    .parse(quoted_follower, ParseGoal::Script)
+                    .unwrap_or_else(|error| {
+                        panic!("quoted follower must remain parseable in {quoted_follower:?}: {error:?}")
+                    })
+                    .body
+                    .len(),
+                3,
+                "source: {quoted_follower:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn deep_do_while_asi_merging_is_incremental_bd_rcnxf() {
+        let depth = 128usize;
+        let source = format!(
+            "{}x()\n{}while (true) y();",
+            "do ".repeat(depth),
+            "while (false)\n".repeat(depth)
+        );
+        assert_eq!(
+            merge_logical_lines(&source).len(),
+            2,
+            "logical-line completion must retire direct ASI trailers incrementally"
+        );
+    }
+
+    #[test]
+    fn deep_wrapped_do_while_asi_is_incremental_bd_rcnxf() {
+        let depth = 128usize;
+        let source = format!(
+            "{}do x()\n{}while (true) y();",
+            "do if (true) ".repeat(depth.saturating_sub(1)),
+            "while (false)\n".repeat(depth)
+        );
+        assert_eq!(
+            split_statement_segments(&source).len(),
+            2,
+            "wrapped ASI trailers must retire one parent statement at a time"
+        );
+        assert_eq!(
+            merge_logical_lines(&source).len(),
+            2,
+            "logical-line completion must retain the wrapped-chain fast path"
+        );
+
+        let parse_depth = 64usize;
+        let parse_source = format!(
+            "{}do x()\n{}while (true) y();",
+            "do if (true) ".repeat(parse_depth.saturating_sub(1)),
+            "while (false)\n".repeat(parse_depth)
+        );
+        assert_eq!(
+            CanonicalEs2020Parser
+                .parse(parse_source.as_str(), ParseGoal::Script)
+                .expect("a wrapped ASI trailer chain within budget must parse")
+                .body
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn postfix_updates_remain_binary_operands_bd_rcnxf() {
+        let parser = CanonicalEs2020Parser;
+        for (source, binary_operator, update_operator) in [
+            ("x++ + y;", BinaryOperator::Add, UpdateOperator::Increment),
+            (
+                "x++/* comment */+y;",
+                BinaryOperator::Add,
+                UpdateOperator::Increment,
+            ),
+            (
+                "x-- - y;",
+                BinaryOperator::Subtract,
+                UpdateOperator::Decrement,
+            ),
+            ("x+++y;", BinaryOperator::Add, UpdateOperator::Increment),
+        ] {
+            let tree = parser
+                .parse(source, ParseGoal::Script)
+                .expect("a postfix update is a complete binary operand");
+            let Statement::Expression(ExpressionStatement {
+                expression:
+                    Expression::Binary {
+                        operator,
+                        left,
+                        right,
+                    },
+                ..
+            }) = &tree.body[0]
+            else {
+                panic!(
+                    "expected a binary expression for {source:?}: {:?}",
+                    tree.body
+                );
+            };
+            assert_eq!(*operator, binary_operator, "source: {source:?}");
+            assert!(matches!(
+                left.as_ref(),
+                Expression::Update {
+                    operator,
+                    argument,
+                    prefix: false,
+                } if *operator == update_operator
+                    && matches!(argument.as_ref(), Expression::Identifier(name) if name == "x")
+            ));
+            assert!(matches!(
+                right.as_ref(),
+                Expression::Identifier(name) if name == "y"
+            ));
+        }
+    }
+
+    #[test]
+    fn outer_expressions_dispatch_nested_arrows_bd_rcnxf() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "async => async;",
+            "asyncName => asyncName;",
+            "async/**/=> 1;",
+        ] {
+            let tree = parser
+                .parse(source, ParseGoal::Script)
+                .expect("an async-prefixed binding identifier remains an ordinary arrow head");
+            assert!(matches!(
+                &tree.body[0],
+                Statement::Expression(ExpressionStatement {
+                    expression: Expression::ArrowFunction {
+                        is_async: false,
+                        ..
+                    },
+                    ..
+                })
+            ));
+        }
+
+        for (source, expected_operator) in [
+            ("this.self = () => 1;", AssignmentOperator::Assign),
+            ("target += () => 1;", AssignmentOperator::AddAssign),
+        ] {
+            let assignment = parser
+                .parse(source, ParseGoal::Script)
+                .expect("an assignment parser recursively owns its arrow RHS");
+            assert!(matches!(
+                &assignment.body[0],
+                Statement::Expression(ExpressionStatement {
+                    expression: Expression::Assignment { operator, right, .. },
+                    ..
+                }) if *operator == expected_operator
+                    && matches!(right.as_ref(), Expression::ArrowFunction { .. })
+            ));
+        }
+
+        for (source, arrow_in_consequent) in [
+            ("true ? () => 1 : 0;", true),
+            ("true ? 0 : () => 1;", false),
+        ] {
+            let tree = parser
+                .parse(source, ParseGoal::Script)
+                .expect("a conditional parser recursively owns arrows in either branch");
+            let Statement::Expression(ExpressionStatement {
+                expression:
+                    Expression::Conditional {
+                        consequent,
+                        alternate,
+                        ..
+                    },
+                ..
+            }) = &tree.body[0]
+            else {
+                panic!("expected a conditional expression for {source:?}");
+            };
+            let branch = if arrow_in_consequent {
+                consequent
+            } else {
+                alternate
+            };
+            assert!(
+                matches!(branch.as_ref(), Expression::ArrowFunction { .. }),
+                "expected an arrow branch for {source:?}"
+            );
+        }
+
+        let nested = parser
+            .parse("x => y => x + y;", ParseGoal::Script)
+            .expect("a direct arrow body may itself be another arrow");
+        assert!(matches!(
+            &nested.body[0],
+            Statement::Expression(ExpressionStatement {
+                expression:
+                    Expression::ArrowFunction {
+                        body: ArrowBody::Expression(body),
+                        ..
+                    },
+                ..
+            }) if matches!(body.as_ref(), Expression::ArrowFunction { .. })
+        ));
+
+        let yielded = parser
+            .parse(
+                "function* direct() { return yield x => x; } \
+                 function* delegated() { return yield* async => async; } \
+                 function* contextual() { return yield async => async; }",
+                ParseGoal::Script,
+            )
+            .expect("yield recursively owns an arrow argument in a generator body");
+        for (statement, expected_delegate) in yielded.body.iter().zip([false, true, false]) {
+            let Statement::FunctionDeclaration(function) = statement else {
+                panic!("expected a generator function declaration");
+            };
+            let Statement::Return(return_statement) = &function.body.body[0] else {
+                panic!("expected a generator return statement");
+            };
+            assert!(matches!(
+                return_statement.argument.as_ref(),
+                Some(Expression::Yield {
+                    argument: Some(argument),
+                    delegate,
+                }) if *delegate == expected_delegate
+                    && matches!(argument.as_ref(), Expression::ArrowFunction { .. })
+            ));
+        }
+
+        for malformed_head in [
+            "a + b => c",
+            "a || b => c",
+            "a.b => c",
+            "a() => c",
+            "1 => c",
+            "{a} => c",
+            "a ?? b => c",
+            "a ? b => c",
+            "a = 1 => c",
+            "async x = y => y",
+            "async x ? y => y : z",
+            "async/* line\nterminator */x => x",
+        ] {
+            let source = format!("let bad = {malformed_head};");
+            parser
+                .parse(source.as_str(), ParseGoal::Script)
+                .expect_err("a malformed direct arrow head must remain a parse error");
+        }
     }
 
     #[test]

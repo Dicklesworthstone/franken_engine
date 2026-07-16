@@ -2760,6 +2760,88 @@ fn allocate_destructure_param_bindings(
     Ok(())
 }
 
+/// References created while lowering parameter defaults live in the parameter
+/// environment, which is distinct from the function body's declaration
+/// environment. Keep their exact binding ids so a same-named body declaration
+/// can shadow the name without changing the default expression's binding.
+#[derive(Default)]
+struct ParameterPrologueState {
+    references: Vec<(String, BindingId)>,
+    child_capture_entries: Vec<(String, BindingId)>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_function_parameter_prologue(
+    destructure_params: &[(String, &BindingPattern)],
+    self_name: Option<&str>,
+    outer_lookup: &BTreeMap<String, BindingId>,
+    body_ops: &mut Vec<Ir1Op>,
+    body_bindings: &mut Vec<ResolvedBinding>,
+    parameter_lookup: &BTreeMap<String, BindingId>,
+    body_binding_index: &mut BindingId,
+    body_scope: ScopeId,
+    body_label_counter: &mut u32,
+) -> Result<ParameterPrologueState, LoweringPipelineError> {
+    if destructure_params.is_empty() {
+        return Ok(ParameterPrologueState::default());
+    }
+
+    let mut prologue_lookup = parameter_lookup.clone();
+    let pre_lower_names = prepare_function_body_bindings(
+        None,
+        self_name,
+        outer_lookup,
+        &mut prologue_lookup,
+        body_binding_index,
+    );
+    for (synthetic_name, pattern) in destructure_params {
+        let source_bid = *prologue_lookup
+            .get(synthetic_name.as_str())
+            .expect("synthetic param binding allocated before parameter prologue");
+        lower_destructuring_to_ir1(
+            pattern,
+            source_bid,
+            body_ops,
+            body_bindings,
+            &mut prologue_lookup,
+            body_binding_index,
+            body_scope,
+            body_label_counter,
+            &mut Vec::new(),
+        )?;
+    }
+
+    let references = prologue_lookup
+        .iter()
+        .filter(|(name, _)| {
+            !is_internal_lowering_binding(name) && !pre_lower_names.contains(name.as_str())
+        })
+        .map(|(name, binding_id)| (name.clone(), *binding_id))
+        .collect();
+    let child_capture_entries = prologue_lookup
+        .iter()
+        .filter(|(name, _)| name.starts_with(CHILD_CAPTURE_BINDING_SENTINEL_PREFIX))
+        .map(|(name, binding_id)| (name.clone(), *binding_id))
+        .collect();
+
+    Ok(ParameterPrologueState {
+        references,
+        child_capture_entries,
+    })
+}
+
+fn merge_parameter_prologue_state(
+    state: &ParameterPrologueState,
+    body_lookup: &mut BTreeMap<String, BindingId>,
+) {
+    for (name, binding_id) in &state.references {
+        body_lookup.entry(name.clone()).or_insert(*binding_id);
+    }
+    for (name, binding_id) in &state.child_capture_entries {
+        body_lookup.entry(name.clone()).or_insert(*binding_id);
+    }
+}
+
 /// Index of the rest parameter (`...x`) in a parameter list, if present
 /// (bd-zs4d5). Valid ES2020 places it last. The interpreter binds this slot
 /// to an Array of the trailing positional args; `push_param_slot` keeps
@@ -4401,22 +4483,17 @@ fn lower_statement_to_ir1_with_flow(
                 &mut body_binding_index,
                 body_scope,
             )?;
-            for (synthetic_name, pattern) in &destructure_params {
-                let source_bid = *body_lookup
-                    .get(synthetic_name.as_str())
-                    .expect("synthetic param binding allocated above");
-                lower_destructuring_to_ir1(
-                    pattern,
-                    source_bid,
-                    &mut body_ops,
-                    &mut body_bindings,
-                    &mut body_lookup,
-                    &mut body_binding_index,
-                    body_scope,
-                    &mut body_label_counter,
-                    &mut Vec::new(),
-                )?;
-            }
+            let parameter_prologue = lower_function_parameter_prologue(
+                &destructure_params,
+                None,
+                binding_lookup,
+                &mut body_ops,
+                &mut body_bindings,
+                &body_lookup,
+                &mut body_binding_index,
+                body_scope,
+                &mut body_label_counter,
+            )?;
             let pre_lower_names = prepare_function_body_bindings(
                 Some(&func.body.body),
                 None,
@@ -4424,6 +4501,7 @@ fn lower_statement_to_ir1_with_flow(
                 &mut body_lookup,
                 &mut body_binding_index,
             );
+            merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup);
             for stmt in &func.body.body {
                 lower_statement_to_ir1(
                     stmt,
@@ -4447,9 +4525,19 @@ fn lower_statement_to_ir1_with_flow(
             // references that exist in the OUTER scope's lookup. Capture the
             // body binding-id alongside the name so the deferred IR3 pass can
             // resolve them exactly (bd-g0aok).
-            let (free_vars, free_var_ids) = collect_free_vars(
+            let (mut free_vars, mut free_var_ids) = collect_free_vars(
                 &body_lookup,
                 &pre_lower_names,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+            );
+            append_parameter_prologue_captures(
+                &parameter_prologue,
+                None,
+                &mut free_vars,
+                &mut free_var_ids,
                 bindings,
                 binding_lookup,
                 binding_index,
@@ -4460,6 +4548,7 @@ fn lower_statement_to_ir1_with_flow(
                 &body_lookup,
                 &pre_lower_names,
                 binding_lookup,
+                &parameter_prologue,
                 None,
             );
             let child_captured_locals =
@@ -4539,22 +4628,17 @@ fn lower_statement_to_ir1_with_flow(
                 &mut body_binding_index,
                 body_scope,
             )?;
-            for (synthetic_name, pattern) in &destructure_params {
-                let source_bid = *body_lookup
-                    .get(synthetic_name.as_str())
-                    .expect("synthetic param binding allocated above");
-                lower_destructuring_to_ir1(
-                    pattern,
-                    source_bid,
-                    &mut body_ops,
-                    &mut body_bindings,
-                    &mut body_lookup,
-                    &mut body_binding_index,
-                    body_scope,
-                    &mut body_label_counter,
-                    &mut Vec::new(),
-                )?;
-            }
+            let parameter_prologue = lower_function_parameter_prologue(
+                &destructure_params,
+                Some(&class_name),
+                binding_lookup,
+                &mut body_ops,
+                &mut body_bindings,
+                &body_lookup,
+                &mut body_binding_index,
+                body_scope,
+                &mut body_label_counter,
+            )?;
             let ctor_statements = constructor.map(|ctor| ctor.body.body.as_slice());
             let ctor_pre_lower_names = prepare_function_body_bindings(
                 ctor_statements,
@@ -4563,6 +4647,7 @@ fn lower_statement_to_ir1_with_flow(
                 &mut body_lookup,
                 &mut body_binding_index,
             );
+            merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup);
             if let Some(ctor) = constructor {
                 for stmt in &ctor.body.body {
                     lower_statement_to_ir1(
@@ -4592,9 +4677,19 @@ fn lower_statement_to_ir1_with_flow(
                 BindingKind::Let,
             )
             .map_err(LoweringPipelineError::SemanticViolation)?;
-            let (ctor_free_vars, ctor_free_var_ids) = collect_free_vars(
+            let (mut ctor_free_vars, mut ctor_free_var_ids) = collect_free_vars(
                 &body_lookup,
                 &ctor_pre_lower_names,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+            );
+            append_parameter_prologue_captures(
+                &parameter_prologue,
+                None,
+                &mut ctor_free_vars,
+                &mut ctor_free_var_ids,
                 bindings,
                 binding_lookup,
                 binding_index,
@@ -4605,6 +4700,7 @@ fn lower_statement_to_ir1_with_flow(
                 &body_lookup,
                 &ctor_pre_lower_names,
                 binding_lookup,
+                &parameter_prologue,
                 Some(&class_name),
             );
             let ctor_child_captured_locals =
@@ -4723,22 +4819,17 @@ fn lower_statement_to_ir1_with_flow(
                     &mut m_binding_index,
                     m_scope,
                 )?;
-                for (synthetic_name, pattern) in &m_destructure_params {
-                    let source_bid = *m_lookup
-                        .get(synthetic_name.as_str())
-                        .expect("synthetic param binding allocated above");
-                    lower_destructuring_to_ir1(
-                        pattern,
-                        source_bid,
-                        &mut m_body_ops,
-                        &mut m_bindings,
-                        &mut m_lookup,
-                        &mut m_binding_index,
-                        m_scope,
-                        &mut m_label_counter,
-                        &mut Vec::new(),
-                    )?;
-                }
+                let parameter_prologue = lower_function_parameter_prologue(
+                    &m_destructure_params,
+                    None,
+                    binding_lookup,
+                    &mut m_body_ops,
+                    &mut m_bindings,
+                    &m_lookup,
+                    &mut m_binding_index,
+                    m_scope,
+                    &mut m_label_counter,
+                )?;
                 let method_pre_lower_names = prepare_function_body_bindings(
                     Some(&method.body.body),
                     None,
@@ -4746,6 +4837,7 @@ fn lower_statement_to_ir1_with_flow(
                     &mut m_lookup,
                     &mut m_binding_index,
                 );
+                merge_parameter_prologue_state(&parameter_prologue, &mut m_lookup);
                 for stmt in &method.body.body {
                     lower_statement_to_ir1(
                         stmt,
@@ -4775,9 +4867,19 @@ fn lower_statement_to_ir1_with_flow(
                 }
 
                 // Push the method function value.
-                let (method_free_vars, method_free_var_ids) = collect_free_vars(
+                let (mut method_free_vars, mut method_free_var_ids) = collect_free_vars(
                     &m_lookup,
                     &method_pre_lower_names,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                );
+                append_parameter_prologue_captures(
+                    &parameter_prologue,
+                    None,
+                    &mut method_free_vars,
+                    &mut method_free_var_ids,
                     bindings,
                     binding_lookup,
                     binding_index,
@@ -4788,6 +4890,7 @@ fn lower_statement_to_ir1_with_flow(
                     &m_lookup,
                     &method_pre_lower_names,
                     binding_lookup,
+                    &parameter_prologue,
                     None,
                 );
                 let m_child_captured_locals = collect_child_captured_locals(
@@ -8625,6 +8728,47 @@ fn alloc_shadow_binding(
 /// the same demand one scope at a time, so a grandchild capture reaches the
 /// actual source binding without eagerly capturing every visible name
 /// (bd-x0ld5).
+#[allow(clippy::too_many_arguments)]
+fn append_free_var_capture(
+    name: &str,
+    body_id: BindingId,
+    names: &mut Vec<String>,
+    ids: &mut Vec<BindingId>,
+    outer_bindings: &mut Vec<ResolvedBinding>,
+    outer_lookup: &mut BTreeMap<String, BindingId>,
+    outer_binding_index: &mut BindingId,
+    outer_scope: ScopeId,
+) {
+    if ids.contains(&body_id) {
+        return;
+    }
+    if !outer_lookup.contains_key(name) {
+        let outer_id = *outer_binding_index;
+        *outer_binding_index = outer_binding_index.saturating_add(1);
+        outer_bindings.push(ResolvedBinding {
+            name: name.to_string(),
+            binding_id: outer_id,
+            scope: outer_scope,
+            kind: BindingKind::Let,
+        });
+        outer_lookup.insert(name.to_string(), outer_id);
+    }
+    let outer_id = *outer_lookup
+        .get(name)
+        .expect("source-lexical capture bridge must exist");
+    let origin_id = outer_lookup
+        .get(&capture_origin_sentinel(name))
+        .copied()
+        .unwrap_or(outer_id);
+    let runtime_name = capture_cell_name(name, origin_id);
+    outer_lookup.insert(
+        child_capture_binding_sentinel(outer_id, &runtime_name),
+        outer_id,
+    );
+    names.push(runtime_name);
+    ids.push(body_id);
+}
+
 fn collect_free_vars(
     body_lookup: &BTreeMap<String, BindingId>,
     pre_lower_names: &BTreeSet<String>,
@@ -8642,33 +8786,49 @@ fn collect_free_vars(
         {
             continue;
         }
-        if !outer_lookup.contains_key(name.as_str()) {
-            let outer_id = *outer_binding_index;
-            *outer_binding_index = outer_binding_index.saturating_add(1);
-            outer_bindings.push(ResolvedBinding {
-                name: name.clone(),
-                binding_id: outer_id,
-                scope: outer_scope,
-                kind: BindingKind::Let,
-            });
-            outer_lookup.insert(name.clone(), outer_id);
-        }
-        let outer_id = *outer_lookup
-            .get(name.as_str())
-            .expect("source-lexical capture bridge must exist");
-        let origin_id = outer_lookup
-            .get(&capture_origin_sentinel(name))
-            .copied()
-            .unwrap_or(outer_id);
-        let runtime_name = capture_cell_name(name, origin_id);
-        outer_lookup.insert(
-            child_capture_binding_sentinel(outer_id, &runtime_name),
-            outer_id,
+        append_free_var_capture(
+            name,
+            *id,
+            &mut names,
+            &mut ids,
+            outer_bindings,
+            outer_lookup,
+            outer_binding_index,
+            outer_scope,
         );
-        names.push(runtime_name);
-        ids.push(*id);
     }
     (names, ids)
+}
+
+/// A body declaration can shadow a parameter-default reference in
+/// `body_lookup`, but the already-emitted prologue operation must retain its
+/// distinct binding id and capture the enclosing source binding.
+#[allow(clippy::too_many_arguments)]
+fn append_parameter_prologue_captures(
+    state: &ParameterPrologueState,
+    excluded_name: Option<&str>,
+    names: &mut Vec<String>,
+    ids: &mut Vec<BindingId>,
+    outer_bindings: &mut Vec<ResolvedBinding>,
+    outer_lookup: &mut BTreeMap<String, BindingId>,
+    outer_binding_index: &mut BindingId,
+    outer_scope: ScopeId,
+) {
+    for (name, body_id) in &state.references {
+        if excluded_name == Some(name.as_str()) || !has_source_lexical_binding(outer_lookup, name) {
+            continue;
+        }
+        append_free_var_capture(
+            name,
+            *body_id,
+            names,
+            ids,
+            outer_bindings,
+            outer_lookup,
+            outer_binding_index,
+            outer_scope,
+        );
+    }
 }
 
 /// Compute the exact runtime capture-cell name and body binding ID demanded by
@@ -8755,6 +8915,7 @@ fn rewrite_unresolved_function_body_loads(
     body_lookup: &BTreeMap<String, BindingId>,
     pre_lower_names: &BTreeSet<String>,
     outer_lookup: &BTreeMap<String, BindingId>,
+    parameter_prologue: &ParameterPrologueState,
     self_name: Option<&str>,
 ) -> Vec<(String, BindingId)> {
     let mut locally_defined_ids = BTreeSet::new();
@@ -8767,7 +8928,7 @@ fn rewrite_unresolved_function_body_loads(
         }
     }
 
-    let unresolved_by_id: BTreeMap<BindingId, String> = body_lookup
+    let mut unresolved_by_id: BTreeMap<BindingId, String> = body_lookup
         .iter()
         .filter(|(name, binding_id)| {
             !is_internal_lowering_binding(name)
@@ -8777,6 +8938,15 @@ fn rewrite_unresolved_function_body_loads(
         })
         .map(|(name, binding_id)| (*binding_id, name.clone()))
         .collect();
+    for (name, binding_id) in &parameter_prologue.references {
+        if !has_source_lexical_binding(outer_lookup, name)
+            && !locally_defined_ids.contains(binding_id)
+        {
+            unresolved_by_id
+                .entry(*binding_id)
+                .or_insert_with(|| name.clone());
+        }
+    }
 
     if unresolved_by_id.is_empty() {
         return Vec::new();
@@ -12667,22 +12837,17 @@ fn lower_expression_to_ir1_inner(
                 &mut body_binding_index,
                 body_scope,
             )?;
-            for (synthetic_name, pattern) in &destructure_params {
-                let source_bid = *body_lookup
-                    .get(synthetic_name.as_str())
-                    .expect("synthetic param binding allocated above");
-                lower_destructuring_to_ir1(
-                    pattern,
-                    source_bid,
-                    &mut body_ops,
-                    &mut body_bindings,
-                    &mut body_lookup,
-                    &mut body_binding_index,
-                    body_scope,
-                    &mut body_label_counter,
-                    &mut Vec::new(),
-                )?;
-            }
+            let parameter_prologue = lower_function_parameter_prologue(
+                &destructure_params,
+                None,
+                binding_lookup,
+                &mut body_ops,
+                &mut body_bindings,
+                &body_lookup,
+                &mut body_binding_index,
+                body_scope,
+                &mut body_label_counter,
+            )?;
             let body_statements = match body {
                 ArrowBody::Block(block) => Some(block.body.as_slice()),
                 ArrowBody::Expression(_) => None,
@@ -12694,6 +12859,7 @@ fn lower_expression_to_ir1_inner(
                 &mut body_lookup,
                 &mut body_binding_index,
             );
+            merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup);
             match body {
                 ArrowBody::Expression(expr) => {
                     lower_expression_to_ir1(
@@ -12731,9 +12897,19 @@ fn lower_expression_to_ir1_inner(
                 }
                 body_ops.push(Ir1Op::Return);
             }
-            let (arrow_free_vars, arrow_free_var_ids) = collect_free_vars(
+            let (mut arrow_free_vars, mut arrow_free_var_ids) = collect_free_vars(
                 &body_lookup,
                 &pre_lower_names,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+            );
+            append_parameter_prologue_captures(
+                &parameter_prologue,
+                None,
+                &mut arrow_free_vars,
+                &mut arrow_free_var_ids,
                 bindings,
                 binding_lookup,
                 binding_index,
@@ -12744,6 +12920,7 @@ fn lower_expression_to_ir1_inner(
                 &body_lookup,
                 &pre_lower_names,
                 binding_lookup,
+                &parameter_prologue,
                 None,
             );
             let arrow_child_captured_locals =
@@ -12816,22 +12993,17 @@ fn lower_expression_to_ir1_inner(
                 &mut body_binding_index,
                 body_scope,
             )?;
-            for (synthetic_name, pattern) in &destructure_params {
-                let source_bid = *body_lookup
-                    .get(synthetic_name.as_str())
-                    .expect("synthetic param binding allocated above");
-                lower_destructuring_to_ir1(
-                    pattern,
-                    source_bid,
-                    &mut body_ops,
-                    &mut body_bindings,
-                    &mut body_lookup,
-                    &mut body_binding_index,
-                    body_scope,
-                    &mut body_label_counter,
-                    &mut Vec::new(),
-                )?;
-            }
+            let parameter_prologue = lower_function_parameter_prologue(
+                &destructure_params,
+                name.as_deref(),
+                binding_lookup,
+                &mut body_ops,
+                &mut body_bindings,
+                &body_lookup,
+                &mut body_binding_index,
+                body_scope,
+                &mut body_label_counter,
+            )?;
             let pre_lower_names = prepare_function_body_bindings(
                 Some(&body.body),
                 name.as_deref(),
@@ -12839,6 +13011,7 @@ fn lower_expression_to_ir1_inner(
                 &mut body_lookup,
                 &mut body_binding_index,
             );
+            merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup);
             for stmt in &body.body {
                 lower_statement_to_ir1(
                     stmt,
@@ -12857,9 +13030,23 @@ fn lower_expression_to_ir1_inner(
                 });
                 body_ops.push(Ir1Op::Return);
             }
+            let mut capture_pre_lower_names = pre_lower_names.clone();
+            if let Some(self_name) = name {
+                capture_pre_lower_names.insert(self_name.clone());
+            }
             let (mut fn_free_vars, mut fn_free_var_ids) = collect_free_vars(
                 &body_lookup,
-                &pre_lower_names,
+                &capture_pre_lower_names,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+            );
+            append_parameter_prologue_captures(
+                &parameter_prologue,
+                name.as_deref(),
+                &mut fn_free_vars,
+                &mut fn_free_var_ids,
                 bindings,
                 binding_lookup,
                 binding_index,
@@ -12870,6 +13057,7 @@ fn lower_expression_to_ir1_inner(
                 &body_lookup,
                 &pre_lower_names,
                 binding_lookup,
+                &parameter_prologue,
                 name.as_deref(),
             );
             // bd-g8blf: a NAMED function expression may reference its own name
@@ -12882,14 +13070,26 @@ fn lower_expression_to_ir1_inner(
             // deferred pass declares it in its temporary PushScope/PopScope (so
             // it does NOT leak to the enclosing scope) capturing `undefined`,
             // and the CreateClosure self-bind (bd-g0aok) supplies the closure
-            // value. No-op for anonymous or non-self-referential expressions.
-            if let Some(self_name) = name
-                && let Some(&self_id) = body_lookup.get(self_name)
-                && !pre_lower_names.contains(self_name)
-                && !fn_free_vars.iter().any(|fv| fv == self_name)
-            {
-                fn_free_vars.push(self_name.clone());
-                fn_free_var_ids.push(self_id);
+            // value. A parameter default has its own binding id when a body
+            // declaration shadows the self name, so prefer that prologue id.
+            // No-op for anonymous or non-self-referential expressions.
+            if let Some(self_name) = name {
+                let prologue_self_id =
+                    parameter_prologue
+                        .references
+                        .iter()
+                        .find_map(|(reference, binding_id)| {
+                            (reference == self_name).then_some(*binding_id)
+                        });
+                let body_self_id = (!pre_lower_names.contains(self_name))
+                    .then(|| body_lookup.get(self_name).copied())
+                    .flatten();
+                if let Some(self_id) = prologue_self_id.or(body_self_id)
+                    && !fn_free_var_ids.contains(&self_id)
+                {
+                    fn_free_vars.push(self_name.clone());
+                    fn_free_var_ids.push(self_id);
+                }
             }
             let fn_child_captured_locals =
                 collect_child_captured_locals(&body_lookup, &fn_free_vars, &fn_free_var_ids);
@@ -13356,22 +13556,17 @@ fn lower_expression_to_ir1_inner(
                 &mut body_binding_index,
                 body_scope,
             )?;
-            for (synthetic_name, pattern) in &destructure_params {
-                let source_bid = *body_lookup
-                    .get(synthetic_name.as_str())
-                    .expect("synthetic param binding allocated above");
-                lower_destructuring_to_ir1(
-                    pattern,
-                    source_bid,
-                    &mut body_ops,
-                    &mut body_bindings,
-                    &mut body_lookup,
-                    &mut body_binding_index,
-                    body_scope,
-                    &mut body_label_counter,
-                    &mut Vec::new(),
-                )?;
-            }
+            let parameter_prologue = lower_function_parameter_prologue(
+                &destructure_params,
+                name.as_deref(),
+                binding_lookup,
+                &mut body_ops,
+                &mut body_bindings,
+                &body_lookup,
+                &mut body_binding_index,
+                body_scope,
+                &mut body_label_counter,
+            )?;
             let ctor_statements = constructor.map(|ctor| ctor.body.body.as_slice());
             let ctor_pre_lower_names = prepare_function_body_bindings(
                 ctor_statements,
@@ -13380,6 +13575,7 @@ fn lower_expression_to_ir1_inner(
                 &mut body_lookup,
                 &mut body_binding_index,
             );
+            merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup);
             if let Some(ctor) = constructor {
                 for stmt in &ctor.body.body {
                     lower_statement_to_ir1(
@@ -13401,9 +13597,19 @@ fn lower_expression_to_ir1_inner(
                 body_ops.push(Ir1Op::Return);
             }
 
-            let (mut ctor_free_vars, ctor_free_var_ids) = collect_free_vars(
+            let (mut ctor_free_vars, mut ctor_free_var_ids) = collect_free_vars(
                 &body_lookup,
                 &ctor_pre_lower_names,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+            );
+            append_parameter_prologue_captures(
+                &parameter_prologue,
+                None,
+                &mut ctor_free_vars,
+                &mut ctor_free_var_ids,
                 bindings,
                 binding_lookup,
                 binding_index,
@@ -13414,10 +13620,17 @@ fn lower_expression_to_ir1_inner(
                 &body_lookup,
                 &ctor_pre_lower_names,
                 binding_lookup,
+                &parameter_prologue,
                 name.as_deref(),
             );
             if let Some(self_name) = name.as_deref()
-                && let Some(&self_binding) = body_lookup.get(self_name)
+                && let Some(self_binding) = parameter_prologue
+                    .references
+                    .iter()
+                    .find_map(|(reference, binding_id)| {
+                        (reference == self_name).then_some(*binding_id)
+                    })
+                    .or_else(|| body_lookup.get(self_name).copied())
             {
                 rewrite_class_expression_self_capture(
                     binding_lookup,
@@ -13540,22 +13753,17 @@ fn lower_expression_to_ir1_inner(
                     &mut m_binding_index,
                     m_scope,
                 )?;
-                for (synthetic_name, pattern) in &m_destructure_params {
-                    let source_bid = *m_lookup
-                        .get(synthetic_name.as_str())
-                        .expect("synthetic param binding allocated above");
-                    lower_destructuring_to_ir1(
-                        pattern,
-                        source_bid,
-                        &mut m_body_ops,
-                        &mut m_bindings,
-                        &mut m_lookup,
-                        &mut m_binding_index,
-                        m_scope,
-                        &mut m_label_counter,
-                        &mut Vec::new(),
-                    )?;
-                }
+                let parameter_prologue = lower_function_parameter_prologue(
+                    &m_destructure_params,
+                    name.as_deref(),
+                    binding_lookup,
+                    &mut m_body_ops,
+                    &mut m_bindings,
+                    &m_lookup,
+                    &mut m_binding_index,
+                    m_scope,
+                    &mut m_label_counter,
+                )?;
                 let method_pre_lower_names = prepare_function_body_bindings(
                     Some(&method.body.body),
                     name.as_deref(),
@@ -13563,6 +13771,7 @@ fn lower_expression_to_ir1_inner(
                     &mut m_lookup,
                     &mut m_binding_index,
                 );
+                merge_parameter_prologue_state(&parameter_prologue, &mut m_lookup);
                 for stmt in &method.body.body {
                     lower_statement_to_ir1(
                         stmt,
@@ -13588,9 +13797,19 @@ fn lower_expression_to_ir1_inner(
                         key: Ir1PropertyKey::Static("prototype".to_string()),
                     });
                 }
-                let (mut method_free_vars, method_free_var_ids) = collect_free_vars(
+                let (mut method_free_vars, mut method_free_var_ids) = collect_free_vars(
                     &m_lookup,
                     &method_pre_lower_names,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                );
+                append_parameter_prologue_captures(
+                    &parameter_prologue,
+                    None,
+                    &mut method_free_vars,
+                    &mut method_free_var_ids,
                     bindings,
                     binding_lookup,
                     binding_index,
@@ -13601,10 +13820,17 @@ fn lower_expression_to_ir1_inner(
                     &m_lookup,
                     &method_pre_lower_names,
                     binding_lookup,
+                    &parameter_prologue,
                     name.as_deref(),
                 );
                 if let Some(self_name) = name.as_deref()
-                    && let Some(&self_binding) = m_lookup.get(self_name)
+                    && let Some(self_binding) = parameter_prologue
+                        .references
+                        .iter()
+                        .find_map(|(reference, binding_id)| {
+                            (reference == self_name).then_some(*binding_id)
+                        })
+                        .or_else(|| m_lookup.get(self_name).copied())
                 {
                     rewrite_class_expression_self_capture(
                         binding_lookup,

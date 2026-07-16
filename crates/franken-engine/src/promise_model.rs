@@ -1130,6 +1130,15 @@ impl MacrotaskQueue {
         })
     }
 
+    /// Exact post-schedule estimate without allocating or mutating the queue.
+    /// All macrotask lanes retain the same fixed entry plus the task label, so
+    /// the source only determines which heap receives the entry.
+    fn projected_schedule_memory_bytes(&self, label: &Label) -> u64 {
+        self.estimated_memory_bytes()
+            .saturating_add(std::mem::size_of::<MacrotaskHeapEntry>() as u64)
+            .saturating_add(estimate_label_memory_bytes(label))
+    }
+
     /// Schedule a macrotask.
     pub fn schedule(
         &mut self,
@@ -1328,6 +1337,19 @@ impl EventLoop {
                     .saturating_mul(2)
                     .saturating_mul(std::mem::size_of::<WitnessEvent>() as u64),
             )
+    }
+
+    /// Exact post-schedule resident-memory estimate for one I/O-completion
+    /// registration, without allocating, mutating the queue, or consuming a
+    /// deterministic registration sequence. The two witness slots are the
+    /// execution and optional clock-advance reservations charged for every
+    /// pending macrotask by [`Self::estimated_memory_bytes`].
+    pub(crate) fn projected_io_completion_memory_bytes(&self, label: &Label) -> u64 {
+        let current_macrotask_bytes = self.macrotasks.estimated_memory_bytes();
+        self.estimated_memory_bytes()
+            .saturating_sub(current_macrotask_bytes)
+            .saturating_add(self.macrotasks.projected_schedule_memory_bytes(label))
+            .saturating_add(2u64.saturating_mul(std::mem::size_of::<WitnessEvent>() as u64))
     }
 
     /// Cancel one pending macrotask by registration sequence and transfer its
@@ -2370,6 +2392,24 @@ mod tests {
             event_loop.estimated_memory_bytes(),
             expected_macrotasks.saturating_add(expected_witness)
         );
+    }
+
+    #[test]
+    fn io_completion_projection_is_exact_and_side_effect_free() {
+        let label = Label::Custom {
+            name: "projected-io".to_string(),
+            level: 3,
+        };
+        let mut event_loop = EventLoop::new();
+        event_loop.set_timeout(ClosureHandle(1), 10, Label::Public);
+        let before = event_loop.estimated_memory_bytes();
+
+        let projected = event_loop.projected_io_completion_memory_bytes(&label);
+        assert_eq!(event_loop.estimated_memory_bytes(), before);
+
+        let sequence = event_loop.schedule_io_completion(ClosureHandle(2), label);
+        assert_eq!(sequence, 1);
+        assert_eq!(event_loop.estimated_memory_bytes(), projected);
     }
 
     #[test]

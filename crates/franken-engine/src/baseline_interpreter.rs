@@ -5469,6 +5469,7 @@ pub struct ExecutionResult {
 
 #[derive(Debug, Clone)]
 struct ModuleExecutionSnapshot {
+    accounted_bytes: u64,
     registers: Vec<Value>,
     /// IFC labels parallel the logical register file. Inline callback
     /// execution replaces the register values, so its snapshot must preserve
@@ -6176,6 +6177,9 @@ pub struct InterpreterCore {
     heap: SeedTrackedField<Vec<HeapObject>>,
     /// Approximate live memory tracked for fail-closed budget enforcement.
     estimated_memory_bytes: u64,
+    /// Resident ownership held by nested module/callback snapshots while the
+    /// corresponding active core fields are temporarily replaced.
+    module_snapshot_in_flight_bytes: u64,
     /// Dedicated iterator runtime state used by iterator-specific IR3 ops.
     iterators: Vec<RuntimeIteratorState>,
     /// Replay-visible iterator protocol traces keyed by runtime iterator state.
@@ -6306,6 +6310,11 @@ pub struct InterpreterCore {
     promise_store: crate::promise_model::PromiseStore,
     /// Deterministic event loop state (microtasks + macrotasks + virtual clock).
     event_loop: crate::promise_model::EventLoop,
+    /// Queue ownership moved to a stack-local Promise/macrotask action remains
+    /// physically live until that action returns. Keep the queue's released
+    /// component charged during the transfer so nested Promise mutations see
+    /// one coherent runtime component.
+    promise_in_flight_task_bytes: u64,
     /// bd-201vt: pending arguments for scheduled async fs callbacks
     /// (`fs.readFile`/`fs.writeFile` callback forms), keyed by the `IoCompletion`
     /// macrotask's registration sequence. The host effect runs synchronously at
@@ -6469,6 +6478,7 @@ impl InterpreterCore {
             call_stack: Vec::new(),
             heap: SeedTrackedField::new(Vec::new()),
             estimated_memory_bytes,
+            module_snapshot_in_flight_bytes: 0,
             iterators: Vec::new(),
             iteration_traces: Vec::new(),
             function_prototypes: SeedTrackedField::new(BTreeMap::new()),
@@ -6511,6 +6521,7 @@ impl InterpreterCore {
             async_generators: Vec::new(),
             promise_store: crate::promise_model::PromiseStore::new(),
             event_loop: crate::promise_model::EventLoop::new(),
+            promise_in_flight_task_bytes: 0,
             pending_io_callbacks: BTreeMap::new(),
             event_listeners: BTreeMap::new(),
             event_promise_waiters: BTreeMap::new(),
@@ -6850,7 +6861,7 @@ impl InterpreterCore {
             // we simply do not invoke the callback.
             let result = match response_callback {
                 Some(cid) if response_obj.is_some() => {
-                    self.schedule_io_callback(cid, vec![response]);
+                    self.schedule_io_callback(cid, vec![response])?;
                     Value::Undefined
                 }
                 _ => response,
@@ -6862,7 +6873,7 @@ impl InterpreterCore {
             // http.get(url)`. The emission is scheduled after the callback (higher
             // registration seq), so it lands on a turn where the listeners exist.
             if let Some(rid) = response_obj {
-                self.schedule_stream_emission(rid, StreamEventPhase::Data);
+                self.schedule_stream_emission(rid, StreamEventPhase::Data)?;
             }
             return Ok(result);
         }
@@ -6973,7 +6984,7 @@ impl InterpreterCore {
                 let error = InterpreterError::HostFilesystem { code, message };
                 if let Some(closure_id) = callback_closure {
                     let thrown = self.native_error_to_thrown_value(&error)?;
-                    self.schedule_io_callback(closure_id, vec![thrown]);
+                    self.schedule_io_callback(closure_id, vec![thrown])?;
                     return Ok(Value::Undefined);
                 }
                 return Err(error);
@@ -7005,7 +7016,7 @@ impl InterpreterCore {
                     // callbacks off the current call stack), and the call itself
                     // evaluates to `undefined`. The encoding still steers `data`'s
                     // Buffer-vs-string shape via the resolver above.
-                    self.schedule_io_callback(closure_id, vec![Value::Null, value]);
+                    self.schedule_io_callback(closure_id, vec![Value::Null, value])?;
                     Value::Undefined
                 } else {
                     value
@@ -7021,7 +7032,7 @@ impl InterpreterCore {
                     // and was recorded above; defer the err-first `cb(null)` to the
                     // next event-loop turn. (Node's writeFile callback takes only the
                     // error argument.)
-                    self.schedule_io_callback(closure_id, vec![Value::Null]);
+                    self.schedule_io_callback(closure_id, vec![Value::Null])?;
                 }
                 Value::Undefined
             }
@@ -7197,12 +7208,27 @@ impl InterpreterCore {
     /// scheduling. `callback_args` is whatever the caller delivers to the closure; it
     /// is stashed by the macrotask's registration sequence and drained when the
     /// macrotask fires in `execute_macrotask_callback`.
-    fn schedule_io_callback(&mut self, closure_id: u32, callback_args: Vec<Value>) {
+    fn schedule_io_callback(
+        &mut self,
+        closure_id: u32,
+        callback_args: Vec<Value>,
+    ) -> Result<(), InterpreterError> {
+        let retained_bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(Self::estimate_value_vec_bytes(&callback_args));
+        self.apply_memory_component_delta(0, retained_bytes)?;
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
         let seq = self.event_loop.schedule_io_completion(
             crate::closure_model::ClosureHandle(closure_id),
             crate::ifc_artifacts::Label::Public,
         );
+        if let Err(error) = self.apply_promise_runtime_memory_delta(previous_promise_bytes) {
+            self.event_loop.rollback_last_scheduled(seq);
+            self.estimated_memory_bytes =
+                self.estimated_memory_bytes.saturating_sub(retained_bytes);
+            return Err(error);
+        }
         self.pending_io_callbacks.insert(seq, callback_args);
+        Ok(())
     }
 
     /// bd-3894s slice (2d): register an event listener closure for `event` on the
@@ -7272,11 +7298,13 @@ impl InterpreterCore {
                 &registration_label,
             ))
         });
-        self.apply_memory_component_delta(0, added_bytes)?;
-
         let waiter_id = self.next_event_promise_waiter_id;
+        let promise = self.create_promise()?;
+        if let Err(error) = self.apply_memory_component_delta(0, added_bytes) {
+            self.rollback_fresh_promise(promise);
+            return Err(error);
+        }
         self.next_event_promise_waiter_id = next_waiter_id;
-        let promise = self.promise_store.create();
         let resolve_record = EventPromiseWaiterRecord {
             waiter_id,
             promise,
@@ -7634,8 +7662,7 @@ impl InterpreterCore {
                     )?;
                     Value::Object(error_id)
                 };
-                self.pending_exception = Some(thrown.clone());
-                self.pending_exception_label = emission_label;
+                self.replace_pending_abrupt_slots(Some((thrown.clone(), emission_label)), None)?;
                 return Err(InterpreterError::UncaughtException {
                     value: Self::uncaught_exception_description(&thrown),
                 });
@@ -8004,14 +8031,17 @@ impl InterpreterCore {
             && Self::is_writable_state_view_key(key))
     }
 
-    fn join_pending_hostcall_stream_label(&mut self, object_id: ObjectId) {
+    fn join_pending_hostcall_stream_label(
+        &mut self,
+        object_id: ObjectId,
+    ) -> Result<(), InterpreterError> {
         let stream_label = self.stream_state_label(object_id);
         let joined = self
             .pending_hostcall_result_label
-            .take()
+            .clone()
             .unwrap_or(Label::Public)
             .join(&stream_label);
-        self.pending_hostcall_result_label = Some(joined);
+        self.replace_pending_hostcall_result_label(Some(joined))
     }
 
     fn writable_receiver_id(&self, receiver: Value) -> Result<ObjectId, InterpreterError> {
@@ -9184,9 +9214,8 @@ impl InterpreterCore {
         fallback_label: Label,
     ) -> (Value, Label, bool) {
         if matches!(error, InterpreterError::UncaughtException { .. })
-            && let Some(value) = self.pending_exception.take()
+            && let Some((value, label)) = self.take_pending_exception_slot()
         {
-            let label = std::mem::replace(&mut self.pending_exception_label, Label::Public);
             (value, label, true)
         } else {
             (Value::str(error.to_string()), fallback_label, false)
@@ -9223,6 +9252,10 @@ impl InterpreterCore {
             let budget_error =
                 self.memory_budget_error(requested_bytes, self.heap_object_count_u32());
             if restore_pending_exception_on_refusal {
+                self.estimated_memory_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_add(Self::estimate_value_bytes(&error))
+                    .saturating_add(Self::estimate_label_bytes(&error_label));
                 self.pending_exception = Some(error);
                 self.pending_exception_label = error_label;
             }
@@ -9232,6 +9265,10 @@ impl InterpreterCore {
             let sequence = self.next_writable_tick_sequence;
             let Some(next_sequence) = sequence.checked_add(1) else {
                 if restore_pending_exception_on_refusal {
+                    self.estimated_memory_bytes = self
+                        .estimated_memory_bytes
+                        .saturating_add(Self::estimate_value_bytes(&error))
+                        .saturating_add(Self::estimate_label_bytes(&error_label));
                     self.pending_exception = Some(error);
                     self.pending_exception_label = error_label;
                 }
@@ -9648,19 +9685,6 @@ impl InterpreterCore {
         Ok((error, fallback_label))
     }
 
-    fn writable_pending_exception_dynamic_bytes(&self) -> u64 {
-        self.pending_exception
-            .as_ref()
-            .map(Self::estimate_writable_value_bytes)
-            .unwrap_or(0)
-            .saturating_add(
-                self.pending_exception
-                    .as_ref()
-                    .map(|_| Self::estimate_label_bytes(&self.pending_exception_label))
-                    .unwrap_or(0),
-            )
-    }
-
     fn retain_first_writable_callback_error(
         &mut self,
         first_error: &mut Option<InterpreterError>,
@@ -9671,8 +9695,7 @@ impl InterpreterCore {
             .as_ref()
             .map(Self::estimate_interpreter_error_bytes)
             .unwrap_or_else(|| Self::estimate_interpreter_error_bytes(&error));
-        let desired_charge =
-            retained_error_bytes.saturating_add(self.writable_pending_exception_dynamic_bytes());
+        let desired_charge = retained_error_bytes;
         if desired_charge > *first_error_charge {
             if let Err(memory_error) = self.add_writable_in_flight_charge(
                 first_error_charge,
@@ -9682,8 +9705,7 @@ impl InterpreterCore {
                 // ownership charge is refused. Containment takes precedence
                 // over preserving a payload that the configured ceiling says
                 // may not survive this callback boundary.
-                self.pending_exception = None;
-                self.pending_exception_label = Label::Public;
+                self.clear_pending_exception_slot();
                 return Err(memory_error);
             }
         } else {
@@ -11692,12 +11714,12 @@ impl InterpreterCore {
                 got: "closed Readable".to_string(),
             });
         };
-        let source = snapshot.source;
-        let next_index = snapshot.next_index;
-        let phase = snapshot.phase;
-        let lifecycle_label = snapshot.lifecycle_label;
-        let push_only = snapshot.push_only;
-        let already_waiting = snapshot.to_array_waiter.is_some();
+        let mut projected = snapshot;
+        let next_index = projected.next_index;
+        let phase = projected.phase;
+        let lifecycle_label = projected.lifecycle_label.clone();
+        let push_only = projected.push_only;
+        let already_waiting = projected.to_array_waiter.is_some();
         if push_only || already_waiting || phase != ReadableFromPumpPhase::Data {
             return Err(InterpreterError::TypeError {
                 expected: "one pre-terminal toArray consumption on Readable.from".to_string(),
@@ -11711,13 +11733,13 @@ impl InterpreterCore {
             });
         }
 
-        let source_length = match &source {
+        let source_length = match &projected.source {
             Value::Str(_) => 1,
             Value::Object(source_id) => self.array_like_length(*source_id)?,
             _ => 0,
         };
         let remaining = source_length.saturating_sub(next_index);
-        let result_length = snapshot
+        let result_length = projected
             .buffer
             .len()
             .checked_add(remaining)
@@ -11755,14 +11777,18 @@ impl InterpreterCore {
         values.try_reserve_exact(result_length).map_err(|_| {
             self.memory_budget_error(minimum_requested_bytes, requested_heap_objects)
         })?;
-        values.extend(snapshot.buffer.into_iter().map(|chunk| chunk.value));
-        match source {
-            Value::Str(text) if next_index == 0 => values.push(Value::Str(text)),
+        values.extend(
+            std::mem::take(&mut projected.buffer)
+                .into_iter()
+                .map(|chunk| chunk.value),
+        );
+        match &projected.source {
+            Value::Str(text) if next_index == 0 => values.push(Value::Str(text.clone())),
             Value::Str(_) => {}
             Value::Object(source_id) => {
                 for index in next_index..source_length {
                     values.push(
-                        self.array_index_value(source_id, index)?
+                        self.array_index_value(*source_id, index)?
                             .unwrap_or(Value::Undefined),
                     );
                 }
@@ -11791,31 +11817,43 @@ impl InterpreterCore {
             ));
         }
 
-        let result = self.alloc_array_from_values(&values)?;
-        let promise = self.promise_store.create();
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let previous_heap_len = self.heap.len();
+        let promise = self.create_promise()?;
+        let result = match self.alloc_array_from_values(&values) {
+            Ok(result) => result,
+            Err(error) => {
+                self.rollback_fresh_promise(promise);
+                self.rollback_heap_to_len(previous_heap_len);
+                self.estimated_memory_bytes = previous_estimated_bytes;
+                return Err(error);
+            }
+        };
         let previous_state_bytes = self
             .readable_from_streams
             .get(&object_id)
             .map(Self::estimate_readable_from_state_bytes)
             .unwrap_or(0);
-        let state = self
-            .readable_from_streams
-            .get_mut(&object_id)
-            .expect("live state was checked before allocation");
-        state.next_index = source_length;
-        state.buffer.clear();
-        state.buffered_length = 0;
-        state.data_readable_pending = false;
-        state.eof_readable_pending = false;
-        state.eof_requested = true;
-        state.phase = ReadableFromPumpPhase::End;
-        state.to_array_waiter = Some(ReadableToArrayWaiter {
+        projected.next_index = source_length;
+        projected.buffered_length = 0;
+        projected.data_readable_pending = false;
+        projected.eof_readable_pending = false;
+        projected.eof_requested = true;
+        projected.phase = ReadableFromPumpPhase::End;
+        projected.to_array_waiter = Some(ReadableToArrayWaiter {
             promise,
             result,
             label: lifecycle_label,
         });
-        let new_state_bytes = Self::estimate_readable_from_state_bytes(state);
-        self.apply_memory_component_delta(previous_state_bytes, new_state_bytes)?;
+        let new_state_bytes = Self::estimate_readable_from_state_bytes(&projected);
+        if let Err(error) = self.apply_memory_component_delta(previous_state_bytes, new_state_bytes)
+        {
+            self.rollback_fresh_promise(promise);
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+            return Err(error);
+        }
+        self.readable_from_streams.insert(object_id, projected);
         self.schedule_readable_from_pump(object_id);
         Ok(Value::Promise(promise.0))
     }
@@ -12123,13 +12161,23 @@ impl InterpreterCore {
     /// closure-callback path, so the sentinel is never invoked). Because it is
     /// scheduled after the response callback, it orders onto a LATER turn, by which
     /// point the callback has registered its `res.on('data'|'end', …)` listeners.
-    fn schedule_stream_emission(&mut self, object_id: ObjectId, phase: StreamEventPhase) {
+    fn schedule_stream_emission(
+        &mut self,
+        object_id: ObjectId,
+        phase: StreamEventPhase,
+    ) -> Result<(), InterpreterError> {
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
         let seq = self.event_loop.schedule_io_completion(
             crate::closure_model::ClosureHandle(0),
             crate::ifc_artifacts::Label::Public,
         );
+        if let Err(error) = self.apply_promise_runtime_memory_delta(previous_promise_bytes) {
+            self.event_loop.rollback_last_scheduled(seq);
+            return Err(error);
+        }
         self.pending_stream_emissions
             .insert(seq, PendingStreamEmission { object_id, phase });
+        Ok(())
     }
 
     /// bd-3894s slice (2d): emit one readable-stream phase for an `IncomingMessage`
@@ -12165,7 +12213,7 @@ impl InterpreterCore {
                     }
                 }
                 // `'end'` always follows `'data'`, on its own turn.
-                self.schedule_stream_emission(object_id, StreamEventPhase::End);
+                self.schedule_stream_emission(object_id, StreamEventPhase::End)?;
                 Ok(())
             }
             StreamEventPhase::End => {
@@ -12778,18 +12826,36 @@ impl InterpreterCore {
         Ok(label.clone())
     }
 
-    fn join_binary_storage_label(&mut self, object_id: ObjectId, label: &Label) {
+    fn join_binary_storage_label(
+        &mut self,
+        object_id: ObjectId,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
         let Some(buffer_id) = self.array_buffer_id_for_object(object_id) else {
-            return;
+            return Ok(());
         };
+        let Some(previous_label) = self
+            .heap
+            .get(buffer_id.0 as usize)
+            .and_then(|object| object.array_buffer.as_ref())
+            .map(|backing| backing.label.clone())
+        else {
+            return Ok(());
+        };
+        let next_label = previous_label.join(label);
+        self.apply_memory_component_delta(
+            Self::estimate_label_bytes(&previous_label),
+            Self::estimate_label_bytes(&next_label),
+        )?;
         self.mutate_heap(|heap| {
             if let Some(backing) = heap
                 .get_mut(buffer_id.0 as usize)
                 .and_then(|object| object.array_buffer.as_mut())
             {
-                backing.label = backing.label.join(label);
+                backing.label = next_label;
             }
         });
+        Ok(())
     }
 
     fn propagate_builtin_binary_mutation_label(
@@ -12821,14 +12887,14 @@ impl InterpreterCore {
                 | Kind::BufferSwap64
         );
         if mutates_receiver && let Value::Object(object_id) = receiver {
-            self.join_binary_storage_label(*object_id, label);
+            self.join_binary_storage_label(*object_id, label)?;
         }
 
         if builtin.kind == Kind::BufferCopy
             && args.count > 0
             && let Value::Object(target_id) = self.read_reg(args.start)?
         {
-            self.join_binary_storage_label(target_id, label);
+            self.join_binary_storage_label(target_id, label)?;
         }
         Ok(())
     }
@@ -13400,13 +13466,18 @@ impl InterpreterCore {
     /// the caller fails closed.
     pub fn arm_state_capture_at_tick(&mut self, tick: u64) {
         self.state_capture_tick = Some(tick);
+        let released_bytes = self.state_capture_memory_bytes();
         self.state_capture_result = None;
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
     }
 
     /// Take the observation produced by an armed state capture, if the
     /// boundary landed exactly on the requested tick.
     pub fn take_captured_state(&mut self) -> Option<CapturedInterpreterState> {
-        self.state_capture_result.take()
+        let released_bytes = self.state_capture_memory_bytes();
+        let captured = self.state_capture_result.take();
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
+        captured
     }
 
     /// Number of nondeterminism events captured so far (the debugger's
@@ -13434,7 +13505,29 @@ impl InterpreterCore {
             return;
         }
         if seen == requested {
-            self.state_capture_result = Some(self.capture_interpreter_state(seen));
+            let projection_working_bytes = self.capture_label_projection_working_bytes();
+            if self
+                .check_temporary_memory_budget(projection_working_bytes)
+                .is_ok()
+            {
+                let heap_label_sources = self.capture_heap_label_sources();
+                let captured_bytes =
+                    self.estimate_projected_captured_state_bytes(&heap_label_sources);
+                if self
+                    .check_temporary_memory_budget(
+                        captured_bytes.saturating_add(projection_working_bytes),
+                    )
+                    .is_ok()
+                    && self.apply_memory_component_delta(0, captured_bytes).is_ok()
+                {
+                    let captured = self.capture_interpreter_state(seen, &heap_label_sources);
+                    debug_assert_eq!(
+                        captured_bytes,
+                        Self::estimate_captured_state_bytes(&captured)
+                    );
+                    self.state_capture_result = Some(captured);
+                }
+            }
         }
         // seen > requested: no boundary landed exactly on the tick — stay
         // uncaptured (fail-closed). Either way the request is satisfied.
@@ -13446,7 +13539,113 @@ impl InterpreterCore {
     /// register from whose value it is transitively reachable via property
     /// values and prototype links). See [`CapturedHeapState`] for why this
     /// is a projection of the register-granularity IFC state.
-    fn capture_interpreter_state(&self, tick: u64) -> CapturedInterpreterState {
+    fn capture_label_projection_working_bytes(&self) -> u64 {
+        u64::try_from(self.heap.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(
+                (std::mem::size_of::<Option<usize>>()
+                    + std::mem::size_of::<u32>()
+                    + std::mem::size_of::<bool>()) as u64,
+            )
+    }
+
+    /// For every heap object, identify the register whose label wins the
+    /// reachability join. `Label::join` selects one operand by its full
+    /// deterministic order, so retaining a source index is enough to estimate
+    /// and later clone the exact result without cloning labels during preflight.
+    fn capture_heap_label_sources(&self) -> Vec<Option<usize>> {
+        let mut heap_label_sources = vec![None; self.heap.len()];
+        let mut frontier = Vec::with_capacity(self.heap.len());
+        let mut queued = vec![false; self.heap.len()];
+        for (register_index, value) in self.registers.iter().enumerate() {
+            if matches!(value, Value::Undefined) {
+                continue;
+            }
+            frontier.clear();
+            queued.fill(false);
+            Self::queue_object_id_from_value(value, &mut frontier, &mut queued);
+            while let Some(object_index) = frontier.pop() {
+                let object_index = object_index as usize;
+                if object_index >= self.heap.len() {
+                    continue;
+                }
+                let candidate = self
+                    .register_labels
+                    .get(register_index)
+                    .unwrap_or(&Label::Public);
+                let replace = heap_label_sources[object_index].is_none_or(|existing_index| {
+                    let existing = self
+                        .register_labels
+                        .get(existing_index)
+                        .unwrap_or(&Label::Public);
+                    candidate > existing
+                });
+                if replace {
+                    heap_label_sources[object_index] = Some(register_index);
+                }
+                let object = &self.heap[object_index];
+                for property_value in object.properties.values() {
+                    Self::queue_object_id_from_value(property_value, &mut frontier, &mut queued);
+                }
+                if let Some(prototype) = object.prototype {
+                    Self::queue_object_id_from_value(
+                        &Value::Object(prototype),
+                        &mut frontier,
+                        &mut queued,
+                    );
+                }
+            }
+        }
+        heap_label_sources
+    }
+
+    fn estimate_projected_captured_state_bytes(&self, heap_label_sources: &[Option<usize>]) -> u64 {
+        let register_count = self
+            .registers
+            .iter()
+            .filter(|value| !matches!(value, Value::Undefined))
+            .count();
+        u64::try_from(register_count)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(std::mem::size_of::<CapturedRegisterState>() as u64)
+            .saturating_add(Self::saturating_sum(
+                self.registers
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, value)| !matches!(value, Value::Undefined))
+                    .map(|(index, value)| {
+                        Self::estimate_value_bytes(value).saturating_add(
+                            self.register_labels
+                                .get(index)
+                                .map(Self::estimate_label_bytes)
+                                .unwrap_or(0),
+                        )
+                    }),
+            ))
+            .saturating_add(
+                u64::try_from(self.heap.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(std::mem::size_of::<CapturedHeapState>() as u64),
+            )
+            .saturating_add(Self::saturating_sum(self.heap.iter().enumerate().map(
+                |(index, object)| {
+                    Self::estimate_heap_object_bytes(object).saturating_add(
+                        heap_label_sources
+                            .get(index)
+                            .and_then(|source| *source)
+                            .and_then(|source| self.register_labels.get(source))
+                            .map(Self::estimate_label_bytes)
+                            .unwrap_or(0),
+                    )
+                },
+            )))
+    }
+
+    fn capture_interpreter_state(
+        &self,
+        tick: u64,
+        heap_label_sources: &[Option<usize>],
+    ) -> CapturedInterpreterState {
         let registers: Vec<CapturedRegisterState> = self
             .registers
             .iter()
@@ -13463,33 +13662,6 @@ impl InterpreterCore {
             })
             .collect();
 
-        // Reachability join: propagate each register's label to every heap
-        // object reachable from its value.
-        let mut heap_labels: BTreeMap<u32, Label> = BTreeMap::new();
-        for entry in &registers {
-            let mut frontier: Vec<u32> = Vec::new();
-            Self::collect_object_ids_from_value(&entry.value, &mut frontier);
-            let mut visited: BTreeSet<u32> = BTreeSet::new();
-            while let Some(object_index) = frontier.pop() {
-                if !visited.insert(object_index) {
-                    continue;
-                }
-                let joined = match heap_labels.get(&object_index) {
-                    Some(existing) => existing.join(&entry.label),
-                    None => entry.label.clone(),
-                };
-                heap_labels.insert(object_index, joined);
-                if let Some(object) = self.heap.get(object_index as usize) {
-                    for value in object.properties.values() {
-                        Self::collect_object_ids_from_value(value, &mut frontier);
-                    }
-                    if let Some(prototype) = object.prototype {
-                        frontier.push(prototype.0);
-                    }
-                }
-            }
-        }
-
         let heap: Vec<CapturedHeapState> = self
             .heap
             .iter()
@@ -13497,8 +13669,10 @@ impl InterpreterCore {
             .map(|(index, object)| CapturedHeapState {
                 object_id: ObjectId(index as u32),
                 object: object.clone(),
-                label: heap_labels
-                    .get(&(index as u32))
+                label: heap_label_sources
+                    .get(index)
+                    .and_then(|source| *source)
+                    .and_then(|source| self.register_labels.get(source))
                     .cloned()
                     .unwrap_or(Label::Public),
             })
@@ -13511,10 +13685,18 @@ impl InterpreterCore {
         }
     }
 
-    /// Append the heap object ids directly referenced by a value.
-    fn collect_object_ids_from_value(value: &Value, out: &mut Vec<u32>) {
+    /// Queue one directly referenced heap object at most once per traversal.
+    /// Marking on enqueue bounds the frontier by `heap.len()` even when an
+    /// object exposes many properties that all reference the same target.
+    fn queue_object_id_from_value(value: &Value, out: &mut Vec<u32>, queued: &mut [bool]) {
         if let Value::Object(object_id) = value {
-            out.push(object_id.0);
+            let index = object_id.0 as usize;
+            if let Some(was_queued) = queued.get_mut(index)
+                && !*was_queued
+            {
+                *was_queued = true;
+                out.push(object_id.0);
+            }
         }
     }
 
@@ -13564,7 +13746,7 @@ impl InterpreterCore {
         };
         self.last_pre_run_seed = Some(seed.clone());
         self.top_level_await_resumption_contexts.clear();
-        self.top_level_await_outcome = None;
+        self.clear_top_level_await_outcome();
         let previous_register_bytes = self.registers_memory_bytes();
         let previous_heap_bytes = self.heap_memory_bytes();
         self.reset_execution_state_from_seed(&seed)?;
@@ -13599,7 +13781,7 @@ impl InterpreterCore {
             return Err(error);
         }
 
-        if let Some(resumed_outcome) = self.top_level_await_outcome.take() {
+        if let Some(resumed_outcome) = self.take_top_level_await_outcome() {
             return resumed_outcome;
         }
 
@@ -13670,8 +13852,84 @@ impl InterpreterCore {
         }
     }
 
-    fn snapshot_module_execution(&self) -> ModuleExecutionSnapshot {
-        ModuleExecutionSnapshot {
+    fn module_execution_snapshot_memory_bytes(&self) -> u64 {
+        Self::estimate_value_vec_bytes(&self.registers)
+            .saturating_add(
+                u64::try_from(self.register_labels.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(std::mem::size_of::<Label>() as u64),
+            )
+            .saturating_add(self.register_context_labels_memory_bytes())
+            .saturating_add(
+                u64::try_from(self.call_stack.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(std::mem::size_of::<CallFrame>() as u64),
+            )
+            .saturating_add(self.call_stack_memory_bytes())
+            .saturating_add(
+                u64::try_from(self.catch_frames.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(std::mem::size_of::<CatchFrame>() as u64),
+            )
+            .saturating_add(
+                u64::try_from(self.finally_modes.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(std::mem::size_of::<FinallyMode>() as u64),
+            )
+            .saturating_add(self.scope_chain_memory_bytes())
+            .saturating_add(
+                u64::try_from(self.pending_captures.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(std::mem::size_of::<u32>() as u64),
+            )
+            .saturating_add(
+                u64::try_from(self.generated_functions.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(std::mem::size_of::<GeneratedFunctionArtifact>() as u64),
+            )
+            .saturating_add(Self::saturating_sum(
+                self.generated_functions
+                    .iter()
+                    .map(Self::estimate_generated_function_artifact_clone_bytes),
+            ))
+            .saturating_add(
+                self.current_module_specifier
+                    .as_deref()
+                    .map(Self::estimate_string_bytes)
+                    .unwrap_or(0),
+            )
+    }
+
+    fn estimate_generated_function_artifact_clone_bytes(
+        artifact: &GeneratedFunctionArtifact,
+    ) -> u64 {
+        let provenance = &artifact.provenance;
+        Self::estimate_string_bytes(&provenance.source_id)
+            .saturating_add(Self::estimate_string_bytes(&provenance.source_hash))
+            .saturating_add(Self::estimate_string_bytes(&provenance.parameter_hash))
+            .saturating_add(Self::estimate_string_bytes(&provenance.construction_site))
+            .saturating_add(
+                Self::retained_module_program_bytes(&artifact.compiled_module, "")
+                    .saturating_sub(std::mem::size_of::<Ir3Module>() as u64)
+                    .saturating_sub(Self::estimate_string_bytes("")),
+            )
+    }
+
+    fn active_module_execution_memory_bytes(&self) -> u64 {
+        self.registers_memory_bytes()
+            .saturating_add(self.register_context_labels_memory_bytes())
+            .saturating_add(self.scope_chain_memory_bytes())
+            .saturating_add(self.call_stack_memory_bytes())
+    }
+
+    fn snapshot_module_execution(&mut self) -> Result<ModuleExecutionSnapshot, InterpreterError> {
+        let accounted_bytes = self.module_execution_snapshot_memory_bytes();
+        self.apply_memory_component_delta(0, accounted_bytes)?;
+        self.module_snapshot_in_flight_bytes = self
+            .module_snapshot_in_flight_bytes
+            .saturating_add(accounted_bytes);
+        Ok(ModuleExecutionSnapshot {
+            accounted_bytes,
             registers: self.registers.clone(),
             register_labels: self.register_labels.clone(),
             active_inline_callback_context_label: self.active_inline_callback_context_label.clone(),
@@ -13689,10 +13947,20 @@ impl InterpreterCore {
             pending_captures: self.pending_captures.clone(),
             generated_functions: self.generated_functions.clone(),
             current_module_specifier: self.current_module_specifier.clone(),
-        }
+        })
     }
 
-    fn restore_module_execution(&mut self, snapshot: ModuleExecutionSnapshot) {
+    fn restore_module_execution(
+        &mut self,
+        snapshot: ModuleExecutionSnapshot,
+        displaced_state_was_accounted: bool,
+    ) {
+        let accounted_bytes = snapshot.accounted_bytes;
+        let displaced_state_bytes = if displaced_state_was_accounted {
+            self.active_module_execution_memory_bytes()
+        } else {
+            0
+        };
         self.registers = SeedTrackedField::new(snapshot.registers);
         self.register_labels = snapshot.register_labels;
         self.active_inline_callback_context_label = snapshot.active_inline_callback_context_label;
@@ -13710,6 +13978,31 @@ impl InterpreterCore {
         self.pending_captures = snapshot.pending_captures;
         self.generated_functions = snapshot.generated_functions;
         self.current_module_specifier = snapshot.current_module_specifier;
+        let restored_state_bytes = if displaced_state_was_accounted {
+            self.active_module_execution_memory_bytes()
+        } else {
+            0
+        };
+        self.module_snapshot_in_flight_bytes = self
+            .module_snapshot_in_flight_bytes
+            .saturating_sub(accounted_bytes);
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(accounted_bytes)
+            .saturating_sub(displaced_state_bytes)
+            .saturating_add(restored_state_bytes);
+    }
+
+    /// Commit work protected by a module-execution rollback snapshot.
+    /// Dropping the clone releases its separately-accounted physical owner;
+    /// the live execution state remains unchanged.
+    fn discard_module_execution_snapshot(&mut self, snapshot: ModuleExecutionSnapshot) {
+        let accounted_bytes = snapshot.accounted_bytes;
+        self.module_snapshot_in_flight_bytes = self
+            .module_snapshot_in_flight_bytes
+            .saturating_sub(accounted_bytes);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(accounted_bytes);
+        drop(snapshot);
     }
 
     fn prepare_module_execution(&mut self, module_specifier: &str) -> Result<(), InterpreterError> {
@@ -14868,7 +15161,7 @@ impl InterpreterCore {
         let generated_hidden_call_depth = caller_call_depth;
         let instructions_before = self.instructions_executed;
 
-        let snapshot = self.snapshot_module_execution();
+        let snapshot = self.snapshot_module_execution()?;
         let saved_active_cjs_context = self.active_cjs_context.clone();
         let setup_previous_register_bytes = self.registers_memory_bytes();
         let setup_previous_register_context_label_bytes =
@@ -14885,6 +15178,8 @@ impl InterpreterCore {
             self.register_base = 0;
             self.catch_frames.clear();
             self.pending_exception = None;
+            self.pending_exception_label = Label::Public;
+            self.pending_hostcall_result_label = None;
             self.pending_return = None;
             self.suspended_abrupt_completions.clear();
             self.finally_modes.clear();
@@ -14926,24 +15221,11 @@ impl InterpreterCore {
                 .map(|v| (v, self.pending_exception_label.clone())),
             _ => None,
         };
-        let previous_register_bytes = self.registers_memory_bytes();
-        let previous_register_context_label_bytes = self.register_context_labels_memory_bytes();
-        let previous_scope_bytes = self.scope_chain_memory_bytes();
-        let previous_call_stack_bytes = self.call_stack_memory_bytes();
-        self.restore_module_execution(snapshot);
+        self.restore_module_execution(snapshot, wrapper_memory_committed);
         self.active_cjs_context = saved_active_cjs_context;
         self.config.granted_capabilities = previous_granted_capabilities;
-        if wrapper_memory_committed {
-            self.apply_register_context_scope_call_stack_memory_delta(
-                previous_register_bytes,
-                previous_register_context_label_bytes,
-                previous_scope_bytes,
-                previous_call_stack_bytes,
-            )?;
-        }
         if let Some((value, label)) = thrown_value {
-            self.pending_exception = Some(value);
-            self.pending_exception_label = label;
+            self.replace_pending_abrupt_slots(Some((value, label)), None)?;
         }
 
         // bd-8enww.3.4: record the invocation in the audit trail with the exact
@@ -16688,13 +16970,13 @@ impl InterpreterCore {
                         // `req.on('response', …)` listener on the next event-loop turn.
                         // The `end(cb)` finish callback (request sent) fires first.
                         if let Some(cid) = finish_cb {
-                            self.schedule_io_callback(cid, Vec::new());
+                            self.schedule_io_callback(cid, Vec::new())?;
                         }
                         if let Some(cid) = response_cb {
-                            self.schedule_io_callback(cid, vec![Value::Object(rid)]);
+                            self.schedule_io_callback(cid, vec![Value::Object(rid)])?;
                         }
                         for cid in &response_listeners {
-                            self.schedule_io_callback(*cid, vec![Value::Object(rid)]);
+                            self.schedule_io_callback(*cid, vec![Value::Object(rid)])?;
                         }
                         // Drive the `IncomingMessage` readable stream (`'data'`/`'end'`)
                         // after those deliveries (higher registration seq => later turn
@@ -16702,7 +16984,7 @@ impl InterpreterCore {
                         // exist). Scheduled unconditionally for a real response so a
                         // synchronous `const res = http.request(url).end(); res.on(...)`
                         // also streams.
-                        self.schedule_stream_emission(rid, StreamEventPhase::Data);
+                        self.schedule_stream_emission(rid, StreamEventPhase::Data)?;
                         // An async consumer (response callback / `'response'` listener /
                         // finish callback) makes `.end()` evaluate to `undefined`; with
                         // none, the response is returned synchronously (slice-4 model).
@@ -16722,7 +17004,7 @@ impl InterpreterCore {
                         if !error_listeners.is_empty() {
                             let err = self.build_request_error_value()?;
                             for cid in &error_listeners {
-                                self.schedule_io_callback(*cid, vec![err.clone()]);
+                                self.schedule_io_callback(*cid, vec![err.clone()])?;
                             }
                         }
                         Ok(Value::Undefined)
@@ -17195,7 +17477,7 @@ impl InterpreterCore {
                     return Ok(Value::Bool(false));
                 };
                 if let Value::Object(object_id) = &receiver {
-                    self.join_pending_hostcall_stream_label(*object_id);
+                    self.join_pending_hostcall_stream_label(*object_id)?;
                 }
                 Ok(Value::Bool(
                     self.object_own_property_contains(&receiver, &property),
@@ -17207,7 +17489,7 @@ impl InterpreterCore {
                     return Ok(Value::Bool(false));
                 };
                 if let Value::Object(object_id) = &receiver {
-                    self.join_pending_hostcall_stream_label(*object_id);
+                    self.join_pending_hostcall_stream_label(*object_id)?;
                 }
                 Ok(Value::Bool(
                     self.object_own_property_contains(&receiver, &property),
@@ -17330,15 +17612,15 @@ impl InterpreterCore {
         module: &Ir3Module,
         specifier: &str,
     ) -> Result<(), InterpreterError> {
-        let snapshot = self.snapshot_module_execution();
+        let snapshot = self.snapshot_module_execution()?;
         let previous_cjs_context = self.active_cjs_context.take();
         if let Err(err) = self.prepare_module_execution(specifier) {
             self.active_cjs_context = previous_cjs_context;
-            self.restore_module_execution(snapshot);
+            self.restore_module_execution(snapshot, false);
             return Err(err);
         }
         let result = self.run_nested_module_execution(module);
-        self.restore_module_execution(snapshot);
+        self.restore_module_execution(snapshot, true);
         self.active_cjs_context = previous_cjs_context;
         result
     }
@@ -17348,21 +17630,21 @@ impl InterpreterCore {
         module: &Ir3Module,
         specifier: &str,
     ) -> Result<(), InterpreterError> {
-        let snapshot = self.snapshot_module_execution();
+        let snapshot = self.snapshot_module_execution()?;
         let previous_cjs_context = self.active_cjs_context.take();
         let parent_module_object = previous_cjs_context
             .as_ref()
             .map(|context| context.module_object);
         if let Err(err) = self.prepare_module_execution(specifier) {
             self.active_cjs_context = previous_cjs_context;
-            self.restore_module_execution(snapshot);
+            self.restore_module_execution(snapshot, false);
             return Err(err);
         }
         let cjs_context = match self.init_cjs_environment(module, specifier, parent_module_object) {
             Ok(context) => context,
             Err(err) => {
                 self.active_cjs_context = previous_cjs_context;
-                self.restore_module_execution(snapshot);
+                self.restore_module_execution(snapshot, true);
                 return Err(err);
             }
         };
@@ -17385,7 +17667,7 @@ impl InterpreterCore {
         } else {
             Ok(())
         };
-        self.restore_module_execution(snapshot);
+        self.restore_module_execution(snapshot, true);
         self.active_cjs_context = previous_cjs_context;
         eval_outcome.and(finalize_outcome).and(loaded_outcome)
     }
@@ -17406,19 +17688,50 @@ impl InterpreterCore {
                 name: name.to_string(),
             });
         };
-        let namespace_object = {
+        let record = self.module_state.modules.get(&specifier).ok_or_else(|| {
+            InterpreterError::ExportOutsideModule {
+                name: name.to_string(),
+            }
+        })?;
+        let namespace_object = record.namespace_object;
+        let previous_export_bytes = record
+            .exports
+            .get(name)
+            .map(|previous| Self::estimate_property_entry_bytes(name, previous))
+            .unwrap_or(0);
+        let next_export_bytes = Self::estimate_property_entry_bytes(name, &value);
+        self.apply_memory_component_delta(previous_export_bytes, next_export_bytes)?;
+        let previous_export = {
             let record = self
                 .module_state
                 .modules
                 .get_mut(&specifier)
-                .ok_or_else(|| InterpreterError::ExportOutsideModule {
-                    name: name.to_string(),
-                })?;
-            record.exports.insert(name.to_string(), value.clone());
-            record.namespace_object
+                .expect("module record was validated before export preflight");
+            record.exports.insert(name.to_string(), value.clone())
         };
-        self.set_object_property(namespace_object, name.to_string(), value)?;
-        Ok(())
+        match self.set_object_property(namespace_object, name.to_string(), value) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let record = self
+                    .module_state
+                    .modules
+                    .get_mut(&specifier)
+                    .expect("module export record existed before namespace update");
+                match previous_export {
+                    Some(previous) => {
+                        record.exports.insert(name.to_string(), previous);
+                    }
+                    None => {
+                        record.exports.remove(name);
+                    }
+                }
+                self.estimated_memory_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(next_export_bytes)
+                    .saturating_add(previous_export_bytes);
+                Err(error)
+            }
+        }
     }
 
     fn complete_return(
@@ -17460,10 +17773,8 @@ impl InterpreterCore {
             self.ip = frame.return_ip;
             Ok(None)
         } else {
-            self.pending_exception = None;
-            self.pending_exception_label = Label::Public;
-            self.pending_return = None;
-            self.suspended_abrupt_completions.clear();
+            self.clear_pending_abrupt_slots();
+            self.clear_suspended_abrupt_completions();
             self.finally_modes.clear();
             Ok(Some(return_val))
         }
@@ -17619,38 +17930,44 @@ impl InterpreterCore {
                     got: "missing async function id".to_string(),
                 })?;
 
-        // Save the current execution state
         let async_function = self
             .async_functions
-            .get_mut(async_function_id as usize)
+            .get(async_function_id as usize)
             .ok_or_else(|| InterpreterError::TypeError {
                 expected: "valid async function".to_string(),
                 got: format!("async#{async_function_id} not found"),
             })?;
-
-        // Save state for resumption
-        async_function.saved_ip = self.ip + 1; // Resume after the AwaitValue instruction
-        async_function.saved_register_base = self.register_base;
-        async_function.phase = AsyncFunctionPhase::SuspendedAwait;
-
-        // Save the current register file state
         let reg_start = self.register_base;
         let reg_end =
             (self.register_base + self.config.max_registers as usize).min(self.registers.len());
-        async_function.saved_registers = self.registers[reg_start..reg_end].to_vec();
+        let previous_async_bytes = Self::estimate_async_function_bytes(async_function);
+        let next_async_bytes = MEMORY_ESTIMATE_GENERATOR_BASE_BYTES.saturating_add(
+            Self::estimate_value_vec_bytes(&self.registers[reg_start..reg_end]),
+        );
+        self.apply_memory_component_delta(previous_async_bytes, next_async_bytes)?;
 
         // Register the internal await reactions with the awaited Promise.
-        let result_promise = self
-            .promise_store
-            .then_for_await(
-                promise_handle,
-                crate::ifc_artifacts::Label::Public,
-                &mut self.event_loop.microtasks,
-            )
-            .map_err(|e| InterpreterError::TypeError {
-                expected: "valid promise".to_string(),
-                got: e.to_string(),
-            })?;
+        let result_promise = match self
+            .register_promise_then_for_await(promise_handle, crate::ifc_artifacts::Label::Public)
+        {
+            Ok(result_promise) => result_promise,
+            Err(error) => {
+                self.estimated_memory_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(next_async_bytes)
+                    .saturating_add(previous_async_bytes);
+                return Err(error);
+            }
+        };
+
+        let async_function = self
+            .async_functions
+            .get_mut(async_function_id as usize)
+            .expect("async function was validated before await preflight");
+        async_function.saved_ip = self.ip + 1;
+        async_function.saved_register_base = self.register_base;
+        async_function.phase = AsyncFunctionPhase::SuspendedAwait;
+        async_function.saved_registers = self.registers[reg_start..reg_end].to_vec();
 
         // Promise reactions resume through the promise returned by `.then()`.
         self.async_resumption_contexts.insert(
@@ -17670,17 +17987,7 @@ impl InterpreterCore {
         result_reg: u32,
         promise_label: Label,
     ) -> Result<(), InterpreterError> {
-        let result_promise = self
-            .promise_store
-            .then_for_await(
-                promise_handle,
-                promise_label,
-                &mut self.event_loop.microtasks,
-            )
-            .map_err(|error| InterpreterError::TypeError {
-                expected: "valid top-level await Promise".to_string(),
-                got: error.to_string(),
-            })?;
+        let result_promise = self.register_promise_then_for_await(promise_handle, promise_label)?;
 
         self.top_level_await_resumption_contexts.insert(
             result_promise.0,
@@ -17701,8 +18008,12 @@ impl InterpreterCore {
         let async_function_id = resumption_context.async_function_id;
         let result_register = resumption_context.result_register;
 
-        // Extract data from the async function without holding the mutable reference
-        let (saved_ip, saved_register_base, saved_registers) = {
+        let previous_register_bytes = self.registers_memory_bytes();
+        let previous_async_bytes = self.async_functions_memory_bytes();
+        // Extract the suspension payload by move. Cloning here retained a
+        // duplicate register snapshot after resumption and made every String
+        // payload appear live in both stores.
+        let (saved_ip, saved_register_base, saved_register_count) = {
             let async_function = self
                 .async_functions
                 .get(async_function_id as usize)
@@ -17721,9 +18032,24 @@ impl InterpreterCore {
             (
                 async_function.saved_ip,
                 async_function.saved_register_base,
-                async_function.saved_registers.clone(),
+                async_function.saved_registers.len(),
             )
         };
+
+        let reg_end = saved_register_base.saturating_add(saved_register_count);
+        if reg_end > self.registers.len() {
+            return Err(InterpreterError::TypeError {
+                expected: "sufficient register capacity".to_string(),
+                got: format!("need {} registers, have {}", reg_end, self.registers.len()),
+            });
+        }
+        let saved_registers = std::mem::take(
+            &mut self
+                .async_functions
+                .get_mut(async_function_id as usize)
+                .expect("async function was validated before suspension move")
+                .saved_registers,
+        );
 
         // Restore execution state
         self.ip = saved_ip;
@@ -17731,15 +18057,6 @@ impl InterpreterCore {
 
         // Restore register file
         let reg_start = self.register_base;
-        let reg_count = saved_registers.len();
-        let reg_end = reg_start + reg_count;
-
-        if reg_end > self.registers.len() {
-            return Err(InterpreterError::TypeError {
-                expected: "sufficient register capacity".to_string(),
-                got: format!("need {} registers, have {}", reg_end, self.registers.len()),
-            });
-        }
 
         // perf: hot path - use into_iter to avoid cloning each register value
         self.mutate_registers(|r| {
@@ -17757,6 +18074,14 @@ impl InterpreterCore {
                 got: format!("async#{async_function_id} not found"),
             })?;
         async_function.phase = AsyncFunctionPhase::Executing;
+        let next_register_bytes = self.registers_memory_bytes();
+        let next_async_bytes = self.async_functions_memory_bytes();
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_register_bytes)
+            .saturating_sub(previous_async_bytes)
+            .saturating_add(next_register_bytes)
+            .saturating_add(next_async_bytes);
 
         match settled {
             Ok(argument) => {
@@ -17822,9 +18147,9 @@ impl InterpreterCore {
                 Err(InterpreterError::Halted) => self.read_reg(0),
                 other => other,
             };
-            self.top_level_await_outcome = Some(outcome);
+            self.replace_top_level_await_outcome(outcome);
         } else if let Err(error) = outcome {
-            self.top_level_await_outcome = Some(Err(error));
+            self.replace_top_level_await_outcome(Err(error));
         }
     }
 
@@ -17837,10 +18162,8 @@ impl InterpreterCore {
         error_value: Value,
         label: Label,
     ) -> Result<bool, InterpreterError> {
-        self.suspend_current_abrupt_completion();
-        self.pending_return = None;
-        self.pending_exception = Some(error_value.clone());
-        self.pending_exception_label = label;
+        self.suspend_current_abrupt_completion()?;
+        self.replace_pending_abrupt_slots(Some((error_value.clone(), label)), None)?;
         if let Some(frame) = self.pop_exception_target_frame()? {
             self.ip = frame.catch_target;
             Ok(false)
@@ -18015,7 +18338,7 @@ impl InterpreterCore {
         self.catch_frames.truncate(idx);
         let (restored_pending_exception, restored_pending_return) =
             self.unwind_call_stack_to(frame.call_depth)?;
-        self.suspend_abrupt_completion(restored_pending_exception, restored_pending_return);
+        self.suspend_abrupt_completion(restored_pending_exception, restored_pending_return)?;
         Ok(Some(frame))
     }
 
@@ -18033,33 +18356,47 @@ impl InterpreterCore {
         &mut self,
         pending_exception: Option<(Value, Label)>,
         pending_return: Option<Value>,
-    ) {
+    ) -> Result<(), InterpreterError> {
         debug_assert!(
             pending_exception.is_none() || pending_return.is_none(),
             "only one abrupt completion should be active at a time"
         );
 
-        match (pending_exception, pending_return) {
-            (Some((exception, label)), None) => self
-                .suspended_abrupt_completions
-                .push(AbruptCompletion::Exception(exception, label)),
-            (None, Some(return_val)) => self
-                .suspended_abrupt_completions
-                .push(AbruptCompletion::Return(return_val)),
-            (None, None) => {}
-            (Some((exception, label)), Some(return_val)) => {
-                self.suspended_abrupt_completions
-                    .push(AbruptCompletion::Exception(exception, label));
-                self.suspended_abrupt_completions
-                    .push(AbruptCompletion::Return(return_val));
+        let completions = match (pending_exception, pending_return) {
+            (Some((exception, label)), None) => {
+                vec![AbruptCompletion::Exception(exception, label)]
             }
-        }
+            (None, Some(return_val)) => vec![AbruptCompletion::Return(return_val)],
+            (None, None) => Vec::new(),
+            (Some((exception, label)), Some(return_val)) => {
+                vec![
+                    AbruptCompletion::Exception(exception, label),
+                    AbruptCompletion::Return(return_val),
+                ]
+            }
+        };
+        let added_bytes = u64::try_from(completions.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(std::mem::size_of::<AbruptCompletion>() as u64)
+            .saturating_add(Self::saturating_sum(
+                completions
+                    .iter()
+                    .map(Self::estimate_abrupt_completion_bytes),
+            ));
+        self.apply_memory_component_delta(0, added_bytes)?;
+        self.suspended_abrupt_completions.extend(completions);
+        Ok(())
     }
 
-    fn suspend_current_abrupt_completion(&mut self) {
+    fn suspend_current_abrupt_completion(&mut self) -> Result<(), InterpreterError> {
+        if self.pending_exception.is_none() && self.pending_return.is_none() {
+            return Ok(());
+        }
+        self.apply_memory_component_delta(0, std::mem::size_of::<AbruptCompletion>() as u64)?;
         if let Some(completion) = self.take_current_abrupt_completion() {
             self.suspended_abrupt_completions.push(completion);
         }
+        Ok(())
     }
 
     fn restore_suspended_abrupt_completion(&mut self) {
@@ -18067,6 +18404,7 @@ impl InterpreterCore {
             return;
         }
 
+        let previous_bytes = self.call_stack_memory_bytes();
         if let Some(completion) = self.suspended_abrupt_completions.pop() {
             match completion {
                 AbruptCompletion::Exception(exception, label) => {
@@ -18077,6 +18415,9 @@ impl InterpreterCore {
                     self.pending_return = Some(return_val);
                 }
             }
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(previous_bytes.saturating_sub(self.call_stack_memory_bytes()));
         }
     }
 
@@ -18706,28 +19047,25 @@ impl InterpreterCore {
         match async_gen.phase {
             AsyncGeneratorPhase::Completed => {
                 // Return a resolved Promise with {value: undefined, done: true}
-                let result_promise = self.promise_store.create().0;
-                let result_id = self.alloc_object_with_prototype(None)?;
-                {
+                let previous_estimated_bytes = self.estimated_memory_bytes;
+                let previous_heap_len = self.heap.len();
+                let outcome = (|| -> Result<Value, InterpreterError> {
+                    let result_id = self.alloc_object_with_prototype(None)?;
                     self.set_object_property(result_id, "value".to_string(), Value::Undefined)?;
                     self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
+                    let result_promise = self.create_fulfilled_promise(
+                        crate::object_model::JsValue::Object(crate::object_model::ObjectHandle(
+                            result_id.0,
+                        )),
+                        crate::ifc_artifacts::Label::Public,
+                    )?;
+                    Ok(Value::Promise(result_promise.0))
+                })();
+                if outcome.is_err() {
+                    self.rollback_heap_to_len(previous_heap_len);
+                    self.estimated_memory_bytes = previous_estimated_bytes;
                 }
-                let js_val = crate::object_model::JsValue::Object(
-                    crate::object_model::ObjectHandle(result_id.0),
-                );
-                let label = crate::ifc_artifacts::Label::Public;
-                self.promise_store
-                    .fulfill(
-                        crate::promise_model::PromiseHandle(result_promise),
-                        js_val,
-                        label,
-                        &mut self.event_loop.microtasks,
-                    )
-                    .map_err(|e| InterpreterError::TypeError {
-                        expected: "promise fulfillment".into(),
-                        got: format!("failed to fulfill promise: {e:?}"),
-                    })?;
-                return Ok(Value::Promise(result_promise));
+                return outcome;
             }
             AsyncGeneratorPhase::Executing => {
                 return Err(InterpreterError::TypeError {
@@ -18796,10 +19134,8 @@ impl InterpreterCore {
         // (bd-l0d6z), then re-arm the pending exception with the preserved
         // value+label, exactly like the `Throw` instruction.
         let thrown_label = self.pending_exception_label.clone();
-        self.suspend_current_abrupt_completion();
-        self.pending_return = None;
-        self.pending_exception = Some(thrown.clone());
-        self.pending_exception_label = thrown_label;
+        self.suspend_current_abrupt_completion()?;
+        self.replace_pending_abrupt_slots(Some((thrown.clone(), thrown_label)), None)?;
         if let Some(frame) = self.pop_exception_target_frame()? {
             self.ip = frame.catch_target;
             Ok(None)
@@ -18809,7 +19145,7 @@ impl InterpreterCore {
             // No enclosing handler: surface as an uncaught exception carrying the
             // original thrown value — byte-identical to the inner `Throw` arm's
             // own `UncaughtException` value (both use `uncaught_exception_description`).
-            self.suspended_abrupt_completions.clear();
+            self.clear_suspended_abrupt_completions();
             Ok(Some(InterpreterError::UncaughtException {
                 value: Self::uncaught_exception_description(&thrown),
             }))
@@ -18837,12 +19173,10 @@ impl InterpreterCore {
                         && self.has_active_catch_frame() =>
                 {
                     let thrown = self.native_error_to_thrown_value(&err)?;
-                    self.suspend_current_abrupt_completion();
-                    self.pending_return = None;
-                    self.pending_exception = Some(thrown.clone());
+                    self.suspend_current_abrupt_completion()?;
                     // Engine-constructed error values (native faults surfaced
                     // as JS-catchable errors) carry no data-flow taint.
-                    self.pending_exception_label = Label::Public;
+                    self.replace_pending_abrupt_slots(Some((thrown.clone(), Label::Public)), None)?;
                     match self.pop_exception_target_frame()? {
                         Some(frame) => {
                             self.ip = frame.catch_target;
@@ -18851,7 +19185,7 @@ impl InterpreterCore {
                         None => {
                             // `has_active_catch_frame` raced/changed: surface as
                             // an uncaught exception rather than the host error.
-                            self.suspended_abrupt_completions.clear();
+                            self.clear_suspended_abrupt_completions();
                             return Err(InterpreterError::UncaughtException {
                                 value: Self::uncaught_exception_description(&thrown),
                             });
@@ -19078,17 +19412,18 @@ impl InterpreterCore {
                             // Same exception, same label: capture before the
                             // suspend resets the shadow (bd-l0d6z).
                             let thrown_label = self.pending_exception_label.clone();
-                            self.suspend_current_abrupt_completion();
-                            self.pending_return = None;
-                            self.pending_exception = Some(thrown.clone());
-                            self.pending_exception_label = thrown_label;
+                            self.suspend_current_abrupt_completion()?;
+                            self.replace_pending_abrupt_slots(
+                                Some((thrown.clone(), thrown_label)),
+                                None,
+                            )?;
                             if let Some(frame) = self.pop_exception_target_frame()? {
                                 self.ip = frame.catch_target;
                             } else {
                                 if self.reject_nearest_async_boundary(thrown.clone())? {
                                     continue;
                                 }
-                                self.suspended_abrupt_completions.clear();
+                                self.clear_suspended_abrupt_completions();
                                 return Err(InterpreterError::UncaughtException {
                                     value: Self::uncaught_exception_description(&thrown),
                                 });
@@ -19180,7 +19515,7 @@ impl InterpreterCore {
                         // preserved; route it into THIS frame's catch handler
                         // rather than letting `?` escape the caller's try/catch
                         // (bd-8enww.4.7).
-                        self.pending_hostcall_result_label = None;
+                        self.clear_pending_hostcall_result_label();
                         let result =
                             match self.dispatch_builtin_function(module, builtin, args, None) {
                                 Ok(value) => value,
@@ -19198,16 +19533,14 @@ impl InterpreterCore {
                                         // engine error), so a Secret arg cannot
                                         // launder to a Public catch binding.
                                         let escaped = self.join_arg_range_label(args)?;
-                                        self.pending_exception_label =
-                                            self.pending_exception_label.join(&escaped);
+                                        self.join_pending_exception_label(&escaped)?;
                                         continue;
                                     }
                                     Some(err) => return Err(err),
                                 },
                             };
                         let callback_result_label = self
-                            .pending_hostcall_result_label
-                            .take()
+                            .take_pending_hostcall_result_label()
                             .unwrap_or(Label::Public);
                         // IFC: builtin results derive entirely from the arg
                         // registers (incl. any callback lanes the builtin runs,
@@ -19290,21 +19623,18 @@ impl InterpreterCore {
 
                     // Generator function call: create a suspended GeneratorObject.
                     if let Value::GeneratorFunction(cid) = &callee_val {
-                        let gen_id = u32::try_from(self.generators.len()).map_err(|_| {
-                            InterpreterError::TypeError {
-                                expected: "generator table capacity".into(),
-                                got: format!("exceeded u32::MAX ({})", self.generators.len()),
-                            }
-                        })?;
-                        self.generators.push(GeneratorObject {
+                        let gen_id = self.push_generator_object(GeneratorObject {
                             function_index: func_idx,
                             closure_index: Some(*cid),
                             saved_ip: 0,
                             saved_registers: Vec::new(),
                             saved_register_base: 0,
                             phase: GeneratorPhase::SuspendedStart,
-                        });
-                        self.write_reg(dst, Value::Generator(gen_id))?;
+                        })?;
+                        if let Err(error) = self.write_reg(dst, Value::Generator(gen_id)) {
+                            self.pop_generator_object_and_release();
+                            return Err(error);
+                        }
                         self.ip += 1;
                         continue;
                     }
@@ -19351,132 +19681,139 @@ impl InterpreterCore {
 
                         self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
-                        let result_promise = self.promise_store.create().0;
-                        let async_id = u32::try_from(self.async_functions.len()).map_err(|_| {
-                            InterpreterError::TypeError {
-                                expected: "async function table capacity".into(),
-                                got: format!("exceeded u32::MAX ({})", self.async_functions.len()),
-                            }
-                        })?;
-                        self.async_functions.push(AsyncFunctionObject {
-                            function_index: func_idx,
-                            closure_index: Some(*cid),
-                            saved_ip: 0,
-                            saved_registers: Vec::new(),
-                            saved_register_base: 0,
-                            phase: AsyncFunctionPhase::Executing,
-                            result_promise,
-                        });
-                        self.write_reg(dst, Value::Promise(result_promise))?;
+                        // Everything after Promise creation is one instruction
+                        // transaction. A later scope/register refusal must not
+                        // publish the Promise, async object, destination value,
+                        // or a partial callee frame.
+                        let previous_estimated_bytes = self.estimated_memory_bytes;
+                        let setup_snapshot = self.snapshot_module_execution()?;
+                        let mut created_promise = None;
+                        let mut async_object_created = false;
+                        let setup_result = (|| -> Result<(), InterpreterError> {
+                            let result_promise_handle = self.create_promise()?;
+                            created_promise = Some(result_promise_handle);
+                            let result_promise = result_promise_handle.0;
+                            let async_id =
+                                self.push_async_function_object(AsyncFunctionObject {
+                                    function_index: func_idx,
+                                    closure_index: Some(*cid),
+                                    saved_ip: 0,
+                                    saved_registers: Vec::new(),
+                                    saved_register_base: 0,
+                                    phase: AsyncFunctionPhase::Executing,
+                                    result_promise,
+                                })?;
+                            async_object_created = true;
+                            self.write_reg(dst, Value::Promise(result_promise))?;
 
-                        let scope_depth = self.scope_chain.depth();
-                        let captured_env_bytes = captured_env
-                            .as_ref()
-                            .map(|env| Self::estimate_scope_chain_bytes(env))
-                            .unwrap_or(0);
-                        let captured_scope_depth = captured_env.as_ref().map_or(0, Vec::len);
-                        let saved_chain =
-                            if captured_env.is_some() {
+                            let scope_depth = self.scope_chain.depth();
+                            let captured_env_bytes = captured_env
+                                .as_ref()
+                                .map(|env| Self::estimate_scope_chain_bytes(env))
+                                .unwrap_or(0);
+                            let captured_scope_depth = captured_env.as_ref().map_or(0, Vec::len);
+                            let saved_chain = if captured_env.is_some() {
                                 Some(self.snapshot_scope_chain_with_temporary_budget(
                                     captured_env_bytes,
                                 )?)
                             } else {
                                 None
                             };
-                        let (frame_this, frame_this_label) = self
-                            .call_stack
-                            .last()
-                            .map_or((Value::Undefined, Label::Public), |frame| {
-                                (frame.this_value.clone(), frame.this_label.clone())
+                            let (frame_this, frame_this_label) = self
+                                .call_stack
+                                .last()
+                                .map_or((Value::Undefined, Label::Public), |frame| {
+                                    (frame.this_value.clone(), frame.this_label.clone())
+                                });
+                            let (call_this, call_this_label) = if captured_env.is_some() {
+                                (frame_this, frame_this_label)
+                            } else {
+                                (Value::Undefined, Label::Public)
+                            };
+                            let previous_scope_bytes = self.scope_chain_memory_bytes();
+                            let previous_closure_bytes = self.closures_memory_bytes();
+                            let previous_call_stack_bytes = self.call_stack_memory_bytes();
+
+                            self.call_stack.push(CallFrame {
+                                return_ip: self.ip + 1,
+                                return_reg: dst,
+                                register_base: self.register_base,
+                                function_index: Some(func_idx),
+                                this_value: call_this,
+                                this_label: call_this_label,
+                                new_target_value: Value::Undefined,
+                                super_value: Value::Undefined,
+                                construct_this: None,
+                                saved_pending_exception: self.pending_exception.take(),
+                                saved_pending_exception_label: std::mem::replace(
+                                    &mut self.pending_exception_label,
+                                    Label::Public,
+                                ),
+                                saved_pending_return: self.pending_return.take(),
+                                saved_suspended_abrupt_depth: self
+                                    .suspended_abrupt_completions
+                                    .len(),
+                                saved_finally_mode_depth: self.finally_modes.len(),
+                                saved_scope_depth: scope_depth,
+                                saved_scope_chain: saved_chain,
+                                closure_id,
+                                captured_scope_depth,
+                                async_function_id: Some(async_id),
                             });
-                        let (call_this, call_this_label) = if captured_env.is_some() {
-                            (frame_this, frame_this_label)
-                        } else {
-                            (Value::Undefined, Label::Public)
-                        };
-                        let previous_scope_bytes = self.scope_chain_memory_bytes();
-                        let previous_closure_bytes = self.closures_memory_bytes();
-                        let previous_call_stack_bytes = self.call_stack_memory_bytes();
 
-                        self.call_stack.push(CallFrame {
-                            return_ip: self.ip + 1,
-                            return_reg: dst,
-                            register_base: self.register_base,
-                            function_index: Some(func_idx),
-                            this_value: call_this,
-                            this_label: call_this_label,
-                            new_target_value: Value::Undefined,
-                            super_value: Value::Undefined,
-                            construct_this: None,
-                            saved_pending_exception: self.pending_exception.take(),
-                            saved_pending_exception_label: std::mem::replace(
-                                &mut self.pending_exception_label,
-                                Label::Public,
-                            ),
-                            saved_pending_return: self.pending_return.take(),
-                            saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
-                            saved_finally_mode_depth: self.finally_modes.len(),
-                            saved_scope_depth: scope_depth,
-                            saved_scope_chain: saved_chain,
-                            closure_id,
-                            captured_scope_depth,
-                            async_function_id: Some(async_id),
-                        });
-
-                        if let Some(env) = captured_env {
-                            self.scope_chain.frames = env;
-                        }
-
-                        if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
-                            self.async_functions.pop();
-                            self.rollback_call_setup_state();
-                            return Err(err);
-                        }
-                        if let Err(err) = self.apply_scope_closure_call_stack_memory_delta(
-                            previous_scope_bytes,
-                            previous_closure_bytes,
-                            previous_call_stack_bytes,
-                        ) {
-                            self.async_functions.pop();
-                            self.rollback_call_setup_state();
-                            return Err(err);
-                        }
-
-                        self.register_base += self.config.max_registers as usize;
-                        self.clear_current_register_frame();
-
-                        for (i, val) in arg_vals.into_iter().enumerate() {
-                            let reg = i as u32;
-                            if reg < self.config.max_registers {
-                                self.write_reg(reg, val)?;
+                            if let Some(env) = captured_env {
+                                self.scope_chain.frames = env;
                             }
-                        }
+                            self.scope_chain.push(self.config.max_scope_depth)?;
+                            self.apply_scope_closure_call_stack_memory_delta(
+                                previous_scope_bytes,
+                                previous_closure_bytes,
+                                previous_call_stack_bytes,
+                            )?;
 
-                        self.ip = func.entry as usize;
+                            self.register_base += self.config.max_registers as usize;
+                            self.clear_current_register_frame();
+                            for (i, val) in arg_vals.into_iter().enumerate() {
+                                let reg = i as u32;
+                                if reg < self.config.max_registers {
+                                    self.write_reg(reg, val)?;
+                                }
+                            }
+                            self.ip = func.entry as usize;
+                            Ok(())
+                        })();
+                        if let Err(error) = setup_result {
+                            if async_object_created {
+                                self.pop_async_function_object_and_release();
+                            }
+                            if let Some(handle) = created_promise {
+                                self.rollback_fresh_promise(handle);
+                            }
+                            self.restore_module_execution(setup_snapshot, false);
+                            self.estimated_memory_bytes = previous_estimated_bytes;
+                            return Err(error);
+                        }
+                        self.discard_module_execution_snapshot(setup_snapshot);
                         continue;
                     }
 
                     // Async generator function call: create a suspended AsyncGeneratorObject.
                     if let Value::AsyncGeneratorFunction(cid) = &callee_val {
                         let async_gen_id =
-                            u32::try_from(self.async_generators.len()).map_err(|_| {
-                                InterpreterError::TypeError {
-                                    expected: "async generator table capacity".into(),
-                                    got: format!(
-                                        "exceeded u32::MAX ({})",
-                                        self.async_generators.len()
-                                    ),
-                                }
+                            self.push_async_generator_object(AsyncGeneratorObject {
+                                function_index: func_idx,
+                                closure_index: Some(*cid),
+                                saved_ip: 0,
+                                saved_registers: Vec::new(),
+                                saved_register_base: 0,
+                                phase: AsyncGeneratorPhase::SuspendedStart,
                             })?;
-                        self.async_generators.push(AsyncGeneratorObject {
-                            function_index: func_idx,
-                            closure_index: Some(*cid),
-                            saved_ip: 0,
-                            saved_registers: Vec::new(),
-                            saved_register_base: 0,
-                            phase: AsyncGeneratorPhase::SuspendedStart,
-                        });
-                        self.write_reg(dst, Value::AsyncGeneratorObject(async_gen_id))?;
+                        if let Err(error) =
+                            self.write_reg(dst, Value::AsyncGeneratorObject(async_gen_id))
+                        {
+                            self.pop_async_generator_object_and_release();
+                            return Err(error);
+                        }
                         self.ip += 1;
                         continue;
                     }
@@ -19502,15 +19839,14 @@ impl InterpreterCore {
                                     )?;
 
                                     // Capability granted - dispatch as a builtin hostcall
-                                    self.pending_hostcall_result_label = None;
+                                    self.clear_pending_hostcall_result_label();
                                     let result = self.dispatch_builtin_hostcall(
                                         &builtin_cap,
                                         args,
                                         Some(module),
                                     )?;
                                     let result_label = self
-                                        .pending_hostcall_result_label
-                                        .take()
+                                        .take_pending_hostcall_result_label()
                                         .unwrap_or(Label::Public)
                                         .join(&self.join_arg_range_label(args)?);
                                     self.write_reg_with_label(dst, result, result_label)?;
@@ -19693,7 +20029,7 @@ impl InterpreterCore {
                         // builtin runs (e.g. `arr.forEach(() => { throw … })`)
                         // must be catchable by an enclosing try/catch in this
                         // frame (bd-8enww.4.7).
-                        self.pending_hostcall_result_label = None;
+                        self.clear_pending_hostcall_result_label();
                         self.mark_inline_callback_started();
                         let result = match self.dispatch_builtin_function(
                             module,
@@ -19715,16 +20051,14 @@ impl InterpreterCore {
                                     let escaped = self
                                         .join_arg_range_label(args)?
                                         .join(self.get_register_label(receiver)?);
-                                    self.pending_exception_label =
-                                        self.pending_exception_label.join(&escaped);
+                                    self.join_pending_exception_label(&escaped)?;
                                     continue;
                                 }
                                 Some(err) => return Err(err),
                             },
                         };
                         let callback_result_label = self
-                            .pending_hostcall_result_label
-                            .take()
+                            .take_pending_hostcall_result_label()
                             .unwrap_or(Label::Public);
                         // IFC: a receiver-aware builtin's result derives from
                         // the receiver and the arg registers (e.g. a Secret
@@ -19811,22 +20145,19 @@ impl InterpreterCore {
                     };
 
                     if let Value::GeneratorFunction(cid) = &callee_val {
-                        let gen_id = u32::try_from(self.generators.len()).map_err(|_| {
-                            InterpreterError::TypeError {
-                                expected: "generator table capacity".into(),
-                                got: format!("exceeded u32::MAX ({})", self.generators.len()),
-                            }
-                        })?;
                         self.mark_inline_callback_started();
-                        self.generators.push(GeneratorObject {
+                        let gen_id = self.push_generator_object(GeneratorObject {
                             function_index: func_idx,
                             closure_index: Some(*cid),
                             saved_ip: 0,
                             saved_registers: Vec::new(),
                             saved_register_base: 0,
                             phase: GeneratorPhase::SuspendedStart,
-                        });
-                        self.write_reg(dst, Value::Generator(gen_id))?;
+                        })?;
+                        if let Err(error) = self.write_reg(dst, Value::Generator(gen_id)) {
+                            self.pop_generator_object_and_release();
+                            return Err(error);
+                        }
                         self.ip += 1;
                         continue;
                     }
@@ -19862,123 +20193,126 @@ impl InterpreterCore {
 
                         self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
-                        let result_promise = self.promise_store.create().0;
-                        let async_id = u32::try_from(self.async_functions.len()).map_err(|_| {
-                            InterpreterError::TypeError {
-                                expected: "async function table capacity".into(),
-                                got: format!("exceeded u32::MAX ({})", self.async_functions.len()),
-                            }
-                        })?;
-                        self.async_functions.push(AsyncFunctionObject {
-                            function_index: func_idx,
-                            closure_index: Some(*cid),
-                            saved_ip: 0,
-                            saved_registers: Vec::new(),
-                            saved_register_base: 0,
-                            phase: AsyncFunctionPhase::Executing,
-                            result_promise,
-                        });
-                        self.write_reg(dst, Value::Promise(result_promise))?;
+                        let previous_estimated_bytes = self.estimated_memory_bytes;
+                        let setup_snapshot = self.snapshot_module_execution()?;
+                        let mut created_promise = None;
+                        let mut async_object_created = false;
+                        let setup_result = (|| -> Result<(), InterpreterError> {
+                            let result_promise_handle = self.create_promise()?;
+                            created_promise = Some(result_promise_handle);
+                            let result_promise = result_promise_handle.0;
+                            let async_id =
+                                self.push_async_function_object(AsyncFunctionObject {
+                                    function_index: func_idx,
+                                    closure_index: Some(*cid),
+                                    saved_ip: 0,
+                                    saved_registers: Vec::new(),
+                                    saved_register_base: 0,
+                                    phase: AsyncFunctionPhase::Executing,
+                                    result_promise,
+                                })?;
+                            async_object_created = true;
+                            self.write_reg(dst, Value::Promise(result_promise))?;
 
-                        let scope_depth = self.scope_chain.depth();
-                        let captured_env_bytes = captured_env
-                            .as_ref()
-                            .map(|env| Self::estimate_scope_chain_bytes(env))
-                            .unwrap_or(0);
-                        let captured_scope_depth = captured_env.as_ref().map_or(0, Vec::len);
-                        let saved_chain =
-                            if captured_env.is_some() {
+                            let scope_depth = self.scope_chain.depth();
+                            let captured_env_bytes = captured_env
+                                .as_ref()
+                                .map(|env| Self::estimate_scope_chain_bytes(env))
+                                .unwrap_or(0);
+                            let captured_scope_depth = captured_env.as_ref().map_or(0, Vec::len);
+                            let saved_chain = if captured_env.is_some() {
                                 Some(self.snapshot_scope_chain_with_temporary_budget(
                                     captured_env_bytes,
                                 )?)
                             } else {
                                 None
                             };
-                        let previous_scope_bytes = self.scope_chain_memory_bytes();
-                        let previous_closure_bytes = self.closures_memory_bytes();
-                        let previous_call_stack_bytes = self.call_stack_memory_bytes();
-                        let receiver_label =
-                            self.clone_register_label_with_temporary_budget(receiver)?;
+                            let previous_scope_bytes = self.scope_chain_memory_bytes();
+                            let previous_closure_bytes = self.closures_memory_bytes();
+                            let previous_call_stack_bytes = self.call_stack_memory_bytes();
+                            let receiver_label =
+                                self.clone_register_label_with_temporary_budget(receiver)?;
 
-                        self.call_stack.push(CallFrame {
-                            return_ip: self.ip + 1,
-                            return_reg: dst,
-                            register_base: self.register_base,
-                            function_index: Some(func_idx),
-                            this_value: receiver_val.clone(),
-                            this_label: receiver_label,
-                            new_target_value: Value::Undefined,
-                            super_value: Value::Undefined,
-                            construct_this: None,
-                            saved_pending_exception: self.pending_exception.take(),
-                            saved_pending_exception_label: std::mem::replace(
-                                &mut self.pending_exception_label,
-                                Label::Public,
-                            ),
-                            saved_pending_return: self.pending_return.take(),
-                            saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
-                            saved_finally_mode_depth: self.finally_modes.len(),
-                            saved_scope_depth: scope_depth,
-                            saved_scope_chain: saved_chain,
-                            closure_id,
-                            captured_scope_depth,
-                            async_function_id: Some(async_id),
-                        });
+                            self.call_stack.push(CallFrame {
+                                return_ip: self.ip + 1,
+                                return_reg: dst,
+                                register_base: self.register_base,
+                                function_index: Some(func_idx),
+                                this_value: receiver_val.clone(),
+                                this_label: receiver_label,
+                                new_target_value: Value::Undefined,
+                                super_value: Value::Undefined,
+                                construct_this: None,
+                                saved_pending_exception: self.pending_exception.take(),
+                                saved_pending_exception_label: std::mem::replace(
+                                    &mut self.pending_exception_label,
+                                    Label::Public,
+                                ),
+                                saved_pending_return: self.pending_return.take(),
+                                saved_suspended_abrupt_depth: self
+                                    .suspended_abrupt_completions
+                                    .len(),
+                                saved_finally_mode_depth: self.finally_modes.len(),
+                                saved_scope_depth: scope_depth,
+                                saved_scope_chain: saved_chain,
+                                closure_id,
+                                captured_scope_depth,
+                                async_function_id: Some(async_id),
+                            });
 
-                        if let Some(env) = captured_env {
-                            self.scope_chain.frames = env;
-                        }
-
-                        if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
-                            self.async_functions.pop();
-                            self.rollback_call_setup_state();
-                            return Err(err);
-                        }
-                        if let Err(err) = self.apply_scope_closure_call_stack_memory_delta(
-                            previous_scope_bytes,
-                            previous_closure_bytes,
-                            previous_call_stack_bytes,
-                        ) {
-                            self.async_functions.pop();
-                            self.rollback_call_setup_state();
-                            return Err(err);
-                        }
-
-                        self.register_base += self.config.max_registers as usize;
-                        self.clear_current_register_frame();
-
-                        for (i, val) in arg_vals.into_iter().enumerate() {
-                            let reg = i as u32;
-                            if reg < self.config.max_registers {
-                                self.write_reg(reg, val)?;
+                            if let Some(env) = captured_env {
+                                self.scope_chain.frames = env;
                             }
-                        }
+                            self.scope_chain.push(self.config.max_scope_depth)?;
+                            self.apply_scope_closure_call_stack_memory_delta(
+                                previous_scope_bytes,
+                                previous_closure_bytes,
+                                previous_call_stack_bytes,
+                            )?;
 
-                        self.ip = func.entry as usize;
+                            self.register_base += self.config.max_registers as usize;
+                            self.clear_current_register_frame();
+                            for (i, val) in arg_vals.into_iter().enumerate() {
+                                let reg = i as u32;
+                                if reg < self.config.max_registers {
+                                    self.write_reg(reg, val)?;
+                                }
+                            }
+                            self.ip = func.entry as usize;
+                            Ok(())
+                        })();
+                        if let Err(error) = setup_result {
+                            if async_object_created {
+                                self.pop_async_function_object_and_release();
+                            }
+                            if let Some(handle) = created_promise {
+                                self.rollback_fresh_promise(handle);
+                            }
+                            self.restore_module_execution(setup_snapshot, false);
+                            self.estimated_memory_bytes = previous_estimated_bytes;
+                            return Err(error);
+                        }
+                        self.discard_module_execution_snapshot(setup_snapshot);
                         continue;
                     }
 
                     if let Value::AsyncGeneratorFunction(cid) = &callee_val {
-                        let async_gen_id =
-                            u32::try_from(self.async_generators.len()).map_err(|_| {
-                                InterpreterError::TypeError {
-                                    expected: "async generator table capacity".into(),
-                                    got: format!(
-                                        "exceeded u32::MAX ({})",
-                                        self.async_generators.len()
-                                    ),
-                                }
-                            })?;
                         self.mark_inline_callback_started();
-                        self.async_generators.push(AsyncGeneratorObject {
-                            function_index: func_idx,
-                            closure_index: Some(*cid),
-                            saved_ip: 0,
-                            saved_registers: Vec::new(),
-                            saved_register_base: 0,
-                            phase: AsyncGeneratorPhase::SuspendedStart,
-                        });
-                        self.write_reg(dst, Value::AsyncGeneratorObject(async_gen_id))?;
+                        let async_gen_id =
+                            self.push_async_generator_object(AsyncGeneratorObject {
+                                function_index: func_idx,
+                                closure_index: Some(*cid),
+                                saved_ip: 0,
+                                saved_registers: Vec::new(),
+                                saved_register_base: 0,
+                                phase: AsyncGeneratorPhase::SuspendedStart,
+                            })?;
+                        if let Err(error) =
+                            self.write_reg(dst, Value::AsyncGeneratorObject(async_gen_id))
+                        {
+                            self.pop_async_generator_object_and_release();
+                            return Err(error);
+                        }
                         self.ip += 1;
                         continue;
                     }
@@ -20092,13 +20426,12 @@ impl InterpreterCore {
                     // exception, and a return from inside try/catch must still
                     // unwind through enclosing finally blocks before it can
                     // complete.
-                    self.suspend_current_abrupt_completion();
-                    self.pending_exception = None;
-                    self.pending_return = Some(return_val.clone());
+                    self.suspend_current_abrupt_completion()?;
+                    self.replace_pending_abrupt_slots(None, Some(return_val.clone()))?;
                     if let Some(finally_target) = self.pop_current_finally_target() {
                         self.ip = finally_target;
                     } else {
-                        self.pending_return = None;
+                        let _ = self.take_pending_return_slot();
                         if let Some(final_value) = self.complete_return(return_val, return_label)? {
                             return Ok(final_value);
                         }
@@ -20124,7 +20457,7 @@ impl InterpreterCore {
 
                     // Dispatch promise hostcalls to the promise subsystem.
                     let is_promise_cap = capability.0.starts_with("promise:");
-                    self.pending_hostcall_result_label = None;
+                    self.clear_pending_hostcall_result_label();
                     let result = if is_promise_cap {
                         self.dispatch_promise_hostcall(&capability.0, args, Some(module))?
                     } else if capability.0 == "module:require" {
@@ -20175,8 +20508,7 @@ impl InterpreterCore {
                                     // receiver/arg cannot launder to a Public catch
                                     // binding now that the mini-lane preserves the
                                     // original thrown value.
-                                    self.pending_exception_label =
-                                        self.pending_exception_label.join(&args_label);
+                                    self.join_pending_exception_label(&args_label)?;
                                     continue;
                                 }
                                 Some(err) => return Err(err),
@@ -20210,8 +20542,7 @@ impl InterpreterCore {
                         Value::Undefined
                     };
                     let result_label = self
-                        .pending_hostcall_result_label
-                        .take()
+                        .take_pending_hostcall_result_label()
                         .unwrap_or(Label::Public)
                         .join(&args_label);
                     self.write_reg_with_label(dst, result, result_label)?;
@@ -20422,7 +20753,7 @@ impl InterpreterCore {
                             .get_register_label(obj)?
                             .join(self.get_register_label(key)?)
                             .join(self.get_register_label(val)?);
-                        self.join_binary_storage_label(object_id, &mutation_label);
+                        self.join_binary_storage_label(object_id, &mutation_label)?;
                     }
                     self.ip += 1;
                 }
@@ -21147,10 +21478,8 @@ impl InterpreterCore {
                     // register's label so `EnterCatch` re-establishes it on
                     // the catch binding instead of leaving a stale label.
                     let thrown_label = self.get_register_label(value)?.clone();
-                    self.suspend_current_abrupt_completion();
-                    self.pending_return = None;
-                    self.pending_exception = Some(thrown.clone());
-                    self.pending_exception_label = thrown_label;
+                    self.suspend_current_abrupt_completion()?;
+                    self.replace_pending_abrupt_slots(Some((thrown.clone(), thrown_label)), None)?;
                     // Walk the catch frame stack to find the nearest valid handler.
                     // Use rposition to find the topmost matching frame by index,
                     // then truncate to remove it and any frames above it — but
@@ -21162,7 +21491,7 @@ impl InterpreterCore {
                         if self.reject_nearest_async_boundary(thrown.clone())? {
                             continue;
                         }
-                        self.suspended_abrupt_completions.clear();
+                        self.clear_suspended_abrupt_completions();
                         return Err(InterpreterError::UncaughtException {
                             value: Self::uncaught_exception_description(&thrown),
                         });
@@ -21170,12 +21499,12 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::EnterCatch { dst } => {
                     // Load the pending exception into the catch binding register.
-                    let exception = self.pending_exception.take().unwrap_or(Value::Undefined);
                     // Take the label BEFORE restoring a suspended completion,
                     // which may overwrite the shadow with an outer exception's
                     // label (bd-l0d6z).
-                    let exception_label =
-                        std::mem::replace(&mut self.pending_exception_label, Label::Public);
+                    let (exception, exception_label) = self
+                        .take_pending_exception_slot()
+                        .unwrap_or((Value::Undefined, Label::Public));
                     self.restore_suspended_abrupt_completion();
                     self.write_reg_with_label(dst, exception, exception_label)?;
                     self.ip += 1;
@@ -21212,7 +21541,7 @@ impl InterpreterCore {
                                 } else if self.reject_nearest_async_boundary(thrown.clone())? {
                                     continue;
                                 } else {
-                                    self.suspended_abrupt_completions.clear();
+                                    self.clear_suspended_abrupt_completions();
                                     return Err(InterpreterError::UncaughtException {
                                         value: desc,
                                     });
@@ -21223,9 +21552,9 @@ impl InterpreterCore {
                             }
                         }
                         FinallyMode::Return => {
-                            if let Some(return_val) = self.pending_return.take() {
+                            if let Some(return_val) = self.take_pending_return_slot() {
                                 if let Some(finally_target) = self.pop_current_finally_target() {
-                                    self.pending_return = Some(return_val);
+                                    self.replace_pending_abrupt_slots(None, Some(return_val))?;
                                     self.ip = finally_target;
                                 } else {
                                     if let Some(final_value) =
@@ -21245,9 +21574,7 @@ impl InterpreterCore {
                     }
                 }
                 Ir3Instruction::DiscardAbruptCompletion => {
-                    self.pending_exception = None;
-                    self.pending_exception_label = Label::Public;
-                    self.pending_return = None;
+                    self.clear_pending_abrupt_slots();
                     let _ = self.finally_modes.pop();
                     self.restore_suspended_abrupt_completion();
                     self.ip += 1;
@@ -21483,9 +21810,7 @@ impl InterpreterCore {
                         _ => {
                             // await non-promise: create a resolved promise with the value
                             let js_val = Self::value_to_js_value(&awaited_value);
-                            let handle = self.promise_store.create();
-                            self.fulfill_promise(handle, js_val, awaited_label)?;
-                            handle
+                            self.create_fulfilled_promise(js_val, awaited_label)?
                         }
                     };
 
@@ -25278,22 +25603,182 @@ impl InterpreterCore {
         Ok(Self::value_to_js_value(&Value::Object(error_id)))
     }
 
-    fn register_combinator(&mut self, state: PromiseCombinatorState) -> u64 {
+    fn register_combinator(
+        &mut self,
+        state: PromiseCombinatorState,
+    ) -> Result<u64, InterpreterError> {
         let id = self.next_promise_combinator_id;
-        self.next_promise_combinator_id = self.next_promise_combinator_id.saturating_add(1);
+        let next_id = id
+            .checked_add(1)
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "Promise combinator id space exhausted".to_string(),
+            })?;
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
         self.promise_combinators.insert(id, state);
-        id
+        if let Err(error) = self.apply_promise_runtime_memory_delta(previous_promise_bytes) {
+            self.promise_combinators.remove(&id);
+            return Err(error);
+        }
+        self.next_promise_combinator_id = next_id;
+        Ok(id)
     }
 
     fn add_combinator_watcher(
         &mut self,
         handle: crate::promise_model::PromiseHandle,
         watcher: PromiseCombinatorWatcher,
-    ) {
+    ) -> Result<(), InterpreterError> {
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
         self.promise_combinator_watchers
             .entry(handle)
             .or_default()
             .push(watcher);
+        if let Err(error) = self.apply_promise_runtime_memory_delta(previous_promise_bytes) {
+            let remove_entry =
+                if let Some(watchers) = self.promise_combinator_watchers.get_mut(&handle) {
+                    watchers.pop();
+                    watchers.is_empty()
+                } else {
+                    false
+                };
+            if remove_entry {
+                self.promise_combinator_watchers.remove(&handle);
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn remove_combinator_and_watchers(
+        &mut self,
+        combinator_id: u64,
+    ) -> Result<(), InterpreterError> {
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        let removed_state = self.promise_combinators.remove(&combinator_id);
+        self.promise_combinator_watchers.retain(|_, watchers| {
+            watchers.retain(|watcher| watcher.combinator_id != combinator_id);
+            !watchers.is_empty()
+        });
+        drop(removed_state);
+        self.apply_promise_runtime_memory_delta(previous_promise_bytes)?;
+        Ok(())
+    }
+
+    fn create_promise(&mut self) -> Result<crate::promise_model::PromiseHandle, InterpreterError> {
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        let handle = self.promise_store.create();
+        if let Err(error) = self.apply_promise_runtime_memory_delta(previous_promise_bytes) {
+            let rolled_back = self.promise_store.rollback_last_created(handle);
+            debug_assert!(rolled_back, "fresh Promise creation must be rollback-safe");
+            return Err(error);
+        }
+        Ok(handle)
+    }
+
+    fn rollback_fresh_promise(&mut self, handle: crate::promise_model::PromiseHandle) {
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        if self.promise_store.rollback_last_created(handle) {
+            let released_bytes =
+                previous_promise_bytes.saturating_sub(self.promise_runtime_memory_bytes());
+            self.estimated_memory_bytes =
+                self.estimated_memory_bytes.saturating_sub(released_bytes);
+        }
+    }
+
+    fn create_fulfilled_promise(
+        &mut self,
+        value: crate::object_model::JsValue,
+        label: Label,
+    ) -> Result<crate::promise_model::PromiseHandle, InterpreterError> {
+        let handle = self.create_promise()?;
+        if let Err(error) = self.fulfill_promise(handle, value, label) {
+            self.rollback_fresh_promise(handle);
+            return Err(error);
+        }
+        Ok(handle)
+    }
+
+    fn create_rejected_promise(
+        &mut self,
+        reason: crate::object_model::JsValue,
+        label: Label,
+    ) -> Result<crate::promise_model::PromiseHandle, InterpreterError> {
+        let handle = self.create_promise()?;
+        if let Err(error) = self.reject_promise(handle, reason, label) {
+            self.rollback_fresh_promise(handle);
+            return Err(error);
+        }
+        Ok(handle)
+    }
+
+    fn register_promise_then(
+        &mut self,
+        handle: crate::promise_model::PromiseHandle,
+        on_fulfilled: Option<crate::closure_model::ClosureHandle>,
+        on_rejected: Option<crate::closure_model::ClosureHandle>,
+        label: Label,
+    ) -> Result<crate::promise_model::PromiseHandle, InterpreterError> {
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        let (next_store_bytes, next_queue_bytes) = self
+            .promise_store
+            .projected_then_memory_bytes(handle, &label, &self.event_loop.microtasks)
+            .map_err(|error| InterpreterError::TypeError {
+                expected: "valid promise handle".to_string(),
+                got: error.to_string(),
+            })?;
+        let next_promise_bytes = next_store_bytes
+            .saturating_add(
+                self.event_loop
+                    .estimated_memory_bytes()
+                    .saturating_sub(self.event_loop.microtasks.estimated_memory_bytes())
+                    .saturating_add(next_queue_bytes),
+            )
+            .saturating_add(self.promise_combinators_memory_bytes())
+            .saturating_add(self.promise_combinator_watchers_memory_bytes())
+            .saturating_add(self.promise_in_flight_task_bytes);
+        self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)?;
+        let result = self
+            .promise_store
+            .then(
+                handle,
+                on_fulfilled,
+                on_rejected,
+                label,
+                &mut self.event_loop.microtasks,
+            )
+            .expect("preflighted Promise.then mutation must remain valid");
+        Ok(result)
+    }
+
+    fn register_promise_then_for_await(
+        &mut self,
+        handle: crate::promise_model::PromiseHandle,
+        label: crate::ifc_artifacts::Label,
+    ) -> Result<crate::promise_model::PromiseHandle, InterpreterError> {
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        let (next_store_bytes, next_queue_bytes) = self
+            .promise_store
+            .projected_then_memory_bytes(handle, &label, &self.event_loop.microtasks)
+            .map_err(|error| InterpreterError::TypeError {
+                expected: "valid promise handle".to_string(),
+                got: error.to_string(),
+            })?;
+        let next_promise_bytes = next_store_bytes
+            .saturating_add(
+                self.event_loop
+                    .estimated_memory_bytes()
+                    .saturating_sub(self.event_loop.microtasks.estimated_memory_bytes())
+                    .saturating_add(next_queue_bytes),
+            )
+            .saturating_add(self.promise_combinators_memory_bytes())
+            .saturating_add(self.promise_combinator_watchers_memory_bytes())
+            .saturating_add(self.promise_in_flight_task_bytes);
+        self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)?;
+        let result = self
+            .promise_store
+            .then_for_await(handle, label, &mut self.event_loop.microtasks)
+            .expect("preflighted await reaction mutation must remain valid");
+        Ok(result)
     }
 
     fn fulfill_promise(
@@ -25302,6 +25787,41 @@ impl InterpreterCore {
         value: crate::object_model::JsValue,
         label: crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        let (next_store_bytes, next_queue_bytes) = self
+            .promise_store
+            .projected_fulfill_memory_bytes(handle, &value, &label, &self.event_loop.microtasks)
+            .map_err(|e| InterpreterError::TypeError {
+                expected: "pending promise".to_string(),
+                got: e.to_string(),
+            })?;
+        let next_promise_bytes = next_store_bytes
+            .saturating_add(
+                self.event_loop
+                    .estimated_memory_bytes()
+                    .saturating_sub(self.event_loop.microtasks.estimated_memory_bytes())
+                    .saturating_add(next_queue_bytes),
+            )
+            .saturating_add(self.promise_combinators_memory_bytes())
+            .saturating_add(self.promise_combinator_watchers_memory_bytes())
+            .saturating_add(self.promise_in_flight_task_bytes);
+        // Only watcher-driven combinator cascades need a rollback snapshot.
+        // Admit that physical owner before cloning any attacker-sized payload.
+        let rollback_snapshot = if self.promise_combinator_watchers.contains_key(&handle) {
+            self.apply_memory_component_delta(0, previous_promise_bytes)?;
+            Some((
+                self.promise_store.clone(),
+                self.event_loop.clone(),
+                self.promise_combinators.clone(),
+                self.promise_combinator_watchers.clone(),
+                previous_promise_bytes,
+                self.heap.len(),
+            ))
+        } else {
+            None
+        };
+        self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)?;
         self.promise_store
             .fulfill(
                 handle,
@@ -25309,11 +25829,30 @@ impl InterpreterCore {
                 label.clone(),
                 &mut self.event_loop.microtasks,
             )
-            .map_err(|e| InterpreterError::TypeError {
-                expected: "pending promise".to_string(),
-                got: e.to_string(),
-            })?;
-        self.notify_promise_settled(handle, PromiseSettlement::Fulfilled(value), label)?;
+            .expect("preflighted Promise fulfillment must remain valid");
+        if let Err(error) =
+            self.notify_promise_settled(handle, PromiseSettlement::Fulfilled(value), label)
+        {
+            let (
+                previous_store,
+                previous_event_loop,
+                previous_combinators,
+                previous_watchers,
+                _,
+                previous_heap_len,
+            ) = rollback_snapshot.expect("watcher failure must have a rollback snapshot");
+            self.promise_store = previous_store;
+            self.event_loop = previous_event_loop;
+            self.promise_combinators = previous_combinators;
+            self.promise_combinator_watchers = previous_watchers;
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+            return Err(error);
+        }
+        if let Some((_, _, _, _, snapshot_bytes, _)) = rollback_snapshot {
+            self.estimated_memory_bytes =
+                self.estimated_memory_bytes.saturating_sub(snapshot_bytes);
+        }
         Ok(())
     }
 
@@ -25323,6 +25862,39 @@ impl InterpreterCore {
         reason: crate::object_model::JsValue,
         label: crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        let (next_store_bytes, next_queue_bytes) = self
+            .promise_store
+            .projected_reject_memory_bytes(handle, &reason, &label, &self.event_loop.microtasks)
+            .map_err(|e| InterpreterError::TypeError {
+                expected: "pending promise".to_string(),
+                got: e.to_string(),
+            })?;
+        let next_promise_bytes = next_store_bytes
+            .saturating_add(
+                self.event_loop
+                    .estimated_memory_bytes()
+                    .saturating_sub(self.event_loop.microtasks.estimated_memory_bytes())
+                    .saturating_add(next_queue_bytes),
+            )
+            .saturating_add(self.promise_combinators_memory_bytes())
+            .saturating_add(self.promise_combinator_watchers_memory_bytes())
+            .saturating_add(self.promise_in_flight_task_bytes);
+        let rollback_snapshot = if self.promise_combinator_watchers.contains_key(&handle) {
+            self.apply_memory_component_delta(0, previous_promise_bytes)?;
+            Some((
+                self.promise_store.clone(),
+                self.event_loop.clone(),
+                self.promise_combinators.clone(),
+                self.promise_combinator_watchers.clone(),
+                previous_promise_bytes,
+                self.heap.len(),
+            ))
+        } else {
+            None
+        };
+        self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)?;
         self.promise_store
             .reject(
                 handle,
@@ -25330,11 +25902,30 @@ impl InterpreterCore {
                 label.clone(),
                 &mut self.event_loop.microtasks,
             )
-            .map_err(|e| InterpreterError::TypeError {
-                expected: "pending promise".to_string(),
-                got: e.to_string(),
-            })?;
-        self.notify_promise_settled(handle, PromiseSettlement::Rejected(reason), label)?;
+            .expect("preflighted Promise rejection must remain valid");
+        if let Err(error) =
+            self.notify_promise_settled(handle, PromiseSettlement::Rejected(reason), label)
+        {
+            let (
+                previous_store,
+                previous_event_loop,
+                previous_combinators,
+                previous_watchers,
+                _,
+                previous_heap_len,
+            ) = rollback_snapshot.expect("watcher failure must have a rollback snapshot");
+            self.promise_store = previous_store;
+            self.event_loop = previous_event_loop;
+            self.promise_combinators = previous_combinators;
+            self.promise_combinator_watchers = previous_watchers;
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+            return Err(error);
+        }
+        if let Some((_, _, _, _, snapshot_bytes, _)) = rollback_snapshot {
+            self.estimated_memory_bytes =
+                self.estimated_memory_bytes.saturating_sub(snapshot_bytes);
+        }
         Ok(())
     }
 
@@ -25344,27 +25935,30 @@ impl InterpreterCore {
         settlement: PromiseSettlement,
         label: crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
         let watchers = match self.promise_combinator_watchers.remove(&handle) {
             Some(watchers) => watchers,
             None => return Ok(()),
         };
-        for watcher in watchers {
-            match &settlement {
+        let transferred_bytes = self.begin_promise_task_transfer(previous_promise_bytes);
+        let outcome = watchers
+            .into_iter()
+            .try_for_each(|watcher| match &settlement {
                 PromiseSettlement::Fulfilled(value) => self.update_combinator_fulfillment(
                     watcher.combinator_id,
                     watcher.index,
                     value.clone(),
                     label.clone(),
-                )?,
+                ),
                 PromiseSettlement::Rejected(reason) => self.update_combinator_rejection(
                     watcher.combinator_id,
                     watcher.index,
                     reason.clone(),
                     label.clone(),
-                )?,
-            }
-        }
-        Ok(())
+                ),
+            });
+        self.finish_promise_task_transfer(transferred_bytes);
+        outcome
     }
 
     fn update_combinator_fulfillment(
@@ -25391,6 +25985,7 @@ impl InterpreterCore {
         }
 
         let mut resolution: Option<ResolutionData> = None;
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
         if let Some(state) = self.promise_combinators.get_mut(&combinator_id) {
             match state {
                 PromiseCombinatorState::All(tracker) => {
@@ -25429,6 +26024,7 @@ impl InterpreterCore {
                 }
             }
         }
+        self.apply_promise_runtime_memory_delta(previous_promise_bytes)?;
 
         if let Some(resolution) = resolution {
             let (handle, value) = match resolution {
@@ -25443,7 +26039,7 @@ impl InterpreterCore {
                 }
             };
             self.fulfill_promise(handle, value, label)?;
-            self.promise_combinators.remove(&combinator_id);
+            self.remove_combinator_and_watchers(combinator_id)?;
         }
         Ok(())
     }
@@ -25472,6 +26068,7 @@ impl InterpreterCore {
         }
 
         let mut resolution: Option<ResolutionData> = None;
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
         if let Some(state) = self.promise_combinators.get_mut(&combinator_id) {
             match state {
                 PromiseCombinatorState::All(tracker) => {
@@ -25508,6 +26105,7 @@ impl InterpreterCore {
                 }
             }
         }
+        self.apply_promise_runtime_memory_delta(previous_promise_bytes)?;
 
         if let Some(resolution) = resolution {
             match resolution {
@@ -25523,7 +26121,7 @@ impl InterpreterCore {
                     self.reject_promise(handle, aggregate, label)?;
                 }
             }
-            self.promise_combinators.remove(&combinator_id);
+            self.remove_combinator_and_watchers(combinator_id)?;
         }
         Ok(())
     }
@@ -25533,10 +26131,57 @@ impl InterpreterCore {
         kind: PromiseCombinatorKind,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        let label = crate::ifc_artifacts::Label::Public;
         let inputs = self.collect_promise_combinator_inputs(args)?;
+        for input in &inputs {
+            if let Value::Promise(handle) = input {
+                self.promise_store
+                    .get(crate::promise_model::PromiseHandle(*handle))
+                    .map_err(|error| InterpreterError::TypeError {
+                        expected: "promise".to_string(),
+                        got: error.to_string(),
+                    })?;
+            }
+        }
+
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let promise_snapshot_bytes = self.promise_runtime_memory_bytes();
+        self.apply_memory_component_delta(0, promise_snapshot_bytes)?;
+        let previous_store = self.promise_store.clone();
+        let previous_event_loop = self.event_loop.clone();
+        let previous_combinators = self.promise_combinators.clone();
+        let previous_watchers = self.promise_combinator_watchers.clone();
+        let previous_combinator_id = self.next_promise_combinator_id;
+        let previous_heap_len = self.heap.len();
+
+        let result = self.dispatch_promise_combinator_inputs(kind, inputs);
+        if result.is_err() {
+            self.promise_store = previous_store;
+            self.event_loop = previous_event_loop;
+            self.promise_combinators = previous_combinators;
+            self.promise_combinator_watchers = previous_watchers;
+            self.next_promise_combinator_id = previous_combinator_id;
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+        } else {
+            drop(previous_store);
+            drop(previous_event_loop);
+            drop(previous_combinators);
+            drop(previous_watchers);
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(promise_snapshot_bytes);
+        }
+        result
+    }
+
+    fn dispatch_promise_combinator_inputs(
+        &mut self,
+        kind: PromiseCombinatorKind,
+        inputs: Vec<Value>,
+    ) -> Result<Value, InterpreterError> {
+        let label = crate::ifc_artifacts::Label::Public;
         let total = inputs.len() as u32;
-        let result_promise = self.promise_store.create();
+        let result_promise = self.create_promise()?;
 
         match kind {
             PromiseCombinatorKind::All | PromiseCombinatorKind::AllSettled if total == 0 => {
@@ -25590,7 +26235,7 @@ impl InterpreterCore {
             }
         };
 
-        let combinator_id = self.register_combinator(state);
+        let combinator_id = self.register_combinator(state)?;
 
         for (index, input) in inputs.into_iter().enumerate() {
             if !self.promise_combinators.contains_key(&combinator_id) {
@@ -25614,7 +26259,7 @@ impl InterpreterCore {
                                     combinator_id,
                                     index,
                                 },
-                            );
+                            )?;
                         }
                         crate::promise_model::PromiseState::Fulfilled(value) => {
                             self.update_combinator_fulfillment(
@@ -25767,19 +26412,7 @@ impl InterpreterCore {
                 (on_finally, on_finally)
             }
         };
-        let result = self
-            .promise_store
-            .then(
-                handle,
-                on_fulfilled,
-                on_rejected,
-                label,
-                &mut self.event_loop.microtasks,
-            )
-            .map_err(|e| InterpreterError::TypeError {
-                expected: "valid promise handle".to_string(),
-                got: e.to_string(),
-            })?;
+        let result = self.register_promise_then(handle, on_fulfilled, on_rejected, label)?;
         Ok(Value::Promise(result.0))
     }
 
@@ -25824,7 +26457,7 @@ impl InterpreterCore {
         match cap {
             "promise:constructor" => {
                 // Create a new pending promise and return its handle.
-                let handle = self.promise_store.create();
+                let handle = self.create_promise()?;
                 Ok(Value::Promise(handle.0))
             }
             "promise:resolve" => {
@@ -25857,8 +26490,7 @@ impl InterpreterCore {
                     _ => {
                         // Promise.resolve(value) — create a pre-resolved promise.
                         let js_val = Self::value_to_js_value(&arg0);
-                        let handle = self.promise_store.create();
-                        self.fulfill_promise(handle, js_val, label.clone())?;
+                        let handle = self.create_fulfilled_promise(js_val, label.clone())?;
                         Ok(Value::Promise(handle.0))
                     }
                 }
@@ -25890,8 +26522,7 @@ impl InterpreterCore {
                     _ => {
                         // Promise.reject(reason) — create a pre-rejected promise.
                         let js_reason = Self::value_to_js_value(&arg0);
-                        let handle = self.promise_store.create();
-                        self.reject_promise(handle, js_reason, label.clone())?;
+                        let handle = self.create_rejected_promise(js_reason, label.clone())?;
                         Ok(Value::Promise(handle.0))
                     }
                 }
@@ -25926,19 +26557,8 @@ impl InterpreterCore {
                     Some(value) => self.promise_reaction_handler_from_value(value, "onRejected")?,
                     None => None,
                 };
-                let result = self
-                    .promise_store
-                    .then(
-                        handle,
-                        on_fulfilled,
-                        on_rejected,
-                        label,
-                        &mut self.event_loop.microtasks,
-                    )
-                    .map_err(|e| InterpreterError::TypeError {
-                        expected: "valid promise handle".to_string(),
-                        got: e.to_string(),
-                    })?;
+                let result =
+                    self.register_promise_then(handle, on_fulfilled, on_rejected, label)?;
                 Ok(Value::Promise(result.0))
             }
             "promise:catch" => {
@@ -25964,19 +26584,7 @@ impl InterpreterCore {
                     Some(value) => self.promise_reaction_handler_from_value(value, "onRejected")?,
                     None => None,
                 };
-                let result = self
-                    .promise_store
-                    .then(
-                        handle,
-                        None,
-                        on_rejected,
-                        label,
-                        &mut self.event_loop.microtasks,
-                    )
-                    .map_err(|e| InterpreterError::TypeError {
-                        expected: "valid promise handle".to_string(),
-                        got: e.to_string(),
-                    })?;
+                let result = self.register_promise_then(handle, None, on_rejected, label)?;
                 Ok(Value::Promise(result.0))
             }
             "promise:finally" => {
@@ -26002,19 +26610,7 @@ impl InterpreterCore {
                     Some(value) => self.promise_reaction_handler_from_value(value, "onFinally")?,
                     None => None,
                 };
-                let result = self
-                    .promise_store
-                    .then(
-                        handle,
-                        on_finally,
-                        on_finally,
-                        label,
-                        &mut self.event_loop.microtasks,
-                    )
-                    .map_err(|e| InterpreterError::TypeError {
-                        expected: "valid promise handle".to_string(),
-                        got: e.to_string(),
-                    })?;
+                let result = self.register_promise_then(handle, on_finally, on_finally, label)?;
                 Ok(Value::Promise(result.0))
             }
             "promise:all" => self.dispatch_promise_combinator(PromiseCombinatorKind::All, args),
@@ -26066,14 +26662,26 @@ impl InterpreterCore {
             turns += 1;
 
             // Phase 1: Execute one macrotask (if ready)
+            let previous_promise_bytes = self.promise_runtime_memory_bytes();
             let turn_result = self.event_loop.turn();
+            let transferred_bytes = self.begin_promise_task_transfer(previous_promise_bytes);
+            let mut macrotask_error = None;
             if let Some(macrotask) = turn_result.macrotask {
                 // Execute the macrotask's handler closure
                 if let Err(err) = self.execute_macrotask_callback(&macrotask, module) {
-                    // Log the error but continue the event loop
-                    // TODO: Consider more sophisticated error handling in the future
-                    eprintln!("Timer callback execution failed: {err:?}");
+                    if matches!(err, InterpreterError::MemoryBudgetExceeded { .. }) {
+                        macrotask_error = Some(err);
+                    } else {
+                        // Preserve the historical best-effort timer exception
+                        // behavior for guest errors; containment refusal is
+                        // never swallowed.
+                        eprintln!("Timer callback execution failed: {err:?}");
+                    }
                 }
+            }
+            self.finish_promise_task_transfer(transferred_bytes);
+            if let Some(error) = macrotask_error {
+                return Err(error);
             }
 
             // Phase 2: settle internal Writable work, then drain microtasks.
@@ -26139,7 +26747,7 @@ impl InterpreterCore {
                     });
                 }
             }
-            self.drain_microtasks(module);
+            self.drain_microtasks(module)?;
             if self.pending_writable_terminal_ticks == 0
                 && !self
                     .writable_streams
@@ -26193,42 +26801,113 @@ impl InterpreterCore {
     /// Each microtask may enqueue additional microtasks; the drain continues
     /// until the queue is empty, matching ES2020 semantics (microtask checkpoint).
     /// A safety bound prevents infinite loops from pathological promise chains.
-    fn drain_microtasks(&mut self, module: Option<&Ir3Module>) {
+    fn drain_microtasks(&mut self, module: Option<&Ir3Module>) -> Result<(), InterpreterError> {
         let max_drain = 10_000u32;
         let mut drained = 0u32;
 
-        while let Some(task) = self.event_loop.microtasks.dequeue() {
-            drained += 1;
-            if drained >= max_drain {
+        while drained < max_drain {
+            let previous_promise_bytes = self.promise_runtime_memory_bytes();
+            let Some(task) = self.event_loop.microtasks.dequeue() else {
                 break;
-            }
-            match &task {
-                crate::promise_model::Microtask::PromiseReaction {
-                    handler,
-                    argument,
-                    result_promise,
-                    label: task_label,
-                } => {
-                    // Check if this is an async function resumption
-                    if handler.is_none() {
-                        // Check if there's an async resumption context for this promise
+            };
+            let transferred_bytes = self.begin_promise_task_transfer(previous_promise_bytes);
+            drained += 1;
+            let task_result = (|| -> Result<(), InterpreterError> {
+                match &task {
+                    crate::promise_model::Microtask::PromiseReaction {
+                        handler,
+                        argument,
+                        result_promise,
+                        label: task_label,
+                    } => {
+                        // Check if this is an async function resumption
+                        if handler.is_none() {
+                            // Check if there's an async resumption context for this promise
+                            if let Some(resumption_context) =
+                                self.async_resumption_contexts.remove(&result_promise.0)
+                            {
+                                // Resume the async function
+                                if let Err(err) = self
+                                    .resume_async_function_after_await(
+                                        resumption_context,
+                                        Ok(argument.clone()),
+                                    )
+                                    .and_then(|()| self.continue_resumed_async_function(module))
+                                {
+                                    let reason = Self::promise_rejection_from_error(&err);
+                                    self.reject_promise(
+                                        *result_promise,
+                                        reason,
+                                        task_label.clone(),
+                                    )?;
+                                }
+                            } else if let Some(resumption_context) = self
+                                .top_level_await_resumption_contexts
+                                .remove(&result_promise.0)
+                            {
+                                let resumed = self.resume_top_level_after_await(
+                                    resumption_context,
+                                    Ok(argument.clone()),
+                                    task_label.clone(),
+                                );
+                                if let Err(error) = resumed {
+                                    self.replace_top_level_await_outcome(Err(error));
+                                } else {
+                                    self.continue_resumed_top_level(module);
+                                }
+                            } else {
+                                // With no closure handler, the identity transform propagates
+                                // the argument to the result promise as a fulfillment value.
+                                self.fulfill_promise(
+                                    *result_promise,
+                                    argument.clone(),
+                                    task_label.clone(),
+                                )?;
+                            }
+                        } else {
+                            let Some(handler) = *handler else {
+                                unreachable!("handler.is_some() checked above");
+                            };
+                            match self.execute_promise_reaction_handler(
+                                module,
+                                handler,
+                                argument.clone(),
+                            ) {
+                                Ok(result) => {
+                                    self.fulfill_promise(
+                                        *result_promise,
+                                        result,
+                                        task_label.clone(),
+                                    )?;
+                                }
+                                Err(err) => {
+                                    let reason = Self::promise_rejection_from_error(&err);
+                                    self.reject_promise(
+                                        *result_promise,
+                                        reason,
+                                        task_label.clone(),
+                                    )?;
+                                }
+                            }
+                        }
+                    }
+                    crate::promise_model::Microtask::PromiseRejection {
+                        reason,
+                        result_promise,
+                        label: task_label,
+                    } => {
                         if let Some(resumption_context) =
                             self.async_resumption_contexts.remove(&result_promise.0)
                         {
-                            // Resume the async function
                             if let Err(err) = self
                                 .resume_async_function_after_await(
                                     resumption_context,
-                                    Ok(argument.clone()),
+                                    Err(reason.clone()),
                                 )
                                 .and_then(|()| self.continue_resumed_async_function(module))
                             {
                                 let reason = Self::promise_rejection_from_error(&err);
-                                let _ = self.reject_promise(
-                                    *result_promise,
-                                    reason,
-                                    task_label.clone(),
-                                );
+                                self.reject_promise(*result_promise, reason, task_label.clone())?;
                             }
                         } else if let Some(resumption_context) = self
                             .top_level_await_resumption_contexts
@@ -26236,109 +26915,58 @@ impl InterpreterCore {
                         {
                             let resumed = self.resume_top_level_after_await(
                                 resumption_context,
-                                Ok(argument.clone()),
+                                Err(reason.clone()),
                                 task_label.clone(),
                             );
                             if let Err(error) = resumed {
-                                self.top_level_await_outcome = Some(Err(error));
+                                self.replace_top_level_await_outcome(Err(error));
                             } else {
                                 self.continue_resumed_top_level(module);
                             }
                         } else {
-                            // With no closure handler, the identity transform propagates
-                            // the argument to the result promise as a fulfillment value.
-                            let _ = self.fulfill_promise(
+                            self.reject_promise(
                                 *result_promise,
-                                argument.clone(),
+                                reason.clone(),
                                 task_label.clone(),
-                            );
-                        }
-                    } else {
-                        let Some(handler) = *handler else {
-                            unreachable!("handler.is_some() checked above");
-                        };
-                        match self.execute_promise_reaction_handler(
-                            module,
-                            handler,
-                            argument.clone(),
-                        ) {
-                            Ok(result) => {
-                                let _ = self.fulfill_promise(
-                                    *result_promise,
-                                    result,
-                                    task_label.clone(),
-                                );
-                            }
-                            Err(err) => {
-                                let reason = Self::promise_rejection_from_error(&err);
-                                let _ = self.reject_promise(
-                                    *result_promise,
-                                    reason,
-                                    task_label.clone(),
-                                );
-                            }
+                            )?;
                         }
                     }
-                }
-                crate::promise_model::Microtask::PromiseRejection {
-                    reason,
-                    result_promise,
-                    label: task_label,
-                } => {
-                    if let Some(resumption_context) =
-                        self.async_resumption_contexts.remove(&result_promise.0)
-                    {
-                        if let Err(err) = self
-                            .resume_async_function_after_await(
-                                resumption_context,
-                                Err(reason.clone()),
-                            )
-                            .and_then(|()| self.continue_resumed_async_function(module))
-                        {
-                            let reason = Self::promise_rejection_from_error(&err);
-                            let _ =
-                                self.reject_promise(*result_promise, reason, task_label.clone());
-                        }
-                    } else if let Some(resumption_context) = self
-                        .top_level_await_resumption_contexts
-                        .remove(&result_promise.0)
-                    {
-                        let resumed = self.resume_top_level_after_await(
-                            resumption_context,
-                            Err(reason.clone()),
-                            task_label.clone(),
-                        );
-                        if let Err(error) = resumed {
-                            self.top_level_await_outcome = Some(Err(error));
-                        } else {
-                            self.continue_resumed_top_level(module);
-                        }
-                    } else {
-                        let _ = self.reject_promise(
-                            *result_promise,
-                            reason.clone(),
-                            task_label.clone(),
-                        );
+                    crate::promise_model::Microtask::ResolveThenable {
+                        promise,
+                        then_handler: _,
+                        thenable: _,
+                        label: _task_label,
+                    } => {
+                        // Simplified: resolve with undefined (full thenable
+                        // unwrapping requires closure execution which is a
+                        // follow-up bead).
+                        self.fulfill_promise(
+                            *promise,
+                            crate::object_model::JsValue::Undefined,
+                            _task_label.clone(),
+                        )?;
                     }
                 }
-                crate::promise_model::Microtask::ResolveThenable {
-                    promise,
-                    then_handler: _,
-                    thenable: _,
-                    label: _task_label,
-                } => {
-                    // Simplified: resolve with undefined (full thenable
-                    // unwrapping requires closure execution which is a
-                    // follow-up bead).
-                    let _ = self.fulfill_promise(
-                        *promise,
-                        crate::object_model::JsValue::Undefined,
-                        _task_label.clone(),
-                    );
-                }
-            }
+                Ok(())
+            })();
+            self.finish_promise_task_transfer(transferred_bytes);
+            task_result?;
         }
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
         self.event_loop.microtasks.compact();
+        self.apply_promise_runtime_memory_delta(previous_promise_bytes)?;
+        // A reaction can mutate both Promise-owned queues and arbitrary
+        // interpreter state (registers, heap, scopes, async continuations).
+        // Reconcile the checkpoint from every resident owner instead of
+        // combining the final Promise estimate with a stale pre-drain
+        // non-Promise subtotal.
+        let requested_bytes = self.recompute_estimated_memory_bytes();
+        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
+        {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
+        self.estimated_memory_bytes = requested_bytes;
+        Ok(())
     }
 
     /// Execute a macrotask callback (e.g., timer callbacks).
@@ -26416,17 +27044,26 @@ impl InterpreterCore {
                 // sequence. Draining the entry keeps the side-table bounded to
                 // in-flight callbacks.
                 let closure_id = macrotask.handler.0;
+                let callback_args = self
+                    .pending_io_callbacks
+                    .remove(&macrotask.registration_seq);
+                let retained_bytes = callback_args
+                    .as_ref()
+                    .map(|arguments| {
+                        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                            .saturating_add(Self::estimate_value_vec_bytes(arguments))
+                    })
+                    .unwrap_or(0);
+                let callback_args = callback_args.unwrap_or_default();
                 if self.closures.get(closure_id as usize).is_none() {
+                    self.estimated_memory_bytes =
+                        self.estimated_memory_bytes.saturating_sub(retained_bytes);
                     return Err(InterpreterError::TypeError {
                         expected: "valid closure".to_string(),
                         got: format!("closure#{closure_id} not found"),
                     });
                 }
-                let callback_args = self
-                    .pending_io_callbacks
-                    .remove(&macrotask.registration_seq)
-                    .unwrap_or_default();
-                match module {
+                let result = match module {
                     Some(module) => {
                         // Reuse the audited synchronous closure-invocation path (the
                         // same one timer + promise-reaction callbacks use): undefined
@@ -26437,15 +27074,18 @@ impl InterpreterCore {
                             Value::Closure(closure_id),
                             Value::Undefined,
                             callback_args,
-                        )?;
-                        Ok(())
+                        )
+                        .map(|_| ())
                     }
                     None => {
                         // No module context only on the test-only event-loop path;
                         // without it the callback body cannot be invoked.
                         Ok(())
                     }
-                }
+                };
+                self.estimated_memory_bytes =
+                    self.estimated_memory_bytes.saturating_sub(retained_bytes);
+                result
             }
             _ => {
                 // Remaining sources (e.g. MessageChannel) are not yet scheduled.
@@ -26507,10 +27147,13 @@ impl InterpreterCore {
         task: PendingTimerTask,
         module: Option<&Ir3Module>,
     ) -> Result<(), InterpreterError> {
+        let retained_bytes = Self::estimate_pending_timer_task_bytes(&task);
         if !self.active_timers.contains_key(&task.timer_id) {
             // Cancelled (clearTimeout/clearInterval/clearImmediate) between
             // scheduling and firing: the macrotask is inert.
             self.unref_timer_ids.remove(&task.timer_id);
+            self.estimated_memory_bytes =
+                self.estimated_memory_bytes.saturating_sub(retained_bytes);
             return Ok(());
         }
         match task.kind {
@@ -26521,14 +27164,36 @@ impl InterpreterCore {
                 delay_ms,
             } => {
                 if self.closures.get(closure_id as usize).is_none() {
+                    self.estimated_memory_bytes =
+                        self.estimated_memory_bytes.saturating_sub(retained_bytes);
                     return Err(InterpreterError::TypeError {
                         expected: "valid closure".to_string(),
                         got: format!("closure#{closure_id} not found"),
                     });
                 }
-                let result = self
-                    .execute_timer_closure(closure_id, module, args.clone())
-                    .map(|_| ());
+                let (result, reschedule_args) = if repeating {
+                    let clone_bytes = Self::estimate_value_vec_bytes(&args);
+                    if let Err(error) = self.apply_memory_component_delta(0, clone_bytes) {
+                        self.active_timers.remove(&task.timer_id);
+                        self.unref_timer_ids.remove(&task.timer_id);
+                        self.estimated_memory_bytes =
+                            self.estimated_memory_bytes.saturating_sub(retained_bytes);
+                        return Err(error);
+                    }
+                    let callback_args = args.clone();
+                    let result = self
+                        .execute_timer_closure(closure_id, module, callback_args)
+                        .map(|_| ());
+                    self.estimated_memory_bytes =
+                        self.estimated_memory_bytes.saturating_sub(clone_bytes);
+                    (result, Some(args))
+                } else {
+                    (
+                        self.execute_timer_closure(closure_id, module, args)
+                            .map(|_| ()),
+                        None,
+                    )
+                };
                 if let Err(ref err) = result {
                     eprintln!("Timer callback execution error: {err:?}");
                 }
@@ -26536,18 +27201,30 @@ impl InterpreterCore {
                     // Re-schedule the next tick unless the callback (or
                     // anything it ran) cleared the interval.
                     if self.active_timers.contains_key(&task.timer_id) {
+                        let previous_promise_bytes = self.promise_runtime_memory_bytes();
                         let seq = self.event_loop.set_timeout(
                             crate::closure_model::ClosureHandle(closure_id),
                             delay_ms,
                             crate::ifc_artifacts::Label::Public,
                         );
+                        if let Err(error) =
+                            self.apply_promise_runtime_memory_delta(previous_promise_bytes)
+                        {
+                            self.event_loop.rollback_last_scheduled(seq);
+                            self.active_timers.remove(&task.timer_id);
+                            self.unref_timer_ids.remove(&task.timer_id);
+                            self.estimated_memory_bytes =
+                                self.estimated_memory_bytes.saturating_sub(retained_bytes);
+                            return Err(error);
+                        }
                         self.pending_timer_tasks.insert(
                             seq,
                             PendingTimerTask {
                                 timer_id: task.timer_id,
                                 kind: PendingTimerTaskKind::Callback {
                                     closure_id,
-                                    args,
+                                    args: reschedule_args
+                                        .expect("repeating timer retained its owned arguments"),
                                     repeating: true,
                                     delay_ms,
                                 },
@@ -26555,6 +27232,8 @@ impl InterpreterCore {
                         );
                     } else {
                         self.unref_timer_ids.remove(&task.timer_id);
+                        self.estimated_memory_bytes =
+                            self.estimated_memory_bytes.saturating_sub(retained_bytes);
                     }
                 } else {
                     // One-shot timers/immediates (and errored intervals) are
@@ -26562,13 +27241,19 @@ impl InterpreterCore {
                     // false and cancellation state stays bounded.
                     self.active_timers.remove(&task.timer_id);
                     self.unref_timer_ids.remove(&task.timer_id);
+                    self.estimated_memory_bytes =
+                        self.estimated_memory_bytes.saturating_sub(retained_bytes);
                 }
                 result
             }
             PendingTimerTaskKind::PromiseResolve { promise, value } => {
                 self.active_timers.remove(&task.timer_id);
                 self.unref_timer_ids.remove(&task.timer_id);
-                self.fulfill_promise(promise, value, crate::ifc_artifacts::Label::Public)
+                let result =
+                    self.fulfill_promise(promise, value, crate::ifc_artifacts::Label::Public);
+                self.estimated_memory_bytes =
+                    self.estimated_memory_bytes.saturating_sub(retained_bytes);
+                result
             }
         }
     }
@@ -26617,20 +27302,55 @@ impl InterpreterCore {
         timer_id: u32,
         marker: &str,
     ) -> Result<Value, InterpreterError> {
-        let object_id = self.alloc_object_with_properties(&[
-            ("__type", Value::str(marker)),
-            ("__timerId", Value::Int(timer_id as i64)),
-        ])?;
+        if !self
+            .config
+            .granted_capabilities
+            .contains(&RuntimeCapability::HeapAllocate)
+        {
+            return Err(InterpreterError::CapabilityDenied {
+                capability: "HeapAllocate".to_string(),
+            });
+        }
+        let requested_heap_objects = self.heap_object_count_u32().saturating_add(1);
+        if requested_heap_objects > self.config.max_heap_objects {
+            return Err(
+                self.memory_budget_error(self.estimated_memory_bytes, requested_heap_objects)
+            );
+        }
+        let object_id =
+            ObjectId(
+                u32::try_from(self.heap.len()).map_err(|_| InterpreterError::TypeError {
+                    expected: "heap capacity".into(),
+                    got: format!("exceeded u32::MAX ({})", self.heap.len()),
+                })?,
+            );
+        let mut object = HeapObject::new();
+        object
+            .properties
+            .insert("__type".to_string(), Value::str(marker));
+        object
+            .properties
+            .insert("__timerId".to_string(), Value::Int(timer_id as i64));
         for (name, kind) in [
             ("hasRef", BuiltinFunctionKind::TimerHasRef),
             ("ref", BuiltinFunctionKind::TimerRef),
             ("unref", BuiltinFunctionKind::TimerUnref),
         ] {
-            self.set_object_property(
-                object_id,
+            object.properties.insert(
                 name.to_string(),
                 Value::BuiltinFunction(BuiltinFunction::timer_handle_method(kind, object_id)),
-            )?;
+            );
+        }
+        let object_size = Self::estimate_heap_object_bytes(&object);
+        let requested_bytes = self.estimated_memory_bytes.saturating_add(object_size);
+        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
+        {
+            return Err(self.memory_budget_error(requested_bytes, requested_heap_objects));
+        }
+        self.mutate_heap(|heap| heap.push(object));
+        self.estimated_memory_bytes = requested_bytes;
+        if let Some(profiler) = &mut self.profiling_data {
+            profiler.record_object_allocation(object_size);
         }
         Ok(Value::Object(object_id))
     }
@@ -26661,13 +27381,21 @@ impl InterpreterCore {
         };
 
         let timer_id = self.next_timer_id;
-        self.next_timer_id = self.next_timer_id.wrapping_add(1);
 
         let handler_id = match callback {
             Value::Closure(id) => Some(id),
             _ => None,
         };
 
+        let pending_task = handler_id.map(|closure_id| PendingTimerTask {
+            timer_id,
+            kind: PendingTimerTaskKind::Callback {
+                closure_id,
+                args: extra_args,
+                repeating,
+                delay_ms,
+            },
+        });
         self.active_timers.insert(
             timer_id,
             ActiveTimer {
@@ -26677,26 +27405,16 @@ impl InterpreterCore {
             },
         );
 
-        if let Some(closure_id) = handler_id {
-            let closure_handle = crate::closure_model::ClosureHandle(closure_id);
-            let label = crate::ifc_artifacts::Label::Public;
-            let seq = if immediate {
-                self.event_loop.set_immediate(closure_handle, label)
-            } else {
-                self.event_loop.set_timeout(closure_handle, delay_ms, label)
+        let mut scheduled_seq = None;
+        if let Some(task) = pending_task {
+            let seq = match self.schedule_pending_timer_task(task, immediate, delay_ms) {
+                Ok(sequence) => sequence,
+                Err(error) => {
+                    self.active_timers.remove(&timer_id);
+                    return Err(error);
+                }
             };
-            self.pending_timer_tasks.insert(
-                seq,
-                PendingTimerTask {
-                    timer_id,
-                    kind: PendingTimerTaskKind::Callback {
-                        closure_id,
-                        args: extra_args,
-                        repeating,
-                        delay_ms,
-                    },
-                },
-            );
+            scheduled_seq = Some(seq);
         }
 
         let (witness_tag, marker) = if immediate {
@@ -26706,12 +27424,23 @@ impl InterpreterCore {
         } else {
             ("builtin:setTimeout", TIMER_HANDLE_TIMEOUT_TYPE)
         };
+        let handle = match self.alloc_timer_handle_object(timer_id, marker) {
+            Ok(handle) => handle,
+            Err(error) => {
+                self.active_timers.remove(&timer_id);
+                if let Some(seq) = scheduled_seq {
+                    self.cancel_pending_timer_registration(seq);
+                }
+                return Err(error);
+            }
+        };
+        self.next_timer_id = self.next_timer_id.wrapping_add(1);
         self.emit_witness(
             WitnessEventKind::HostcallDispatched,
             Some(&format!("{witness_tag}:{timer_id}")),
         );
 
-        self.alloc_timer_handle_object(timer_id, marker)
+        Ok(handle)
     }
 
     /// bd-suwvw: shared clearTimeout/clearInterval/clearImmediate core.
@@ -26740,6 +27469,14 @@ impl InterpreterCore {
 
         let was_active = self.active_timers.remove(&timer_id).is_some();
         self.unref_timer_ids.remove(&timer_id);
+        let pending_sequences: Vec<u64> = self
+            .pending_timer_tasks
+            .iter()
+            .filter_map(|(sequence, task)| (task.timer_id == timer_id).then_some(*sequence))
+            .collect();
+        for sequence in pending_sequences {
+            self.cancel_pending_timer_registration(sequence);
+        }
         if was_active {
             self.emit_witness(
                 WitnessEventKind::HostcallDispatched,
@@ -26760,15 +27497,37 @@ impl InterpreterCore {
                 got: callback.type_name().to_string(),
             });
         };
-        let result_promise = self.promise_store.create();
-        self.event_loop
+        let result_promise = self.create_promise()?;
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        let task = crate::promise_model::Microtask::PromiseReaction {
+            handler: Some(crate::closure_model::ClosureHandle(*closure_id)),
+            argument: crate::object_model::JsValue::Undefined,
+            result_promise,
+            label: crate::ifc_artifacts::Label::Public,
+        };
+        let next_queue_bytes = self
+            .event_loop
             .microtasks
-            .enqueue(crate::promise_model::Microtask::PromiseReaction {
-                handler: Some(crate::closure_model::ClosureHandle(*closure_id)),
-                argument: crate::object_model::JsValue::Undefined,
-                result_promise,
-                label: crate::ifc_artifacts::Label::Public,
-            });
+            .projected_enqueue_memory_bytes(&task);
+        let next_promise_bytes = self
+            .promise_store
+            .estimated_memory_bytes()
+            .saturating_add(
+                self.event_loop
+                    .estimated_memory_bytes()
+                    .saturating_sub(self.event_loop.microtasks.estimated_memory_bytes())
+                    .saturating_add(next_queue_bytes),
+            )
+            .saturating_add(self.promise_combinators_memory_bytes())
+            .saturating_add(self.promise_combinator_watchers_memory_bytes())
+            .saturating_add(self.promise_in_flight_task_bytes);
+        if let Err(error) =
+            self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)
+        {
+            self.rollback_fresh_promise(result_promise);
+            return Err(error);
+        }
+        self.event_loop.microtasks.enqueue(task);
         Ok(Value::Undefined)
     }
 
@@ -26791,7 +27550,14 @@ impl InterpreterCore {
             }
         };
         let timer_id = self.next_timer_id;
-        self.next_timer_id = self.next_timer_id.wrapping_add(1);
+        let promise = self.create_promise()?;
+        let task = PendingTimerTask {
+            timer_id,
+            kind: PendingTimerTaskKind::PromiseResolve {
+                promise,
+                value: Self::value_to_js_value(value),
+            },
+        };
         self.active_timers.insert(
             timer_id,
             ActiveTimer {
@@ -26800,25 +27566,12 @@ impl InterpreterCore {
                 repeating: false,
             },
         );
-
-        let promise = self.promise_store.create();
-        let sentinel = crate::closure_model::ClosureHandle(u32::MAX);
-        let label = crate::ifc_artifacts::Label::Public;
-        let seq = if immediate {
-            self.event_loop.set_immediate(sentinel, label)
-        } else {
-            self.event_loop.set_timeout(sentinel, delay_ms, label)
-        };
-        self.pending_timer_tasks.insert(
-            seq,
-            PendingTimerTask {
-                timer_id,
-                kind: PendingTimerTaskKind::PromiseResolve {
-                    promise,
-                    value: Self::value_to_js_value(value),
-                },
-            },
-        );
+        if let Err(error) = self.schedule_pending_timer_task(task, immediate, delay_ms) {
+            self.active_timers.remove(&timer_id);
+            self.rollback_fresh_promise(promise);
+            return Err(error);
+        }
+        self.next_timer_id = self.next_timer_id.wrapping_add(1);
         self.emit_witness(
             WitnessEventKind::HostcallDispatched,
             Some(&format!("builtin:timersPromises:{timer_id}")),
@@ -30278,8 +31031,7 @@ impl InterpreterCore {
                     // sound upper bound) by the receiver+args label join on the
                     // dispatch site's throw path.
                     let thrown = Self::read_local_register(&local_registers, value)?;
-                    self.pending_exception = Some(thrown.clone());
-                    self.pending_exception_label = Label::Public;
+                    self.replace_pending_abrupt_slots(Some((thrown.clone(), Label::Public)), None)?;
                     return Err(InterpreterError::UncaughtException {
                         value: Self::uncaught_exception_description(&thrown),
                     });
@@ -30534,8 +31286,7 @@ impl InterpreterCore {
                     // preserved value; the dispatch site's throw-path label join
                     // re-establishes confidentiality for this label-less lane.
                     let thrown = Self::read_local_register(&local_registers, value)?;
-                    self.pending_exception = Some(thrown.clone());
-                    self.pending_exception_label = Label::Public;
+                    self.replace_pending_abrupt_slots(Some((thrown.clone(), Label::Public)), None)?;
                     return Err(InterpreterError::UncaughtException {
                         value: Self::uncaught_exception_description(&thrown),
                     });
@@ -30676,15 +31427,7 @@ impl InterpreterCore {
         }
 
         let transient_execution_bytes = Self::transient_module_wrapper_bytes(module)
-            .saturating_add(self.registers_memory_bytes())
-            .saturating_add(self.register_context_labels_memory_bytes())
-            .saturating_add(self.scope_chain_memory_bytes())
-            .saturating_add(self.call_stack_memory_bytes())
-            // `snapshot_module_execution` clones the caller's pending throw
-            // before isolated setup clears the live slot. Writable batches
-            // retain and charge that live payload after an earlier callback
-            // throws; include the one-copy snapshot peak in this preflight.
-            .saturating_add(self.writable_pending_exception_dynamic_bytes());
+            .saturating_add(self.module_execution_snapshot_memory_bytes());
         let callback_context_label = match (
             self.active_inline_callback_context_label.as_ref(),
             argument_label,
@@ -30781,13 +31524,7 @@ impl InterpreterCore {
         }
 
         let transient_wrapper_bytes = Self::transient_module_wrapper_bytes(module);
-        let snapshot_retained_bytes = self
-            .registers_memory_bytes()
-            .saturating_add(self.register_context_labels_memory_bytes())
-            .saturating_add(self.scope_chain_memory_bytes())
-            .saturating_add(self.call_stack_memory_bytes());
-        let transient_execution_bytes =
-            transient_wrapper_bytes.saturating_add(snapshot_retained_bytes);
+        let transient_execution_bytes = transient_wrapper_bytes;
         let inherited_context_dominates = match (
             self.active_inline_callback_context_label.as_ref(),
             argument_label.as_ref(),
@@ -30830,7 +31567,16 @@ impl InterpreterCore {
             .instructions
             .push(Ir3Instruction::Return { value: 0 });
 
-        let snapshot = self.snapshot_module_execution();
+        let snapshot = match self.snapshot_module_execution() {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                drop(wrapper);
+                self.estimated_memory_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(transient_execution_bytes);
+                return Err(error);
+            }
+        };
         let saved_active_cjs_context = self.active_cjs_context.clone();
         let setup_previous_register_bytes = self.registers_memory_bytes();
         let setup_previous_register_context_label_bytes =
@@ -30848,6 +31594,8 @@ impl InterpreterCore {
             self.register_base = 0;
             self.catch_frames.clear();
             self.pending_exception = None;
+            self.pending_exception_label = Label::Public;
+            self.pending_hostcall_result_label = None;
             self.pending_return = None;
             self.suspended_abrupt_completions.clear();
             self.finally_modes.clear();
@@ -30913,28 +31661,10 @@ impl InterpreterCore {
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
             .saturating_sub(transient_execution_bytes);
-        let previous_register_bytes = self.registers_memory_bytes();
-        let previous_register_context_label_bytes = self.register_context_labels_memory_bytes();
-        let previous_scope_bytes = self.scope_chain_memory_bytes();
-        let previous_call_stack_bytes = self.call_stack_memory_bytes();
-        self.restore_module_execution(snapshot);
+        self.restore_module_execution(snapshot, wrapper_memory_committed);
         self.active_cjs_context = saved_active_cjs_context;
-        let restore_memory_result = if wrapper_memory_committed {
-            Some(self.apply_register_context_scope_call_stack_memory_delta(
-                previous_register_bytes,
-                previous_register_context_label_bytes,
-                previous_scope_bytes,
-                previous_call_stack_bytes,
-            ))
-        } else {
-            None
-        };
-        if let Some(result) = restore_memory_result {
-            result?;
-        }
         if let Some((value, label)) = thrown_value {
-            self.pending_exception = Some(value);
-            self.pending_exception_label = label;
+            self.replace_pending_abrupt_slots(Some((value, label)), None)?;
         }
         let result_label = result_label?;
         result.map(|value| (value, result_label))
@@ -30979,13 +31709,7 @@ impl InterpreterCore {
         }
 
         let transient_wrapper_bytes = Self::transient_module_wrapper_bytes(module);
-        let snapshot_retained_bytes = self
-            .registers_memory_bytes()
-            .saturating_add(self.register_context_labels_memory_bytes())
-            .saturating_add(self.scope_chain_memory_bytes())
-            .saturating_add(self.call_stack_memory_bytes());
-        let transient_execution_bytes =
-            transient_wrapper_bytes.saturating_add(snapshot_retained_bytes);
+        let transient_execution_bytes = transient_wrapper_bytes;
         self.apply_memory_component_delta(0, transient_execution_bytes)?;
         let mut wrapper = module.clone();
         let wrapper_start = wrapper.instructions.len();
@@ -31001,7 +31725,16 @@ impl InterpreterCore {
             .instructions
             .push(Ir3Instruction::Return { value: 0 });
 
-        let snapshot = self.snapshot_module_execution();
+        let snapshot = match self.snapshot_module_execution() {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                drop(wrapper);
+                self.estimated_memory_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(transient_execution_bytes);
+                return Err(error);
+            }
+        };
         let saved_active_cjs_context = self.active_cjs_context.clone();
         let setup_previous_register_bytes = self.registers_memory_bytes();
         let setup_previous_register_context_label_bytes =
@@ -31018,6 +31751,8 @@ impl InterpreterCore {
             self.register_base = 0;
             self.catch_frames.clear();
             self.pending_exception = None;
+            self.pending_exception_label = Label::Public;
+            self.pending_hostcall_result_label = None;
             self.pending_return = None;
             self.suspended_abrupt_completions.clear();
             self.finally_modes.clear();
@@ -31050,25 +31785,8 @@ impl InterpreterCore {
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
             .saturating_sub(transient_execution_bytes);
-        let previous_register_bytes = self.registers_memory_bytes();
-        let previous_register_context_label_bytes = self.register_context_labels_memory_bytes();
-        let previous_scope_bytes = self.scope_chain_memory_bytes();
-        let previous_call_stack_bytes = self.call_stack_memory_bytes();
-        self.restore_module_execution(snapshot);
+        self.restore_module_execution(snapshot, wrapper_memory_committed);
         self.active_cjs_context = saved_active_cjs_context;
-        let restore_memory_result = if wrapper_memory_committed {
-            Some(self.apply_register_context_scope_call_stack_memory_delta(
-                previous_register_bytes,
-                previous_register_context_label_bytes,
-                previous_scope_bytes,
-                previous_call_stack_bytes,
-            ))
-        } else {
-            None
-        };
-        if let Some(result) = restore_memory_result {
-            result?;
-        }
         result
     }
 
@@ -31895,7 +32613,7 @@ impl InterpreterCore {
         // Each dispatch owns exactly one optional callback-derived label. A
         // previous failed or test-only direct dispatch must never taint the
         // next, unrelated hostcall.
-        self.pending_hostcall_result_label = None;
+        self.clear_pending_hostcall_result_label();
         let timestamp_ns = self.instructions_executed;
         let args_hash = self.hostcall_arguments_hash(args);
         let outcome = self.dispatch_builtin_hostcall_inner(cap, args, module);
@@ -33166,7 +33884,7 @@ impl InterpreterCore {
                             .filter(|key| self.writable_own_property_visible(obj_id, key))
                             .map(|key| Value::str(key.as_str()))
                             .collect::<Vec<_>>();
-                        self.join_pending_hostcall_stream_label(obj_id);
+                        self.join_pending_hostcall_stream_label(obj_id)?;
                         let array_id = self.alloc_array_from_values(&key_values)?;
                         Ok(Value::Object(array_id))
                     }
@@ -33195,7 +33913,7 @@ impl InterpreterCore {
                             .filter(|(key, _)| self.writable_own_property_visible(obj_id, key))
                             .map(|(_, value)| value.clone())
                             .collect::<Vec<_>>();
-                        self.join_pending_hostcall_stream_label(obj_id);
+                        self.join_pending_hostcall_stream_label(obj_id)?;
                         let array_id = self.alloc_array_from_values(&values)?;
                         Ok(Value::Object(array_id))
                     }
@@ -33224,7 +33942,7 @@ impl InterpreterCore {
                             .filter(|(key, _)| self.writable_own_property_visible(obj_id, key))
                             .map(|(key, value)| (key.clone(), value.clone()))
                             .collect::<Vec<_>>();
-                        self.join_pending_hostcall_stream_label(obj_id);
+                        self.join_pending_hostcall_stream_label(obj_id)?;
                         let mut entry_values = Vec::with_capacity(entries.len());
 
                         // Set array elements as numeric properties, each containing a [key, value] pair
@@ -33282,7 +34000,7 @@ impl InterpreterCore {
                             })
                             .map(|(key, value)| (key.clone(), value.clone()))
                             .collect::<Vec<_>>();
-                        self.join_pending_hostcall_stream_label(source_obj_id);
+                        self.join_pending_hostcall_stream_label(source_obj_id)?;
 
                         // Copy each property to target object
                         for (key, value) in properties_to_copy {
@@ -34033,7 +34751,7 @@ impl InterpreterCore {
 
                 let value = self.read_reg(args.start)?;
                 if let Value::Object(object_id) = &value {
-                    self.join_pending_hostcall_stream_label(*object_id);
+                    self.join_pending_hostcall_stream_label(*object_id)?;
                 }
                 // bd-9a8cz.3: real recursive object/array serialization. Previously
                 // `Value::Object(_)` was a `"{}"` stub. `json_stringify_value`
@@ -34895,7 +35613,7 @@ impl InterpreterCore {
                     _ => return Ok(Value::Bool(false)),
                 };
 
-                self.join_pending_hostcall_stream_label(obj_id);
+                self.join_pending_hostcall_stream_label(obj_id)?;
                 Ok(Value::Bool(self.object_own_property_contains(
                     &Value::Object(obj_id),
                     &Value::str(prop_name),
@@ -35743,7 +36461,7 @@ impl InterpreterCore {
                 } else {
                     Value::Object(target)
                 };
-                self.join_pending_hostcall_stream_label(target);
+                self.join_pending_hostcall_stream_label(target)?;
                 self.proxy_aware_get_property(module, target, &key, receiver, 0)
             }
             "builtin:ReflectSet" => {
@@ -35776,7 +36494,7 @@ impl InterpreterCore {
                 }
                 let key_value = self.read_reg(args.start + 1)?;
                 let key = self.property_key_from_value(&key_value);
-                self.join_pending_hostcall_stream_label(target);
+                self.join_pending_hostcall_stream_label(target)?;
                 Ok(Value::Bool(
                     self.proxy_aware_has_property(module, target, &key, 0)?,
                 ))
@@ -35784,7 +36502,7 @@ impl InterpreterCore {
             "builtin:ReflectOwnKeys" => {
                 let target = self.read_object_argument(args, 0, "Reflect.ownKeys target object")?;
                 let keys = self.proxy_aware_own_property_keys(module, target, 0)?;
-                self.join_pending_hostcall_stream_label(target);
+                self.join_pending_hostcall_stream_label(target)?;
                 let array_id = self.alloc_array_from_values(&keys)?;
                 Ok(Value::Object(array_id))
             }
@@ -35825,7 +36543,7 @@ impl InterpreterCore {
                 let (value, label) = self.invoke_inline_method_call_with_argument_label(
                     module, target, this_arg, arguments, None,
                 )?;
-                self.pending_hostcall_result_label = Some(label);
+                self.replace_pending_hostcall_result_label(Some(label))?;
                 Ok(value)
             }
             "builtin:ReflectConstruct" => {
@@ -35885,21 +36603,38 @@ impl InterpreterCore {
                 Ok(Value::Object(set_id))
             }
             "builtin:WeakMap" => {
-                let weakmap_id = self.alloc_object_with_prototype(None)?;
+                let previous_heap_len = self.heap.len();
+                let previous_estimated_bytes = self.estimated_memory_bytes;
+                let mut published_weakmap = None;
+                let outcome = (|| {
+                    let weakmap_id = self.alloc_object_with_prototype(None)?;
+                    published_weakmap = Some(weakmap_id);
 
-                self.set_object_property(weakmap_id, "__type".to_string(), Value::str("WeakMap"))?;
+                    self.set_object_property(
+                        weakmap_id,
+                        "__type".to_string(),
+                        Value::str("WeakMap"),
+                    )?;
 
-                // Initialize weak reference storage for this WeakMap
-                self.weakmap_storage
-                    .insert(weakmap_id, WeakMapStorage::new());
+                    self.apply_memory_component_delta(0, MEMORY_ESTIMATE_MAP_ENTRY_BYTES)?;
+                    self.weakmap_storage
+                        .insert(weakmap_id, WeakMapStorage::new());
 
-                // Handle iterable initialization for WeakMap
-                if args.count > 0 {
-                    let iterable = self.read_reg(args.start)?;
-                    self.seed_weakmap_from_iterable(weakmap_id, iterable)?;
+                    if args.count > 0 {
+                        let iterable = self.read_reg(args.start)?;
+                        self.seed_weakmap_from_iterable(weakmap_id, iterable)?;
+                    }
+
+                    Ok(Value::Object(weakmap_id))
+                })();
+                if outcome.is_err() {
+                    if let Some(weakmap_id) = published_weakmap {
+                        self.weakmap_storage.remove(&weakmap_id);
+                    }
+                    self.rollback_heap_to_len(previous_heap_len);
+                    self.estimated_memory_bytes = previous_estimated_bytes;
                 }
-
-                Ok(Value::Object(weakmap_id))
+                outcome
             }
             "builtin:WeakSet" => {
                 // WeakSet([iterable]) constructor implementation (simplified)
@@ -36685,7 +37420,7 @@ impl InterpreterCore {
                             .filter(|key| self.writable_own_property_visible(obj_id, key))
                             .map(|name| Value::str(name.as_str()))
                             .collect::<Vec<_>>();
-                        self.join_pending_hostcall_stream_label(obj_id);
+                        self.join_pending_hostcall_stream_label(obj_id)?;
                         let array_id = self.alloc_array_from_values(&property_name_values)?;
                         Ok(Value::Object(array_id))
                     }
@@ -36790,7 +37525,7 @@ impl InterpreterCore {
                 let (value, label) = self.invoke_inline_method_call_with_argument_label(
                     module, function, this_arg, call_args, None,
                 )?;
-                self.pending_hostcall_result_label = Some(label);
+                self.replace_pending_hostcall_result_label(Some(label))?;
                 Ok(value)
             }
 
@@ -36977,7 +37712,7 @@ impl InterpreterCore {
                 let (value, label) = self.invoke_inline_method_call_with_argument_label(
                     module, function, this_arg, apply_args, None,
                 )?;
-                self.pending_hostcall_result_label = Some(label);
+                self.replace_pending_hostcall_result_label(Some(label))?;
                 Ok(value)
             }
 
@@ -37440,7 +38175,7 @@ impl InterpreterCore {
                     })
                     .flatten()
                     .map(|value| (value, is_frozen));
-                self.join_pending_hostcall_stream_label(obj_id);
+                self.join_pending_hostcall_stream_label(obj_id)?;
                 if let Some((value, is_frozen)) = descriptor_source {
                     {
                         // Create property descriptor object
@@ -37495,7 +38230,7 @@ impl InterpreterCore {
                 };
 
                 // Use our prototype chain descriptor lookup
-                self.join_pending_hostcall_stream_label(obj_id);
+                self.join_pending_hostcall_stream_label(obj_id)?;
                 self.prototype_chain_get_property_descriptor(obj_id, &prop_key)
             }
 
@@ -37796,7 +38531,7 @@ impl InterpreterCore {
 
                 // All ordinary own properties are enumerable in this simplified
                 // model; Writable state mirrors are inherited accessors.
-                self.join_pending_hostcall_stream_label(object_id);
+                self.join_pending_hostcall_stream_label(object_id)?;
                 Ok(Value::Bool(self.object_own_property_contains(
                     &Value::Object(object_id),
                     &Value::str(prop_key),
@@ -40415,6 +41150,7 @@ impl InterpreterCore {
             return Ok(());
         };
 
+        let mut updates = BTreeMap::new();
         for entry in entries {
             let Ok(pair) = self.collect_for_of_values(&entry) else {
                 continue;
@@ -40428,11 +41164,31 @@ impl InterpreterCore {
             let Value::Object(key_object_id) = key else {
                 continue; // Skip non-object keys
             };
+            updates.insert(key_object_id.0, value);
+        }
 
-            // Store in weak reference storage
-            if let Some(storage) = self.weakmap_storage.get_mut(&weakmap_id) {
-                storage.set(key_object_id.0, value);
-            }
+        let Some(storage) = self.weakmap_storage.get(&weakmap_id) else {
+            return Ok(());
+        };
+        let previous_bytes = Self::saturating_sum(updates.keys().filter_map(|key| {
+            storage.get(*key).map(|previous| {
+                MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                    .saturating_mul(2)
+                    .saturating_add(Self::estimate_value_bytes(previous))
+            })
+        }));
+        let next_bytes = Self::saturating_sum(updates.values().map(|value| {
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                .saturating_mul(2)
+                .saturating_add(Self::estimate_value_bytes(value))
+        }));
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        let storage = self
+            .weakmap_storage
+            .get_mut(&weakmap_id)
+            .expect("WeakMap storage was validated before aggregate preflight");
+        for (key, value) in updates {
+            storage.set(key, value);
         }
 
         Ok(())
@@ -41496,6 +42252,15 @@ impl InterpreterCore {
 
     // -- Heap operations ---------------------------------------------------
 
+    /// Roll back transaction-owned heap appends and every index keyed by the
+    /// discarded object ids. Keeping this paired prevents stale remembered-set
+    /// entries from surviving an otherwise atomic allocation refusal.
+    fn rollback_heap_to_len(&mut self, previous_heap_len: usize) {
+        self.mutate_heap(|heap| heap.truncate(previous_heap_len));
+        self.gc_remembered_set
+            .retain(|object_id| (object_id.0 as usize) < previous_heap_len);
+    }
+
     fn estimate_string_bytes(text: &str) -> u64 {
         MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(text.len() as u64)
     }
@@ -41657,6 +42422,505 @@ impl InterpreterCore {
             Label::Custom { name, .. } => Self::estimate_string_bytes(name),
             _ => 0,
         }
+    }
+
+    fn estimate_value_vec_bytes(values: &[Value]) -> u64 {
+        u64::try_from(values.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(std::mem::size_of::<Value>() as u64)
+            .saturating_add(Self::saturating_sum(
+                values.iter().map(Self::estimate_value_bytes),
+            ))
+    }
+
+    fn estimate_abrupt_completion_bytes(completion: &AbruptCompletion) -> u64 {
+        match completion {
+            AbruptCompletion::Exception(value, label) => {
+                Self::estimate_value_bytes(value).saturating_add(Self::estimate_label_bytes(label))
+            }
+            AbruptCompletion::Return(value) => Self::estimate_value_bytes(value),
+        }
+    }
+
+    fn pending_abrupt_slots_memory_bytes(&self) -> u64 {
+        self.pending_exception
+            .as_ref()
+            .map(Self::estimate_value_bytes)
+            .unwrap_or(0)
+            .saturating_add(Self::estimate_label_bytes(&self.pending_exception_label))
+            .saturating_add(
+                self.pending_return
+                    .as_ref()
+                    .map(Self::estimate_value_bytes)
+                    .unwrap_or(0),
+            )
+    }
+
+    fn replace_pending_abrupt_slots(
+        &mut self,
+        exception: Option<(Value, Label)>,
+        return_value: Option<Value>,
+    ) -> Result<(), InterpreterError> {
+        debug_assert!(
+            exception.is_none() || return_value.is_none(),
+            "pending exception and return are mutually exclusive"
+        );
+        let previous_bytes = self.pending_abrupt_slots_memory_bytes();
+        let next_bytes = exception
+            .as_ref()
+            .map(|(value, label)| {
+                Self::estimate_value_bytes(value).saturating_add(Self::estimate_label_bytes(label))
+            })
+            .unwrap_or(0)
+            .saturating_add(
+                return_value
+                    .as_ref()
+                    .map(Self::estimate_value_bytes)
+                    .unwrap_or(0),
+            );
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        match exception {
+            Some((value, label)) => {
+                self.pending_exception = Some(value);
+                self.pending_exception_label = label;
+            }
+            None => {
+                self.pending_exception = None;
+                self.pending_exception_label = Label::Public;
+            }
+        }
+        self.pending_return = return_value;
+        Ok(())
+    }
+
+    fn clear_pending_abrupt_slots(&mut self) {
+        let released_bytes = self.pending_abrupt_slots_memory_bytes();
+        self.pending_exception = None;
+        self.pending_exception_label = Label::Public;
+        self.pending_return = None;
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
+    }
+
+    fn clear_pending_exception_slot(&mut self) {
+        let released_bytes = self
+            .pending_exception
+            .as_ref()
+            .map(Self::estimate_value_bytes)
+            .unwrap_or(0)
+            .saturating_add(Self::estimate_label_bytes(&self.pending_exception_label));
+        self.pending_exception = None;
+        self.pending_exception_label = Label::Public;
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
+    }
+
+    fn take_pending_exception_slot(&mut self) -> Option<(Value, Label)> {
+        let value = self.pending_exception.take()?;
+        let label = std::mem::replace(&mut self.pending_exception_label, Label::Public);
+        let released_bytes =
+            Self::estimate_value_bytes(&value).saturating_add(Self::estimate_label_bytes(&label));
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
+        Some((value, label))
+    }
+
+    fn take_pending_return_slot(&mut self) -> Option<Value> {
+        let value = self.pending_return.take()?;
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(Self::estimate_value_bytes(&value));
+        Some(value)
+    }
+
+    fn clear_suspended_abrupt_completions(&mut self) {
+        let released_bytes = u64::try_from(self.suspended_abrupt_completions.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(std::mem::size_of::<AbruptCompletion>() as u64)
+            .saturating_add(Self::saturating_sum(
+                self.suspended_abrupt_completions
+                    .iter()
+                    .map(Self::estimate_abrupt_completion_bytes),
+            ));
+        self.suspended_abrupt_completions.clear();
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
+    }
+
+    fn replace_pending_hostcall_result_label(
+        &mut self,
+        label: Option<Label>,
+    ) -> Result<(), InterpreterError> {
+        let previous_bytes = self
+            .pending_hostcall_result_label
+            .as_ref()
+            .map(Self::estimate_label_bytes)
+            .unwrap_or(0);
+        let next_bytes = label.as_ref().map(Self::estimate_label_bytes).unwrap_or(0);
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        self.pending_hostcall_result_label = label;
+        Ok(())
+    }
+
+    fn clear_pending_hostcall_result_label(&mut self) {
+        let released_bytes = self
+            .pending_hostcall_result_label
+            .as_ref()
+            .map(Self::estimate_label_bytes)
+            .unwrap_or(0);
+        self.pending_hostcall_result_label = None;
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
+    }
+
+    fn take_pending_hostcall_result_label(&mut self) -> Option<Label> {
+        let label = self.pending_hostcall_result_label.take()?;
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(Self::estimate_label_bytes(&label));
+        Some(label)
+    }
+
+    fn join_pending_exception_label(&mut self, other: &Label) -> Result<(), InterpreterError> {
+        let previous_bytes = Self::estimate_label_bytes(&self.pending_exception_label);
+        let joined = self.pending_exception_label.join(other);
+        let next_bytes = Self::estimate_label_bytes(&joined);
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        self.pending_exception_label = joined;
+        Ok(())
+    }
+
+    fn abrupt_completion_memory_bytes(&self) -> u64 {
+        self.pending_abrupt_slots_memory_bytes()
+            .saturating_add(
+                self.pending_hostcall_result_label
+                    .as_ref()
+                    .map(Self::estimate_label_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                u64::try_from(self.suspended_abrupt_completions.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(std::mem::size_of::<AbruptCompletion>() as u64),
+            )
+            .saturating_add(Self::saturating_sum(
+                self.suspended_abrupt_completions
+                    .iter()
+                    .map(Self::estimate_abrupt_completion_bytes),
+            ))
+    }
+
+    fn estimate_async_function_bytes(function: &AsyncFunctionObject) -> u64 {
+        MEMORY_ESTIMATE_GENERATOR_BASE_BYTES
+            .saturating_add(Self::estimate_value_vec_bytes(&function.saved_registers))
+    }
+
+    fn async_functions_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.async_functions
+                .iter()
+                .map(Self::estimate_async_function_bytes),
+        )
+    }
+
+    fn estimate_async_generator_bytes(generator: &AsyncGeneratorObject) -> u64 {
+        MEMORY_ESTIMATE_GENERATOR_BASE_BYTES
+            .saturating_add(Self::estimate_value_vec_bytes(&generator.saved_registers))
+    }
+
+    fn async_generators_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.async_generators
+                .iter()
+                .map(Self::estimate_async_generator_bytes),
+        )
+    }
+
+    fn push_generator_object(
+        &mut self,
+        generator: GeneratorObject,
+    ) -> Result<u32, InterpreterError> {
+        let id = u32::try_from(self.generators.len()).map_err(|_| InterpreterError::TypeError {
+            expected: "generator table capacity".into(),
+            got: format!("exceeded u32::MAX ({})", self.generators.len()),
+        })?;
+        let previous_bytes = self.generators_memory_bytes();
+        self.generators.push(generator);
+        let next_bytes = self.generators_memory_bytes();
+        if let Err(error) = self.apply_memory_component_delta(previous_bytes, next_bytes) {
+            self.generators.pop();
+            return Err(error);
+        }
+        Ok(id)
+    }
+
+    fn pop_generator_object_and_release(&mut self) {
+        let previous_bytes = self.generators_memory_bytes();
+        self.generators.pop();
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_bytes.saturating_sub(self.generators_memory_bytes()));
+    }
+
+    fn push_async_function_object(
+        &mut self,
+        function: AsyncFunctionObject,
+    ) -> Result<u32, InterpreterError> {
+        let id =
+            u32::try_from(self.async_functions.len()).map_err(|_| InterpreterError::TypeError {
+                expected: "async function table capacity".into(),
+                got: format!("exceeded u32::MAX ({})", self.async_functions.len()),
+            })?;
+        let previous_bytes = self.async_functions_memory_bytes();
+        self.async_functions.push(function);
+        let next_bytes = self.async_functions_memory_bytes();
+        if let Err(error) = self.apply_memory_component_delta(previous_bytes, next_bytes) {
+            self.async_functions.pop();
+            return Err(error);
+        }
+        Ok(id)
+    }
+
+    fn pop_async_function_object_and_release(&mut self) {
+        let previous_bytes = self.async_functions_memory_bytes();
+        self.async_functions.pop();
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_bytes.saturating_sub(self.async_functions_memory_bytes()));
+    }
+
+    fn push_async_generator_object(
+        &mut self,
+        generator: AsyncGeneratorObject,
+    ) -> Result<u32, InterpreterError> {
+        let id = u32::try_from(self.async_generators.len()).map_err(|_| {
+            InterpreterError::TypeError {
+                expected: "async generator table capacity".into(),
+                got: format!("exceeded u32::MAX ({})", self.async_generators.len()),
+            }
+        })?;
+        let previous_bytes = self.async_generators_memory_bytes();
+        self.async_generators.push(generator);
+        let next_bytes = self.async_generators_memory_bytes();
+        if let Err(error) = self.apply_memory_component_delta(previous_bytes, next_bytes) {
+            self.async_generators.pop();
+            return Err(error);
+        }
+        Ok(id)
+    }
+
+    fn pop_async_generator_object_and_release(&mut self) {
+        let previous_bytes = self.async_generators_memory_bytes();
+        self.async_generators.pop();
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_bytes.saturating_sub(self.async_generators_memory_bytes()));
+    }
+
+    fn pending_io_callbacks_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(self.pending_io_callbacks.values().map(|arguments| {
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                .saturating_add(Self::estimate_value_vec_bytes(arguments))
+        }))
+    }
+
+    fn estimate_pending_timer_task_bytes(task: &PendingTimerTask) -> u64 {
+        match &task.kind {
+            PendingTimerTaskKind::Callback { args, .. } => {
+                MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(Self::estimate_value_vec_bytes(args))
+            }
+            PendingTimerTaskKind::PromiseResolve { value, .. } => MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                .saturating_add(crate::promise_model::estimate_js_value_memory_bytes(value)),
+        }
+    }
+
+    fn pending_timer_tasks_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.pending_timer_tasks
+                .values()
+                .map(Self::estimate_pending_timer_task_bytes),
+        )
+    }
+
+    fn schedule_pending_timer_task(
+        &mut self,
+        task: PendingTimerTask,
+        immediate: bool,
+        delay_ms: u64,
+    ) -> Result<u64, InterpreterError> {
+        let retained_bytes = Self::estimate_pending_timer_task_bytes(&task);
+        self.apply_memory_component_delta(0, retained_bytes)?;
+        let closure_id = match &task.kind {
+            PendingTimerTaskKind::Callback { closure_id, .. } => *closure_id,
+            PendingTimerTaskKind::PromiseResolve { .. } => u32::MAX,
+        };
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        let closure_handle = crate::closure_model::ClosureHandle(closure_id);
+        let label = crate::ifc_artifacts::Label::Public;
+        let sequence = if immediate {
+            self.event_loop.set_immediate(closure_handle, label)
+        } else {
+            self.event_loop.set_timeout(closure_handle, delay_ms, label)
+        };
+        if let Err(error) = self.apply_promise_runtime_memory_delta(previous_promise_bytes) {
+            self.event_loop.rollback_last_scheduled(sequence);
+            self.estimated_memory_bytes =
+                self.estimated_memory_bytes.saturating_sub(retained_bytes);
+            return Err(error);
+        }
+        self.pending_timer_tasks.insert(sequence, task);
+        Ok(sequence)
+    }
+
+    fn cancel_pending_timer_registration(&mut self, sequence: u64) {
+        if let Some(task) = self.pending_timer_tasks.remove(&sequence) {
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(Self::estimate_pending_timer_task_bytes(&task));
+        }
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        self.event_loop.cancel_registration(sequence);
+        let released_promise_bytes =
+            previous_promise_bytes.saturating_sub(self.promise_runtime_memory_bytes());
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(released_promise_bytes);
+    }
+
+    fn estimate_promise_combinator_bytes(state: &PromiseCombinatorState) -> u64 {
+        match state {
+            PromiseCombinatorState::All(tracker) => tracker.estimated_memory_bytes(),
+            PromiseCombinatorState::AllSettled(tracker) => tracker.estimated_memory_bytes(),
+            PromiseCombinatorState::Race(tracker) => tracker.estimated_memory_bytes(),
+            PromiseCombinatorState::Any(tracker) => tracker.estimated_memory_bytes(),
+        }
+    }
+
+    fn promise_combinators_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(self.promise_combinators.values().map(|state| {
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                .saturating_add(Self::estimate_promise_combinator_bytes(state))
+        }))
+    }
+
+    fn promise_combinator_watchers_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(self.promise_combinator_watchers.values().map(|watchers| {
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(
+                u64::try_from(watchers.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(std::mem::size_of::<PromiseCombinatorWatcher>() as u64),
+            )
+        }))
+    }
+
+    fn promise_runtime_memory_bytes(&self) -> u64 {
+        self.promise_store
+            .estimated_memory_bytes()
+            .saturating_add(self.event_loop.estimated_memory_bytes())
+            .saturating_add(self.promise_combinators_memory_bytes())
+            .saturating_add(self.promise_combinator_watchers_memory_bytes())
+            .saturating_add(self.promise_in_flight_task_bytes)
+    }
+
+    fn begin_promise_task_transfer(&mut self, previous_promise_bytes: u64) -> u64 {
+        let released_bytes =
+            previous_promise_bytes.saturating_sub(self.promise_runtime_memory_bytes());
+        self.promise_in_flight_task_bytes = self
+            .promise_in_flight_task_bytes
+            .saturating_add(released_bytes);
+        debug_assert_eq!(self.promise_runtime_memory_bytes(), previous_promise_bytes);
+        released_bytes
+    }
+
+    fn finish_promise_task_transfer(&mut self, transferred_bytes: u64) {
+        self.promise_in_flight_task_bytes = self
+            .promise_in_flight_task_bytes
+            .saturating_sub(transferred_bytes);
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(transferred_bytes);
+    }
+
+    fn weakmap_storage_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(self.weakmap_storage.values().map(|storage| {
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(Self::saturating_sum(
+                storage.entries.values().map(|value| {
+                    MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                        .saturating_mul(2)
+                        .saturating_add(Self::estimate_value_bytes(value))
+                }),
+            ))
+        }))
+    }
+
+    fn module_exports_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.module_state
+                .modules
+                .values()
+                .flat_map(|record| record.exports.iter())
+                .map(|(name, value)| Self::estimate_property_entry_bytes(name, value)),
+        )
+    }
+
+    fn estimate_captured_state_bytes(state: &CapturedInterpreterState) -> u64 {
+        u64::try_from(state.registers.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(std::mem::size_of::<CapturedRegisterState>() as u64)
+            .saturating_add(Self::saturating_sum(state.registers.iter().map(|entry| {
+                Self::estimate_value_bytes(&entry.value)
+                    .saturating_add(Self::estimate_label_bytes(&entry.label))
+            })))
+            .saturating_add(
+                u64::try_from(state.heap.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(std::mem::size_of::<CapturedHeapState>() as u64),
+            )
+            .saturating_add(Self::saturating_sum(state.heap.iter().map(|entry| {
+                Self::estimate_heap_object_bytes(&entry.object)
+                    .saturating_add(Self::estimate_label_bytes(&entry.label))
+            })))
+    }
+
+    fn state_capture_memory_bytes(&self) -> u64 {
+        self.state_capture_result
+            .as_ref()
+            .map(Self::estimate_captured_state_bytes)
+            .unwrap_or(0)
+    }
+
+    fn top_level_await_outcome_memory_bytes(&self) -> u64 {
+        match &self.top_level_await_outcome {
+            Some(Ok(value)) => Self::estimate_value_bytes(value),
+            Some(Err(error)) => Self::estimate_interpreter_error_bytes(error),
+            None => 0,
+        }
+    }
+
+    fn replace_top_level_await_outcome(&mut self, outcome: Result<Value, InterpreterError>) {
+        let previous_bytes = self.top_level_await_outcome_memory_bytes();
+        let next_bytes = match &outcome {
+            Ok(value) => Self::estimate_value_bytes(value),
+            Err(error) => Self::estimate_interpreter_error_bytes(error),
+        };
+        match self.apply_memory_component_delta(previous_bytes, next_bytes) {
+            Ok(_) => self.top_level_await_outcome = Some(outcome),
+            Err(memory_error) => {
+                self.estimated_memory_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(previous_bytes)
+                    .saturating_add(Self::estimate_interpreter_error_bytes(&memory_error));
+                self.top_level_await_outcome = Some(Err(memory_error));
+            }
+        }
+    }
+
+    fn clear_top_level_await_outcome(&mut self) {
+        let released_bytes = self.top_level_await_outcome_memory_bytes();
+        self.top_level_await_outcome = None;
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
+    }
+
+    fn take_top_level_await_outcome(&mut self) -> Option<Result<Value, InterpreterError>> {
+        let released_bytes = self.top_level_await_outcome_memory_bytes();
+        let outcome = self.top_level_await_outcome.take();
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
+        outcome
     }
 
     /// Dynamic payload retained by a Writable-owned `Value`.
@@ -41838,6 +43102,7 @@ impl InterpreterCore {
     fn estimate_call_frame_bytes(frame: &CallFrame) -> u64 {
         MEMORY_ESTIMATE_CALL_FRAME_BASE_BYTES
             .saturating_add(Self::estimate_value_bytes(&frame.this_value))
+            .saturating_add(Self::estimate_label_bytes(&frame.this_label))
             .saturating_add(Self::estimate_value_bytes(&frame.new_target_value))
             .saturating_add(Self::estimate_value_bytes(&frame.super_value))
             .saturating_add(
@@ -41854,6 +43119,9 @@ impl InterpreterCore {
                     .map(Self::estimate_value_bytes)
                     .unwrap_or(0),
             )
+            .saturating_add(Self::estimate_label_bytes(
+                &frame.saved_pending_exception_label,
+            ))
             .saturating_add(
                 frame
                     .saved_pending_return
@@ -41879,7 +43147,10 @@ impl InterpreterCore {
         let array_buffer_bytes = object
             .array_buffer
             .as_ref()
-            .map(|backing| backing.bytes.len() as u64)
+            .map(|backing| {
+                (backing.bytes.len() as u64)
+                    .saturating_add(Self::estimate_label_bytes(&backing.label))
+            })
             .unwrap_or(0);
         let typed_array_bytes = object
             .typed_array
@@ -41935,13 +43206,8 @@ impl InterpreterCore {
     }
 
     fn estimate_generator_bytes(generator: &GeneratorObject) -> u64 {
-        let registers = Self::saturating_sum(
-            generator
-                .saved_registers
-                .iter()
-                .map(Self::estimate_value_bytes),
-        );
-        MEMORY_ESTIMATE_GENERATOR_BASE_BYTES.saturating_add(registers)
+        MEMORY_ESTIMATE_GENERATOR_BASE_BYTES
+            .saturating_add(Self::estimate_value_vec_bytes(&generator.saved_registers))
     }
 
     fn estimate_generators_bytes(generators: &[GeneratorObject]) -> u64 {
@@ -41994,8 +43260,17 @@ impl InterpreterCore {
         ))
     }
 
-    fn call_stack_memory_bytes(&self) -> u64 {
+    fn call_stack_frame_memory_bytes(&self) -> u64 {
         Self::saturating_sum(self.call_stack.iter().map(Self::estimate_call_frame_bytes))
+    }
+
+    /// Call frames and the interpreter-level abrupt-completion slots are one
+    /// ownership component. Throws/returns move between these stores during
+    /// calls and finally unwinding; treating the transfer as a single delta
+    /// prevents both transient double charging and silent release drift.
+    fn call_stack_memory_bytes(&self) -> u64 {
+        self.call_stack_frame_memory_bytes()
+            .saturating_add(self.abrupt_completion_memory_bytes())
     }
 
     fn generators_memory_bytes(&self) -> u64 {
@@ -42101,13 +43376,18 @@ impl InterpreterCore {
             .saturating_add(self.register_context_labels_memory_bytes())
             .saturating_add(Self::estimate_scope_chain_bytes(&self.scope_chain.frames))
             .saturating_add(self.closures_memory_bytes())
-            .saturating_add(Self::saturating_sum(
-                self.call_stack.iter().map(Self::estimate_call_frame_bytes),
-            ))
+            .saturating_add(self.call_stack_memory_bytes())
             .saturating_add(Self::saturating_sum(
                 self.iterators.iter().map(Self::estimate_iterator_bytes),
             ))
             .saturating_add(Self::estimate_generators_bytes(&self.generators))
+            .saturating_add(self.async_functions_memory_bytes())
+            .saturating_add(self.async_generators_memory_bytes())
+            .saturating_add(self.top_level_await_outcome_memory_bytes())
+            .saturating_add(self.pending_io_callbacks_memory_bytes())
+            .saturating_add(self.pending_timer_tasks_memory_bytes())
+            .saturating_add(self.promise_runtime_memory_bytes())
+            .saturating_add(self.weakmap_storage_memory_bytes())
             .saturating_add(self.event_listeners_memory_bytes())
             .saturating_add(self.event_promise_waiters_memory_bytes())
             .saturating_add(self.readable_from_streams_memory_bytes())
@@ -42115,6 +43395,9 @@ impl InterpreterCore {
             .saturating_add(self.writable_terminal_states_memory_bytes())
             .saturating_add(self.writable_in_flight_callback_bytes)
             .saturating_add(self.module_state.retained_program_bytes)
+            .saturating_add(self.module_exports_memory_bytes())
+            .saturating_add(self.state_capture_memory_bytes())
+            .saturating_add(self.module_snapshot_in_flight_bytes)
     }
 
     #[cfg(test)]
@@ -42170,6 +43453,14 @@ impl InterpreterCore {
         previous_closure_bytes: u64,
     ) -> Result<u64, InterpreterError> {
         self.apply_memory_component_delta(previous_closure_bytes, self.closures_memory_bytes())
+    }
+
+    fn apply_promise_runtime_memory_delta(
+        &mut self,
+        previous_promise_bytes: u64,
+    ) -> Result<u64, InterpreterError> {
+        let next_promise_bytes = self.promise_runtime_memory_bytes();
+        self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)
     }
 
     fn apply_scope_and_closure_memory_delta(
@@ -45600,7 +46891,8 @@ mod active_builtin_regressions {
             .alloc_buffer_view_object(source_buffer, 1, 2)
             .expect("shared Buffer alias should allocate");
 
-        core.join_binary_storage_label(source, &Label::Secret);
+        core.join_binary_storage_label(source, &Label::Secret)
+            .expect("binary label join fits test budget");
         assert_eq!(core.binary_storage_label(source), Label::Secret);
         assert_eq!(
             core.binary_storage_label(alias),
@@ -48178,7 +49470,8 @@ mod async_runtime_tests_current {
             crate::ifc_artifacts::Label::Public,
         )
         .expect("awaited promise should be fulfillable");
-        core.drain_microtasks(Some(&module));
+        core.drain_microtasks(Some(&module))
+            .expect("microtask drain fits test budget");
 
         let promise = core
             .promise_store
@@ -48236,7 +49529,8 @@ mod async_runtime_tests_current {
             crate::ifc_artifacts::Label::Public,
         )
         .expect("awaited promise should be rejectable");
-        core.drain_microtasks(Some(&module));
+        core.drain_microtasks(Some(&module))
+            .expect("microtask drain fits test budget");
 
         let promise = core
             .promise_store
@@ -48303,7 +49597,8 @@ mod async_runtime_tests_current {
             crate::ifc_artifacts::Label::Public,
         )
         .expect("awaited promise should be rejectable");
-        core.drain_microtasks(Some(&module));
+        core.drain_microtasks(Some(&module))
+            .expect("microtask drain fits test budget");
 
         let promise = core
             .promise_store
@@ -50854,6 +52149,1259 @@ mod async_runtime_tests_current {
     }
 
     #[test]
+    fn abrupt_side_tables_refuse_one_short_transfer_and_release_exactly_bd_zpn45() {
+        let value = Value::BigInt(Arc::from("abrupt-owner".repeat(31)));
+        let label = Label::Custom {
+            name: "abrupt-label".repeat(19),
+            level: 4,
+        };
+        let mut probe = test_interpreter();
+        let baseline = probe
+            .sync_estimated_memory_bytes()
+            .expect("abrupt probe baseline");
+        probe
+            .replace_pending_abrupt_slots(Some((value.clone(), label.clone())), None)
+            .expect("unbounded pending exception probe");
+        let pending_delta = probe.estimated_memory_bytes().saturating_sub(baseline);
+        assert!(pending_delta > 0);
+        assert_eq!(
+            probe.estimated_memory_bytes(),
+            probe.recompute_estimated_memory_bytes()
+        );
+
+        let mut one_short = test_interpreter();
+        let one_short_baseline = one_short
+            .sync_estimated_memory_bytes()
+            .expect("pending exception refusal baseline");
+        one_short.config.max_total_memory_bytes = one_short_baseline + pending_delta - 1;
+        assert!(matches!(
+            one_short.replace_pending_abrupt_slots(Some((value.clone(), label.clone())), None),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(one_short.pending_exception.is_none());
+        assert_eq!(one_short.estimated_memory_bytes(), one_short_baseline);
+
+        let mut exact = test_interpreter();
+        let exact_baseline = exact
+            .sync_estimated_memory_bytes()
+            .expect("pending exception exact baseline");
+        exact.config.max_total_memory_bytes = exact_baseline + pending_delta;
+        exact
+            .replace_pending_abrupt_slots(Some((value.clone(), label.clone())), None)
+            .expect("pending exception fits exact ceiling");
+        assert_eq!(
+            exact.estimated_memory_bytes(),
+            exact_baseline + pending_delta
+        );
+        assert_eq!(
+            exact.estimated_memory_bytes(),
+            exact.recompute_estimated_memory_bytes()
+        );
+        exact.clear_pending_abrupt_slots();
+        assert_eq!(exact.estimated_memory_bytes(), exact_baseline);
+
+        let mut suspended_probe = test_interpreter();
+        let suspended_baseline = suspended_probe
+            .sync_estimated_memory_bytes()
+            .expect("suspended completion probe baseline");
+        suspended_probe
+            .suspend_abrupt_completion(Some((value.clone(), label.clone())), None)
+            .expect("unbounded suspended completion probe");
+        let suspended_delta = suspended_probe
+            .estimated_memory_bytes()
+            .saturating_sub(suspended_baseline);
+        assert!(suspended_delta > pending_delta);
+
+        let mut suspended_one_short = test_interpreter();
+        let suspended_one_short_baseline = suspended_one_short
+            .sync_estimated_memory_bytes()
+            .expect("suspended completion refusal baseline");
+        suspended_one_short.config.max_total_memory_bytes =
+            suspended_one_short_baseline + suspended_delta - 1;
+        assert!(matches!(
+            suspended_one_short
+                .suspend_abrupt_completion(Some((value.clone(), label.clone())), None),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(suspended_one_short.suspended_abrupt_completions.is_empty());
+        assert_eq!(
+            suspended_one_short.estimated_memory_bytes(),
+            suspended_one_short_baseline
+        );
+
+        let mut suspended_exact = test_interpreter();
+        let suspended_exact_baseline = suspended_exact
+            .sync_estimated_memory_bytes()
+            .expect("suspended completion exact baseline");
+        suspended_exact.config.max_total_memory_bytes = suspended_exact_baseline + suspended_delta;
+        suspended_exact
+            .suspend_abrupt_completion(Some((value, label.clone())), None)
+            .expect("suspended completion fits exact ceiling");
+        assert_eq!(
+            suspended_exact.estimated_memory_bytes(),
+            suspended_exact.recompute_estimated_memory_bytes()
+        );
+        suspended_exact.clear_suspended_abrupt_completions();
+        assert_eq!(
+            suspended_exact.estimated_memory_bytes(),
+            suspended_exact_baseline
+        );
+
+        let mut hostcall_label = test_interpreter();
+        let hostcall_baseline = hostcall_label
+            .sync_estimated_memory_bytes()
+            .expect("hostcall label baseline");
+        let label_bytes = InterpreterCore::estimate_label_bytes(&label);
+        hostcall_label.config.max_total_memory_bytes = hostcall_baseline + label_bytes - 1;
+        assert!(matches!(
+            hostcall_label.replace_pending_hostcall_result_label(Some(label.clone())),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(hostcall_label.pending_hostcall_result_label.is_none());
+        hostcall_label.config.max_total_memory_bytes = hostcall_baseline + label_bytes;
+        hostcall_label
+            .replace_pending_hostcall_result_label(Some(label))
+            .expect("hostcall label fits exact ceiling");
+        assert_eq!(
+            hostcall_label.estimated_memory_bytes(),
+            hostcall_label.recompute_estimated_memory_bytes()
+        );
+        assert!(
+            hostcall_label
+                .take_pending_hostcall_result_label()
+                .is_some()
+        );
+        assert_eq!(hostcall_label.estimated_memory_bytes(), hostcall_baseline);
+
+        let tla_value = Value::BigInt(Arc::from("top-level-await".repeat(31)));
+        let mut tla_probe = test_interpreter();
+        let tla_baseline = tla_probe
+            .sync_estimated_memory_bytes()
+            .expect("top-level await outcome probe baseline");
+        tla_probe.replace_top_level_await_outcome(Ok(tla_value.clone()));
+        let tla_delta = tla_probe
+            .estimated_memory_bytes()
+            .saturating_sub(tla_baseline);
+        assert!(tla_delta > 0);
+
+        let mut tla_one_short = test_interpreter();
+        let tla_one_short_baseline = tla_one_short
+            .sync_estimated_memory_bytes()
+            .expect("top-level await outcome refusal baseline");
+        tla_one_short.config.max_total_memory_bytes = tla_one_short_baseline + tla_delta - 1;
+        tla_one_short.replace_top_level_await_outcome(Ok(tla_value.clone()));
+        assert!(matches!(
+            tla_one_short.top_level_await_outcome,
+            Some(Err(InterpreterError::MemoryBudgetExceeded { .. }))
+        ));
+        assert_eq!(
+            tla_one_short.estimated_memory_bytes(),
+            tla_one_short.recompute_estimated_memory_bytes()
+        );
+
+        let mut tla_exact = test_interpreter();
+        let tla_exact_baseline = tla_exact
+            .sync_estimated_memory_bytes()
+            .expect("top-level await outcome exact baseline");
+        tla_exact.config.max_total_memory_bytes = tla_exact_baseline + tla_delta;
+        tla_exact.replace_top_level_await_outcome(Ok(tla_value));
+        assert!(matches!(tla_exact.top_level_await_outcome, Some(Ok(_))));
+        assert_eq!(
+            tla_exact.estimated_memory_bytes(),
+            tla_exact.recompute_estimated_memory_bytes()
+        );
+        assert!(matches!(
+            tla_exact.take_top_level_await_outcome(),
+            Some(Ok(_))
+        ));
+        assert_eq!(tla_exact.estimated_memory_bytes(), tla_exact_baseline);
+    }
+
+    #[test]
+    fn async_saved_register_stores_refuse_one_short_and_release_exactly_bd_zpn45() {
+        let saved = vec![Value::BigInt(Arc::from("async-register".repeat(37)))];
+        let function = AsyncFunctionObject {
+            function_index: 2,
+            closure_index: Some(3),
+            saved_ip: 5,
+            saved_registers: saved.clone(),
+            saved_register_base: 0,
+            phase: AsyncFunctionPhase::SuspendedAwait,
+            result_promise: 7,
+        };
+        let generator = AsyncGeneratorObject {
+            function_index: 11,
+            closure_index: Some(13),
+            saved_ip: 17,
+            saved_registers: saved,
+            saved_register_base: 0,
+            phase: AsyncGeneratorPhase::SuspendedYield,
+        };
+
+        let mut function_probe = test_interpreter();
+        let function_baseline = function_probe
+            .sync_estimated_memory_bytes()
+            .expect("async function probe baseline");
+        function_probe
+            .push_async_function_object(function.clone())
+            .expect("unbounded async function probe");
+        let function_delta = function_probe
+            .estimated_memory_bytes()
+            .saturating_sub(function_baseline);
+        assert!(function_delta > 0);
+
+        let mut function_one_short = test_interpreter();
+        let function_one_short_baseline = function_one_short
+            .sync_estimated_memory_bytes()
+            .expect("async function refusal baseline");
+        function_one_short.config.max_total_memory_bytes =
+            function_one_short_baseline + function_delta - 1;
+        assert!(matches!(
+            function_one_short.push_async_function_object(function.clone()),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(function_one_short.async_functions.is_empty());
+        assert_eq!(
+            function_one_short.estimated_memory_bytes(),
+            function_one_short_baseline
+        );
+
+        let mut function_exact = test_interpreter();
+        let function_exact_baseline = function_exact
+            .sync_estimated_memory_bytes()
+            .expect("async function exact baseline");
+        function_exact.config.max_total_memory_bytes = function_exact_baseline + function_delta;
+        function_exact
+            .push_async_function_object(function)
+            .expect("async function fits exact ceiling");
+        assert_eq!(
+            function_exact.estimated_memory_bytes(),
+            function_exact.recompute_estimated_memory_bytes()
+        );
+        function_exact.pop_async_function_object_and_release();
+        assert_eq!(
+            function_exact.estimated_memory_bytes(),
+            function_exact_baseline
+        );
+
+        let mut generator_probe = test_interpreter();
+        let generator_baseline = generator_probe
+            .sync_estimated_memory_bytes()
+            .expect("async generator probe baseline");
+        generator_probe
+            .push_async_generator_object(generator.clone())
+            .expect("unbounded async generator probe");
+        let generator_delta = generator_probe
+            .estimated_memory_bytes()
+            .saturating_sub(generator_baseline);
+        assert!(generator_delta > 0);
+
+        let mut generator_one_short = test_interpreter();
+        let generator_one_short_baseline = generator_one_short
+            .sync_estimated_memory_bytes()
+            .expect("async generator refusal baseline");
+        generator_one_short.config.max_total_memory_bytes =
+            generator_one_short_baseline + generator_delta - 1;
+        assert!(matches!(
+            generator_one_short.push_async_generator_object(generator.clone()),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(generator_one_short.async_generators.is_empty());
+
+        let mut generator_exact = test_interpreter();
+        let generator_exact_baseline = generator_exact
+            .sync_estimated_memory_bytes()
+            .expect("async generator exact baseline");
+        generator_exact.config.max_total_memory_bytes = generator_exact_baseline + generator_delta;
+        generator_exact
+            .push_async_generator_object(generator)
+            .expect("async generator fits exact ceiling");
+        assert_eq!(
+            generator_exact.estimated_memory_bytes(),
+            generator_exact.recompute_estimated_memory_bytes()
+        );
+        generator_exact.pop_async_generator_object_and_release();
+        assert_eq!(
+            generator_exact.estimated_memory_bytes(),
+            generator_exact_baseline
+        );
+    }
+
+    #[test]
+    fn pending_io_and_timer_payloads_are_atomic_and_exact_bd_zpn45() {
+        let callback_args = vec![Value::BigInt(Arc::from("io-argument".repeat(41)))];
+        let mut io_probe = test_interpreter();
+        let io_baseline = io_probe
+            .sync_estimated_memory_bytes()
+            .expect("I/O callback probe baseline");
+        io_probe
+            .schedule_io_callback(77, callback_args.clone())
+            .expect("unbounded I/O callback probe");
+        let io_delta = io_probe
+            .estimated_memory_bytes()
+            .saturating_sub(io_baseline);
+        assert!(io_delta > 0);
+        assert_eq!(
+            io_probe.estimated_memory_bytes(),
+            io_probe.recompute_estimated_memory_bytes()
+        );
+
+        let mut io_one_short = test_interpreter();
+        let io_one_short_baseline = io_one_short
+            .sync_estimated_memory_bytes()
+            .expect("I/O callback refusal baseline");
+        io_one_short.config.max_total_memory_bytes = io_one_short_baseline + io_delta - 1;
+        assert!(matches!(
+            io_one_short.schedule_io_callback(77, callback_args.clone()),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(io_one_short.pending_io_callbacks.is_empty());
+        assert!(!io_one_short.event_loop.has_pending_work());
+        assert_eq!(io_one_short.estimated_memory_bytes(), io_one_short_baseline);
+
+        let mut io_exact = test_interpreter();
+        let io_exact_baseline = io_exact
+            .sync_estimated_memory_bytes()
+            .expect("I/O callback exact baseline");
+        io_exact.config.max_total_memory_bytes = io_exact_baseline + io_delta;
+        io_exact
+            .schedule_io_callback(77, callback_args)
+            .expect("I/O callback fits exact ceiling");
+        assert_eq!(
+            io_exact.estimated_memory_bytes(),
+            io_exact.recompute_estimated_memory_bytes()
+        );
+
+        let timer_task = PendingTimerTask {
+            timer_id: 9,
+            kind: PendingTimerTaskKind::Callback {
+                closure_id: 88,
+                args: vec![Value::BigInt(Arc::from("timer-argument".repeat(43)))],
+                repeating: false,
+                delay_ms: 1,
+            },
+        };
+        let mut timer_probe = test_interpreter();
+        let timer_baseline = timer_probe
+            .sync_estimated_memory_bytes()
+            .expect("timer callback probe baseline");
+        let probe_sequence = timer_probe
+            .schedule_pending_timer_task(timer_task.clone(), false, 1)
+            .expect("unbounded timer callback probe");
+        let timer_delta = timer_probe
+            .estimated_memory_bytes()
+            .saturating_sub(timer_baseline);
+        assert!(timer_delta > 0);
+        assert_eq!(
+            timer_probe.estimated_memory_bytes(),
+            timer_probe.recompute_estimated_memory_bytes()
+        );
+        timer_probe.cancel_pending_timer_registration(probe_sequence);
+        assert_eq!(timer_probe.estimated_memory_bytes(), timer_baseline);
+
+        let mut timer_one_short = test_interpreter();
+        let timer_one_short_baseline = timer_one_short
+            .sync_estimated_memory_bytes()
+            .expect("timer callback refusal baseline");
+        timer_one_short.config.max_total_memory_bytes = timer_one_short_baseline + timer_delta - 1;
+        assert!(matches!(
+            timer_one_short.schedule_pending_timer_task(timer_task.clone(), false, 1),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(timer_one_short.pending_timer_tasks.is_empty());
+        assert!(!timer_one_short.event_loop.has_pending_work());
+        assert_eq!(
+            timer_one_short.estimated_memory_bytes(),
+            timer_one_short_baseline
+        );
+
+        let mut timer_exact = test_interpreter();
+        let timer_exact_baseline = timer_exact
+            .sync_estimated_memory_bytes()
+            .expect("timer callback exact baseline");
+        timer_exact.config.max_total_memory_bytes = timer_exact_baseline + timer_delta;
+        let exact_sequence = timer_exact
+            .schedule_pending_timer_task(timer_task, false, 1)
+            .expect("timer callback fits exact ceiling");
+        assert_eq!(
+            timer_exact.estimated_memory_bytes(),
+            timer_exact.recompute_estimated_memory_bytes()
+        );
+        timer_exact.cancel_pending_timer_registration(exact_sequence);
+        assert_eq!(timer_exact.estimated_memory_bytes(), timer_exact_baseline);
+
+        let production_args = vec![Value::BigInt(Arc::from(
+            "production-timer-argument".repeat(37),
+        ))];
+        let mut production_probe = test_interpreter();
+        let production_baseline = production_probe
+            .sync_estimated_memory_bytes()
+            .expect("production timer probe baseline");
+        production_probe
+            .timer_schedule_from_values(
+                Value::Closure(88),
+                Some(Value::Int(1)),
+                production_args.clone(),
+                false,
+                false,
+            )
+            .expect("unbounded production timer probe");
+        let production_delta = production_probe
+            .estimated_memory_bytes()
+            .saturating_sub(production_baseline);
+        assert!(production_delta > timer_delta);
+
+        let mut production_one_short = test_interpreter();
+        let production_one_short_baseline = production_one_short
+            .sync_estimated_memory_bytes()
+            .expect("production timer refusal baseline");
+        let production_heap_len = production_one_short.heap.len();
+        let production_timer_id = production_one_short.next_timer_id;
+        production_one_short.config.max_total_memory_bytes =
+            production_one_short_baseline + production_delta - 1;
+        assert!(matches!(
+            production_one_short.timer_schedule_from_values(
+                Value::Closure(88),
+                Some(Value::Int(1)),
+                production_args.clone(),
+                false,
+                false,
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(production_one_short.heap.len(), production_heap_len);
+        assert_eq!(production_one_short.next_timer_id, production_timer_id);
+        assert!(production_one_short.active_timers.is_empty());
+        assert!(production_one_short.pending_timer_tasks.is_empty());
+        assert!(!production_one_short.event_loop.has_pending_work());
+        assert_eq!(
+            production_one_short.estimated_memory_bytes(),
+            production_one_short_baseline
+        );
+        assert_eq!(
+            production_one_short.estimated_memory_bytes(),
+            production_one_short.recompute_estimated_memory_bytes()
+        );
+
+        let mut production_exact = test_interpreter();
+        let production_exact_baseline = production_exact
+            .sync_estimated_memory_bytes()
+            .expect("production timer exact baseline");
+        production_exact.config.max_total_memory_bytes =
+            production_exact_baseline + production_delta;
+        let handle = production_exact
+            .timer_schedule_from_values(
+                Value::Closure(88),
+                Some(Value::Int(1)),
+                production_args,
+                false,
+                false,
+            )
+            .expect("production timer fits exact ceiling");
+        assert_eq!(
+            production_exact.estimated_memory_bytes(),
+            production_exact.recompute_estimated_memory_bytes()
+        );
+        production_exact
+            .timer_clear_from_value(&handle, "test:clearTimeout")
+            .expect("timer cancellation releases side tables");
+        assert!(production_exact.active_timers.is_empty());
+        assert!(production_exact.pending_timer_tasks.is_empty());
+        assert!(!production_exact.event_loop.has_pending_work());
+        assert_eq!(
+            production_exact.estimated_memory_bytes(),
+            production_exact.recompute_estimated_memory_bytes()
+        );
+
+        let firing_fixture = |repeating| {
+            let mut core = test_interpreter();
+            core.closures.push(ClosureValue {
+                function_index: 0,
+                captured_env: Vec::new(),
+            });
+            let timer_id = 41;
+            core.active_timers.insert(
+                timer_id,
+                ActiveTimer {
+                    handler: Some(0),
+                    delay_ms: 1,
+                    repeating,
+                },
+            );
+            let task = PendingTimerTask {
+                timer_id,
+                kind: PendingTimerTaskKind::Callback {
+                    closure_id: 0,
+                    args: vec![Value::BigInt(Arc::from("firing-argument".repeat(71)))],
+                    repeating,
+                    delay_ms: 1,
+                },
+            };
+            core.sync_estimated_memory_bytes()
+                .expect("timer firing fixture baseline");
+            let retained_bytes = InterpreterCore::estimate_pending_timer_task_bytes(&task);
+            core.apply_memory_component_delta(0, retained_bytes)
+                .expect("model dequeued task remains charged while firing");
+            (core, task, retained_bytes)
+        };
+
+        let (mut repeating_one_short, repeating_task, retained_bytes) = firing_fixture(true);
+        let repeating_charged_baseline = repeating_one_short.estimated_memory_bytes();
+        let clone_bytes = match &repeating_task.kind {
+            PendingTimerTaskKind::Callback { args, .. } => {
+                InterpreterCore::estimate_value_vec_bytes(args)
+            }
+            PendingTimerTaskKind::PromiseResolve { .. } => unreachable!(),
+        };
+        repeating_one_short.config.max_total_memory_bytes =
+            repeating_charged_baseline + clone_bytes - 1;
+        assert!(matches!(
+            repeating_one_short.execute_pending_timer_task(repeating_task, None),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(repeating_one_short.active_timers.is_empty());
+        assert_eq!(
+            repeating_one_short.estimated_memory_bytes(),
+            repeating_charged_baseline - retained_bytes
+        );
+
+        let (mut repeating_exact, repeating_task, _) = firing_fixture(true);
+        let repeating_exact_baseline = repeating_exact.estimated_memory_bytes();
+        repeating_exact.config.max_total_memory_bytes = repeating_exact_baseline + clone_bytes;
+        repeating_exact
+            .execute_pending_timer_task(repeating_task, None)
+            .expect("repeating timer callback copy fits exact physical ceiling");
+        assert_eq!(repeating_exact.pending_timer_tasks.len(), 1);
+        assert!(repeating_exact.event_loop.has_pending_work());
+        assert_eq!(
+            repeating_exact.estimated_memory_bytes(),
+            repeating_exact.recompute_estimated_memory_bytes()
+        );
+
+        let (mut one_shot_exact, one_shot_task, _) = firing_fixture(false);
+        let one_shot_ceiling = one_shot_exact.estimated_memory_bytes();
+        one_shot_exact.config.max_total_memory_bytes = one_shot_ceiling;
+        one_shot_exact
+            .execute_pending_timer_task(one_shot_task, None)
+            .expect("one-shot timer moves arguments without a callback copy");
+        assert!(one_shot_exact.active_timers.is_empty());
+        assert_eq!(
+            one_shot_exact.estimated_memory_bytes(),
+            one_shot_exact.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn weakmap_and_module_export_duplicates_are_atomic_and_exact_bd_zpn45() {
+        let weakmap_fixture = || {
+            let mut core = test_interpreter();
+            let weakmap = construct_weakmap_for_current_test(&mut core);
+            let key = core
+                .alloc_object_with_properties(&[])
+                .expect("WeakMap object key");
+            let pair = core
+                .alloc_array_from_values(&[
+                    Value::Object(key),
+                    Value::BigInt(Arc::from("weakmap-value".repeat(47))),
+                ])
+                .expect("WeakMap pair");
+            let iterable = core
+                .alloc_array_from_values(&[Value::Object(pair)])
+                .expect("WeakMap iterable");
+            core.sync_estimated_memory_bytes()
+                .expect("WeakMap fixture baseline");
+            (core, weakmap, key, iterable)
+        };
+
+        let (mut weakmap_probe, weakmap_id, _key_id, iterable_id) = weakmap_fixture();
+        let weakmap_baseline = weakmap_probe.estimated_memory_bytes();
+        weakmap_probe
+            .seed_weakmap_from_iterable(weakmap_id, Value::Object(iterable_id))
+            .expect("unbounded WeakMap seed probe");
+        let weakmap_delta = weakmap_probe
+            .estimated_memory_bytes()
+            .saturating_sub(weakmap_baseline);
+        assert!(weakmap_delta > 0);
+        assert_eq!(
+            weakmap_probe.estimated_memory_bytes(),
+            weakmap_probe.recompute_estimated_memory_bytes()
+        );
+
+        let (mut weakmap_one_short, weakmap_id, key_id, iterable_id) = weakmap_fixture();
+        let weakmap_one_short_baseline = weakmap_one_short.estimated_memory_bytes();
+        weakmap_one_short.config.max_total_memory_bytes =
+            weakmap_one_short_baseline + weakmap_delta - 1;
+        assert!(matches!(
+            weakmap_one_short.seed_weakmap_from_iterable(weakmap_id, Value::Object(iterable_id)),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(
+            weakmap_one_short.weakmap_storage[&weakmap_id]
+                .get(key_id.0)
+                .is_none()
+        );
+        assert_eq!(
+            weakmap_one_short.estimated_memory_bytes(),
+            weakmap_one_short_baseline
+        );
+
+        let (mut weakmap_exact, weakmap_id, key_id, iterable_id) = weakmap_fixture();
+        let weakmap_exact_baseline = weakmap_exact.estimated_memory_bytes();
+        weakmap_exact.config.max_total_memory_bytes = weakmap_exact_baseline + weakmap_delta;
+        weakmap_exact
+            .seed_weakmap_from_iterable(weakmap_id, Value::Object(iterable_id))
+            .expect("WeakMap value fits exact ceiling");
+        assert!(
+            weakmap_exact.weakmap_storage[&weakmap_id]
+                .get(key_id.0)
+                .is_some()
+        );
+        assert_eq!(
+            weakmap_exact.estimated_memory_bytes(),
+            weakmap_exact.recompute_estimated_memory_bytes()
+        );
+
+        let export_fixture = || {
+            let mut core = test_interpreter();
+            let namespace = core
+                .alloc_object_with_properties(&[])
+                .expect("module namespace object");
+            let specifier = "memory-owner.mjs".to_string();
+            core.module_state.modules.insert(
+                specifier.clone(),
+                ModuleRuntimeRecord {
+                    status: ModuleRuntimeStatus::Evaluating,
+                    namespace_object: namespace,
+                    exports: BTreeMap::new(),
+                    cjs_module_object: None,
+                    compiled_module: None,
+                },
+            );
+            core.current_module_specifier = Some(specifier.clone());
+            core.sync_estimated_memory_bytes()
+                .expect("module export fixture baseline");
+            (core, specifier, namespace)
+        };
+        let export_value = Value::BigInt(Arc::from("module-export".repeat(53)));
+        let (mut export_probe, _, _) = export_fixture();
+        let export_baseline = export_probe.estimated_memory_bytes();
+        export_probe
+            .register_module_export("answer", export_value.clone())
+            .expect("unbounded module export probe");
+        let export_delta = export_probe
+            .estimated_memory_bytes()
+            .saturating_sub(export_baseline);
+        assert!(export_delta > 0);
+        assert_eq!(
+            export_probe.estimated_memory_bytes(),
+            export_probe.recompute_estimated_memory_bytes()
+        );
+
+        let (mut export_one_short, specifier, namespace) = export_fixture();
+        let export_one_short_baseline = export_one_short.estimated_memory_bytes();
+        export_one_short.config.max_total_memory_bytes =
+            export_one_short_baseline + export_delta - 1;
+        assert!(matches!(
+            export_one_short.register_module_export("answer", export_value.clone()),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(
+            export_one_short.module_state.modules[&specifier]
+                .exports
+                .is_empty()
+        );
+        assert!(
+            !export_one_short.heap[namespace.0 as usize]
+                .properties
+                .contains_key("answer")
+        );
+        assert_eq!(
+            export_one_short.estimated_memory_bytes(),
+            export_one_short_baseline
+        );
+
+        let (mut export_exact, specifier, namespace) = export_fixture();
+        let export_exact_baseline = export_exact.estimated_memory_bytes();
+        export_exact.config.max_total_memory_bytes = export_exact_baseline + export_delta;
+        export_exact
+            .register_module_export("answer", export_value)
+            .expect("module export fits exact ceiling");
+        assert!(
+            export_exact.module_state.modules[&specifier]
+                .exports
+                .contains_key("answer")
+        );
+        assert!(
+            export_exact.heap[namespace.0 as usize]
+                .properties
+                .contains_key("answer")
+        );
+        assert_eq!(
+            export_exact.estimated_memory_bytes(),
+            export_exact.recompute_estimated_memory_bytes()
+        );
+
+        let mut missing_export = test_interpreter();
+        missing_export.current_module_specifier = Some("missing-record.mjs".to_string());
+        let missing_export_baseline = missing_export
+            .sync_estimated_memory_bytes()
+            .expect("missing export record baseline");
+        assert!(matches!(
+            missing_export.register_module_export(
+                "answer",
+                Value::BigInt(Arc::from("unretained-export".repeat(31)))
+            ),
+            Err(InterpreterError::ExportOutsideModule { .. })
+        ));
+        assert_eq!(
+            missing_export.estimated_memory_bytes(),
+            missing_export_baseline
+        );
+        assert_eq!(
+            missing_export.estimated_memory_bytes(),
+            missing_export.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn heap_transaction_rollback_prunes_only_discarded_remembered_ids_bd_zpn45() {
+        let mut core = test_interpreter();
+        let retained = core
+            .alloc_object_with_properties(&[("retained", Value::Int(1))])
+            .expect("retained heap object");
+        let previous_heap_len = core.heap.len();
+        let discarded = core
+            .alloc_object_with_properties(&[("discarded", Value::Int(2))])
+            .expect("transaction-owned heap object");
+        assert!(core.gc_remembered_set.contains(&retained));
+        assert!(core.gc_remembered_set.contains(&discarded));
+
+        core.rollback_heap_to_len(previous_heap_len);
+
+        assert!(core.gc_remembered_set.contains(&retained));
+        assert!(!core.gc_remembered_set.contains(&discarded));
+        assert!(
+            core.gc_remembered_set
+                .iter()
+                .all(|object_id| (object_id.0 as usize) < core.heap.len())
+        );
+        core.sync_estimated_memory_bytes()
+            .expect("heap rollback accounting resync");
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn state_capture_and_promise_store_are_atomic_exact_and_released_bd_zpn45() {
+        let capture_fixture = || {
+            let mut core = test_interpreter();
+            let child = core
+                .alloc_object_with_properties(&[(
+                    "payload",
+                    Value::BigInt(Arc::from("captured-heap".repeat(29))),
+                )])
+                .expect("captured child object");
+            let object = core
+                .alloc_object_with_properties(&[("child", Value::Object(child))])
+                .expect("captured root object");
+            for index in 0..48 {
+                core.set_object_property(
+                    object,
+                    format!("duplicate-{index}"),
+                    Value::Object(child),
+                )
+                .expect("duplicate reachability edge");
+            }
+            core.write_reg(3, Value::Object(object))
+                .expect("captured object register");
+            core.set_register_label(3, Label::TopSecret)
+                .expect("captured named register label");
+            core.write_reg(4, Value::Object(object))
+                .expect("second captured object register");
+            core.set_register_label(
+                4,
+                Label::Custom {
+                    name: "capture-label".repeat(23),
+                    level: 4,
+                },
+            )
+            .expect("captured same-level custom register label");
+            core.sync_estimated_memory_bytes()
+                .expect("state capture fixture baseline");
+            core.arm_state_capture_at_tick(0);
+            core
+        };
+
+        let mut capture_probe = capture_fixture();
+        let capture_baseline = capture_probe.estimated_memory_bytes();
+        capture_probe.check_state_capture_boundary();
+        let capture_delta = capture_probe
+            .estimated_memory_bytes()
+            .saturating_sub(capture_baseline);
+        let capture_peak_delta =
+            capture_delta.saturating_add(capture_probe.capture_label_projection_working_bytes());
+        assert!(capture_delta > 0);
+        assert!(capture_probe.state_capture_result.is_some());
+        assert_eq!(
+            capture_probe.estimated_memory_bytes(),
+            capture_probe.recompute_estimated_memory_bytes()
+        );
+        let captured = capture_probe
+            .state_capture_result
+            .as_ref()
+            .expect("capture probe produced state");
+        let expected_label = Label::Custom {
+            name: "capture-label".repeat(23),
+            level: 4,
+        };
+        assert_eq!(captured.heap[0].label, expected_label);
+        assert_eq!(captured.heap[1].label, expected_label);
+
+        let mut capture_one_short = capture_fixture();
+        let capture_one_short_baseline = capture_one_short.estimated_memory_bytes();
+        capture_one_short.config.max_total_memory_bytes =
+            capture_one_short_baseline + capture_peak_delta - 1;
+        capture_one_short.check_state_capture_boundary();
+        assert!(capture_one_short.state_capture_result.is_none());
+        assert_eq!(
+            capture_one_short.estimated_memory_bytes(),
+            capture_one_short_baseline
+        );
+
+        let mut capture_exact = capture_fixture();
+        let capture_exact_baseline = capture_exact.estimated_memory_bytes();
+        capture_exact.config.max_total_memory_bytes = capture_exact_baseline + capture_peak_delta;
+        capture_exact.check_state_capture_boundary();
+        assert!(capture_exact.state_capture_result.is_some());
+        assert_eq!(
+            capture_exact.estimated_memory_bytes(),
+            capture_exact.recompute_estimated_memory_bytes()
+        );
+        assert!(capture_exact.take_captured_state().is_some());
+        assert_eq!(
+            capture_exact.estimated_memory_bytes(),
+            capture_exact_baseline
+        );
+
+        let snapshot_fixture = || {
+            let mut core = test_interpreter();
+            core.write_reg(
+                2,
+                Value::BigInt(Arc::from("module-snapshot-register".repeat(23))),
+            )
+            .expect("module snapshot register");
+            core.set_register_label(
+                2,
+                Label::Custom {
+                    name: "module-snapshot-label".repeat(19),
+                    level: 3,
+                },
+            )
+            .expect("module snapshot label");
+            core.sync_estimated_memory_bytes()
+                .expect("module snapshot fixture baseline");
+            core
+        };
+        let mut snapshot_probe = snapshot_fixture();
+        let snapshot_baseline = snapshot_probe.estimated_memory_bytes();
+        let probe_snapshot = snapshot_probe
+            .snapshot_module_execution()
+            .expect("unbounded module snapshot probe");
+        let snapshot_delta = snapshot_probe
+            .estimated_memory_bytes()
+            .saturating_sub(snapshot_baseline);
+        assert!(snapshot_delta > 0);
+        assert_eq!(
+            snapshot_probe.estimated_memory_bytes(),
+            snapshot_probe.recompute_estimated_memory_bytes()
+        );
+        snapshot_probe
+            .write_reg(2, Value::Int(7))
+            .expect("nested execution replaces snapshotted register");
+        snapshot_probe
+            .set_register_label(2, Label::Public)
+            .expect("nested execution replaces snapshotted label");
+        snapshot_probe.restore_module_execution(probe_snapshot, true);
+        assert_eq!(snapshot_probe.estimated_memory_bytes(), snapshot_baseline);
+
+        let mut snapshot_one_short = snapshot_fixture();
+        let snapshot_one_short_baseline = snapshot_one_short.estimated_memory_bytes();
+        snapshot_one_short.config.max_total_memory_bytes =
+            snapshot_one_short_baseline + snapshot_delta - 1;
+        assert!(matches!(
+            snapshot_one_short.snapshot_module_execution(),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(snapshot_one_short.module_snapshot_in_flight_bytes, 0);
+        assert_eq!(
+            snapshot_one_short.estimated_memory_bytes(),
+            snapshot_one_short_baseline
+        );
+
+        let mut snapshot_exact = snapshot_fixture();
+        let snapshot_exact_baseline = snapshot_exact.estimated_memory_bytes();
+        snapshot_exact.config.max_total_memory_bytes = snapshot_exact_baseline + snapshot_delta;
+        let exact_snapshot = snapshot_exact
+            .snapshot_module_execution()
+            .expect("module snapshot fits exact ceiling");
+        assert_eq!(
+            snapshot_exact.estimated_memory_bytes(),
+            snapshot_exact.recompute_estimated_memory_bytes()
+        );
+        snapshot_exact.restore_module_execution(exact_snapshot, true);
+        assert_eq!(
+            snapshot_exact.estimated_memory_bytes(),
+            snapshot_exact_baseline
+        );
+
+        let mut promise_probe = test_interpreter();
+        let promise_baseline = promise_probe
+            .sync_estimated_memory_bytes()
+            .expect("Promise creation probe baseline");
+        let probe_handle = promise_probe
+            .create_promise()
+            .expect("unbounded Promise creation probe");
+        let promise_delta = promise_probe
+            .estimated_memory_bytes()
+            .saturating_sub(promise_baseline);
+        assert!(promise_delta > 0);
+        assert_eq!(
+            promise_probe.estimated_memory_bytes(),
+            promise_probe.recompute_estimated_memory_bytes()
+        );
+        promise_probe.rollback_fresh_promise(probe_handle);
+        assert_eq!(promise_probe.estimated_memory_bytes(), promise_baseline);
+
+        let mut promise_one_short = test_interpreter();
+        let promise_one_short_baseline = promise_one_short
+            .sync_estimated_memory_bytes()
+            .expect("Promise creation refusal baseline");
+        promise_one_short.config.max_total_memory_bytes =
+            promise_one_short_baseline + promise_delta - 1;
+        assert!(matches!(
+            promise_one_short.create_promise(),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(promise_one_short.promise_store.len(), 0);
+        assert_eq!(
+            promise_one_short.estimated_memory_bytes(),
+            promise_one_short_baseline
+        );
+
+        let mut promise_exact = test_interpreter();
+        let promise_exact_baseline = promise_exact
+            .sync_estimated_memory_bytes()
+            .expect("Promise creation exact baseline");
+        promise_exact.config.max_total_memory_bytes = promise_exact_baseline + promise_delta;
+        let exact_handle = promise_exact
+            .create_promise()
+            .expect("Promise creation fits exact ceiling");
+        assert_eq!(
+            promise_exact.estimated_memory_bytes(),
+            promise_exact.recompute_estimated_memory_bytes()
+        );
+        promise_exact.rollback_fresh_promise(exact_handle);
+        assert_eq!(
+            promise_exact.estimated_memory_bytes(),
+            promise_exact_baseline
+        );
+
+        let settlement_fixture = || {
+            let mut core = test_interpreter();
+            let handle = core.create_promise().expect("settlement source Promise");
+            core.sync_estimated_memory_bytes()
+                .expect("settlement fixture baseline");
+            (core, handle)
+        };
+        let settlement_value = crate::object_model::JsValue::Str("settled-value".repeat(31));
+        let settlement_label = Label::Custom {
+            name: "settled-label".repeat(17),
+            level: 3,
+        };
+        let (mut settlement_probe, handle) = settlement_fixture();
+        let settlement_baseline = settlement_probe.estimated_memory_bytes();
+        settlement_probe
+            .fulfill_promise(handle, settlement_value.clone(), settlement_label.clone())
+            .expect("unbounded Promise settlement probe");
+        let settlement_delta = settlement_probe
+            .estimated_memory_bytes()
+            .saturating_sub(settlement_baseline);
+        assert!(settlement_delta > 0);
+        assert_eq!(
+            settlement_probe.estimated_memory_bytes(),
+            settlement_probe.recompute_estimated_memory_bytes()
+        );
+
+        let (mut settlement_one_short, handle) = settlement_fixture();
+        let settlement_one_short_baseline = settlement_one_short.estimated_memory_bytes();
+        settlement_one_short.config.max_total_memory_bytes =
+            settlement_one_short_baseline + settlement_delta - 1;
+        assert!(matches!(
+            settlement_one_short.fulfill_promise(
+                handle,
+                settlement_value.clone(),
+                settlement_label.clone()
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(matches!(
+            settlement_one_short
+                .promise_store
+                .get(handle)
+                .expect("source Promise survives refusal")
+                .state,
+            crate::promise_model::PromiseState::Pending
+        ));
+        assert_eq!(
+            settlement_one_short.estimated_memory_bytes(),
+            settlement_one_short_baseline
+        );
+
+        let (mut settlement_exact, handle) = settlement_fixture();
+        let settlement_exact_baseline = settlement_exact.estimated_memory_bytes();
+        settlement_exact.config.max_total_memory_bytes =
+            settlement_exact_baseline + settlement_delta;
+        settlement_exact
+            .fulfill_promise(handle, settlement_value, settlement_label)
+            .expect("Promise settlement fits exact ceiling");
+        assert!(
+            settlement_exact
+                .promise_store
+                .get(handle)
+                .expect("settled Promise exists")
+                .state
+                .is_fulfilled()
+        );
+        assert_eq!(
+            settlement_exact.estimated_memory_bytes(),
+            settlement_exact.recompute_estimated_memory_bytes()
+        );
+
+        let reaction_fixture = || {
+            let mut core = test_interpreter();
+            let handle = core.create_promise().expect("reaction source Promise");
+            core.sync_estimated_memory_bytes()
+                .expect("reaction fixture baseline");
+            (core, handle)
+        };
+        let reaction_label = Label::Custom {
+            name: "reaction-label".repeat(29),
+            level: 2,
+        };
+        let (mut reaction_probe, handle) = reaction_fixture();
+        let reaction_baseline = reaction_probe.estimated_memory_bytes();
+        reaction_probe
+            .register_promise_then(handle, None, None, reaction_label.clone())
+            .expect("unbounded Promise reaction probe");
+        let reaction_delta = reaction_probe
+            .estimated_memory_bytes()
+            .saturating_sub(reaction_baseline);
+        assert!(reaction_delta > 0);
+
+        let (mut reaction_one_short, handle) = reaction_fixture();
+        let reaction_one_short_baseline = reaction_one_short.estimated_memory_bytes();
+        reaction_one_short.config.max_total_memory_bytes =
+            reaction_one_short_baseline + reaction_delta - 1;
+        assert!(matches!(
+            reaction_one_short.register_promise_then(handle, None, None, reaction_label.clone()),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(reaction_one_short.promise_store.len(), 1);
+        assert!(
+            reaction_one_short
+                .promise_store
+                .get(handle)
+                .expect("source Promise survives reaction refusal")
+                .reactions
+                .is_empty()
+        );
+        assert_eq!(
+            reaction_one_short.estimated_memory_bytes(),
+            reaction_one_short_baseline
+        );
+
+        let (mut reaction_exact, handle) = reaction_fixture();
+        let reaction_exact_baseline = reaction_exact.estimated_memory_bytes();
+        reaction_exact.config.max_total_memory_bytes = reaction_exact_baseline + reaction_delta;
+        reaction_exact
+            .register_promise_then(handle, None, None, reaction_label)
+            .expect("Promise reaction fits exact ceiling");
+        assert_eq!(reaction_exact.promise_store.len(), 2);
+        assert_eq!(
+            reaction_exact
+                .promise_store
+                .get(handle)
+                .expect("source Promise after reaction")
+                .reactions
+                .len(),
+            2
+        );
+        assert_eq!(
+            reaction_exact.estimated_memory_bytes(),
+            reaction_exact.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn composed_promise_owners_rollback_and_drain_exactly_bd_zpn45() {
+        let once_fixture = || {
+            let mut core = test_interpreter();
+            let emitter = core
+                .alloc_object_with_properties(&[])
+                .expect("events.once emitter");
+            core.write_reg(0, Value::Object(emitter))
+                .expect("events.once target register");
+            core.write_reg(1, Value::str("payload-event".repeat(31)))
+                .expect("events.once event register");
+            core.sync_estimated_memory_bytes()
+                .expect("events.once fixture baseline");
+            core
+        };
+        let once_args = RegRange { start: 0, count: 2 };
+        let mut once_probe = once_fixture();
+        let once_baseline = once_probe.estimated_memory_bytes();
+        once_probe
+            .register_event_promise_once(once_args)
+            .expect("unbounded events.once probe");
+        let once_delta = once_probe
+            .estimated_memory_bytes()
+            .saturating_sub(once_baseline);
+        assert!(once_delta > 0);
+
+        let mut once_one_short = once_fixture();
+        let once_one_short_baseline = once_one_short.estimated_memory_bytes();
+        once_one_short.config.max_total_memory_bytes = once_one_short_baseline + once_delta - 1;
+        assert!(matches!(
+            once_one_short.register_event_promise_once(once_args),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(once_one_short.promise_store.len(), 0);
+        assert!(once_one_short.event_promise_waiters.is_empty());
+        assert_eq!(once_one_short.next_event_promise_waiter_id, 0);
+        assert_eq!(
+            once_one_short.estimated_memory_bytes(),
+            once_one_short_baseline
+        );
+
+        let mut once_exact = once_fixture();
+        let once_exact_baseline = once_exact.estimated_memory_bytes();
+        once_exact.config.max_total_memory_bytes = once_exact_baseline + once_delta;
+        once_exact
+            .register_event_promise_once(once_args)
+            .expect("events.once fits exact ceiling");
+        assert_eq!(once_exact.promise_store.len(), 1);
+        assert_eq!(once_exact.next_event_promise_waiter_id, 1);
+        assert_eq!(
+            once_exact.estimated_memory_bytes(),
+            once_exact.recompute_estimated_memory_bytes()
+        );
+
+        let combinator_fixture = || {
+            let mut core = test_interpreter();
+            let first = core.create_promise().expect("first Promise.all input");
+            let second = core.create_promise().expect("second Promise.all input");
+            core.write_reg(0, Value::Promise(first.0))
+                .expect("first Promise.all register");
+            core.write_reg(1, Value::Promise(second.0))
+                .expect("second Promise.all register");
+            core.sync_estimated_memory_bytes()
+                .expect("Promise.all fixture baseline");
+            (core, first, second)
+        };
+        let combinator_args = RegRange { start: 0, count: 2 };
+        let mut combinator_probe = combinator_fixture().0;
+        let combinator_baseline = combinator_probe.estimated_memory_bytes();
+        let combinator_snapshot_bytes = combinator_probe.promise_runtime_memory_bytes();
+        combinator_probe
+            .dispatch_promise_combinator(PromiseCombinatorKind::All, combinator_args)
+            .expect("unbounded Promise.all probe");
+        let combinator_delta = combinator_probe
+            .estimated_memory_bytes()
+            .saturating_sub(combinator_baseline);
+        let combinator_peak_delta = combinator_snapshot_bytes.saturating_add(combinator_delta);
+        assert!(combinator_delta > 0);
+
+        let (mut combinator_one_short, _, _) = combinator_fixture();
+        let combinator_one_short_baseline = combinator_one_short.estimated_memory_bytes();
+        combinator_one_short.config.max_total_memory_bytes =
+            combinator_one_short_baseline + combinator_peak_delta - 1;
+        assert!(matches!(
+            combinator_one_short
+                .dispatch_promise_combinator(PromiseCombinatorKind::All, combinator_args),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(combinator_one_short.promise_store.len(), 2);
+        assert!(combinator_one_short.promise_combinators.is_empty());
+        assert!(combinator_one_short.promise_combinator_watchers.is_empty());
+        assert_eq!(combinator_one_short.next_promise_combinator_id, 0);
+        assert_eq!(
+            combinator_one_short.estimated_memory_bytes(),
+            combinator_one_short_baseline
+        );
+
+        let (mut combinator_exact, first, second) = combinator_fixture();
+        let combinator_exact_baseline = combinator_exact.estimated_memory_bytes();
+        combinator_exact.config.max_total_memory_bytes =
+            combinator_exact_baseline + combinator_peak_delta;
+        combinator_exact
+            .dispatch_promise_combinator(PromiseCombinatorKind::All, combinator_args)
+            .expect("Promise.all fits exact physical ceiling");
+        assert_eq!(combinator_exact.promise_store.len(), 3);
+        assert_eq!(combinator_exact.promise_combinators.len(), 1);
+        assert_eq!(
+            combinator_exact
+                .promise_combinator_watchers
+                .get(&first)
+                .map_or(0, Vec::len),
+            1
+        );
+        assert_eq!(
+            combinator_exact
+                .promise_combinator_watchers
+                .get(&second)
+                .map_or(0, Vec::len),
+            1
+        );
+        assert_eq!(
+            combinator_exact.estimated_memory_bytes(),
+            combinator_exact.recompute_estimated_memory_bytes()
+        );
+
+        let mut drain = test_interpreter();
+        let source = drain.create_promise().expect("microtask source Promise");
+        let result = drain
+            .register_promise_then(source, None, None, Label::Public)
+            .expect("microtask result Promise");
+        drain
+            .fulfill_promise(
+                source,
+                crate::object_model::JsValue::Str("drained-value".repeat(17)),
+                Label::Public,
+            )
+            .expect("enqueue identity reaction");
+        assert_eq!(drain.event_loop.microtasks.pending_count(), 1);
+        drain
+            .drain_microtasks(None)
+            .expect("microtask drain propagates settlement success");
+        assert!(
+            drain
+                .promise_store
+                .get(result)
+                .expect("reaction result Promise remains live")
+                .state
+                .is_fulfilled()
+        );
+        assert!(drain.event_loop.microtasks.is_empty());
+        assert_eq!(drain.promise_in_flight_task_bytes, 0);
+        assert_eq!(
+            drain.estimated_memory_bytes(),
+            drain.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
     fn writable_terminal_callback_fifo_is_exact_accounted_and_atomic_bd_fw7zd_1() {
         assert!(
             usize::try_from(MEMORY_ESTIMATE_WRITABLE_END_CALLBACK_BYTES)
@@ -52171,7 +54719,9 @@ mod async_runtime_tests_current {
             name: "dominant-backing-label".repeat(12),
             level: 29,
         };
-        end_core.join_binary_storage_label(chunk, &backing_label);
+        end_core
+            .join_binary_storage_label(chunk, &backing_label)
+            .expect("binary label join fits test budget");
         let callback_value =
             Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayIsArray));
         let callback_label = Label::Custom {
@@ -56529,7 +59079,8 @@ mod async_runtime_tests_current {
         core.register_event_listener(obj_id, "data", 12);
         core.register_event_listener(obj_id, "end", 13);
 
-        core.schedule_stream_emission(obj_id, StreamEventPhase::Data);
+        core.schedule_stream_emission(obj_id, StreamEventPhase::Data)
+            .expect("stream emission scheduling fits test budget");
         assert_eq!(
             core.pending_stream_emissions.len(),
             1,
@@ -58953,7 +61504,8 @@ mod event_loop_timer_microtask_tests {
 
         // Run the microtask checkpoint. The pre-enqueued microtask must
         // execute (fulfilling `pending`) without the timer firing first.
-        core.drain_microtasks(None);
+        core.drain_microtasks(None)
+            .expect("microtask drain fits test budget");
 
         assert_eq!(
             core.event_loop.microtasks.pending_count(),

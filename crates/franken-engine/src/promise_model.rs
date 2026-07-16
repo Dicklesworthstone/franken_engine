@@ -24,6 +24,56 @@ use crate::closure_model::ClosureHandle;
 use crate::ifc_artifacts::Label;
 use crate::object_model::JsValue;
 
+/// Approximate allocation header carried by every retained string. Keep this
+/// aligned with the baseline interpreter's logical-owner accounting algebra.
+const MEMORY_ESTIMATE_STRING_BASE_BYTES: u64 = 24;
+/// Conservative per-entry charge for deterministic tree-backed maps.
+const MEMORY_ESTIMATE_MAP_ENTRY_BYTES: u64 = 48;
+
+fn saturating_sum(values: impl Iterator<Item = u64>) -> u64 {
+    values.fold(0u64, u64::saturating_add)
+}
+
+fn estimate_vector_slot_bytes<T>(len: usize) -> u64 {
+    u64::try_from(len)
+        .unwrap_or(u64::MAX)
+        .saturating_mul(u64::try_from(std::mem::size_of::<T>()).unwrap_or(u64::MAX))
+}
+
+fn estimate_string_memory_bytes(text: &str) -> u64 {
+    MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(text.len() as u64)
+}
+
+/// Dynamic payload retained by an object-model value.
+///
+/// Handles and numeric variants are inline identifiers/scalars and therefore
+/// have no additional dynamic charge. Strings own a separate allocation.
+pub(crate) fn estimate_js_value_memory_bytes(value: &JsValue) -> u64 {
+    match value {
+        JsValue::Str(text) => estimate_string_memory_bytes(text),
+        JsValue::Undefined
+        | JsValue::Null
+        | JsValue::Bool(_)
+        | JsValue::Int(_)
+        | JsValue::Float(_)
+        | JsValue::Symbol(_)
+        | JsValue::Object(_)
+        | JsValue::Function(_) => 0,
+    }
+}
+
+/// Dynamic payload retained by an IFC label.
+pub(crate) fn estimate_label_memory_bytes(label: &Label) -> u64 {
+    match label {
+        Label::Custom { name, .. } => estimate_string_memory_bytes(name),
+        Label::Public
+        | Label::Internal
+        | Label::Confidential
+        | Label::Secret
+        | Label::TopSecret => 0,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Promise handle
 // ---------------------------------------------------------------------------
@@ -303,6 +353,45 @@ pub enum WitnessEvent {
     ClockAdvanced { from_ms: u64, to_ms: u64 },
 }
 
+/// Dynamic payload retained by one replay witness event.
+pub(crate) fn estimate_witness_event_memory_bytes(event: &WitnessEvent) -> u64 {
+    match event {
+        WitnessEvent::PromiseFulfilled { value, label, .. } => {
+            estimate_js_value_memory_bytes(value).saturating_add(estimate_label_memory_bytes(label))
+        }
+        WitnessEvent::PromiseRejected { reason, label, .. } => {
+            estimate_js_value_memory_bytes(reason)
+                .saturating_add(estimate_label_memory_bytes(label))
+        }
+        WitnessEvent::PromiseCreated { .. }
+        | WitnessEvent::MicrotaskEnqueued { .. }
+        | WitnessEvent::MicrotaskDequeued { .. }
+        | WitnessEvent::MacrotaskExecuted { .. }
+        | WitnessEvent::ClockAdvanced { .. } => 0,
+    }
+}
+
+fn estimate_witness_log_memory_bytes(witness: &[WitnessEvent]) -> u64 {
+    estimate_vector_slot_bytes::<WitnessEvent>(witness.len()).saturating_add(saturating_sum(
+        witness.iter().map(estimate_witness_event_memory_bytes),
+    ))
+}
+
+pub(crate) fn estimate_microtask_payload_memory_bytes(task: &Microtask) -> u64 {
+    match task {
+        Microtask::PromiseReaction {
+            argument, label, ..
+        } => estimate_js_value_memory_bytes(argument)
+            .saturating_add(estimate_label_memory_bytes(label)),
+        Microtask::PromiseRejection { reason, label, .. } => estimate_js_value_memory_bytes(reason)
+            .saturating_add(estimate_label_memory_bytes(label)),
+        Microtask::ResolveThenable {
+            thenable, label, ..
+        } => estimate_js_value_memory_bytes(thenable)
+            .saturating_add(estimate_label_memory_bytes(label)),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Promise errors
 // ---------------------------------------------------------------------------
@@ -370,6 +459,143 @@ impl PromiseStore {
         }
     }
 
+    /// Deterministic resident-memory estimate for every Promise-owned record,
+    /// reaction, label, settled payload, and replay witness.
+    pub(crate) fn estimated_memory_bytes(&self) -> u64 {
+        estimate_vector_slot_bytes::<PromiseRecord>(self.promises.len())
+            .saturating_add(saturating_sum(self.promises.iter().map(|record| {
+                let state_bytes = match &record.state {
+                    PromiseState::Pending => 0,
+                    PromiseState::Fulfilled(value) | PromiseState::Rejected(value) => {
+                        estimate_js_value_memory_bytes(value)
+                    }
+                };
+                state_bytes
+                    .saturating_add(estimate_label_memory_bytes(&record.label))
+                    .saturating_add(estimate_vector_slot_bytes::<PromiseReaction>(
+                        record.reactions.len(),
+                    ))
+                    .saturating_add(saturating_sum(
+                        record
+                            .reactions
+                            .iter()
+                            .map(|reaction| estimate_label_memory_bytes(&reaction.label)),
+                    ))
+            })))
+            .saturating_add(estimate_witness_log_memory_bytes(&self.witness))
+    }
+
+    fn projected_create_memory_bytes(&self) -> u64 {
+        self.estimated_memory_bytes()
+            .saturating_add(std::mem::size_of::<PromiseRecord>() as u64)
+            .saturating_add(std::mem::size_of::<WitnessEvent>() as u64)
+    }
+
+    /// Exact Promise-store and microtask-queue estimates after registering a
+    /// `.then` reaction, computed without cloning or mutating either owner.
+    pub(crate) fn projected_then_memory_bytes(
+        &self,
+        handle: PromiseHandle,
+        label: &Label,
+        queue: &MicrotaskQueue,
+    ) -> Result<(u64, u64), PromiseError> {
+        let record = self.get(handle)?;
+        let mut next_store_bytes = self.projected_create_memory_bytes();
+        let mut next_queue_bytes = queue.estimated_memory_bytes();
+        match &record.state {
+            PromiseState::Pending => {
+                next_store_bytes = next_store_bytes
+                    .saturating_add(
+                        2u64.saturating_mul(std::mem::size_of::<PromiseReaction>() as u64),
+                    )
+                    .saturating_add(2u64.saturating_mul(estimate_label_memory_bytes(label)));
+            }
+            PromiseState::Fulfilled(value) => {
+                next_queue_bytes = queue.projected_enqueue_payload_memory_bytes(
+                    estimate_js_value_memory_bytes(value),
+                    estimate_label_memory_bytes(label),
+                );
+            }
+            PromiseState::Rejected(reason) => {
+                next_queue_bytes = queue.projected_enqueue_payload_memory_bytes(
+                    estimate_js_value_memory_bytes(reason),
+                    estimate_label_memory_bytes(label),
+                );
+            }
+        }
+        Ok((next_store_bytes, next_queue_bytes))
+    }
+
+    /// Exact post-fulfillment estimates without allocating the projected
+    /// Promise store or queue.
+    pub(crate) fn projected_fulfill_memory_bytes(
+        &self,
+        handle: PromiseHandle,
+        value: &JsValue,
+        label: &Label,
+        queue: &MicrotaskQueue,
+    ) -> Result<(u64, u64), PromiseError> {
+        self.projected_settlement_memory_bytes(handle, value, label, queue, ReactionKind::Fulfill)
+    }
+
+    /// Exact post-rejection estimates without allocating the projected
+    /// Promise store or queue.
+    pub(crate) fn projected_reject_memory_bytes(
+        &self,
+        handle: PromiseHandle,
+        reason: &JsValue,
+        label: &Label,
+        queue: &MicrotaskQueue,
+    ) -> Result<(u64, u64), PromiseError> {
+        self.projected_settlement_memory_bytes(handle, reason, label, queue, ReactionKind::Reject)
+    }
+
+    fn projected_settlement_memory_bytes(
+        &self,
+        handle: PromiseHandle,
+        payload: &JsValue,
+        label: &Label,
+        queue: &MicrotaskQueue,
+        selected_kind: ReactionKind,
+    ) -> Result<(u64, u64), PromiseError> {
+        let record = self.get(handle)?;
+        if record.state.is_settled() {
+            return Err(PromiseError::AlreadySettled { handle });
+        }
+
+        let reactions_bytes = estimate_vector_slot_bytes::<PromiseReaction>(record.reactions.len())
+            .saturating_add(saturating_sum(
+                record
+                    .reactions
+                    .iter()
+                    .map(|reaction| estimate_label_memory_bytes(&reaction.label)),
+            ));
+        let payload_bytes = estimate_js_value_memory_bytes(payload);
+        let label_bytes = estimate_label_memory_bytes(label);
+        let next_store_bytes = self
+            .estimated_memory_bytes()
+            .saturating_sub(reactions_bytes)
+            .saturating_sub(estimate_label_memory_bytes(&record.label))
+            .saturating_add(payload_bytes)
+            .saturating_add(label_bytes)
+            .saturating_add(std::mem::size_of::<WitnessEvent>() as u64)
+            .saturating_add(payload_bytes)
+            .saturating_add(label_bytes);
+
+        let next_queue_bytes = record
+            .reactions
+            .iter()
+            .filter(|reaction| reaction.kind == selected_kind)
+            .fold(queue.estimated_memory_bytes(), |bytes, _| {
+                bytes
+                    .saturating_add(std::mem::size_of::<Option<Microtask>>() as u64)
+                    .saturating_add(payload_bytes)
+                    .saturating_add(label_bytes)
+                    .saturating_add(2u64.saturating_mul(std::mem::size_of::<WitnessEvent>() as u64))
+            });
+        Ok((next_store_bytes, next_queue_bytes))
+    }
+
     /// Create a new pending Promise.
     pub fn create(&mut self) -> PromiseHandle {
         let handle = PromiseHandle(self.promises.len() as u32);
@@ -379,6 +605,30 @@ impl PromiseStore {
         self.witness
             .push(WitnessEvent::PromiseCreated { handle, seq });
         handle
+    }
+
+    /// Roll back the most recent still-pending creation after an enclosing
+    /// interpreter memory preflight refuses its resident charge.
+    pub(crate) fn rollback_last_created(&mut self, handle: PromiseHandle) -> bool {
+        let is_last_pending = self.promises.last().is_some_and(|record| {
+            record.handle == handle
+                && matches!(record.state, PromiseState::Pending)
+                && record.reactions.is_empty()
+        });
+        let has_matching_witness = matches!(
+            self.witness.last(),
+            Some(WitnessEvent::PromiseCreated {
+                handle: witness_handle,
+                ..
+            }) if *witness_handle == handle
+        );
+        if !is_last_pending || !has_matching_witness {
+            return false;
+        }
+        self.promises.pop();
+        self.witness.pop();
+        self.next_seq = self.next_seq.saturating_sub(1);
+        true
     }
 
     /// Get a Promise by handle.
@@ -675,7 +925,7 @@ impl Default for PromiseStore {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MicrotaskQueue {
     /// The queue.
-    tasks: Vec<Microtask>,
+    tasks: Vec<Option<Microtask>>,
     /// Read cursor — avoids Vec shifting.
     cursor: usize,
     /// Monotonic enqueue counter for witness events.
@@ -694,35 +944,96 @@ impl MicrotaskQueue {
         }
     }
 
+    /// Deterministic resident-memory estimate for physical queue slots,
+    /// pending task payloads, labels, and replay witnesses. Consumed slots stay
+    /// charged until [`Self::compact`] releases them.
+    pub(crate) fn estimated_memory_bytes(&self) -> u64 {
+        estimate_vector_slot_bytes::<Option<Microtask>>(self.tasks.len())
+            .saturating_add(saturating_sum(
+                self.tasks
+                    .iter()
+                    .filter_map(Option::as_ref)
+                    .map(estimate_microtask_payload_memory_bytes),
+            ))
+            .saturating_add(estimate_witness_log_memory_bytes(&self.witness))
+            // Every pending job will deterministically append one dequeue
+            // witness. Reserve that slot at enqueue time so transferring a
+            // job out of the queue can never grow resident memory after the
+            // queue has already been mutated.
+            .saturating_add(estimate_vector_slot_bytes::<WitnessEvent>(
+                self.pending_count(),
+            ))
+    }
+
+    /// Exact post-enqueue estimate without allocating or mutating the queue.
+    pub(crate) fn projected_enqueue_memory_bytes(&self, task: &Microtask) -> u64 {
+        let payload_bytes = estimate_microtask_payload_memory_bytes(task);
+        self.projected_enqueue_payload_memory_bytes(payload_bytes, 0)
+    }
+
+    fn projected_enqueue_payload_memory_bytes(&self, value_bytes: u64, label_bytes: u64) -> u64 {
+        self.estimated_memory_bytes()
+            .saturating_add(std::mem::size_of::<Option<Microtask>>() as u64)
+            .saturating_add(value_bytes)
+            .saturating_add(label_bytes)
+            .saturating_add(2u64.saturating_mul(std::mem::size_of::<WitnessEvent>() as u64))
+    }
+
     /// Enqueue a microtask.
     pub fn enqueue(&mut self, task: Microtask) {
         let index = self.enqueue_count;
         self.enqueue_count += 1;
-        self.tasks.push(task);
+        self.tasks.push(Some(task));
         self.witness.push(WitnessEvent::MicrotaskEnqueued { index });
+    }
+
+    /// Roll back the most recent pending enqueue after an enclosing memory
+    /// preflight refuses the queue's resident growth.
+    #[cfg(test)]
+    pub(crate) fn rollback_last_enqueued(&mut self) -> Option<Microtask> {
+        let last_index = self.tasks.len().checked_sub(1)?;
+        if last_index < self.cursor
+            || !matches!(
+                self.witness.last(),
+                Some(WitnessEvent::MicrotaskEnqueued { index })
+                    if *index + 1 == self.enqueue_count
+            )
+        {
+            return None;
+        }
+        let task = self.tasks.pop().flatten()?;
+        self.witness.pop();
+        self.enqueue_count = self.enqueue_count.saturating_sub(1);
+        Some(task)
     }
 
     /// Dequeue the next microtask (FIFO).
     pub fn dequeue(&mut self) -> Option<Microtask> {
-        if self.cursor < self.tasks.len() {
-            let task = self.tasks[self.cursor].clone();
+        while self.cursor < self.tasks.len() {
             let index = self.cursor as u64;
+            let task = self.tasks[self.cursor].take();
             self.cursor += 1;
-            self.witness.push(WitnessEvent::MicrotaskDequeued { index });
-            Some(task)
-        } else {
-            None
+            if task.is_some() {
+                self.witness.push(WitnessEvent::MicrotaskDequeued { index });
+                return task;
+            }
         }
+        None
     }
 
     /// Check if there are pending microtasks.
     pub fn is_empty(&self) -> bool {
-        self.cursor >= self.tasks.len()
+        self.tasks[self.cursor.min(self.tasks.len())..]
+            .iter()
+            .all(Option::is_none)
     }
 
     /// Number of pending (unprocessed) microtasks.
     pub fn pending_count(&self) -> usize {
-        self.tasks.len() - self.cursor
+        self.tasks[self.cursor.min(self.tasks.len())..]
+            .iter()
+            .filter(|task| task.is_some())
+            .count()
     }
 
     /// Total number of microtasks ever enqueued.
@@ -795,6 +1106,28 @@ impl MacrotaskQueue {
             io_completion_tasks: BinaryHeap::new(),
             next_registration_seq: 0,
         }
+    }
+
+    /// Deterministic resident-memory estimate across every source lane.
+    pub(crate) fn estimated_memory_bytes(&self) -> u64 {
+        [
+            &self.message_channel_tasks,
+            &self.immediate_tasks,
+            &self.timer_tasks,
+            &self.io_completion_tasks,
+        ]
+        .into_iter()
+        .fold(0u64, |total, tasks| {
+            total
+                .saturating_add(estimate_vector_slot_bytes::<MacrotaskHeapEntry>(
+                    tasks.len(),
+                ))
+                .saturating_add(saturating_sum(
+                    tasks
+                        .iter()
+                        .map(|entry| estimate_label_memory_bytes(&entry.task.label)),
+                ))
+        })
     }
 
     /// Schedule a macrotask.
@@ -872,6 +1205,32 @@ impl MacrotaskQueue {
             .map(|entry| &entry.task)
     }
 
+    /// Remove and return one pending task by registration sequence.
+    ///
+    /// Entries are moved into a temporary vector and rebuilt into a heap so
+    /// cancellation neither clones retained labels nor violates heap order.
+    pub(crate) fn cancel_registration(&mut self, registration_seq: u64) -> Option<Macrotask> {
+        Self::remove_registration_from(&mut self.message_channel_tasks, registration_seq)
+            .or_else(|| Self::remove_registration_from(&mut self.immediate_tasks, registration_seq))
+            .or_else(|| Self::remove_registration_from(&mut self.timer_tasks, registration_seq))
+            .or_else(|| {
+                Self::remove_registration_from(&mut self.io_completion_tasks, registration_seq)
+            })
+    }
+
+    /// Roll back the most recently scheduled task before it becomes visible.
+    /// Unlike ordinary cancellation, this restores the deterministic sequence
+    /// counter so a memory-accounting refusal has no observable scheduling
+    /// side effect.
+    pub(crate) fn rollback_last_scheduled(&mut self, registration_seq: u64) -> Option<Macrotask> {
+        if self.next_registration_seq != registration_seq.checked_add(1)? {
+            return None;
+        }
+        let task = self.cancel_registration(registration_seq)?;
+        self.next_registration_seq = registration_seq;
+        Some(task)
+    }
+
     fn tasks_for_source_mut(
         &mut self,
         source: MacrotaskSource,
@@ -896,6 +1255,19 @@ impl MacrotaskQueue {
         } else {
             None
         }
+    }
+
+    fn remove_registration_from(
+        tasks: &mut BinaryHeap<MacrotaskHeapEntry>,
+        registration_seq: u64,
+    ) -> Option<Macrotask> {
+        let mut entries = std::mem::take(tasks).into_vec();
+        let removed = entries
+            .iter()
+            .position(|entry| entry.task.registration_seq == registration_seq)
+            .map(|index| entries.swap_remove(index).task);
+        *tasks = BinaryHeap::from(entries);
+        removed
     }
 }
 
@@ -937,6 +1309,36 @@ impl EventLoop {
             witness: Vec::new(),
             max_microtasks_per_turn: 100_000,
         }
+    }
+
+    /// Deterministic resident-memory estimate for both queues and the
+    /// event-loop-level witness log. The virtual clock and safety limit are
+    /// inline numeric state and add no dynamic charge.
+    pub(crate) fn estimated_memory_bytes(&self) -> u64 {
+        self.microtasks
+            .estimated_memory_bytes()
+            .saturating_add(self.macrotasks.estimated_memory_bytes())
+            .saturating_add(estimate_witness_log_memory_bytes(&self.witness))
+            // A selected task appends `MacrotaskExecuted` and may first append
+            // `ClockAdvanced`. Reserve both slots while the task is pending;
+            // `turn()` therefore only transfers or releases ownership.
+            .saturating_add(
+                u64::try_from(self.macrotasks.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(2)
+                    .saturating_mul(std::mem::size_of::<WitnessEvent>() as u64),
+            )
+    }
+
+    /// Cancel one pending macrotask by registration sequence and transfer its
+    /// ownership to the caller.
+    pub(crate) fn cancel_registration(&mut self, registration_seq: u64) -> Option<Macrotask> {
+        self.macrotasks.cancel_registration(registration_seq)
+    }
+
+    /// Roll back the last scheduling mutation, including its sequence number.
+    pub(crate) fn rollback_last_scheduled(&mut self, registration_seq: u64) -> Option<Macrotask> {
+        self.macrotasks.rollback_last_scheduled(registration_seq)
     }
 
     /// Select the next macrotask for execution.
@@ -1074,6 +1476,13 @@ pub struct PromiseAllTracker {
 }
 
 impl PromiseAllTracker {
+    /// Dynamic resident memory owned by the collected result map.
+    pub(crate) fn estimated_memory_bytes(&self) -> u64 {
+        saturating_sum(self.values.values().map(|value| {
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(estimate_js_value_memory_bytes(value))
+        }))
+    }
+
     /// Record that input promise at `index` fulfilled with `value`.
     /// Returns `true` if all promises are now resolved.
     pub fn record_fulfillment(&mut self, index: u32, value: JsValue) -> bool {
@@ -1124,6 +1533,15 @@ pub struct SettledOutcome {
 }
 
 impl PromiseAllSettledTracker {
+    /// Dynamic resident memory owned by the collected outcome map.
+    pub(crate) fn estimated_memory_bytes(&self) -> u64 {
+        saturating_sum(self.outcomes.values().map(|outcome| {
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                .saturating_add(estimate_string_memory_bytes(&outcome.status))
+                .saturating_add(estimate_js_value_memory_bytes(&outcome.value))
+        }))
+    }
+
     /// Record a fulfillment. Returns `true` if all settled.
     pub fn record_fulfillment(&mut self, index: u32, value: JsValue) -> bool {
         if !self.outcomes.contains_key(&index) {
@@ -1165,6 +1583,11 @@ pub struct PromiseRaceTracker {
 }
 
 impl PromiseRaceTracker {
+    /// A race tracker retains only inline handles and scalar state.
+    pub(crate) fn estimated_memory_bytes(&self) -> u64 {
+        0
+    }
+
     /// Attempt to settle the race. Returns `true` if this was the first settlement.
     pub fn try_settle(&mut self) -> bool {
         if self.settled {
@@ -1191,6 +1614,13 @@ pub struct PromiseAnyTracker {
 }
 
 impl PromiseAnyTracker {
+    /// Dynamic resident memory owned by the rejection-reason map.
+    pub(crate) fn estimated_memory_bytes(&self) -> u64 {
+        saturating_sum(self.errors.values().map(|reason| {
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(estimate_js_value_memory_bytes(reason))
+        }))
+    }
+
     /// Record a rejection. Returns `true` if all promises have rejected (AggregateError).
     pub fn record_rejection(&mut self, index: u32, reason: JsValue) -> bool {
         if self.settled {
@@ -1730,6 +2160,344 @@ mod tests {
         queue.compact();
         assert_eq!(queue.tasks.len(), 0);
         assert_eq!(queue.cursor, 0);
+    }
+
+    #[test]
+    fn promise_store_memory_estimate_counts_each_resident_owner() {
+        let value = js_str("payload");
+        let label = Label::Custom {
+            name: "sensitive".to_string(),
+            level: 3,
+        };
+        let store = PromiseStore {
+            promises: vec![PromiseRecord {
+                handle: PromiseHandle(0),
+                state: PromiseState::Fulfilled(value.clone()),
+                reactions: vec![PromiseReaction {
+                    kind: ReactionKind::Fulfill,
+                    handler: Some(ClosureHandle(4)),
+                    result_promise: PromiseHandle(1),
+                    label: label.clone(),
+                }],
+                label: label.clone(),
+                creation_seq: 0,
+                rejection_handled: false,
+            }],
+            next_seq: 1,
+            witness: vec![WitnessEvent::PromiseFulfilled {
+                handle: PromiseHandle(0),
+                value: value.clone(),
+                label: label.clone(),
+            }],
+        };
+
+        let expected = estimate_vector_slot_bytes::<PromiseRecord>(1)
+            .saturating_add(estimate_js_value_memory_bytes(&value))
+            .saturating_add(estimate_label_memory_bytes(&label))
+            .saturating_add(estimate_vector_slot_bytes::<PromiseReaction>(1))
+            .saturating_add(estimate_label_memory_bytes(&label))
+            .saturating_add(estimate_vector_slot_bytes::<WitnessEvent>(1))
+            .saturating_add(estimate_js_value_memory_bytes(&value))
+            .saturating_add(estimate_label_memory_bytes(&label));
+        assert_eq!(store.estimated_memory_bytes(), expected);
+    }
+
+    #[test]
+    fn promise_transition_projections_match_committed_owners_exactly() {
+        let label = Label::Custom {
+            name: "projection-label".repeat(5),
+            level: 3,
+        };
+        let value = js_str("projection-value");
+
+        let mut pending_store = PromiseStore::new();
+        let pending = pending_store.create();
+        let mut pending_queue = MicrotaskQueue::new();
+        let (projected_store_bytes, projected_queue_bytes) = pending_store
+            .projected_then_memory_bytes(pending, &label, &pending_queue)
+            .expect("pending then projection");
+        pending_store
+            .then(pending, None, None, label.clone(), &mut pending_queue)
+            .expect("pending then commit");
+        assert_eq!(
+            pending_store.estimated_memory_bytes(),
+            projected_store_bytes
+        );
+        assert_eq!(
+            pending_queue.estimated_memory_bytes(),
+            projected_queue_bytes
+        );
+
+        let mut fulfilled_store = PromiseStore::new();
+        let fulfilled = fulfilled_store.create();
+        let mut fulfilled_queue = MicrotaskQueue::new();
+        fulfilled_store
+            .fulfill(
+                fulfilled,
+                value.clone(),
+                label.clone(),
+                &mut fulfilled_queue,
+            )
+            .expect("source fulfillment");
+        let (projected_store_bytes, projected_queue_bytes) = fulfilled_store
+            .projected_then_memory_bytes(fulfilled, &label, &fulfilled_queue)
+            .expect("settled then projection");
+        fulfilled_store
+            .then(fulfilled, None, None, label.clone(), &mut fulfilled_queue)
+            .expect("settled then commit");
+        assert_eq!(
+            fulfilled_store.estimated_memory_bytes(),
+            projected_store_bytes
+        );
+        assert_eq!(
+            fulfilled_queue.estimated_memory_bytes(),
+            projected_queue_bytes
+        );
+
+        let mut settlement_store = PromiseStore::new();
+        let source = settlement_store.create();
+        settlement_store
+            .then(
+                source,
+                None,
+                None,
+                label.clone(),
+                &mut MicrotaskQueue::new(),
+            )
+            .expect("settlement reaction registration");
+        let mut settlement_queue = MicrotaskQueue::new();
+        let (projected_store_bytes, projected_queue_bytes) = settlement_store
+            .projected_fulfill_memory_bytes(source, &value, &label, &settlement_queue)
+            .expect("fulfillment projection");
+        settlement_store
+            .fulfill(source, value, label, &mut settlement_queue)
+            .expect("fulfillment commit");
+        assert_eq!(
+            settlement_store.estimated_memory_bytes(),
+            projected_store_bytes
+        );
+        assert_eq!(
+            settlement_queue.estimated_memory_bytes(),
+            projected_queue_bytes
+        );
+    }
+
+    #[test]
+    fn microtask_dequeue_moves_payload_and_compact_releases_slot() {
+        let label = Label::Custom {
+            name: "queued".to_string(),
+            level: 2,
+        };
+        let mut queue = MicrotaskQueue::new();
+        queue.enqueue(Microtask::PromiseReaction {
+            handler: None,
+            argument: js_str("owned-buffer"),
+            result_promise: PromiseHandle(0),
+            label: label.clone(),
+        });
+        let resident_pointer = match queue.tasks[0]
+            .as_ref()
+            .expect("enqueued slot remains occupied")
+        {
+            Microtask::PromiseReaction {
+                argument: JsValue::Str(text),
+                ..
+            } => text.as_ptr(),
+            _ => panic!("expected string-backed reaction task"),
+        };
+        let before_dequeue = estimate_vector_slot_bytes::<Option<Microtask>>(1)
+            .saturating_add(estimate_string_memory_bytes("owned-buffer"))
+            .saturating_add(estimate_label_memory_bytes(&label))
+            .saturating_add(estimate_vector_slot_bytes::<WitnessEvent>(2));
+        assert_eq!(queue.estimated_memory_bytes(), before_dequeue);
+
+        let task = queue.dequeue().expect("queued task is available");
+        let moved_pointer = match &task {
+            Microtask::PromiseReaction {
+                argument: JsValue::Str(text),
+                ..
+            } => text.as_ptr(),
+            _ => panic!("expected string-backed reaction task"),
+        };
+        assert_eq!(
+            moved_pointer, resident_pointer,
+            "dequeue must move, not clone"
+        );
+        assert_eq!(
+            queue.estimated_memory_bytes(),
+            estimate_vector_slot_bytes::<Option<Microtask>>(1)
+                .saturating_add(estimate_vector_slot_bytes::<WitnessEvent>(2))
+        );
+
+        queue.compact();
+        assert_eq!(
+            queue.estimated_memory_bytes(),
+            estimate_vector_slot_bytes::<WitnessEvent>(2)
+        );
+    }
+
+    #[test]
+    fn event_loop_memory_estimate_covers_every_macrotask_lane_and_witness() {
+        let label = Label::Custom {
+            name: "lane".to_string(),
+            level: 1,
+        };
+        let mut event_loop = EventLoop::new();
+        event_loop.macrotasks.schedule(
+            MacrotaskSource::MessageChannel,
+            ClosureHandle(1),
+            0,
+            label.clone(),
+        );
+        event_loop.set_immediate(ClosureHandle(2), label.clone());
+        event_loop.set_timeout(ClosureHandle(3), 1, label.clone());
+        event_loop.schedule_io_completion(ClosureHandle(4), label.clone());
+        event_loop.witness.push(WitnessEvent::PromiseRejected {
+            handle: PromiseHandle(0),
+            reason: js_str("audit"),
+            label: label.clone(),
+        });
+
+        let expected_macrotasks = 4u64.saturating_mul(
+            estimate_vector_slot_bytes::<MacrotaskHeapEntry>(1)
+                .saturating_add(estimate_label_memory_bytes(&label)),
+        );
+        let expected_witness = estimate_vector_slot_bytes::<WitnessEvent>(1)
+            .saturating_add(estimate_string_memory_bytes("audit"))
+            .saturating_add(estimate_label_memory_bytes(&label))
+            .saturating_add(estimate_vector_slot_bytes::<WitnessEvent>(8));
+        assert_eq!(
+            event_loop.estimated_memory_bytes(),
+            expected_macrotasks.saturating_add(expected_witness)
+        );
+    }
+
+    #[test]
+    fn macrotask_cancellation_moves_task_and_releases_exact_estimate() {
+        let label = Label::Custom {
+            name: "cancelled".to_string(),
+            level: 2,
+        };
+        let mut event_loop = EventLoop::new();
+        let registration_seq = event_loop.set_timeout(ClosureHandle(7), 100, label.clone());
+        let task_bytes = estimate_vector_slot_bytes::<MacrotaskHeapEntry>(1)
+            .saturating_add(estimate_label_memory_bytes(&label))
+            .saturating_add(estimate_vector_slot_bytes::<WitnessEvent>(2));
+        assert_eq!(event_loop.estimated_memory_bytes(), task_bytes);
+
+        let cancelled = event_loop
+            .cancel_registration(registration_seq)
+            .expect("scheduled registration remains cancellable");
+        assert_eq!(cancelled.registration_seq, registration_seq);
+        assert_eq!(cancelled.label, label);
+        assert_eq!(event_loop.estimated_memory_bytes(), 0);
+        assert!(event_loop.cancel_registration(registration_seq).is_none());
+    }
+
+    #[test]
+    fn failed_schedule_rollback_reuses_deterministic_sequence() {
+        let mut event_loop = EventLoop::new();
+        let refused_seq = event_loop.set_timeout(ClosureHandle(7), 100, Label::Public);
+        let rolled_back = event_loop
+            .rollback_last_scheduled(refused_seq)
+            .expect("last schedule remains rollback-safe");
+        assert_eq!(rolled_back.registration_seq, refused_seq);
+        assert_eq!(event_loop.estimated_memory_bytes(), 0);
+
+        let retried_seq = event_loop.set_timeout(ClosureHandle(8), 100, Label::Public);
+        assert_eq!(retried_seq, refused_seq);
+    }
+
+    #[test]
+    fn promise_combinator_memory_estimates_count_maps_values_and_statuses() {
+        let mut all = PromiseAllTracker {
+            result_promise: PromiseHandle(1),
+            values: BTreeMap::new(),
+            total: 1,
+            resolved_count: 0,
+            settled: false,
+        };
+        all.record_fulfillment(0, js_str("all"));
+        assert_eq!(
+            all.estimated_memory_bytes(),
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(estimate_string_memory_bytes("all"))
+        );
+
+        let mut all_settled = PromiseAllSettledTracker {
+            result_promise: PromiseHandle(2),
+            outcomes: BTreeMap::new(),
+            total: 1,
+            settled_count: 0,
+        };
+        all_settled.record_rejection(0, js_str("reason"));
+        assert_eq!(
+            all_settled.estimated_memory_bytes(),
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                .saturating_add(estimate_string_memory_bytes("rejected"))
+                .saturating_add(estimate_string_memory_bytes("reason"))
+        );
+
+        let race = PromiseRaceTracker {
+            result_promise: PromiseHandle(3),
+            settled: false,
+        };
+        assert_eq!(race.estimated_memory_bytes(), 0);
+
+        let mut any = PromiseAnyTracker {
+            result_promise: PromiseHandle(4),
+            errors: BTreeMap::new(),
+            total: 1,
+            rejected_count: 0,
+            settled: false,
+        };
+        any.record_rejection(0, js_str("any"));
+        assert_eq!(
+            any.estimated_memory_bytes(),
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(estimate_string_memory_bytes("any"))
+        );
+    }
+
+    #[test]
+    fn fresh_promise_rollback_restores_store_and_witness_exactly() {
+        let mut store = PromiseStore::new();
+        let baseline = store.estimated_memory_bytes();
+        let handle = store.create();
+        assert!(store.estimated_memory_bytes() > baseline);
+        assert!(store.rollback_last_created(handle));
+        assert_eq!(store.len(), 0);
+        assert!(store.witness_log().is_empty());
+        assert_eq!(store.estimated_memory_bytes(), baseline);
+        assert!(!store.rollback_last_created(handle));
+    }
+
+    #[test]
+    fn fresh_microtask_rollback_moves_payload_and_restores_queue_exactly() {
+        let mut queue = MicrotaskQueue::new();
+        let baseline = queue.estimated_memory_bytes();
+        queue.enqueue(Microtask::PromiseRejection {
+            reason: js_str("rollback-payload"),
+            result_promise: PromiseHandle(4),
+            label: Label::Custom {
+                name: "rollback-label".to_string(),
+                level: 2,
+            },
+        });
+        assert!(queue.estimated_memory_bytes() > baseline);
+        let rolled_back = queue
+            .rollback_last_enqueued()
+            .expect("fresh pending enqueue is rollback-safe");
+        assert!(matches!(
+            rolled_back,
+            Microtask::PromiseRejection {
+                reason: JsValue::Str(reason),
+                ..
+            } if reason == "rollback-payload"
+        ));
+        assert!(queue.is_empty());
+        assert_eq!(queue.total_enqueued(), 0);
+        assert!(queue.witness_log().is_empty());
+        assert_eq!(queue.estimated_memory_bytes(), baseline);
+        assert!(queue.rollback_last_enqueued().is_none());
     }
 
     // ----- Virtual clock -----

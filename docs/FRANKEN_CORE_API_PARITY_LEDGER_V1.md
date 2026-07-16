@@ -61,6 +61,7 @@ alone.
 | `bd-la2e0` | Fail-closed async-function placeholder fix in franken-core. |
 | `bd-nwhcp` | Timer placeholder tests replaced with executable regressions. |
 | `bd-n8eta.4` | Executable Symbol property-key parity wave; ADR/API contract, engine/core carriers, hook migration, and donor closeout are separate children. |
+| `bd-b12xs` | Exact UTF-16 property-key migration; exact lookup, ordered storage, and runtime adoption are separate children. |
 
 ## Active Parity Exception: Executable Symbol Keys
 
@@ -88,6 +89,27 @@ membership or a passing descriptor-model test is not evidence that this
 executable parity gap is closed. Legacy object-backed engine Symbols may be
 canonicalized only by the versioned whole-artifact migration specified in
 ADR-0008, never by guessing from an arbitrary heap object.
+
+## Active Parity Exception: Exact UTF-16 String Keys
+
+`bd-b12xs.1` added `js_string::ExactPropertyMap`, which keeps lone-surrogate
+keys exact and uses a dual JSON wire shape. `bd-b12xs.2` adds the corresponding
+`object_model::ExactOrderedStringMap` as a stable, additive core API: canonical
+array indices iterate numerically first, other exact strings retain creation
+order, and borrowed and owning iterators return `JsString` keys without a lossy
+projection.
+
+The existing `OrderedStringMap` signatures and runtime heap fields remain
+unchanged. Runtime adoption and engine/core item-level parity are later
+`bd-b12xs` work, so the `js_string` and `object_model` rows remain
+`pending_graduation`. Required adoption evidence must preserve all of these
+properties:
+
+- lone D800, lone D801, and literal U+FFFD keys remain three distinct entries
+- all-well-formed maps retain the historical map-shaped bytes
+- any lone-surrogate key selects an ES-ordered exact pair sequence for the
+  whole map
+- decoders reject duplicate canonical keys while accepting both wire shapes
 
 ## Fail-Closed Rules
 

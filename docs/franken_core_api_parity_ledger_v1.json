@@ -434,11 +434,12 @@
       "engine_export_present": true,
       "file_relation": "different",
       "owner_rationale": "franken-core contains the canonical implementation and franken-engine re-exports it, but runtime property-carrier adoption and wire parity remain incomplete; export presence alone does not promote the row.",
-      "test_expectation": "Prove exact UTF-16 value and serde behavior through the engine re-export, then complete ExactPropertyMap runtime integration before owner promotion.",
+      "test_expectation": "Prove exact UTF-16 value and ExactPropertyMap serde behavior through the engine re-export, then complete ExactOrderedStringMap runtime integration before owner promotion.",
       "known_beads": [
         "bd-2vzgi",
         "bd-b12xs",
-        "bd-b12xs.1"
+        "bd-b12xs.1",
+        "bd-b12xs.2"
       ]
     },
     {
@@ -463,12 +464,14 @@
       "engine_path": "crates/franken-engine/src/object_model.rs",
       "engine_export_present": true,
       "file_relation": "different",
-      "owner_rationale": "object_model was one of the missing modules behind earlier workspace exclusion.",
-      "test_expectation": "Future parity work must compare object invariants and serde behavior before promotion.",
+      "owner_rationale": "object_model was one of the missing modules behind earlier workspace exclusion; its core-only OrderedStringMap and additive ExactOrderedStringMap families remain item-level parity work despite both crates exporting the module.",
+      "test_expectation": "Future parity work must compare object invariants and serde behavior, including legacy-byte/order compatibility for OrderedStringMap, exact UTF-16 identity plus ES own-key order for ExactOrderedStringMap, borrowed and owning iterator behavior for both, and the intended engine adoption boundary, before promotion.",
       "known_beads": [
         "bd-ucemx",
         "bd-zsais",
-        "bd-dymfz"
+        "bd-dymfz",
+        "bd-b12xs",
+        "bd-b12xs.2"
       ]
     },
     {

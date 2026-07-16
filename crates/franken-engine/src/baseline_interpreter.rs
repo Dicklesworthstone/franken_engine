@@ -3463,6 +3463,38 @@ impl Value {
         matches!(self, Self::Undefined | Self::Null)
     }
 
+    /// Whether this runtime value has ECMAScript object identity.
+    ///
+    /// Functions, promises, iterators, and other exotic objects use dedicated
+    /// carrier variants rather than [`Value::Object`]. Keep this match
+    /// exhaustive so every future variant makes an explicit
+    /// object-versus-primitive choice (bd-ptu9m).
+    #[allow(clippy::match_like_matches_macro)] // Exhaustiveness is the point of this classifier.
+    pub fn is_object_like(&self) -> bool {
+        match self {
+            Self::Undefined
+            | Self::Null
+            | Self::Bool(_)
+            | Self::Int(_)
+            | Self::BigInt(_)
+            | Self::Float(_)
+            | Self::Str(_) => false,
+            Self::Object(_)
+            | Self::Function(_)
+            | Self::Closure(_)
+            | Self::Iterator(_)
+            | Self::GeneratorFunction(_)
+            | Self::Generator(_)
+            | Self::AsyncFunction(_)
+            | Self::AsyncFunctionObject(_)
+            | Self::AsyncGeneratorFunction(_)
+            | Self::AsyncGeneratorObject(_)
+            | Self::Promise(_)
+            | Self::BuiltinFunction(_)
+            | Self::Accessor { .. } => true,
+        }
+    }
+
     pub fn is_callable(&self) -> bool {
         matches!(
             self,
@@ -17765,7 +17797,7 @@ impl InterpreterCore {
             // return value is not an object, use the allocated `this` object
             // instead.
             let (effective_val, effective_label) = match &frame.construct_this {
-                Some(this_obj) if !matches!(&return_val, Value::Object(_)) => {
+                Some(this_obj) if !return_val.is_object_like() => {
                     (this_obj.clone(), frame.this_label.clone())
                 }
                 _ => (return_val, return_label),
@@ -71928,6 +71960,36 @@ mod class_feature_bd_bg9l1_16_tests {
         ))
         .expect("class expressions must construct instances from real source");
         assert_eq!(value, "42");
+    }
+
+    #[test]
+    fn constructor_preserves_explicit_object_like_returns_bd_ptu9m() {
+        let value = eval_class_source(concat!(
+            "let callable = function(){ return 7; };\n",
+            "let promise = Promise.resolve(9);\n",
+            "let builtin = Array.isArray;\n",
+            "function* make(){ yield 1; } let generator = make();\n",
+            "function ReturnCallable(){ return callable; }\n",
+            "function ReturnPromise(){ return promise; }\n",
+            "function ReturnBuiltin(){ return builtin; }\n",
+            "function ReturnGenerator(){ return generator; }\n",
+            "new ReturnCallable() === callable && ",
+            "new ReturnPromise() === promise && ",
+            "new ReturnBuiltin() === builtin && ",
+            "new ReturnGenerator() === generator;",
+        ))
+        .expect("constructors must preserve explicit ECMAScript object-like returns");
+        assert_eq!(value, "true");
+    }
+
+    #[test]
+    fn constructor_primitive_return_keeps_allocated_instance_bd_ptu9m() {
+        let value = eval_class_source(concat!(
+            "function KeepThis(){ this.value = 4; return 7; }\n",
+            "let instance = new KeepThis(); instance.value === 4;",
+        ))
+        .expect("a primitive constructor return must fall back to the allocated instance");
+        assert_eq!(value, "true");
     }
 
     #[test]

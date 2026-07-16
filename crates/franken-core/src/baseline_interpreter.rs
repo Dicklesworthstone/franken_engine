@@ -389,6 +389,36 @@ impl Value {
         matches!(self, Self::Undefined | Self::Null)
     }
 
+    /// Whether this runtime value has ECMAScript object identity.
+    ///
+    /// The baseline carrier keeps functions, promises, iterators, and other
+    /// exotic objects in dedicated variants instead of wrapping each one in
+    /// [`Value::Object`]. Keep this match exhaustive so every future variant
+    /// makes an explicit object-versus-primitive choice (bd-ptu9m).
+    #[allow(clippy::match_like_matches_macro)] // Exhaustiveness is the point of this classifier.
+    pub fn is_object_like(&self) -> bool {
+        match self {
+            Self::Undefined
+            | Self::Null
+            | Self::Bool(_)
+            | Self::Int(_)
+            | Self::Float(_)
+            | Self::Str(_) => false,
+            Self::Object(_)
+            | Self::Function(_)
+            | Self::Closure(_)
+            | Self::Iterator(_)
+            | Self::GeneratorFunction(_)
+            | Self::Generator(_)
+            | Self::AsyncFunction(_)
+            | Self::AsyncFunctionObject(_)
+            | Self::AsyncGeneratorFunction(_)
+            | Self::AsyncGeneratorObject(_)
+            | Self::Promise(_)
+            | Self::BuiltinFunction(_) => true,
+        }
+    }
+
     /// Type name for error messages.
     pub fn type_name(&self) -> &'static str {
         match self {
@@ -3210,7 +3240,7 @@ impl InterpreterCore {
             // return value is not an object, use the allocated `this` object
             // instead.
             let (effective_val, effective_label) = match &frame.construct_this {
-                Some(this_obj) if !matches!(&return_val, Value::Object(_)) => {
+                Some(this_obj) if !return_val.is_object_like() => {
                     (this_obj.clone(), frame.this_label.clone())
                 }
                 _ => (return_val, return_label),
@@ -18337,6 +18367,38 @@ mod tests {
             .execute(&output.ir3)
             .expect("bd-va13y class expression source should execute")
             .value
+    }
+
+    #[test]
+    fn constructor_preserves_explicit_object_like_returns_bd_ptu9m() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "let callable = function(){ return 7; }; \
+                 let promise = Promise.resolve(9); \
+                 let builtin = Array.isArray; \
+                 function* make(){ yield 1; } let generator = make(); \
+                 function ReturnCallable(){ return callable; } \
+                 function ReturnPromise(){ return promise; } \
+                 function ReturnBuiltin(){ return builtin; } \
+                 function ReturnGenerator(){ return generator; } \
+                 new ReturnCallable() === callable && \
+                 new ReturnPromise() === promise && \
+                 new ReturnBuiltin() === builtin && \
+                 new ReturnGenerator() === generator;"
+            ),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn constructor_primitive_return_keeps_allocated_instance_bd_ptu9m() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "function KeepThis(){ this.value = 4; return 7; } \
+                 let instance = new KeepThis(); instance.value === 4;"
+            ),
+            Value::Bool(true)
+        );
     }
 
     #[test]

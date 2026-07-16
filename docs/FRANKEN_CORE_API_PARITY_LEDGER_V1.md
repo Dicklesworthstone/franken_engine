@@ -13,8 +13,8 @@ This ledger inventories every public module exported by
 `crates/franken-engine/src/lib.rs`. It is a graduation-readiness artifact only:
 it does not change APIs, move code, or approve workspace membership.
 
-The current inventory has 41 franken-core module exports. All 41 names are also
-exported by `franken-engine`, but most corresponding source files differ. That
+The current inventory has 42 franken-core module exports. All 42 names are also
+exported by `franken-engine`, but all corresponding source files differ. That
 means the current state is parity-visible, not parity-proven.
 
 ## Contract Version
@@ -42,11 +42,11 @@ alone.
 
 | Metric | Value |
 | --- | --- |
-| franken-core public modules | 41 |
-| matching franken-engine public modules | 41 |
+| franken-core public modules | 42 |
+| matching franken-engine public modules | 42 |
 | missing engine module names | 0 |
 | identical source files | 0 |
-| different source files | 41 |
+| different source files | 42 |
 | workspace inclusion complete | true |
 
 ## Historical Inputs
@@ -60,6 +60,34 @@ alone.
 | `bd-77ec1` | Open engine follow-up for suspended async-generator `.next()` body execution and truthful support claims. |
 | `bd-la2e0` | Fail-closed async-function placeholder fix in franken-core. |
 | `bd-nwhcp` | Timer placeholder tests replaced with executable regressions. |
+| `bd-n8eta.4` | Executable Symbol property-key parity wave; ADR/API contract, engine/core carriers, hook migration, and donor closeout are separate children. |
+
+## Active Parity Exception: Executable Symbol Keys
+
+`bd-n8eta.4.1` records a wire-additive but Rust-source-breaking versioned
+evolution in ADR-0008. Both descriptor object models already have typed Symbol
+identities and correct `[[OwnPropertyKeys]]` order, but their executable
+baseline heaps are not at parity: franken-core has no executable Symbol value,
+while franken-engine uses heap objects and projects computed Symbol keys to
+strings.
+
+The parity row therefore remains `pending_graduation`. Evidence must land in
+this order:
+
+| Bead | Required evidence |
+| --- | --- |
+| `bd-n8eta.4.6` | Both exhaustive public `Value` enums receive the required version/migration treatment and downstream match/serde audit. |
+| `bd-n8eta.4.2` | Engine uses typed Symbol identity for lookup, ordering, replay, memory, and the correct consumer filters. |
+| `bd-n8eta.4.3` | Core adds the same executable value/key contract and proves QuickJS/V8 profile parity. |
+| `bd-n8eta.4.4` | The frozen string-only property-hook boundary gains an explicitly reviewed typed-key migration without a string alias. |
+| `bd-n8eta.4.5` | Node/Bun donor cases and lockstep engine/core tests prove the combined surface before DISC-013 closes. |
+
+Legacy string-only heap payloads must remain readable, and a historical string
+such as `"Symbol(14)"` must remain distinct from `SymbolId(14)`. Workspace
+membership or a passing descriptor-model test is not evidence that this
+executable parity gap is closed. Legacy object-backed engine Symbols may be
+canonicalized only by the versioned whole-artifact migration specified in
+ADR-0008, never by guessing from an arbitrary heap object.
 
 ## Fail-Closed Rules
 

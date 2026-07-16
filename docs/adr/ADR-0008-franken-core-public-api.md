@@ -4,7 +4,8 @@
 - Date: 2026-06-05
 - Owners: FrankenEngine maintainers + Track J maintainers
 - Plan references: Track J, franken-core graduation contract, API parity ledger
-- Related beads: `bd-cixqu.10.6`, `bd-cixqu.10.7`, `bd-4w7h9.1`, `bd-4w7h9.2`
+- Related beads: `bd-cixqu.10.6`, `bd-cixqu.10.7`, `bd-4w7h9.1`,
+  `bd-4w7h9.2`, `bd-n8eta.4`, `bd-n8eta.4.1`, `bd-n8eta.4.6`
 
 ## Context
 
@@ -46,7 +47,7 @@ mutation and must still satisfy the graduation contract and parity ledger.
 
 ## Public Module Surface
 
-The root public API is exactly the 41 `pub mod` declarations in
+The root public API is exactly the 42 `pub mod` declarations in
 `crates/franken-core/src/lib.rs`:
 
 | Module | Stability tier | Graduation state |
@@ -75,6 +76,7 @@ The root public API is exactly the 41 `pub mod` declarations in
 | `hindsight_boundary_capture` | experimental boundary | pending graduation |
 | `ifc_artifacts` | stable boundary | pending graduation |
 | `ir_contract` | stable boundary | pending graduation |
+| `js_string` | stable boundary | pending graduation |
 | `lowering_pipeline` | stable boundary | pending graduation |
 | `object_model` | stable boundary | pending graduation |
 | `optimal_stopping` | experimental boundary | pending graduation |
@@ -128,6 +130,7 @@ the owning type's module tier and Rust visibility rules.
 - `hash_tiers`: enums `HashTier`, `HashAlgorithm`; structs `IntegrityHash`, `ContentHash`, `AuthenticityHash`, `HashEvent`.
 - `ifc_artifacts`: enums `Label`, `ClearanceClass`, `Ir2LabelSource`, `FlowAuthorizationAdvisory`, `FlowCheckResult`, `ProofMethod`, `DeclassificationDecision`, `ClaimStrength`, `IfcValidationError`; structs `IfcSchemaVersion`, `DeclassificationObligation`, `FlowEnvelope`, `FlowAuthorizationAssessment`, `FlowRule`, `DeclassificationRoute`, `FlowPolicy`, `FlowProof`, `DeclassificationReceipt`, `ConfinementClaim`.
 - `ir_contract`: constants `IR_ACCESSOR_GET_PREFIX`, `IR_ACCESSOR_SET_PREFIX`, `IR_SUPER_CONSTRUCTOR_PROPERTY`, `IR_SUPER_PROTOTYPE_PROPERTY`; type aliases `BindingId`, `Reg`, `InstrIndex`; enums `IrLevel`, `BindingKind`, `ScopeKind`, `Ir1PropertyKey`, `IteratorCloseReason`, `Ir1Op`, `Ir1Literal`, `EffectBoundary`, `Ir3Instruction`, `WitnessEventKind`, `ExecutionOutcome`, `IrErrorCode`; structs `IrSchemaVersion`, `IrHeader`, `Ir0Module`, `ScopeId`, `ResolvedBinding`, `ScopeNode`, `Ir1Module`, `CapabilityTag`, `FlowAnnotation`, `Ir2Op`, `Ir2Module`, `RegRange`, `Ir3FunctionDesc`, `SpecializationLinkage`, `Ir3Module`, `WitnessEvent`, `HostcallDecisionRecord`, `Ir4Module`, `IrError`, `IrContractEvent`, `IrVerifier`; functions `verify_ir0_hash`, `verify_ir1_source`, `verify_ir3_specialization`, `verify_ir4_linkage`, `error_code`.
+- `js_string`: structs `JsString`, `CodeUnits`, `ExactPropertyMap`.
 - `lowering_pipeline`: enum `LoweringPipelineError`; structs `LoweringContext`, `LoweringEvent`, `InvariantCheck`, `PassWitness`, `IsomorphismLedgerEntry`, `LoweringPassResult`, `LoweringPipelineOutput`, `Ir2FlowProofArtifact`, `FlowProofArtifactEntry`, `DeniedFlowArtifactEntry`, `RequiredDeclassificationArtifactEntry`, `RuntimeCheckpointArtifactEntry`; functions `lower_ir0_to_ir3`, `validate_ir0_static_semantics`, `lower_ir0_to_ir1`, `lower_ir1_to_ir2`, `lower_ir2_to_ir3`.
 - `object_model`: enums `PropertyKey`, `WellKnownSymbol`, `JsValue`, `PropertyDescriptor`, `ObjectError`, `ManagedObject`; structs `SymbolId`, `ObjectHandle`, `OrdinaryObject`, `ProxyObject`, `ObjectHeap`, `SymbolRegistry`, `ProxyInvariantChecker`, `Reflect`, `ReflectApplyRequest`, `ReflectConstructRequest`.
 - `parser`: public re-export `ParseGoal`; constants `PARSE_EVENT_IR_CONTRACT_VERSION`, `PARSE_EVENT_IR_SCHEMA_VERSION`, `PARSE_EVENT_IR_HASH_ALGORITHM`, `PARSE_EVENT_IR_HASH_PREFIX`, `PARSE_EVENT_IR_POLICY_ID`, `PARSE_EVENT_IR_COMPONENT`, `PARSE_EVENT_IR_TRACE_PREFIX`, `PARSE_EVENT_IR_DECISION_PREFIX`, `PARSE_EVENT_AST_MATERIALIZER_CONTRACT_VERSION`, `PARSE_EVENT_AST_MATERIALIZER_SCHEMA_VERSION`, `PARSE_EVENT_AST_MATERIALIZER_NODE_ID_PREFIX`, `PARSER_DIAGNOSTIC_TAXONOMY_VERSION`, `PARSER_DIAGNOSTIC_SCHEMA_VERSION`, `PARSER_DIAGNOSTIC_HASH_ALGORITHM`, `PARSER_DIAGNOSTIC_HASH_PREFIX`, `SEMANTIC_ERROR_TAXONOMY_VERSION`; type aliases `ParseResult`, `ParseEventMaterializationResult`; traits `ParserInput`, `Es2020Parser`; enums `ParseErrorCode`, `ParseDiagnosticCategory`, `ParseDiagnosticSeverity`, `ParserMode`, `ParseBudgetKind`, `GrammarCoverageStatus`, `ParseEventKind`, `ParseEventMaterializationErrorCode`, `SemanticErrorCode`, `SemanticDiagnosticCategory`; structs `ParseDiagnosticRule`, `ParseDiagnosticTaxonomy`, `ParserBudget`, `ParserOptions`, `ParseFailureWitness`, `GrammarFamilyCoverage`, `GrammarCompletenessMatrix`, `GrammarCompletenessSummary`, `ParseError`, `ParseDiagnosticEnvelope`, `ParseEvent`, `ParseEventIr`, `ParseEventMaterializationError`, `MaterializedStatementNode`, `MaterializedSyntaxTree`, `ParserSource`, `StreamInput`, `CanonicalEs2020Parser`, `SemanticError`, `SemanticValidationResult`; function `normalize_parse_error`.
@@ -163,12 +166,12 @@ the owning type's module tier and Rust visibility rules.
 
 Audit result:
 
-- All 41 root exports are explicit `pub mod` declarations in `lib.rs`.
+- All 42 root exports are explicit `pub mod` declarations in `lib.rs`.
 - There is no root-level wildcard `pub use *` facade.
 - Module-level public declarations are broad, but this is an intentional
   v0.1 workspace-boundary freeze, not a claim of third-party API maturity.
-- The parity ledger records 41 matching module names in `franken-engine`, 0
-  missing engine exports, 0 identical source files, 41 different source files,
+- The parity ledger records 42 matching module names in `franken-engine`, 0
+  missing engine exports, 0 identical source files, 42 different source files,
   and `workspace_inclusion_complete = true`.
 - Every parity-ledger row is still `pending_graduation`.
 
@@ -226,6 +229,7 @@ versions are treated as compatibility boundaries:
 | --- | --- | --- |
 | Stable boundary additive item | patch or minor | bead + tests + ADR inventory update |
 | Stable boundary behavior clarification | patch | bead + validation evidence |
+| Stable boundary exhaustive enum variant or public struct field addition | minor while `0.x`, major after `1.0` | ADR update + migration notes + downstream construction/match and serde audit |
 | Stable boundary signature/shape removal or rename | minor while `0.x`, major after `1.0` | ADR update + migration notes |
 | Experimental boundary additive item | patch or minor | bead + inventory update |
 | Experimental boundary breaking change | minor | bead + release note |
@@ -233,11 +237,234 @@ versions are treated as compatibility boundaries:
 
 After `1.0`, stable boundary breaking changes require a major version bump.
 
+## Approved Versioned Evolution: Executable Symbol Property Keys
+
+`bd-n8eta.4.1` approves one wire-additive but Rust-source-breaking
+stable-boundary evolution for the executable baseline interpreters. Both
+public `Value` enums are currently exhaustive. Appending `Value::Symbol`
+preserves every existing variant's serde encoding, but it breaks downstream
+exhaustive matches and old decoders cannot read the new variant.
+
+The version contract is therefore non-optional:
+
+- `bd-n8eta.4.6` blocks both runtime implementation children.
+- The current `frankenengine-core` and `frankenengine-engine` `0.1.0` packages
+  must advance to a version newer than `0.1.x` (at least `0.2.0`, including a
+  separately approved `1.0.0`) before or atomically with the new variant. If
+  either package has already reached `1.0`, this change requires its next major
+  version.
+- That migration must publish release/migration notes, audit downstream
+  exhaustive matches and serde consumers, and add `#[non_exhaustive]` to both
+  `Value` enums in the same versioned change.
+- The same audit covers any public execution-seed or captured-state shape
+  change needed to carry `symbol_state`; no public `0.1.x` shape changes outside
+  the coordinated migration.
+
+The descriptor object model already exposes `object_model::SymbolId`,
+`object_model::PropertyKey::{String, Symbol}`, and `JsValue::Symbol`; the
+executable heaps must reuse those identities instead of inventing a
+display-string encoding.
+
+The approved source contract is:
+
+1. After `bd-n8eta.4.6`, append
+   `Value::Symbol(object_model::SymbolId)` to each executable baseline `Value`
+   enum. Existing variant names, payloads, discriminants, and serialized
+   encodings do not move or change; the new JSON value wire is
+   `{"Symbol":14}` for `SymbolId(14)`.
+2. Use `object_model::PropertyKey` (or a private isomorphic carrier) inside
+   executable property operations. The ordinary string `"Symbol(14)"` and
+   `PropertyKey::Symbol(SymbolId(14))` are distinct keys in lookup, equality,
+   duplicate detection, and replay.
+3. Keep every public `HeapObject` field name, type, and visibility unchanged.
+   Symbol-keyed data/accessor entries and Symbol creation order may use private
+   metadata in the existing ordered property carrier, because replacing the
+   public `OrderedStringMap<Value>` field would violate this freeze.
+4. Keep `baseline_interpreter::PropertyKey = String` and the current
+   `InterpreterHook::pre_property_access` signature unchanged in the ordinary
+   ECMAScript implementation children. That callback cannot represent a Symbol
+   identity. `bd-n8eta.4.4` owns an explicitly reviewed typed-key hook migration;
+   implementations must not stringify a Symbol to cross the old callback, and
+   the parent cannot claim hooked-execution completeness before that child
+   lands.
+5. Store dynamic Symbol allocation, descriptions, the global registry, and
+   well-known-symbol schema in interpreter-owned seed-tracked state. That state
+   is authoritative; it must never be reconstructed from display strings or
+   ordinary user-visible property names.
+
+This evolution does not require an AST or IR schema change: computed property
+keys already travel through dynamic value registers. It does require the
+following backward-readable heap wire extension:
+
+```json
+{
+  "properties": {"ordinary": {"Int": 1}},
+  "symbol_properties": [
+    {"symbol_id": 14, "kind": "data", "value": {"Int": 2}},
+    {"symbol_id": 15, "kind": "accessor", "get": null, "set": null}
+  ]
+}
+```
+
+- `properties` retains its historical string-keyed map representation.
+- `symbol_properties` is optional, omitted when empty, appended after existing
+  fields, and ordered by Symbol-property creation time.
+- Every `symbol_properties` record has exactly one nonzero `u32` `symbol_id`
+  and one `kind`. A `data` record requires exactly `symbol_id`, `kind`, and one
+  existing `Value` wire in `value`; it forbids `get` and `set`. An `accessor`
+  record requires exactly `symbol_id`, `kind`, `get`, and `set`; each accessor
+  endpoint is JSON `null` or one existing `Value` wire, and `value` is
+  forbidden. Unknown fields and kinds are rejected.
+- A decoder must continue to accept every payload that omits
+  `symbol_properties`. When the field is present it rejects duplicate
+  `symbol_id` entries and malformed endpoint values. A whole-interpreter
+  decoder also rejects any dynamic ID absent from its `symbol_state`.
+- A standalone `HeapObject` decoder has no registry context, so it performs
+  only structural validation and preserves typed `SymbolId` keys for exact
+  round-trip; it does not invent descriptions or registry entries. Before such
+  an object can be attached to an interpreter, seeded, or accessed, the
+  interpreter validates every key and nested `Value::Symbol` against its
+  `symbol_state`. Missing state or an unresolved dynamic ID rejects attachment.
+- Updating a Symbol property retains its array position; delete followed by
+  re-creation appends it. Descriptor-kind conversion retains the position.
+- Historical engine payloads may contain ordinary strings such as
+  `"Symbol(14)"` produced by the old lossy projection. Those strings are
+  inherently ambiguous with user-authored strings and must remain ordinary
+  string keys; deserialization must not guess and rewrite them into Symbols.
+- Existing `Value` and heap payloads with no Symbol values/properties must keep
+  their prior bytes. Any explicit schema identifier or golden artifact that a
+  child changes must be versioned or regenerated with explicit provenance; a
+  Symbol-bearing payload may not be claimed as the old string-only schema.
+
+Every materialized execution seed and serialized whole-interpreter
+snapshot/capture carries the same `symbol_state`. In serialized artifacts this
+is an optional final field, omitted only for the canonical default state
+(`next_symbol_id = 14`, empty `symbols`, and no Symbol values or keys), with
+this exact shape:
+
+```json
+{
+  "symbol_state": {
+    "well_known_schema": "es2020-symbol-ids-1-13-v1",
+    "next_symbol_id": 16,
+    "symbols": [
+      {"symbol_id": 14, "kind": "private", "description": null},
+      {
+        "symbol_id": 15,
+        "kind": "global",
+        "description": "shared",
+        "registry_key": "shared"
+      }
+    ]
+  }
+}
+```
+
+- Symbol ID `0` is invalid. `WellKnownSymbol` identities are fixed at IDs
+  `1..=13` by `es2020-symbol-ids-1-13-v1` and are not listed in `symbols`.
+  Dynamic private and global Symbols use monotonically increasing IDs starting
+  at `14`; IDs are never reused within an interpreter state. `u32::MAX` is an
+  exhausted-state sentinel and is never issued as a `SymbolId`.
+
+The fixed well-known mapping for that schema is:
+
+| ID | Symbol | Property-key name | Description |
+| ---: | --- | --- | --- |
+| 1 | `Iterator` | `@@iterator` | `Symbol.iterator` |
+| 2 | `ToPrimitive` | `@@toPrimitive` | `Symbol.toPrimitive` |
+| 3 | `HasInstance` | `@@hasInstance` | `Symbol.hasInstance` |
+| 4 | `ToStringTag` | `@@toStringTag` | `Symbol.toStringTag` |
+| 5 | `Species` | `@@species` | `Symbol.species` |
+| 6 | `IsConcatSpreadable` | `@@isConcatSpreadable` | `Symbol.isConcatSpreadable` |
+| 7 | `Unscopables` | `@@unscopables` | `Symbol.unscopables` |
+| 8 | `AsyncIterator` | `@@asyncIterator` | `Symbol.asyncIterator` |
+| 9 | `Match` | `@@match` | `Symbol.match` |
+| 10 | `MatchAll` | `@@matchAll` | `Symbol.matchAll` |
+| 11 | `Replace` | `@@replace` | `Symbol.replace` |
+| 12 | `Search` | `@@search` | `Symbol.search` |
+| 13 | `Split` | `@@split` | `Symbol.split` |
+
+Changing any row requires a new `well_known_schema`; Rust enum declaration
+order alone is never allowed to redefine persisted IDs.
+
+- `next_symbol_id` is the first unallocated dynamic ID and must be greater than
+  every listed dynamic ID. Overflow is an execution error, not a wrap or reuse.
+  `symbols` is serialized in increasing ID order.
+- `symbols` contains every live dynamic identity plus every global-registry
+  identity. An unreachable private record may be collected, but its ID is not
+  reused and `next_symbol_id` does not move backward except when an entire
+  earlier execution seed is restored atomically.
+- A `private` record requires exactly `symbol_id`, `kind`, and `description`,
+  where `description` is JSON `null` or the existing `JsString` wire; it
+  forbids `registry_key`. A `global` record additionally requires a non-null
+  `registry_key` using the exact `JsString` wire, and its `description` must
+  equal that key. Registry keys and Symbol IDs are unique. Unknown fields,
+  kinds, reserved IDs, inconsistent `next_symbol_id`, and unresolved
+  `Value::Symbol` or Symbol-property IDs are rejected.
+- `Symbol.for` consults only the global records and interns by exact `JsString`
+  key. `Symbol.keyFor` returns a key only for a global record; private and
+  well-known Symbols return `undefined`. Well-known descriptions come from the
+  fixed schema, while private/global descriptions come from `symbols`.
+- Seed capture/reset copies `symbol_state` atomically with registers and heap.
+  Equality, memory estimates, and serialized capture state include it, so a
+  restore cannot reuse an existing ID or lose registry identity.
+
+Legacy engine object-backed Symbols need an explicit artifact migration, not a
+heuristic applied to arbitrary heap JSON. For a whole interpreter artifact
+whose schema/provenance identifies the pre-`0.2.0` engine representation, the
+migrator:
+
+1. recognizes only objects whose historical internal marker fields have the
+   exact relationships: lowercase `__type: "symbol"` with an integer `__id`
+   equal to its heap `ObjectId` and optional string
+   `__description`/`__registry_key`, or uppercase `__type: "Symbol"` with
+   `__wellKnown: true` and a recognized `__key`; unrelated own properties are
+   preserved but do not participate in classification;
+2. maps well-known keys to IDs `1..=13`, then assigns dynamic IDs from `14` in
+   ascending legacy `ObjectId` order and preserves repeated references;
+   legacy global objects with the same exact registry key map to one identity
+   when their marker metadata agree, while inconsistent IDs or descriptions
+   reject the migration;
+3. rewrites legacy Symbol value references to `Value::Symbol`, builds the
+   exact `symbol_state`, and leaves every historical string property key,
+   including `"Symbol(14)"`, unchanged.
+
+An unversioned standalone legacy `HeapObject` payload without
+`symbol_properties` remains readable as its historical ordinary object and is
+never guessed to be a Symbol. This avoids silently reinterpreting a
+user-authored object that happens to contain the old metadata-like property
+names.
+
+The executable ordering contract matches ES2020: canonical integer strings
+first numerically, other strings in creation order, then Symbols in creation
+order. `Object.keys`/`values`/`entries`, `Object.getOwnPropertyNames`,
+`for...in`, querystring, CommonJS named exports, and JSON omit Symbols;
+`Object.getOwnPropertySymbols` returns only typed Symbols in creation order,
+and `Reflect.ownKeys` returns the complete mixed typed-key order. Enumerable
+Symbols participate in `Object.assign` and object spread. Proxy forwarding and
+own-key invariant checks must never stringify Symbol identities. Property
+storage, execution seeds, equality, memory estimates, and rejected write
+rollback must all retain the typed identity and exact order.
+
+Implementation ownership is deliberately split:
+
+| Bead | Contract ownership |
+| --- | --- |
+| `bd-n8eta.4.6` | version bump, exhaustive-match/serde audit, and migration notes |
+| `bd-n8eta.4.2` | engine baseline migration from object-backed/string-projected Symbols |
+| `bd-n8eta.4.3` | franken-core executable Symbol value, carrier, and lane parity |
+| `bd-n8eta.4.4` | typed property-hook boundary; separate owner-reviewed lane |
+| `bd-n8eta.4.5` | Node/Bun donor matrix, cross-lane proof, and DISC-013 closeout |
+
+This is a versioned API approval, not a premature conformance claim. The
+baseline interpreter row remains `pending_graduation` until the version,
+implementation, and parity children are green.
+
 ## Cross-Crate Compatibility Matrix
 
 | Consumer or peer | Current relation | Compatibility rule |
 | --- | --- | --- |
-| `crates/franken-engine` | owns the current native runtime and exports matching module names for all 41 `franken-core` modules | J.7 may not replace engine ownership with core ownership unless the parity ledger and graduation contract are updated and verified |
+| `crates/franken-engine` | owns the current native runtime and exports matching module names for all 42 `franken-core` modules | J.7 may not replace engine ownership with core ownership unless the parity ledger and graduation contract are updated and verified |
 | `crates/franken-extension-host` | dependency of `franken-core` via path dependency | public config and host-boundary types must remain compatible with `frankenengine-extension-host` version used by this repo |
 | `/dp/franken_node` | downstream/product repo depends one-way on `franken_engine` | no core-to-node dependency; no forked engine crates inside `franken_node` |
 | `/dp/frankensqlite` and `/dp/sqlmodel_rust` | canonical persistence substrates under AGENTS.md sibling reuse policy | `franken-core` must not add local SQLite persistence substitutes for control-plane state |
@@ -268,8 +495,8 @@ Costs:
 
 - The current `pub mod` surface is broad and includes experimental modules.
 - Some modules remain parity-visible but not parity-proven.
-- J.7 may still uncover workspace integration blockers because 38 parity rows
-  differ between `franken-core` and `franken-engine`.
+- J.7 may still uncover workspace integration blockers because all 42 parity
+  rows have different source files in `franken-core` and `franken-engine`.
 
 ## Validation
 
@@ -279,5 +506,7 @@ Validation for this ADR:
 rg -n '^pub mod ' crates/franken-core/src/lib.rs
 rg -n '^pub (struct|enum|trait|type|fn|const|static) ' crates/franken-core/src/*.rs
 jq empty docs/franken_core_api_parity_ledger_v1.json docs/franken_core_graduation_contract_v1.json
-git diff --check -- docs/adr/ADR-0008-franken-core-public-api.md .beads/issues.jsonl
+git diff --check -- docs/adr/ADR-0008-franken-core-public-api.md \
+  docs/FRANKEN_CORE_API_PARITY_LEDGER_V1.md \
+  docs/franken_core_api_parity_ledger_v1.json
 ```

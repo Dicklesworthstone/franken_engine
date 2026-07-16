@@ -52,11 +52,11 @@
     "known_beads"
   ],
   "summary": {
-    "core_module_count": 41,
-    "matching_engine_export_count": 41,
+    "core_module_count": 42,
+    "matching_engine_export_count": 42,
     "missing_engine_export_count": 0,
     "identical_file_count": 0,
-    "different_file_count": 41,
+    "different_file_count": 42,
     "unclassified_row_count": 0,
     "workspace_inclusion_complete": true
   },
@@ -95,6 +95,11 @@
       "bead_id": "bd-nwhcp",
       "role": "timer placeholder regression replacement",
       "rationale": "Added executable timer regressions in franken-core baseline_interpreter."
+    },
+    {
+      "bead_id": "bd-n8eta.4",
+      "role": "executable Symbol property-key parity wave",
+      "rationale": "Splits the versioned API/wire contract, exhaustive-Value migration, engine/core typed-key carriers, property-hook migration, and donor closeout into separately provable children."
     }
   ],
   "rows": [
@@ -118,14 +123,20 @@
       "engine_path": "crates/franken-engine/src/baseline_interpreter.rs",
       "engine_export_present": true,
       "file_relation": "different",
-      "owner_rationale": "This is a high-risk runtime surface with known franken-core follow-up fixes and an open engine async-generator .next body-execution gap; ownership needs dedicated proof.",
-      "test_expectation": "Future parity work must compare fail-closed async, timer, capability, and execution semantics before owner promotion, including proof that suspended async generator .next() executes or remains explicitly out of scope.",
+      "owner_rationale": "This is a high-risk runtime surface with known franken-core follow-up fixes, an open engine async-generator .next body-execution gap, and a versioned typed executable Symbol-key parity wave under bd-n8eta.4; ownership needs dedicated proof.",
+      "test_expectation": "Future parity work must compare fail-closed async, timer, capability, and execution semantics before owner promotion, including proof that suspended async generator .next() executes or remains explicitly out of scope, that the exhaustive Value migration is versioned and audited, and that numeric-string/string/Symbol own-key identity, order, serde, replay, memory accounting, and consumer filtering agree across executable lanes.",
       "known_beads": [
         "bd-yqpka",
         "bd-77ec1",
         "bd-la2e0",
         "bd-nwhcp",
-        "bd-dymfz"
+        "bd-dymfz",
+        "bd-n8eta.4.1",
+        "bd-n8eta.4.2",
+        "bd-n8eta.4.3",
+        "bd-n8eta.4.4",
+        "bd-n8eta.4.5",
+        "bd-n8eta.4.6"
       ]
     },
     {
@@ -413,6 +424,22 @@
       "owner_rationale": "IR contract is central to parser/lowering/runtime compatibility and needs explicit parity.",
       "test_expectation": "Future parity work must compare IR schema and lowering expectations.",
       "known_beads": []
+    },
+    {
+      "module": "js_string",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/js_string.rs",
+      "engine_path": "crates/franken-engine/src/js_string.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "franken-core contains the canonical implementation and franken-engine re-exports it, but runtime property-carrier adoption and wire parity remain incomplete; export presence alone does not promote the row.",
+      "test_expectation": "Prove exact UTF-16 value and serde behavior through the engine re-export, then complete ExactPropertyMap runtime integration before owner promotion.",
+      "known_beads": [
+        "bd-2vzgi",
+        "bd-b12xs",
+        "bd-b12xs.1"
+      ]
     },
     {
       "module": "lowering_pipeline",

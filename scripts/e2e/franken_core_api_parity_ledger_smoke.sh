@@ -59,7 +59,7 @@ json_shape_ok() {
 
 doc_shape_ok() {
   grep -Fq 'Machine-readable ledger: `docs/franken_core_api_parity_ledger_v1.json`' "$ledger_doc" \
-    && grep -Fq 'The current inventory has 41 franken-core module exports.' "$ledger_doc" \
+    && grep -Fq 'The current inventory has 42 franken-core module exports.' "$ledger_doc" \
     && grep -Fq 'For this first ledger, every row is `pending_graduation`.' "$ledger_doc" \
     && grep -Fq '| workspace inclusion complete | true |' "$ledger_doc" \
     && grep -Fq 'bash scripts/e2e/franken_core_api_parity_ledger_smoke.sh negative' "$ledger_doc"

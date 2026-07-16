@@ -13636,7 +13636,7 @@ mod tests {
         let trivia_lines = merge_logical_lines(&trivia_run);
         assert_eq!(trivia_lines.len(), 1);
         parser
-            .parse(&trivia_run, ParseGoal::Script)
+            .parse(trivia_run.as_str(), ParseGoal::Script)
             .expect("long trivia-only runs preserve a pending declaration in linear scans");
 
         let declarators = (0..500)
@@ -13647,7 +13647,7 @@ mod tests {
         let significant_lines = merge_logical_lines(&significant_run);
         assert_eq!(significant_lines.len(), 1);
         let significant_tree = parser
-            .parse(&significant_run, ParseGoal::Script)
+            .parse(significant_run.as_str(), ParseGoal::Script)
             .expect("significant multiline declarators use incremental continuation state");
         assert!(matches!(
             &significant_tree.body[0],
@@ -13723,7 +13723,7 @@ mod tests {
                 2,
                 "a complete operand must permit ASI before the next statement: {source:?}"
             );
-            parser.parse(&source, ParseGoal::Script).expect(
+            parser.parse(source.as_str(), ParseGoal::Script).expect(
                 "member, RegExp, and numeric operands remain complete alternate statements",
             );
         }
@@ -13736,7 +13736,7 @@ mod tests {
                 "a member-access dot after a numeric literal must retain its property: {source:?}"
             );
             parser
-                .parse(&source, ParseGoal::Script)
+                .parse(source.as_str(), ParseGoal::Script)
                 .expect("a numeric member expression may continue after its member-access dot");
         }
 
@@ -13749,7 +13749,7 @@ mod tests {
             );
             assert_eq!(
                 parser
-                    .parse(&source, ParseGoal::Script)
+                    .parse(source.as_str(), ParseGoal::Script)
                     .expect("postfix update restricted productions permit ASI")
                     .body
                     .len(),
@@ -13823,7 +13823,7 @@ mod tests {
                 "a LineTerminator forces an update at statement start to be prefix: {source:?}"
             );
             parser
-                .parse(&source, ParseGoal::Script)
+                .parse(source.as_str(), ParseGoal::Script)
                 .expect("a split prefix update retains the RegExp lexical goal");
         }
         for block_prefix_update in [

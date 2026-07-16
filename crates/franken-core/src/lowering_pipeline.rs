@@ -15563,6 +15563,131 @@ mod tests {
     }
 
     #[test]
+    fn binding_pattern_comment_and_bom_trivia_execute_bd_rcnxf() {
+        let (_, _, static_keys) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let/* declaration */\u{FEFF}{/* lead */ value /* : , = } ] */: x, \
+             'quoted' /* : , = */: y, 1 /* : , = */: z, \
+             shorthand /* = , */ = 5} = {value: 7, quoted: 3, 1: 2}; \
+             x * 1000 + y * 100 + z * 10 + shorthand;",
+        );
+        assert_eq!(static_keys, Value::Int(7_325));
+
+        let (_, _, parameters) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function pick({value // : , = ] }\n: x}, [/* hole */, y = 2]) { \
+                 return x * 10 + y; \
+             } \
+             pick({value: 7}, [, 3]);",
+        );
+        assert_eq!(parameters, Value::Int(73));
+
+        let (_, _, tight_defaults) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let [x/* tight */=4] = []; \
+             let {y/* tight */=3} = {}; \
+             x * 10 + y;",
+        );
+        assert_eq!(tight_defaults, Value::Int(43));
+
+        let (_, _, declaration_lines) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let/* closed block trivia */\nlineValue = 4; \
+             const\u{FEFF}\nbomValue = 3; \
+             lineValue * 10 + bomValue;",
+        );
+        assert_eq!(declaration_lines, Value::Int(43));
+
+        let (_, _, comment_segments) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let/* ; } ] ) */x = 4; \
+             let y/* ; ' \" ` { [ */=3; \
+             x * 10 + y;",
+        );
+        assert_eq!(comment_segments, Value::Int(43));
+
+        let (_, _, sloppy_let_asi) = lower_and_execute_deferred_source_bd_6pvhn(
+            "var let = 5; var counter = 1; let\n++counter; counter;",
+        );
+        assert_eq!(sloppy_let_asi, Value::Int(2));
+
+        let (_, _, continued_declarations) = lower_and_execute_deferred_source_bd_6pvhn(
+            "const first // before initializer\n= 2; \
+             let second // before initializer\n= 3; \
+             const [third] // before initializer\n= [4]; \
+             let fourth // before comma\n, fifth = 5; \
+             first * 1000 + second * 100 + third * 10 + fifth;",
+        );
+        assert_eq!(continued_declarations, Value::Int(2_345));
+
+        let (_, _, trailing_declarations) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let a = 1; const // before binding\n b = 2; \
+             let d = 1; const e // before equals\n = 2; \
+             let f = 1; let g // before comma\n , h = 2; \
+             a + b + d + e + f + h;",
+        );
+        assert_eq!(trailing_declarations, Value::Int(9));
+
+        let (_, _, sloppy_let_trivia) = lower_and_execute_deferred_source_bd_6pvhn(
+            "var let = value => value + 1; \
+             var first = let/**/(4); \
+             var second = let\u{FEFF}(4); \
+             let/**/x = 9; \
+             first * 100 + second * 10 + x;",
+        );
+        assert_eq!(sloppy_let_trivia, Value::Int(559));
+
+        let (_, _, sloppy_let_assignment) =
+            lower_and_execute_deferred_source_bd_6pvhn("var let = 0; let\n= 1; let;");
+        assert_eq!(sloppy_let_assignment, Value::Int(1));
+
+        let (_, _, sloppy_let_in) = lower_and_execute_deferred_source_bd_6pvhn(
+            "var let = 'x'; var object = {x: 1}; let\nin object;",
+        );
+        assert_eq!(sloppy_let_in, Value::Bool(true));
+
+        for source in [
+            "var let = value => value + 1; let\n(4);",
+            "var let = value => value + 1; let// call trivia\n(4);",
+            "var let = value => value + 1; let\u{FEFF}\n(4);",
+        ] {
+            let (_, _, sloppy_let_call) = lower_and_execute_deferred_source_bd_6pvhn(source);
+            assert_eq!(sloppy_let_call, Value::Int(5), "source: {source:?}");
+        }
+
+        let (_, _, sloppy_let_reserved_words) =
+            lower_and_execute_deferred_source_bd_6pvhn("var let = 1; let\ntrue; let\nnull; let;");
+        assert_eq!(sloppy_let_reserved_words, Value::Int(1));
+
+        let (_, _, leading_statement_trivia) = lower_and_execute_deferred_source_bd_6pvhn(
+            "/* leading */ let a = 1; \
+             /* before declaration */ const b = 2; \
+             a + b;",
+        );
+        assert_eq!(leading_statement_trivia, Value::Int(3));
+
+        let (_, _, comment_only_segments) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let x = 1; /* block only */ ; // line only\n x;",
+        );
+        assert_eq!(comment_only_segments, Value::Int(1));
+
+        let (_, _, clause_trivia) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let x = 0; if (false) { x = 1; }/* clause */else { x = 2; } x;",
+        );
+        assert_eq!(clause_trivia, Value::Int(2));
+
+        let (_, _, standalone_else) =
+            lower_and_execute_deferred_source_bd_6pvhn("let x = 0; if (false) {} else\nx = 2; x;");
+        assert_eq!(standalone_else, Value::Int(2));
+
+        let (_, _, clause_identifier_prefix) = lower_and_execute_deferred_source_bd_6pvhn(
+            "var else$foo = 7; var x = 0; \
+             if (false) { x = 1; } else$foo; x + else$foo;",
+        );
+        assert_eq!(clause_identifier_prefix, Value::Int(7));
+
+        let (_, _, contextual_for_of) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let seen = 0; for (let of of [7]) { seen = of; } seen;",
+        );
+        assert_eq!(contextual_for_of, Value::Int(7));
+    }
+
+    #[test]
     fn unicode_and_escaped_binding_names_execute_canonically_bd_t4947() {
         let (_, _, direct) = lower_and_execute_deferred_source_bd_6pvhn(
             r"let π = 7;

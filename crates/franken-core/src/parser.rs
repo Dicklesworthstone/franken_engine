@@ -2176,6 +2176,8 @@ fn merge_logical_lines_keyword_allows_regex(identifier: &str) -> bool {
         identifier,
         "case"
             | "delete"
+            | "do"
+            | "else"
             | "in"
             | "instanceof"
             | "new"
@@ -2188,15 +2190,22 @@ fn merge_logical_lines_keyword_allows_regex(identifier: &str) -> bool {
     )
 }
 
+fn merge_logical_lines_identifier_opens_control_header(identifier: &str) -> bool {
+    matches!(
+        identifier,
+        "catch" | "for" | "if" | "switch" | "while" | "with"
+    )
+}
+
+fn merge_logical_lines_identifier_awaits_statement(identifier: &str) -> bool {
+    matches!(identifier, "catch" | "do" | "else" | "finally" | "try")
+}
+
 fn merge_logical_lines_slash_starts_regex(
     last_significant: Option<char>,
     trailing_identifier: &str,
-    next_char: Option<char>,
+    trailing_identifier_is_member: bool,
 ) -> bool {
-    if matches!(next_char, Some('=')) {
-        return false;
-    }
-
     match last_significant {
         None => true,
         Some(
@@ -2204,15 +2213,701 @@ fn merge_logical_lines_slash_starts_regex(
             | '+' | '-' | '<' | '>' | '/',
         ) => true,
         Some(ch) if ch.is_ascii_alphabetic() || ch == '_' || ch == '$' => {
-            merge_logical_lines_keyword_allows_regex(trailing_identifier)
+            !trailing_identifier_is_member
+                && merge_logical_lines_keyword_allows_regex(trailing_identifier)
         }
         _ => false,
     }
 }
 
+fn statement_clause_continues(statement: &str, following: &str) -> bool {
+    (starts_with_keyword(statement, "if") && starts_with_keyword(following, "else"))
+        || (starts_with_keyword(statement, "try")
+            && (starts_with_keyword(following, "catch")
+                || starts_with_keyword(following, "finally")))
+        || (starts_with_keyword(statement, "do") && starts_with_keyword(following, "while"))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingClauseKind {
+    IfAwaitElse,
+    ElseAwaitStatement,
+    ElseExpressionContinuation,
+    ElseDeclarationContinuation,
+    ElseIfAwaitBody,
+    ElseIfExpressionContinuation,
+    ElseIfDeclarationContinuation,
+    TryAwaitHandler,
+    CatchAwaitBody,
+    CatchAwaitFinally,
+    FinallyAwaitBody,
+    DoAwaitWhile,
+    DoWhileAwaitCondition,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingClauseContinuation {
+    kind: PendingClauseKind,
+    fragment_start: usize,
+}
+
+fn pending_clause_after_statement(
+    statement: &str,
+    following: &str,
+    fragment_start: usize,
+) -> Option<PendingClauseContinuation> {
+    let kind = if starts_with_keyword(statement, "if") && starts_with_keyword(following, "else") {
+        PendingClauseKind::IfAwaitElse
+    } else if starts_with_keyword(statement, "try")
+        && (starts_with_keyword(following, "catch") || starts_with_keyword(following, "finally"))
+    {
+        PendingClauseKind::TryAwaitHandler
+    } else if starts_with_keyword(statement, "do") && starts_with_keyword(following, "while") {
+        PendingClauseKind::DoAwaitWhile
+    } else {
+        return None;
+    };
+    Some(PendingClauseContinuation {
+        kind,
+        fragment_start,
+    })
+}
+
+fn clause_keyword_tail<'a>(source: &'a str, keyword: &str) -> Option<&'a str> {
+    let source = trim_binding_pattern_leading_trivia(source)?;
+    if !starts_with_keyword(source, keyword) {
+        return None;
+    }
+    trim_binding_pattern_leading_trivia(source.strip_prefix(keyword)?)
+}
+
+fn catch_clause_is_complete(fragment: &str) -> bool {
+    let Some(after_catch) = clause_keyword_tail(fragment, "catch") else {
+        return false;
+    };
+    if after_catch.is_empty() {
+        return false;
+    }
+    let body_source = if after_catch.starts_with('(') {
+        let Some((_, remaining)) = extract_balanced(after_catch, '(', ')') else {
+            return false;
+        };
+        trim_binding_pattern_leading_trivia(remaining).unwrap_or_default()
+    } else {
+        after_catch
+    };
+    body_source.starts_with('{') && extract_balanced(body_source, '{', '}').is_some()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParenthesizedStatementStatus {
+    MissingCondition,
+    MissingBody,
+    Complete,
+    Invalid,
+}
+
+fn parenthesized_statement_status(
+    source: &str,
+    keyword: &str,
+) -> Option<ParenthesizedStatementStatus> {
+    let tail = clause_keyword_tail(source, keyword)?;
+    if tail.is_empty() {
+        return Some(ParenthesizedStatementStatus::MissingCondition);
+    }
+    if !tail.starts_with('(') {
+        return Some(ParenthesizedStatementStatus::Invalid);
+    }
+    let Some((_, body)) = extract_balanced(tail, '(', ')') else {
+        return Some(ParenthesizedStatementStatus::Invalid);
+    };
+    let body = trim_binding_pattern_leading_trivia(body).unwrap_or_default();
+    if body.is_empty() {
+        Some(ParenthesizedStatementStatus::MissingBody)
+    } else {
+        Some(ParenthesizedStatementStatus::Complete)
+    }
+}
+
+fn source_ends_expression_continuation(source: &str) -> bool {
+    let Some(source) = trim_binding_pattern_trivia(source) else {
+        return false;
+    };
+    let state = scan_binding_pattern_source_until(source, |_, _, _, _| true);
+    if !state.complete {
+        return false;
+    }
+    if !state.trailing_identifier_is_member
+        && matches!(
+            state.trailing_identifier.as_str(),
+            "in" | "instanceof" | "typeof" | "void" | "delete" | "new"
+        )
+    {
+        return true;
+    }
+    match state.last_significant {
+        Some(
+            '+' | '-' | '*' | '/' | '%' | '<' | '>' | '=' | '!' | '&' | '|' | '^' | '?' | ':' | ','
+            | '~',
+        ) => true,
+        Some('.') => !source_ends_complete_decimal_dot(source),
+        _ => false,
+    }
+}
+
+fn source_ends_complete_decimal_dot(source: &str) -> bool {
+    let Some(prefix) = source.strip_suffix('.') else {
+        return false;
+    };
+    let token_start = prefix
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| !ch.is_ascii_digit() && *ch != '_')
+        .map_or(0, |(index, ch)| index.saturating_add(ch.len_utf8()));
+    if token_start > 0 {
+        let preceding = prefix[..token_start].chars().next_back();
+        if preceding.is_some_and(|ch| ch == '.' || is_identifier_part_character(ch))
+            || signed_decimal_exponent_precedes(prefix, token_start)
+        {
+            return false;
+        }
+    }
+    parse_f64_numeric_literal(&source[token_start..]).is_some()
+}
+
+fn signed_decimal_exponent_precedes(prefix: &str, trailing_digits_start: usize) -> bool {
+    let Some(before_sign) = prefix.get(..trailing_digits_start) else {
+        return false;
+    };
+    let Some(before_exponent_marker) = before_sign
+        .strip_suffix('+')
+        .or_else(|| before_sign.strip_suffix('-'))
+        .and_then(|source| {
+            source
+                .strip_suffix('e')
+                .or_else(|| source.strip_suffix('E'))
+        })
+    else {
+        return false;
+    };
+    let mantissa_start = before_exponent_marker
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| !ch.is_ascii_digit() && *ch != '_' && *ch != '.')
+        .map_or(0, |(index, ch)| index.saturating_add(ch.len_utf8()));
+    if mantissa_start == before_exponent_marker.len()
+        || (mantissa_start > 0
+            && before_exponent_marker[..mantissa_start]
+                .chars()
+                .next_back()
+                .is_some_and(is_identifier_part_character))
+    {
+        return false;
+    }
+    parse_f64_numeric_literal(&prefix[mantissa_start..]).is_some()
+}
+
+fn source_ends_postfix_update(source: &str) -> bool {
+    let Some(source) = trim_binding_pattern_trivia(source) else {
+        return false;
+    };
+    let state = scan_binding_pattern_source_until(source, |_, _, _, _| true);
+    state.complete && state.ends_postfix_update
+}
+
+fn starts_postfix_expression_continuation(source: &str) -> bool {
+    let source = source.trim_start_matches(is_binding_pattern_whitespace);
+    source.starts_with("?.") || matches!(source.chars().next(), Some('(' | '[' | '.' | '`'))
+}
+
+fn restricted_statement_ends_at_line_terminator(source: &str) -> bool {
+    ["return", "throw", "break", "continue"]
+        .into_iter()
+        .any(|keyword| clause_keyword_tail(source, keyword).is_some_and(str::is_empty))
+}
+
+fn expression_statement_continues(source: &str, next_after_trivia: &str) -> bool {
+    if restricted_statement_ends_at_line_terminator(source)
+        || (source_ends_postfix_update(source)
+            && starts_postfix_expression_continuation(next_after_trivia))
+    {
+        return false;
+    }
+    source_ends_expression_continuation(source)
+        || starts_directive_expression_continuation(next_after_trivia)
+}
+
+fn pending_clause_with_kind(
+    kind: PendingClauseKind,
+    fragment_start: usize,
+) -> PendingClauseContinuation {
+    PendingClauseContinuation {
+        kind,
+        fragment_start,
+    }
+}
+
+fn completed_clause_statement(
+    await_else_after_completion: bool,
+    next_after_trivia: &str,
+    current_len: usize,
+) -> Option<PendingClauseContinuation> {
+    (await_else_after_completion && starts_with_keyword(next_after_trivia, "else")).then_some(
+        pending_clause_with_kind(PendingClauseKind::IfAwaitElse, current_len),
+    )
+}
+
+fn advance_clause_statement(
+    pending: PendingClauseContinuation,
+    mut statement: &str,
+    next_after_trivia: &str,
+    current_len: usize,
+    mut await_else_after_completion: bool,
+) -> Option<PendingClauseContinuation> {
+    loop {
+        if starts_with_keyword(statement, "if") {
+            match parenthesized_statement_status(statement, "if") {
+                Some(ParenthesizedStatementStatus::MissingCondition)
+                    if next_after_trivia.starts_with('(') =>
+                {
+                    return Some(pending);
+                }
+                Some(ParenthesizedStatementStatus::MissingBody) => {
+                    return Some(pending_clause_with_kind(
+                        PendingClauseKind::ElseIfAwaitBody,
+                        current_len,
+                    ));
+                }
+                Some(ParenthesizedStatementStatus::Complete) => {
+                    let tail = clause_keyword_tail(statement, "if")?;
+                    let (_, body) = extract_balanced(tail, '(', ')')?;
+                    statement = trim_binding_pattern_leading_trivia(body)?;
+                    await_else_after_completion = true;
+                    continue;
+                }
+                Some(ParenthesizedStatementStatus::Invalid)
+                | Some(ParenthesizedStatementStatus::MissingCondition)
+                | None => return None,
+            }
+        }
+
+        let mut matched_parenthesized_statement = false;
+        for keyword in ["while", "for", "with", "switch"] {
+            if !starts_with_keyword(statement, keyword) {
+                continue;
+            }
+            matched_parenthesized_statement = true;
+            match parenthesized_statement_status(statement, keyword) {
+                Some(ParenthesizedStatementStatus::MissingCondition)
+                    if next_after_trivia.starts_with('(') =>
+                {
+                    return Some(pending);
+                }
+                Some(ParenthesizedStatementStatus::MissingBody) => {
+                    let kind = if await_else_after_completion {
+                        PendingClauseKind::ElseIfAwaitBody
+                    } else {
+                        PendingClauseKind::ElseAwaitStatement
+                    };
+                    return Some(pending_clause_with_kind(kind, current_len));
+                }
+                Some(ParenthesizedStatementStatus::Complete) => {
+                    let tail = clause_keyword_tail(statement, keyword)?;
+                    let (_, body) = extract_balanced(tail, '(', ')')?;
+                    statement = trim_binding_pattern_leading_trivia(body)?;
+                    break;
+                }
+                Some(ParenthesizedStatementStatus::Invalid)
+                | Some(ParenthesizedStatementStatus::MissingCondition)
+                | None => return None,
+            }
+        }
+        if matched_parenthesized_statement {
+            continue;
+        }
+
+        if starts_with_keyword(statement, "try")
+            && (starts_with_keyword(next_after_trivia, "catch")
+                || starts_with_keyword(next_after_trivia, "finally"))
+        {
+            return Some(pending_clause_with_kind(
+                PendingClauseKind::TryAwaitHandler,
+                current_len,
+            ));
+        }
+        if starts_with_keyword(statement, "do") && starts_with_keyword(next_after_trivia, "while") {
+            return Some(pending_clause_with_kind(
+                PendingClauseKind::DoAwaitWhile,
+                current_len,
+            ));
+        }
+
+        if declaration_source_needs_continuation(statement, next_after_trivia) {
+            let kind = if await_else_after_completion {
+                PendingClauseKind::ElseIfDeclarationContinuation
+            } else {
+                PendingClauseKind::ElseDeclarationContinuation
+            };
+            return Some(pending_clause_with_kind(kind, current_len));
+        }
+        if expression_statement_continues(statement, next_after_trivia) {
+            let kind = if await_else_after_completion {
+                PendingClauseKind::ElseIfExpressionContinuation
+            } else {
+                PendingClauseKind::ElseExpressionContinuation
+            };
+            return Some(pending_clause_with_kind(kind, current_len));
+        }
+        return completed_clause_statement(
+            await_else_after_completion,
+            next_after_trivia,
+            current_len,
+        );
+    }
+}
+
+fn advance_pending_clause(
+    pending: PendingClauseContinuation,
+    current_text: &str,
+    next_after_trivia: &str,
+) -> Option<PendingClauseContinuation> {
+    let fragment = current_text.get(pending.fragment_start..)?;
+    let fragment = trim_binding_pattern_trivia(fragment)?;
+    if fragment.is_empty() {
+        return Some(pending);
+    }
+
+    match pending.kind {
+        PendingClauseKind::IfAwaitElse => {
+            if !starts_with_keyword(fragment, "else") {
+                return None;
+            }
+            let alternate = clause_keyword_tail(fragment, "else")?;
+            if alternate.is_empty() {
+                return Some(pending_clause_with_kind(
+                    PendingClauseKind::ElseAwaitStatement,
+                    current_text.len(),
+                ));
+            }
+            advance_clause_statement(
+                pending,
+                alternate,
+                next_after_trivia,
+                current_text.len(),
+                false,
+            )
+        }
+        PendingClauseKind::ElseAwaitStatement => advance_clause_statement(
+            pending,
+            fragment,
+            next_after_trivia,
+            current_text.len(),
+            false,
+        ),
+        PendingClauseKind::ElseExpressionContinuation => {
+            if expression_statement_continues(fragment, next_after_trivia) {
+                Some(pending_clause_with_kind(
+                    PendingClauseKind::ElseExpressionContinuation,
+                    current_text.len(),
+                ))
+            } else {
+                None
+            }
+        }
+        PendingClauseKind::ElseDeclarationContinuation => {
+            let line_ends_continuation = fragment.ends_with(',') || fragment.ends_with('=');
+            if pending_declaration_fragment_needs_continuation(
+                fragment,
+                line_ends_continuation,
+                next_after_trivia,
+            ) {
+                Some(pending_clause_with_kind(
+                    PendingClauseKind::ElseDeclarationContinuation,
+                    current_text.len(),
+                ))
+            } else {
+                None
+            }
+        }
+        PendingClauseKind::ElseIfAwaitBody => advance_clause_statement(
+            pending,
+            fragment,
+            next_after_trivia,
+            current_text.len(),
+            true,
+        ),
+        PendingClauseKind::ElseIfExpressionContinuation => {
+            if expression_statement_continues(fragment, next_after_trivia) {
+                Some(pending_clause_with_kind(
+                    PendingClauseKind::ElseIfExpressionContinuation,
+                    current_text.len(),
+                ))
+            } else if starts_with_keyword(next_after_trivia, "else") {
+                Some(pending_clause_with_kind(
+                    PendingClauseKind::IfAwaitElse,
+                    current_text.len(),
+                ))
+            } else {
+                None
+            }
+        }
+        PendingClauseKind::ElseIfDeclarationContinuation => {
+            let line_ends_continuation = fragment.ends_with(',') || fragment.ends_with('=');
+            if pending_declaration_fragment_needs_continuation(
+                fragment,
+                line_ends_continuation,
+                next_after_trivia,
+            ) {
+                Some(pending_clause_with_kind(
+                    PendingClauseKind::ElseIfDeclarationContinuation,
+                    current_text.len(),
+                ))
+            } else if starts_with_keyword(next_after_trivia, "else") {
+                Some(pending_clause_with_kind(
+                    PendingClauseKind::IfAwaitElse,
+                    current_text.len(),
+                ))
+            } else {
+                None
+            }
+        }
+        PendingClauseKind::TryAwaitHandler => {
+            if starts_with_keyword(fragment, "catch") {
+                let after_catch = clause_keyword_tail(fragment, "catch")?;
+                if after_catch.is_empty() {
+                    return if next_after_trivia.starts_with('{') {
+                        Some(pending_clause_with_kind(
+                            PendingClauseKind::CatchAwaitBody,
+                            current_text.len(),
+                        ))
+                    } else if next_after_trivia.starts_with('(') {
+                        Some(pending)
+                    } else {
+                        None
+                    };
+                }
+                if after_catch.starts_with('(') {
+                    let (_, body) = extract_balanced(after_catch, '(', ')')?;
+                    if trim_binding_pattern_leading_trivia(body).is_some_and(str::is_empty) {
+                        return Some(pending_clause_with_kind(
+                            PendingClauseKind::CatchAwaitBody,
+                            current_text.len(),
+                        ));
+                    }
+                }
+                if !catch_clause_is_complete(fragment) {
+                    return None;
+                }
+                starts_with_keyword(next_after_trivia, "finally").then_some(
+                    pending_clause_with_kind(
+                        PendingClauseKind::CatchAwaitFinally,
+                        current_text.len(),
+                    ),
+                )
+            } else if starts_with_keyword(fragment, "finally") {
+                let body = clause_keyword_tail(fragment, "finally")?;
+                if body.is_empty() && next_after_trivia.starts_with('{') {
+                    Some(pending_clause_with_kind(
+                        PendingClauseKind::FinallyAwaitBody,
+                        current_text.len(),
+                    ))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+        PendingClauseKind::CatchAwaitBody => {
+            if !fragment.starts_with('{') || extract_balanced(fragment, '{', '}').is_none() {
+                return None;
+            }
+            starts_with_keyword(next_after_trivia, "finally").then_some(pending_clause_with_kind(
+                PendingClauseKind::CatchAwaitFinally,
+                current_text.len(),
+            ))
+        }
+        PendingClauseKind::CatchAwaitFinally => {
+            if !starts_with_keyword(fragment, "finally") {
+                return None;
+            }
+            let body = clause_keyword_tail(fragment, "finally")?;
+            if body.is_empty() && next_after_trivia.starts_with('{') {
+                Some(pending_clause_with_kind(
+                    PendingClauseKind::FinallyAwaitBody,
+                    current_text.len(),
+                ))
+            } else {
+                None
+            }
+        }
+        PendingClauseKind::FinallyAwaitBody => None,
+        PendingClauseKind::DoAwaitWhile => {
+            if !starts_with_keyword(fragment, "while") {
+                return None;
+            }
+            let condition = clause_keyword_tail(fragment, "while")?;
+            if condition.is_empty() && next_after_trivia.starts_with('(') {
+                Some(pending_clause_with_kind(
+                    PendingClauseKind::DoWhileAwaitCondition,
+                    current_text.len(),
+                ))
+            } else {
+                None
+            }
+        }
+        PendingClauseKind::DoWhileAwaitCondition => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PhysicalLine<'a> {
+    segment: &'a str,
+    content: &'a str,
+    terminator: &'a str,
+}
+
+fn source_line_terminator_ranges(source: &str) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut chars = source.char_indices().peekable();
+    while let Some((index, ch)) = chars.next() {
+        match ch {
+            '\r' => {
+                let end = if matches!(chars.peek(), Some((_, '\n'))) {
+                    chars.next().map_or(index.saturating_add(1), |(next, ch)| {
+                        next.saturating_add(ch.len_utf8())
+                    })
+                } else {
+                    index.saturating_add(ch.len_utf8())
+                };
+                ranges.push((index, end));
+            }
+            '\n' | '\u{2028}' | '\u{2029}' => {
+                ranges.push((index, index.saturating_add(ch.len_utf8())));
+            }
+            _ => {}
+        }
+    }
+    ranges
+}
+
+fn physical_line_segments(source: &str) -> Vec<PhysicalLine<'_>> {
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    for (terminator_start, terminator_end) in source_line_terminator_ranges(source) {
+        lines.push(PhysicalLine {
+            segment: &source[start..terminator_end],
+            content: &source[start..terminator_start],
+            terminator: &source[terminator_start..terminator_end],
+        });
+        start = terminator_end;
+    }
+    if start < source.len() {
+        lines.push(PhysicalLine {
+            segment: &source[start..],
+            content: &source[start..],
+            terminator: "",
+        });
+    }
+    lines
+}
+
+fn next_significant_offsets_after_physical_lines(
+    text: &str,
+    physical_lines: &[PhysicalLine<'_>],
+) -> Vec<Option<usize>> {
+    let mut boundaries = Vec::new();
+    let mut boundary = 0usize;
+    for physical_line in physical_lines {
+        boundary = boundary.saturating_add(physical_line.segment.len());
+        boundaries.push(boundary);
+    }
+
+    let mut next_offsets = vec![None; boundaries.len()];
+    let mut next_boundary = 0usize;
+    scan_binding_pattern_source(text, |index, ch, _, quoted| {
+        if !quoted && is_binding_pattern_whitespace(ch) {
+            return;
+        }
+        while next_boundary < boundaries.len() && boundaries[next_boundary] <= index {
+            next_offsets[next_boundary] = Some(index);
+            next_boundary = next_boundary.saturating_add(1);
+        }
+    });
+    next_offsets
+}
+
+fn trailing_statement_source(source: &str) -> Option<&str> {
+    trim_binding_pattern_trivia(source)
+        .filter(|source| !source.ends_with(';'))
+        .and_then(|_| {
+            split_statement_segments(source)
+                .last()
+                .map(|(_, _, statement)| *statement)
+        })
+        .and_then(trim_binding_pattern_trivia)
+}
+
+fn declaration_source_needs_continuation(source: &str, next_after_trivia: &str) -> bool {
+    let Some(kind) = variable_declaration_prefix_kind(source) else {
+        return false;
+    };
+    let body = source
+        .strip_prefix(kind.as_str())
+        .and_then(trim_binding_pattern_trivia)
+        .unwrap_or_default();
+    let next = next_after_trivia.chars().next();
+    let next_starts_binding = matches!(next, Some('{' | '['))
+        || next_after_trivia.starts_with('\\')
+        || canonical_leading_source_identifier(next_after_trivia).is_some();
+    let let_expression_continues = kind == VariableDeclarationKind::Let
+        && starts_directive_expression_continuation(next_after_trivia);
+    let next_selects_declaration = if kind == VariableDeclarationKind::Let {
+        let_starts_lexical_declaration(next_after_trivia)
+    } else {
+        next_starts_binding
+    };
+    !next_after_trivia.is_empty()
+        && ((body.is_empty() && (next_selects_declaration || let_expression_continues))
+            || source.ends_with(',')
+            || source.ends_with('=')
+            || matches!(next, Some(',' | '=')))
+}
+
+fn pending_declaration_fragment_needs_continuation(
+    line: &str,
+    line_ends_continuation: bool,
+    next_after_trivia: &str,
+) -> bool {
+    let next = next_after_trivia.chars().next();
+    let next_continues_declaration =
+        !next_after_trivia.is_empty() && matches!(next, Some(',' | '='));
+    let Some(source) = trim_binding_pattern_trivia(line) else {
+        // The opening quote/comment can be on an earlier physical line, so a
+        // closing fragment need not be self-contained lexical input.
+        return line_ends_continuation || next_continues_declaration;
+    };
+    if source.is_empty() {
+        return true;
+    }
+    let Some(trailing_source) = trailing_statement_source(source) else {
+        return false;
+    };
+    if declaration_source_needs_continuation(trailing_source, next_after_trivia) {
+        return true;
+    }
+    !next_after_trivia.is_empty()
+        && (trailing_source.ends_with(',')
+            || trailing_source.ends_with('=')
+            || next_continues_declaration)
+}
+
 /// Merge physical lines into logical lines by tracking brace/paren/bracket depth.
 /// When a line ends with unbalanced delimiters, subsequent lines are merged until balance.
 fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
+    let physical_lines = physical_line_segments(text);
+    let next_significant_offsets =
+        next_significant_offsets_after_physical_lines(text, &physical_lines);
     let mut result = Vec::new();
     let mut current_text = String::new();
     let mut current_byte_offset: u64 = 0;
@@ -2227,16 +2922,21 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
     let mut regex_in_char_class = false;
     let mut escaped = false;
     let mut accumulating = false;
+    let mut pending_declaration_continuation = false;
+    let mut pending_clause_continuation: Option<PendingClauseContinuation> = None;
     let mut last_significant: Option<char> = None;
     let mut trailing_identifier = String::new();
+    let mut trailing_identifier_is_member = false;
+    let mut identifier_token_open = false;
+    let mut control_paren_stack = Vec::new();
+    let mut block_brace_stack = Vec::new();
+    let mut statement_goal = true;
+    let mut previous_line_terminator = "";
 
-    for (line_idx, segment) in text.split_inclusive('\n').enumerate() {
+    for (line_idx, physical_line) in physical_lines.iter().copied().enumerate() {
         let line_no = (line_idx as u64).saturating_add(1);
-        let line = segment
-            .strip_suffix('\n')
-            .unwrap_or(segment)
-            .strip_suffix('\r')
-            .unwrap_or(segment.strip_suffix('\n').unwrap_or(segment));
+        let segment = physical_line.segment;
+        let line = physical_line.content;
 
         if !accumulating {
             current_text.clear();
@@ -2244,33 +2944,41 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             current_start_line = line_no;
             last_significant = None;
             trailing_identifier.clear();
-        } else if let Some(quote) = in_quote {
+            trailing_identifier_is_member = false;
+            identifier_token_open = false;
+            control_paren_stack.clear();
+            block_brace_stack.clear();
+            statement_goal = true;
+        } else if in_quote.is_some() {
             if escaped {
-                if quote == '`' {
-                    // Template cooked values discard LineContinuations here.
-                    let continuation = current_text.pop();
-                    debug_assert_eq!(continuation, Some('\\'));
-                } else {
-                    // Keep string-literal LineContinuation provenance until
-                    // token cooking. Directive recognition must distinguish
-                    // `"use \\` newline `strict"` from a Use Strict Directive.
-                    current_text.push('\n');
-                }
+                // Preserve LineContinuation provenance until literal cooking.
+                // Besides directive recognition for strings, retaining the
+                // physical line boundary keeps spans after a template aligned
+                // with the original source.
+                current_text.push_str(previous_line_terminator);
                 escaped = false;
             } else {
                 // Preserve an unescaped line ending so the literal parser can
                 // reject it (or retain it for a template) instead of silently
                 // changing an invalid string into one containing a space.
-                current_text.push('\n');
+                current_text.push_str(previous_line_terminator);
             }
         } else {
+            if identifier_token_open
+                && !trailing_identifier_is_member
+                && merge_logical_lines_identifier_awaits_statement(&trailing_identifier)
+            {
+                statement_goal = true;
+            }
             // Preserve physical line boundaries inside balanced constructs.
             // Besides ASI, directive prologues and line comments depend on
             // LineTerminator provenance; flattening this to a space loses it.
-            current_text.push('\n');
+            current_text.push_str(previous_line_terminator);
+            identifier_token_open = false;
         }
         current_text.push_str(line);
 
+        let mut line_has_significant_code = false;
         let mut chars = line.chars().peekable();
         while let Some(ch) = chars.next() {
             if in_block_comment {
@@ -2281,6 +2989,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 continue;
             }
             if let Some(q) = in_quote {
+                line_has_significant_code = true;
                 if escaped {
                     escaped = false;
                     continue;
@@ -2295,6 +3004,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 continue;
             }
             if in_regex_literal {
+                line_has_significant_code = true;
                 if escaped {
                     escaped = false;
                     continue;
@@ -2311,102 +3021,258 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                     }
                     '/' if !regex_in_char_class => {
                         in_regex_literal = false;
-                        last_significant = Some('/');
+                        last_significant = Some(')');
                         trailing_identifier.clear();
+                        trailing_identifier_is_member = false;
+                        identifier_token_open = false;
+                        statement_goal = false;
                     }
                     _ => {}
                 }
                 continue;
             }
+            let identifier_continues = ch.is_ascii_alphabetic()
+                || matches!(ch, '_' | '$')
+                || (ch.is_ascii_digit() && identifier_token_open);
+            if identifier_token_open && !identifier_continues {
+                if !trailing_identifier_is_member
+                    && merge_logical_lines_identifier_awaits_statement(&trailing_identifier)
+                {
+                    statement_goal = true;
+                }
+                identifier_token_open = false;
+            }
+            if matches!(ch, '+' | '-') && chars.peek().is_some_and(|next| *next == ch) {
+                let prefix_position = (line_idx > 0 && !line_has_significant_code)
+                    || merge_logical_lines_slash_starts_regex(
+                        last_significant,
+                        trailing_identifier.as_str(),
+                        trailing_identifier_is_member,
+                    );
+                chars.next();
+                line_has_significant_code = true;
+                last_significant = Some(if prefix_position { ch } else { ')' });
+                trailing_identifier.clear();
+                trailing_identifier_is_member = false;
+                identifier_token_open = false;
+                statement_goal = false;
+                continue;
+            }
             match ch {
                 '/' => match chars.peek() {
-                    Some('/') => break,
+                    Some('/') => {
+                        identifier_token_open = false;
+                        break;
+                    }
                     Some('*') => {
                         chars.next();
                         in_block_comment = true;
+                        identifier_token_open = false;
                     }
-                    next_char
-                        if merge_logical_lines_slash_starts_regex(
-                            last_significant,
-                            trailing_identifier.as_str(),
-                            next_char.copied(),
-                        ) =>
+                    _ if merge_logical_lines_slash_starts_regex(
+                        last_significant,
+                        trailing_identifier.as_str(),
+                        trailing_identifier_is_member,
+                    ) =>
                     {
+                        line_has_significant_code = true;
                         in_regex_literal = true;
                         regex_in_char_class = false;
                         escaped = false;
                         trailing_identifier.clear();
+                        trailing_identifier_is_member = false;
+                        identifier_token_open = false;
+                        statement_goal = false;
                     }
-                    _ => {}
+                    _ => {
+                        line_has_significant_code = true;
+                        last_significant = Some('/');
+                        trailing_identifier.clear();
+                        trailing_identifier_is_member = false;
+                        identifier_token_open = false;
+                        statement_goal = false;
+                    }
                 },
                 '\'' | '"' | '`' => {
+                    line_has_significant_code = true;
                     in_quote = Some(ch);
                     last_significant = Some(ch);
                     trailing_identifier.clear();
+                    trailing_identifier_is_member = false;
+                    identifier_token_open = false;
+                    statement_goal = false;
                 }
                 '{' => {
+                    let is_block = statement_goal;
+                    block_brace_stack.push(is_block);
+                    line_has_significant_code = true;
                     brace_depth += 1;
                     last_significant = Some(ch);
                     trailing_identifier.clear();
+                    trailing_identifier_is_member = false;
+                    identifier_token_open = false;
+                    statement_goal = is_block;
                 }
                 '}' => {
+                    let is_block = block_brace_stack.pop().unwrap_or(false);
+                    line_has_significant_code = true;
                     brace_depth -= 1;
-                    last_significant = Some(ch);
+                    last_significant = Some(if is_block { '{' } else { ch });
                     trailing_identifier.clear();
+                    trailing_identifier_is_member = false;
+                    identifier_token_open = false;
+                    statement_goal = is_block;
                 }
                 '(' => {
+                    let is_control_header = !trailing_identifier_is_member
+                        && merge_logical_lines_identifier_opens_control_header(
+                            &trailing_identifier,
+                        );
+                    control_paren_stack.push(is_control_header);
+                    line_has_significant_code = true;
                     paren_depth += 1;
                     last_significant = Some(ch);
                     trailing_identifier.clear();
+                    trailing_identifier_is_member = false;
+                    identifier_token_open = false;
+                    statement_goal = false;
                 }
                 ')' => {
+                    let is_control_header = control_paren_stack.pop().unwrap_or(false);
+                    line_has_significant_code = true;
                     paren_depth -= 1;
-                    last_significant = Some(ch);
+                    last_significant = Some(if is_control_header { '{' } else { ch });
                     trailing_identifier.clear();
+                    trailing_identifier_is_member = false;
+                    identifier_token_open = false;
+                    statement_goal = is_control_header;
                 }
                 '[' => {
+                    line_has_significant_code = true;
                     bracket_depth += 1;
                     last_significant = Some(ch);
                     trailing_identifier.clear();
+                    trailing_identifier_is_member = false;
+                    identifier_token_open = false;
+                    statement_goal = false;
                 }
                 ']' => {
+                    line_has_significant_code = true;
                     bracket_depth -= 1;
                     last_significant = Some(ch);
                     trailing_identifier.clear();
+                    trailing_identifier_is_member = false;
+                    identifier_token_open = false;
+                    statement_goal = false;
                 }
-                ch if ch.is_ascii_whitespace() => {}
+                ch if is_binding_pattern_whitespace(ch) => {
+                    identifier_token_open = false;
+                }
                 ch if ch.is_ascii_alphabetic() || ch == '_' || ch == '$' => {
+                    line_has_significant_code = true;
+                    if !identifier_token_open {
+                        trailing_identifier.clear();
+                        trailing_identifier_is_member = last_significant == Some('.');
+                    }
                     trailing_identifier.push(ch);
+                    identifier_token_open = true;
                     last_significant = Some(ch);
+                    statement_goal = false;
                 }
                 ch if ch.is_ascii_digit() => {
-                    if !trailing_identifier.is_empty() {
+                    line_has_significant_code = true;
+                    if identifier_token_open {
                         trailing_identifier.push(ch);
                     } else {
                         trailing_identifier.clear();
+                        trailing_identifier_is_member = false;
                     }
                     last_significant = Some(ch);
+                    statement_goal = false;
                 }
                 ch => {
+                    line_has_significant_code = true;
                     last_significant = Some(ch);
                     trailing_identifier.clear();
+                    trailing_identifier_is_member = false;
+                    identifier_token_open = false;
+                    statement_goal = ch == ';' && paren_depth <= 0;
                 }
             }
         }
 
         byte_offset = byte_offset.saturating_add(segment.len() as u64);
 
-        if brace_depth <= 0
+        // A LineTerminator is permitted between a declaration keyword and its
+        // first binding, regardless of whether comment, BOM, or ordinary
+        // whitespace precedes it. In sloppy Script, however, `let` can also be
+        // an IdentifierReference: `let\n++x` must remain two ASI-separated
+        // statements. Look through following trivia and continue only when the
+        // next token can actually begin a binding.
+        let may_flush = brace_depth <= 0
             && paren_depth <= 0
             && bracket_depth <= 0
             && in_quote.is_none()
             && !in_block_comment
-            && !in_regex_literal
-        {
+            && !in_regex_literal;
+        // Only inspect the accumulated statement list once its lexical state
+        // is otherwise flushable. A pending declaration is updated from the
+        // newly appended physical-line fragment, so neither comments nor one
+        // declarator/comma per line rescan the growing logical statement.
+        let (declaration_needs_binding, clause_continues) = if may_flush {
+            let remaining_source = usize::try_from(byte_offset)
+                .ok()
+                .and_then(|offset| text.get(offset..))
+                .unwrap_or_default();
+            let next_after_trivia = next_significant_offsets
+                .get(line_idx)
+                .and_then(|offset| *offset)
+                .and_then(|offset| text.get(offset..))
+                .unwrap_or_else(|| trim_directive_trivia(remaining_source).0);
+            if accumulating && pending_declaration_continuation {
+                let line_ends_continuation =
+                    line_has_significant_code && matches!(last_significant, Some(',' | '='));
+                (
+                    !line_has_significant_code
+                        || pending_declaration_fragment_needs_continuation(
+                            line,
+                            line_ends_continuation,
+                            next_after_trivia,
+                        ),
+                    None,
+                )
+            } else if accumulating && pending_clause_continuation.is_some() {
+                (
+                    false,
+                    if !line_has_significant_code {
+                        pending_clause_continuation
+                    } else {
+                        pending_clause_continuation.and_then(|pending| {
+                            advance_pending_clause(pending, &current_text, next_after_trivia)
+                        })
+                    },
+                )
+            } else {
+                let trailing_source = trailing_statement_source(&current_text);
+                let declaration_needs_binding = trailing_source.is_some_and(|source| {
+                    declaration_source_needs_continuation(source, next_after_trivia)
+                });
+                let clause_continues = trailing_source.and_then(|source| {
+                    pending_clause_after_statement(source, next_after_trivia, current_text.len())
+                });
+                (declaration_needs_binding, clause_continues)
+            }
+        } else {
+            (
+                pending_declaration_continuation,
+                pending_clause_continuation,
+            )
+        };
+        if may_flush && !declaration_needs_binding && clause_continues.is_none() {
             let trimmed = current_text.trim();
             if !trimmed.is_empty() {
                 result.push(LogicalLine {
-                    text: trimmed.to_string(),
+                    text: current_text.clone(),
                     byte_offset: current_byte_offset,
                     start_line: current_start_line,
                     end_line: line_no,
@@ -2420,20 +3286,30 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             regex_in_char_class = false;
             last_significant = None;
             trailing_identifier.clear();
+            trailing_identifier_is_member = false;
+            identifier_token_open = false;
+            control_paren_stack.clear();
+            block_brace_stack.clear();
+            statement_goal = true;
             accumulating = false;
+            pending_declaration_continuation = false;
+            pending_clause_continuation = None;
         } else {
             accumulating = true;
+            pending_declaration_continuation = declaration_needs_binding;
+            pending_clause_continuation = clause_continues;
         }
+        previous_line_terminator = physical_line.terminator;
     }
 
     if accumulating {
         let trimmed = current_text.trim();
         if !trimmed.is_empty() {
             result.push(LogicalLine {
-                text: trimmed.to_string(),
+                text: current_text,
                 byte_offset: current_byte_offset,
                 start_line: current_start_line,
-                end_line: text.lines().count().max(1) as u64,
+                end_line: physical_lines.len().max(1) as u64,
             });
         }
     }
@@ -2441,15 +3317,19 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
     result
 }
 
+fn is_identifier_part_character(ch: char) -> bool {
+    matches!(ch, '$' | '_' | '\\' | '\u{200C}' | '\u{200D}') || unicode_id_start::is_id_continue(ch)
+}
+
 fn starts_identifier_part(source: &str) -> bool {
-    source.chars().next().is_some_and(|ch| {
-        matches!(ch, '$' | '_' | '\\' | '\u{200C}' | '\u{200D}')
-            || unicode_id_start::is_id_continue(ch)
-    })
+    source
+        .chars()
+        .next()
+        .is_some_and(is_identifier_part_character)
 }
 
 fn starts_directive_expression_continuation(source: &str) -> bool {
-    let source = source.trim_start_matches(|ch: char| ch.is_whitespace() || ch == '\u{FEFF}');
+    let source = source.trim_start_matches(is_binding_pattern_whitespace);
     if source.starts_with("++") || source.starts_with("--") {
         return false;
     }
@@ -2489,7 +3369,7 @@ fn trim_directive_trivia(mut source: &str) -> (&str, bool) {
     loop {
         let mut whitespace_end = 0usize;
         for (index, ch) in source.char_indices() {
-            if ch.is_whitespace() || ch == '\u{FEFF}' {
+            if is_binding_pattern_whitespace(ch) {
                 saw_line_terminator |= matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}');
                 whitespace_end = index + ch.len_utf8();
             } else {
@@ -2630,21 +3510,31 @@ fn parse_source(
     }
 
     let logical_lines = merge_logical_lines(text);
+    let source_line_starts = source_line_start_offsets(text);
     let mut statements = Vec::new();
 
     for logical_line in &logical_lines {
+        let logical_line_starts = logical_line_start_offsets(&logical_line.text);
         for (start_in_line, end_in_line, statement_text) in
             split_statement_segments(&logical_line.text)
         {
+            let (start_line, start_column) =
+                logical_line_position(&logical_line_starts, logical_line.start_line, start_in_line);
+            let (end_line, end_column) =
+                logical_line_position(&logical_line_starts, logical_line.start_line, end_in_line);
             let span = SourceSpan::new(
-                logical_line
-                    .byte_offset
-                    .saturating_add(start_in_line as u64),
-                logical_line.byte_offset.saturating_add(end_in_line as u64),
-                logical_line.start_line,
-                start_in_line.saturating_add(1) as u64,
-                logical_line.end_line,
-                end_in_line.saturating_add(1) as u64,
+                source_offset_at_position(&source_line_starts, start_line, start_column)
+                    .unwrap_or_else(|| {
+                        logical_line
+                            .byte_offset
+                            .saturating_add(start_in_line as u64)
+                    }),
+                source_offset_at_position(&source_line_starts, end_line, end_column)
+                    .unwrap_or_else(|| logical_line.byte_offset.saturating_add(end_in_line as u64)),
+                start_line,
+                start_column,
+                end_line,
+                end_column,
             );
             statements.push(parse_statement(statement_text, goal, span, &mut context)?);
         }
@@ -2659,43 +3549,61 @@ fn parse_source(
     })
 }
 
+fn source_line_start_offsets(source: &str) -> Vec<u64> {
+    let mut offsets = vec![0];
+    offsets.extend(
+        source_line_terminator_ranges(source)
+            .into_iter()
+            .map(|(_, end)| end as u64),
+    );
+    offsets
+}
+
+fn logical_line_start_offsets(source: &str) -> Vec<usize> {
+    let mut offsets = vec![0];
+    offsets.extend(
+        source_line_terminator_ranges(source)
+            .into_iter()
+            .map(|(_, end)| end),
+    );
+    offsets
+}
+
+fn logical_line_position(line_starts: &[usize], first_line: u64, offset: usize) -> (u64, u64) {
+    let line_index = line_starts
+        .partition_point(|line_start| *line_start <= offset)
+        .saturating_sub(1);
+    let line = first_line.saturating_add(line_index as u64);
+    let column = offset
+        .saturating_sub(line_starts.get(line_index).copied().unwrap_or(0))
+        .saturating_add(1) as u64;
+    (line, column)
+}
+
+fn source_offset_at_position(line_starts: &[u64], line: u64, column: u64) -> Option<u64> {
+    let line_index = usize::try_from(line.checked_sub(1)?).ok()?;
+    line_starts
+        .get(line_index)
+        .copied()
+        .map(|start| start.saturating_add(column.saturating_sub(1)))
+}
+
 fn line_count(source: &str) -> u64 {
-    let mut count = 1u64;
-    for byte in source.as_bytes() {
-        if *byte == b'\n' {
-            count = count.saturating_add(1);
-        }
-    }
-    count
+    (source_line_terminator_ranges(source).len() as u64).saturating_add(1)
 }
 
 fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
     let mut out = Vec::new();
     let mut segment_start = 0usize;
-    let mut in_quote: Option<char> = None;
-    let mut escaped = false;
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;
     let mut brace_depth = 0usize;
 
-    for (index, ch) in line.char_indices() {
-        if let Some(quote) = in_quote {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if ch == '\\' {
-                escaped = true;
-                continue;
-            }
-            if ch == quote {
-                in_quote = None;
-            }
-            continue;
+    scan_binding_pattern_source(line, |index, ch, _, quoted| {
+        if quoted {
+            return;
         }
-
         match ch {
-            '\'' | '"' | '`' => in_quote = Some(ch),
             '(' => paren_depth = paren_depth.saturating_add(1),
             ')' => paren_depth = paren_depth.saturating_sub(1),
             '[' => bracket_depth = bracket_depth.saturating_add(1),
@@ -2711,7 +3619,7 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
                 // don't break function expressions or object literals
                 // embedded in larger expressions.
                 if was_positive && brace_depth == 0 && paren_depth == 0 && bracket_depth == 0 {
-                    let seg = line[segment_start..].trim_start();
+                    let seg = trim_directive_trivia(&line[segment_start..]).0;
                     let starts_with_block = starts_with_keyword(seg, "function")
                         || starts_with_keyword(seg, "if")
                         || starts_with_keyword(seg, "for")
@@ -2722,12 +3630,10 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
                         || starts_with_keyword(seg, "class");
                     if starts_with_block {
                         let after = index.saturating_add(1);
-                        let rest = line[after..].trim_start();
-                        let continues = starts_with_keyword(rest, "else")
-                            || starts_with_keyword(rest, "catch")
-                            || starts_with_keyword(rest, "finally")
-                            || starts_with_keyword(rest, "while");
-                        if !rest.is_empty() && !continues {
+                        let rest_with_trivia = &line[after..];
+                        let rest = trim_directive_trivia(rest_with_trivia).0;
+                        let continues = statement_clause_continues(seg, rest);
+                        if !rest_with_trivia.trim_start().is_empty() && !continues {
                             push_segment(&mut out, line, segment_start, after);
                             segment_start = after;
                         }
@@ -2740,19 +3646,16 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
             }
             _ => {}
         }
-    }
+    });
     push_segment(&mut out, line, segment_start, line.len());
     out
 }
 
-/// Returns true when `text` starts with the keyword `kw` followed by a
-/// non-alphanumeric, non-underscore character (or end of string).
+/// Returns true when `text` starts with `kw` and the next source character is
+/// not an ECMAScript IdentifierPart (or `kw` reaches the end of the string).
 fn starts_with_keyword(text: &str, kw: &str) -> bool {
-    text.starts_with(kw)
-        && text
-            .as_bytes()
-            .get(kw.len())
-            .is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'_')
+    text.strip_prefix(kw)
+        .is_some_and(|rest| !starts_identifier_part(rest))
 }
 
 fn push_segment<'a>(
@@ -2765,10 +3668,19 @@ fn push_segment<'a>(
         return;
     }
     let raw = &line[start..end];
-    let leading = raw.len().saturating_sub(raw.trim_start().len());
-    let trailing = raw.len().saturating_sub(raw.trim_end().len());
-    let trimmed_start = start.saturating_add(leading);
-    let trimmed_end = end.saturating_sub(trailing);
+    let (trimmed_start, trimmed_end) =
+        if let Some((lexical_start, lexical_end)) = binding_pattern_trivia_bounds(raw) {
+            (
+                start.saturating_add(lexical_start),
+                start.saturating_add(lexical_end),
+            )
+        } else {
+            // Preserve incomplete lexical input for the parser's diagnostic
+            // path instead of dropping it as if it were complete trivia.
+            let leading = raw.len().saturating_sub(raw.trim_start().len());
+            let trailing = raw.len().saturating_sub(raw.trim_end().len());
+            (start.saturating_add(leading), end.saturating_sub(trailing))
+        };
     if trimmed_end <= trimmed_start {
         return;
     }
@@ -3462,13 +4374,420 @@ fn parse_identifier_reference(
     Ok(Some(identifier))
 }
 
+fn binding_pattern_slash_starts_regexp(
+    last_significant: Option<char>,
+    trailing_identifier: &str,
+    trailing_identifier_is_member: bool,
+) -> bool {
+    match last_significant {
+        None => true,
+        Some(
+            '(' | '{' | '[' | ',' | ';' | ':' | '=' | '!' | '?' | '&' | '|' | '^' | '~' | '*' | '%'
+            | '+' | '-' | '<' | '>' | '/',
+        ) => true,
+        Some(ch) if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '$') => {
+            !trailing_identifier_is_member
+                && matches!(
+                    trailing_identifier,
+                    "case"
+                        | "delete"
+                        | "do"
+                        | "else"
+                        | "in"
+                        | "instanceof"
+                        | "new"
+                        | "return"
+                        | "throw"
+                        | "typeof"
+                        | "void"
+                )
+        }
+        _ => false,
+    }
+}
+
+/// Visit lexical code points in a binding-pattern source slice.
+///
+/// Comments are trivia and are not visited. Quoted text is visited with
+/// `quoted = true`, so delimiter consumers can ignore punctuation inside a
+/// string while trivia trimming still keeps the entire literal. `depth` is
+/// the aggregate delimiter depth before the current code point is applied.
+/// The returned state records whether the full input was lexically complete;
+/// consumers may also stop the scan early by returning false from `visit`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BindingPatternScanState {
+    complete: bool,
+    last_significant: Option<char>,
+    trailing_identifier: String,
+    trailing_identifier_is_member: bool,
+    ends_postfix_update: bool,
+}
+
+fn scan_binding_pattern_source_until(
+    source: &str,
+    mut visit: impl FnMut(usize, char, usize, bool) -> bool,
+) -> BindingPatternScanState {
+    let mut chars = source.char_indices().peekable();
+    let mut depth = 0usize;
+    let mut in_quote: Option<char> = None;
+    let mut in_line_comment = false;
+    let mut in_block_comment = false;
+    let mut escaped = false;
+    let mut last_significant = None;
+    let mut trailing_identifier = String::new();
+    let mut trailing_identifier_is_member = false;
+    let mut identifier_token_open = false;
+    let mut ends_postfix_update = false;
+    let mut line_terminator_since_significant = false;
+    let mut control_paren_stack = Vec::new();
+    let mut block_brace_stack = Vec::new();
+    let mut statement_goal = true;
+
+    macro_rules! visit_or_stop {
+        ($index:expr, $ch:expr, $depth:expr, $quoted:expr) => {
+            if !visit($index, $ch, $depth, $quoted) {
+                return BindingPatternScanState {
+                    complete: true,
+                    last_significant,
+                    trailing_identifier,
+                    trailing_identifier_is_member,
+                    ends_postfix_update,
+                };
+            }
+        };
+    }
+
+    while let Some((index, ch)) = chars.next() {
+        if in_line_comment {
+            if matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}') {
+                in_line_comment = false;
+                line_terminator_since_significant = true;
+            }
+            continue;
+        }
+        if in_block_comment {
+            if matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}') {
+                line_terminator_since_significant = true;
+            }
+            if ch == '*' && chars.peek().is_some_and(|(_, next)| *next == '/') {
+                chars.next();
+                in_block_comment = false;
+            }
+            continue;
+        }
+        if let Some(quote) = in_quote {
+            visit_or_stop!(index, ch, depth, true);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == quote {
+                in_quote = None;
+            }
+            continue;
+        }
+
+        let identifier_continues = ch.is_ascii_alphabetic()
+            || matches!(ch, '_' | '$')
+            || (ch.is_ascii_digit() && identifier_token_open);
+        if identifier_token_open && !identifier_continues {
+            if !trailing_identifier_is_member
+                && merge_logical_lines_identifier_awaits_statement(&trailing_identifier)
+            {
+                statement_goal = true;
+            }
+            identifier_token_open = false;
+        }
+
+        if matches!(ch, '+' | '-') && chars.peek().is_some_and(|(_, next)| *next == ch) {
+            let prefix_position = line_terminator_since_significant
+                || binding_pattern_slash_starts_regexp(
+                    last_significant,
+                    &trailing_identifier,
+                    trailing_identifier_is_member,
+                );
+            visit_or_stop!(index, ch, depth, false);
+            if let Some((next_index, next_ch)) = chars.next() {
+                visit_or_stop!(next_index, next_ch, depth, false);
+            }
+            // Prefix ++/-- still expects an expression; postfix ++/-- ends
+            // one. Preserve that distinction for the following `/` token.
+            last_significant = Some(if prefix_position { ch } else { ')' });
+            ends_postfix_update = !prefix_position;
+            trailing_identifier.clear();
+            trailing_identifier_is_member = false;
+            identifier_token_open = false;
+            line_terminator_since_significant = false;
+            statement_goal = false;
+            continue;
+        }
+
+        if ch == '/' {
+            match chars.peek().map(|(_, next)| *next) {
+                Some('/') => {
+                    chars.next();
+                    in_line_comment = true;
+                    identifier_token_open = false;
+                    continue;
+                }
+                Some('*') => {
+                    chars.next();
+                    in_block_comment = true;
+                    identifier_token_open = false;
+                    continue;
+                }
+                _ => {}
+            }
+            if binding_pattern_slash_starts_regexp(
+                last_significant,
+                &trailing_identifier,
+                trailing_identifier_is_member,
+            ) && let Some((_pattern, _flags, consumed)) =
+                parse_regexp_literal_prefix(&source[index..])
+            {
+                let regexp_end = index.saturating_add(consumed);
+                visit_or_stop!(index, ch, depth, true);
+                while let Some((next_index, next_ch)) = chars.peek().copied() {
+                    if next_index >= regexp_end {
+                        break;
+                    }
+                    chars.next();
+                    visit_or_stop!(next_index, next_ch, depth, true);
+                }
+                // A completed RegExp literal is an operand. Use an operand
+                // sentinel rather than its closing slash, which would make a
+                // following division slash look like another RegExp opener.
+                last_significant = Some(')');
+                ends_postfix_update = false;
+                trailing_identifier.clear();
+                trailing_identifier_is_member = false;
+                identifier_token_open = false;
+                line_terminator_since_significant = false;
+                statement_goal = false;
+                continue;
+            }
+        }
+        if matches!(ch, '\'' | '"' | '`') {
+            visit_or_stop!(index, ch, depth, true);
+            in_quote = Some(ch);
+            escaped = false;
+            last_significant = Some(ch);
+            ends_postfix_update = false;
+            trailing_identifier.clear();
+            trailing_identifier_is_member = false;
+            identifier_token_open = false;
+            line_terminator_since_significant = false;
+            statement_goal = false;
+            continue;
+        }
+
+        visit_or_stop!(index, ch, depth, false);
+        match ch {
+            '(' => {
+                let is_control_header = !trailing_identifier_is_member
+                    && merge_logical_lines_identifier_opens_control_header(&trailing_identifier);
+                control_paren_stack.push(is_control_header);
+                depth = depth.saturating_add(1);
+                trailing_identifier.clear();
+                trailing_identifier_is_member = false;
+                identifier_token_open = false;
+                last_significant = Some(ch);
+                statement_goal = false;
+            }
+            ')' => {
+                let is_control_header = control_paren_stack.pop().unwrap_or(false);
+                depth = depth.saturating_sub(1);
+                trailing_identifier.clear();
+                trailing_identifier_is_member = false;
+                identifier_token_open = false;
+                last_significant = Some(if is_control_header { '{' } else { ch });
+                statement_goal = is_control_header;
+            }
+            '{' => {
+                let is_block = statement_goal;
+                block_brace_stack.push(is_block);
+                depth = depth.saturating_add(1);
+                trailing_identifier.clear();
+                trailing_identifier_is_member = false;
+                identifier_token_open = false;
+                last_significant = Some(ch);
+                statement_goal = is_block;
+            }
+            '}' => {
+                let is_block = block_brace_stack.pop().unwrap_or(false);
+                depth = depth.saturating_sub(1);
+                trailing_identifier.clear();
+                trailing_identifier_is_member = false;
+                identifier_token_open = false;
+                last_significant = Some(if is_block { '{' } else { ch });
+                statement_goal = is_block;
+            }
+            '[' => {
+                depth = depth.saturating_add(1);
+                trailing_identifier.clear();
+                trailing_identifier_is_member = false;
+                identifier_token_open = false;
+                last_significant = Some(ch);
+                statement_goal = false;
+            }
+            ']' => {
+                depth = depth.saturating_sub(1);
+                trailing_identifier.clear();
+                trailing_identifier_is_member = false;
+                identifier_token_open = false;
+                last_significant = Some(ch);
+                statement_goal = false;
+            }
+            ch if is_binding_pattern_whitespace(ch) => {
+                if matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}') {
+                    line_terminator_since_significant = true;
+                }
+                continue;
+            }
+            ch if ch.is_ascii_alphabetic() || matches!(ch, '_' | '$') => {
+                if !identifier_token_open {
+                    trailing_identifier.clear();
+                    trailing_identifier_is_member = last_significant == Some('.');
+                }
+                trailing_identifier.push(ch);
+                identifier_token_open = true;
+                last_significant = Some(ch);
+                statement_goal = false;
+            }
+            ch if ch.is_ascii_digit() => {
+                if identifier_token_open {
+                    trailing_identifier.push(ch);
+                } else {
+                    trailing_identifier.clear();
+                    trailing_identifier_is_member = false;
+                }
+                last_significant = Some(ch);
+                statement_goal = false;
+            }
+            ch => {
+                trailing_identifier.clear();
+                trailing_identifier_is_member = false;
+                identifier_token_open = false;
+                last_significant = Some(ch);
+                statement_goal = ch == ';' && control_paren_stack.is_empty();
+            }
+        }
+        ends_postfix_update = false;
+        line_terminator_since_significant = false;
+    }
+
+    BindingPatternScanState {
+        complete: !in_block_comment && in_quote.is_none(),
+        last_significant,
+        trailing_identifier,
+        trailing_identifier_is_member,
+        ends_postfix_update,
+    }
+}
+
+fn scan_binding_pattern_source(
+    source: &str,
+    mut visit: impl FnMut(usize, char, usize, bool),
+) -> bool {
+    scan_binding_pattern_source_until(source, |index, ch, depth, quoted| {
+        visit(index, ch, depth, quoted);
+        true
+    })
+    .complete
+}
+
+fn is_binding_pattern_whitespace(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{0009}'
+            | '\u{000A}'
+            | '\u{000B}'
+            | '\u{000C}'
+            | '\u{000D}'
+            | '\u{0020}'
+            | '\u{00A0}'
+            | '\u{1680}'
+            | '\u{2000}'
+            ..='\u{200A}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202F}'
+                | '\u{205F}'
+                | '\u{3000}'
+                | '\u{FEFF}'
+    )
+}
+
+fn contains_non_ecmascript_whitespace(source: &str) -> bool {
+    let mut found = false;
+    scan_binding_pattern_source_until(source, |_, ch, _, quoted| {
+        if !quoted && ch.is_whitespace() && !is_binding_pattern_whitespace(ch) {
+            found = true;
+            false
+        } else {
+            true
+        }
+    });
+    found
+}
+
+fn trim_binding_pattern_leading_trivia(source: &str) -> Option<&str> {
+    let mut first_significant = None;
+    let state = scan_binding_pattern_source_until(source, |index, ch, _, quoted| {
+        if quoted || !is_binding_pattern_whitespace(ch) {
+            first_significant = Some(index);
+            false
+        } else {
+            true
+        }
+    });
+    if let Some(first_significant) = first_significant {
+        Some(&source[first_significant..])
+    } else if state.complete {
+        Some("")
+    } else {
+        None
+    }
+}
+
+/// Remove only leading and trailing lexical trivia from a binding-pattern
+/// slice. Comments between token characters remain inside the returned slice,
+/// so invalid token splices such as `va/*c*/lue` are rejected rather than
+/// silently concatenated.
+fn binding_pattern_trivia_bounds(source: &str) -> Option<(usize, usize)> {
+    let mut first_significant = None;
+    let mut last_significant_end = 0usize;
+    let complete = scan_binding_pattern_source(source, |index, ch, _, quoted| {
+        if quoted || !is_binding_pattern_whitespace(ch) {
+            first_significant.get_or_insert(index);
+            last_significant_end = index.saturating_add(ch.len_utf8());
+        }
+    });
+    if !complete {
+        return None;
+    }
+    Some((first_significant.unwrap_or(0), last_significant_end))
+}
+
+fn trim_binding_pattern_trivia(source: &str) -> Option<&str> {
+    let (start, end) = binding_pattern_trivia_bounds(source)?;
+    Some(&source[start..end])
+}
+
 /// Parse a binding pattern: identifier, `{ ... }` object, or `[ ... ]` array.
 fn parse_binding_pattern(
     source: &str,
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<BindingPattern> {
-    let trimmed = source.trim();
+    let trimmed = trim_binding_pattern_trivia(source).ok_or_else(|| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "unterminated comment or quoted literal in binding pattern",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )
+    })?;
     if trimmed.is_empty() {
         return Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
@@ -3487,9 +4806,12 @@ fn parse_binding_pattern(
     // Default value: `pattern = expr` (only at top level of a pattern element)
     // We need to be careful not to match `=` inside nested patterns.
     if let Some(eq_pos) = find_top_level_eq(trimmed) {
-        let left_src = trimmed[..eq_pos].trim();
-        let right_src = trimmed[eq_pos + 1..].trim();
-        if !left_src.is_empty() && !right_src.is_empty() {
+        let left_src = trim_binding_pattern_trivia(&trimmed[..eq_pos]);
+        let right_src = trim_binding_pattern_trivia(&trimmed[eq_pos + 1..]);
+        if let (Some(left_src), Some(right_src)) = (left_src, right_src)
+            && !left_src.is_empty()
+            && !right_src.is_empty()
+        {
             let left = parse_binding_pattern(left_src, span, context)?;
             let right = parse_expression(right_src, span, context, 1)?;
             return Ok(BindingPattern::AssignmentPattern {
@@ -3502,13 +4824,13 @@ fn parse_binding_pattern(
     // Object pattern: `{ ... }`
     if trimmed.starts_with('{') && trimmed.ends_with('}') {
         let inner = &trimmed[1..trimmed.len() - 1];
-        return parse_object_binding_pattern(inner.trim(), span, context);
+        return parse_object_binding_pattern(inner, span, context);
     }
 
     // Array pattern: `[ ... ]`
     if trimmed.starts_with('[') && trimmed.ends_with(']') {
         let inner = &trimmed[1..trimmed.len() - 1];
-        return parse_array_binding_pattern(inner.trim(), span, context);
+        return parse_array_binding_pattern(inner, span, context);
     }
 
     // Simple BindingIdentifier: decode permitted Unicode escapes before
@@ -3527,65 +4849,31 @@ fn parse_binding_pattern(
 
 /// Find `=` at the top level (not inside brackets, parens, braces, or strings).
 fn find_top_level_eq(source: &str) -> Option<usize> {
-    let mut depth = 0usize;
-    let mut in_quote: Option<char> = None;
-    let mut escaped = false;
-
-    for (i, ch) in source.char_indices() {
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if ch == '\\' {
-                escaped = true;
-                continue;
-            }
-            if ch == q {
-                in_quote = None;
-            }
-            continue;
+    let mut found = None;
+    let mut previous_significant = None;
+    scan_binding_pattern_source(source, |index, ch, depth, quoted| {
+        if found.is_some() || quoted {
+            return;
         }
-        match ch {
-            '\'' | '"' | '`' => in_quote = Some(ch),
-            '(' | '[' | '{' => depth = depth.saturating_add(1),
-            ')' | ']' | '}' => depth = depth.saturating_sub(1),
-            '=' if depth == 0 => {
-                // Skip `==` and `=>`
-                let next = source.as_bytes().get(i + 1).copied();
-                let prev = if i > 0 {
-                    source.as_bytes().get(i - 1).copied()
-                } else {
-                    None
-                };
-                if next != Some(b'=') && next != Some(b'>') {
-                    // Skip `!=`, `<=`, `>=`, `+=`, etc.
-                    let is_compound = matches!(
-                        prev,
-                        Some(
-                            b'<' | b'>'
-                                | b'!'
-                                | b'='
-                                | b'+'
-                                | b'-'
-                                | b'*'
-                                | b'/'
-                                | b'%'
-                                | b'&'
-                                | b'|'
-                                | b'^'
-                                | b'~'
-                        )
-                    );
-                    if !is_compound {
-                        return Some(i);
-                    }
-                }
+        if depth == 0 && ch == '=' {
+            // Comments and whitespace are trivia, so use the previous
+            // significant code point rather than the raw byte before `=`.
+            // This accepts `x/* trivia */=1` without mistaking the comment's
+            // closing slash for a `/=` compound assignment.
+            let next = source.as_bytes().get(index + 1).copied();
+            let is_compound = matches!(
+                previous_significant,
+                Some('<' | '>' | '!' | '=' | '+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '~')
+            );
+            if next != Some(b'=') && next != Some(b'>') && !is_compound {
+                found = Some(index);
             }
-            _ => {}
         }
-    }
-    None
+        if !is_binding_pattern_whitespace(ch) {
+            previous_significant = Some(ch);
+        }
+    });
+    found
 }
 
 /// Parse object destructuring pattern contents (inside `{ ... }`).
@@ -3594,16 +4882,32 @@ fn parse_object_binding_pattern(
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<BindingPattern> {
+    let inner = trim_binding_pattern_trivia(inner).ok_or_else(|| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "unterminated comment or quoted literal in object binding pattern",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )
+    })?;
     if inner.is_empty() {
         return Ok(BindingPattern::ObjectPattern(Vec::new()));
     }
 
+    let has_trailing_comma = inner.ends_with(',');
     let segments = split_pattern_elements(inner);
     let mut properties = Vec::with_capacity(segments.len());
     let mut seen_rest = false;
 
     for segment in &segments {
-        let seg = segment.trim();
+        let seg = trim_binding_pattern_trivia(segment).ok_or_else(|| {
+            ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "unterminated comment or quoted literal in object binding property",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            )
+        })?;
 
         if seen_rest {
             return Err(ParseError::new(
@@ -3615,15 +4919,24 @@ fn parse_object_binding_pattern(
         }
 
         if seg.is_empty() {
-            continue;
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "object binding pattern contains an empty property",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
         }
 
         // Rest element in object pattern: `...rest`
         if let Some(rest_src) = seg.strip_prefix("...") {
             seen_rest = true;
-            let inner_pat = parse_binding_pattern(rest_src.trim(), span, context)?;
+            let inner_pat = parse_binding_pattern(rest_src, span, context)?;
+            let key_name = inner_pat
+                .as_identifier()
+                .unwrap_or_else(|| rest_src.trim())
+                .to_string();
             properties.push(ObjectPatternProperty {
-                key: Expression::Identifier(rest_src.trim().to_string()),
+                key: Expression::Identifier(key_name),
                 value: BindingPattern::Rest(Box::new(inner_pat)),
                 computed: false,
                 shorthand: false,
@@ -3633,13 +4946,28 @@ fn parse_object_binding_pattern(
 
         // Computed key: `[expr]: pattern`
         if seg.starts_with('[')
-            && let Some(bracket_end) = seg.find(']')
+            && let Some(bracket_end) = find_binding_pattern_computed_key_end(seg)
         {
-            let key_src = &seg[1..bracket_end];
-            let after_bracket = seg[bracket_end + 1..].trim();
+            let key_src = trim_binding_pattern_trivia(&seg[1..bracket_end]).ok_or_else(|| {
+                ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    "unterminated trivia in computed object binding key",
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                )
+            })?;
+            let after_bracket =
+                trim_binding_pattern_trivia(&seg[bracket_end + 1..]).ok_or_else(|| {
+                    ParseError::new(
+                        ParseErrorCode::UnsupportedSyntax,
+                        "unterminated trivia after computed object binding key",
+                        context.source_label.to_string(),
+                        Some(span.clone()),
+                    )
+                })?;
             if let Some(value_src) = after_bracket.strip_prefix(':') {
-                let key = parse_expression(key_src.trim(), span, context, 1)?;
-                let value = parse_binding_pattern(value_src.trim(), span, context)?;
+                let key = parse_expression(key_src, span, context, 1)?;
+                let value = parse_binding_pattern(value_src, span, context)?;
                 properties.push(ObjectPatternProperty {
                     key,
                     value,
@@ -3652,8 +4980,8 @@ fn parse_object_binding_pattern(
 
         // Key-value: `key: pattern` or shorthand: `key` or `key = default`
         if let Some(colon_pos) = find_top_level_colon_in_pattern(seg) {
-            let key_src = seg[..colon_pos].trim();
-            let value_src = seg[colon_pos + 1..].trim();
+            let key_src = &seg[..colon_pos];
+            let value_src = &seg[colon_pos + 1..];
             let key = parse_static_binding_property_key(key_src, span, context)?;
             let value = parse_binding_pattern(value_src, span, context)?;
             properties.push(ObjectPatternProperty {
@@ -3681,6 +5009,19 @@ fn parse_object_binding_pattern(
         }
     }
 
+    if has_trailing_comma
+        && properties
+            .last()
+            .is_some_and(|property| matches!(&property.value, BindingPattern::Rest(_)))
+    {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "rest element must be the absolute last property in object pattern (no trailing commas allowed)",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+
     Ok(BindingPattern::ObjectPattern(properties))
 }
 
@@ -3689,6 +5030,14 @@ fn parse_static_binding_property_key(
     span: &SourceSpan,
     context: &ParseExecutionContext<'_>,
 ) -> ParseResult<Expression> {
+    let source = trim_binding_pattern_trivia(source).ok_or_else(|| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            format!("invalid static object-binding property key: `{source}`"),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )
+    })?;
     parse_static_property_name(source, span, context, "object-binding")
 }
 
@@ -3714,7 +5063,6 @@ fn parse_static_property_name(
     context: &ParseExecutionContext<'_>,
     construct: &str,
 ) -> ParseResult<Expression> {
-    let source = source.trim();
     let invalid_key = || {
         ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
@@ -4047,36 +5395,28 @@ fn decode_binding_property_identifier_escapes(source: &str) -> Option<String> {
     Some(out)
 }
 
+fn find_binding_pattern_computed_key_end(source: &str) -> Option<usize> {
+    if !source.starts_with('[') {
+        return None;
+    }
+    let mut closing_index = None;
+    scan_binding_pattern_source(source, |index, ch, depth, quoted| {
+        if closing_index.is_none() && !quoted && ch == ']' && depth == 1 {
+            closing_index = Some(index);
+        }
+    });
+    closing_index
+}
+
 /// Find `:` at the top level of a pattern element.
 fn find_top_level_colon_in_pattern(source: &str) -> Option<usize> {
-    let mut depth = 0usize;
-    let mut in_quote: Option<char> = None;
-    let mut escaped = false;
-
-    for (i, ch) in source.char_indices() {
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if ch == '\\' {
-                escaped = true;
-                continue;
-            }
-            if ch == q {
-                in_quote = None;
-            }
-            continue;
+    let mut found = None;
+    scan_binding_pattern_source(source, |index, ch, depth, quoted| {
+        if found.is_none() && !quoted && depth == 0 && ch == ':' {
+            found = Some(index);
         }
-        match ch {
-            '\'' | '"' | '`' => in_quote = Some(ch),
-            '(' | '[' | '{' => depth = depth.saturating_add(1),
-            ')' | ']' | '}' => depth = depth.saturating_sub(1),
-            ':' if depth == 0 => return Some(i),
-            _ => {}
-        }
-    }
-    None
+    });
+    found
 }
 
 /// Parse array destructuring pattern contents (inside `[ ... ]`).
@@ -4085,15 +5425,31 @@ fn parse_array_binding_pattern(
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<BindingPattern> {
+    let inner = trim_binding_pattern_trivia(inner).ok_or_else(|| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "unterminated comment or quoted literal in array binding pattern",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )
+    })?;
     if inner.is_empty() {
         return Ok(BindingPattern::ArrayPattern(Vec::new()));
     }
 
+    let has_trailing_comma = inner.ends_with(',');
     let segments = split_pattern_elements(inner);
     let mut elements = Vec::with_capacity(segments.len());
 
     for segment in &segments {
-        let seg = segment.trim();
+        let seg = trim_binding_pattern_trivia(segment).ok_or_else(|| {
+            ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "unterminated comment or quoted literal in array binding element",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            )
+        })?;
         if seg.is_empty() {
             elements.push(None); // hole
         } else {
@@ -4118,7 +5474,7 @@ fn parse_array_binding_pattern(
     }
     if let Some(&pos) = rest_positions.first() {
         // Rest must be the absolute last element (no trailing commas/holes allowed after it)
-        if pos != elements.len() - 1 {
+        if pos != elements.len() - 1 || has_trailing_comma {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "rest element must be the last element in array pattern",
@@ -4135,47 +5491,23 @@ fn parse_array_binding_pattern(
 fn split_pattern_elements(source: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut start = 0;
-    let mut depth = 0usize;
-    let mut in_quote: Option<char> = None;
-    let mut escaped = false;
-
-    for (i, ch) in source.char_indices() {
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if ch == '\\' {
-                escaped = true;
-                continue;
-            }
-            if ch == q {
-                in_quote = None;
-            }
-            continue;
+    scan_binding_pattern_source(source, |index, ch, depth, quoted| {
+        if !quoted && depth == 0 && ch == ',' {
+            out.push(&source[start..index]);
+            start = index.saturating_add(ch.len_utf8());
         }
-        match ch {
-            '\'' | '"' | '`' => in_quote = Some(ch),
-            '(' | '[' | '{' => depth = depth.saturating_add(1),
-            ')' | ']' | '}' => depth = depth.saturating_sub(1),
-            ',' if depth == 0 => {
-                out.push(&source[start..i]);
-                start = i + 1;
-            }
-            _ => {}
-        }
-    }
+    });
     out.push(&source[start..]);
     if let Some(last) = out.last()
-        && last.trim().is_empty()
-        && source.trim_end().ends_with(',')
+        && trim_binding_pattern_trivia(last).is_some_and(str::is_empty)
+        && trim_binding_pattern_trivia(source).is_some_and(|trimmed| trimmed.ends_with(','))
     {
         out.pop();
     }
     out
 }
 
-fn parse_variable_declaration_kind(statement: &str) -> Option<VariableDeclarationKind> {
+fn variable_declaration_prefix_kind(statement: &str) -> Option<VariableDeclarationKind> {
     for kind in [
         VariableDeclarationKind::Var,
         VariableDeclarationKind::Let,
@@ -4188,11 +5520,42 @@ fn parse_variable_declaration_kind(statement: &str) -> Option<VariableDeclaratio
             return Some(kind);
         }
         let next_char = rest.chars().next().unwrap();
-        if next_char.is_whitespace() || next_char == '[' || next_char == '{' {
+        if is_binding_pattern_whitespace(next_char)
+            || next_char == '['
+            || next_char == '{'
+            || rest.starts_with("//")
+            || rest.starts_with("/*")
+        {
             return Some(kind);
         }
     }
     None
+}
+
+fn let_starts_lexical_declaration(source_after_let: &str) -> bool {
+    let after_trivia = trim_directive_trivia(source_after_let).0;
+    if after_trivia.is_empty()
+        || strip_contextual_keyword(after_trivia, "in").is_some()
+        || strip_contextual_keyword(after_trivia, "instanceof").is_some()
+    {
+        return false;
+    }
+
+    matches!(after_trivia.chars().next(), Some('[' | '{' | '\\'))
+        || canonical_leading_source_identifier(after_trivia)
+            .is_some_and(|(name, _)| !is_always_reserved_word(&name))
+        // Preserve fail-closed handling for an unterminated block comment;
+        // complete comments have already been consumed as lexical trivia.
+        || after_trivia.starts_with("/*")
+}
+
+fn parse_variable_declaration_kind(statement: &str) -> Option<VariableDeclarationKind> {
+    let kind = variable_declaration_prefix_kind(statement)?;
+    (kind != VariableDeclarationKind::Let
+        || statement
+            .strip_prefix(kind.as_str())
+            .is_some_and(let_starts_lexical_declaration))
+    .then_some(kind)
 }
 
 fn validate_lexical_binding_names(
@@ -4219,10 +5582,15 @@ fn parse_variable_declaration(
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<VariableDeclaration> {
     let keyword = kind.as_str();
-    let body = statement
-        .strip_prefix(keyword)
-        .map(str::trim_start)
-        .unwrap();
+    let body_source = statement.strip_prefix(keyword).unwrap();
+    let body = trim_binding_pattern_leading_trivia(body_source).ok_or_else(|| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            format!("{keyword} declaration has unterminated leading trivia"),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )
+    })?;
     if body.is_empty() {
         return Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
@@ -4245,13 +5613,20 @@ fn parse_variable_declaration(
     let mut declarations = Vec::with_capacity(declarator_segments.len());
     for declarator in declarator_segments {
         let (name_raw, initializer_raw) = split_var_declarator_assignment(declarator);
-        let name = name_raw.trim();
-        let pattern = parse_binding_pattern(name, &span, context)?;
+        let pattern = parse_binding_pattern(name_raw, &span, context)?;
         validate_lexical_binding_names(kind, &pattern, &span, context)?;
 
         let initializer = match initializer_raw {
             Some(initializer_source) => {
-                let initializer_source = initializer_source.trim();
+                let initializer_source = trim_binding_pattern_trivia(initializer_source)
+                    .ok_or_else(|| {
+                        ParseError::new(
+                            ParseErrorCode::UnsupportedSyntax,
+                            format!("{keyword} initializer has unterminated lexical trivia"),
+                            context.source_label.to_string(),
+                            Some(span.clone()),
+                        )
+                    })?;
                 if initializer_source.is_empty() {
                     return Err(ParseError::new(
                         ParseErrorCode::UnsupportedSyntax,
@@ -4290,43 +5665,12 @@ fn parse_variable_declaration(
 fn split_var_declarator_segments(source: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut segment_start = 0usize;
-    let mut in_quote: Option<char> = None;
-    let mut escaped = false;
-    let mut paren_depth = 0usize;
-    let mut bracket_depth = 0usize;
-    let mut brace_depth = 0usize;
-
-    for (index, ch) in source.char_indices() {
-        if let Some(quote) = in_quote {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if ch == '\\' {
-                escaped = true;
-                continue;
-            }
-            if ch == quote {
-                in_quote = None;
-            }
-            continue;
+    scan_binding_pattern_source(source, |index, ch, depth, quoted| {
+        if !quoted && depth == 0 && ch == ',' {
+            push_var_declarator_segment(&mut out, source, segment_start, index);
+            segment_start = index.saturating_add(ch.len_utf8());
         }
-
-        match ch {
-            '\'' | '"' | '`' => in_quote = Some(ch),
-            '(' => paren_depth = paren_depth.saturating_add(1),
-            ')' => paren_depth = paren_depth.saturating_sub(1),
-            '[' => bracket_depth = bracket_depth.saturating_add(1),
-            ']' => bracket_depth = bracket_depth.saturating_sub(1),
-            '{' => brace_depth = brace_depth.saturating_add(1),
-            '}' => brace_depth = brace_depth.saturating_sub(1),
-            ',' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
-                push_var_declarator_segment(&mut out, source, segment_start, index);
-                segment_start = index.saturating_add(ch.len_utf8());
-            }
-            _ => {}
-        }
-    }
+    });
     push_var_declarator_segment(&mut out, source, segment_start, source.len());
     out
 }
@@ -4341,60 +5685,38 @@ fn push_var_declarator_segment<'a>(
         return;
     }
     let raw = &source[start..end];
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
+    if raw.chars().all(is_binding_pattern_whitespace) {
         return;
     }
-    out.push(trimmed);
+    out.push(raw);
 }
 
 fn split_var_declarator_assignment(segment: &str) -> (&str, Option<&str>) {
-    let mut in_quote: Option<char> = None;
-    let mut escaped = false;
-    let mut paren_depth = 0usize;
-    let mut bracket_depth = 0usize;
-    let mut brace_depth = 0usize;
-
-    for (index, ch) in segment.char_indices() {
-        if let Some(quote) = in_quote {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if ch == '\\' {
-                escaped = true;
-                continue;
-            }
-            if ch == quote {
-                in_quote = None;
-            }
-            continue;
+    let mut assignment = None;
+    let mut previous_significant = None;
+    scan_binding_pattern_source(segment, |index, ch, depth, quoted| {
+        if assignment.is_some() || quoted {
+            return;
         }
-
-        match ch {
-            '\'' | '"' => in_quote = Some(ch),
-            '(' => paren_depth = paren_depth.saturating_add(1),
-            ')' => paren_depth = paren_depth.saturating_sub(1),
-            '[' => bracket_depth = bracket_depth.saturating_add(1),
-            ']' => bracket_depth = bracket_depth.saturating_sub(1),
-            '{' => brace_depth = brace_depth.saturating_add(1),
-            '}' => brace_depth = brace_depth.saturating_sub(1),
-            '=' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
-                let prev = segment[..index].chars().next_back();
-                let next = segment[index.saturating_add(ch.len_utf8())..]
-                    .chars()
-                    .next();
-                let part_of_comparison =
-                    matches!(prev, Some('=') | Some('!') | Some('<') | Some('>'))
-                        || matches!(next, Some('='));
-                if part_of_comparison {
-                    continue;
-                }
-                let rhs_start = index.saturating_add(ch.len_utf8());
-                return (&segment[..index], Some(&segment[rhs_start..]));
+        if depth == 0 && ch == '=' {
+            let next = segment[index.saturating_add(ch.len_utf8())..]
+                .chars()
+                .next();
+            let part_of_comparison = matches!(
+                previous_significant,
+                Some('=') | Some('!') | Some('<') | Some('>')
+            ) || matches!(next, Some('='));
+            if !part_of_comparison {
+                assignment = Some(index);
             }
-            _ => {}
         }
+        if !is_binding_pattern_whitespace(ch) {
+            previous_significant = Some(ch);
+        }
+    });
+    if let Some(index) = assignment {
+        let rhs_start = index.saturating_add('='.len_utf8());
+        return (&segment[..index], Some(&segment[rhs_start..]));
     }
 
     (segment, None)
@@ -4420,11 +5742,30 @@ fn parse_expression(
         ));
     }
 
-    let expression = expression.trim();
+    // Comments and the full ES WhiteSpace set are lexical trivia at an
+    // expression boundary. Keep internal trivia in place so it cannot join
+    // identifier tokens, but discard leading/trailing trivia before recursive
+    // postfix and binary parsing (for example `let/**/(4)` and `let\u{FEFF}(4)`).
+    let expression = trim_binding_pattern_trivia(expression).ok_or_else(|| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "unterminated lexical trivia at expression boundary",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )
+    })?;
     if expression.is_empty() {
         return Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "empty expression statement",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+    if contains_non_ecmascript_whitespace(expression) {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "non-ECMAScript whitespace at expression boundary",
             context.source_label.to_string(),
             Some(span.clone()),
         ));
@@ -4540,8 +5881,6 @@ fn parse_primary_expression(
     context: &mut ParseExecutionContext<'_>,
     recursion_depth: u64,
 ) -> ParseResult<Expression> {
-    let expression = expression.trim();
-
     if let Some(value) = parse_quoted_string(expression) {
         return Ok(Expression::StringLiteral(value));
     }
@@ -4682,13 +6021,16 @@ fn try_parse_arrow_function(
     recursion_depth: u64,
 ) -> Option<ParseResult<Expression>> {
     let (is_async, rest) = if let Some(after_async) = expr.strip_prefix("async") {
-        let trimmed = after_async.trim_start();
+        let (trimmed, saw_line_terminator) = trim_directive_trivia(after_async);
+        let consumed_trivia = trimmed.len() < after_async.len();
         let starts_with_identifier = matches!(
             trimmed.chars().next(),
             Some(ch) if matches!(ch, '$' | '_') || unicode_id_start::is_id_start(ch)
         ) || trimmed.starts_with(r"\u");
-        // `async(` could be a call, so require whitespace before `(`.
-        if after_async.starts_with(|c: char| c.is_ascii_whitespace())
+        // `async(` could be a call. An async-arrow head requires separating
+        // lexical trivia and forbids a LineTerminator before its parameter.
+        if consumed_trivia
+            && !saw_line_terminator
             && (trimmed.starts_with('(') || starts_with_identifier)
         {
             (true, trimmed)
@@ -4702,7 +6044,15 @@ fn try_parse_arrow_function(
     if rest.starts_with('(') {
         // (params) => body
         let (params_src, after_params) = extract_balanced(rest, '(', ')')?;
-        let after = after_params.trim_start();
+        let (after, saw_line_terminator) = trim_directive_trivia(after_params);
+        if saw_line_terminator && after.starts_with("=>") {
+            return Some(Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "line terminator is not allowed before an arrow token",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            )));
+        }
         let body_src = after.strip_prefix("=>")?;
         let body_src = body_src.trim();
 
@@ -4731,9 +6081,32 @@ fn try_parse_arrow_function(
         ))
     } else {
         // ident => body (single param, no parens)
-        // Find `=>` that isn't inside quotes/brackets.
+        // Find `=>` that isn't inside lexical trivia or nested delimiters.
         let arrow_pos = find_top_level_arrow(rest)?;
-        let param_name = rest[..arrow_pos].trim();
+        let (param_with_trailing_trivia, _) = trim_directive_trivia(&rest[..arrow_pos]);
+        let param_name = match trim_binding_pattern_trivia(param_with_trailing_trivia) {
+            Some(param_name) => param_name,
+            None => {
+                return Some(Err(ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    "unterminated comment or quoted literal in arrow parameter",
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                )));
+            }
+        };
+        let trailing_trivia = param_with_trailing_trivia
+            .strip_prefix(param_name)
+            .unwrap_or_default();
+        let (_, saw_line_terminator) = trim_directive_trivia(trailing_trivia);
+        if saw_line_terminator {
+            return Some(Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "line terminator is not allowed before an arrow token",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            )));
+        }
         let param_name = match parse_simple_binding_identifier(param_name, span, context) {
             Ok(Some(name)) => name,
             Ok(None) => {
@@ -4768,21 +6141,54 @@ fn parse_arrow_params(
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<Vec<FunctionParam>> {
-    if params_src.trim().is_empty() {
+    let params_src = trim_binding_pattern_trivia(params_src).ok_or_else(|| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "unterminated comment or quoted literal in function parameters",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )
+    })?;
+    if params_src.is_empty() {
         return Ok(Vec::new());
     }
+    let has_trailing_comma = params_src.ends_with(',');
     let segments = split_pattern_elements(params_src);
     let mut params = Vec::with_capacity(segments.len());
     for segment in &segments {
-        let seg = segment.trim();
+        let seg = trim_binding_pattern_trivia(segment).ok_or_else(|| {
+            ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "unterminated comment or quoted literal in function parameter",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            )
+        })?;
         if seg.is_empty() {
-            continue;
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "function parameter list contains an empty parameter",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
         }
         let pattern = parse_binding_pattern(seg, span, context)?;
         params.push(FunctionParam {
             pattern,
             span: span.clone(),
         });
+    }
+    if has_trailing_comma
+        && params
+            .last()
+            .is_some_and(|parameter| matches!(&parameter.pattern, BindingPattern::Rest(_)))
+    {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "rest parameter cannot have a trailing comma",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
     }
     Ok(params)
 }
@@ -4893,57 +6299,13 @@ fn parse_arrow_body(
 
 /// Find `=>` at the top level (not inside quotes/brackets/parens).
 fn find_top_level_arrow(s: &str) -> Option<usize> {
-    let bytes = s.as_bytes();
-    let mut depth_paren: i32 = 0;
-    let mut depth_bracket: i32 = 0;
-    let mut depth_brace: i32 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
-    let mut i = 0usize;
-
-    while i + 1 < bytes.len() {
-        let b = bytes[i];
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                i += 1;
-                continue;
-            }
-            if b == b'\\' {
-                escaped = true;
-                i += 1;
-                continue;
-            }
-            if b == q {
-                in_quote = None;
-            }
-            i += 1;
-            continue;
+    let mut found = None;
+    scan_binding_pattern_source(s, |index, _, depth, quoted| {
+        if found.is_none() && !quoted && depth == 0 && s[index..].starts_with("=>") {
+            found = Some(index);
         }
-        match b {
-            b'\'' | b'"' | b'`' => {
-                in_quote = Some(b);
-                i += 1;
-                continue;
-            }
-            b'(' => depth_paren += 1,
-            b')' => depth_paren -= 1,
-            b'[' => depth_bracket += 1,
-            b']' => depth_bracket -= 1,
-            b'{' => depth_brace += 1,
-            b'}' => depth_brace -= 1,
-            b'=' if depth_paren == 0
-                && depth_bracket == 0
-                && depth_brace == 0
-                && bytes[i + 1] == b'>' =>
-            {
-                return Some(i);
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    None
+    });
+    found
 }
 
 // ---------------------------------------------------------------------------
@@ -5048,6 +6410,22 @@ fn parse_template_literal(
 
     while i < bytes.len() {
         if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            let escaped_source = &inner[i + 1..];
+            let escaped_char = escaped_source
+                .chars()
+                .next()
+                .expect("the byte following a template escape must exist");
+            if matches!(escaped_char, '\n' | '\u{2028}' | '\u{2029}') {
+                i = i.saturating_add(1 + escaped_char.len_utf8());
+                continue;
+            }
+            if escaped_char == '\r' {
+                i = i.saturating_add(2);
+                if bytes.get(i) == Some(&b'\n') {
+                    i = i.saturating_add(1);
+                }
+                continue;
+            }
             // Escaped character — include literally. Advance past the
             // full UTF-8 codepoint that follows the backslash so we
             // don't split multi-byte characters.
@@ -5071,6 +6449,15 @@ fn parse_template_literal(
             // a backslash followed by a complete codepoint.
             let end = i.min(inner.len());
             current_quasi.push_str(&inner[esc_start..end]);
+            continue;
+        }
+        if bytes[i] == b'\r' {
+            // Template TV normalizes CR and CRLF source characters to LF.
+            current_quasi.push('\n');
+            i = i.saturating_add(1);
+            if bytes.get(i) == Some(&b'\n') {
+                i = i.saturating_add(1);
+            }
             continue;
         }
         if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
@@ -5678,7 +7065,7 @@ fn generator_function_marker_prefix(prefix: &str) -> bool {
             let Some(ch) = prefix[index..].chars().next() else {
                 break;
             };
-            if !ch.is_whitespace() && ch != '\u{FEFF}' {
+            if !is_binding_pattern_whitespace(ch) {
                 last_significant_end = index + ch.len_utf8();
             }
             index += ch.len_utf8();
@@ -8285,40 +9672,19 @@ fn extract_balanced(s: &str, open_char: char, close_char: char) -> Option<(&str,
     if !s.starts_with(open_char) {
         return None;
     }
-    let bytes = s.as_bytes();
-    let mut depth: i64 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
-    for (i, &b) in bytes.iter().enumerate() {
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if b == b'\\' {
-                escaped = true;
-                continue;
-            }
-            if b == q {
-                in_quote = None;
-            }
-            continue;
+    let mut closing_index = None;
+    scan_binding_pattern_source_until(s, |index, ch, depth, quoted| {
+        if closing_index.is_none() && !quoted && ch == close_char && depth == 1 {
+            closing_index = Some(index);
+            false
+        } else {
+            true
         }
-        match b {
-            b'\'' | b'"' | b'`' => in_quote = Some(b),
-            _ if b == open_char as u8 => depth += 1,
-            _ if b == close_char as u8 => {
-                depth -= 1;
-                if depth == 0 {
-                    let inner = &s[1..i];
-                    let rest = &s[i + 1..];
-                    return Some((inner, rest));
-                }
-            }
-            _ => {}
-        }
-    }
-    None
+    });
+    let closing_index = closing_index?;
+    let inner_start = open_char.len_utf8();
+    let rest_start = closing_index.saturating_add(close_char.len_utf8());
+    Some((&s[inner_start..closing_index], &s[rest_start..]))
 }
 
 fn top_level_yield_asi_split(source: &str) -> Option<usize> {
@@ -8422,8 +9788,7 @@ fn top_level_yield_asi_split(source: &str) -> Option<usize> {
         }
         if source.is_char_boundary(index)
             && let Some(ch) = source[index..].chars().next()
-            && !ch.is_whitespace()
-            && ch != '\u{FEFF}'
+            && !is_binding_pattern_whitespace(ch)
         {
             last_significant = Some(ch);
         }
@@ -8521,17 +9886,11 @@ fn parse_if_statement(
     // Split consequent from optional else.
     let (consequent_src, alternate_src) = if rest.starts_with('{') {
         if let Some((block_inner, after_block)) = extract_balanced(rest, '{', '}') {
-            let after = after_block.trim();
+            let after = trim_directive_trivia(after_block).0;
             (
                 format!("{{{block_inner}}}"),
-                if after.starts_with("else") {
-                    Some(
-                        after
-                            .strip_prefix("else")
-                            .unwrap_or(after)
-                            .trim()
-                            .to_string(),
-                    )
+                if let Some(after_else) = after.strip_prefix("else") {
+                    Some(trim_directive_trivia(after_else).0.trim_end().to_string())
                 } else {
                     None
                 },
@@ -8783,41 +10142,80 @@ fn try_parse_for_in_of(
     goal: ParseGoal,
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<Option<Statement>> {
-    // Try to split on ` in ` or ` of ` at top level.
-    let (keyword, split_pos) = match find_top_level_keyword(header, " in ") {
-        Some(pos) => ("in", pos),
-        None => match find_top_level_keyword(header, " of ") {
-            Some(pos) => ("of", pos),
-            None => return Ok(None),
-        },
-    };
+    // A contextual `of` may itself be the binding name (`for (let of of
+    // values)`). Try top-level keyword-token candidates in source order and
+    // keep the first whose left side is a complete binding.
+    let mut selected = None;
+    for (keyword, split_pos) in find_top_level_for_in_of_keywords(header) {
+        let Some(lhs) = trim_binding_pattern_trivia(&header[..split_pos]) else {
+            continue;
+        };
+        let Some(rhs) = trim_binding_pattern_trivia(&header[split_pos + keyword.len()..]) else {
+            continue;
+        };
+        if lhs.is_empty() || rhs.is_empty() {
+            continue;
+        }
 
-    let lhs = header[..split_pos].trim();
-    let rhs = header[split_pos + keyword.len() + 2..].trim();
-
-    // Parse binding: optionally `let x`, `const x`, `var x`, or bare `x`.
-    let (binding_kind, binding_src) = if let Some(after) = lhs
-        .strip_prefix("let ")
-        .or_else(|| lhs.strip_prefix("let\t"))
-    {
-        (Some(VariableDeclarationKind::Let), after.trim())
-    } else if let Some(after) = lhs
-        .strip_prefix("const ")
-        .or_else(|| lhs.strip_prefix("const\t"))
-    {
-        (Some(VariableDeclarationKind::Const), after.trim())
-    } else if let Some(after) = lhs
-        .strip_prefix("var ")
-        .or_else(|| lhs.strip_prefix("var\t"))
-    {
-        (Some(VariableDeclarationKind::Var), after.trim())
-    } else {
-        (None, lhs)
-    };
-
-    let binding = match parse_binding_pattern(binding_src, span, context) {
-        Ok(pat) => pat,
-        Err(_) => return Ok(None),
+        // Parse binding: optionally `let x`, `const x`, `var x`, or bare `x`.
+        // The declaration keyword may be followed immediately by comment/BOM
+        // trivia or by a pattern delimiter.
+        let mut binding_kind = parse_variable_declaration_kind(lhs);
+        if keyword == "of" && binding_kind.is_none() && lhs == "let" {
+            // `let` is a valid sloppy assignment target in for-in, but the
+            // corresponding for-of form is an early error. Skipping this
+            // candidate also lets `for (let of of values)` select the second
+            // contextual `of`, where `let of` is a lexical declaration.
+            continue;
+        }
+        let binding_src = if let Some(kind) = binding_kind {
+            let Some(binding_src) = lhs
+                .strip_prefix(kind.as_str())
+                .and_then(trim_binding_pattern_trivia)
+            else {
+                continue;
+            };
+            if binding_src.is_empty()
+                && lhs == "let"
+                && keyword == "in"
+                && goal == ParseGoal::Script
+                && !context.strict_mode
+            {
+                // In sloppy Script grammar, bare `let` remains an Identifier
+                // assignment target in `for (let in object)`.
+                binding_kind = None;
+                lhs
+            } else {
+                binding_src
+            }
+        } else {
+            lhs
+        };
+        let Ok(binding) = parse_binding_pattern(binding_src, span, context) else {
+            continue;
+        };
+        // The AST has no distinct pre-loop initializer field. Reject a
+        // top-level initializer rather than mis-lowering it as a per-iteration
+        // destructuring default; defaults nested inside a pattern remain valid.
+        if matches!(
+            &binding,
+            BindingPattern::AssignmentPattern { .. } | BindingPattern::Rest(_)
+        ) {
+            continue;
+        }
+        // ES2020's for-of early errors reserve bare `async`; declaration
+        // bindings and the analogous for-in assignment target remain valid.
+        if keyword == "of"
+            && binding_kind.is_none()
+            && matches!(&binding, BindingPattern::Identifier(name) if name == "async")
+        {
+            continue;
+        }
+        selected = Some((keyword, binding_kind, binding, rhs));
+        break;
+    }
+    let Some((keyword, binding_kind, binding, rhs)) = selected else {
+        return Ok(None);
     };
     if let Some(kind) = binding_kind {
         validate_lexical_binding_names(kind, &binding, span, context)?;
@@ -8847,67 +10245,37 @@ fn try_parse_for_in_of(
     }
 }
 
-/// Find a keyword (like ` in ` or ` of `) at the top level of an expression,
-/// respecting parentheses, brackets, braces, and quotes.
-fn find_top_level_keyword(src: &str, keyword: &str) -> Option<usize> {
-    let bytes = src.as_bytes();
-    let kw_bytes = keyword.as_bytes();
-    let kw_len = kw_bytes.len();
-    if bytes.len() < kw_len {
-        return None;
-    }
-    let mut depth_paren = 0i32;
-    let mut depth_bracket = 0i32;
-    let mut depth_brace = 0i32;
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut in_backtick = false;
-    let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if in_single {
-            if b == b'\\' {
-                i += 1;
-            } else if b == b'\'' {
-                in_single = false;
-            }
-        } else if in_double {
-            if b == b'\\' {
-                i += 1;
-            } else if b == b'"' {
-                in_double = false;
-            }
-        } else if in_backtick {
-            if b == b'\\' {
-                i += 1;
-            } else if b == b'`' {
-                in_backtick = false;
-            }
-        } else {
-            match b {
-                b'\'' => in_single = true,
-                b'"' => in_double = true,
-                b'`' => in_backtick = true,
-                b'(' => depth_paren += 1,
-                b')' => depth_paren -= 1,
-                b'[' => depth_bracket += 1,
-                b']' => depth_bracket -= 1,
-                b'{' => depth_brace += 1,
-                b'}' => depth_brace -= 1,
-                _ => {}
-            }
-            if depth_paren == 0
-                && depth_bracket == 0
-                && depth_brace == 0
-                && i + kw_len <= bytes.len()
-                && &bytes[i..i + kw_len] == kw_bytes
-            {
-                return Some(i);
+/// Find top-level `in`/`of` IdentifierName tokens in source order. Comments,
+/// BOM, and other whitespace may separate either side of the token; member
+/// names such as `object.of` are not loop delimiters.
+fn find_top_level_for_in_of_keywords(src: &str) -> Vec<(&'static str, usize)> {
+    let mut found = Vec::new();
+    let mut previous_significant = None;
+    scan_binding_pattern_source(src, |index, ch, depth, quoted| {
+        if quoted {
+            return;
+        }
+        if depth == 0 && previous_significant != Some('.') {
+            for keyword in ["in", "of"] {
+                let end = index.saturating_add(keyword.len());
+                if ch == keyword.as_bytes()[0] as char
+                    && src[index..].starts_with(keyword)
+                    && !src[..index].chars().next_back().is_some_and(|previous| {
+                        matches!(previous, '$' | '_' | '\\' | '\u{200C}' | '\u{200D}')
+                            || unicode_id_start::is_id_continue(previous)
+                    })
+                    && !starts_identifier_part(&src[end..])
+                {
+                    found.push((keyword, index));
+                    break;
+                }
             }
         }
-        i += 1;
-    }
-    None
+        if !is_binding_pattern_whitespace(ch) {
+            previous_significant = Some(ch);
+        }
+    });
+    found
 }
 
 fn parse_while_statement(
@@ -8976,8 +10344,9 @@ fn parse_do_while_statement(
 
     let body = parse_statement(body_src.trim(), goal, span.clone(), context)?;
 
-    let rest = rest.trim();
-    let rest = rest.strip_prefix("while").unwrap_or(rest).trim_start();
+    let rest = trim_directive_trivia(&rest).0;
+    let rest = rest.strip_prefix("while").unwrap_or(rest);
+    let rest = trim_directive_trivia(rest).0;
     let (condition_src, _) = extract_balanced(rest, '(', ')').ok_or_else(|| {
         ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
@@ -9055,11 +10424,12 @@ fn parse_try_catch_statement(
         span: span.clone(),
     };
 
-    let rest = rest.trim();
+    let rest = trim_directive_trivia(rest).0;
 
     // Parse optional catch clause.
     let (handler, rest) = if rest.starts_with("catch") {
-        let after_catch = rest.strip_prefix("catch").unwrap_or(rest).trim_start();
+        let after_catch = rest.strip_prefix("catch").unwrap_or(rest);
+        let after_catch = trim_directive_trivia(after_catch).0;
         let (param, after_param) = if after_catch.starts_with('(') {
             let (p, r) = extract_balanced(after_catch, '(', ')').ok_or_else(|| {
                 ParseError::new(
@@ -9073,7 +10443,7 @@ fn parse_try_catch_statement(
         } else {
             (None, after_catch)
         };
-        let after_param = after_param.trim_start();
+        let after_param = trim_directive_trivia(after_param).0;
         let (catch_inner, rest2) = extract_balanced(after_param, '{', '}').ok_or_else(|| {
             ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
@@ -9092,7 +10462,7 @@ fn parse_try_catch_statement(
                 },
                 span: span.clone(),
             }),
-            rest2.trim(),
+            trim_directive_trivia(rest2).0,
         )
     } else {
         (None, rest)
@@ -9100,7 +10470,8 @@ fn parse_try_catch_statement(
 
     // Parse optional finally clause.
     let finalizer = if rest.starts_with("finally") {
-        let after_finally = rest.strip_prefix("finally").unwrap_or(rest).trim_start();
+        let after_finally = rest.strip_prefix("finally").unwrap_or(rest);
+        let after_finally = trim_directive_trivia(after_finally).0;
         let (finally_inner, _) = extract_balanced(after_finally, '{', '}').ok_or_else(|| {
             ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
@@ -9618,26 +10989,12 @@ fn split_class_members(body: &str) -> Vec<&str> {
     let mut start = 0;
     let mut brace_depth = 0usize;
     let mut paren_depth = 0usize;
-    let mut in_quote: Option<char> = None;
-    let mut escaped = false;
 
-    for (i, ch) in body.char_indices() {
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if ch == '\\' {
-                escaped = true;
-                continue;
-            }
-            if ch == q {
-                in_quote = None;
-            }
-            continue;
+    scan_binding_pattern_source(body, |index, ch, _, quoted| {
+        if quoted {
+            return;
         }
         match ch {
-            '\'' | '"' | '`' => in_quote = Some(ch),
             '(' => paren_depth = paren_depth.saturating_add(1),
             ')' => paren_depth = paren_depth.saturating_sub(1),
             '{' => brace_depth = brace_depth.saturating_add(1),
@@ -9646,18 +11003,18 @@ fn split_class_members(body: &str) -> Vec<&str> {
                     brace_depth = brace_depth.saturating_sub(1);
                 }
                 if brace_depth == 0 && paren_depth == 0 {
-                    let end = i + 1;
+                    let end = index.saturating_add(ch.len_utf8());
                     segments.push(&body[start..end]);
                     start = end;
                 }
             }
             ';' if brace_depth == 0 && paren_depth == 0 => {
                 // Semicolons between methods — skip.
-                start = i + 1;
+                start = index.saturating_add(ch.len_utf8());
             }
             _ => {}
         }
-    }
+    });
     let remaining = body[start..].trim();
     if !remaining.is_empty() {
         segments.push(remaining);
@@ -10595,6 +11952,999 @@ mod tests {
         );
         assert_eq!(properties[7].key, Expression::Identifier("π".to_string()));
         assert_eq!(properties[8].key, Expression::Identifier("π".to_string()));
+    }
+
+    #[test]
+    fn binding_patterns_treat_comments_and_bom_as_trivia_bd_rcnxf() {
+        let parser = CanonicalEs2020Parser;
+        let tree = parser
+            .parse(
+                "let/* declaration */\u{FEFF}{/* lead */ value /* : , = } ] */: /* target */ x, \
+                 'quoted' /* : , = */: y, 1 /* : , = */: z, \
+                 [/* ] , : = */ 'computed' /* ] */] /* : */: computed, \
+                 shorthand /* = , */ = 5, ... /* rest */ rest} = source; \
+                 let [/* comment-only hole */, first /* , = ] } */ = 1, second] = values; \
+                 let empty = (/* no parameters */) => 1;",
+                ParseGoal::Script,
+            )
+            .expect("comments and BOM are lexical trivia around binding-pattern tokens");
+
+        let Statement::VariableDeclaration(object_declaration) = &tree.body[0] else {
+            panic!("expected object-binding declaration");
+        };
+        let BindingPattern::ObjectPattern(properties) = &object_declaration.declarations[0].pattern
+        else {
+            panic!("expected object-binding pattern");
+        };
+        assert_eq!(properties.len(), 6);
+        assert_eq!(properties[0].key, Expression::Identifier("value".into()));
+        assert!(matches!(
+            &properties[0].value,
+            BindingPattern::Identifier(name) if name == "x"
+        ));
+        assert_eq!(
+            properties[1].key,
+            Expression::StringLiteral("quoted".into())
+        );
+        assert_eq!(properties[2].key, Expression::NumericLiteral(1));
+        assert!(properties[3].computed);
+        assert!(matches!(
+            &properties[4].value,
+            BindingPattern::AssignmentPattern { left, .. }
+                if matches!(left.as_ref(), BindingPattern::Identifier(name) if name == "shorthand")
+        ));
+        assert!(matches!(
+            &properties[5].value,
+            BindingPattern::Rest(inner)
+                if matches!(inner.as_ref(), BindingPattern::Identifier(name) if name == "rest")
+        ));
+
+        let Statement::VariableDeclaration(array_declaration) = &tree.body[1] else {
+            panic!("expected array-binding declaration");
+        };
+        assert!(matches!(
+            &array_declaration.declarations[0].pattern,
+            BindingPattern::ArrayPattern(elements)
+                if elements.len() == 3
+                    && elements[0].is_none()
+                    && matches!(&elements[1], Some(BindingPattern::AssignmentPattern { .. }))
+                    && matches!(&elements[2], Some(BindingPattern::Identifier(name)) if name == "second")
+        ));
+
+        let Statement::VariableDeclaration(arrow_declaration) = &tree.body[2] else {
+            panic!("expected arrow declaration");
+        };
+        assert!(matches!(
+            arrow_declaration.declarations[0].initializer.as_ref(),
+            Some(Expression::ArrowFunction { params, .. }) if params.is_empty()
+        ));
+
+        parser
+            .parse(
+                "let {line // : , = ] }\n: renamed} = source",
+                ParseGoal::Script,
+            )
+            .expect("a line comment may separate a property name from its colon");
+        parser
+            .parse(
+                "let emptyObject = ({/* comment only */} = {}) => 1; \
+                 let trailingParameter = (value, /* trailing */) => value;",
+                ParseGoal::Script,
+            )
+            .expect("comment-only empty patterns and trivia after a trailing comma remain valid");
+        let tight_default_tree = parser
+            .parse(
+                "let {x/* tight */=1} = source; \
+                 let [y/* tight */=2] = values; \
+                 function defaults(value/* tight */=3) {} \
+                 let arrow = (value/* tight */=4) => value; \
+                 let {whole}/* tight */={whole: 5};",
+                ParseGoal::Script,
+            )
+            .expect("a comment immediately before a default equals remains lexical trivia");
+        assert_eq!(tight_default_tree.body.len(), 5);
+        let comment_segment_tree = parser
+            .parse(
+                "let/* ; ' \" ` { [ ( */first = 1; \
+                 let second/* ; } ] ) */=2; \
+                 let third = 3/* ; } ] ) */, fourth = 4;",
+                ParseGoal::Script,
+            )
+            .expect("comment punctuation cannot split or rebalance binding declarations");
+        assert_eq!(comment_segment_tree.body.len(), 3);
+        assert!(matches!(
+            &comment_segment_tree.body[2],
+            Statement::VariableDeclaration(declaration) if declaration.declarations.len() == 2
+        ));
+        parser
+            .parse(
+                "var let = value; var counter = 1; let\n++counter; let\n(4);",
+                ParseGoal::Script,
+            )
+            .expect("sloppy let preserves update ASI and call continuation across a line ending");
+        parser
+            .parse(
+                "let {escaped = /\\//, matcher = /[,:=]/, product = /a/*factor} = source; \
+                 let re = /\\//, value = 1",
+                ParseGoal::Script,
+            )
+            .expect("comment recognition must not consume RegExp literals or following multiply");
+        let regexp_division_tree = parser
+            .parse("let {x = /a/ / 2, y = /b/ / 3} = source", ParseGoal::Script)
+            .expect("division after a RegExp literal must preserve the next binding property");
+        let Statement::VariableDeclaration(regexp_declaration) = &regexp_division_tree.body[0]
+        else {
+            panic!("expected RegExp-default binding declaration");
+        };
+        assert!(matches!(
+            &regexp_declaration.declarations[0].pattern,
+            BindingPattern::ObjectPattern(properties) if properties.len() == 2
+        ));
+        parser
+            .parse(
+                "let {line = // trivia\n/\\//, bom = \u{FEFF}/\\//, \
+                 block = /* trivia */ /\\//} = source",
+                ParseGoal::Script,
+            )
+            .expect("RegExp context survives line, block, and BOM binding trivia");
+        parser
+            .parse(
+                "for (let/* trivia */[x] of values) {} \
+                 for (const\u{FEFF}{x} of values) {} \
+                 for (var/* trivia */{x} in source) {}",
+                ParseGoal::Script,
+            )
+            .expect("for-in/of declaration bindings accept comment and BOM trivia");
+        let for_comment_tree = parser
+            .parse(
+                "for (const {x /* } in */: y} of [{x: 7}]) { y; } \
+                 for (const matcher of / in /) {} \
+                 for (let x/* comment */of [1]) {} \
+                 for (let x\tin {a: 1}) {} \
+                 for (let x\u{FEFF}of [1]) {} \
+                 for (let x /* before */ in/* after */ {x: 1}) {} \
+                 for (let of of [1]) {} \
+                 for (let of in {x: 1}) {} \
+                 for (const [nested = 1] of [[]]) {} \
+                 for (let in {x: 1}) {}",
+                ParseGoal::Script,
+            )
+            .expect("fake loop keywords inside comments and RegExp literals are ignored");
+        assert!(matches!(
+            &for_comment_tree.body[0],
+            Statement::ForOf(statement)
+                if matches!(&statement.binding, BindingPattern::ObjectPattern(properties) if properties.len() == 1)
+        ));
+        assert!(matches!(&for_comment_tree.body[1], Statement::ForOf(_)));
+        for (index, expected_of) in [true, false, true, false, true, false, true, false]
+            .into_iter()
+            .enumerate()
+        {
+            let statement = &for_comment_tree.body[index + 2];
+            assert_eq!(
+                matches!(statement, Statement::ForOf(_)),
+                expected_of,
+                "unexpected loop kind at donor case {index}"
+            );
+        }
+        let Statement::ForOf(contextual_of_loop) = &for_comment_tree.body[6] else {
+            panic!("expected contextual `let of` declaration in for-of loop");
+        };
+        assert_eq!(
+            contextual_of_loop.binding_kind,
+            Some(VariableDeclarationKind::Let)
+        );
+        assert!(matches!(
+            &contextual_of_loop.binding,
+            BindingPattern::Identifier(name) if name == "of"
+        ));
+        let Statement::ForIn(bare_let_loop) = &for_comment_tree.body[9] else {
+            panic!("expected sloppy bare-let for-in loop");
+        };
+        assert_eq!(bare_let_loop.binding_kind, None);
+        assert!(matches!(
+            &bare_let_loop.binding,
+            BindingPattern::Identifier(name) if name == "let"
+        ));
+        let contextual_loop_tree = parser
+            .parse(
+                "for (async in {}) {} \
+                 for (let async of []) {} \
+                 for (var async of []) {} \
+                 for (let [...rest] of [[]]) {}",
+                ParseGoal::Script,
+            )
+            .expect("for-head contextual names and nested rest follow ES2020 early errors");
+        assert!(matches!(&contextual_loop_tree.body[0], Statement::ForIn(_)));
+        assert!(
+            contextual_loop_tree.body[1..]
+                .iter()
+                .all(|statement| matches!(statement, Statement::ForOf(_)))
+        );
+
+        let unparenthesized_arrow_tree = parser
+            .parse(
+                "let commented = value /* fake => */ => value; \
+                 let bom = item\u{FEFF}=> item; \
+                 let asynchronous = async value /* trivia */ => value; \
+                 let asyncComment = async/* trivia */value => value; \
+                 let asyncBom = async\u{FEFF}(value) => value; \
+                 let parenthesizedComment = (value)/* trivia */=> value; \
+                 let parenthesizedBom = (value)\u{FEFF}=> value; \
+                 let asyncBoth = async/**/(value)/* trivia */=> value;",
+                ParseGoal::Script,
+            )
+            .expect("arrow bindings accept comment and BOM trivia around the arrow token");
+        for (statement, expected_async) in unparenthesized_arrow_tree
+            .body
+            .iter()
+            .zip([false, false, true, true, true, false, false, true])
+        {
+            let Statement::VariableDeclaration(declaration) = statement else {
+                panic!("expected arrow variable declaration");
+            };
+            assert!(matches!(
+                declaration.declarations[0].initializer.as_ref(),
+                Some(Expression::ArrowFunction { params, is_async, .. })
+                    if params.len() == 1 && *is_async == expected_async
+            ));
+        }
+
+        let parameter_tree = parser
+            .parse(
+                "let arrow = (/* ) */ value) => value; \
+                 function regular(/* ( */ value) { return value; } \
+                 class C { first(/* ( */ value) {} second(other) {} }",
+                ParseGoal::Script,
+            )
+            .expect("comment delimiters do not terminate or inflate parameter lists");
+        let Statement::VariableDeclaration(arrow_declaration) = &parameter_tree.body[0] else {
+            panic!("expected arrow declaration");
+        };
+        assert!(matches!(
+            arrow_declaration.declarations[0].initializer.as_ref(),
+            Some(Expression::ArrowFunction { params, .. }) if params.len() == 1
+        ));
+        let Statement::FunctionDeclaration(function) = &parameter_tree.body[1] else {
+            panic!("expected function declaration");
+        };
+        assert_eq!(function.params.len(), 1);
+        let Statement::ClassDeclaration(class) = &parameter_tree.body[2] else {
+            panic!("expected class declaration");
+        };
+        assert_eq!(class.body.len(), 2);
+        assert_eq!(class.body[0].params.len(), 1);
+        assert_eq!(class.body[0].key, Expression::Identifier("first".into()));
+        assert_eq!(class.body[1].key, Expression::Identifier("second".into()));
+
+        let line_comment_declarations = parser
+            .parse(
+                "let// declaration trivia\nx = 1;\n\
+                 const// declaration trivia\ny = 2;\n\
+                 var// declaration trivia\nz = 3;\n\
+                 let/* closed block trivia */\nblockValue = 4;\n\
+                 const\u{FEFF}\nbomValue = 5;\n\
+                 var\nplainValue = 6;",
+                ParseGoal::Script,
+            )
+            .expect("a line terminator may separate a declaration keyword from its binding");
+        assert_eq!(line_comment_declarations.body.len(), 6);
+
+        let continued_declarations = parser
+            .parse(
+                "const first // before initializer\n= 2; \
+                 let second // before initializer\n= 3; \
+                 const [third] // before initializer\n= [4]; \
+                 let fourth // before comma\n, fifth = 5;",
+                ParseGoal::Script,
+            )
+            .expect(
+                "a declaration continues across trailing comment trivia before equals or comma",
+            );
+        assert_eq!(continued_declarations.body.len(), 4);
+        assert!(matches!(
+            &continued_declarations.body[3],
+            Statement::VariableDeclaration(declaration) if declaration.declarations.len() == 2
+        ));
+
+        let array_edge_tree = parser
+            .parse(
+                "let [] = empty; let [/* comment only */] = alsoEmpty; \
+                 let [/* comment */,] = oneHole; let [,/* comment */] = anotherHole;",
+                ParseGoal::Script,
+            )
+            .expect("comment trivia preserves empty arrays and exact elision counts");
+        for (index, expected_elements) in [0, 0, 1, 1].into_iter().enumerate() {
+            let Statement::VariableDeclaration(declaration) = &array_edge_tree.body[index] else {
+                panic!("expected array binding declaration");
+            };
+            let BindingPattern::ArrayPattern(elements) = &declaration.declarations[0].pattern
+            else {
+                panic!("expected array binding pattern");
+            };
+            assert_eq!(elements.len(), expected_elements);
+            assert!(elements.iter().all(Option::is_none));
+        }
+
+        assert_eq!(
+            split_pattern_elements("x = numerator /* trivia */ / denominator, y = left / right")
+                .len(),
+            2,
+            "division after a comment must not consume the next pattern comma as RegExp text"
+        );
+        assert_eq!(
+            split_var_declarator_segments("x = 12 /* trivia */ / 3, y = /z/").len(),
+            2,
+            "division after a comment must preserve the next variable declarator"
+        );
+        assert_eq!(
+            split_var_declarator_segments("x = /a/ / 2, y = /b/").len(),
+            2,
+            "a completed RegExp is an operand, so a following slash is division"
+        );
+        for source in [
+            "x = obj.in / divisor, y = left / right",
+            "x = obj.return / divisor, y = left / right",
+            "x = obj.await / divisor, y = left / right",
+            "x = value++ / divisor, y = left / right",
+            "x = value-- / divisor, y = left / right",
+            "x = value/* trivia */++ / divisor, y = left / right",
+            "x = key in /[,]/, y = left / right",
+            "x = key instanceof /[,]/, y = left / right",
+        ] {
+            assert_eq!(
+                split_pattern_elements(source).len(),
+                2,
+                "member keywords and postfix updates remain operands before division: {source}"
+            );
+        }
+        for identifier in ["await", "yield", "of"] {
+            let source = format!("x = {identifier} / 2, y = /b/");
+            assert_eq!(
+                split_var_declarator_segments(&source).len(),
+                2,
+                "contextual identifier remains an operand before division: {source}"
+            );
+        }
+        assert_eq!(
+            extract_balanced("(x++ / y) / z", '(', ')'),
+            Some(("x++ / y", " / z"))
+        );
+    }
+
+    #[test]
+    fn merge_logical_lines_preserves_es_whitespace_before_regexp_bd_rcnxf() {
+        let parser = CanonicalEs2020Parser;
+        let source = "let {x = \u{FEFF}/[}]/,\n y} = {};";
+        let lines = merge_logical_lines(source);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].text.contains("\n y}"));
+
+        let tree = parser
+            .parse(source, ParseGoal::Script)
+            .expect("BOM trivia must preserve the RegExp lexical goal across physical lines");
+        assert!(matches!(
+            &tree.body[0],
+            Statement::VariableDeclaration(declaration)
+                if matches!(
+                    &declaration.declarations[0].pattern,
+                    BindingPattern::ObjectPattern(properties) if properties.len() == 2
+                )
+        ));
+
+        let mut trivia_run = String::from("let\n");
+        trivia_run.push_str(&"/* trivia-only physical line */\n".repeat(256));
+        trivia_run.push_str("value = 1;");
+        let trivia_lines = merge_logical_lines(&trivia_run);
+        assert_eq!(trivia_lines.len(), 1);
+        parser
+            .parse(&trivia_run, ParseGoal::Script)
+            .expect("long trivia-only runs preserve a pending declaration in linear scans");
+
+        let declarators = (0..500)
+            .map(|index| format!("x{index}"))
+            .collect::<Vec<_>>()
+            .join("\n,\n");
+        let significant_run = format!("let\n{declarators};");
+        let significant_lines = merge_logical_lines(&significant_run);
+        assert_eq!(significant_lines.len(), 1);
+        let significant_tree = parser
+            .parse(&significant_run, ParseGoal::Script)
+            .expect("significant multiline declarators use incremental continuation state");
+        assert!(matches!(
+            &significant_tree.body[0],
+            Statement::VariableDeclaration(declaration) if declaration.declarations.len() == 500
+        ));
+
+        for source in [
+            "let\nx = `foo\nbar`\n,\ny = 1;",
+            "let\nx =\n\"a\\\nb\"\n,\ny;",
+            "let\nx = `foo\nbar`,\ny = 1;",
+            "let\nx =\n\"a\\\nb\",\ny;",
+        ] {
+            assert_eq!(merge_logical_lines(source).len(), 1, "source: {source:?}");
+            let tree = parser
+                .parse(source, ParseGoal::Script)
+                .expect("inherited literal state must survive an incremental line fragment");
+            assert!(matches!(
+                &tree.body[0],
+                Statement::VariableDeclaration(declaration)
+                    if declaration.declarations.len() == 2
+            ));
+        }
+
+        let mut else_if_run = String::from("if (false) {}");
+        else_if_run.push_str(&"\nelse if (false) {}".repeat(500));
+        else_if_run.push_str("\nelse {}");
+        assert_eq!(merge_logical_lines(&else_if_run).len(), 1);
+    }
+
+    #[test]
+    fn merge_logical_lines_tracks_multiline_clause_phases_bd_rcnxf() {
+        let parser = CanonicalEs2020Parser;
+
+        let standalone_else = "let x = 0;\nif (false) {}\nelse\nx = 2;\nx;";
+        assert_eq!(merge_logical_lines(standalone_else).len(), 3);
+        let standalone_tree = parser
+            .parse(standalone_else, ParseGoal::Script)
+            .expect("a standalone else may precede an arbitrary Statement");
+        assert_eq!(standalone_tree.body.len(), 3);
+        assert!(matches!(
+            &standalone_tree.body[1],
+            Statement::If(statement) if statement.alternate.is_some()
+        ));
+
+        let split_assignment = "let x = 0;\nif (false) {}\nelse\nx\n= 2;\nx;";
+        assert_eq!(merge_logical_lines(split_assignment).len(), 3);
+        assert_eq!(
+            parser
+                .parse(split_assignment, ParseGoal::Script)
+                .expect("an alternate expression may continue with an assignment operator")
+                .body
+                .len(),
+            3
+        );
+
+        for source in [
+            "if (false) {}\nelse\nhit = ({})\ninstanceof\nObject;",
+            "if (false) {}\nelse\nhit = typeof\nmissing;",
+            "if (false) {}\nelse\n++\nx;",
+            "if (false) {}\nelse\nwhile (x < 1) x\n= 1;",
+            "if (false) {}\nelse\nif (true) x\n= 1;",
+        ] {
+            assert_eq!(merge_logical_lines(source).len(), 1, "source: {source:?}");
+            parser
+                .parse(source, ParseGoal::Script)
+                .expect("an alternate retains every required expression and inline body tail");
+        }
+
+        for alternate in ["obj.new", "obj.in", "/a/", "1."] {
+            let source = format!("if (false) {{}}\nelse\n{alternate}\nx = 2;");
+            assert_eq!(
+                merge_logical_lines(&source).len(),
+                2,
+                "a complete operand must permit ASI before the next statement: {source:?}"
+            );
+            parser.parse(&source, ParseGoal::Script).expect(
+                "member, RegExp, and numeric operands remain complete alternate statements",
+            );
+        }
+
+        for alternate in ["1.0.", ".5.", "1e2.", "1e+2.", "1e-2.", "0x1."] {
+            let source = format!("if (false) {{}}\nelse\n{alternate}\ntoString();");
+            assert_eq!(
+                merge_logical_lines(&source).len(),
+                1,
+                "a member-access dot after a numeric literal must retain its property: {source:?}"
+            );
+            parser
+                .parse(&source, ParseGoal::Script)
+                .expect("a numeric member expression may continue after its member-access dot");
+        }
+
+        for next_statement in ["[1];", "(x = 10);", "`tag`;"] {
+            let source = format!("let x = 0;\nif (false) {{}}\nelse\nx++\n{next_statement}\nx;");
+            assert_eq!(
+                merge_logical_lines(&source).len(),
+                4,
+                "a postfix update is ASI-separated from postfix-only syntax: {source:?}"
+            );
+            assert_eq!(
+                parser
+                    .parse(&source, ParseGoal::Script)
+                    .expect("postfix update restricted productions permit ASI")
+                    .body
+                    .len(),
+                4
+            );
+        }
+        let postfix_division = "if (false) {}\nelse\nx++\n/ divisor;\ny = 2;";
+        assert_eq!(
+            merge_logical_lines(postfix_division).len(),
+            2,
+            "binary division may continue a completed postfix update without leaking lexical state"
+        );
+        assert_eq!(
+            parser
+                .parse(postfix_division, ParseGoal::Script)
+                .expect("postfix update followed by cross-line division remains a clause body")
+                .body
+                .len(),
+            2
+        );
+
+        for source in [
+            "if (false) {}\nelse\n/[{]/;\nx = 2;",
+            "if (false) {}\nelse\n/=/;\nx = 2;",
+            "if (false) {}\nelse\n/=/\nlet x = 2;",
+            "if (false) {} else /[{]/;\nx = 2;",
+            "if (false) {}\nelse\nif (true)\n/[{]/;\nx = 2;",
+            "if (false) {}\nelse\nwhile (false) /[{]/;\nx = 2;",
+            "if (false) {}\nelse\ndo /[{]/; while (false);\nx = 2;",
+            "if (false) {} else while (false) /[{]/;\nx = 2;",
+            "if (false) {}\nelse {\nwhile (false) /[{]/;\n}\nx = 2;",
+            "if (false) {}\nelse {} /[{]/;\nx = 2;",
+        ] {
+            assert_eq!(
+                merge_logical_lines(source).len(),
+                2,
+                "a RegExp statement body must not leak character-class delimiters: {source:?}"
+            );
+            assert_eq!(
+                parser
+                    .parse(source, ParseGoal::Script)
+                    .expect("a pending clause statement starts with the RegExp lexical goal")
+                    .body
+                    .len(),
+                2
+            );
+        }
+        for member in ["obj.do", "obj.else", "obj.in"] {
+            let source = format!("if (false) {{}}\nelse\n{member} / divisor;\nx = 2;");
+            assert_eq!(
+                merge_logical_lines(&source).len(),
+                2,
+                "a keyword-named member remains an operand before division: {source:?}"
+            );
+        }
+        for source in [
+            "if (false) {}\nelse\n/a/ / 2;\ny = 2;",
+            "if (false) {}\nelse\n/a/\n/ 2;\ny = 2;",
+        ] {
+            assert_eq!(
+                merge_logical_lines(source).len(),
+                2,
+                "a completed RegExp is an operand before division: {source:?}"
+            );
+        }
+        for operator in ["++", "--"] {
+            let source = format!("if (false) {{}}\nelse\n{operator}\n/a/.lastIndex;\ny = 2;");
+            assert_eq!(
+                merge_logical_lines(&source).len(),
+                2,
+                "a LineTerminator forces an update at statement start to be prefix: {source:?}"
+            );
+            parser
+                .parse(&source, ParseGoal::Script)
+                .expect("a split prefix update retains the RegExp lexical goal");
+        }
+        for block_prefix_update in [
+            "{ x\n++/[{]/.lastIndex; }\ny = 2;",
+            "{ x// comment\n++/[{]/.lastIndex; }\ny = 2;",
+            "{ x/* comment\n*/++/[{]/.lastIndex; }\ny = 2;",
+        ] {
+            assert_eq!(merge_logical_lines(block_prefix_update).len(), 2);
+            parser
+                .parse(block_prefix_update, ParseGoal::Script)
+                .expect("LineTerminator-restricted updates remain prefix inside a block");
+        }
+
+        let regexp_equals = "let r = /=[{]/; let x = 2;";
+        assert_eq!(merge_logical_lines(regexp_equals).len(), 1);
+        assert_eq!(
+            parser
+                .parse(regexp_equals, ParseGoal::Script)
+                .expect("slash-equals begins a RegExp in an expression lexical goal")
+                .body
+                .len(),
+            2
+        );
+
+        let nested_else = "if (false) {}\nelse\nif (false) {}\nelse {}";
+        assert_eq!(merge_logical_lines(nested_else).len(), 1);
+        let nested_tree = parser
+            .parse(nested_else, ParseGoal::Script)
+            .expect("a dangling else binds to the nested if alternate");
+        assert!(matches!(
+            &nested_tree.body[0],
+            Statement::If(statement)
+                if matches!(
+                    statement.alternate.as_deref(),
+                    Some(Statement::If(nested)) if nested.alternate.is_some()
+                )
+        ));
+
+        let multiline_else_if = "if (false) {}\nelse if (false) {\n  let value = 1;\n}\nelse {}";
+        assert_eq!(merge_logical_lines(multiline_else_if).len(), 1);
+        parser
+            .parse(multiline_else_if, ParseGoal::Script)
+            .expect("a multiline else-if body remains eligible for its else clause");
+
+        for source in [
+            "if (false) {}\nelse\nwhile (false)\nx++;",
+            "if (false) {}\nelse\nwhile\n(false)\nx++;",
+        ] {
+            assert_eq!(merge_logical_lines(source).len(), 1, "source: {source:?}");
+            parser
+                .parse(source, ParseGoal::Script)
+                .expect("a control-statement alternate retains its required body");
+        }
+
+        let independent_while = "if (false) {}\nelse {}\nwhile (false) {}";
+        assert_eq!(merge_logical_lines(independent_while).len(), 2);
+        assert_eq!(
+            parser
+                .parse(independent_while, ParseGoal::Script)
+                .expect("an independent while must not be absorbed by an else clause")
+                .body
+                .len(),
+            2
+        );
+
+        for source in [
+            "try {}\ncatch\n(error)\n{\n}\nfinally\n{\n}",
+            "try {}\nfinally\n{\n}",
+            "do {}\nwhile\n(false);",
+        ] {
+            assert_eq!(merge_logical_lines(source).len(), 1, "source: {source:?}");
+            parser
+                .parse(source, ParseGoal::Script)
+                .expect("required clause tails may span balanced physical fragments");
+        }
+
+        let mut malformed_else_if = String::from("if (false) {}\nelse\nif");
+        malformed_else_if.push_str(
+            &(0..512)
+                .map(|index| format!("\nidentifier{index}"))
+                .collect::<String>(),
+        );
+        assert_eq!(
+            merge_logical_lines(&malformed_else_if).len(),
+            513,
+            "an impossible balanced if head must fail its clause phase immediately"
+        );
+
+        let deeply_nested_inline =
+            format!("if (false) {{}}\nelse\n{}x = 1;", "if (true) ".repeat(512));
+        assert_eq!(
+            merge_logical_lines(&deeply_nested_inline).len(),
+            1,
+            "inline control-body descent must advance through strict suffixes"
+        );
+
+        let nested_divisions = format!(
+            "if (false) {{}}\nelse\n{}{};",
+            "if (true) ".repeat(256),
+            std::iter::repeat_n("x", 256)
+                .collect::<Vec<_>>()
+                .join(" / ")
+        );
+        assert_eq!(
+            merge_logical_lines(&nested_divisions).len(),
+            1,
+            "incremental lexical goals must not rescan nested control prefixes per division"
+        );
+    }
+
+    #[test]
+    fn sloppy_let_trivia_selects_expression_or_declaration_bd_rcnxf() {
+        let parser = CanonicalEs2020Parser;
+        for expression in [
+            "let",
+            "let/**/(4)",
+            "let\u{FEFF}(4)",
+            "let/**/.x",
+            "let/**/+2",
+            "let\n=1",
+            "let\nin object",
+            "let\n, 2",
+        ] {
+            assert_eq!(
+                parse_variable_declaration_kind(expression),
+                None,
+                "sloppy IdentifierReference expression was misclassified: {expression:?}"
+            );
+        }
+        assert_eq!(
+            parse_variable_declaration_kind("let/**/x = 9"),
+            Some(VariableDeclarationKind::Let)
+        );
+
+        let trivia_tree = parser
+            .parse(
+                "var let = value => value + 1; \
+                 let/**/(4); let\u{FEFF}(4); let/**/.x; let/**/+2; let/**/x = 9;",
+                ParseGoal::Script,
+            )
+            .expect(
+                "comment and BOM trivia must not force sloppy let expressions into declarations",
+            );
+        assert_eq!(trivia_tree.body.len(), 6);
+        assert!(matches!(
+            &trivia_tree.body[5],
+            Statement::VariableDeclaration(declaration)
+                if declaration.kind == VariableDeclarationKind::Let
+        ));
+
+        let continuation_tree = parser
+            .parse(
+                "var let = 0; let\n= 1; \
+                 var object = {x: 1}; let\nin object; let\n, 2;",
+                ParseGoal::Script,
+            )
+            .expect(
+                "sloppy let assignment, in, and comma expressions continue across a line ending",
+            );
+        assert_eq!(continuation_tree.body.len(), 5);
+        assert!(matches!(
+            &continuation_tree.body[1],
+            Statement::Expression(ExpressionStatement {
+                expression: Expression::Assignment { .. },
+                ..
+            })
+        ));
+        assert!(matches!(
+            &continuation_tree.body[3],
+            Statement::Expression(ExpressionStatement {
+                expression: Expression::Binary {
+                    operator: BinaryOperator::In,
+                    ..
+                },
+                ..
+            })
+        ));
+
+        let call_tree = parser
+            .parse("var let = value => value + 1; let\n(4);", ParseGoal::Script)
+            .expect("a line ending before call arguments does not trigger ASI");
+        assert_eq!(call_tree.body.len(), 2);
+        assert!(matches!(
+            &call_tree.body[1],
+            Statement::Expression(ExpressionStatement {
+                expression: Expression::Call { .. },
+                ..
+            })
+        ));
+
+        let reserved_word_tree = parser
+            .parse("var let = 1; let\ntrue; let\nnull; let;", ParseGoal::Script)
+            .expect("reserved-word statements after bare sloppy let remain ASI-separated");
+        assert_eq!(reserved_word_tree.body.len(), 6);
+
+        let trailing_declaration_tree = parser
+            .parse(
+                "let a = 1; const // before binding\n b = 2; \
+                 let d = 1; const e // before equals\n = 2; \
+                 let f = 1; let g // before comma\n , h = 2; \
+                 a + b + d + e + f + h;",
+                ParseGoal::Script,
+            )
+            .expect("continuation analysis must inspect the final top-level statement segment");
+        assert_eq!(trailing_declaration_tree.body.len(), 7);
+        assert!(matches!(
+            &trailing_declaration_tree.body[5],
+            Statement::VariableDeclaration(declaration) if declaration.declarations.len() == 2
+        ));
+    }
+
+    #[test]
+    fn comment_only_statement_segments_are_lexical_trivia_bd_rcnxf() {
+        let parser = CanonicalEs2020Parser;
+        let trailing = parser
+            .parse("let x = 1; /* trailing */", ParseGoal::Script)
+            .expect("a trailing block comment is not an expression statement");
+        assert_eq!(trailing.body.len(), 1);
+
+        let between = parser
+            .parse(
+                "let x = 1; /* block only */ ; // line only\n x;",
+                ParseGoal::Script,
+            )
+            .expect("comment-only segments between statements are lexical trivia");
+        assert_eq!(between.body.len(), 2);
+
+        let comment_only = parser
+            .parse("/* block only */\n// line only", ParseGoal::Script)
+            .expect("a comment-only Script has an empty statement list");
+        assert!(comment_only.body.is_empty());
+
+        for (source, expected_start, expected_end) in [("/*\n*/x;", 5, 6), ("/*\r\n*/x;", 6, 7)] {
+            let span_tree = parser
+                .parse(source, ParseGoal::Script)
+                .expect("leading multiline comment trivia preserves physical coordinates");
+            let Statement::Expression(expression) = &span_tree.body[0] else {
+                panic!("expected expression after leading comment trivia");
+            };
+            assert_eq!(expression.span.start_offset, expected_start);
+            assert_eq!(expression.span.end_offset, expected_end);
+            assert_eq!(expression.span.start_line, 2);
+            assert_eq!(expression.span.start_column, 3);
+            assert_eq!(expression.span.end_line, 2);
+            assert_eq!(expression.span.end_column, 4);
+        }
+
+        let leading = parser
+            .parse("/* leading */ let x = 1; x;", ParseGoal::Script)
+            .expect("leading comment trivia must not hide declaration dispatch");
+        assert!(matches!(
+            &leading.body[0],
+            Statement::VariableDeclaration(declaration)
+                if declaration.kind == VariableDeclarationKind::Let
+        ));
+
+        let between_declarations = parser
+            .parse(
+                "let a = 1; /* before declaration */ const b = 2; a + b;",
+                ParseGoal::Script,
+            )
+            .expect("comment trivia after a semicolon must not hide declaration dispatch");
+        assert!(matches!(
+            &between_declarations.body[1],
+            Statement::VariableDeclaration(declaration)
+                if declaration.kind == VariableDeclarationKind::Const
+        ));
+
+        let leading_function = parser
+            .parse(
+                "/* leading */ function f() {} let x = 1; x;",
+                ParseGoal::Script,
+            )
+            .expect("leading trivia must not hide a block statement split boundary");
+        assert_eq!(leading_function.body.len(), 3);
+        assert!(matches!(
+            &leading_function.body[0],
+            Statement::FunctionDeclaration(_)
+        ));
+
+        let clause_tree = parser
+            .parse(
+                "let x = 0; if (false) { x = 1; }/* clause */else { x = 2; } x;",
+                ParseGoal::Script,
+            )
+            .expect("comment trivia between if and else preserves the clause boundary");
+        assert_eq!(clause_tree.body.len(), 3);
+        assert!(matches!(
+            &clause_tree.body[1],
+            Statement::If(statement) if statement.alternate.is_some()
+        ));
+
+        let clause_prefix_tree = parser
+            .parse(
+                "var else$foo = 7; var x = 0; \
+                 if (false) { x = 1; } else$foo; x + else$foo;",
+                ParseGoal::Script,
+            )
+            .expect("an identifier beginning with else is not an else clause");
+        assert_eq!(clause_prefix_tree.body.len(), 5);
+        assert!(matches!(
+            &clause_prefix_tree.body[2],
+            Statement::If(statement) if statement.alternate.is_none()
+        ));
+        for identifier in ["else$foo", "elseπ", r"else\u0066oo"] {
+            assert!(
+                !starts_with_keyword(identifier, "else"),
+                "IdentifierName continuation was mistaken for a clause keyword: {identifier}"
+            );
+        }
+
+        parser
+            .parse(
+                "try {}/* clause */catch (error) {} \
+                 try {}// clause\nfinally {} \
+                 do {}/* clause */while (false);",
+                ParseGoal::Script,
+            )
+            .expect("comment trivia preserves catch, finally, and do-while clauses");
+    }
+
+    #[test]
+    fn binding_pattern_trivia_does_not_join_tokens_bd_rcnxf() {
+        let parser = CanonicalEs2020Parser;
+        assert!(!is_binding_pattern_whitespace('\u{0085}'));
+        assert_eq!(
+            parse_variable_declaration_kind("let\u{0085}value = 1"),
+            None
+        );
+        assert_eq!(
+            trim_binding_pattern_trivia("\u{0085}value\u{0085}"),
+            Some("\u{0085}value\u{0085}")
+        );
+        assert_eq!(
+            trim_binding_pattern_trivia("\u{FEFF}/* lead */ value /* tail */"),
+            Some("value")
+        );
+        assert_eq!(
+            trim_binding_pattern_trivia("va/* internal */lue"),
+            Some("va/* internal */lue")
+        );
+        assert_eq!(trim_binding_pattern_trivia("value /* unterminated"), None);
+        parser
+            .parse(
+                "let string = '\u{0085}'; let regexp = /\u{0085}/; \
+                 let commented = /* \u{0085} */ 1;",
+                ParseGoal::Script,
+            )
+            .expect("non-ES whitespace remains valid inside lexical literals and comments");
+        for source in [
+            "var {va/* c */lue: picked} = source",
+            "var {'value' /* c */ junk: picked} = source",
+            "var {1 /* c */ 2: picked} = source",
+            "let {\u{0085}value: picked} = source",
+            "let {value\u{0085}: picked} = source",
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("comments cannot splice separate tokens into one property name");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
+            assert!(error.message.contains("object-binding property key"));
+        }
+        for source in [
+            "var \u{0085}value = 1",
+            "const \u{0085}value = 1",
+            "let value = \u{0085}1",
+            "let value = 1\u{0085} + 2",
+            "let value = first\u{0085}second",
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("non-ECMAScript whitespace cannot act as declaration trivia");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
+        }
+        for source in [
+            "let {[key] /* c */ junk: value} = source",
+            "let {...re/* c */st} = source",
+            "let {[key]/* c */: va/* c */lue} = source",
+        ] {
+            assert!(
+                parser.parse(source, ParseGoal::Script).is_err(),
+                "binding trivia cannot hide residual or token-spliced syntax: {source}"
+            );
+        }
+        for source in [
+            "let invalid = (/* c */, ) => 1",
+            "let invalid = (/* c */, value) => value",
+            "let invalid = (value, /* c */, ) => value",
+            "let invalid = value/*\n*/=> value",
+            "let invalid = async value/*\n*/=> value",
+            "let invalid = (value)\n=> value",
+            "let invalid = (value)/*\n*/=> value",
+            "for (let value = 1 of [2]) {}",
+            "for (const value = 1 in {x: 1}) {}",
+            "for (var value = 1 of [2]) {}",
+            "for (let [value] = [1] of [[2]]) {}",
+            "for (var [value] = [1] in {x: 1}) {}",
+            "for (var value = 1 in {x: 1}) {}",
+            "'use strict'; for (var value = 1 in {x: 1}) {}",
+            "for (let of values) {}",
+            "'use strict'; for (let in {x: 1}) {}",
+            "for (async of []) {}",
+            "for (async/* comment */of []) {}",
+            "for (let ...rest of []) {}",
+            "for (const ...rest in {}) {}",
+            "for (var ...rest of []) {}",
+            "for (...rest of []) {}",
+            "function invalid(/* c */, ) {}",
+            "let {/* c */, value} = source",
+            "let {value, /* c */, other} = source",
+            "let [...rest, /* c */] = source",
+            "let {...rest, /* c */} = source",
+            "function invalid(...rest, /* c */) {}",
+        ] {
+            assert!(
+                parser.parse(source, ParseGoal::Script).is_err(),
+                "comment-only leading or interior slots stay syntax errors: {source}"
+            );
+        }
     }
 
     #[test]
@@ -12795,11 +15145,15 @@ strict"; var static = 1; }"#,
     #[test]
     fn line_count_multiple_lines() {
         assert_eq!(line_count("a\nb\nc"), 3);
+        assert_eq!(line_count("a\rb\r\nc\u{2028}d\u{2029}e"), 5);
     }
 
     #[test]
     fn line_count_trailing_newline() {
         assert_eq!(line_count("a\n"), 2);
+        assert_eq!(line_count("a\r"), 2);
+        assert_eq!(line_count("a\u{2028}"), 2);
+        assert_eq!(line_count("a\u{2029}"), 2);
     }
 
     #[test]
@@ -14375,7 +16729,7 @@ strict"; var static = 1; }"#,
         ] {
             let lines = merge_logical_lines(source);
             assert_eq!(lines.len(), 1);
-            assert!(lines[0].text.contains("\\\n"));
+            assert!(lines[0].text.contains('\\'));
             parser
                 .parse(source, ParseGoal::Script)
                 .expect("string token cooking should consume the preserved continuation");
@@ -14387,10 +16741,77 @@ strict"; var static = 1; }"#,
     }
 
     #[test]
-    fn merge_logical_lines_cooks_template_line_continuation_bd_h4esx() {
-        let lines = merge_logical_lines("let value = `a\\\nb`;");
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].text, "let value = `ab`;");
+    fn merge_logical_lines_preserves_template_line_continuation_bd_h4esx() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "let value = `a\\\nb`;",
+            "let value = `a\\\r\nb`;",
+            "let value = `a\\\rb`;",
+            "let value = `a\\\u{2028}b`;",
+            "let value = `a\\\u{2029}b`;",
+        ] {
+            let lines = merge_logical_lines(source);
+            assert_eq!(lines.len(), 1);
+            assert!(
+                lines[0].text.contains('\\'),
+                "merge must preserve the escape for literal cooking: {source:?}"
+            );
+            let tree = parser
+                .parse(source, ParseGoal::Script)
+                .expect("template LineContinuations are cooked by the literal parser");
+            assert!(matches!(
+                &tree.body[0],
+                Statement::VariableDeclaration(declaration)
+                    if matches!(
+                        declaration.declarations[0].initializer.as_ref(),
+                        Some(Expression::TemplateLiteral { quasis, .. }) if quasis == &["ab"]
+                    )
+            ));
+        }
+    }
+
+    #[test]
+    fn template_line_continuation_preserves_following_statement_span_bd_rcnxf() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "let t = `a\\\nb`; x;",
+            "let t = `a\\\r\nb`; x;",
+            "let t = `a\\\rb`; x;",
+            "let t = `a\\\u{2028}b`; x;",
+            "let t = `a\\\u{2029}b`; x;",
+        ] {
+            let tree = parser
+                .parse(source, ParseGoal::Script)
+                .expect("a statement after a template continuation must retain its source span");
+            let Statement::Expression(expression) = &tree.body[1] else {
+                panic!("expected the trailing identifier expression");
+            };
+            let x_offset = source.rfind('x').expect("the source contains x") as u64;
+            assert_eq!(expression.span.start_offset, x_offset);
+            assert_eq!(expression.span.end_offset, x_offset + 1);
+            assert_eq!(expression.span.start_line, 2);
+            assert_eq!(expression.span.start_column, 5);
+            assert_eq!(expression.span.end_line, 2);
+            assert_eq!(expression.span.end_column, 6);
+        }
+    }
+
+    #[test]
+    fn template_text_normalizes_cr_and_crlf_to_lf_bd_rcnxf() {
+        let parser = CanonicalEs2020Parser;
+        for source in ["let value = `a\rb`;", "let value = `a\r\nb`;"] {
+            let tree = parser
+                .parse(source, ParseGoal::Script)
+                .expect("template source text accepts every ECMAScript LineTerminator");
+            assert!(matches!(
+                &tree.body[0],
+                Statement::VariableDeclaration(declaration)
+                    if matches!(
+                        declaration.declarations[0].initializer.as_ref(),
+                        Some(Expression::TemplateLiteral { quasis, .. }) if quasis == &["a\nb"]
+                    )
+            ));
+        }
     }
 
     #[test]

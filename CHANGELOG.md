@@ -2,11 +2,24 @@
 
 This is a synthesized, agent-facing changelog for the full history of `franken_engine`.
 
-Scope window: project inception on 2026-02-18 through current `main` (`d51f2715`, 2026-05-15).
+Base synthesis window: project inception on 2026-02-18 through `d51f2715` (2026-05-15). Dated post-snapshot sections below record later changes.
 
-This document was rebuilt from git history (4,446 commits, no published releases), the checked-in beads tracker (`.beads/issues.jsonl`), the in-tree `docs/CLAIM_TO_PROOF_MATRIX_V1.md` claim ledger, and the contemporaneous workstream notes left in `docs/` and `runbooks/`.
+The base synthesis was rebuilt from git history (4,446 commits and no published releases at that snapshot), the checked-in beads tracker (`.beads/issues.jsonl`), the in-tree `docs/CLAIM_TO_PROOF_MATRIX_V1.md` claim ledger, and the contemporaneous workstream notes left in `docs/` and `runbooks/`; the dated sections below carry the later release history forward.
 
-The project ships a single `0.1.0` Cargo manifest across the workspace and has no GitHub Releases or version tags — only two backup tags (`backup/main-tip-1b2e6cf0`, `backup/worktree-tip-1f288b45`). All published evidence is artifact-bundle based; the "version" of any given decision/benchmark/replay claim is its artifact manifest and its bead, not a release number.
+The first conventional release, `v0.1.0`, was published on 2026-05-29. Current `main` also uses artifact-bundle versions for individual decision, benchmark, and replay claims; those schema versions remain independent of Cargo package semver.
+
+---
+
+## Post-Snapshot Update — `0.2.0` Compatibility Staging (2026-07-16)
+
+`bd-n8eta.4.6` moves only `frankenengine-core` and `frankenengine-engine` to an unreleased `0.2.0` line. This is a source-compatibility boundary, not a tag or publication: unrelated workspace packages stay at `0.1.0`, and GA/release actions remain separately gated.
+
+- Both public baseline-interpreter `Value` enums are now `#[non_exhaustive]`. Downstream matches must retain a fallback arm before the separately owned typed-Symbol runtime work appends a new variant.
+- The downstream audit found 57 cross-crate match expressions across 13 files; every match already had a wildcard, binding, or equivalent fallback. `/data/projects/franken_node` had no direct construction, import, or match on either baseline `Value` type.
+- Existing serde discriminants and payload bytes do not change. Focused historical-wire tests decode and re-encode all pre-migration variants byte-for-byte; the later Symbol children own any new wire values and execution-seed state.
+- `IrSchemaVersion::CURRENT` remains `0.1.0` because this migration adds no IR opcode or persisted IR shape. The separately tracked `bd-f1ixz` must version its IR schema when its `CopyDataProperties` variants land on the unreleased `0.2.0` package line.
+
+No `Value::Symbol`, typed executable property-key carrier, `symbol_state`, tag, or release is introduced here.
 
 ---
 
@@ -40,7 +53,8 @@ Commits: `619479f2`, `163c17472`.
 
 | Version | Kind | Date | Summary |
 |---------|------|------|---------|
-| `0.1.0` (in-development) | Cargo workspace version | 2026-02-18 → present | Continuous `main`-only development; no tagged releases. Evidence ships per artifact bundle, not per version. |
+| `0.2.0` (unreleased) | `frankenengine-core` / `frankenengine-engine` Cargo versions | 2026-07-16 → present | Compatibility-staging line for public exhaustive-enum evolution; no tag or publication. |
+| [`v0.1.0`](https://github.com/Dicklesworthstone/franken_engine/releases/tag/v0.1.0) | Published release | 2026-05-29 | First conventional release and installed-binary baseline. |
 | [`backup/main-tip-1b2e6cf0`](https://github.com/Dicklesworthstone/franken_engine/tree/backup/main-tip-1b2e6cf0) | Backup tag (not a release) | 2026-04-16 | Mid-April main tip preserved during the Test262 / async-execution work. |
 | [`backup/worktree-tip-1f288b45`](https://github.com/Dicklesworthstone/franken_engine/tree/backup/worktree-tip-1f288b45) | Backup tag (not a release) | 2026-03-18 | Mid-March worktree tip preserved during the integration-test enrichment wave. |
 

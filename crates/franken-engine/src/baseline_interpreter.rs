@@ -1523,6 +1523,12 @@ impl From<i64> for Float64 {
 // ---------------------------------------------------------------------------
 
 /// Runtime value representation for the baseline interpreter.
+///
+/// This enum is intentionally non-exhaustive at the public crate boundary.
+/// Downstream consumers must retain a fallback arm so additive JavaScript
+/// value kinds can land without another source-breaking exhaustive-match
+/// migration.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Value {
     /// Undefined.

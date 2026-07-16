@@ -4,7 +4,7 @@ expression: actual
 ---
 {
   "exit_code": 0,
-  "stdout": "frankenctl 0.1.0\n",
+  "stdout": "frankenctl 0.2.0\n",
   "stderr": "",
   "command": "frankenctl version"
 }

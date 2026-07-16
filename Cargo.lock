@@ -1512,7 +1512,7 @@ dependencies = [
 
 [[package]]
 name = "frankenengine-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "ed25519-dalek",
@@ -1533,7 +1533,7 @@ dependencies = [
 
 [[package]]
 name = "frankenengine-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64",
  "bumpalo",

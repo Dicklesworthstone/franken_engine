@@ -429,7 +429,7 @@ fn evaluate_default_artifacts(context: &ArtifactContext) -> Result<EvaluatedArti
     let compile_config = CompileConfig {
         target: CompileTarget::FrozenSnapshot,
         policy_revision: 7,
-        engine_version: "0.1.0-cold-start-lane".to_string(),
+        engine_version: format!("{}-cold-start-lane", env!("CARGO_PKG_VERSION")),
         ..CompileConfig::default()
     };
     let entrygraphs = build_demo_entrygraphs();

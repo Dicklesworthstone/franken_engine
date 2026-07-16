@@ -422,8 +422,10 @@
       "engine_export_present": true,
       "file_relation": "different",
       "owner_rationale": "IR contract is central to parser/lowering/runtime compatibility and needs explicit parity.",
-      "test_expectation": "Future parity work must compare IR schema and lowering expectations.",
-      "known_beads": []
+      "test_expectation": "Future parity work must compare IR schema and lowering expectations. bd-f1ixz owns the versioned additive CopyDataProperties path and must update the persisted IR schema when its public op variants land on the unreleased 0.2 package line.",
+      "known_beads": [
+        "bd-f1ixz"
+      ]
     },
     {
       "module": "js_string",

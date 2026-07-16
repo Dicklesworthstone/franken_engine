@@ -153,7 +153,7 @@ if [[ "${1:-}" == "exec" ]]; then
     printf '[RCH] local (forced smoke fixture)\n'
     exit 0
   fi
-  printf '   Compiling frankenengine-engine v0.1.0 (/data/projects/franken_engine/crates/franken-engine)\n'
+  printf '   Compiling frankenengine-engine v0.2.0 (/data/projects/franken_engine/crates/franken-engine)\n'
   if [[ "${FAKE_RCH_TEST_FAILURE:-0}" == "1" ]]; then
     printf '    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.00s\n'
     printf '     Running unittests src/lib.rs\n\n'

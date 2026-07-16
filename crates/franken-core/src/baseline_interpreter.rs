@@ -245,6 +245,12 @@ impl From<i64> for Float64 {
 // ---------------------------------------------------------------------------
 
 /// Runtime value representation for the baseline interpreter.
+///
+/// This enum is intentionally non-exhaustive at the public crate boundary.
+/// Downstream consumers must retain a fallback arm so additive JavaScript
+/// value kinds can land without another source-breaking exhaustive-match
+/// migration.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Value {
     /// Undefined.
@@ -17224,6 +17230,68 @@ mod tests {
             let json = serde_json::to_string(&val).unwrap();
             let deser: Value = serde_json::from_str(&json).unwrap();
             assert_eq!(val, deser);
+        }
+    }
+
+    #[test]
+    fn historical_value_wire_bytes_survive_the_0_2_api_migration() {
+        let cases = [
+            (Value::Undefined, r#""Undefined""#.to_string()),
+            (Value::Null, r#""Null""#.to_string()),
+            (Value::Bool(true), r#"{"Bool":true}"#.to_string()),
+            (Value::Int(42), r#"{"Int":42}"#.to_string()),
+            (
+                Value::Float(Float64::new(1.5)),
+                r#"{"Float":4609434218613702656}"#.to_string(),
+            ),
+            (Value::str("hello"), r#"{"Str":"hello"}"#.to_string()),
+            (
+                Value::Str(JsString::from_code_units(&[0xD800])),
+                r#"{"Str":{"$wtf16":[55296]}}"#.to_string(),
+            ),
+            (Value::Object(ObjectId(7)), r#"{"Object":7}"#.to_string()),
+            (Value::Function(3), r#"{"Function":3}"#.to_string()),
+            (Value::Closure(4), r#"{"Closure":4}"#.to_string()),
+            (Value::Iterator(5), r#"{"Iterator":5}"#.to_string()),
+            (
+                Value::GeneratorFunction(6),
+                r#"{"GeneratorFunction":6}"#.to_string(),
+            ),
+            (Value::Generator(7), r#"{"Generator":7}"#.to_string()),
+            (
+                Value::AsyncFunction(8),
+                r#"{"AsyncFunction":8}"#.to_string(),
+            ),
+            (
+                Value::AsyncFunctionObject(9),
+                r#"{"AsyncFunctionObject":9}"#.to_string(),
+            ),
+            (
+                Value::AsyncGeneratorFunction(10),
+                r#"{"AsyncGeneratorFunction":10}"#.to_string(),
+            ),
+            (
+                Value::AsyncGeneratorObject(11),
+                r#"{"AsyncGeneratorObject":11}"#.to_string(),
+            ),
+            (Value::Promise(12), r#"{"Promise":12}"#.to_string()),
+            (
+                Value::BuiltinFunction(BuiltinFunction {
+                    kind: BuiltinFunctionKind::Require,
+                    module_specifier: "node:path".to_string(),
+                }),
+                r#"{"BuiltinFunction":{"kind":"require","module_specifier":"node:path"}}"#
+                    .to_string(),
+            ),
+        ];
+
+        for (value, historical_wire) in cases {
+            let encoded = serde_json::to_string(&value).unwrap();
+            assert_eq!(encoded, historical_wire);
+
+            let decoded: Value = serde_json::from_str(&historical_wire).unwrap();
+            assert_eq!(decoded, value);
+            assert_eq!(serde_json::to_string(&decoded).unwrap(), historical_wire);
         }
     }
 

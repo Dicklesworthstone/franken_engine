@@ -4,7 +4,7 @@ expression: content
 ---
 {
   "exit_code": 0,
-  "stdout": "franken-benchmark-evidence-export 0.1.0\n",
+  "stdout": "franken-benchmark-evidence-export 0.2.0\n",
   "stderr": "",
   "command": "franken-benchmark-evidence-export --version",
   "category": "benchmark"

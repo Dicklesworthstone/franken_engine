@@ -35,7 +35,7 @@ The rules compose. A containment action is replay-anchored *and* signed, so a co
 
 This is research-grade infrastructure, not a packaged product.
 
-- **First release: `v0.1.0`.** Prebuilt `frankenctl` binaries (Linux x86_64 and macOS Apple Silicon) ship via [GitHub Releases](https://github.com/Dicklesworthstone/franken_engine/releases) with a checksum-verified `curl | bash` installer ([`install.sh`](./install.sh)); other platforms fall back to a standalone (`--no-default-features`) source build. The single workspace version is `0.1.0`. See [`CHANGELOG.md`](./CHANGELOG.md) for the evidence trail.
+- **First published release: `v0.1.0`.** Prebuilt `frankenctl` binaries (Linux x86_64 and macOS Apple Silicon) ship via [GitHub Releases](https://github.com/Dicklesworthstone/franken_engine/releases) with a checksum-verified `curl | bash` installer ([`install.sh`](./install.sh)); other platforms fall back to a standalone (`--no-default-features`) source build. Current `main` stages `frankenengine-core` and `frankenengine-engine` at an unreleased `0.2.0` compatibility boundary; it does not create a `v0.2.0` tag or release. See [`CHANGELOG.md`](./CHANGELOG.md) for the evidence trail.
 - **Every README claim is gated.** Any wording change runs through [`./scripts/run_claim_to_proof_matrix_gate.sh ci`](./scripts/run_claim_to_proof_matrix_gate.sh) against [`docs/claim_to_proof_matrix_v1.json`](./docs/claim_to_proof_matrix_v1.json). Claims classified `hypothesis` or `target` must say so explicitly; absolute-superiority language without artifacts is rejected.
 - **Automation surfaces ship in advisory-only mode.** The shadow daemon and related automations cannot execute live mutations or production deployments until adoption gates are explicitly verified green. See [`docs/SHADOW_DAEMON_PROOF_STATE.md`](./docs/SHADOW_DAEMON_PROOF_STATE.md).
 
@@ -64,20 +64,20 @@ Most recent promotions and proof-bundle landings from the May 2026 cycle (see [`
 
 ### Versioning & Release Posture
 
-The workspace ships at `0.1.0` across every Cargo manifest. That number is not going to move soon, and the *real* version of any given runtime behaviour, decision, or benchmark claim is its artifact bundle, not the Cargo version. Here is what that means in practice:
+The published baseline is `v0.1.0`. Current `main` deliberately splits the two public runtime crates onto an unreleased `0.2.0` line so their source-breaking exhaustive-enum evolution is explicit; unrelated workspace packages remain at `0.1.0`. Artifact bundles still version individual runtime behaviours, decisions, and benchmark claims independently of Cargo semver.
 
 | Concept | What it is |
 |---|---|
-| **Workspace Cargo version** (`0.1.0`) | A pin that lets `cargo` resolve the crates. Not a release. Will be bumped only when a tagged GA exit lands. |
+| **Cargo package versions** | `frankenengine-core` and `frankenengine-engine` stage an unreleased `0.2.0` compatibility line on `main`; every other workspace package remains at `0.1.0`. This is not a tag or publication. |
 | **Backup tags** (`backup/main-tip-*`, `backup/worktree-tip-*`) | Periodic preservation tags so a future bisect can find a known-good point. Not releases. |
-| **GitHub Releases** | None yet. The first will require the GA-exit evidence package (see *Acceptance Ledger & GA Exit Evidence*) to be complete, which in turn requires every matrix row to be either OBSERVED or explicitly downgraded. |
+| **GitHub Releases** | `v0.1.0` is the published baseline. No `v0.2.0` release is created by the compatibility migration; a future GA release remains gated by the GA-exit evidence package. |
 | **Artifact bundle version** (`franken-engine.proof-artifact-manifest.v1`) | The schema version that every gate's `run_manifest.json` carries. Bumped when the manifest shape changes; pinned by `SchemaId` in evidence records. |
 | **`SchemaId`** (per persisted type) | Content hash of a schema definition. Automatically detects schema evolution; replay refuses to silently reinterpret old bytes under a new schema. |
 | **Bead** (`bd-<base36>` in `.beads/issues.jsonl`) | The unit of work granularity. Every claim in the claim-to-proof matrix names a single owning bead; closing the bead is the unit of release-level change. |
 
 The practical effect: if you ask "what version of FrankenEngine should I pin?", the right answer is **a specific commit SHA plus a specific artifact-bundle manifest**, not a semver string. Downstream consumers (e.g. `/dp/franken_node`) consume FrankenEngine by path-dep in Cargo.toml plus a documented commit SHA, not by a published crate version. That's also why `CHANGELOG.md` is organised into research-grouped capability waves instead of release headings.
 
-When the GA-exit package becomes complete, the workspace will jump to a real tagged release and the artifact-bundle-versioning model will sit alongside conventional semver. Until then, treat per-artifact-bundle versioning as the system of record.
+When the GA-exit package becomes complete, the research line can advance to a separately approved tagged GA release and the artifact-bundle-versioning model will sit alongside conventional semver. Until then, treat a commit SHA plus its artifact-bundle manifest as the system of record.
 
 ---
 
@@ -1388,7 +1388,7 @@ The "GA exit" package collects every artifact the runtime needs to ship to gener
 
 An external auditor can re-check that proof bundle without the FrankenEngine source tree. Export it with `scripts/export_proof_bundle.sh export <proof_source_dir>`, then verify it in the clean-room docker image (which carries no engine source) with `scripts/run_y2_proof_bundle_verifier.sh verify <proof_bundle.tar.gz>`; the verifier independently recomputes the bundle's recheck digest and fails closed on any mismatch. The bundle path, recheck digest, and verifier image are wired into `ga_exit_evidence_package.rs` as a `ProofBundleReference` so they travel with the GA-exit package and cannot drift from the Y.1 exporter / Y.2 verifier.
 
-This is the artifact that promotes the workspace from `0.1.0` to a tagged release. It does not exist yet, because the matrix still has TARGETED and HYPOTHESIS rows that need to be either promoted or explicitly downgraded for the release wording to hold.
+This is the artifact that promotes the research line to the separately approved tagged GA release. It does not exist yet, because the matrix still has TARGETED and HYPOTHESIS rows that need to be either promoted or explicitly downgraded for the release wording to hold.
 
 ---
 

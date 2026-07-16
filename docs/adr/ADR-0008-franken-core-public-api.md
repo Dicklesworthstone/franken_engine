@@ -169,7 +169,7 @@ Audit result:
 
 - All 42 root exports are explicit `pub mod` declarations in `lib.rs`.
 - There is no root-level wildcard `pub use *` facade.
-- Module-level public declarations are broad, but this is an intentional
+- Module-level public declarations are broad, but this began as an intentional
   v0.1 workspace-boundary freeze, not a claim of third-party API maturity.
 - The parity ledger records 42 matching module names in `franken-engine`, 0
   missing engine exports, 0 identical source files, 42 different source files,
@@ -181,8 +181,8 @@ separate breaking API-design task and must not be mixed into the ADR freeze.
 
 ## Stability Guarantees
 
-Stable boundary modules guarantee source-level compatibility within the
-`0.1.x` line for:
+Stable boundary modules guarantee source-level compatibility within each
+published `0.x` minor line for:
 
 - module name
 - public type/function/trait/constant name
@@ -223,8 +223,10 @@ Deprecation policy for experimental boundary modules:
 
 ## Semver Policy
 
-`frankenengine-core` is currently versioned `0.1.0`. For `0.x` crates, minor
-versions are treated as compatibility boundaries:
+The published GitHub `v0.1.0` release carried `frankenengine-core` and
+`frankenengine-engine` source packages versioned at `0.1.0`; current `main`
+stages their next source-compatibility boundary at an unreleased `0.2.0`. For
+`0.x` crates, minor versions are treated as compatibility boundaries:
 
 | Change class | Required version action | Required process |
 | --- | --- | --- |
@@ -242,24 +244,49 @@ After `1.0`, stable boundary breaking changes require a major version bump.
 
 `bd-n8eta.4.1` approves one wire-additive but Rust-source-breaking
 stable-boundary evolution for the executable baseline interpreters. Both
-public `Value` enums are currently exhaustive. Appending `Value::Symbol`
-preserves every existing variant's serde encoding, but it breaks downstream
-exhaustive matches and old decoders cannot read the new variant.
+public `Value` enums were exhaustive when that decision was approved.
+Appending `Value::Symbol` preserves every existing variant's serde encoding,
+but it breaks downstream exhaustive matches and old decoders cannot read the
+new variant.
 
 The version contract is therefore non-optional:
 
 - `bd-n8eta.4.6` blocks both runtime implementation children.
-- The current `frankenengine-core` and `frankenengine-engine` `0.1.0` packages
-  must advance to a version newer than `0.1.x` (at least `0.2.0`, including a
-  separately approved `1.0.0`) before or atomically with the new variant. If
-  either package has already reached `1.0`, this change requires its next major
-  version.
+- The `frankenengine-core` and `frankenengine-engine` source packages carried
+  by the `v0.1.0` release must advance to a version newer than `0.1.x` (at
+  least `0.2.0`, including a separately approved `1.0.0`) before or atomically
+  with the new variant. If either package has already reached `1.0`, this
+  change requires its next major version.
 - That migration must publish release/migration notes, audit downstream
   exhaustive matches and serde consumers, and add `#[non_exhaustive]` to both
   `Value` enums in the same versioned change.
 - The same audit covers any public execution-seed or captured-state shape
   change needed to carry `symbol_state`; no public `0.1.x` shape changes outside
   the coordinated migration.
+
+### `0.2.0` migration checkpoint (`bd-n8eta.4.6`)
+
+The two public runtime crates now stage `0.2.0` on `main`; unrelated workspace
+packages remain at `0.1.0`. This checkpoint creates no tag or release and adds
+no Symbol runtime behavior. It makes both public baseline `Value` enums
+`#[non_exhaustive]`, while leaving every existing variant, payload, serde
+discriminant, and execution-seed shape unchanged.
+
+The downstream source audit used AST match enumeration plus direct import and
+construction searches. It found 57 cross-crate match expressions in 13 files;
+all already carry a wildcard, binding, or equivalent fallback arm. The sibling
+`/data/projects/franken_node` tree contains no direct imports, constructions,
+or matches of either baseline `Value` type. Existing callers therefore require
+no source patch for this checkpoint, but new callers must not exhaustively
+match either enum.
+
+Historical-wire regressions decode and re-encode every pre-migration `Value`
+variant without changing bytes. Old `0.1.x` decoders will still reject a future
+`Symbol` variant, as required for an unknown externally tagged serde variant;
+new decoders must continue to accept all historical payloads. Because this
+checkpoint adds no IR operation or serialized IR shape,
+`IrSchemaVersion::CURRENT` remains `0.1.0`; later IR-shape work must version
+that schema independently while the package line is still unreleased.
 
 The descriptor object model already exposes `object_model::SymbolId`,
 `object_model::PropertyKey::{String, Symbol}`, and `JsValue::Symbol`; the

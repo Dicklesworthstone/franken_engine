@@ -14,7 +14,7 @@ cat >"${good_dir}/cargo-output.log" <<'GOOD_LOG'
 Selected worker: vmi-good at 192.0.2.10 (rust)
 INFO rch::transfer: Syncing /data/projects/franken_engine/crates/franken-engine-test-support -> /data/projects/franken_engine/crates/franken-engine-test-support on worker
    Compiling frankenengine-extension-host v0.1.0 (/data/projects/franken_engine/crates/franken-extension-host)
-   Compiling frankenengine-engine v0.1.0 (/data/projects/franken_engine/crates/franken-engine)
+   Compiling frankenengine-engine v0.2.0 (/data/projects/franken_engine/crates/franken-engine)
 GOOD_LOG
 
 cat >"${bad_dir}/cargo-output.log" <<'BAD_LOG'
@@ -24,7 +24,7 @@ BAD_LOG
 
 cat >"${exec_dir}/cargo-output.log" <<'EXEC_LOG'
 Selected worker: vmi-good at 192.0.2.10 (rust)
-   Compiling frankenengine-engine v0.1.0 (/data/projects/franken_engine/crates/franken-engine)
+   Compiling frankenengine-engine v0.2.0 (/data/projects/franken_engine/crates/franken-engine)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.00s
      Running unittests src/lib.rs
 
@@ -36,7 +36,7 @@ EXEC_LOG
 
 cat >"${bad_dir}/no-execution.log" <<'NO_EXEC_LOG'
 Selected worker: vmi-good at 192.0.2.10 (rust)
-   Compiling frankenengine-engine v0.1.0 (/data/projects/franken_engine/crates/franken-engine)
+   Compiling frankenengine-engine v0.2.0 (/data/projects/franken_engine/crates/franken-engine)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.00s
 NO_EXEC_LOG
 

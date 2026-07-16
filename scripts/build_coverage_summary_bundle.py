@@ -28,6 +28,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,7 @@ CLAIM_ID = "FE-CLAIM-026"
 OWNING_BEAD = "bd-fqlfw.7.4"
 POLICY_ID = "policy-es2020-coverage-summary-bundle-v1"
 COVERAGE_SCHEMA = "franken-engine.coverage-summary.v1"
+ENGINE_MANIFEST = Path(__file__).resolve().parents[1] / "crates/franken-engine/Cargo.toml"
 
 
 def canonical_bytes(obj: Any) -> bytes:
@@ -55,6 +57,15 @@ def write_canonical(path: Path, obj: Any) -> str:
 
 def load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def engine_package_version() -> str:
+    with ENGINE_MANIFEST.open("rb") as manifest_file:
+        manifest = tomllib.load(manifest_file)
+    version = manifest.get("package", {}).get("version")
+    if not isinstance(version, str) or not version:
+        raise ValueError(f"missing package.version in {ENGINE_MANIFEST}")
+    return version
 
 
 def git_output(args: list[str], fallback: str) -> str:
@@ -131,7 +142,7 @@ def main() -> int:
         "runtime": {
             "mode": "test262-coverage-summary",
             "lane": "test262_conformance_runner",
-            "engine_version": "0.1.0",
+            "engine_version": engine_package_version(),
             "test262_commit": corpus_commit,
             "scope": "es2020-normative (language/* + built-ins/*)",
         },

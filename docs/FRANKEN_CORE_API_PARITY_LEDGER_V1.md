@@ -77,7 +77,7 @@ this order:
 
 | Bead | Required evidence |
 | --- | --- |
-| `bd-n8eta.4.6` | Both exhaustive public `Value` enums receive the required version/migration treatment and downstream match/serde audit. |
+| `bd-n8eta.4.6` | Stages both public runtime crates at unreleased `0.2.0`, marks both `Value` enums non-exhaustive, preserves historical serde bytes, and records the clean downstream match audit. |
 | `bd-n8eta.4.2` | Engine uses typed Symbol identity for lookup, ordering, replay, memory, and the correct consumer filters. |
 | `bd-n8eta.4.3` | Core adds the same executable value/key contract and proves QuickJS/V8 profile parity. |
 | `bd-n8eta.4.4` | The frozen string-only property-hook boundary gains an explicitly reviewed typed-key migration without a string alias. |

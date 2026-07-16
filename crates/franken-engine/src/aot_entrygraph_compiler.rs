@@ -350,7 +350,7 @@ impl Default for CompileConfig {
             require_provenance: true,
             honour_cache: true,
             policy_revision: 1,
-            engine_version: String::from("0.1.0"),
+            engine_version: env!("CARGO_PKG_VERSION").to_string(),
             max_module_source_bytes: 2 * 1024 * 1024, // 2 MiB
             allowed_entry_kinds: BTreeSet::new(),
         }

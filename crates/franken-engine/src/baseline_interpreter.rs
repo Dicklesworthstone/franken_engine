@@ -34783,35 +34783,41 @@ impl InterpreterCore {
                 Ok(Value::str(json_str))
             }
             "builtin:JsonParse" => {
-                // JSON.parse: full recursive-descent parse of objects, arrays,
-                // strings (with escapes), numbers, booleans, and null into heap
-                // Values (bd-9a8cz.4 — previously only scalars parsed; {}/[]
-                // silently returned undefined). Invalid JSON or a non-string
-                // argument yields undefined, preserving the pre-existing
-                // simplified error policy (the spec throws SyntaxError).
+                // Full recursive JSON values over exact UTF-16 input units,
+                // including raw lone surrogates (bd-4v2up) and units contributed
+                // by `\uXXXX` escapes (bd-neika). Invalid JSON and non-string
+                // inputs preserve the engine's simplified posture by yielding
+                // undefined instead of a SyntaxError.
                 if args.count == 0 {
                     return Ok(Value::Undefined);
                 }
-                let json_str_val = self.read_reg(args.start)?;
-                match json_str_val {
-                    Value::Str(json_str) => {
-                        let chars: Vec<char> = json_str.chars().collect();
-                        let mut pos = 0usize;
-                        Self::json_skip_ws(&chars, &mut pos);
-                        match self.json_parse_value(&chars, &mut pos, 0)? {
-                            Some(value) => {
-                                Self::json_skip_ws(&chars, &mut pos);
-                                // Reject trailing non-whitespace (invalid JSON).
-                                if pos == chars.len() {
-                                    Ok(value)
-                                } else {
-                                    Ok(Value::Undefined)
-                                }
-                            }
-                            None => Ok(Value::Undefined),
+                let json_str = match self.read_reg(args.start)? {
+                    Value::Str(text) => text,
+                    _ => return Ok(Value::Undefined),
+                };
+                let units = json_str.code_units_vec();
+                let mut pos = 0usize;
+                let heap_checkpoint = self.heap.len();
+                let memory_checkpoint = self.estimated_memory_bytes;
+                Self::json_skip_ws(&units, &mut pos);
+                match self.json_parse_value(&units, &mut pos, 0) {
+                    Ok(Some(value)) => {
+                        Self::json_skip_ws(&units, &mut pos);
+                        if pos == units.len() {
+                            Ok(value)
+                        } else {
+                            self.rollback_json_parse(heap_checkpoint, memory_checkpoint);
+                            Ok(Value::Undefined)
                         }
                     }
-                    _ => Ok(Value::Undefined),
+                    Ok(None) => {
+                        self.rollback_json_parse(heap_checkpoint, memory_checkpoint);
+                        Ok(Value::Undefined)
+                    }
+                    Err(err) => {
+                        self.rollback_json_parse(heap_checkpoint, memory_checkpoint);
+                        Err(err)
+                    }
                 }
             }
             "builtin:isNaN" => {
@@ -44794,187 +44800,196 @@ impl InterpreterCore {
     // -- JSON.parse recursive-descent parser (bd-9a8cz.4) ------------------
     // Parses the full JSON grammar into heap Values. `Option` distinguishes
     // parse success/failure (None => invalid JSON => caller returns undefined);
-    // `Result` carries heap-allocation errors. Char-indexed for correct unicode
-    // handling.
+    // `Result` carries heap-allocation errors. The cursor operates on exact
+    // UTF-16 code units so raw lone surrogates never pass through a lossy UTF-8
+    // projection (bd-4v2up).
 
-    fn json_skip_ws(chars: &[char], pos: &mut usize) {
-        while matches!(chars.get(*pos), Some(' ' | '\t' | '\n' | '\r')) {
+    fn json_skip_ws(units: &[u16], pos: &mut usize) {
+        while matches!(units.get(*pos), Some(0x20 | 0x09 | 0x0A | 0x0D)) {
             *pos += 1;
         }
     }
 
-    /// Parse a JSON string token (the cursor must be at the opening `"`).
-    /// Parse a JSON string token into exact UTF-16 code units. A `\uXXXX`
-    /// escape contributes its raw code unit, so paired surrogate escapes heal
-    /// into the supplementary code point and a lone-surrogate escape yields a
-    /// real lone-surrogate string value when the units normalize (bd-neika;
-    /// ES2020 24.5.1 accepts lone-surrogate escapes in JSON text).
-    fn json_parse_string(chars: &[char], pos: &mut usize) -> Option<JsString> {
-        if chars.get(*pos) != Some(&'"') {
+    /// Parse a JSON string token directly over exact UTF-16 code units. Both
+    /// raw units and `\uXXXX` escapes remain exact: paired surrogates heal into
+    /// one scalar, while a lone surrogate remains representable in [`JsString`].
+    fn json_parse_string(units: &[u16], pos: &mut usize) -> Option<JsString> {
+        if units.get(*pos) != Some(&0x22) {
             return None;
         }
         *pos += 1;
-        let mut units: Vec<u16> = Vec::new();
-        let push_char = |units: &mut Vec<u16>, c: char| {
-            let mut buf = [0u16; 2];
-            units.extend_from_slice(c.encode_utf16(&mut buf));
-        };
-        while let Some(&c) = chars.get(*pos) {
+        let mut parsed = Vec::new();
+        while let Some(&unit) = units.get(*pos) {
             *pos += 1;
-            match c {
-                '"' => return Some(JsString::from_code_units(&units)),
-                '\\' => {
-                    let &esc = chars.get(*pos)?;
+            match unit {
+                0x22 => return Some(JsString::from_code_units(&parsed)),
+                0x5C => {
+                    let &escaped = units.get(*pos)?;
                     *pos += 1;
-                    match esc {
-                        '"' => push_char(&mut units, '"'),
-                        '\\' => push_char(&mut units, '\\'),
-                        '/' => push_char(&mut units, '/'),
-                        'n' => push_char(&mut units, '\n'),
-                        't' => push_char(&mut units, '\t'),
-                        'r' => push_char(&mut units, '\r'),
-                        'b' => push_char(&mut units, '\u{08}'),
-                        'f' => push_char(&mut units, '\u{0C}'),
-                        'u' => {
-                            if *pos + 4 > chars.len() {
+                    match escaped {
+                        0x22 => parsed.push(0x22),
+                        0x5C => parsed.push(0x5C),
+                        0x2F => parsed.push(0x2F),
+                        0x62 => parsed.push(0x08),
+                        0x66 => parsed.push(0x0C),
+                        0x6E => parsed.push(0x0A),
+                        0x72 => parsed.push(0x0D),
+                        0x74 => parsed.push(0x09),
+                        0x75 => {
+                            if *pos + 4 > units.len() {
                                 return None;
                             }
-                            let hex: String = chars[*pos..*pos + 4].iter().collect();
+                            let mut code = 0u16;
+                            for &digit in &units[*pos..*pos + 4] {
+                                let nibble = match digit {
+                                    0x30..=0x39 => digit - 0x30,
+                                    0x41..=0x46 => digit - 0x41 + 10,
+                                    0x61..=0x66 => digit - 0x61 + 10,
+                                    _ => return None,
+                                };
+                                code = (code << 4) | nibble;
+                            }
                             *pos += 4;
-                            let code = u32::from_str_radix(&hex, 16).ok()?;
-                            units.push(u16::try_from(code).ok()?);
+                            parsed.push(code);
                         }
                         _ => return None,
                     }
                 }
-                _ => push_char(&mut units, c),
+                0x00..=0x1F => return None,
+                _ => parsed.push(unit),
             }
         }
-        None // unterminated string
+        None
     }
 
     /// Parse a JSON number token into an Int (when integral) or Float.
-    fn json_parse_number(chars: &[char], pos: &mut usize) -> Option<Value> {
+    fn json_parse_number(units: &[u16], pos: &mut usize) -> Option<Value> {
         let start = *pos;
-        if chars.get(*pos) == Some(&'-') {
+        if units.get(*pos) == Some(&0x2D) {
             *pos += 1;
         }
-        while matches!(chars.get(*pos), Some(d) if d.is_ascii_digit()) {
-            *pos += 1;
+        match units.get(*pos) {
+            Some(0x30) => {
+                *pos += 1;
+                if matches!(units.get(*pos), Some(0x30..=0x39)) {
+                    return None;
+                }
+            }
+            Some(0x31..=0x39) => {
+                *pos += 1;
+                while matches!(units.get(*pos), Some(0x30..=0x39)) {
+                    *pos += 1;
+                }
+            }
+            _ => return None,
         }
         let mut is_float = false;
-        if chars.get(*pos) == Some(&'.') {
+        if units.get(*pos) == Some(&0x2E) {
             is_float = true;
             *pos += 1;
-            while matches!(chars.get(*pos), Some(d) if d.is_ascii_digit()) {
+            let fraction_start = *pos;
+            while matches!(units.get(*pos), Some(0x30..=0x39)) {
                 *pos += 1;
             }
+            if *pos == fraction_start {
+                return None;
+            }
         }
-        if matches!(chars.get(*pos), Some('e' | 'E')) {
+        if matches!(units.get(*pos), Some(0x65 | 0x45)) {
             is_float = true;
             *pos += 1;
-            if matches!(chars.get(*pos), Some('+' | '-')) {
+            if matches!(units.get(*pos), Some(0x2B | 0x2D)) {
                 *pos += 1;
             }
-            while matches!(chars.get(*pos), Some(d) if d.is_ascii_digit()) {
+            let exponent_start = *pos;
+            while matches!(units.get(*pos), Some(0x30..=0x39)) {
                 *pos += 1;
             }
-        }
-        let slice: String = chars[start..*pos].iter().collect();
-        if slice.is_empty() || slice == "-" {
-            return None;
-        }
-        if !is_float {
-            if let Ok(int_val) = slice.parse::<i64>() {
-                return Some(Value::Int(int_val));
+            if *pos == exponent_start {
+                return None;
             }
         }
-        slice
+        let token = String::from_utf16(&units[start..*pos]).ok()?;
+        if token == "-0" {
+            return Some(Value::Float(Float64::new(-0.0)));
+        }
+        if !is_float && let Ok(value) = token.parse::<i64>() {
+            return Some(Value::Int(value));
+        }
+        token
             .parse::<f64>()
             .ok()
-            .map(|f| Value::Float(Float64::new(f)))
+            .map(|value| Value::Float(Float64::new(value)))
     }
 
     fn json_parse_value(
         &mut self,
-        chars: &[char],
+        units: &[u16],
         pos: &mut usize,
         depth: usize,
     ) -> Result<Option<Value>, InterpreterError> {
         if depth > 200 {
             return Ok(None); // guard against stack exhaustion on deep nesting
         }
-        Self::json_skip_ws(chars, pos);
-        let Some(&c) = chars.get(*pos) else {
+        Self::json_skip_ws(units, pos);
+        let Some(&unit) = units.get(*pos) else {
             return Ok(None);
         };
-        match c {
-            '{' => self.json_parse_object(chars, pos, depth),
-            '[' => self.json_parse_array(chars, pos, depth),
-            '"' => Ok(Self::json_parse_string(chars, pos).map(Value::str)),
-            't' => {
-                if chars[*pos..].starts_with(&['t', 'r', 'u', 'e']) {
-                    *pos += 4;
-                    Ok(Some(Value::Bool(true)))
-                } else {
-                    Ok(None)
-                }
+        match unit {
+            0x7B => self.json_parse_object(units, pos, depth),
+            0x5B => self.json_parse_array(units, pos, depth),
+            0x22 => Ok(Self::json_parse_string(units, pos).map(Value::str)),
+            0x74 if units[*pos..].starts_with(&[0x74, 0x72, 0x75, 0x65]) => {
+                *pos += 4;
+                Ok(Some(Value::Bool(true)))
             }
-            'f' => {
-                if chars[*pos..].starts_with(&['f', 'a', 'l', 's', 'e']) {
-                    *pos += 5;
-                    Ok(Some(Value::Bool(false)))
-                } else {
-                    Ok(None)
-                }
+            0x66 if units[*pos..].starts_with(&[0x66, 0x61, 0x6C, 0x73, 0x65]) => {
+                *pos += 5;
+                Ok(Some(Value::Bool(false)))
             }
-            'n' => {
-                if chars[*pos..].starts_with(&['n', 'u', 'l', 'l']) {
-                    *pos += 4;
-                    Ok(Some(Value::Null))
-                } else {
-                    Ok(None)
-                }
+            0x6E if units[*pos..].starts_with(&[0x6E, 0x75, 0x6C, 0x6C]) => {
+                *pos += 4;
+                Ok(Some(Value::Null))
             }
-            '-' | '0'..='9' => Ok(Self::json_parse_number(chars, pos)),
+            0x2D | 0x30..=0x39 => Ok(Self::json_parse_number(units, pos)),
             _ => Ok(None),
         }
     }
 
     fn json_parse_object(
         &mut self,
-        chars: &[char],
+        units: &[u16],
         pos: &mut usize,
         depth: usize,
     ) -> Result<Option<Value>, InterpreterError> {
         *pos += 1; // consume '{'
         let id = self.alloc_object_with_prototype(None)?;
-        Self::json_skip_ws(chars, pos);
-        if chars.get(*pos) == Some(&'}') {
+        Self::json_skip_ws(units, pos);
+        if units.get(*pos) == Some(&0x7D) {
             *pos += 1;
             return Ok(Some(Value::Object(id)));
         }
         loop {
-            Self::json_skip_ws(chars, pos);
-            let Some(key) = Self::json_parse_string(chars, pos) else {
+            Self::json_skip_ws(units, pos);
+            let Some(key) = Self::json_parse_string(units, pos) else {
                 return Ok(None);
             };
-            Self::json_skip_ws(chars, pos);
-            if chars.get(*pos) != Some(&':') {
+            Self::json_skip_ws(units, pos);
+            if units.get(*pos) != Some(&0x3A) {
                 return Ok(None);
             }
             *pos += 1;
-            let Some(value) = self.json_parse_value(chars, pos, depth + 1)? else {
+            let Some(value) = self.json_parse_value(units, pos, depth + 1)? else {
                 return Ok(None);
             };
             // Property keys remain UTF-8 `String`s: a lone-surrogate key
             // routes through the lossy projection (documented bd-neika
             // boundary); string VALUES keep exact code units.
             self.set_object_property(id, key.to_string(), value)?;
-            Self::json_skip_ws(chars, pos);
-            match chars.get(*pos) {
-                Some(&',') => *pos += 1,
-                Some(&'}') => {
+            Self::json_skip_ws(units, pos);
+            match units.get(*pos) {
+                Some(0x2C) => *pos += 1,
+                Some(0x7D) => {
                     *pos += 1;
                     return Ok(Some(Value::Object(id)));
                 }
@@ -44985,29 +45000,29 @@ impl InterpreterCore {
 
     fn json_parse_array(
         &mut self,
-        chars: &[char],
+        units: &[u16],
         pos: &mut usize,
         depth: usize,
     ) -> Result<Option<Value>, InterpreterError> {
         *pos += 1; // consume '['
         let id = self.alloc_array_with_prototype(None)?;
-        Self::json_skip_ws(chars, pos);
-        if chars.get(*pos) == Some(&']') {
+        Self::json_skip_ws(units, pos);
+        if units.get(*pos) == Some(&0x5D) {
             *pos += 1;
             self.json_finalize_array_len(id, 0)?;
             return Ok(Some(Value::Object(id)));
         }
         let mut len: u32 = 0;
         loop {
-            let Some(value) = self.json_parse_value(chars, pos, depth + 1)? else {
+            let Some(value) = self.json_parse_value(units, pos, depth + 1)? else {
                 return Ok(None);
             };
             self.set_object_property(id, len.to_string(), value)?;
             len = len.saturating_add(1);
-            Self::json_skip_ws(chars, pos);
-            match chars.get(*pos) {
-                Some(&',') => *pos += 1,
-                Some(&']') => {
+            Self::json_skip_ws(units, pos);
+            match units.get(*pos) {
+                Some(0x2C) => *pos += 1,
+                Some(0x5D) => {
                     *pos += 1;
                     self.json_finalize_array_len(id, len)?;
                     return Ok(Some(Value::Object(id)));
@@ -45026,6 +45041,11 @@ impl InterpreterCore {
             }
         });
         Ok(())
+    }
+
+    fn rollback_json_parse(&mut self, heap_len: usize, estimated_memory_bytes: u64) {
+        self.rollback_heap_to_len(heap_len);
+        self.estimated_memory_bytes = estimated_memory_bytes;
     }
 
     /// Get the number of objects on the heap.
@@ -70157,6 +70177,86 @@ mod tests {
         } else {
             panic!("Expected Str, got {result:?}");
         }
+    }
+
+    #[test]
+    fn json_parse_rolls_back_late_invalid_allocations() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test");
+        core.set_register(0, Value::str(r#"{"a":[1,2]} trailing"#))
+            .expect("invalid JSON input should fit register zero");
+        let heap_before = core.heap_size();
+        let memory_before = core.estimated_memory_bytes();
+
+        let result = core
+            .dispatch_builtin_hostcall_inner(
+                "builtin:JsonParse",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("invalid JSON should preserve the undefined posture");
+
+        assert_eq!(result, Value::Undefined);
+        assert_eq!(core.heap_size(), heap_before);
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+    }
+
+    #[test]
+    fn json_parse_preserves_raw_lone_surrogate_units() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test");
+        for expected in [vec![0xD800], vec![0xDC00], vec![0xD83D, 0xDE00]] {
+            let mut json = vec![0x22];
+            json.extend_from_slice(&expected);
+            json.push(0x22);
+            core.set_register(0, Value::Str(JsString::from_code_units(&json)))
+                .expect("raw UTF-16 JSON input should fit register zero");
+
+            let result = core
+                .dispatch_builtin_hostcall(
+                    "builtin:JsonParse",
+                    RegRange { start: 0, count: 1 },
+                    None,
+                )
+                .expect("raw UTF-16 JSON string should parse");
+
+            let Value::Str(parsed) = result else {
+                panic!("JSON.parse should return the parsed string");
+            };
+            assert_eq!(parsed.code_units_vec(), expected);
+        }
+
+        let mut nested = "{\"value\":\"".encode_utf16().collect::<Vec<_>>();
+        nested.push(0xD800);
+        nested.extend("\"}".encode_utf16());
+        core.set_register(0, Value::Str(JsString::from_code_units(&nested)))
+            .expect("nested raw UTF-16 JSON input should fit register zero");
+        let nested_result = core
+            .dispatch_builtin_hostcall("builtin:JsonParse", RegRange { start: 0, count: 1 }, None)
+            .expect("nested raw UTF-16 JSON string should parse");
+        let Value::Object(nested_id) = nested_result else {
+            panic!("JSON.parse should allocate the nested object");
+        };
+        let Some(Value::Str(nested_value)) =
+            core.heap[nested_id.0 as usize].properties.get("value")
+        else {
+            panic!("nested JSON string should be stored as a data property");
+        };
+        assert_eq!(nested_value.code_units_vec(), vec![0xD800]);
+
+        core.set_register(
+            0,
+            Value::Str(JsString::from_code_units(&[0x22, 0x1F, 0x22])),
+        )
+        .expect("raw control-unit JSON input should fit register zero");
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:JsonParse",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("invalid JSON should preserve the undefined posture"),
+            Value::Undefined,
+            "raw JSON control units must remain invalid"
+        );
     }
 
     #[test]

@@ -176,6 +176,31 @@ fn json_parse_combines_paired_surrogate_escapes_in_json_text() {
 }
 
 #[test]
+fn json_parse_preserves_raw_lone_surrogate_input_units() {
+    expect_true(
+        "json-parse-raw-units",
+        "var quote = String.fromCharCode(34); \
+         var high = String.fromCharCode(0xD800); \
+         var low = String.fromCharCode(0xDC00); \
+         var pair = String.fromCharCode(0xD83D, 0xDE00); \
+         var parsedHigh = JSON.parse(quote + high + quote); \
+         var parsedLow = JSON.parse(quote + low + quote); \
+         var parsedPair = JSON.parse(quote + pair + quote); \
+         parsedHigh === high && parsedHigh.charCodeAt(0) === 0xD800 && \
+         parsedLow === low && parsedLow.charCodeAt(0) === 0xDC00 && \
+         parsedPair === pair && parsedPair.charCodeAt(0) === 0xD83D;",
+    );
+    expect_true(
+        "json-parse-raw-nested-and-control",
+        "var high = String.fromCharCode(0xD800); \
+         var nested = JSON.parse('{\"value\":\"' + high + '\"}'); \
+         var quote = String.fromCharCode(34); \
+         var control = String.fromCharCode(0x1F); \
+         nested.value === high && JSON.parse(quote + control + quote) === undefined;",
+    );
+}
+
+#[test]
 fn is_well_formed_and_to_well_formed_report_real_surrogate_state() {
     expect_true("iswellformed-true", "'😀'.isWellFormed() === true;");
     expect_true(

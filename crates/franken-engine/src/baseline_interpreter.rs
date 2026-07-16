@@ -231,6 +231,13 @@ const MEMORY_ESTIMATE_EVENT_LISTENER_BASE_BYTES: u64 = 48;
 /// A non-`error` wait registers two linked records (the awaited event and the
 /// implicit rejection-on-`error` observer), both accounted independently.
 const MEMORY_ESTIMATE_EVENT_PROMISE_WAITER_BASE_BYTES: u64 = 48;
+/// Conservative fixed charges for the interpreter-local loopback `net`
+/// kernel. The transport never creates an OS socket; these side tables own the
+/// bounded server/socket lifecycle and queued byte payloads used by the Node
+/// compatibility surface (bd-7qwej).
+const MEMORY_ESTIMATE_LOOPBACK_SERVER_BASE_BYTES: u64 = 128;
+const MEMORY_ESTIMATE_LOOPBACK_SOCKET_BASE_BYTES: u64 = 256;
+const MEMORY_ESTIMATE_LOOPBACK_TASK_BASE_BYTES: u64 = 96;
 /// Conservative base charge for one finite `Readable.from` side-table entry.
 /// A retained string source and custom IFC label are charged separately.
 const MEMORY_ESTIMATE_READABLE_FROM_BASE_BYTES: u64 = 64;
@@ -2077,6 +2084,22 @@ pub enum BuiltinFunctionKind {
     StreamWritableUncork,
     /// `Writable.prototype.destroy([error])` lifecycle teardown.
     StreamWritableDestroy,
+    /// Hermetic same-interpreter `net.Server` / `net.Socket` methods
+    /// (bd-7qwej). These variants remain at the true enum tail because the
+    /// discriminant participates in deterministic register hashing.
+    NetServerListen,
+    NetServerAddress,
+    NetServerClose,
+    NetSocketWrite,
+    NetSocketEnd,
+    NetSocketDestroy,
+    NetSocketSetEncoding,
+    NetSocketPause,
+    NetSocketResume,
+    NetSocketRef,
+    NetSocketUnref,
+    NetSocketSetNoDelay,
+    NetSocketSetKeepAlive,
 }
 
 impl BuiltinFunctionKind {
@@ -3294,6 +3317,19 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StreamWritableCork => "cork",
             BuiltinFunctionKind::StreamWritableUncork => "uncork",
             BuiltinFunctionKind::StreamWritableDestroy => "destroy",
+            BuiltinFunctionKind::NetServerListen => "listen",
+            BuiltinFunctionKind::NetServerAddress => "address",
+            BuiltinFunctionKind::NetServerClose => "close",
+            BuiltinFunctionKind::NetSocketWrite => "write",
+            BuiltinFunctionKind::NetSocketEnd => "end",
+            BuiltinFunctionKind::NetSocketDestroy => "destroy",
+            BuiltinFunctionKind::NetSocketSetEncoding => "setEncoding",
+            BuiltinFunctionKind::NetSocketPause => "pause",
+            BuiltinFunctionKind::NetSocketResume => "resume",
+            BuiltinFunctionKind::NetSocketRef => "ref",
+            BuiltinFunctionKind::NetSocketUnref => "unref",
+            BuiltinFunctionKind::NetSocketSetNoDelay => "setNoDelay",
+            BuiltinFunctionKind::NetSocketSetKeepAlive => "setKeepAlive",
             BuiltinFunctionKind::ArrayPush => "push",
             BuiltinFunctionKind::ArrayPop => "pop",
             BuiltinFunctionKind::ArrayShift => "shift",
@@ -5829,6 +5865,86 @@ struct PendingStreamEmission {
     phase: StreamEventPhase,
 }
 
+/// One interpreter-owned loopback listener. Only listeners created by the
+/// current JS execution can be reached; no OS bind or ambient network
+/// authority is involved (bd-7qwej).
+#[derive(Debug, Clone)]
+struct LoopbackServerState {
+    address: String,
+    port: Option<u16>,
+    listening: bool,
+    active_connections: BTreeSet<ObjectId>,
+    close_requested: bool,
+    close_scheduled: bool,
+    lifecycle_label: Label,
+}
+
+#[derive(Debug, Clone)]
+struct LoopbackBufferedData {
+    bytes: Vec<u8>,
+    label: Label,
+}
+
+/// Authoritative state for a hermetic loopback socket. Public fields such as
+/// `bytesRead` are mirrored onto the heap for Node-shaped observation, while
+/// peer linkage and queued bytes remain unforgeable engine state.
+#[derive(Debug, Clone)]
+struct LoopbackSocketState {
+    peer: Option<ObjectId>,
+    owner_server: Option<ObjectId>,
+    paused: bool,
+    encoding_utf8: bool,
+    local_ended: bool,
+    remote_ended: bool,
+    destroyed: bool,
+    close_scheduled: bool,
+    bytes_read: u64,
+    bytes_written: u64,
+    pending_data: VecDeque<LoopbackBufferedData>,
+    pending_end: bool,
+    pending_outbound: VecDeque<LoopbackBufferedData>,
+    pending_outbound_end: bool,
+    lifecycle_label: Label,
+}
+
+/// Deferred loopback lifecycle/data actions dispatched on the existing
+/// deterministic `IoCompletion` lane. Keeping these out of the guest heap
+/// preserves event ordering and prevents forged transport state.
+#[derive(Debug, Clone)]
+enum PendingLoopbackTask {
+    Listening {
+        server: ObjectId,
+    },
+    Connect {
+        client: ObjectId,
+        server: ObjectId,
+    },
+    Data {
+        target: ObjectId,
+        bytes: Vec<u8>,
+        label: Label,
+    },
+    End {
+        target: ObjectId,
+        label: Label,
+    },
+    Close {
+        target: ObjectId,
+        had_error: bool,
+        label: Label,
+    },
+    ServerClose {
+        server: ObjectId,
+        label: Label,
+    },
+    Error {
+        target: ObjectId,
+        code: String,
+        label: Label,
+        close_after: bool,
+    },
+}
+
 /// Current phase of one finite `Readable.from` pump.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReadableFromPumpPhase {
@@ -6392,6 +6508,13 @@ pub struct InterpreterCore {
     /// Scheduled pure-compute stream pumps keyed by their `IoCompletion`
     /// registration sequence. At most one pump is queued per readable object.
     pending_readable_from_pumps: BTreeMap<u64, ObjectId>,
+    /// Hermetic same-interpreter `net` transport state (bd-7qwej). Listener
+    /// ports are deterministic execution-local identifiers, never OS ports.
+    loopback_servers: BTreeMap<ObjectId, LoopbackServerState>,
+    loopback_sockets: BTreeMap<ObjectId, LoopbackSocketState>,
+    pending_loopback_tasks: BTreeMap<u64, PendingLoopbackTask>,
+    loopback_task_in_flight_bytes: u64,
+    next_loopback_port: u16,
     /// Engine-owned Writable instances. Their per-state ready bit drives a
     /// pre-microtask lifecycle checkpoint without a separately retained queue.
     writable_streams: BTreeMap<ObjectId, WritableState>,
@@ -6575,6 +6698,11 @@ impl InterpreterCore {
             pending_stream_emissions: BTreeMap::new(),
             readable_from_streams: BTreeMap::new(),
             pending_readable_from_pumps: BTreeMap::new(),
+            loopback_servers: BTreeMap::new(),
+            loopback_sockets: BTreeMap::new(),
+            pending_loopback_tasks: BTreeMap::new(),
+            loopback_task_in_flight_bytes: 0,
+            next_loopback_port: 41_000,
             writable_streams: BTreeMap::new(),
             writable_terminal_states: BTreeMap::new(),
             writable_in_flight_callback_bytes: 0,
@@ -7275,6 +7403,1083 @@ impl InterpreterCore {
         }
         self.pending_io_callbacks.insert(seq, callback_args);
         Ok(())
+    }
+
+    fn estimate_loopback_server_state_bytes(state: &LoopbackServerState) -> u64 {
+        MEMORY_ESTIMATE_LOOPBACK_SERVER_BASE_BYTES
+            .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES)
+            .saturating_add(state.address.len() as u64)
+            .saturating_add(
+                (state.active_connections.len() as u64)
+                    .saturating_mul(MEMORY_ESTIMATE_MAP_ENTRY_BYTES),
+            )
+            .saturating_add(Self::estimate_label_bytes(&state.lifecycle_label))
+    }
+
+    fn estimate_loopback_socket_state_bytes(state: &LoopbackSocketState) -> u64 {
+        let queued_data = |queue: &VecDeque<LoopbackBufferedData>| {
+            Self::saturating_sum(queue.iter().map(|data| {
+                MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                    .saturating_add(data.bytes.len() as u64)
+                    .saturating_add(Self::estimate_label_bytes(&data.label))
+            }))
+        };
+        MEMORY_ESTIMATE_LOOPBACK_SOCKET_BASE_BYTES
+            .saturating_add(queued_data(&state.pending_data))
+            .saturating_add(queued_data(&state.pending_outbound))
+            .saturating_add(Self::estimate_label_bytes(&state.lifecycle_label))
+    }
+
+    fn estimate_pending_loopback_task_bytes(task: &PendingLoopbackTask) -> u64 {
+        let payload = match task {
+            PendingLoopbackTask::Data { bytes, label, .. } => {
+                (bytes.len() as u64).saturating_add(Self::estimate_label_bytes(label))
+            }
+            PendingLoopbackTask::End { label, .. }
+            | PendingLoopbackTask::Close { label, .. }
+            | PendingLoopbackTask::ServerClose { label, .. } => Self::estimate_label_bytes(label),
+            PendingLoopbackTask::Error { code, label, .. } => MEMORY_ESTIMATE_STRING_BASE_BYTES
+                .saturating_add(code.len() as u64)
+                .saturating_add(Self::estimate_label_bytes(label)),
+            PendingLoopbackTask::Listening { .. } | PendingLoopbackTask::Connect { .. } => 0,
+        };
+        MEMORY_ESTIMATE_LOOPBACK_TASK_BASE_BYTES.saturating_add(payload)
+    }
+
+    fn loopback_servers_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.loopback_servers
+                .values()
+                .map(Self::estimate_loopback_server_state_bytes),
+        )
+    }
+
+    fn loopback_sockets_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.loopback_sockets
+                .values()
+                .map(Self::estimate_loopback_socket_state_bytes),
+        )
+    }
+
+    fn pending_loopback_tasks_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.pending_loopback_tasks
+                .values()
+                .map(Self::estimate_pending_loopback_task_bytes),
+        )
+    }
+
+    fn schedule_loopback_task(
+        &mut self,
+        task: PendingLoopbackTask,
+    ) -> Result<(), InterpreterError> {
+        let retained_bytes = Self::estimate_pending_loopback_task_bytes(&task);
+        self.apply_memory_component_delta(0, retained_bytes)?;
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        let sequence = self
+            .event_loop
+            .schedule_io_completion(crate::closure_model::ClosureHandle(u32::MAX), Label::Public);
+        if let Err(error) = self.apply_promise_runtime_memory_delta(previous_promise_bytes) {
+            self.event_loop.rollback_last_scheduled(sequence);
+            self.estimated_memory_bytes =
+                self.estimated_memory_bytes.saturating_sub(retained_bytes);
+            return Err(error);
+        }
+        self.pending_loopback_tasks.insert(sequence, task);
+        Ok(())
+    }
+
+    fn add_loopback_listener(
+        &mut self,
+        target: ObjectId,
+        event: &str,
+        listener: Value,
+        once: bool,
+    ) -> Result<(), InterpreterError> {
+        if !listener.is_callable() {
+            return Ok(());
+        }
+        self.insert_event_listener(target, event, EventListenerRecord { listener, once }, false)
+    }
+
+    fn last_callable_arg(&self, args: RegRange) -> Result<Option<Value>, InterpreterError> {
+        if args.count == 0 {
+            return Ok(None);
+        }
+        let value = self.read_reg(args.start + args.count - 1)?;
+        Ok(value.is_callable().then_some(value))
+    }
+
+    fn construct_loopback_server(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        let lifecycle_label = self.writable_invocation_label(args)?;
+        let object_id = self.alloc_object_with_properties(&[
+            ("__type", Value::str("NetServer")),
+            ("__maxListeners", Value::Int(10)),
+            ("listening", Value::Bool(false)),
+        ])?;
+        let state = LoopbackServerState {
+            address: "127.0.0.1".to_string(),
+            port: None,
+            listening: false,
+            active_connections: BTreeSet::new(),
+            close_requested: false,
+            close_scheduled: false,
+            lifecycle_label,
+        };
+        let retained_bytes = Self::estimate_loopback_server_state_bytes(&state);
+        self.apply_memory_component_delta(0, retained_bytes)?;
+        self.loopback_servers.insert(object_id, state);
+        if let Some(callback) = self.last_callable_arg(args)? {
+            self.add_loopback_listener(object_id, "connection", callback, false)?;
+        }
+        Ok(Value::Object(object_id))
+    }
+
+    fn construct_loopback_socket(
+        &mut self,
+        connected: bool,
+        remote_port: Option<u16>,
+        lifecycle_label: Label,
+    ) -> Result<ObjectId, InterpreterError> {
+        let object_id = self.alloc_object_with_properties(&[
+            ("__type", Value::str("NetSocket")),
+            ("__maxListeners", Value::Int(10)),
+            ("readable", Value::Bool(true)),
+            ("writable", Value::Bool(true)),
+            ("connecting", Value::Bool(!connected)),
+            ("destroyed", Value::Bool(false)),
+            ("bytesRead", Value::Int(0)),
+            ("bytesWritten", Value::Int(0)),
+            ("localAddress", Value::str("127.0.0.1")),
+            ("remoteAddress", Value::str("127.0.0.1")),
+            (
+                "remotePort",
+                remote_port.map_or(Value::Undefined, |port| Value::Int(i64::from(port))),
+            ),
+        ])?;
+        let state = LoopbackSocketState {
+            peer: None,
+            owner_server: None,
+            paused: false,
+            encoding_utf8: false,
+            local_ended: false,
+            remote_ended: false,
+            destroyed: false,
+            close_scheduled: false,
+            bytes_read: 0,
+            bytes_written: 0,
+            pending_data: VecDeque::new(),
+            pending_end: false,
+            pending_outbound: VecDeque::new(),
+            pending_outbound_end: false,
+            lifecycle_label,
+        };
+        let retained_bytes = Self::estimate_loopback_socket_state_bytes(&state);
+        self.apply_memory_component_delta(0, retained_bytes)?;
+        self.loopback_sockets.insert(object_id, state);
+        Ok(object_id)
+    }
+
+    fn loopback_port_from_value(&self, value: &Value) -> Option<u16> {
+        let candidate = match value {
+            Value::Object(_) => self.fs_object_property(value, "port")?,
+            other => other.clone(),
+        };
+        u16::try_from(Self::value_as_integer(&candidate)).ok()
+    }
+
+    fn loopback_host_from_connect_args(
+        &self,
+        first: &Value,
+        args: RegRange,
+    ) -> Result<String, InterpreterError> {
+        if matches!(first, Value::Object(_)) {
+            return Ok(self
+                .fs_object_property(first, "host")
+                .map(|value| self.value_to_string(&value))
+                .unwrap_or_else(|| "127.0.0.1".to_string()));
+        }
+        if args.count >= 2 {
+            let candidate = self.read_reg(args.start + 1)?;
+            if let Value::Str(host) = candidate {
+                return Ok(host.to_string());
+            }
+        }
+        Ok("127.0.0.1".to_string())
+    }
+
+    fn connect_loopback_socket(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        let first = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let port = self.loopback_port_from_value(&first);
+        let host = match self.loopback_host_from_connect_args(&first, args)?.as_str() {
+            "localhost" => "127.0.0.1".to_string(),
+            host => host.to_string(),
+        };
+        let lifecycle_label = self.writable_invocation_label(args)?;
+        let client = self.construct_loopback_socket(false, port, lifecycle_label)?;
+        if let Some(callback) = self.last_callable_arg(args)? {
+            self.add_loopback_listener(client, "connect", callback, true)?;
+        }
+        let server = port.and_then(|port| {
+            self.loopback_servers.iter().find_map(|(object_id, state)| {
+                (state.listening && state.port == Some(port) && state.address == host)
+                    .then_some(*object_id)
+            })
+        });
+        if let Some(server) = server {
+            self.schedule_loopback_task(PendingLoopbackTask::Connect { client, server })?;
+        } else {
+            let label = self.loopback_socket_label(client);
+            self.schedule_loopback_task(PendingLoopbackTask::Error {
+                target: client,
+                code: "ECONNREFUSED".to_string(),
+                label,
+                close_after: true,
+            })?;
+        }
+        Ok(Value::Object(client))
+    }
+
+    fn loopback_server_receiver(receiver: Value) -> Result<ObjectId, InterpreterError> {
+        match receiver {
+            Value::Object(object_id) => Ok(object_id),
+            other => Err(InterpreterError::TypeError {
+                expected: "net.Server receiver".to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn loopback_socket_receiver(receiver: Value) -> Result<ObjectId, InterpreterError> {
+        match receiver {
+            Value::Object(object_id) => Ok(object_id),
+            other => Err(InterpreterError::TypeError {
+                expected: "net.Socket receiver".to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn loopback_server_label(&self, server: ObjectId) -> Label {
+        self.loopback_servers
+            .get(&server)
+            .map(|state| state.lifecycle_label.clone())
+            .unwrap_or(Label::Public)
+    }
+
+    fn loopback_socket_label(&self, socket: ObjectId) -> Label {
+        self.loopback_sockets
+            .get(&socket)
+            .map(|state| state.lifecycle_label.clone())
+            .unwrap_or(Label::Public)
+    }
+
+    fn join_loopback_server_label(
+        &mut self,
+        server: ObjectId,
+        label: &Label,
+    ) -> Result<Label, InterpreterError> {
+        let previous_bytes = self.loopback_servers_memory_bytes();
+        let Some(previous_label) = self
+            .loopback_servers
+            .get(&server)
+            .map(|state| state.lifecycle_label.clone())
+        else {
+            return Err(InterpreterError::ObjectNotFound { id: server.0 });
+        };
+        let next_label = previous_label.join(label);
+        let next_bytes = previous_bytes
+            .saturating_sub(Self::estimate_label_bytes(&previous_label))
+            .saturating_add(Self::estimate_label_bytes(&next_label));
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        self.loopback_servers
+            .get_mut(&server)
+            .expect("loopback server was validated before atomic label commit")
+            .lifecycle_label = next_label.clone();
+        Ok(next_label)
+    }
+
+    fn join_loopback_socket_label(
+        &mut self,
+        socket: ObjectId,
+        label: &Label,
+    ) -> Result<Label, InterpreterError> {
+        let previous_bytes = self.loopback_sockets_memory_bytes();
+        let Some(previous_label) = self
+            .loopback_sockets
+            .get(&socket)
+            .map(|state| state.lifecycle_label.clone())
+        else {
+            return Err(InterpreterError::ObjectNotFound { id: socket.0 });
+        };
+        let next_label = previous_label.join(label);
+        let next_bytes = previous_bytes
+            .saturating_sub(Self::estimate_label_bytes(&previous_label))
+            .saturating_add(Self::estimate_label_bytes(&next_label));
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        self.loopback_sockets
+            .get_mut(&socket)
+            .expect("loopback socket was validated before atomic label commit")
+            .lifecycle_label = next_label.clone();
+        Ok(next_label)
+    }
+
+    fn loopback_server_listen(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let server = Self::loopback_server_receiver(receiver)?;
+        let invocation_label = self.writable_invocation_label(args)?;
+        self.join_loopback_server_label(server, &invocation_label)?;
+        let first = self.builtin_arg(args, 0)?.unwrap_or(Value::Int(0));
+        let requested_port = self.loopback_port_from_value(&first).unwrap_or(0);
+        let requested_host = if matches!(first, Value::Object(_)) {
+            self.fs_object_property(&first, "host")
+                .map(|value| self.value_to_string(&value))
+        } else if args.count >= 2 {
+            match self.read_reg(args.start + 1)? {
+                Value::Str(host) => Some(host.to_string()),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let address = requested_host.unwrap_or_else(|| "127.0.0.1".to_string());
+        if address != "127.0.0.1" && address != "localhost" {
+            return Err(InterpreterError::TypeError {
+                expected: "engine-owned loopback listener".to_string(),
+                got: address,
+            });
+        }
+        let port = if requested_port == 0 {
+            let port = self.next_loopback_port;
+            self.next_loopback_port = self.next_loopback_port.checked_add(1).unwrap_or(41_000);
+            port
+        } else {
+            requested_port
+        };
+        let Some(state) = self.loopback_servers.get_mut(&server) else {
+            return Err(InterpreterError::ObjectNotFound { id: server.0 });
+        };
+        state.address = "127.0.0.1".to_string();
+        state.port = Some(port);
+        state.listening = true;
+        self.set_object_property(server, "listening".to_string(), Value::Bool(true))?;
+        if let Some(callback) = self.last_callable_arg(args)? {
+            self.add_loopback_listener(server, "listening", callback, true)?;
+        }
+        self.schedule_loopback_task(PendingLoopbackTask::Listening { server })?;
+        Ok(Value::Object(server))
+    }
+
+    fn loopback_server_address(&mut self, receiver: Value) -> Result<Value, InterpreterError> {
+        let server = Self::loopback_server_receiver(receiver)?;
+        let Some(state) = self.loopback_servers.get(&server) else {
+            return Err(InterpreterError::ObjectNotFound { id: server.0 });
+        };
+        if !state.listening {
+            return Ok(Value::Null);
+        }
+        let port = state.port.unwrap_or(0);
+        let address = state.address.clone();
+        Ok(Value::Object(self.alloc_object_with_properties(&[
+            ("port", Value::Int(i64::from(port))),
+            ("address", Value::str(address)),
+            ("family", Value::str("IPv4")),
+        ])?))
+    }
+
+    fn loopback_server_close(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let server = Self::loopback_server_receiver(receiver)?;
+        let invocation_label = self.writable_invocation_label(args)?;
+        let lifecycle_label = self.join_loopback_server_label(server, &invocation_label)?;
+        let should_schedule = {
+            let Some(state) = self.loopback_servers.get_mut(&server) else {
+                return Err(InterpreterError::ObjectNotFound { id: server.0 });
+            };
+            state.listening = false;
+            state.close_requested = true;
+            let should_schedule = state.active_connections.is_empty() && !state.close_scheduled;
+            if should_schedule {
+                state.close_scheduled = true;
+            }
+            should_schedule
+        };
+        self.set_object_property(server, "listening".to_string(), Value::Bool(false))?;
+        if let Some(callback) = self.last_callable_arg(args)? {
+            self.add_loopback_listener(server, "close", callback, true)?;
+        }
+        if should_schedule {
+            self.schedule_loopback_task(PendingLoopbackTask::ServerClose {
+                server,
+                label: lifecycle_label,
+            })?;
+        }
+        Ok(Value::Object(server))
+    }
+
+    fn loopback_socket_write(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let socket = Self::loopback_socket_receiver(receiver)?;
+        let chunk = self.builtin_arg(args, 0)?.unwrap_or(Value::str(""));
+        let bytes = self.fs_value_bytes(&chunk)?;
+        let binary_label = match &chunk {
+            Value::Object(object_id) => self.binary_storage_label(*object_id),
+            _ => Label::Public,
+        };
+        let invocation_label = self.writable_invocation_label(args)?.join(&binary_label);
+        let data_label = self.join_loopback_socket_label(socket, &invocation_label)?;
+        let (peer, refused) = {
+            let Some(state) = self.loopback_sockets.get_mut(&socket) else {
+                return Err(InterpreterError::ObjectNotFound { id: socket.0 });
+            };
+            if state.local_ended || state.destroyed {
+                (None, true)
+            } else {
+                state.bytes_written = state.bytes_written.saturating_add(bytes.len() as u64);
+                (state.peer, false)
+            }
+        };
+        if refused {
+            self.schedule_loopback_task(PendingLoopbackTask::Error {
+                target: socket,
+                code: "ERR_STREAM_WRITE_AFTER_END".to_string(),
+                label: data_label,
+                close_after: false,
+            })?;
+            return Ok(Value::Bool(false));
+        }
+        let bytes_written = self
+            .loopback_sockets
+            .get(&socket)
+            .map_or(0, |state| state.bytes_written);
+        self.set_object_property(
+            socket,
+            "bytesWritten".to_string(),
+            Value::Int(i64::try_from(bytes_written).unwrap_or(i64::MAX)),
+        )?;
+        if let Some(target) = peer {
+            self.schedule_loopback_task(PendingLoopbackTask::Data {
+                target,
+                bytes,
+                label: data_label,
+            })?;
+        } else {
+            let record = LoopbackBufferedData {
+                bytes,
+                label: data_label,
+            };
+            let added_bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                .saturating_add(record.bytes.len() as u64)
+                .saturating_add(Self::estimate_label_bytes(&record.label));
+            self.apply_memory_component_delta(0, added_bytes)?;
+            self.loopback_sockets
+                .get_mut(&socket)
+                .expect("socket was validated before outbound buffering")
+                .pending_outbound
+                .push_back(record);
+        }
+        Ok(Value::Bool(true))
+    }
+
+    fn maybe_schedule_loopback_close(&mut self, socket: ObjectId) -> Result<(), InterpreterError> {
+        let should_schedule = if let Some(state) = self.loopback_sockets.get_mut(&socket) {
+            let should_schedule = state.local_ended
+                && state.remote_ended
+                && !state.destroyed
+                && !state.close_scheduled;
+            if should_schedule {
+                state.close_scheduled = true;
+            }
+            should_schedule
+        } else {
+            false
+        };
+        if should_schedule {
+            let label = self.loopback_socket_label(socket);
+            self.schedule_loopback_task(PendingLoopbackTask::Close {
+                target: socket,
+                had_error: false,
+                label,
+            })?;
+        }
+        Ok(())
+    }
+
+    fn loopback_socket_end(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let socket = Self::loopback_socket_receiver(receiver)?;
+        if args.count > 0 {
+            let first = self.read_reg(args.start)?;
+            if !first.is_callable() && !matches!(first, Value::Undefined) {
+                let one_arg = RegRange {
+                    start: args.start,
+                    count: 1,
+                };
+                let _ = self.loopback_socket_write(Value::Object(socket), one_arg)?;
+            }
+        }
+        if let Some(callback) = self.last_callable_arg(args)? {
+            self.add_loopback_listener(socket, "finish", callback, true)?;
+        }
+        let invocation_label = self.writable_invocation_label(args)?;
+        let lifecycle_label = self.join_loopback_socket_label(socket, &invocation_label)?;
+        let peer = {
+            let Some(state) = self.loopback_sockets.get_mut(&socket) else {
+                return Err(InterpreterError::ObjectNotFound { id: socket.0 });
+            };
+            if state.local_ended {
+                return Ok(Value::Object(socket));
+            }
+            state.local_ended = true;
+            state.peer
+        };
+        let _ = self.emit_event_listener_records(
+            module,
+            socket,
+            "finish",
+            Vec::new(),
+            lifecycle_label.clone(),
+        )?;
+        if let Some(target) = peer {
+            self.schedule_loopback_task(PendingLoopbackTask::End {
+                target,
+                label: lifecycle_label,
+            })?;
+        } else if let Some(state) = self.loopback_sockets.get_mut(&socket) {
+            state.pending_outbound_end = true;
+        }
+        self.maybe_schedule_loopback_close(socket)?;
+        Ok(Value::Object(socket))
+    }
+
+    fn loopback_socket_destroy(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let socket = Self::loopback_socket_receiver(receiver)?;
+        let invocation_label = self.writable_invocation_label(args)?;
+        let lifecycle_label = self.join_loopback_socket_label(socket, &invocation_label)?;
+        let previous_socket_bytes = self.loopback_sockets_memory_bytes();
+        let peer = {
+            let Some(state) = self.loopback_sockets.get_mut(&socket) else {
+                return Err(InterpreterError::ObjectNotFound { id: socket.0 });
+            };
+            if state.destroyed || state.close_scheduled {
+                return Ok(Value::Object(socket));
+            }
+            state.destroyed = true;
+            state.close_scheduled = true;
+            state.pending_data.clear();
+            state.pending_end = false;
+            state.pending_outbound.clear();
+            state.pending_outbound_end = false;
+            state.peer.take()
+        };
+        if let Some(target) = peer
+            && let Some(state) = self.loopback_sockets.get_mut(&target)
+            && state.peer == Some(socket)
+        {
+            state.peer = None;
+        }
+        self.apply_memory_component_delta(
+            previous_socket_bytes,
+            self.loopback_sockets_memory_bytes(),
+        )?;
+        self.set_object_property(socket, "destroyed".to_string(), Value::Bool(true))?;
+        self.set_object_property(socket, "readable".to_string(), Value::Bool(false))?;
+        self.set_object_property(socket, "writable".to_string(), Value::Bool(false))?;
+        self.schedule_loopback_task(PendingLoopbackTask::Close {
+            target: socket,
+            had_error: false,
+            label: lifecycle_label.clone(),
+        })?;
+        if let Some(target) = peer {
+            self.schedule_loopback_task(PendingLoopbackTask::End {
+                target,
+                label: lifecycle_label,
+            })?;
+        }
+        Ok(Value::Object(socket))
+    }
+
+    fn loopback_socket_set_encoding(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let socket = Self::loopback_socket_receiver(receiver)?;
+        let invocation_label = self.writable_invocation_label(args)?;
+        self.join_loopback_socket_label(socket, &invocation_label)?;
+        let encoding = self
+            .builtin_arg(args, 0)?
+            .map(|value| self.value_to_string(&value).to_ascii_lowercase())
+            .unwrap_or_default();
+        if let Some(state) = self.loopback_sockets.get_mut(&socket) {
+            state.encoding_utf8 = matches!(encoding.as_str(), "utf8" | "utf-8");
+        }
+        Ok(Value::Object(socket))
+    }
+
+    fn loopback_socket_pause(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let socket = Self::loopback_socket_receiver(receiver)?;
+        let invocation_label = self.writable_invocation_label(args)?;
+        self.join_loopback_socket_label(socket, &invocation_label)?;
+        if let Some(state) = self.loopback_sockets.get_mut(&socket) {
+            state.paused = true;
+        }
+        Ok(Value::Object(socket))
+    }
+
+    fn loopback_socket_resume(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let socket = Self::loopback_socket_receiver(receiver)?;
+        let invocation_label = self.writable_invocation_label(args)?;
+        let lifecycle_label = self.join_loopback_socket_label(socket, &invocation_label)?;
+        let previous_socket_bytes = self.loopback_sockets_memory_bytes();
+        let (pending_data, pending_end) = {
+            let Some(state) = self.loopback_sockets.get_mut(&socket) else {
+                return Err(InterpreterError::ObjectNotFound { id: socket.0 });
+            };
+            state.paused = false;
+            (
+                std::mem::take(&mut state.pending_data),
+                std::mem::take(&mut state.pending_end),
+            )
+        };
+        self.apply_memory_component_delta(
+            previous_socket_bytes,
+            self.loopback_sockets_memory_bytes(),
+        )?;
+        for data in pending_data {
+            self.schedule_loopback_task(PendingLoopbackTask::Data {
+                target: socket,
+                bytes: data.bytes,
+                label: data.label.join(&lifecycle_label),
+            })?;
+        }
+        if pending_end {
+            self.schedule_loopback_task(PendingLoopbackTask::End {
+                target: socket,
+                label: lifecycle_label,
+            })?;
+        }
+        Ok(Value::Object(socket))
+    }
+
+    fn loopback_socket_chainable(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let socket = Self::loopback_socket_receiver(receiver)?;
+        let invocation_label = self.writable_invocation_label(args)?;
+        self.join_loopback_socket_label(socket, &invocation_label)?;
+        Ok(Value::Object(socket))
+    }
+
+    fn emit_loopback_event(
+        &mut self,
+        module: Option<&Ir3Module>,
+        target: ObjectId,
+        event: &str,
+        arguments: Vec<Value>,
+        emission_label: Label,
+    ) -> Result<bool, InterpreterError> {
+        let Some(module) = module else {
+            return Ok(false);
+        };
+        self.emit_event_listener_records(module, target, event, arguments, emission_label)
+    }
+
+    fn execute_pending_loopback_task(
+        &mut self,
+        task: PendingLoopbackTask,
+        module: Option<&Ir3Module>,
+    ) -> Result<(), InterpreterError> {
+        let retained_bytes = Self::estimate_pending_loopback_task_bytes(&task);
+        self.loopback_task_in_flight_bytes = self
+            .loopback_task_in_flight_bytes
+            .saturating_add(retained_bytes);
+        let result = self.drive_pending_loopback_task(task, module);
+        self.loopback_task_in_flight_bytes = self
+            .loopback_task_in_flight_bytes
+            .saturating_sub(retained_bytes);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(retained_bytes);
+        result
+    }
+
+    fn drive_pending_loopback_task(
+        &mut self,
+        task: PendingLoopbackTask,
+        module: Option<&Ir3Module>,
+    ) -> Result<(), InterpreterError> {
+        match task {
+            PendingLoopbackTask::Listening { server } => {
+                let label = self.loopback_server_label(server);
+                let _ = self.emit_loopback_event(module, server, "listening", Vec::new(), label)?;
+            }
+            PendingLoopbackTask::Connect { client, server } => {
+                if !self.loopback_sockets.contains_key(&client)
+                    || self
+                        .loopback_sockets
+                        .get(&client)
+                        .is_some_and(|state| state.destroyed)
+                {
+                    return Ok(());
+                }
+                if !self
+                    .loopback_servers
+                    .get(&server)
+                    .is_some_and(|state| state.listening)
+                {
+                    let label = self.loopback_socket_label(client);
+                    self.schedule_loopback_task(PendingLoopbackTask::Error {
+                        target: client,
+                        code: "ECONNREFUSED".to_string(),
+                        label,
+                        close_after: true,
+                    })?;
+                    return Ok(());
+                }
+                let remote_port = self
+                    .loopback_servers
+                    .get(&server)
+                    .and_then(|state| state.port);
+                let connection_label = self
+                    .loopback_sockets
+                    .get(&client)
+                    .map(|state| state.lifecycle_label.clone())
+                    .unwrap_or(Label::Public)
+                    .join(
+                        &self
+                            .loopback_servers
+                            .get(&server)
+                            .map(|state| state.lifecycle_label.clone())
+                            .unwrap_or(Label::Public),
+                    );
+                self.join_loopback_socket_label(client, &connection_label)?;
+                let accepted =
+                    self.construct_loopback_socket(true, remote_port, connection_label.clone())?;
+                self.apply_memory_component_delta(0, MEMORY_ESTIMATE_MAP_ENTRY_BYTES)?;
+                self.loopback_servers
+                    .get_mut(&server)
+                    .expect("listening server was validated before connection admission")
+                    .active_connections
+                    .insert(accepted);
+                if let Some(state) = self.loopback_sockets.get_mut(&client) {
+                    state.peer = Some(accepted);
+                }
+                if let Some(state) = self.loopback_sockets.get_mut(&accepted) {
+                    state.peer = Some(client);
+                    state.owner_server = Some(server);
+                }
+                let previous_socket_bytes = self.loopback_sockets_memory_bytes();
+                let (pending_outbound, pending_outbound_end) = {
+                    let state = self
+                        .loopback_sockets
+                        .get_mut(&client)
+                        .expect("connecting client state");
+                    (
+                        std::mem::take(&mut state.pending_outbound),
+                        std::mem::take(&mut state.pending_outbound_end),
+                    )
+                };
+                self.apply_memory_component_delta(
+                    previous_socket_bytes,
+                    self.loopback_sockets_memory_bytes(),
+                )?;
+                self.set_object_property(client, "connecting".to_string(), Value::Bool(false))?;
+                for data in pending_outbound {
+                    self.schedule_loopback_task(PendingLoopbackTask::Data {
+                        target: accepted,
+                        bytes: data.bytes,
+                        label: data.label.join(&connection_label),
+                    })?;
+                }
+                if pending_outbound_end {
+                    self.schedule_loopback_task(PendingLoopbackTask::End {
+                        target: accepted,
+                        label: connection_label.clone(),
+                    })?;
+                }
+                let _ = self.emit_loopback_event(
+                    module,
+                    server,
+                    "connection",
+                    vec![Value::Object(accepted)],
+                    connection_label.clone(),
+                )?;
+                let _ = self.emit_loopback_event(
+                    module,
+                    client,
+                    "connect",
+                    Vec::new(),
+                    connection_label,
+                )?;
+            }
+            PendingLoopbackTask::Data {
+                target,
+                bytes,
+                label,
+            } => {
+                if !self.loopback_sockets.contains_key(&target)
+                    || self
+                        .loopback_sockets
+                        .get(&target)
+                        .is_some_and(|state| state.destroyed)
+                {
+                    return Ok(());
+                }
+                let delivery_label = self.join_loopback_socket_label(target, &label)?;
+                let paused = self
+                    .loopback_sockets
+                    .get(&target)
+                    .is_some_and(|state| state.paused);
+                if paused {
+                    let record = LoopbackBufferedData {
+                        bytes,
+                        label: delivery_label,
+                    };
+                    let retained_bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                        .saturating_add(record.bytes.len() as u64)
+                        .saturating_add(Self::estimate_label_bytes(&record.label));
+                    self.apply_memory_component_delta(0, retained_bytes)?;
+                    if let Some(state) = self.loopback_sockets.get_mut(&target) {
+                        state.pending_data.push_back(record);
+                    }
+                    return Ok(());
+                }
+                let (encoding_utf8, bytes_read) = {
+                    let Some(state) = self.loopback_sockets.get_mut(&target) else {
+                        return Ok(());
+                    };
+                    if state.destroyed {
+                        return Ok(());
+                    }
+                    state.bytes_read = state.bytes_read.saturating_add(bytes.len() as u64);
+                    (state.encoding_utf8, state.bytes_read)
+                };
+                self.set_object_property(
+                    target,
+                    "bytesRead".to_string(),
+                    Value::Int(i64::try_from(bytes_read).unwrap_or(i64::MAX)),
+                )?;
+                let chunk = if encoding_utf8 {
+                    Value::str(String::from_utf8_lossy(&bytes).into_owned())
+                } else {
+                    let buffer = self.alloc_buffer_from_bytes(&bytes)?;
+                    self.join_binary_storage_label(buffer, &delivery_label)?;
+                    Value::Object(buffer)
+                };
+                let _ =
+                    self.emit_loopback_event(module, target, "data", vec![chunk], delivery_label)?;
+            }
+            PendingLoopbackTask::End { target, label } => {
+                if !self.loopback_sockets.contains_key(&target)
+                    || self
+                        .loopback_sockets
+                        .get(&target)
+                        .is_some_and(|state| state.destroyed)
+                {
+                    return Ok(());
+                }
+                let lifecycle_label = self.join_loopback_socket_label(target, &label)?;
+                let paused = self
+                    .loopback_sockets
+                    .get(&target)
+                    .is_some_and(|state| state.paused);
+                if paused {
+                    if let Some(state) = self.loopback_sockets.get_mut(&target) {
+                        state.pending_end = true;
+                    }
+                    return Ok(());
+                }
+                let (peer, should_reply) = {
+                    let Some(state) = self.loopback_sockets.get_mut(&target) else {
+                        return Ok(());
+                    };
+                    if state.remote_ended {
+                        return Ok(());
+                    }
+                    state.remote_ended = true;
+                    let should_reply = !state.local_ended && !state.destroyed;
+                    if should_reply {
+                        state.local_ended = true;
+                    }
+                    (state.peer, should_reply)
+                };
+                let _ = self.emit_loopback_event(
+                    module,
+                    target,
+                    "end",
+                    Vec::new(),
+                    lifecycle_label.clone(),
+                )?;
+                if should_reply {
+                    if let Some(peer) = peer {
+                        self.schedule_loopback_task(PendingLoopbackTask::End {
+                            target: peer,
+                            label: lifecycle_label,
+                        })?;
+                    }
+                }
+                self.maybe_schedule_loopback_close(target)?;
+                if let Some(peer) = peer {
+                    self.maybe_schedule_loopback_close(peer)?;
+                }
+            }
+            PendingLoopbackTask::Close {
+                target,
+                had_error,
+                label,
+            } => {
+                let lifecycle_label = self.join_loopback_socket_label(target, &label)?;
+                let previous_socket_bytes = self.loopback_sockets_memory_bytes();
+                let owner_server = if let Some(state) = self.loopback_sockets.get_mut(&target) {
+                    state.destroyed = true;
+                    state.peer = None;
+                    state.pending_data.clear();
+                    state.pending_end = false;
+                    state.pending_outbound.clear();
+                    state.pending_outbound_end = false;
+                    state.owner_server
+                } else {
+                    None
+                };
+                self.apply_memory_component_delta(
+                    previous_socket_bytes,
+                    self.loopback_sockets_memory_bytes(),
+                )?;
+                self.set_object_property(target, "destroyed".to_string(), Value::Bool(true))?;
+                self.set_object_property(target, "readable".to_string(), Value::Bool(false))?;
+                self.set_object_property(target, "writable".to_string(), Value::Bool(false))?;
+                let _ = self.emit_loopback_event(
+                    module,
+                    target,
+                    "close",
+                    vec![Value::Bool(had_error)],
+                    lifecycle_label,
+                )?;
+                if let Some(server) = owner_server {
+                    let previous_server_bytes = self.loopback_servers_memory_bytes();
+                    let close_label = self.loopback_servers.get(&server).and_then(|state| {
+                        (state.close_requested
+                            && state.active_connections.len() == 1
+                            && state.active_connections.contains(&target)
+                            && !state.close_scheduled)
+                            .then(|| state.lifecycle_label.clone())
+                    });
+                    if let Some(state) = self.loopback_servers.get_mut(&server) {
+                        state.active_connections.remove(&target);
+                        if close_label.is_some() {
+                            state.close_scheduled = true;
+                        }
+                    }
+                    self.apply_memory_component_delta(
+                        previous_server_bytes,
+                        self.loopback_servers_memory_bytes(),
+                    )?;
+                    if let Some(label) = close_label {
+                        self.schedule_loopback_task(PendingLoopbackTask::ServerClose {
+                            server,
+                            label,
+                        })?;
+                    }
+                }
+            }
+            PendingLoopbackTask::ServerClose { server, label } => {
+                let lifecycle_label = self.join_loopback_server_label(server, &label)?;
+                let _ =
+                    self.emit_loopback_event(module, server, "close", Vec::new(), lifecycle_label)?;
+            }
+            PendingLoopbackTask::Error {
+                target,
+                code,
+                label,
+                close_after,
+            } => {
+                let lifecycle_label = self.join_loopback_socket_label(target, &label)?;
+                self.set_object_property(target, "connecting".to_string(), Value::Bool(false))?;
+                let prototype = self.ensure_builtin_prototype("Error")?;
+                let error = self.alloc_object_with_prototype(Some(prototype))?;
+                self.initialize_error_like_object(error, "Error", code.clone())?;
+                self.set_object_property(error, "code".to_string(), Value::str(code))?;
+                let _ = self.emit_loopback_event(
+                    module,
+                    target,
+                    "error",
+                    vec![Value::Object(error)],
+                    lifecycle_label.clone(),
+                )?;
+                if close_after {
+                    if let Some(state) = self.loopback_sockets.get_mut(&target) {
+                        state.close_scheduled = true;
+                    }
+                    self.schedule_loopback_task(PendingLoopbackTask::Close {
+                        target,
+                        had_error: true,
+                        label: lifecycle_label,
+                    })?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn clear_loopback_execution_state(&mut self) {
+        let registrations: Vec<u64> = self.pending_loopback_tasks.keys().copied().collect();
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        for registration in registrations {
+            self.event_loop.cancel_registration(registration);
+        }
+        let released_promise_bytes =
+            previous_promise_bytes.saturating_sub(self.promise_runtime_memory_bytes());
+        let retained_bytes = self
+            .loopback_servers_memory_bytes()
+            .saturating_add(self.loopback_sockets_memory_bytes())
+            .saturating_add(self.pending_loopback_tasks_memory_bytes())
+            .saturating_add(self.loopback_task_in_flight_bytes);
+        let targets: Vec<ObjectId> = self
+            .loopback_servers
+            .keys()
+            .chain(self.loopback_sockets.keys())
+            .copied()
+            .collect();
+        self.loopback_servers.clear();
+        self.loopback_sockets.clear();
+        self.pending_loopback_tasks.clear();
+        self.loopback_task_in_flight_bytes = 0;
+        self.next_loopback_port = 41_000;
+        for target in targets {
+            self.clear_event_listeners(target, None);
+            self.clear_event_promise_waiters_for_target(target);
+        }
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(retained_bytes)
+            .saturating_sub(released_promise_bytes);
     }
 
     /// bd-3894s slice (2d): register an event listener closure for `event` on the
@@ -12647,6 +13852,7 @@ impl InterpreterCore {
         // seeded heap. Otherwise a reused id can inherit callbacks, listeners,
         // or static `events.once` links from the preceding execution.
         self.clear_writable_execution_state();
+        self.clear_loopback_execution_state();
         if let Some(context) = self.active_inline_callback_context_label.take() {
             self.estimated_memory_bytes = self
                 .estimated_memory_bytes
@@ -12823,6 +14029,18 @@ impl InterpreterCore {
                 }
             }
             if let Some(state) = self.writable_terminal_states.get(&id) {
+                let candidate = &state.lifecycle_label;
+                if label.is_none_or(|winner| candidate > winner) {
+                    label = Some(candidate);
+                }
+            }
+            if let Some(state) = self.loopback_servers.get(&id) {
+                let candidate = &state.lifecycle_label;
+                if label.is_none_or(|winner| candidate > winner) {
+                    label = Some(candidate);
+                }
+            }
+            if let Some(state) = self.loopback_sockets.get(&id) {
                 let candidate = &state.lifecycle_label;
                 if label.is_none_or(|winner| candidate > winner) {
                     label = Some(candidate);
@@ -15638,6 +16856,41 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::StreamWritableDestroy => {
                 self.writable_destroy(receiver.unwrap_or(Value::Undefined), args)
+            }
+            BuiltinFunctionKind::NetServerListen => {
+                self.loopback_server_listen(receiver.unwrap_or(Value::Undefined), args)
+            }
+            BuiltinFunctionKind::NetServerAddress => {
+                self.loopback_server_address(receiver.unwrap_or(Value::Undefined))
+            }
+            BuiltinFunctionKind::NetServerClose => {
+                self.loopback_server_close(receiver.unwrap_or(Value::Undefined), args)
+            }
+            BuiltinFunctionKind::NetSocketWrite => {
+                self.loopback_socket_write(receiver.unwrap_or(Value::Undefined), args)
+            }
+            BuiltinFunctionKind::NetSocketEnd => self.loopback_socket_end(
+                module,
+                receiver.unwrap_or(Value::Undefined),
+                args,
+            ),
+            BuiltinFunctionKind::NetSocketDestroy => {
+                self.loopback_socket_destroy(receiver.unwrap_or(Value::Undefined), args)
+            }
+            BuiltinFunctionKind::NetSocketSetEncoding => {
+                self.loopback_socket_set_encoding(receiver.unwrap_or(Value::Undefined), args)
+            }
+            BuiltinFunctionKind::NetSocketPause => {
+                self.loopback_socket_pause(receiver.unwrap_or(Value::Undefined), args)
+            }
+            BuiltinFunctionKind::NetSocketResume => {
+                self.loopback_socket_resume(receiver.unwrap_or(Value::Undefined), args)
+            }
+            BuiltinFunctionKind::NetSocketRef
+            | BuiltinFunctionKind::NetSocketUnref
+            | BuiltinFunctionKind::NetSocketSetNoDelay
+            | BuiltinFunctionKind::NetSocketSetKeepAlive => {
+                self.loopback_socket_chainable(receiver.unwrap_or(Value::Undefined), args)
             }
             BuiltinFunctionKind::ArrayPush => {
                 // ES2020 23.1.3.20: append each argument to `this` at the
@@ -24567,69 +25820,120 @@ impl InterpreterCore {
             ("Writable", "destroy") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamWritableDestroy,
             )),
+            ("NetServer", "listen") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::NetServerListen,
+            )),
+            ("NetServer", "address") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::NetServerAddress,
+            )),
+            ("NetServer", "close") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::NetServerClose,
+            )),
+            ("NetSocket", "write") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::NetSocketWrite,
+            )),
+            ("NetSocket", "end") => {
+                Some(BuiltinFunction::new_kind(BuiltinFunctionKind::NetSocketEnd))
+            }
+            ("NetSocket", "destroy") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::NetSocketDestroy,
+            )),
+            ("NetSocket", "setEncoding") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::NetSocketSetEncoding,
+            )),
+            ("NetSocket", "pause") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::NetSocketPause,
+            )),
+            ("NetSocket", "resume") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::NetSocketResume,
+            )),
+            ("NetSocket", "ref") => {
+                Some(BuiltinFunction::new_kind(BuiltinFunctionKind::NetSocketRef))
+            }
+            ("NetSocket", "unref") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::NetSocketUnref,
+            )),
+            ("NetSocket", "setNoDelay") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::NetSocketSetNoDelay,
+            )),
+            ("NetSocket", "setKeepAlive") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::NetSocketSetKeepAlive,
+            )),
             // bd-3894s / bd-2dmnn: standalone EventEmitter objects and both HTTP
             // stream tags resolve against one receiver-aware EventEmitter method
             // surface and one listener side table.
             (
-                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable",
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
+                | "NetServer" | "NetSocket",
                 "on" | "addListener",
             ) => Some(BuiltinFunction::emitter_on()),
             (
-                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable",
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
+                | "NetServer" | "NetSocket",
                 "once",
             ) => Some(BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterOnce)),
             (
-                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable",
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
+                | "NetServer" | "NetSocket",
                 "off" | "removeListener",
             ) => Some(BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterOff)),
             (
-                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable",
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
+                | "NetServer" | "NetSocket",
                 "removeAllListeners",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterRemoveAllListeners,
             )),
             (
-                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable",
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
+                | "NetServer" | "NetSocket",
                 "listenerCount",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterListenerCount,
             )),
             (
-                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable",
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
+                | "NetServer" | "NetSocket",
                 "eventNames",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterEventNames,
             )),
             (
-                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable",
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
+                | "NetServer" | "NetSocket",
                 "prependListener",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterPrependListener,
             )),
             (
-                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable",
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
+                | "NetServer" | "NetSocket",
                 "prependOnceListener",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterPrependOnceListener,
             )),
             (
-                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable",
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
+                | "NetServer" | "NetSocket",
                 "emit",
             ) => Some(BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterEmit)),
             (
-                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable",
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
+                | "NetServer" | "NetSocket",
                 "getMaxListeners",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterGetMaxListeners,
             )),
             (
-                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable",
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
+                | "NetServer" | "NetSocket",
                 "setMaxListeners",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterSetMaxListeners,
             )),
             (
-                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable",
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
+                | "NetServer" | "NetSocket",
                 "listeners",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterListeners,
@@ -26803,14 +28107,27 @@ impl InterpreterCore {
             let transferred_bytes = self.begin_promise_task_transfer(previous_promise_bytes);
             let mut macrotask_error = None;
             if let Some(macrotask) = turn_result.macrotask {
+                let timer_like = matches!(
+                    macrotask.source,
+                    crate::promise_model::MacrotaskSource::Timer
+                        | crate::promise_model::MacrotaskSource::Immediate
+                );
                 // Execute the macrotask's handler closure
                 if let Err(err) = self.execute_macrotask_callback(&macrotask, module) {
-                    if matches!(err, InterpreterError::MemoryBudgetExceeded { .. }) {
+                    if !timer_like
+                        || matches!(
+                            err,
+                            InterpreterError::MemoryBudgetExceeded { .. }
+                                | InterpreterError::ContainmentActionRequested { .. }
+                        )
+                    {
                         macrotask_error = Some(err);
                     } else {
-                        // Preserve the historical best-effort timer exception
-                        // behavior for guest errors; containment refusal is
-                        // never swallowed.
+                        // Preserve only the historical best-effort timer and
+                        // immediate exception behavior. I/O-completion errors
+                        // (including unhandled EventEmitter `error`) are real
+                        // asynchronous program failures and must escape the
+                        // eval boundary (bd-7qwej).
                         eprintln!("Timer callback execution failed: {err:?}");
                     }
                 }
@@ -27151,6 +28468,16 @@ impl InterpreterCore {
                 result.map(|_| ())
             }
             crate::promise_model::MacrotaskSource::IoCompletion => {
+                // bd-7qwej: interpreter-local `net` lifecycle/data actions use
+                // the deterministic I/O lane with a sentinel handler. Dispatch
+                // their engine-owned side-table entry before any raw closure
+                // path can observe that sentinel.
+                if let Some(task) = self
+                    .pending_loopback_tasks
+                    .remove(&macrotask.registration_seq)
+                {
+                    return self.execute_pending_loopback_task(task, module);
+                }
                 // bd-fw7zd: finite `Readable.from` pumps share the deterministic
                 // I/O-completion lane but carry their state in an engine-owned
                 // table, so the sentinel handler is never invoked as a closure.
@@ -32206,14 +33533,14 @@ impl InterpreterCore {
                 Ok(Value::Str(left_string.concat(right_string)))
             }
             (Value::Str(left_string), other) => {
-                let other_string = Self::value_to_primitive_string(other);
+                let other_string = self.value_to_string(other);
                 self.check_string_limit(left_string.len().saturating_add(other_string.len()))?;
                 Ok(Value::Str(
                     left_string.concat(&JsString::from(other_string)),
                 ))
             }
             (other, Value::Str(right_string)) => {
-                let other_string = Self::value_to_primitive_string(other);
+                let other_string = self.value_to_string(other);
                 self.check_string_limit(other_string.len().saturating_add(right_string.len()))?;
                 Ok(Value::Str(
                     JsString::from(other_string).concat(right_string),
@@ -33601,6 +34928,37 @@ impl InterpreterCore {
                     ("__maxListeners", Value::Int(10)),
                 ])?;
                 Ok(Value::Object(object_id))
+            }
+            "builtin:NetIsIP" | "builtin:NetIsIPv4" | "builtin:NetIsIPv6" => {
+                let candidate = self
+                    .builtin_arg(args, 0)?
+                    .map(|value| self.value_to_string(&value))
+                    .unwrap_or_default();
+                let parsed = candidate.parse::<std::net::IpAddr>().ok();
+                match cap {
+                    "builtin:NetIsIP" => Ok(Value::Int(match parsed {
+                        Some(std::net::IpAddr::V4(_)) => 4,
+                        Some(std::net::IpAddr::V6(_)) => 6,
+                        None => 0,
+                    })),
+                    "builtin:NetIsIPv4" => {
+                        Ok(Value::Bool(matches!(parsed, Some(std::net::IpAddr::V4(_)))))
+                    }
+                    "builtin:NetIsIPv6" => {
+                        Ok(Value::Bool(matches!(parsed, Some(std::net::IpAddr::V6(_)))))
+                    }
+                    _ => unreachable!("matched net IP classifier"),
+                }
+            }
+            "builtin:NetCreateServer" => self.construct_loopback_server(args),
+            "builtin:NetConnect" | "builtin:NetCreateConnection" => {
+                self.connect_loopback_socket(args)
+            }
+            "builtin:NetSocket" => {
+                let lifecycle_label = self.writable_invocation_label(args)?;
+                let socket = self.construct_loopback_socket(false, None, lifecycle_label)?;
+                self.set_object_property(socket, "connecting".to_string(), Value::Bool(false))?;
+                Ok(Value::Object(socket))
             }
             "builtin:EventsOnce" => {
                 // bd-asw4m.1: static `events.once(emitter, event)` is pure
@@ -42373,6 +43731,18 @@ impl InterpreterCore {
     /// (`value_to_string`, `+` concatenation, template literals) so error
     /// stringification is uniform and deterministic.
     fn object_to_coerced_string(&self, id: ObjectId) -> String {
+        // Node Buffers implement a UTF-8 `toString` primitive hint. The net
+        // stream corpus exercises that through ordinary `text += chunk`
+        // coercion, not an explicit method call (bd-7qwej).
+        if let Some(view) = self
+            .heap
+            .get(id.0 as usize)
+            .and_then(|object| object.typed_array.as_ref())
+            .filter(|view| view.is_buffer)
+            && let Ok(bytes) = self.typed_array_view_bytes(view)
+        {
+            return String::from_utf8_lossy(bytes).into_owned();
+        }
         self.error_object_to_string(id)
             .unwrap_or_else(|| "[object Object]".to_string())
     }
@@ -43765,6 +45135,10 @@ impl InterpreterCore {
             .saturating_add(self.event_listeners_memory_bytes())
             .saturating_add(self.event_promise_waiters_memory_bytes())
             .saturating_add(self.readable_from_streams_memory_bytes())
+            .saturating_add(self.loopback_servers_memory_bytes())
+            .saturating_add(self.loopback_sockets_memory_bytes())
+            .saturating_add(self.pending_loopback_tasks_memory_bytes())
+            .saturating_add(self.loopback_task_in_flight_bytes)
             .saturating_add(self.writable_streams_memory_bytes())
             .saturating_add(self.writable_terminal_states_memory_bytes())
             .saturating_add(self.writable_in_flight_callback_bytes)
@@ -73698,6 +75072,81 @@ mod memory_accounting_tests {
                 function_index,
             }),
         ]
+    }
+
+    #[test]
+    fn loopback_net_retains_ifc_labels_in_socket_and_queued_data_bd_7qwej() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "loopback-ifc-accounting");
+        let sender = core
+            .construct_loopback_socket(true, Some(41_000), Label::Public)
+            .expect("sender socket");
+        let receiver = core
+            .construct_loopback_socket(true, Some(41_000), Label::Public)
+            .expect("receiver socket");
+        core.loopback_sockets
+            .get_mut(&sender)
+            .expect("sender state")
+            .peer = Some(receiver);
+        core.loopback_sockets
+            .get_mut(&receiver)
+            .expect("receiver state")
+            .peer = Some(sender);
+        core.write_reg_with_label(0, Value::str("classified"), Label::Secret)
+            .expect("secret chunk register");
+
+        assert_eq!(
+            core.loopback_socket_write(Value::Object(sender), RegRange { start: 0, count: 1 },)
+                .expect("secret loopback write"),
+            Value::Bool(true)
+        );
+        assert_eq!(core.loopback_socket_label(sender), Label::Secret);
+        let task = core
+            .pending_loopback_tasks
+            .values()
+            .next()
+            .expect("queued data task");
+        assert!(matches!(
+            task,
+            PendingLoopbackTask::Data {
+                target,
+                bytes,
+                label: Label::Secret,
+            } if *target == receiver && bytes == b"classified"
+        ));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "loopback labels and queued bytes must be fully accounted"
+        );
+    }
+
+    #[test]
+    fn loopback_reset_cancels_sentinel_io_registrations_bd_7qwej() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "loopback-reset-accounting");
+        let socket = core
+            .construct_loopback_socket(true, Some(41_000), Label::Public)
+            .expect("loopback socket");
+        core.schedule_loopback_task(PendingLoopbackTask::Data {
+            target: socket,
+            bytes: b"orphan-candidate".to_vec(),
+            label: Label::Public,
+        })
+        .expect("queued I/O-completion task");
+        let registration = *core
+            .pending_loopback_tasks
+            .keys()
+            .next()
+            .expect("sentinel registration");
+
+        core.clear_loopback_execution_state();
+
+        assert!(core.pending_loopback_tasks.is_empty());
+        assert!(core.event_loop.cancel_registration(registration).is_none());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "reset must release both side-table and event-loop ownership"
+        );
     }
 
     proptest! {

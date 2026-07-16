@@ -42,8 +42,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::{
     ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, BlockStatement, ExportKind,
-    Expression, ImportClause, MethodKind, ObjectPatternProperty, ObjectPropertyKind, ParseGoal,
-    SourceSpan, Statement, UnaryOperator, VariableDeclarationKind,
+    Expression, FunctionParam, ImportClause, MethodKind, ObjectPatternProperty, ObjectPropertyKind,
+    ParseGoal, SourceSpan, Statement, UnaryOperator, VariableDeclarationKind,
 };
 use crate::effect_set::{EffectKind, EffectSet};
 use crate::flow_lattice::{
@@ -904,6 +904,14 @@ fn lower_ir0_to_ir1_with_ambient_grant(
     }
     for alias in confirmed_events_module_aliases(&ir0.tree.body, &binding_lookup) {
         binding_lookup.insert(events_module_alias_sentinel(&alias), 0);
+    }
+    // bd-7qwej: `net` is another lowering-only Node builtin surface. Record
+    // only unshadowed CJS aliases whose supported static exports are actually
+    // called/constructed. The sentinel propagates into nested functions, while
+    // lexical shadows suppress it there. Bare/unused, dynamic, computed, and
+    // unsupported `require('net')` shapes remain on the fail-closed path.
+    for alias in confirmed_net_module_aliases(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(net_module_alias_sentinel(&alias), 0);
     }
     // bd-fw7zd: `stream` is likewise a lowering-only builtin surface. The
     // supported vertical slices recognize statically proven `Readable.from`
@@ -2032,6 +2040,7 @@ fn reserve_and_mark_source_scope_bindings(
         reserve_fresh_binding_id(binding_lookup, binding_index, name);
     }
     suppress_stream_module_sentinels(binding_lookup, &lexical_names);
+    suppress_net_module_sentinels(binding_lookup, &lexical_names);
     for name in reserve_root_scope_bindings(statements, binding_lookup, binding_index) {
         binding_lookup.insert(lexical_binding_sentinel(&name), 0);
         let binding_id = *binding_lookup
@@ -2048,6 +2057,7 @@ fn mark_pre_reserved_source_scope_bindings(
 ) {
     let reserved = reserve_root_scope_bindings(statements, binding_lookup, binding_index);
     suppress_stream_module_sentinels(binding_lookup, &reserved);
+    suppress_net_module_sentinels(binding_lookup, &reserved);
     for name in reserved {
         binding_lookup.insert(lexical_binding_sentinel(&name), 0);
         let binding_id = *binding_lookup
@@ -2105,6 +2115,7 @@ fn binding_entry_snapshot(
             let stream_writable = stream_writable_binding_sentinel(name);
             let pending_stream_readable = pending_stream_readable_binding_sentinel(name);
             let pending_stream_writable = pending_stream_writable_binding_sentinel(name);
+            let net_module = net_module_alias_sentinel(name);
             [
                 (name.clone(), binding_lookup.get(name).copied()),
                 (origin.clone(), binding_lookup.get(&origin).copied()),
@@ -2124,6 +2135,7 @@ fn binding_entry_snapshot(
                     pending_stream_writable.clone(),
                     binding_lookup.get(&pending_stream_writable).copied(),
                 ),
+                (net_module.clone(), binding_lookup.get(&net_module).copied()),
             ]
         })
         .collect()
@@ -2236,6 +2248,7 @@ fn prepare_function_body_bindings(
     // (bd-fw7zd fresh-eyes audit).
     for name in &local_names {
         suppress_stream_module_sentinel(body_lookup, name);
+        suppress_net_module_sentinel(body_lookup, name);
     }
     for name in &local_names {
         body_lookup.insert(lexical_binding_sentinel(name), 0);
@@ -2245,6 +2258,7 @@ fn prepare_function_body_bindings(
     }
     if let Some(name) = self_name {
         suppress_stream_module_sentinel(body_lookup, name);
+        suppress_net_module_sentinel(body_lookup, name);
         body_lookup.insert(lexical_binding_sentinel(name), 0);
     }
 
@@ -2755,6 +2769,7 @@ fn allocate_destructure_param_bindings(
             )
             .map_err(LoweringPipelineError::SemanticViolation)?;
             suppress_stream_module_sentinel(binding_lookup, inner_name);
+            suppress_net_module_sentinel(binding_lookup, inner_name);
         }
     }
     Ok(())
@@ -3241,7 +3256,13 @@ fn lower_statement_to_ir1_with_flow(
                             // elide their ambient-denied require initializer.
                             || (is_require_events_module_initializer(init, binding_lookup)
                                 && binding_lookup
-                                    .contains_key(&events_module_alias_sentinel(alias))))
+                                    .contains_key(&events_module_alias_sentinel(alias)))
+                            // bd-7qwej: confirmed `net` module aliases are
+                            // lowering-only; supported member calls/new sites
+                            // carry the finite builtin capability directly.
+                            || (is_require_net_module_initializer(init, binding_lookup)
+                                && binding_lookup
+                                    .contains_key(&net_module_alias_sentinel(alias))))
                     {
                         ops.push(Ir1Op::LoadLiteral {
                             value: Ir1Literal::Undefined,
@@ -3496,6 +3517,7 @@ fn lower_statement_to_ir1_with_flow(
             };
             let lexical_binding_snapshot = binding_entry_snapshot(binding_lookup, &lexical_names);
             suppress_stream_module_sentinels(binding_lookup, &lexical_names);
+            suppress_net_module_sentinels(binding_lookup, &lexical_names);
             for name in for_in_stmt.binding.binding_names() {
                 let binding_id = if for_in_stmt.binding_kind == Some(VariableDeclarationKind::Var) {
                     reserve_binding_id(binding_lookup, binding_index, name)
@@ -3626,6 +3648,7 @@ fn lower_statement_to_ir1_with_flow(
             };
             let lexical_binding_snapshot = binding_entry_snapshot(binding_lookup, &lexical_names);
             suppress_stream_module_sentinels(binding_lookup, &lexical_names);
+            suppress_net_module_sentinels(binding_lookup, &lexical_names);
             for name in for_of_stmt.binding.binding_names() {
                 let binding_id = if for_of_stmt.binding_kind == Some(VariableDeclarationKind::Var) {
                     reserve_binding_id(binding_lookup, binding_index, name)
@@ -4078,6 +4101,7 @@ fn lower_statement_to_ir1_with_flow(
                     let catch_binding_snapshot =
                         binding_entry_snapshot(binding_lookup, &catch_lexical_names);
                     suppress_stream_module_sentinels(binding_lookup, &catch_lexical_names);
+                    suppress_net_module_sentinels(binding_lookup, &catch_lexical_names);
                     reserve_and_mark_source_scope_bindings(
                         &handler.body.body,
                         binding_lookup,
@@ -4456,6 +4480,7 @@ fn lower_statement_to_ir1_with_flow(
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
+            seed_net_module_alias_sentinels(&mut body_lookup, binding_lookup);
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -4471,6 +4496,7 @@ fn lower_statement_to_ir1_with_flow(
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
                 suppress_stream_module_sentinel(&mut body_lookup, pname);
+                suppress_net_module_sentinel(&mut body_lookup, pname);
             }
             // For destructuring-pattern params, allocate inner identifier
             // bindings and emit destructuring ops that copy from each
@@ -4605,6 +4631,7 @@ fn lower_statement_to_ir1_with_flow(
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
+            seed_net_module_alias_sentinels(&mut body_lookup, binding_lookup);
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -4619,6 +4646,7 @@ fn lower_statement_to_ir1_with_flow(
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
                 suppress_stream_module_sentinel(&mut body_lookup, pname);
+                suppress_net_module_sentinel(&mut body_lookup, pname);
             }
             // Destructure non-identifier ctor params (applies defaults) before the body.
             allocate_destructure_param_bindings(
@@ -4796,6 +4824,7 @@ fn lower_statement_to_ir1_with_flow(
                 seed_fs_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_events_module_sentinels(&mut m_lookup, binding_lookup);
                 seed_stream_module_sentinels(&mut m_lookup, binding_lookup);
+                seed_net_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 let mut m_binding_index: BindingId = 0;
                 let m_scope = ScopeId { depth: 0, index: 0 };
                 let mut m_label_counter: u32 = 0;
@@ -4810,6 +4839,7 @@ fn lower_statement_to_ir1_with_flow(
                     )
                     .map_err(LoweringPipelineError::SemanticViolation)?;
                     suppress_stream_module_sentinel(&mut m_lookup, pname);
+                    suppress_net_module_sentinel(&mut m_lookup, pname);
                 }
                 // Destructure non-identifier params (applies defaults) before the body.
                 allocate_destructure_param_bindings(
@@ -4972,6 +5002,7 @@ fn lower_switch_to_ir1(
     }
     let lexical_binding_snapshot = binding_entry_snapshot(binding_lookup, &lexical_names);
     suppress_stream_module_sentinels(binding_lookup, &lexical_names);
+    suppress_net_module_sentinels(binding_lookup, &lexical_names);
     for name in &lexical_names {
         let binding_id = reserve_fresh_binding_id(binding_lookup, binding_index, name);
         binding_lookup.insert(lexical_binding_sentinel(name), 0);
@@ -9531,7 +9562,7 @@ fn lower_expression_to_ir1(
         _ => None,
     };
     let op_start = ops.len();
-    lower_expression_to_ir1_inner(
+    if !try_lower_net_expression_to_ir1(
         expression,
         ops,
         bindings,
@@ -9540,7 +9571,18 @@ fn lower_expression_to_ir1(
         root_scope_id,
         label_counter,
         span_table,
-    )?;
+    )? {
+        lower_expression_to_ir1_inner(
+            expression,
+            ops,
+            bindings,
+            binding_lookup,
+            binding_index,
+            root_scope_id,
+            label_counter,
+            span_table,
+        )?;
+    }
     if let Some(span) = expression_span {
         let op_end = ops.len();
         if op_end > op_start {
@@ -9552,6 +9594,67 @@ fn lower_expression_to_ir1(
         }
     }
     Ok(())
+}
+
+/// bd-7qwej: keep every net-specific call/constructor branch out of
+/// [`lower_expression_to_ir1_inner`]'s already-large recursive stack frame.
+/// Debug builds do not reliably optimize that frame, and even a small branch
+/// added enough spills to push nested callback sources over the fixed 2 MiB
+/// test-thread stack. The span-recording wrapper invokes this helper before the
+/// generic recursive match, so recognized net expressions retain ordinary span
+/// accounting without enlarging every recursive inner frame.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn try_lower_net_expression_to_ir1(
+    expression: &Expression,
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    root_scope_id: ScopeId,
+    label_counter: &mut u32,
+    span_table: &mut Vec<Ir1OpSpanEntry>,
+) -> Result<bool, LoweringPipelineError> {
+    let (arguments, capability) = match expression {
+        Expression::Call {
+            callee, arguments, ..
+        } => {
+            let Some(capability) = net_builtin_call_capability(callee, binding_lookup) else {
+                return Ok(false);
+            };
+            (arguments.as_slice(), capability)
+        }
+        Expression::New { callee, arguments }
+            if net_socket_constructor_capability(callee, binding_lookup).is_some() =>
+        {
+            (arguments.as_slice(), "builtin:NetSocket")
+        }
+        _ => return Ok(false),
+    };
+    let arg_count = arguments.len();
+    if arg_count > u32::MAX as usize {
+        return Err(LoweringPipelineError::TooManyArguments {
+            count: arg_count,
+            max: u32::MAX as usize,
+        });
+    }
+    for argument in arguments {
+        lower_expression_to_ir1(
+            argument,
+            ops,
+            bindings,
+            binding_lookup,
+            binding_index,
+            root_scope_id,
+            label_counter,
+            span_table,
+        )?;
+    }
+    ops.push(Ir1Op::HostCall {
+        capability: capability.to_string(),
+        arg_count: arg_count as u32,
+    });
+    Ok(true)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -12800,6 +12903,7 @@ fn lower_expression_to_ir1_inner(
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
+            seed_net_module_alias_sentinels(&mut body_lookup, binding_lookup);
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -12828,6 +12932,7 @@ fn lower_expression_to_ir1_inner(
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
                 suppress_stream_module_sentinel(&mut body_lookup, pname);
+                suppress_net_module_sentinel(&mut body_lookup, pname);
             }
             // Destructure non-identifier params (applies defaults) before the body.
             allocate_destructure_param_bindings(
@@ -12956,8 +13061,10 @@ fn lower_expression_to_ir1_inner(
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
+            seed_net_module_alias_sentinels(&mut body_lookup, binding_lookup);
             if let Some(self_name) = name {
                 suppress_stream_module_sentinel(&mut body_lookup, self_name);
+                suppress_net_module_sentinel(&mut body_lookup, self_name);
             }
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
@@ -12985,6 +13092,7 @@ fn lower_expression_to_ir1_inner(
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
                 suppress_stream_module_sentinel(&mut body_lookup, pname);
+                suppress_net_module_sentinel(&mut body_lookup, pname);
             }
             allocate_destructure_param_bindings(
                 &destructure_params,
@@ -13530,8 +13638,10 @@ fn lower_expression_to_ir1_inner(
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
+            seed_net_module_alias_sentinels(&mut body_lookup, binding_lookup);
             if let Some(self_name) = name {
                 suppress_stream_module_sentinel(&mut body_lookup, self_name);
+                suppress_net_module_sentinel(&mut body_lookup, self_name);
             }
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
@@ -13547,6 +13657,7 @@ fn lower_expression_to_ir1_inner(
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
                 suppress_stream_module_sentinel(&mut body_lookup, pname);
+                suppress_net_module_sentinel(&mut body_lookup, pname);
             }
             // Destructure non-identifier ctor params (applies defaults) before the body.
             allocate_destructure_param_bindings(
@@ -13724,8 +13835,10 @@ fn lower_expression_to_ir1_inner(
                 seed_fs_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_events_module_sentinels(&mut m_lookup, binding_lookup);
                 seed_stream_module_sentinels(&mut m_lookup, binding_lookup);
+                seed_net_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 if let Some(self_name) = name {
                     suppress_stream_module_sentinel(&mut m_lookup, self_name);
+                    suppress_net_module_sentinel(&mut m_lookup, self_name);
                 }
                 let method_self_snapshot = name.as_deref().map(|self_name| {
                     expose_class_expression_self_binding(binding_lookup, self_name, bid)
@@ -13744,6 +13857,7 @@ fn lower_expression_to_ir1_inner(
                     )
                     .map_err(LoweringPipelineError::SemanticViolation)?;
                     suppress_stream_module_sentinel(&mut m_lookup, pname);
+                    suppress_net_module_sentinel(&mut m_lookup, pname);
                 }
                 // Destructure non-identifier params (applies defaults) before the body.
                 allocate_destructure_param_bindings(
@@ -15573,6 +15687,835 @@ fn seed_fs_module_alias_sentinels(
             body_lookup.insert(key.clone(), 0);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Node `net` builtin recognition (bd-7qwej)
+//
+// The supported net slice is a finite lowering-only surface: exact static
+// member calls on an unshadowed `require('net')` / `require('node:net')`
+// receiver, or on a usage-confirmed alias of that receiver, lower directly to
+// `builtin:Net*`. No module object is materialized. Computed/optional access,
+// dynamic specifiers, unsupported exports, and bare possession therefore keep
+// the ordinary fail-closed require behavior.
+
+fn is_net_module_specifier(specifier: &str) -> bool {
+    specifier == "net" || specifier == "node:net"
+}
+
+fn net_module_alias_sentinel(name: &str) -> String {
+    format!("\0netmod\0{name}")
+}
+
+fn suppress_net_module_sentinel(binding_lookup: &mut BTreeMap<String, BindingId>, name: &str) {
+    binding_lookup.remove(&net_module_alias_sentinel(name));
+}
+
+fn suppress_net_module_sentinels(
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    names: &BTreeSet<String>,
+) {
+    for name in names {
+        suppress_net_module_sentinel(binding_lookup, name);
+    }
+}
+
+fn seed_net_module_alias_sentinels(
+    body_lookup: &mut BTreeMap<String, BindingId>,
+    outer_lookup: &BTreeMap<String, BindingId>,
+) {
+    for key in outer_lookup.keys() {
+        if key.starts_with("\0netmod\0") {
+            body_lookup.insert(key.clone(), 0);
+        }
+    }
+}
+
+fn is_require_net_module_initializer(
+    expr: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    let Expression::Call {
+        callee, arguments, ..
+    } = expr
+    else {
+        return false;
+    };
+    if !matches!(callee.as_ref(), Expression::Identifier(name)
+        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+    {
+        return false;
+    }
+    matches!(
+        arguments.as_slice(),
+        [Expression::StringLiteral(specifier)] if is_net_module_specifier(specifier)
+    )
+}
+
+fn net_method_capability(method: &str) -> Option<&'static str> {
+    match method {
+        "isIP" => Some("builtin:NetIsIP"),
+        "isIPv4" => Some("builtin:NetIsIPv4"),
+        "isIPv6" => Some("builtin:NetIsIPv6"),
+        "createServer" => Some("builtin:NetCreateServer"),
+        "connect" => Some("builtin:NetConnect"),
+        "createConnection" => Some("builtin:NetCreateConnection"),
+        _ => None,
+    }
+}
+
+fn is_net_module_object(expr: &Expression, binding_lookup: &BTreeMap<String, BindingId>) -> bool {
+    match expr {
+        Expression::Identifier(alias) => {
+            binding_lookup.contains_key(&net_module_alias_sentinel(alias))
+        }
+        Expression::Call { .. } => is_require_net_module_initializer(expr, binding_lookup),
+        _ => false,
+    }
+}
+
+fn net_member_name<'a>(
+    callee: &'a Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'a str> {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee
+    else {
+        return None;
+    };
+    if !is_net_module_object(object, binding_lookup) {
+        return None;
+    }
+    match property.as_ref() {
+        Expression::Identifier(name) | Expression::StringLiteral(name) => Some(name),
+        _ => None,
+    }
+}
+
+fn net_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    net_member_name(callee, binding_lookup).and_then(net_method_capability)
+}
+
+fn net_socket_constructor_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    (net_member_name(callee, binding_lookup) == Some("Socket")).then_some("builtin:NetSocket")
+}
+
+fn net_alias_member_name<'a>(callee: &'a Expression, alias: &str) -> Option<&'a str> {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee
+    else {
+        return None;
+    };
+    if !matches!(object.as_ref(), Expression::Identifier(name) if name == alias) {
+        return None;
+    }
+    match property.as_ref() {
+        Expression::Identifier(name) | Expression::StringLiteral(name) => Some(name),
+        _ => None,
+    }
+}
+
+fn is_net_alias_usage(expr: &Expression, alias: &str) -> bool {
+    match expr {
+        Expression::Call { callee, .. } => net_alias_member_name(callee, alias)
+            .is_some_and(|method| net_method_capability(method).is_some()),
+        Expression::New { callee, .. } => net_alias_member_name(callee, alias) == Some("Socket"),
+        _ => false,
+    }
+}
+
+fn net_pattern_binds_alias(pattern: &BindingPattern, alias: &str) -> bool {
+    pattern.binding_names().contains(&alias)
+}
+
+fn net_statement_hoists_var_alias(statement: &Statement, alias: &str) -> bool {
+    match statement {
+        Statement::VariableDeclaration(declaration)
+            if declaration.kind == VariableDeclarationKind::Var =>
+        {
+            declaration
+                .declarations
+                .iter()
+                .any(|declarator| net_pattern_binds_alias(&declarator.pattern, alias))
+        }
+        Statement::Block(block) => block
+            .body
+            .iter()
+            .any(|inner| net_statement_hoists_var_alias(inner, alias)),
+        Statement::If(if_statement) => {
+            net_statement_hoists_var_alias(&if_statement.consequent, alias)
+                || if_statement
+                    .alternate
+                    .as_deref()
+                    .is_some_and(|alternate| net_statement_hoists_var_alias(alternate, alias))
+        }
+        Statement::For(for_statement) => {
+            for_statement
+                .init
+                .as_deref()
+                .is_some_and(|init| net_statement_hoists_var_alias(init, alias))
+                || net_statement_hoists_var_alias(&for_statement.body, alias)
+        }
+        Statement::ForIn(for_statement) => {
+            (for_statement.binding_kind == Some(VariableDeclarationKind::Var)
+                && net_pattern_binds_alias(&for_statement.binding, alias))
+                || net_statement_hoists_var_alias(&for_statement.body, alias)
+        }
+        Statement::ForOf(for_statement) => {
+            (for_statement.binding_kind == Some(VariableDeclarationKind::Var)
+                && net_pattern_binds_alias(&for_statement.binding, alias))
+                || net_statement_hoists_var_alias(&for_statement.body, alias)
+        }
+        Statement::While(while_statement) => {
+            net_statement_hoists_var_alias(&while_statement.body, alias)
+        }
+        Statement::DoWhile(do_while_statement) => {
+            net_statement_hoists_var_alias(&do_while_statement.body, alias)
+        }
+        Statement::TryCatch(try_statement) => {
+            try_statement
+                .block
+                .body
+                .iter()
+                .any(|inner| net_statement_hoists_var_alias(inner, alias))
+                || try_statement.handler.as_ref().is_some_and(|handler| {
+                    handler
+                        .body
+                        .body
+                        .iter()
+                        .any(|inner| net_statement_hoists_var_alias(inner, alias))
+                })
+                || try_statement.finalizer.as_ref().is_some_and(|finalizer| {
+                    finalizer
+                        .body
+                        .iter()
+                        .any(|inner| net_statement_hoists_var_alias(inner, alias))
+                })
+        }
+        Statement::Switch(switch_statement) => switch_statement.cases.iter().any(|case| {
+            case.consequent
+                .iter()
+                .any(|inner| net_statement_hoists_var_alias(inner, alias))
+        }),
+        Statement::Labeled(labeled) => net_statement_hoists_var_alias(&labeled.body, alias),
+        // Nested function/class declarations introduce distinct function
+        // scopes, so their `var` declarations do not hoist into this one.
+        Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => false,
+        _ => false,
+    }
+}
+
+fn net_function_scope_shadows_alias(
+    name: Option<&str>,
+    params: &[FunctionParam],
+    body: &[Statement],
+    alias: &str,
+) -> bool {
+    name == Some(alias)
+        || params
+            .iter()
+            .any(|param| net_pattern_binds_alias(&param.pattern, alias))
+        || direct_lexical_binding_names(body).contains(alias)
+        || body
+            .iter()
+            .any(|statement| net_statement_hoists_var_alias(statement, alias))
+}
+
+fn net_expr_contains_unshadowed_alias_usage(expr: &Expression, alias: &str) -> bool {
+    if is_net_alias_usage(expr, alias) {
+        return true;
+    }
+    match expr {
+        Expression::ArrowFunction { params, body, .. } => {
+            if params
+                .iter()
+                .any(|param| net_pattern_binds_alias(&param.pattern, alias))
+            {
+                return false;
+            }
+            match body {
+                ArrowBody::Expression(inner) => {
+                    net_expr_contains_unshadowed_alias_usage(inner, alias)
+                }
+                ArrowBody::Block(block) => {
+                    if net_function_scope_shadows_alias(None, params, &block.body, alias) {
+                        return false;
+                    }
+                    block.body.iter().any(|statement| {
+                        net_statement_contains_unshadowed_alias_usage(statement, alias)
+                    })
+                }
+            }
+        }
+        Expression::Function {
+            name, params, body, ..
+        } => {
+            !net_function_scope_shadows_alias(name.as_deref(), params, &body.body, alias)
+                && body.body.iter().any(|statement| {
+                    net_statement_contains_unshadowed_alias_usage(statement, alias)
+                })
+        }
+        Expression::Call {
+            callee, arguments, ..
+        }
+        | Expression::OptionalCall {
+            callee, arguments, ..
+        }
+        | Expression::New { callee, arguments } => {
+            net_expr_contains_unshadowed_alias_usage(callee, alias)
+                || arguments
+                    .iter()
+                    .any(|argument| net_expr_contains_unshadowed_alias_usage(argument, alias))
+        }
+        Expression::Member {
+            object, property, ..
+        }
+        | Expression::OptionalMember {
+            object, property, ..
+        } => {
+            net_expr_contains_unshadowed_alias_usage(object, alias)
+                || net_expr_contains_unshadowed_alias_usage(property, alias)
+        }
+        Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
+            net_expr_contains_unshadowed_alias_usage(left, alias)
+                || net_expr_contains_unshadowed_alias_usage(right, alias)
+        }
+        Expression::Unary { argument, .. }
+        | Expression::Await(argument)
+        | Expression::SpreadElement(argument) => {
+            net_expr_contains_unshadowed_alias_usage(argument, alias)
+        }
+        Expression::Conditional {
+            test,
+            consequent,
+            alternate,
+        } => {
+            net_expr_contains_unshadowed_alias_usage(test, alias)
+                || net_expr_contains_unshadowed_alias_usage(consequent, alias)
+                || net_expr_contains_unshadowed_alias_usage(alternate, alias)
+        }
+        Expression::Yield {
+            argument: Some(argument),
+            ..
+        } => net_expr_contains_unshadowed_alias_usage(argument, alias),
+        Expression::ArrayLiteral(elements) => elements
+            .iter()
+            .flatten()
+            .any(|element| net_expr_contains_unshadowed_alias_usage(element, alias)),
+        Expression::ObjectLiteral(properties) => properties.iter().any(|property| {
+            (property.computed && net_expr_contains_unshadowed_alias_usage(&property.key, alias))
+                || net_expr_contains_unshadowed_alias_usage(&property.value, alias)
+        }),
+        Expression::TemplateLiteral { expressions, .. } => expressions
+            .iter()
+            .any(|expression| net_expr_contains_unshadowed_alias_usage(expression, alias)),
+        Expression::ClassExpression {
+            name,
+            super_class,
+            body,
+        } => {
+            super_class.as_deref().is_some_and(|super_class| {
+                net_expr_contains_unshadowed_alias_usage(super_class, alias)
+            }) || (name.as_deref() != Some(alias)
+                && body.iter().any(|method| {
+                    (method.computed
+                        && net_expr_contains_unshadowed_alias_usage(&method.key, alias))
+                        || (!net_function_scope_shadows_alias(
+                            None,
+                            &method.params,
+                            &method.body.body,
+                            alias,
+                        ) && method.body.body.iter().any(|statement| {
+                            net_statement_contains_unshadowed_alias_usage(statement, alias)
+                        }))
+                }))
+        }
+        _ => false,
+    }
+}
+
+/// True when an unshadowed alias occurrence is used outside the finite static
+/// net call/new receiver shapes. A confirmed call consumes its receiver here
+/// (so the `net` identifier is not mistaken for a bare escape), but its
+/// arguments are still scanned: `net.connect(net)` must be rejected.
+fn net_expr_has_rejected_alias_use(expr: &Expression, alias: &str) -> bool {
+    match expr {
+        Expression::Identifier(name) => name == alias,
+        Expression::Call {
+            callee, arguments, ..
+        } if net_alias_member_name(callee, alias)
+            .is_some_and(|method| net_method_capability(method).is_some()) =>
+        {
+            arguments
+                .iter()
+                .any(|argument| net_expr_has_rejected_alias_use(argument, alias))
+        }
+        Expression::New { callee, arguments }
+            if net_alias_member_name(callee, alias) == Some("Socket") =>
+        {
+            arguments
+                .iter()
+                .any(|argument| net_expr_has_rejected_alias_use(argument, alias))
+        }
+        Expression::ArrowFunction { params, body, .. } => {
+            if params
+                .iter()
+                .any(|param| net_pattern_binds_alias(&param.pattern, alias))
+            {
+                return false;
+            }
+            match body {
+                ArrowBody::Expression(inner) => net_expr_has_rejected_alias_use(inner, alias),
+                ArrowBody::Block(block) => {
+                    if net_function_scope_shadows_alias(None, params, &block.body, alias) {
+                        false
+                    } else {
+                        block
+                            .body
+                            .iter()
+                            .any(|statement| net_statement_has_rejected_alias_use(statement, alias))
+                    }
+                }
+            }
+        }
+        Expression::Function {
+            name, params, body, ..
+        } => {
+            !net_function_scope_shadows_alias(name.as_deref(), params, &body.body, alias)
+                && body
+                    .body
+                    .iter()
+                    .any(|statement| net_statement_has_rejected_alias_use(statement, alias))
+        }
+        Expression::Call {
+            callee, arguments, ..
+        }
+        | Expression::OptionalCall {
+            callee, arguments, ..
+        }
+        | Expression::New { callee, arguments } => {
+            net_expr_has_rejected_alias_use(callee, alias)
+                || arguments
+                    .iter()
+                    .any(|argument| net_expr_has_rejected_alias_use(argument, alias))
+        }
+        Expression::Member {
+            object,
+            property,
+            computed,
+            ..
+        }
+        | Expression::OptionalMember {
+            object,
+            property,
+            computed,
+            ..
+        } => {
+            net_expr_has_rejected_alias_use(object, alias)
+                || (*computed && net_expr_has_rejected_alias_use(property, alias))
+        }
+        Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
+            net_expr_has_rejected_alias_use(left, alias)
+                || net_expr_has_rejected_alias_use(right, alias)
+        }
+        Expression::Unary { argument, .. }
+        | Expression::Await(argument)
+        | Expression::SpreadElement(argument) => net_expr_has_rejected_alias_use(argument, alias),
+        Expression::Conditional {
+            test,
+            consequent,
+            alternate,
+        } => {
+            net_expr_has_rejected_alias_use(test, alias)
+                || net_expr_has_rejected_alias_use(consequent, alias)
+                || net_expr_has_rejected_alias_use(alternate, alias)
+        }
+        Expression::Yield {
+            argument: Some(argument),
+            ..
+        } => net_expr_has_rejected_alias_use(argument, alias),
+        Expression::ArrayLiteral(elements) => elements
+            .iter()
+            .flatten()
+            .any(|element| net_expr_has_rejected_alias_use(element, alias)),
+        Expression::ObjectLiteral(properties) => properties.iter().any(|property| {
+            (property.computed && net_expr_has_rejected_alias_use(&property.key, alias))
+                || net_expr_has_rejected_alias_use(&property.value, alias)
+        }),
+        Expression::TemplateLiteral { expressions, .. } => expressions
+            .iter()
+            .any(|expression| net_expr_has_rejected_alias_use(expression, alias)),
+        Expression::ClassExpression {
+            name,
+            super_class,
+            body,
+        } => {
+            super_class
+                .as_deref()
+                .is_some_and(|super_class| net_expr_has_rejected_alias_use(super_class, alias))
+                || (name.as_deref() != Some(alias)
+                    && body.iter().any(|method| {
+                        (method.computed && net_expr_has_rejected_alias_use(&method.key, alias))
+                            || (!net_function_scope_shadows_alias(
+                                None,
+                                &method.params,
+                                &method.body.body,
+                                alias,
+                            ) && method.body.body.iter().any(|statement| {
+                                net_statement_has_rejected_alias_use(statement, alias)
+                            }))
+                    }))
+        }
+        _ => false,
+    }
+}
+
+fn net_statement_contains_unshadowed_alias_usage(statement: &Statement, alias: &str) -> bool {
+    match statement {
+        Statement::Expression(expression) => {
+            net_expr_contains_unshadowed_alias_usage(&expression.expression, alias)
+        }
+        Statement::VariableDeclaration(declaration) => {
+            declaration.declarations.iter().any(|declarator| {
+                !net_pattern_binds_alias(&declarator.pattern, alias)
+                    && declarator.initializer.as_ref().is_some_and(|initializer| {
+                        net_expr_contains_unshadowed_alias_usage(initializer, alias)
+                    })
+            })
+        }
+        Statement::Block(block) => {
+            if direct_lexical_binding_names(&block.body).contains(alias) {
+                return false;
+            }
+            block
+                .body
+                .iter()
+                .any(|inner| net_statement_contains_unshadowed_alias_usage(inner, alias))
+        }
+        Statement::FunctionDeclaration(function) => {
+            !net_function_scope_shadows_alias(
+                function.name.as_deref(),
+                &function.params,
+                &function.body.body,
+                alias,
+            ) && function
+                .body
+                .body
+                .iter()
+                .any(|inner| net_statement_contains_unshadowed_alias_usage(inner, alias))
+        }
+        Statement::ClassDeclaration(class) => {
+            class.super_class.as_deref().is_some_and(|super_class| {
+                net_expr_contains_unshadowed_alias_usage(super_class, alias)
+            }) || (class.name.as_deref() != Some(alias)
+                && class.body.iter().any(|method| {
+                    (method.computed
+                        && net_expr_contains_unshadowed_alias_usage(&method.key, alias))
+                        || (!net_function_scope_shadows_alias(
+                            None,
+                            &method.params,
+                            &method.body.body,
+                            alias,
+                        ) && method.body.body.iter().any(|inner| {
+                            net_statement_contains_unshadowed_alias_usage(inner, alias)
+                        }))
+                }))
+        }
+        Statement::If(if_statement) => {
+            net_expr_contains_unshadowed_alias_usage(&if_statement.condition, alias)
+                || net_statement_contains_unshadowed_alias_usage(&if_statement.consequent, alias)
+                || if_statement.alternate.as_deref().is_some_and(|alternate| {
+                    net_statement_contains_unshadowed_alias_usage(alternate, alias)
+                })
+        }
+        Statement::For(for_statement) => {
+            let init_shadows = for_statement.init.as_deref().is_some_and(|initializer| {
+                direct_lexical_binding_names(std::slice::from_ref(initializer)).contains(alias)
+                    || net_statement_hoists_var_alias(initializer, alias)
+            });
+            if init_shadows {
+                return false;
+            }
+            for_statement.init.as_deref().is_some_and(|initializer| {
+                net_statement_contains_unshadowed_alias_usage(initializer, alias)
+            }) || for_statement
+                .condition
+                .as_ref()
+                .is_some_and(|condition| net_expr_contains_unshadowed_alias_usage(condition, alias))
+                || for_statement
+                    .update
+                    .as_ref()
+                    .is_some_and(|update| net_expr_contains_unshadowed_alias_usage(update, alias))
+                || net_statement_contains_unshadowed_alias_usage(&for_statement.body, alias)
+        }
+        Statement::ForIn(for_statement) => {
+            if net_pattern_binds_alias(&for_statement.binding, alias) {
+                return false;
+            }
+            net_expr_contains_unshadowed_alias_usage(&for_statement.object, alias)
+                || net_statement_contains_unshadowed_alias_usage(&for_statement.body, alias)
+        }
+        Statement::ForOf(for_statement) => {
+            if net_pattern_binds_alias(&for_statement.binding, alias) {
+                return false;
+            }
+            net_expr_contains_unshadowed_alias_usage(&for_statement.iterable, alias)
+                || net_statement_contains_unshadowed_alias_usage(&for_statement.body, alias)
+        }
+        Statement::While(while_statement) => {
+            net_expr_contains_unshadowed_alias_usage(&while_statement.condition, alias)
+                || net_statement_contains_unshadowed_alias_usage(&while_statement.body, alias)
+        }
+        Statement::DoWhile(do_while_statement) => {
+            net_expr_contains_unshadowed_alias_usage(&do_while_statement.condition, alias)
+                || net_statement_contains_unshadowed_alias_usage(&do_while_statement.body, alias)
+        }
+        Statement::Return(return_statement) => return_statement
+            .argument
+            .as_ref()
+            .is_some_and(|argument| net_expr_contains_unshadowed_alias_usage(argument, alias)),
+        Statement::Throw(throw_statement) => {
+            net_expr_contains_unshadowed_alias_usage(&throw_statement.argument, alias)
+        }
+        Statement::TryCatch(try_statement) => {
+            let try_uses = net_statement_contains_unshadowed_alias_usage(
+                &Statement::Block(try_statement.block.clone()),
+                alias,
+            );
+            let catch_uses = try_statement.handler.as_ref().is_some_and(|handler| {
+                handler.parameter.as_deref() != Some(alias)
+                    && net_statement_contains_unshadowed_alias_usage(
+                        &Statement::Block(handler.body.clone()),
+                        alias,
+                    )
+            });
+            let finally_uses = try_statement.finalizer.as_ref().is_some_and(|finalizer| {
+                net_statement_contains_unshadowed_alias_usage(
+                    &Statement::Block(finalizer.clone()),
+                    alias,
+                )
+            });
+            try_uses || catch_uses || finally_uses
+        }
+        Statement::Switch(switch_statement) => {
+            let discriminant_uses =
+                net_expr_contains_unshadowed_alias_usage(&switch_statement.discriminant, alias);
+            let switch_shadows = switch_statement
+                .cases
+                .iter()
+                .any(|case| direct_lexical_binding_names(&case.consequent).contains(alias));
+            discriminant_uses
+                || (!switch_shadows
+                    && switch_statement.cases.iter().any(|case| {
+                        case.test.as_ref().is_some_and(|test| {
+                            net_expr_contains_unshadowed_alias_usage(test, alias)
+                        }) || case.consequent.iter().any(|inner| {
+                            net_statement_contains_unshadowed_alias_usage(inner, alias)
+                        })
+                    }))
+        }
+        Statement::Labeled(labeled) => {
+            net_statement_contains_unshadowed_alias_usage(&labeled.body, alias)
+        }
+        // `with` is rejected by lowering; imports/exports and control-only
+        // statements carry no net alias use.
+        _ => false,
+    }
+}
+
+fn net_block_has_rejected_alias_use(body: &[Statement], alias: &str) -> bool {
+    if direct_lexical_binding_names(body).contains(alias) {
+        false
+    } else {
+        body.iter()
+            .any(|statement| net_statement_has_rejected_alias_use(statement, alias))
+    }
+}
+
+fn net_statement_has_rejected_alias_use(statement: &Statement, alias: &str) -> bool {
+    match statement {
+        Statement::Expression(expression) => {
+            net_expr_has_rejected_alias_use(&expression.expression, alias)
+        }
+        Statement::VariableDeclaration(declaration) => {
+            declaration.declarations.iter().any(|declarator| {
+                !net_pattern_binds_alias(&declarator.pattern, alias)
+                    && declarator.initializer.as_ref().is_some_and(|initializer| {
+                        net_expr_has_rejected_alias_use(initializer, alias)
+                    })
+            })
+        }
+        Statement::Block(block) => net_block_has_rejected_alias_use(&block.body, alias),
+        Statement::FunctionDeclaration(function) => {
+            !net_function_scope_shadows_alias(
+                function.name.as_deref(),
+                &function.params,
+                &function.body.body,
+                alias,
+            ) && function
+                .body
+                .body
+                .iter()
+                .any(|inner| net_statement_has_rejected_alias_use(inner, alias))
+        }
+        Statement::ClassDeclaration(class) => {
+            class
+                .super_class
+                .as_deref()
+                .is_some_and(|super_class| net_expr_has_rejected_alias_use(super_class, alias))
+                || (class.name.as_deref() != Some(alias)
+                    && class.body.iter().any(|method| {
+                        (method.computed && net_expr_has_rejected_alias_use(&method.key, alias))
+                            || (!net_function_scope_shadows_alias(
+                                None,
+                                &method.params,
+                                &method.body.body,
+                                alias,
+                            ) && method
+                                .body
+                                .body
+                                .iter()
+                                .any(|inner| net_statement_has_rejected_alias_use(inner, alias)))
+                    }))
+        }
+        Statement::If(if_statement) => {
+            net_expr_has_rejected_alias_use(&if_statement.condition, alias)
+                || net_statement_has_rejected_alias_use(&if_statement.consequent, alias)
+                || if_statement
+                    .alternate
+                    .as_deref()
+                    .is_some_and(|alternate| net_statement_has_rejected_alias_use(alternate, alias))
+        }
+        Statement::For(for_statement) => {
+            let init_shadows = for_statement.init.as_deref().is_some_and(|initializer| {
+                direct_lexical_binding_names(std::slice::from_ref(initializer)).contains(alias)
+                    || net_statement_hoists_var_alias(initializer, alias)
+            });
+            if init_shadows {
+                return false;
+            }
+            for_statement
+                .init
+                .as_deref()
+                .is_some_and(|initializer| net_statement_has_rejected_alias_use(initializer, alias))
+                || for_statement
+                    .condition
+                    .as_ref()
+                    .is_some_and(|condition| net_expr_has_rejected_alias_use(condition, alias))
+                || for_statement
+                    .update
+                    .as_ref()
+                    .is_some_and(|update| net_expr_has_rejected_alias_use(update, alias))
+                || net_statement_has_rejected_alias_use(&for_statement.body, alias)
+        }
+        Statement::ForIn(for_statement) => {
+            if net_pattern_binds_alias(&for_statement.binding, alias) {
+                return false;
+            }
+            net_expr_has_rejected_alias_use(&for_statement.object, alias)
+                || net_statement_has_rejected_alias_use(&for_statement.body, alias)
+        }
+        Statement::ForOf(for_statement) => {
+            if net_pattern_binds_alias(&for_statement.binding, alias) {
+                return false;
+            }
+            net_expr_has_rejected_alias_use(&for_statement.iterable, alias)
+                || net_statement_has_rejected_alias_use(&for_statement.body, alias)
+        }
+        Statement::While(while_statement) => {
+            net_expr_has_rejected_alias_use(&while_statement.condition, alias)
+                || net_statement_has_rejected_alias_use(&while_statement.body, alias)
+        }
+        Statement::DoWhile(do_while_statement) => {
+            net_expr_has_rejected_alias_use(&do_while_statement.condition, alias)
+                || net_statement_has_rejected_alias_use(&do_while_statement.body, alias)
+        }
+        Statement::Return(return_statement) => return_statement
+            .argument
+            .as_ref()
+            .is_some_and(|argument| net_expr_has_rejected_alias_use(argument, alias)),
+        Statement::Throw(throw_statement) => {
+            net_expr_has_rejected_alias_use(&throw_statement.argument, alias)
+        }
+        Statement::TryCatch(try_statement) => {
+            net_block_has_rejected_alias_use(&try_statement.block.body, alias)
+                || try_statement.handler.as_ref().is_some_and(|handler| {
+                    handler.parameter.as_deref() != Some(alias)
+                        && net_block_has_rejected_alias_use(&handler.body.body, alias)
+                })
+                || try_statement.finalizer.as_ref().is_some_and(|finalizer| {
+                    net_block_has_rejected_alias_use(&finalizer.body, alias)
+                })
+        }
+        Statement::Switch(switch_statement) => {
+            if net_expr_has_rejected_alias_use(&switch_statement.discriminant, alias) {
+                return true;
+            }
+            let switch_shadows = switch_statement
+                .cases
+                .iter()
+                .any(|case| direct_lexical_binding_names(&case.consequent).contains(alias));
+            !switch_shadows
+                && switch_statement.cases.iter().any(|case| {
+                    case.test
+                        .as_ref()
+                        .is_some_and(|test| net_expr_has_rejected_alias_use(test, alias))
+                        || case
+                            .consequent
+                            .iter()
+                            .any(|inner| net_statement_has_rejected_alias_use(inner, alias))
+                })
+        }
+        Statement::Labeled(labeled) => net_statement_has_rejected_alias_use(&labeled.body, alias),
+        _ => false,
+    }
+}
+
+fn confirmed_net_module_aliases(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for statement in body {
+        if let Statement::VariableDeclaration(declaration) = statement {
+            if declaration.kind != VariableDeclarationKind::Const {
+                continue;
+            }
+            for declarator in &declaration.declarations {
+                if let (BindingPattern::Identifier(alias), Some(initializer)) =
+                    (&declarator.pattern, &declarator.initializer)
+                    && is_require_net_module_initializer(initializer, binding_lookup)
+                {
+                    candidates.insert(alias.clone());
+                }
+            }
+        }
+    }
+
+    candidates
+        .into_iter()
+        .filter(|alias| {
+            body.iter()
+                .any(|statement| net_statement_contains_unshadowed_alias_usage(statement, alias))
+                && !body
+                    .iter()
+                    .any(|statement| net_statement_has_rejected_alias_use(statement, alias))
+        })
+        .collect()
 }
 
 /// bd-suwvw: compute the identifier names BOTH bound via `const/let/var
@@ -20437,6 +21380,252 @@ mod tests {
                 _ => 0,
             })
             .sum()
+    }
+
+    #[test]
+    fn net_alias_calls_and_socket_constructor_lower_to_distinct_builtins_bd_7qwej() {
+        let ops = lower_script_source_ops(
+            "const network = require('node:net');\n\
+             network.isIP('127.0.0.1');\n\
+             network.isIPv4('127.0.0.1');\n\
+             network.isIPv6('::1');\n\
+             network.createServer(() => {});\n\
+             network.connect({ port: 1 });\n\
+             network.createConnection({ port: 2 });\n\
+             new network.Socket({ allowHalfOpen: true });\n",
+            "net_alias_builtins_bd_7qwej.js",
+        );
+
+        for capability in [
+            "builtin:NetIsIP",
+            "builtin:NetIsIPv4",
+            "builtin:NetIsIPv6",
+            "builtin:NetCreateServer",
+            "builtin:NetConnect",
+            "builtin:NetCreateConnection",
+            "builtin:NetSocket",
+        ] {
+            assert_eq!(
+                count_hostcall_deep(&ops, capability),
+                1,
+                "expected exactly one {capability} hostcall"
+            );
+        }
+        assert!(
+            !ops_deep_match(&ops, &|op| matches!(op,
+                Ir1Op::HostCall { capability, .. } if capability == "module:require")),
+            "a confirmed net alias must elide its ambient require initializer"
+        );
+    }
+
+    #[test]
+    fn net_exact_inline_require_call_and_new_shapes_lower_bd_7qwej() {
+        let ops = lower_script_source_ops(
+            "require('net').isIP('x');\n\
+             require('node:net').isIPv4('127.0.0.1');\n\
+             require('net').isIPv6('::1');\n\
+             require('node:net').createServer();\n\
+             require('net').connect(1);\n\
+             require('node:net').createConnection(2);\n\
+             new (require('net').Socket)();\n",
+            "net_inline_builtins_bd_7qwej.js",
+        );
+
+        for capability in [
+            "builtin:NetIsIP",
+            "builtin:NetIsIPv4",
+            "builtin:NetIsIPv6",
+            "builtin:NetCreateServer",
+            "builtin:NetConnect",
+            "builtin:NetCreateConnection",
+            "builtin:NetSocket",
+        ] {
+            assert_eq!(count_hostcall_deep(&ops, capability), 1);
+        }
+    }
+
+    #[test]
+    fn net_alias_sentinel_propagates_into_nested_functions_bd_7qwej() {
+        let ops = lower_script_source_ops(
+            "const net = require('net');\n\
+             function makeServer() {\n\
+               const probe = () => net.isIP('127.0.0.1');\n\
+               return net.createServer(probe);\n\
+             }\n",
+            "net_nested_alias_bd_7qwej.js",
+        );
+
+        assert_eq!(count_hostcall_deep(&ops, "builtin:NetIsIP"), 1);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:NetCreateServer"), 1);
+    }
+
+    #[test]
+    fn net_alias_sentinel_does_not_cross_nested_parameter_shadow_bd_7qwej() {
+        let ops = lower_script_source_ops(
+            "const net = require('net');\n\
+             net.isIP('127.0.0.1');\n\
+             function shadowed(net) {\n\
+               net.isIP('not-the-module');\n\
+               return new net.Socket();\n\
+             }\n",
+            "net_nested_shadow_bd_7qwej.js",
+        );
+
+        assert_eq!(count_hostcall_deep(&ops, "builtin:NetIsIP"), 1);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:NetSocket"), 0);
+    }
+
+    #[test]
+    fn net_unused_dynamic_computed_and_unsupported_requires_fail_closed_bd_7qwej() {
+        for (label, source) in [
+            ("unused", "const net = require('net');"),
+            ("bare", "require('node:net');"),
+            (
+                "dynamic",
+                "const name = 'net'; const net = require(name); net.isIP('x');",
+            ),
+            (
+                "computed",
+                "const net = require('net'); net['isIP']('127.0.0.1');",
+            ),
+            (
+                "unsupported",
+                "const net = require('node:net'); net.lookup('localhost');",
+            ),
+            (
+                "nested-shadow-only",
+                "const net = require('net'); function f(net) { net.isIP('x'); }",
+            ),
+            (
+                "arrow-shadow-only",
+                "const net = require('net'); const f = (net) => net.isIP('x');",
+            ),
+        ] {
+            let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
+            let ir0 = Ir0Module::from_syntax_tree(tree, format!("net_{label}_bd_7qwej.js"));
+            let error = lower_ir0_to_ir1(&ir0)
+                .expect_err("unrecognized net possession must preserve ambient denial");
+            assert!(
+                matches!(
+                    error,
+                    LoweringPipelineError::AmbientAuthorityViolation { .. }
+                ),
+                "{label} should fail at the ambient-authority gate, got {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn net_block_catch_loop_and_hoisted_var_shadow_only_uses_fail_closed_bd_7qwej() {
+        for (label, source) in [
+            (
+                "block-shadow-only",
+                "const net = require('net'); { const net = null; net.isIP('x'); }",
+            ),
+            (
+                "catch-shadow-only",
+                "const net = require('net'); try { throw 1; } catch (net) { net.isIP('x'); }",
+            ),
+            (
+                "for-shadow-only",
+                "const net = require('net'); for (let net = 0; net < 1; net = net + 1) { net.isIP('x'); }",
+            ),
+            (
+                "for-of-shadow-only",
+                "const net = require('net'); for (const net of [1]) { net.isIP('x'); }",
+            ),
+            (
+                "nested-var-shadow-only",
+                "const net = require('net'); function f() { if (true) { var net = null; } net.isIP('x'); }",
+            ),
+            (
+                "arrow-hoisted-var-shadow-only",
+                "const net = require('net'); const f = () => { if (true) { var net = null; } net.isIP('x'); };",
+            ),
+        ] {
+            let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
+            let ir0 = Ir0Module::from_syntax_tree(tree, format!("net_{label}_bd_7qwej.js"));
+            let error = lower_ir0_to_ir1(&ir0)
+                .expect_err("a shadow-only net use must not confirm the root module alias");
+            assert!(
+                matches!(
+                    error,
+                    LoweringPipelineError::AmbientAuthorityViolation { .. }
+                ),
+                "{label} should preserve ambient require denial, got {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn net_mutable_reassigned_mutated_and_escaped_aliases_fail_closed_bd_7qwej() {
+        for (label, source) in [
+            (
+                "mutable-reassignment",
+                "let net = require('net'); net = null; net.connect(1);",
+            ),
+            (
+                "member-mutation",
+                "const net = require('net'); net.connect = () => null; net.connect(1);",
+            ),
+            (
+                "mixed-bare-escape",
+                "const net = require('net'); consume(net); net.isIP('127.0.0.1');",
+            ),
+            (
+                "mixed-computed-read",
+                "const net = require('net'); net.isIP('127.0.0.1'); net['connect'](1);",
+            ),
+            (
+                "mixed-unsupported-read",
+                "const net = require('net'); net.isIP('127.0.0.1'); consume(net.lookup);",
+            ),
+            (
+                "mixed-object-escape",
+                "const net = require('net'); const escaped = { net }; net.isIP('127.0.0.1');",
+            ),
+        ] {
+            let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
+            let ir0 = Ir0Module::from_syntax_tree(tree, format!("net_{label}_bd_7qwej.js"));
+            let error = lower_ir0_to_ir1(&ir0)
+                .expect_err("untrusted net alias provenance must preserve ambient denial");
+            assert!(
+                matches!(
+                    error,
+                    LoweringPipelineError::AmbientAuthorityViolation { .. }
+                ),
+                "{label} should preserve ambient require denial, got {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn net_supported_object_values_and_computed_keys_confirm_const_alias_bd_7qwej() {
+        let ops = lower_script_source_ops(
+            "const net = require('net');\n\
+             const probes = { value: net.isIP('127.0.0.1'), [net.isIPv4('x')]: true };\n",
+            "net_object_value_usage_bd_7qwej.js",
+        );
+
+        assert_eq!(count_hostcall_deep(&ops, "builtin:NetIsIP"), 1);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:NetIsIPv4"), 1);
+    }
+
+    #[test]
+    fn net_require_shadow_does_not_gain_builtin_provenance_bd_7qwej() {
+        let tree = crate::parser_api_stability::parse_script(
+            "const require = () => null;\n\
+             const net = require('net');\n\
+             net.isIP('127.0.0.1');\n",
+        )
+        .expect("parse script");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "net_shadowed_require_bd_7qwej.js");
+        let error = lower_ir0_to_ir1(&ir0)
+            .expect_err("a shadowed require must not acquire net builtin provenance");
+        assert!(matches!(
+            error,
+            LoweringPipelineError::AmbientAuthorityViolation { .. }
+        ));
     }
 
     #[test]

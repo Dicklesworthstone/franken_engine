@@ -15,7 +15,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use sqlmodel::{Model, Value};
-use sqlmodel_frankensqlite::FrankenConnection;
+use sqlmodel_core::Row as SqlModelRow;
+use sqlmodel_frankensqlite::{FrankenConnection, FrankenExclusiveTransaction};
 
 use crate::fleet_immune_protocol::FleetTrustStateCasMint;
 use crate::typed_persistence_models::{
@@ -1231,6 +1232,34 @@ pub trait FrankensqliteBackend {
 /// Required basename for the isolated fleet-authority database.
 pub const FLEET_TRUST_STATE_DATABASE_FILENAME: &str = "fleet_trust_state.db";
 
+/// Exact SQL text FrankenSQLite persists in `sqlite_schema` for the generated
+/// fleet-authority model. Keeping this representation explicit lets the
+/// authority boundary reject hidden collation, affinity, or constraint drift
+/// after FrankenSQLite has canonicalized identifier quoting.
+const FLEET_TRUST_STATE_CANONICAL_CREATE_SQL: &str = "CREATE TABLE IF NOT EXISTS fleet_trust_state (state_id BIGINT NOT NULL, schema_version TEXT NOT NULL, fleet_authority_id TEXT NOT NULL, generation_decimal TEXT NOT NULL, authority_epoch_decimal TEXT NOT NULL, snapshot_hash TEXT NOT NULL, prior_snapshot_hash TEXT NOT NULL, authority_head_hash TEXT NOT NULL, anchor_advance_permit_hex TEXT NOT NULL, snapshot_json TEXT NOT NULL, PRIMARY KEY (state_id))";
+
+trait FleetAuthoritySql {
+    fn query(&mut self, sql: &str, params: &[Value]) -> Result<Vec<SqlModelRow>, String>;
+    fn execute(&mut self, sql: &str, params: &[Value]) -> Result<u64, String>;
+    fn execute_raw(&mut self, sql: &str) -> Result<(), String>;
+}
+
+impl FleetAuthoritySql for FrankenExclusiveTransaction<'_> {
+    fn query(&mut self, sql: &str, params: &[Value]) -> Result<Vec<SqlModelRow>, String> {
+        self.query_sync(sql, params)
+            .map_err(|error| error.to_string())
+    }
+
+    fn execute(&mut self, sql: &str, params: &[Value]) -> Result<u64, String> {
+        self.execute_sync(sql, params)
+            .map_err(|error| error.to_string())
+    }
+
+    fn execute_raw(&mut self, sql: &str) -> Result<(), String> {
+        FrankenExclusiveTransaction::execute_raw(self, sql).map_err(|error| error.to_string())
+    }
+}
+
 /// Real FrankenSQLite backend for the rollback-sensitive fleet authority row.
 ///
 /// This backend deliberately exposes no connection accessor and implements no
@@ -1256,10 +1285,10 @@ impl fmt::Debug for FleetTrustStateFrankensqliteBackend {
 impl FleetTrustStateFrankensqliteBackend {
     /// Open the isolated authority database through the sibling-owned driver.
     ///
-    /// FrankenEngine intentionally does not set WAL, synchronous, journal, or
-    /// migration policy here. Opening the connection delegates those choices
-    /// to FrankenSQLite; [`FrankensqliteBackend::apply_control_plane_profile`]
-    /// only installs and validates the separately generated fleet table.
+    /// The SQLModel driver owns the sealed durability profile: identity-bound
+    /// file admission, WAL, `synchronous=FULL`, disabled statement
+    /// microbatching, and strict multi-process refusal. FrankenEngine only
+    /// installs and validates the separately generated fleet table.
     fn open_file(path: impl AsRef<Path>) -> Result<Self, StorageError> {
         let path = path.as_ref();
         if path.file_name().and_then(|name| name.to_str())
@@ -1278,12 +1307,13 @@ impl FleetTrustStateFrankensqliteBackend {
                 backend: "frankensqlite_fleet_trust_state".to_string(),
                 detail: "fleet authority database path must be valid UTF-8".to_string(),
             })?;
-        let connection = FrankenConnection::open_file(path).map_err(|error| {
-            StorageError::BackendUnavailable {
-                backend: "frankensqlite_fleet_trust_state".to_string(),
-                detail: format!("failed to open isolated authority database: {error}"),
-            }
-        })?;
+        let connection =
+            FrankenConnection::open_strict_durable_control_plane_file(path).map_err(|error| {
+                StorageError::BackendUnavailable {
+                    backend: "frankensqlite_fleet_trust_state".to_string(),
+                    detail: format!("failed to open strict durable authority database: {error}"),
+                }
+            })?;
         Ok(Self { connection })
     }
 
@@ -1365,11 +1395,10 @@ impl FleetTrustStateFrankensqliteBackend {
         ]
     }
 
-    fn load_current(&self) -> Result<Option<StoreRecord>, String> {
-        let probes = self
-            .connection
-            .query_sync(
-                "SELECT state_id, \
+    fn load_current_using(sql: &mut impl FleetAuthoritySql) -> Result<Option<StoreRecord>, String> {
+        let probes = sql
+            .query(
+                "SELECT octet_length(state_id) AS state_id_bytes, \
                         octet_length(schema_version) AS schema_version_bytes, \
                         octet_length(fleet_authority_id) AS fleet_authority_id_bytes, \
                         octet_length(generation_decimal) AS generation_bytes, \
@@ -1379,7 +1408,7 @@ impl FleetTrustStateFrankensqliteBackend {
                         octet_length(authority_head_hash) AS authority_head_hash_bytes, \
                         octet_length(anchor_advance_permit_hex) AS permit_bytes, \
                         octet_length(snapshot_json) AS snapshot_bytes \
-                 FROM fleet_trust_state ORDER BY state_id ASC LIMIT 2;",
+                 FROM fleet_trust_state LIMIT 2;",
                 &[],
             )
             .map_err(|error| format!("fleet trust-state bounded read probe failed: {error}"))?;
@@ -1393,12 +1422,12 @@ impl FleetTrustStateFrankensqliteBackend {
             return Ok(None);
         };
 
-        let state_id = probe
-            .get_named::<i64>("state_id")
+        let state_id_bytes = probe
+            .get_named::<i64>("state_id_bytes")
             .map_err(|error| format!("invalid fleet trust-state probe row: {error}"))?;
-        if state_id != FLEET_TRUST_STATE_RECORD_ID {
+        if state_id_bytes != 1 {
             return Err(format!(
-                "fleet trust-state database contains noncanonical state_id {state_id}"
+                "fleet trust-state state_id_bytes must be exactly 1, got {state_id_bytes}"
             ));
         }
         let expected_lengths = [
@@ -1448,16 +1477,15 @@ impl FleetTrustStateFrankensqliteBackend {
             ));
         }
 
-        // Repeat the bounds inside the materializing statement. This closes the
-        // probe-to-load allocation window if another connection changes the row.
-        let rows = self
-            .connection
-            .query_sync(
+        // Repeat the metadata bounds inside the materializing statement so no
+        // projected value is decoded before the record header proves it small.
+        let rows = sql
+            .query(
                 "SELECT state_id, schema_version, fleet_authority_id, generation_decimal, authority_epoch_decimal, \
                         snapshot_hash, prior_snapshot_hash, authority_head_hash, \
                         anchor_advance_permit_hex, snapshot_json \
                  FROM fleet_trust_state \
-                 WHERE state_id = ?1 \
+                 WHERE octet_length(state_id) = 1 \
                    AND octet_length(schema_version) = ?2 \
                    AND octet_length(fleet_authority_id) = 64 \
                    AND octet_length(generation_decimal) = 20 \
@@ -1467,10 +1495,6 @@ impl FleetTrustStateFrankensqliteBackend {
                    AND octet_length(authority_head_hash) = 64 \
                    AND octet_length(anchor_advance_permit_hex) BETWEEN 1 AND ?3 \
                    AND octet_length(snapshot_json) BETWEEN 1 AND ?4 \
-                   AND NOT EXISTS (\
-                       SELECT 1 FROM fleet_trust_state AS extra \
-                       WHERE extra.state_id <> ?1\
-                   ) \
                  LIMIT 1;",
                 &[
                     Value::BigInt(FLEET_TRUST_STATE_RECORD_ID),
@@ -1489,6 +1513,14 @@ impl FleetTrustStateFrankensqliteBackend {
                     .to_string(),
             );
         };
+        let state_id = row
+            .get_named::<i64>("state_id")
+            .map_err(|error| format!("invalid fleet trust-state state_id: {error}"))?;
+        if state_id != FLEET_TRUST_STATE_RECORD_ID {
+            return Err(format!(
+                "fleet trust-state database contains noncanonical state_id {state_id}"
+            ));
+        }
         let model = FleetTrustStateEntry::from_row(row)
             .map_err(|error| format!("fleet trust-state SQLModel row is invalid: {error}"))?;
         let revision = Self::revision_from_model(&model)?;
@@ -1498,33 +1530,76 @@ impl FleetTrustStateFrankensqliteBackend {
             .map_err(|error| error.to_string())
     }
 
-    fn user_schema_objects(&self) -> Result<Vec<(String, String, String)>, String> {
+    fn load_current(&self) -> Result<Option<StoreRecord>, String> {
         self.connection
-            .query_sync(
-                "SELECT type, name, tbl_name FROM sqlite_schema \
-                 WHERE substr(name, 1, 7) <> 'sqlite_' \
-                 ORDER BY type ASC, name ASC;",
-                &[],
-            )
-            .map_err(|error| format!("fleet trust-state schema inventory failed: {error}"))?
-            .into_iter()
-            .map(|row| {
-                Ok((
-                    row.get_named::<String>("type")
-                        .map_err(|error| format!("invalid schema inventory row: {error}"))?,
-                    row.get_named::<String>("name")
-                        .map_err(|error| format!("invalid schema inventory row: {error}"))?,
-                    row.get_named::<String>("tbl_name")
-                        .map_err(|error| format!("invalid schema inventory row: {error}"))?,
-                ))
-            })
-            .collect::<Result<Vec<_>, _>>()
+            .with_exclusive_transaction_result(|transaction| Self::load_current_using(transaction))
+            .map_err(|error| error.to_string())
     }
 
-    fn validate_authority_table_shape(&self) -> Result<(), String> {
-        let rows = self
-            .connection
-            .query_sync("PRAGMA table_info(fleet_trust_state);", &[])
+    fn user_schema_objects_using(
+        sql: &mut impl FleetAuthoritySql,
+    ) -> Result<Vec<(String, String, String)>, String> {
+        sql.query(
+            "SELECT type, name, tbl_name FROM sqlite_schema \
+                 WHERE substr(name, 1, 7) <> 'sqlite_' \
+                 ORDER BY type ASC, name ASC;",
+            &[],
+        )
+        .map_err(|error| format!("fleet trust-state schema inventory failed: {error}"))?
+        .into_iter()
+        .map(|row| {
+            Ok((
+                row.get_named::<String>("type")
+                    .map_err(|error| format!("invalid schema inventory row: {error}"))?,
+                row.get_named::<String>("name")
+                    .map_err(|error| format!("invalid schema inventory row: {error}"))?,
+                row.get_named::<String>("tbl_name")
+                    .map_err(|error| format!("invalid schema inventory row: {error}"))?,
+            ))
+        })
+        .collect::<Result<Vec<_>, _>>()
+    }
+
+    fn validate_authority_table_shape_using(
+        sql: &mut impl FleetAuthoritySql,
+    ) -> Result<(), String> {
+        let schema_rows = sql
+            .query(
+                "SELECT sql AS create_sql FROM sqlite_schema \
+                 WHERE type = 'table' AND name = 'fleet_trust_state';",
+                &[],
+            )
+            .map_err(|error| {
+                format!("fleet trust-state CREATE TABLE inspection failed: {error}")
+            })?;
+        if schema_rows.len() != 1 {
+            return Err(format!(
+                "fleet trust-state schema has {} CREATE TABLE rows; expected exactly one",
+                schema_rows.len()
+            ));
+        }
+        let actual_create_sql = schema_rows
+            .first()
+            .ok_or_else(|| "fleet trust-state CREATE TABLE row disappeared".to_string())?
+            .get_named::<String>("create_sql")
+            .map_err(|error| format!("invalid fleet trust-state CREATE TABLE row: {error}"))?;
+        let normalize_create_sql = |statement: &str| {
+            statement
+                .trim_end_matches(';')
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        if normalize_create_sql(&actual_create_sql)
+            != normalize_create_sql(FLEET_TRUST_STATE_CANONICAL_CREATE_SQL)
+        {
+            return Err(format!(
+                "fleet trust-state table has noncanonical CREATE TABLE SQL: {actual_create_sql}"
+            ));
+        }
+
+        let rows = sql
+            .query("PRAGMA table_info(fleet_trust_state);", &[])
             .map_err(|error| format!("fleet trust-state table inspection failed: {error}"))?;
         let expected = [
             ("state_id", "BIGINT", 1_i64, 1_i64),
@@ -1581,43 +1656,49 @@ impl FleetTrustStateFrankensqliteBackend {
         Ok(())
     }
 
-    fn initialize_authority_schema(&self) -> Result<(), String> {
+    fn initialize_authority_schema_using(sql: &mut impl FleetAuthoritySql) -> Result<(), String> {
         let expected_objects = vec![(
             "table".to_string(),
             "fleet_trust_state".to_string(),
             "fleet_trust_state".to_string(),
         )];
-        let preflight_objects = self.user_schema_objects()?;
+        let preflight_objects = Self::user_schema_objects_using(sql)?;
         if !preflight_objects.is_empty() && preflight_objects != expected_objects {
             return Err(format!(
                 "isolated fleet authority database contains unexpected schema objects before bootstrap: {preflight_objects:?}"
             ));
         }
         if preflight_objects.is_empty() {
-            self.connection
-                .execute_raw(&fleet_trust_state_create_table_sql())
+            sql.execute_raw(&fleet_trust_state_create_table_sql())
                 .map_err(|error| format!("fleet trust-state schema bootstrap failed: {error}"))?;
         }
-        let postflight_objects = self.user_schema_objects()?;
+        let postflight_objects = Self::user_schema_objects_using(sql)?;
         if postflight_objects != expected_objects {
             return Err(format!(
                 "isolated fleet authority database contains unexpected schema objects after bootstrap: {postflight_objects:?}"
             ));
         }
-        self.validate_authority_table_shape()?;
-        self.load_current().map(|_| ())
+        Self::validate_authority_table_shape_using(sql)?;
+        Self::load_current_using(sql).map(|_| ())
     }
 
-    fn apply_candidate(
-        &self,
+    fn initialize_authority_schema(&self) -> Result<(), String> {
+        self.connection
+            .with_exclusive_transaction_result(|transaction| {
+                Self::initialize_authority_schema_using(transaction)
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    fn apply_candidate_using(
+        sql: &mut impl FleetAuthoritySql,
         model: &FleetTrustStateEntry,
         expected_revision: Option<u64>,
         expected_current_snapshot_hash: Option<&str>,
     ) -> Result<u64, String> {
         match (expected_revision, expected_current_snapshot_hash) {
-            (None, None) => self
-                .connection
-                .execute_sync(
+            (None, None) => sql
+                .execute(
                     "INSERT INTO fleet_trust_state \
                         (state_id, schema_version, fleet_authority_id, generation_decimal, authority_epoch_decimal, \
                          snapshot_hash, prior_snapshot_hash, authority_head_hash, \
@@ -1633,20 +1714,19 @@ impl FleetTrustStateFrankensqliteBackend {
                     Value::Text(format!("{expected_revision:020}")),
                     Value::Text(expected_hash.to_string()),
                 ]);
-                self.connection
-                    .execute_sync(
-                        "UPDATE fleet_trust_state \
+                sql.execute(
+                    "UPDATE fleet_trust_state \
                          SET schema_version = ?2, fleet_authority_id = ?3, \
                              generation_decimal = ?4, authority_epoch_decimal = ?5, \
                              snapshot_hash = ?6, prior_snapshot_hash = ?7, \
                              authority_head_hash = ?8, anchor_advance_permit_hex = ?9, \
                              snapshot_json = ?10 \
                          WHERE state_id = ?1 \
-                           AND generation_decimal = ?11 \
-                           AND snapshot_hash = ?12;",
-                        &values,
-                    )
-                    .map_err(|error| format!("fleet trust-state update CAS failed: {error}"))
+                           AND generation_decimal COLLATE BINARY = ?11 COLLATE BINARY \
+                           AND snapshot_hash COLLATE BINARY = ?12 COLLATE BINARY;",
+                    &values,
+                )
+                .map_err(|error| format!("fleet trust-state update CAS failed: {error}"))
             }
             _ => Err(
                 "fleet trust-state expected revision and expected snapshot hash must both be present or both be absent"
@@ -1723,32 +1803,41 @@ impl FrankensqliteBackend for FleetTrustStateFrankensqliteBackend {
             );
         }
 
-        let affected =
-            self.apply_candidate(&model, expected_revision, expected_current_snapshot_hash)?;
-        if affected > 1 {
-            return Err(format!(
-                "fleet trust-state singleton CAS affected {affected} rows"
-            ));
-        }
-        let current = self.load_current()?;
-        if affected == 0 {
-            return Ok(CompareAndSwapOutcome::Conflict { current });
-        }
-
         let expected = model
             .to_store_record(next_revision)
             .map_err(|error| error.to_string())?;
-        match current {
-            Some(current) if current == expected => Ok(CompareAndSwapOutcome::Applied(current)),
-            Some(_) => Err(
-                "fleet trust-state CAS committed but exact durable readback changed before publication"
-                    .to_string(),
-            ),
-            None => Err(
-                "fleet trust-state CAS reported one affected row without durable readback"
-                    .to_string(),
-            ),
-        }
+        self
+            .connection
+            .with_exclusive_transaction_result(|transaction| {
+                let affected = Self::apply_candidate_using(
+                    transaction,
+                    &model,
+                    expected_revision,
+                    expected_current_snapshot_hash,
+                )?;
+                if affected > 1 {
+                    return Err(format!(
+                        "fleet trust-state singleton CAS affected {affected} rows"
+                    ));
+                }
+                let current = Self::load_current_using(transaction)?;
+                if affected == 0 {
+                    return Ok(CompareAndSwapOutcome::Conflict { current });
+                }
+                match current {
+                    Some(current) if current == expected => {
+                        Ok(CompareAndSwapOutcome::Applied(current))
+                    }
+                    Some(_) => Err(
+                        "fleet trust-state CAS readback differed before commit".to_string(),
+                    ),
+                    None => Err(
+                        "fleet trust-state CAS reported one affected row without transactional readback"
+                            .to_string(),
+                    ),
+                }
+            })
+            .map_err(|error| error.to_string())
     }
 
     fn get_record(&self, store: StoreKind, key: &str) -> Result<Option<StoreRecord>, String> {
@@ -5173,7 +5262,7 @@ mod tests {
         let shape_error = malformed
             .initialize_authority_schema()
             .expect_err("malformed authority schema must fail closed");
-        assert!(shape_error.contains("has 2 columns"));
+        assert!(shape_error.contains("noncanonical CREATE TABLE SQL"));
 
         let triggered = FleetTrustStateFrankensqliteBackend::open_memory()
             .expect("trigger-schema test backend should open");
@@ -5193,6 +5282,21 @@ mod tests {
             .expect_err("authority triggers must fail closed");
         assert!(trigger_error.contains("unexpected schema objects before bootstrap"));
         assert!(trigger_error.contains("fleet_trust_state_after_update"));
+
+        let collated = FleetTrustStateFrankensqliteBackend::open_memory()
+            .expect("collation-schema test backend should open");
+        let collated_sql = fleet_trust_state_create_table_sql().replace(
+            "\"generation_decimal\" TEXT NOT NULL",
+            "\"generation_decimal\" TEXT COLLATE RTRIM NOT NULL",
+        );
+        collated
+            .connection
+            .execute_raw(&collated_sql)
+            .expect("test should seed a text-collated authority table");
+        let collation_error = collated
+            .initialize_authority_schema()
+            .expect_err("nonbinary authority collations must fail closed");
+        assert!(collation_error.contains("noncanonical CREATE TABLE SQL"));
     }
 
     #[test]
@@ -5231,6 +5335,35 @@ mod tests {
             .load_current()
             .expect_err("multiple physical rows must fail before SQLModel deserialization");
         assert!(error.contains("at least 2 rows"));
+    }
+
+    #[test]
+    fn real_fleet_backend_bounds_state_id_before_materialization() {
+        let backend = FleetTrustStateFrankensqliteBackend::open_memory()
+            .expect("state-id ingress test backend should open");
+        backend
+            .initialize_authority_schema()
+            .expect("canonical authority schema should initialize");
+        let model = fleet_trust_state_entry(1, 10);
+        let mut values = FleetTrustStateFrankensqliteBackend::values_for_model(&model);
+        values[0] = Value::Bytes(vec![0xA5; 1024 * 1024]);
+        backend
+            .connection
+            .execute_sync(
+                "INSERT INTO fleet_trust_state \
+                    (state_id, schema_version, fleet_authority_id, generation_decimal, authority_epoch_decimal, \
+                     snapshot_hash, prior_snapshot_hash, authority_head_hash, \
+                     anchor_advance_permit_hex, snapshot_json) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10);",
+                &values,
+            )
+            .expect("non-STRICT test table should accept a hostile state-id type");
+
+        let error = backend
+            .load_current()
+            .expect_err("oversized state_id must be refused by the metadata probe");
+        assert!(error.contains("state_id_bytes must be exactly 1"));
+        assert!(!error.contains("invalid fleet trust-state probe row"));
     }
 
     #[test]

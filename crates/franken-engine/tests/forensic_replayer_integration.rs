@@ -34,6 +34,7 @@ use frankenengine_engine::forensic_replayer::{
     CounterfactualSpec, DecisionChange, ForensicReplayer, IncidentMetadata, IncidentTrace,
     ReplayConfig, ReplayDiff, ReplayError, ReplayResult, TraceValidationError, validate_trace,
 };
+use frankenengine_engine::hostcall_telemetry::TelemetryDropCounts;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -99,6 +100,7 @@ fn build_trace_with_id(evidence: Vec<Evidence>, trace_id: &str) -> IncidentTrace
             annotations: BTreeMap::new(),
         },
         telemetry_log: Vec::new(),
+        telemetry_drop_counts: Default::default(),
         posterior_history,
         decision_log,
         evidence_log: evidence,
@@ -121,6 +123,7 @@ fn empty_trace() -> IncidentTrace {
             annotations: BTreeMap::new(),
         },
         telemetry_log: Vec::new(),
+        telemetry_drop_counts: Default::default(),
         posterior_history: Vec::new(),
         decision_log: Vec::new(),
         evidence_log: Vec::new(),
@@ -207,7 +210,7 @@ fn trace_serde_preserves_content_hash() {
 }
 
 // ===========================================================================
-// Section 3 — TraceValidationError Display all 7 variants
+// Section 3 — TraceValidationError Display all 8 variants
 // ===========================================================================
 
 #[test]
@@ -260,6 +263,20 @@ fn validation_error_display_empty_trace() {
 }
 
 #[test]
+fn validation_error_display_incomplete_telemetry() {
+    let e = TraceValidationError::IncompleteTelemetry {
+        drop_counts: TelemetryDropCounts {
+            channel_full: 2,
+            monotonicity_violation: 1,
+            empty_extension_id: 0,
+        },
+    };
+    let s = e.to_string();
+    assert!(s.contains("incomplete telemetry"));
+    assert!(s.contains("3 dropped record(s)"));
+}
+
+#[test]
 fn validation_error_display_telemetry_integrity_failure() {
     let e = TraceValidationError::TelemetryIntegrityFailure { record_id: 77 };
     let s = e.to_string();
@@ -278,7 +295,7 @@ fn validation_error_display_receipt_integrity_failure() {
 }
 
 #[test]
-fn validation_error_serde_roundtrip_all_seven() {
+fn validation_error_serde_roundtrip_all_eight() {
     let variants: Vec<TraceValidationError> = vec![
         TraceValidationError::NonMonotonicTimestamp {
             record_index: 1,
@@ -295,6 +312,12 @@ fn validation_error_serde_roundtrip_all_seven() {
             posteriors: 6,
         },
         TraceValidationError::EmptyTrace,
+        TraceValidationError::IncompleteTelemetry {
+            drop_counts: TelemetryDropCounts {
+                channel_full: 1,
+                ..TelemetryDropCounts::default()
+            },
+        },
         TraceValidationError::TelemetryIntegrityFailure { record_id: 10 },
         TraceValidationError::ReceiptIntegrityFailure {
             receipt_id: "rcpt-rt".to_string(),

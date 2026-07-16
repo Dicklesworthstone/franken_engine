@@ -12,9 +12,9 @@
 //! of the argument register values, and a deterministic timestamp sourced from
 //! the interpreter's instruction counter (so two replays produce byte-identical
 //! records). The live recorder is exposed via `InterpreterCore::hostcall_telemetry`.
-//! [`crate::forensic_replayer::IncidentTrace::with_telemetry_log`] copies the
-//! recorder's records into an incident trace's `telemetry_log`, giving the
-//! Probabilistic Guardplane the runtime evidence feed it expects.
+//! [`crate::forensic_replayer::IncidentTrace::with_telemetry_recorder`] copies
+//! the recorder's records and drop counts into an incident trace, giving the
+//! Probabilistic Guardplane a completeness-aware runtime evidence feed.
 //!
 //! Plan reference: Section 10.5, item 3.
 //! Cross-refs: 9A.2 (Probabilistic Guardplane), 9E.9 (normative
@@ -452,6 +452,7 @@ impl Default for RecorderConfig {
 /// guardplane observes is incomplete and must not be treated as a clean,
 /// event-free stream.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TelemetryDropCounts {
     /// Records dropped because the channel was at capacity (backpressure).
     pub channel_full: u64,
@@ -682,8 +683,12 @@ impl TelemetryRecorder {
         &self.snapshots
     }
 
-    /// Compute the overall content hash of all records.
+    /// Compute the overall content hash of all records and any observed drops.
     /// Records are sorted by record_id for insertion-order independence.
+    ///
+    /// Complete streams retain their historical hash. Incomplete streams add
+    /// a domain-separated drop-count suffix so a retained record prefix cannot
+    /// hash identically after a refused security-relevant tail (bd-0332s).
     pub fn content_hash(&self) -> ContentHash {
         let mut buf = Vec::new();
         let mut sorted: Vec<_> = self.records.iter().collect();
@@ -691,6 +696,12 @@ impl TelemetryRecorder {
         for record in &sorted {
             buf.extend_from_slice(&record.record_id.to_le_bytes());
             buf.extend_from_slice(record.content_hash.as_bytes());
+        }
+        if self.dropped.any() {
+            buf.extend_from_slice(b"telemetry-drop-counts-v1");
+            buf.extend_from_slice(&self.dropped.channel_full.to_le_bytes());
+            buf.extend_from_slice(&self.dropped.monotonicity_violation.to_le_bytes());
+            buf.extend_from_slice(&self.dropped.empty_extension_id.to_le_bytes());
         }
         ContentHash::compute(&buf)
     }
@@ -2350,6 +2361,7 @@ mod tests {
         recorder
             .record(2, test_input("ext-001", HostcallType::FsRead))
             .unwrap();
+        let complete_prefix_hash = recorder.content_hash();
 
         // Mirror the production swallow: `let _ = recorder.record(...)`.
         let dropped = test_input("attacker", HostcallType::FsWrite);
@@ -2366,6 +2378,11 @@ mod tests {
         assert_eq!(recorder.drop_counts().channel_full, 1);
         assert_eq!(recorder.drop_counts().monotonicity_violation, 0);
         assert_eq!(recorder.drop_counts().empty_extension_id, 0);
+        assert_ne!(
+            recorder.content_hash(),
+            complete_prefix_hash,
+            "a refused tail must change the completeness-aware recorder hash"
+        );
 
         // A second overflow accumulates (monotonic signal).
         let _ = recorder.record(4, test_input("attacker", HostcallType::FsWrite));
@@ -2458,5 +2475,14 @@ mod tests {
             serde_json::from_value(value).expect("legacy recorder must deserialize");
         assert_eq!(restored.dropped_records(), 0);
         assert!(!restored.has_dropped_records());
+    }
+
+    #[test]
+    fn partial_drop_counts_json_defaults_missing_reasons() {
+        let counts: TelemetryDropCounts =
+            serde_json::from_str(r#"{"channel_full":3}"#).expect("decode partial drop counts");
+        assert_eq!(counts.channel_full, 3);
+        assert_eq!(counts.monotonicity_violation, 0);
+        assert_eq!(counts.empty_extension_id, 0);
     }
 }

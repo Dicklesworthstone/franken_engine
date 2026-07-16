@@ -35,6 +35,7 @@ use frankenengine_engine::forensic_replayer::{
     validate_trace,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
+use frankenengine_engine::hostcall_telemetry::TelemetryDropCounts;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -96,6 +97,7 @@ fn build_trace_with_id(evidence: Vec<Evidence>, trace_id: &str) -> IncidentTrace
             annotations: BTreeMap::new(),
         },
         telemetry_log: Vec::new(),
+        telemetry_drop_counts: Default::default(),
         posterior_history,
         decision_log,
         evidence_log: evidence,
@@ -122,6 +124,7 @@ fn empty_trace() -> IncidentTrace {
             annotations: BTreeMap::new(),
         },
         telemetry_log: Vec::new(),
+        telemetry_drop_counts: Default::default(),
         posterior_history: Vec::new(),
         decision_log: Vec::new(),
         evidence_log: Vec::new(),
@@ -158,11 +161,11 @@ fn make_replay_step(idx: u64, action: ContainmentAction) -> ReplayStep {
 }
 
 // ===========================================================================
-// Section 1 — TraceValidationError Display uniqueness across all 7 variants
+// Section 1 — TraceValidationError Display uniqueness across all 8 variants
 // ===========================================================================
 
 #[test]
-fn enrichment_trace_validation_error_display_all_seven_unique() {
+fn enrichment_trace_validation_error_display_all_eight_unique() {
     let variants: Vec<TraceValidationError> = vec![
         TraceValidationError::NonMonotonicTimestamp {
             record_index: 10,
@@ -179,6 +182,12 @@ fn enrichment_trace_validation_error_display_all_seven_unique() {
             posteriors: 44,
         },
         TraceValidationError::EmptyTrace,
+        TraceValidationError::IncompleteTelemetry {
+            drop_counts: TelemetryDropCounts {
+                empty_extension_id: 1,
+                ..TelemetryDropCounts::default()
+            },
+        },
         TraceValidationError::TelemetryIntegrityFailure { record_id: 55 },
         TraceValidationError::ReceiptIntegrityFailure {
             receipt_id: "rcpt-unique".to_string(),
@@ -192,8 +201,8 @@ fn enrichment_trace_validation_error_display_all_seven_unique() {
     }
     assert_eq!(
         display_set.len(),
-        7,
-        "all 7 variants must produce distinct Display strings"
+        8,
+        "all 8 variants must produce distinct Display strings"
     );
 }
 
@@ -326,6 +335,20 @@ fn enrichment_trace_validation_error_serde_empty_trace() {
     let restored: TraceValidationError = serde_json::from_str(&json).unwrap();
     assert_eq!(e, restored);
     assert_eq!(restored.to_string(), "empty trace");
+}
+
+#[test]
+fn enrichment_trace_validation_error_serde_incomplete_telemetry() {
+    let e = TraceValidationError::IncompleteTelemetry {
+        drop_counts: TelemetryDropCounts {
+            channel_full: 1,
+            monotonicity_violation: 2,
+            empty_extension_id: 3,
+        },
+    };
+    let json = serde_json::to_string(&e).unwrap();
+    let restored: TraceValidationError = serde_json::from_str(&json).unwrap();
+    assert_eq!(e, restored);
 }
 
 #[test]
@@ -576,6 +599,12 @@ fn enrichment_replay_error_serde_validation_with_all_error_types() {
             TraceValidationError::EvidenceCountMismatch {
                 evidence: 7,
                 posteriors: 3,
+            },
+            TraceValidationError::IncompleteTelemetry {
+                drop_counts: TelemetryDropCounts {
+                    channel_full: 1,
+                    ..TelemetryDropCounts::default()
+                },
             },
             TraceValidationError::TelemetryIntegrityFailure { record_id: 99 },
             TraceValidationError::ReceiptIntegrityFailure {

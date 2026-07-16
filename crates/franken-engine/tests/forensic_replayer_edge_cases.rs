@@ -28,6 +28,7 @@ use frankenengine_engine::forensic_replayer::{
     ReplayConfig, ReplayDiff, ReplayError, ReplayResult, ReplayStep, TraceValidationError,
     validate_trace,
 };
+use frankenengine_engine::hostcall_telemetry::TelemetryDropCounts;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -101,6 +102,7 @@ fn build_trace(evidence: Vec<Evidence>) -> IncidentTrace {
             annotations: BTreeMap::new(),
         },
         telemetry_log: Vec::new(),
+        telemetry_drop_counts: Default::default(),
         posterior_history,
         decision_log,
         evidence_log: evidence,
@@ -132,6 +134,12 @@ fn trace_validation_error_serde_all_variants() {
             posteriors: 6,
         },
         TraceValidationError::EmptyTrace,
+        TraceValidationError::IncompleteTelemetry {
+            drop_counts: TelemetryDropCounts {
+                channel_full: 1,
+                ..TelemetryDropCounts::default()
+            },
+        },
         TraceValidationError::TelemetryIntegrityFailure { record_id: 42 },
         TraceValidationError::ReceiptIntegrityFailure {
             receipt_id: "rcpt-001".to_string(),
@@ -162,6 +170,12 @@ fn trace_validation_error_display_all_variants() {
             posteriors: 4,
         },
         TraceValidationError::EmptyTrace,
+        TraceValidationError::IncompleteTelemetry {
+            drop_counts: TelemetryDropCounts {
+                monotonicity_violation: 1,
+                ..TelemetryDropCounts::default()
+            },
+        },
         TraceValidationError::TelemetryIntegrityFailure { record_id: 99 },
         TraceValidationError::ReceiptIntegrityFailure {
             receipt_id: "r1".to_string(),
@@ -176,8 +190,9 @@ fn trace_validation_error_display_all_variants() {
     assert!(variants[2].to_string().contains("3"));
     assert!(variants[3].to_string().contains("2"));
     assert_eq!(variants[4].to_string(), "empty trace");
-    assert!(variants[5].to_string().contains("99"));
-    assert!(variants[6].to_string().contains("r1"));
+    assert!(variants[5].to_string().contains("incomplete telemetry"));
+    assert!(variants[6].to_string().contains("99"));
+    assert!(variants[7].to_string().contains("r1"));
 }
 
 // ===========================================================================

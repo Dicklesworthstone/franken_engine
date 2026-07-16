@@ -6252,11 +6252,11 @@ pub struct InterpreterCore {
     /// Live hostcall telemetry recorder driven from every `dispatch_*_hostcall`
     /// path (bd-qi3hs). The deterministic timestamp source is the interpreter's
     /// own instruction counter, so the record sequence is byte-identical across
-    /// replays. Recording is best-effort: backpressure (`ChannelFull`) is
-    /// swallowed silently so a saturated telemetry channel can never block JS
-    /// execution. The recorder is exposed via [`InterpreterCore::hostcall_telemetry`]
-    /// and copied into incident traces via
-    /// [`crate::forensic_replayer::IncidentTrace::with_telemetry_log`].
+    /// replays. Recording is best-effort: backpressure (`ChannelFull`) never
+    /// blocks JS execution, but every refusal increments completeness evidence.
+    /// The recorder is exposed via [`InterpreterCore::hostcall_telemetry`] and
+    /// copied into incident traces via
+    /// [`crate::forensic_replayer::IncidentTrace::with_telemetry_recorder`].
     telemetry_recorder: TelemetryRecorder,
     /// Structured events.
     events: Vec<InterpreterEvent>,
@@ -45367,9 +45367,9 @@ impl InterpreterCore {
     }
 
     /// Live hostcall telemetry recorder driven from each `dispatch_*_hostcall`
-    /// path (bd-qi3hs). Use this to seed
-    /// [`crate::forensic_replayer::IncidentTrace::telemetry_log`] with the
-    /// real per-execution evidence feed the Probabilistic Guardplane consumes.
+    /// path (bd-qi3hs). Pass this recorder to
+    /// [`crate::forensic_replayer::IncidentTrace::with_telemetry_recorder`] so
+    /// replay receives both retained records and completeness evidence.
     pub fn hostcall_telemetry(&self) -> &TelemetryRecorder {
         &self.telemetry_recorder
     }

@@ -200,10 +200,10 @@ fn fresh_interpreter_has_empty_recorder() {
 }
 
 #[test]
-fn incident_trace_with_telemetry_log_carries_real_records() {
+fn incident_trace_with_telemetry_recorder_carries_complete_evidence() {
     // The forensic_replayer bridge: an IncidentTrace seeded from interpreter
-    // recorder state actually carries the live records (the old `Vec::new()`
-    // placeholders left telemetry_log empty no matter what).
+    // recorder state carries both the live records and the source recorder's
+    // completeness evidence.
     let core = run_to_core(
         "trace-incident",
         "console.log('seed-bd-qi3hs'); console.error('uh-oh');",
@@ -228,6 +228,7 @@ fn incident_trace_with_telemetry_log_carries_real_records() {
             annotations: std::collections::BTreeMap::new(),
         },
         telemetry_log: Vec::new(),
+        telemetry_drop_counts: Default::default(),
         posterior_history: Vec::new(),
         decision_log: Vec::new(),
         evidence_log: Vec::new(),
@@ -242,7 +243,7 @@ fn incident_trace_with_telemetry_log_carries_real_records() {
         "an unbridged IncidentTrace starts with an empty telemetry_log"
     );
 
-    let bridged = trace.with_telemetry_log(live_records.clone());
+    let bridged = trace.with_telemetry_recorder(core.hostcall_telemetry());
     assert_eq!(
         bridged.telemetry_log.len(),
         live_records.len(),
@@ -251,6 +252,11 @@ fn incident_trace_with_telemetry_log_carries_real_records() {
     for (a, b) in bridged.telemetry_log.iter().zip(live_records.iter()) {
         assert_eq!(a, b, "bridged records must equal the live source records");
     }
+    assert_eq!(
+        bridged.telemetry_drop_counts,
+        core.hostcall_telemetry().drop_counts(),
+        "bridged trace must retain source-recorder completeness evidence"
+    );
 
     // The trace's content hash must change once real records replace the
     // empty placeholder — otherwise the bridge has no observable effect.

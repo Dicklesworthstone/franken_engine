@@ -534,6 +534,7 @@ fn build_doctor_input() -> RuntimeDiagnosticsCliInput {
         },
         evidence_entries: Vec::new(),
         hostcall_records: Vec::new(),
+        telemetry_drop_counts: Default::default(),
         containment_receipts: Vec::new(),
         replay_artifacts: Vec::new(),
     }

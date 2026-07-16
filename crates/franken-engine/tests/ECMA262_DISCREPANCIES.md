@@ -265,7 +265,7 @@ test reports, not buried in const sets (see DISC-005 below).
 
 ### DISC-013: Own-property enumeration carriers require explicit ECMAScript order
 
-- **Status:** PARTIALLY RESOLVED; ACCEPTED only for the remaining accessor/symbol baseline gaps
+- **Status:** PARTIALLY RESOLVED; ACCEPTED only for the remaining baseline Symbol-key gap
 - **ES2020 ref:** §9.1.11 (`[[OwnPropertyKeys]]`), plus callers such as
   `Object.keys`, `Object.values`, `Object.entries`, `Reflect.ownKeys`,
   `for...in`, and `JSON.stringify`
@@ -284,21 +284,29 @@ test reports, not buried in const sets (see DISC-005 below).
   canonical numeric-index-then-creation-order iteration. Full and incremental
   memory accounting charge the carrier's duplicate ordering key, and rejected
   core accessor conversions restore the exact prior data-property position.
-- **Remaining symptom:** `franken-core` still stores accessor descriptors in a
-  separate map and appends them after data keys during for-in collection, so a
-  mixed data/accessor creation sequence cannot yet retain one unified order.
-  The string-key-only baseline carrier also does not model Symbol keys; the
-  descriptor object model does. These are explicit non-goals of `bd-n8eta.2`.
+  `bd-n8eta.3` adds one ordinary-string creation ledger shared by
+  `franken-core` data and accessor storage. Descriptor-kind transitions retain
+  position, delete/re-create appends, canonical indices from either map remain
+  numeric-first, and both `Object.keys` and for-in observe the unified order.
+  The additive sequence sidecar survives execution-seed cloning and serde
+  round trips; legacy payloads without it remain readable through the strongest
+  deterministic order their historical shape retained (ordered data keys,
+  then lexical accessor-only keys). Rejected conversions restore the prior
+  maps, chronology shape, and memory estimate exactly.
+- **Remaining symptom:** The string-key-only executable baseline carrier still
+  does not model Symbol keys; the descriptor object model does. Invoking
+  accessor getters from value-consuming builtins such as `Object.values` is a
+  separate continuation/descriptor-execution gap rather than an own-key order
+  carrier gap.
 - **Test verdict expression:** Descriptor and baseline carrier tests prove
   canonical index boundaries, donor order `b,a`, update stability,
   delete/re-create append, map-shaped serde recovery, and failed-write rollback.
   Product-path querystring fixtures 0010/0013/0020 now assert Node/Bun insertion
   order rather than the former lexical divergence pin.
-- **Rationale for the remaining ACCEPTED scope:** A complete repair needs one
-  creation-order carrier shared by core data and accessor descriptors plus an
-  explicit baseline Symbol-key representation and compatible wire semantics.
-  Keeping that residual explicit avoids overstating the data-property slice as
-  full accessor/symbol conformance.
+- **Rationale for the remaining ACCEPTED scope:** Complete `[[OwnPropertyKeys]]`
+  coverage now needs an explicit executable-baseline Symbol-key representation
+  and compatible wire semantics. Keeping that residual explicit avoids
+  overstating string-key order as full Symbol conformance.
 - **Tracking beads:** bd-qporw (original decision), bd-n8eta (runtime repair),
   bd-n8eta.1 (descriptor-model slice), bd-n8eta.2 (baseline data-property slice),
   bd-n8eta.3 (core mixed data/accessor order), bd-n8eta.4 (baseline Symbol keys)

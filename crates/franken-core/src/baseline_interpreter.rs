@@ -51,7 +51,7 @@ use crate::js_string::JsString;
 use crate::lowering_pipeline::{
     CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX, LoweringContext, lower_ir0_to_ir3,
 };
-use crate::object_model::OrderedStringMap;
+use crate::object_model::{OrderedStringMap, canonical_array_index};
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 use crate::runtime_config::ExecutionConfig;
 
@@ -500,26 +500,237 @@ pub struct ObjectId(pub u32);
 // ---------------------------------------------------------------------------
 
 /// A heap-allocated object with string-keyed properties.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct HeapObject {
     /// Data properties in ECMAScript own-key order with deterministic lookup.
     pub properties: OrderedStringMap<Value>,
     /// Accessor descriptor storage, parallel to `properties` so the baseline
     /// heap can model the object_model accessor/data split.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub accessors: BTreeMap<String, AccessorProperty>,
     /// Prototype link used by membership operators and constructor instances.
     pub prototype: Option<ObjectId>,
     /// Constructor function index that allocated this object via `Construct`.
     pub constructor_function: Option<u32>,
     /// Whether this object was allocated by an array-producing path.
-    #[serde(default)]
     pub is_array: bool,
+}
+
+impl Serialize for HeapObject {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+
+        let order = self.properties.baseline_string_key_order().map(|_| {
+            self.own_property_keys()
+                .into_iter()
+                .filter(|key| canonical_array_index(key).is_none())
+                .collect::<Vec<_>>()
+        });
+        let field_count =
+            4 + if self.accessors.is_empty() { 0 } else { 1 } + if order.is_some() { 1 } else { 0 };
+        let mut object = serializer.serialize_struct("HeapObject", field_count)?;
+        object.serialize_field("properties", &self.properties)?;
+        if !self.accessors.is_empty() {
+            object.serialize_field("accessors", &self.accessors)?;
+        }
+        object.serialize_field("prototype", &self.prototype)?;
+        object.serialize_field("constructor_function", &self.constructor_function)?;
+        object.serialize_field("is_array", &self.is_array)?;
+        if let Some(order) = &order {
+            object.serialize_field("own_string_key_order", order)?;
+        }
+        object.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for HeapObject {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+
+        #[derive(Deserialize)]
+        struct HeapObjectWire {
+            properties: OrderedStringMap<Value>,
+            #[serde(default)]
+            accessors: BTreeMap<String, AccessorProperty>,
+            prototype: Option<ObjectId>,
+            constructor_function: Option<u32>,
+            #[serde(default)]
+            is_array: bool,
+            #[serde(default)]
+            own_string_key_order: Option<Vec<String>>,
+        }
+
+        let wire = HeapObjectWire::deserialize(deserializer)?;
+        let mut object = Self {
+            properties: wire.properties,
+            accessors: wire.accessors,
+            prototype: wire.prototype,
+            constructor_function: wire.constructor_function,
+            is_array: wire.is_array,
+        };
+
+        if let Some(order) = wire.own_string_key_order {
+            let mut encoded = BTreeSet::new();
+            for key in &order {
+                if canonical_array_index(key).is_some() {
+                    return Err(D::Error::custom(
+                        "canonical array index in ordinary-string key order",
+                    ));
+                }
+                if !encoded.insert(key.clone()) {
+                    return Err(D::Error::custom(
+                        "duplicate key in ordinary-string key order",
+                    ));
+                }
+            }
+            let live = object
+                .properties
+                .keys()
+                .chain(object.accessors.keys())
+                .filter(|key| canonical_array_index(key).is_none())
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            if encoded != live {
+                return Err(D::Error::custom(
+                    "ordinary-string key order must contain every live ordinary key exactly once",
+                ));
+            }
+            object.properties.set_baseline_string_key_order(Some(order));
+        }
+
+        Ok(object)
+    }
+}
+
+impl PartialEq for HeapObject {
+    fn eq(&self, other: &Self) -> bool {
+        self.properties == other.properties
+            && self.accessors == other.accessors
+            && self.prototype == other.prototype
+            && self.constructor_function == other.constructor_function
+            && self.is_array == other.is_array
+            && self.properties.baseline_string_key_order().is_some()
+                == other.properties.baseline_string_key_order().is_some()
+            && self.own_property_keys() == other.own_property_keys()
+    }
+}
+
+impl Eq for HeapObject {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PropertyOrderRollback {
+    Unchanged,
+    RemoveInsertedKey,
+    Restore(Option<Vec<String>>),
 }
 
 impl HeapObject {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn contains_own_property(&self, key: &str) -> bool {
+        self.accessors.contains_key(key) || self.properties.contains_key(key)
+    }
+
+    /// Record a logical own-property definition without moving an existing
+    /// key across data/accessor descriptor-kind transitions.
+    ///
+    /// Before recording, reconcile the hidden chronology with the observable
+    /// public fields. This preserves the position of an accessor inserted
+    /// directly through the ADR-frozen public `accessors` map before a later
+    /// interpreter mutation. The returned delta restores the exact prior
+    /// hidden state if the definition is rejected by the memory budget.
+    fn record_property_definition(&mut self, key: &str, existed: bool) -> PropertyOrderRollback {
+        if canonical_array_index(key).is_some() {
+            return PropertyOrderRollback::Unchanged;
+        }
+
+        let normalized = self
+            .own_property_keys()
+            .into_iter()
+            .filter(|candidate| canonical_array_index(candidate).is_none())
+            .collect::<Vec<_>>();
+        let previous = self
+            .properties
+            .baseline_string_key_order()
+            .map(<[String]>::to_vec);
+        let normalized_existing = previous.as_deref() == Some(normalized.as_slice());
+        if !normalized_existing {
+            self.properties
+                .set_baseline_string_key_order(Some(normalized));
+        }
+
+        let order = self
+            .properties
+            .baseline_string_key_order_mut()
+            .expect("ordinary-string order was just initialized");
+        let key_was_inserted = if existed && order.iter().any(|candidate| candidate == key) {
+            false
+        } else {
+            order.retain(|candidate| candidate != key);
+            order.push(key.to_string());
+            true
+        };
+
+        if !normalized_existing {
+            PropertyOrderRollback::Restore(previous)
+        } else if key_was_inserted {
+            PropertyOrderRollback::RemoveInsertedKey
+        } else {
+            PropertyOrderRollback::Unchanged
+        }
+    }
+
+    fn rollback_property_definition_order(&mut self, key: &str, rollback: PropertyOrderRollback) {
+        match rollback {
+            PropertyOrderRollback::Unchanged => {}
+            PropertyOrderRollback::RemoveInsertedKey => {
+                if let Some(order) = self.properties.baseline_string_key_order_mut() {
+                    order.retain(|candidate| candidate != key);
+                }
+            }
+            PropertyOrderRollback::Restore(previous) => {
+                self.properties.set_baseline_string_key_order(previous);
+            }
+        }
+    }
+
+    fn forget_property_order(&mut self, key: &str) {
+        if let Some(order) = self.properties.baseline_string_key_order_mut() {
+            order.retain(|candidate| candidate != key);
+        }
+    }
+
+    /// Return all live own string keys in ECMAScript order.
+    ///
+    /// Legacy payloads without the additive chronology sidecar recover the
+    /// strongest order their historical shape retained: ordered data keys,
+    /// then lexical accessor-only keys. The live-key union is completed
+    /// defensively so even low-level field mutation cannot hide a key.
+    fn own_property_keys(&self) -> Vec<String> {
+        let mut array_indices = BTreeMap::<u32, String>::new();
+        for key in self.properties.keys().chain(self.accessors.keys()) {
+            if let Some(index) = canonical_array_index(key) {
+                array_indices.entry(index).or_insert_with(|| key.clone());
+            }
+        }
+
+        let mut ordinary = Vec::new();
+        let mut seen = BTreeSet::new();
+        if let Some(order) = self.properties.baseline_string_key_order() {
+            for key in order {
+                if self.contains_own_property(key) && seen.insert(key.clone()) {
+                    ordinary.push(key.clone());
+                }
+            }
+        }
+        for key in self.properties.keys().chain(self.accessors.keys()) {
+            if canonical_array_index(key).is_none() && seen.insert(key.clone()) {
+                ordinary.push(key.clone());
+            }
+        }
+
+        array_indices.into_values().chain(ordinary).collect()
     }
 }
 
@@ -2229,6 +2440,8 @@ impl InterpreterCore {
         }
 
         if let Some(heap_obj) = self.heap.get_mut(slot_idx) {
+            let existed = heap_obj.contains_own_property("value");
+            heap_obj.record_property_definition("value", existed);
             heap_obj.properties.insert("value".to_string(), value);
         }
     }
@@ -2643,12 +2856,21 @@ impl InterpreterCore {
         let export_value = self.prototype_chain_get(context.module_object, "exports")?;
         self.register_module_export("default", export_value.clone())?;
         if let Value::Object(object_id) = export_value {
-            let properties = self
+            let object = self
                 .heap
                 .get(object_id.0 as usize)
-                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
-                .properties
-                .clone();
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+            let properties = object
+                .own_property_keys()
+                .into_iter()
+                .filter_map(|key| {
+                    object
+                        .properties
+                        .get(&key)
+                        .cloned()
+                        .map(|value| (key, value))
+                })
+                .collect::<Vec<_>>();
             for (key, value) in properties {
                 if key == "default" {
                     continue;
@@ -5376,9 +5598,11 @@ impl InterpreterCore {
                         // Collect source properties
                         let properties: Vec<(String, Value)> = {
                             if let Some(obj) = self.heap.get(source_id.0 as usize) {
-                                obj.properties
-                                    .iter()
-                                    .map(|(k, v)| (k.clone(), v.clone()))
+                                obj.own_property_keys()
+                                    .into_iter()
+                                    .filter_map(|key| {
+                                        obj.properties.get(&key).cloned().map(|value| (key, value))
+                                    })
                                     .collect()
                             } else {
                                 Vec::new()
@@ -9659,10 +9883,16 @@ impl InterpreterCore {
             .get(object_id.0 as usize)
             .map(|object| {
                 object
-                    .properties
-                    .iter()
-                    .filter(|(key, _)| !(object.is_array && key.as_str() == "length"))
-                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .own_property_keys()
+                    .into_iter()
+                    .filter(|key| !(object.is_array && key == "length"))
+                    .filter_map(|key| {
+                        object
+                            .properties
+                            .get(&key)
+                            .cloned()
+                            .map(|value| (key, value))
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -9799,10 +10029,9 @@ impl InterpreterCore {
             .get(object_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
         Ok(object
-            .properties
-            .keys()
-            .filter(|key| !(object.is_array && key.as_str() == "length"))
-            .cloned()
+            .own_property_keys()
+            .into_iter()
+            .filter(|key| !(object.is_array && key == "length"))
             .collect())
     }
 
@@ -10119,9 +10348,20 @@ impl InterpreterCore {
                     )
             })
             .sum::<u64>();
+        let own_string_key_order = object
+            .properties
+            .baseline_string_key_order()
+            .map(|order| {
+                order
+                    .iter()
+                    .map(|key| Self::estimate_string_bytes(key))
+                    .sum::<u64>()
+            })
+            .unwrap_or(0);
         MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES
             .saturating_add(properties)
             .saturating_add(accessors)
+            .saturating_add(own_string_key_order)
     }
 
     fn estimate_iterator_bytes(iterator: &RuntimeIteratorState) -> u64 {
@@ -10407,14 +10647,9 @@ impl InterpreterCore {
                 .heap
                 .get(id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
-            for key in object.properties.keys() {
+            for key in object.own_property_keys() {
                 if seen.insert(key.clone()) {
-                    keys.push(key.clone());
-                }
-            }
-            for key in object.accessors.keys() {
-                if seen.insert(key.clone()) {
-                    keys.push(key.clone());
+                    keys.push(key);
                 }
             }
             current = object.prototype;
@@ -10480,15 +10715,25 @@ impl InterpreterCore {
         key: String,
         value: Value,
     ) -> Result<(), InterpreterError> {
-        let (previous_data, previous_data_position, previous_accessor, property_key) = {
+        let (
+            previous_data,
+            previous_data_position,
+            previous_accessor,
+            property_key,
+            order_rollback,
+        ) = {
             let object = self
                 .heap
                 .get_mut(object_id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
             if let Some((kind, property_key)) = Self::decode_accessor_definition_key(&key) {
+                let existed = object.contains_own_property(&property_key);
+                let order_rollback = object.record_property_definition(&property_key, existed);
                 let previous_data_position =
                     object.properties.string_insertion_position(&property_key);
-                let previous_data = object.properties.remove(&property_key);
+                let previous_data = object
+                    .properties
+                    .remove_preserving_baseline_order(&property_key);
                 let previous_accessor = object.accessors.get(&property_key).cloned();
                 let accessor = object.accessors.entry(property_key.clone()).or_default();
                 match kind {
@@ -10500,11 +10745,20 @@ impl InterpreterCore {
                     previous_data_position,
                     previous_accessor,
                     property_key,
+                    order_rollback,
                 )
             } else {
+                let existed = object.contains_own_property(&key);
+                let order_rollback = object.record_property_definition(&key, existed);
                 let previous_accessor = object.accessors.remove(&key);
                 let previous_data = object.properties.insert(key.clone(), value);
-                (previous_data, None, previous_accessor, key.clone())
+                (
+                    previous_data,
+                    None,
+                    previous_accessor,
+                    key.clone(),
+                    order_rollback,
+                )
             }
         };
         if let Err(err) = self.sync_estimated_memory_bytes() {
@@ -10523,13 +10777,16 @@ impl InterpreterCore {
                     object.properties.insert(property_key.clone(), previous);
                 }
             } else {
-                object.properties.remove(&property_key);
+                object
+                    .properties
+                    .remove_preserving_baseline_order(&property_key);
             }
             if let Some(previous) = previous_accessor {
                 object.accessors.insert(property_key.clone(), previous);
             } else {
                 object.accessors.remove(&property_key);
             }
+            object.rollback_property_definition_order(&property_key, order_rollback);
             self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
             return Err(err);
         }
@@ -10545,14 +10802,16 @@ impl InterpreterCore {
         key: String,
         value: Value,
     ) -> Result<(), InterpreterError> {
-        let (previous_data, previous_accessor) = {
+        let (previous_data, previous_accessor, order_rollback) = {
             let object = self
                 .heap
                 .get_mut(object_id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+            let existed = object.contains_own_property(&key);
+            let order_rollback = object.record_property_definition(&key, existed);
             let previous_accessor = object.accessors.remove(&key);
             let previous_data = object.properties.insert(key.clone(), value);
-            (previous_data, previous_accessor)
+            (previous_data, previous_accessor, order_rollback)
         };
         if let Err(err) = self.sync_estimated_memory_bytes() {
             let object = self
@@ -10562,11 +10821,12 @@ impl InterpreterCore {
             if let Some(previous) = previous_data {
                 object.properties.insert(key.clone(), previous);
             } else {
-                object.properties.remove(&key);
+                object.properties.remove_preserving_baseline_order(&key);
             }
             if let Some(previous) = previous_accessor {
-                object.accessors.insert(key, previous);
+                object.accessors.insert(key.clone(), previous);
             }
+            object.rollback_property_definition_order(&key, order_rollback);
             self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
             return Err(err);
         }
@@ -10578,18 +10838,15 @@ impl InterpreterCore {
         object_id: ObjectId,
         key: &str,
     ) -> Result<bool, InterpreterError> {
-        let removed = self
+        let object = self
             .heap
             .get_mut(object_id.0 as usize)
-            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
-            .properties
-            .remove(key);
-        let removed_accessor = self
-            .heap
-            .get_mut(object_id.0 as usize)
-            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
-            .accessors
-            .remove(key);
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        let removed = object.properties.remove(key);
+        let removed_accessor = object.accessors.remove(key);
+        if removed.is_some() || removed_accessor.is_some() {
+            object.forget_property_order(key);
+        }
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         Ok(removed.is_some() || removed_accessor.is_some())
     }
@@ -16065,6 +16322,437 @@ mod tests {
     }
 
     #[test]
+    fn mixed_data_accessor_consumers_use_one_es_own_key_order() {
+        let mut core = quickjs_test_core();
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(object_id, "z".to_string(), Value::Int(1))
+            .unwrap();
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_GET_PREFIX}x"),
+            Value::Function(1),
+        )
+        .unwrap();
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_GET_PREFIX}10"),
+            Value::Function(2),
+        )
+        .unwrap();
+        core.set_object_property(object_id, "2".to_string(), Value::Int(2))
+            .unwrap();
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_GET_PREFIX}1"),
+            Value::Function(3),
+        )
+        .unwrap();
+        core.set_object_property(object_id, "4294967295".to_string(), Value::Int(5))
+            .unwrap();
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_GET_PREFIX}4294967294"),
+            Value::Function(4),
+        )
+        .unwrap();
+        core.set_object_property(object_id, "a".to_string(), Value::Int(6))
+            .unwrap();
+
+        let expected = vec![
+            "1".to_string(),
+            "2".to_string(),
+            "10".to_string(),
+            "4294967294".to_string(),
+            "z".to_string(),
+            "x".to_string(),
+            "4294967295".to_string(),
+            "a".to_string(),
+        ];
+        assert_eq!(
+            core.heap[object_id.0 as usize].own_property_keys(),
+            expected
+        );
+        assert_eq!(core.own_enumerable_keys(object_id).unwrap(), expected);
+        assert_eq!(core.collect_for_in_keys(object_id).unwrap(), expected);
+
+        core.registers[4] = Value::Object(object_id);
+        let keys = core
+            .dispatch_builtin_hostcall("builtin:ObjectKeys", RegRange { start: 4, count: 1 })
+            .unwrap();
+        let Value::Object(keys_id) = keys else {
+            panic!("Object.keys should return an array object");
+        };
+        assert_eq!(
+            core.read_array_like_values(keys_id),
+            expected.into_iter().map(Value::str).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn descriptor_kind_conversions_preserve_creation_position() {
+        let mut core = quickjs_test_core();
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        for (key, value) in [("a", 1), ("b", 2), ("c", 3)] {
+            core.set_object_property(object_id, key.to_string(), Value::Int(value))
+                .unwrap();
+        }
+        let expected = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_GET_PREFIX}b"),
+            Value::Function(1),
+        )
+        .unwrap();
+        assert_eq!(
+            core.heap[object_id.0 as usize].own_property_keys(),
+            expected
+        );
+        assert!(!core.heap[object_id.0 as usize].properties.contains_key("b"));
+        assert!(core.heap[object_id.0 as usize].accessors.contains_key("b"));
+
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_SET_PREFIX}b"),
+            Value::Function(2),
+        )
+        .unwrap();
+        assert_eq!(
+            core.heap[object_id.0 as usize].own_property_keys(),
+            expected
+        );
+
+        core.set_plain_data_property(object_id, "b".to_string(), Value::Int(4))
+            .unwrap();
+        assert_eq!(
+            core.heap[object_id.0 as usize].own_property_keys(),
+            expected
+        );
+        assert_eq!(
+            core.heap[object_id.0 as usize].properties.get("b"),
+            Some(&Value::Int(4))
+        );
+        assert!(!core.heap[object_id.0 as usize].accessors.contains_key("b"));
+        assert_eq!(core.qs_stringify_object(object_id, "&", "="), "a=1&b=4&c=3");
+    }
+
+    #[test]
+    fn deleted_accessor_recreation_appends_ordinary_key() {
+        let mut core = quickjs_test_core();
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(object_id, "a".to_string(), Value::Int(1))
+            .unwrap();
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_GET_PREFIX}x"),
+            Value::Function(1),
+        )
+        .unwrap();
+        core.set_object_property(object_id, "b".to_string(), Value::Int(2))
+            .unwrap();
+
+        assert!(core.remove_object_property(object_id, "x").unwrap());
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_GET_PREFIX}x"),
+            Value::Function(2),
+        )
+        .unwrap();
+        assert_eq!(
+            core.heap[object_id.0 as usize].own_property_keys(),
+            vec!["a".to_string(), "b".to_string(), "x".to_string()]
+        );
+    }
+
+    #[test]
+    fn heap_object_mixed_order_serde_roundtrip_and_legacy_fallback() {
+        let mut core = quickjs_test_core();
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(object_id, "a".to_string(), Value::Int(1))
+            .unwrap();
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_GET_PREFIX}x"),
+            Value::Function(1),
+        )
+        .unwrap();
+        core.set_object_property(object_id, "b".to_string(), Value::Int(2))
+            .unwrap();
+
+        let encoded = serde_json::to_value(&core.heap[object_id.0 as usize]).unwrap();
+        assert!(encoded["properties"].is_object());
+        assert_eq!(
+            encoded["own_string_key_order"],
+            serde_json::json!(["a", "x", "b"])
+        );
+        let restored: HeapObject = serde_json::from_value(encoded.clone()).unwrap();
+        assert_eq!(
+            restored.own_property_keys(),
+            vec!["a".to_string(), "x".to_string(), "b".to_string()]
+        );
+        let standalone_properties: OrderedStringMap<Value> =
+            serde_json::from_value(serde_json::to_value(&restored.properties).unwrap()).unwrap();
+        assert_eq!(standalone_properties, restored.properties);
+
+        let mut data_only = HeapObject::new();
+        data_only
+            .properties
+            .insert("only".to_string(), Value::Int(1));
+        let legacy_data_only = data_only.clone();
+        let _ = data_only.record_property_definition("only", true);
+        assert_eq!(
+            data_only.own_property_keys(),
+            legacy_data_only.own_property_keys()
+        );
+        assert_ne!(data_only, legacy_data_only);
+
+        let mut legacy_encoded = encoded.clone();
+        legacy_encoded
+            .as_object_mut()
+            .unwrap()
+            .remove("own_string_key_order");
+        let legacy: HeapObject = serde_json::from_value(legacy_encoded).unwrap();
+        assert_eq!(
+            legacy.own_property_keys(),
+            vec!["a".to_string(), "b".to_string(), "x".to_string()]
+        );
+        assert_ne!(restored, legacy);
+
+        let mut duplicate_order = encoded;
+        duplicate_order["own_string_key_order"] = serde_json::json!(["a", "x", "x"]);
+        assert!(serde_json::from_value::<HeapObject>(duplicate_order).is_err());
+
+        let mut incomplete_order = serde_json::to_value(&restored).unwrap();
+        incomplete_order["own_string_key_order"] = serde_json::json!(["a", "x"]);
+        assert!(serde_json::from_value::<HeapObject>(incomplete_order).is_err());
+
+        let mut public_field_mutation = restored.clone();
+        public_field_mutation.accessors.insert(
+            "y".to_string(),
+            AccessorProperty {
+                get: Some(Value::Function(2)),
+                set: None,
+            },
+        );
+        let normalized = serde_json::to_value(&public_field_mutation).unwrap();
+        assert_eq!(
+            normalized["own_string_key_order"],
+            serde_json::json!(["a", "x", "b", "y"])
+        );
+        let normalized_roundtrip: HeapObject = serde_json::from_value(normalized).unwrap();
+        assert_eq!(normalized_roundtrip, public_field_mutation);
+        assert_eq!(
+            normalized_roundtrip.own_property_keys(),
+            vec![
+                "a".to_string(),
+                "x".to_string(),
+                "b".to_string(),
+                "y".to_string()
+            ]
+        );
+
+        let mut mutation_core = quickjs_test_core();
+        let mutation_id = mutation_core.alloc_object_with_prototype(None).unwrap();
+        mutation_core.heap[mutation_id.0 as usize] = public_field_mutation;
+        mutation_core.estimated_memory_bytes = mutation_core.recompute_estimated_memory_bytes();
+        mutation_core
+            .set_object_property(mutation_id, "c".to_string(), Value::Int(3))
+            .unwrap();
+        assert_eq!(
+            mutation_core.heap[mutation_id.0 as usize].own_property_keys(),
+            vec![
+                "a".to_string(),
+                "x".to_string(),
+                "b".to_string(),
+                "y".to_string(),
+                "c".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn public_accessor_order_normalization_rolls_back_exact_hidden_state() {
+        let mut core = quickjs_test_core();
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(object_id, "a".to_string(), Value::Int(1))
+            .unwrap();
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_GET_PREFIX}x"),
+            Value::Function(1),
+        )
+        .unwrap();
+        core.set_object_property(object_id, "b".to_string(), Value::Int(2))
+            .unwrap();
+        core.heap[object_id.0 as usize].accessors.insert(
+            "y".to_string(),
+            AccessorProperty {
+                get: Some(Value::Function(2)),
+                set: None,
+            },
+        );
+        core.estimated_memory_bytes = core.recompute_estimated_memory_bytes();
+
+        let raw_order_before = core.heap[object_id.0 as usize]
+            .properties
+            .baseline_string_key_order()
+            .unwrap()
+            .to_vec();
+        let memory_before = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = memory_before;
+        let error = core
+            .set_object_property(object_id, "c".to_string(), Value::str("x".repeat(512)))
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(
+            core.heap[object_id.0 as usize]
+                .properties
+                .baseline_string_key_order(),
+            Some(raw_order_before.as_slice())
+        );
+        assert_eq!(
+            core.heap[object_id.0 as usize].own_property_keys(),
+            vec![
+                "a".to_string(),
+                "x".to_string(),
+                "b".to_string(),
+                "y".to_string()
+            ]
+        );
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+    }
+
+    #[test]
+    fn legacy_heap_order_normalizes_before_a_new_property_appends() {
+        let legacy_json = serde_json::json!({
+            "properties": {"a": Value::Int(1), "b": Value::Int(2)},
+            "accessors": {"x": {"get": Value::Function(1), "set": null}},
+            "prototype": null,
+            "constructor_function": null,
+            "is_array": false
+        });
+        let legacy: HeapObject = serde_json::from_value(legacy_json).unwrap();
+        let mut core = quickjs_test_core();
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        core.heap[object_id.0 as usize] = legacy;
+        core.estimated_memory_bytes = core.recompute_estimated_memory_bytes();
+
+        let original_memory_limit = core.config.max_total_memory_bytes;
+        let memory_before = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = memory_before;
+        let error = core
+            .set_object_property(object_id, "c".to_string(), Value::str("x".repeat(512)))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert!(
+            core.heap[object_id.0 as usize]
+                .properties
+                .baseline_string_key_order()
+                .is_none()
+        );
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+        core.config.max_total_memory_bytes = original_memory_limit;
+
+        core.set_object_property(object_id, "c".to_string(), Value::Int(3))
+            .unwrap();
+        assert_eq!(
+            core.heap[object_id.0 as usize].own_property_keys(),
+            vec![
+                "a".to_string(),
+                "b".to_string(),
+                "x".to_string(),
+                "c".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn write_heap_slot_records_ordinary_key_order() {
+        let mut core = quickjs_test_core();
+        core.write_heap_slot(0, Value::Int(1));
+        core.set_object_property(
+            ObjectId(0),
+            format!("{IR_ACCESSOR_GET_PREFIX}x"),
+            Value::Function(1),
+        )
+        .unwrap();
+        assert_eq!(
+            core.heap[0].own_property_keys(),
+            vec!["value".to_string(), "x".to_string()]
+        );
+    }
+
+    #[test]
+    fn mixed_property_order_survives_execution_seed_restore() {
+        let mut core = quickjs_test_core();
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(object_id, "a".to_string(), Value::Int(1))
+            .unwrap();
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_GET_PREFIX}x"),
+            Value::Function(1),
+        )
+        .unwrap();
+        core.set_object_property(object_id, "b".to_string(), Value::Int(2))
+            .unwrap();
+        let seed = core.capture_execution_seed();
+
+        assert!(core.remove_object_property(object_id, "x").unwrap());
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_GET_PREFIX}x"),
+            Value::Function(2),
+        )
+        .unwrap();
+        assert_eq!(
+            core.heap[object_id.0 as usize].own_property_keys(),
+            vec!["a".to_string(), "b".to_string(), "x".to_string()]
+        );
+
+        core.reset_execution_state_from_seed(&seed);
+        assert_eq!(
+            core.heap[object_id.0 as usize].own_property_keys(),
+            vec!["a".to_string(), "x".to_string(), "b".to_string()]
+        );
+    }
+
+    #[test]
+    fn legacy_order_materialization_charges_each_sidecar_string() {
+        let legacy_json = serde_json::json!({
+            "properties": {"a": Value::Int(1), "b": Value::Int(2)},
+            "accessors": {"x": {"get": Value::Function(1), "set": null}},
+            "prototype": null,
+            "constructor_function": null,
+            "is_array": false
+        });
+        let legacy: HeapObject = serde_json::from_value(legacy_json).unwrap();
+        let mut core = quickjs_test_core();
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        core.heap[object_id.0 as usize] = legacy;
+        core.estimated_memory_bytes = core.recompute_estimated_memory_bytes();
+        let memory_before = core.estimated_memory_bytes();
+
+        core.set_object_property(object_id, "a".to_string(), Value::Int(1))
+            .unwrap();
+        let expected_delta = ["a", "b", "x"]
+            .into_iter()
+            .map(InterpreterCore::estimate_string_bytes)
+            .sum::<u64>();
+        assert_eq!(
+            core.estimated_memory_bytes() - memory_before,
+            expected_delta
+        );
+    }
+
+    #[test]
     fn failed_accessor_conversion_restores_data_property_order() {
         let mut core = quickjs_test_core();
         let object_id = core.alloc_object_with_prototype(None).unwrap();
@@ -16095,6 +16783,69 @@ mod tests {
             Some(&Value::Int(1))
         );
         assert!(!core.heap[object_id.0 as usize].accessors.contains_key("a"));
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+    }
+
+    #[test]
+    fn failed_accessor_to_data_conversion_restores_kind_order_and_memory() {
+        let mut core = quickjs_test_core();
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(object_id, "a".to_string(), Value::Int(1))
+            .unwrap();
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_GET_PREFIX}x"),
+            Value::Function(1),
+        )
+        .unwrap();
+        core.set_object_property(object_id, "b".to_string(), Value::Int(2))
+            .unwrap();
+        let memory_before = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = memory_before;
+
+        let error = core
+            .set_plain_data_property(object_id, "x".to_string(), Value::str("x".repeat(512)))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(
+            core.heap[object_id.0 as usize].own_property_keys(),
+            vec!["a".to_string(), "x".to_string(), "b".to_string()]
+        );
+        assert!(!core.heap[object_id.0 as usize].properties.contains_key("x"));
+        assert_eq!(
+            core.heap[object_id.0 as usize]
+                .accessors
+                .get("x")
+                .and_then(|accessor| accessor.get.as_ref()),
+            Some(&Value::Function(1))
+        );
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+    }
+
+    #[test]
+    fn failed_new_property_restores_existing_sidecar_and_memory() {
+        let mut core = quickjs_test_core();
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(object_id, "a".to_string(), Value::Int(1))
+            .unwrap();
+        let object_before = serde_json::to_value(&core.heap[object_id.0 as usize]).unwrap();
+        let memory_before = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = memory_before;
+
+        let error = core
+            .set_object_property(object_id, "b".to_string(), Value::str("x".repeat(512)))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(
+            serde_json::to_value(&core.heap[object_id.0 as usize]).unwrap(),
+            object_before
+        );
         assert_eq!(core.estimated_memory_bytes(), memory_before);
     }
 

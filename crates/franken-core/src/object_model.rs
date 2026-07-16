@@ -39,12 +39,27 @@ use crate::js_string::JsString;
 /// order in a decoded map becomes the recovered creation order for non-index
 /// strings, so existing replay/checkpoint payloads remain readable without a
 /// sidecar field.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct OrderedStringMap<V> {
     by_key: BTreeMap<String, V>,
     array_indices: BTreeMap<u32, String>,
     string_insertion_order: Vec<String>,
+    // Optional mixed data/accessor chronology used by the core baseline
+    // HeapObject. It lives inside this already-public field type so HeapObject
+    // keeps its ADR-frozen public struct shape; OrderedStringMap's standalone
+    // map-shaped serde intentionally ignores it.
+    baseline_string_key_order: Option<Vec<String>>,
 }
+
+impl<V: PartialEq> PartialEq for OrderedStringMap<V> {
+    fn eq(&self, other: &Self) -> bool {
+        self.by_key == other.by_key
+            && self.array_indices == other.array_indices
+            && self.string_insertion_order == other.string_insertion_order
+    }
+}
+
+impl<V: Eq> Eq for OrderedStringMap<V> {}
 
 impl<V> Default for OrderedStringMap<V> {
     fn default() -> Self {
@@ -52,6 +67,7 @@ impl<V> Default for OrderedStringMap<V> {
             by_key: BTreeMap::new(),
             array_indices: BTreeMap::new(),
             string_insertion_order: Vec::new(),
+            baseline_string_key_order: None,
         }
     }
 }
@@ -97,6 +113,11 @@ impl<V> OrderedStringMap<V> {
                 self.array_indices.insert(index, key.clone());
             } else {
                 self.string_insertion_order.push(key.clone());
+                if let Some(order) = self.baseline_string_key_order.as_mut()
+                    && !order.iter().any(|candidate| candidate == &key)
+                {
+                    order.push(key.clone());
+                }
             }
         }
         self.by_key.insert(key, value)
@@ -134,6 +155,18 @@ impl<V> OrderedStringMap<V> {
 
     /// Remove `key` and its ordering entry.
     pub fn remove(&mut self, key: &str) -> Option<V> {
+        self.remove_internal(key, true)
+    }
+
+    /// Remove a data value while retaining the shared baseline chronology.
+    ///
+    /// Core uses this only for an in-place data-to-accessor descriptor-kind
+    /// transition. Ordinary deletion must use [`Self::remove`].
+    pub(crate) fn remove_preserving_baseline_order(&mut self, key: &str) -> Option<V> {
+        self.remove_internal(key, false)
+    }
+
+    fn remove_internal(&mut self, key: &str, remove_from_baseline_order: bool) -> Option<V> {
         let removed = self.by_key.remove(key);
         if removed.is_some() {
             if let Some(index) = canonical_array_index(key) {
@@ -141,16 +174,25 @@ impl<V> OrderedStringMap<V> {
             } else {
                 self.string_insertion_order
                     .retain(|candidate| candidate != key);
+                if remove_from_baseline_order
+                    && let Some(order) = self.baseline_string_key_order.as_mut()
+                {
+                    order.retain(|candidate| candidate != key);
+                }
             }
         }
         removed
     }
 
-    /// Remove all entries and ordering state.
+    /// Remove all data entries and their ordering state.
     pub fn clear(&mut self) {
+        let removed_keys = self.by_key.keys().cloned().collect::<BTreeSet<_>>();
         self.by_key.clear();
         self.array_indices.clear();
         self.string_insertion_order.clear();
+        if let Some(order) = self.baseline_string_key_order.as_mut() {
+            order.retain(|key| !removed_keys.contains(key));
+        }
     }
 
     /// Retain only entries for which `keep` returns true.
@@ -158,11 +200,15 @@ impl<V> OrderedStringMap<V> {
     where
         F: FnMut(&String, &mut V) -> bool,
     {
+        let old_keys = self.by_key.keys().cloned().collect::<BTreeSet<_>>();
         self.by_key.retain(|key, value| keep(key, value));
         let by_key = &self.by_key;
         self.array_indices.retain(|_, key| by_key.contains_key(key));
         self.string_insertion_order
             .retain(|key| by_key.contains_key(key));
+        if let Some(order) = self.baseline_string_key_order.as_mut() {
+            order.retain(|key| !old_keys.contains(key) || by_key.contains_key(key));
+        }
     }
 
     /// Iterate keys in ES own-property string-key order.
@@ -186,6 +232,18 @@ impl<V> OrderedStringMap<V> {
                 .chain(self.string_insertion_order.iter()),
             by_key: &self.by_key,
         }
+    }
+
+    pub(crate) fn baseline_string_key_order(&self) -> Option<&[String]> {
+        self.baseline_string_key_order.as_deref()
+    }
+
+    pub(crate) fn baseline_string_key_order_mut(&mut self) -> Option<&mut Vec<String>> {
+        self.baseline_string_key_order.as_mut()
+    }
+
+    pub(crate) fn set_baseline_string_key_order(&mut self, order: Option<Vec<String>>) {
+        self.baseline_string_key_order = order;
     }
 }
 
@@ -312,7 +370,7 @@ impl<V> IntoIterator for OrderedStringMap<V> {
     }
 }
 
-fn canonical_array_index(key: &str) -> Option<u32> {
+pub(crate) fn canonical_array_index(key: &str) -> Option<u32> {
     let index = key.parse::<u32>().ok()?;
     (index < u32::MAX && index.to_string() == key).then_some(index)
 }

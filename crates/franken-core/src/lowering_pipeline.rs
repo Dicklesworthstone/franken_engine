@@ -15923,6 +15923,39 @@ mod tests {
     }
 
     #[test]
+    fn declaration_and_catch_names_execute_canonically_bd_7vm4l() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            r"function v\u0061lue() { return 7; }
+              let result = 0;
+              try { throw value(); } catch (e\u0072r) { result = err + 1; }
+              result;",
+        );
+        assert_eq!(value, Value::Int(8));
+    }
+
+    #[test]
+    fn escaped_import_bindings_collide_after_canonicalization_bd_7vm4l() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                r"import {first as v\u0061lue} from 'one';
+                   import {second as value} from 'two';",
+                ParseGoal::Module,
+            )
+            .expect("each import declaration is locally well-formed");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_7vm4l.mjs");
+        let result = validate_ir0_static_semantics(&ir0);
+        assert_eq!(result.error_count(), 1);
+        assert!(matches!(
+            result.errors.as_slice(),
+            [SemanticError {
+                code: SemanticErrorCode::DuplicateImportBinding,
+                binding_name: Some(name),
+                ..
+            }] if name == "value"
+        ));
+    }
+
+    #[test]
     fn sloppy_script_await_and_yield_bindings_execute_as_identifiers_bd_4d60a() {
         let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
             "var await = value => value + 1; var yield = 3; await(yield);",

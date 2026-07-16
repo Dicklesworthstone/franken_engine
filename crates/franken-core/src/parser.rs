@@ -3599,9 +3599,13 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
     let mut bracket_depth = 0usize;
     let mut brace_depth = 0usize;
 
-    scan_binding_pattern_source(line, |index, ch, _, quoted| {
+    scan_binding_pattern_source(line, |index, ch, depth, quoted| {
         if quoted {
             return;
+        }
+        if depth == 0 && async_function_asi_boundary(line, segment_start, index) {
+            push_segment(&mut out, line, segment_start, index);
+            segment_start = index;
         }
         match ch {
             '(' => paren_depth = paren_depth.saturating_add(1),
@@ -3621,6 +3625,7 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
                 if was_positive && brace_depth == 0 && paren_depth == 0 && bracket_depth == 0 {
                     let seg = trim_directive_trivia(&line[segment_start..]).0;
                     let starts_with_block = starts_with_keyword(seg, "function")
+                        || strip_async_function_keyword(seg).is_some()
                         || starts_with_keyword(seg, "if")
                         || starts_with_keyword(seg, "for")
                         || starts_with_keyword(seg, "while")
@@ -3649,6 +3654,37 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
     });
     push_segment(&mut out, line, segment_start, line.len());
     out
+}
+
+fn async_function_asi_boundary(line: &str, segment_start: usize, function_start: usize) -> bool {
+    if !starts_with_keyword(&line[function_start..], "function") {
+        return false;
+    }
+    let prefix = &line[segment_start..function_start];
+    let Some((_, significant_end)) = binding_pattern_trivia_bounds(prefix) else {
+        return false;
+    };
+    let significant = &prefix[..significant_end];
+    if canonical_trailing_source_identifier(significant).as_deref() != Some("async") {
+        return false;
+    }
+    let (remaining, saw_line_terminator) = trim_directive_trivia(&prefix[significant_end..]);
+    saw_line_terminator && remaining.is_empty()
+}
+
+fn canonical_trailing_source_identifier(source: &str) -> Option<String> {
+    source.char_indices().find_map(|(start, _)| {
+        if source[..start]
+            .chars()
+            .next_back()
+            .is_some_and(is_identifier_part_character)
+        {
+            return None;
+        }
+        canonical_leading_source_identifier(&source[start..])
+            .filter(|(_, consumed)| start.saturating_add(*consumed) == source.len())
+            .map(|(identifier, _)| identifier)
+    })
 }
 
 /// Returns true when `text` starts with `kw` and the next source character is
@@ -3828,10 +3864,8 @@ fn parse_statement_inner(
     {
         return self::parse_continue_statement(statement, span);
     }
-    if statement.starts_with("function ")
-        || statement.starts_with("function*")
-        || statement.starts_with("async function ")
-        || statement.starts_with("async function*")
+    if starts_with_keyword(statement, "function")
+        || strip_async_function_keyword(statement).is_some()
     {
         return self::parse_function_declaration(statement, span, context);
     }
@@ -3877,7 +3911,7 @@ fn parse_import(
         });
     }
 
-    let (binding_raw, source_raw) = body.split_once(" from ").ok_or_else(|| {
+    let (binding_raw, source_raw) = split_import_from_clause(body).ok_or_else(|| {
         ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "import declaration must be `import <binding-clause> from <quoted-source>` or `import <quoted-source>`",
@@ -3904,6 +3938,30 @@ fn parse_import(
     })
 }
 
+fn split_import_from_clause(body: &str) -> Option<(&str, &str)> {
+    let mut split = None;
+    scan_binding_pattern_source(body, |index, ch, depth, quoted| {
+        if quoted || depth != 0 || ch != 'f' {
+            return;
+        }
+        let Some(trailing) = body[index..].strip_prefix("from") else {
+            return;
+        };
+        let starts_token = !body[..index]
+            .chars()
+            .next_back()
+            .is_some_and(is_identifier_part_character);
+        if starts_token && !starts_identifier_part(trailing) {
+            // `from` is also a legal imported/local IdentifierName. The final
+            // top-level token is the import-clause separator (`import from
+            // from 'pkg'`, `import {from as local} from 'pkg'`).
+            split = Some(index);
+        }
+    });
+    let split = split?;
+    Some((&body[..split], &body[split + "from".len()..]))
+}
+
 fn parse_import_binding_clause(
     binding_clause: &str,
     source_label: &str,
@@ -3918,10 +3976,8 @@ fn parse_import_binding_clause(
         ));
     }
 
-    if is_module_binding_identifier(binding_clause) {
-        return Ok(ImportClause::Default {
-            local: binding_clause.to_string(),
-        });
+    if let Some(local) = canonical_module_binding_identifier(binding_clause) {
+        return Ok(ImportClause::Default { local });
     }
 
     if let Some(namespace_binding) = parse_namespace_import_binding(binding_clause) {
@@ -3935,22 +3991,24 @@ fn parse_import_binding_clause(
         return Ok(ImportClause::Named { specifiers });
     }
 
-    if let Some((default_binding_raw, trailing_clause_raw)) = binding_clause.split_once(',') {
-        let default_binding = default_binding_raw.trim();
+    let combined_clause_parts = split_top_level_commas(binding_clause);
+    if let [default_binding_raw, trailing_clause_raw] = combined_clause_parts.as_slice() {
+        let default_binding_source = default_binding_raw.trim();
         let trailing_clause = trailing_clause_raw.trim();
 
-        if !is_module_binding_identifier(default_binding) {
+        let Some(default_binding) = canonical_module_binding_identifier(default_binding_source)
+        else {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "default import binding must be a non-keyword identifier",
                 source_label.to_string(),
                 Some(span.clone()),
             ));
-        }
+        };
 
         if let Some(namespace_binding) = parse_namespace_import_binding(trailing_clause) {
             return Ok(ImportClause::DefaultAndNamespace {
-                default: default_binding.to_string(),
+                default: default_binding,
                 namespace: namespace_binding,
             });
         }
@@ -3958,7 +4016,7 @@ fn parse_import_binding_clause(
         if is_named_import_clause(trailing_clause) {
             let specifiers = parse_named_import_specifiers(trailing_clause, source_label, span)?;
             return Ok(ImportClause::DefaultAndNamed {
-                default: default_binding.to_string(),
+                default: default_binding,
                 specifiers,
             });
         }
@@ -3973,13 +4031,9 @@ fn parse_import_binding_clause(
 }
 
 fn parse_namespace_import_binding(clause: &str) -> Option<String> {
-    let rest = clause.strip_prefix('*')?.trim_start();
-    let rest = rest.strip_prefix("as")?.trim_start();
-    if is_module_binding_identifier(rest) {
-        Some(rest.to_string())
-    } else {
-        None
-    }
+    let rest = trim_binding_pattern_leading_trivia(clause.strip_prefix('*')?)?;
+    let rest = strip_contextual_keyword(rest, "as")?;
+    canonical_module_binding_identifier(rest)
 }
 
 fn is_named_import_clause(clause: &str) -> bool {
@@ -3996,27 +4050,11 @@ fn is_named_import_clause(clause: &str) -> bool {
         return true;
     }
 
-    for specifier in inner.split(',') {
-        let specifier = specifier.trim();
-        if specifier.is_empty() {
+    for specifier in split_top_level_commas(inner) {
+        if trim_binding_pattern_trivia(specifier).is_none_or(str::is_empty) {
             return false;
         }
-
-        let mut parts = specifier.split_whitespace();
-        let first = parts.next().unwrap();
-        let second = parts.next();
-        let third = parts.next();
-        let fourth = parts.next();
-
-        let is_valid = match (second, third, fourth) {
-            (None, None, None) => is_module_binding_identifier(first),
-            (Some("as"), Some(local), None) => {
-                is_identifier(first) && is_module_binding_identifier(local)
-            }
-            _ => false,
-        };
-
-        if !is_valid {
+        if parse_named_import_specifier_parts(specifier).is_none() {
             return false;
         }
     }
@@ -4050,9 +4088,8 @@ fn parse_named_import_specifiers(
     let mut specifiers = Vec::new();
     let mut seen_local = BTreeSet::new();
 
-    for specifier in inner.split(',') {
-        let specifier = specifier.trim();
-        if specifier.is_empty() {
+    for specifier in split_top_level_commas(inner) {
+        if trim_binding_pattern_trivia(specifier).is_none_or(str::is_empty) {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "named import specifier list contains an empty entry",
@@ -4061,35 +4098,16 @@ fn parse_named_import_specifiers(
             ));
         }
 
-        let mut parts = specifier.split_whitespace();
-        let import_name = parts.next().unwrap();
-        let second = parts.next();
-        let third = parts.next();
-        let fourth = parts.next();
-
-        let (import_name, local_name) = match (second, third, fourth) {
-            (None, None, None) => (import_name, import_name),
-            (Some("as"), Some(local), None) => (import_name, local),
-            _ => {
-                return Err(ParseError::new(
-                    ParseErrorCode::UnsupportedSyntax,
-                    "unsupported named import specifier; expected `name` or `name as alias`",
-                    source_label.to_string(),
-                    Some(span.clone()),
-                ));
-            }
-        };
-
-        if !is_identifier(import_name) || !is_identifier(local_name) {
+        let Some((import_name, local_name)) = parse_named_import_specifier_parts(specifier) else {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
-                "named import specifier must use identifiers",
+                "unsupported named import specifier; expected `IdentifierName` or `IdentifierName as BindingIdentifier`",
                 source_label.to_string(),
                 Some(span.clone()),
             ));
-        }
+        };
 
-        if !seen_local.insert(local_name.to_string()) {
+        if !seen_local.insert(local_name.clone()) {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "import binding has already been declared",
@@ -4099,12 +4117,27 @@ fn parse_named_import_specifiers(
         }
 
         specifiers.push(ImportSpecifier {
-            import_name: import_name.to_string(),
-            local_name: local_name.to_string(),
+            import_name,
+            local_name,
         });
     }
 
     Ok(specifiers)
+}
+
+fn parse_named_import_specifier_parts(specifier: &str) -> Option<(String, String)> {
+    let specifier = trim_binding_pattern_trivia(specifier)?;
+    let (import_name, import_name_end) = canonical_leading_source_identifier(specifier)?;
+    let trailing = trim_binding_pattern_leading_trivia(&specifier[import_name_end..])?;
+
+    if trailing.is_empty() {
+        let local_name = canonical_module_binding_identifier(specifier)?;
+        return Some((import_name, local_name));
+    }
+
+    let local_source = strip_contextual_keyword(trailing, "as")?;
+    let local_name = canonical_module_binding_identifier(local_source)?;
+    Some((import_name, local_name))
 }
 
 fn parse_export(
@@ -4342,6 +4375,47 @@ fn parse_simple_binding_identifier(
         ));
     }
     Ok(Some(identifier))
+}
+
+fn parse_required_binding_identifier(
+    source: &str,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+    strict_mode: bool,
+    await_identifier_reserved: bool,
+    yield_identifier_reserved: bool,
+) -> ParseResult<String> {
+    let source = trim_binding_pattern_trivia(source).ok_or_else(|| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "binding identifier has unterminated lexical trivia",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )
+    })?;
+    let identifier = canonical_source_identifier_name(source).ok_or_else(|| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            format!("invalid binding identifier spelling: `{source}`"),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )
+    })?;
+    if !is_binding_identifier_in_grammar(
+        &identifier,
+        context.goal,
+        strict_mode,
+        await_identifier_reserved,
+        yield_identifier_reserved,
+    ) {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            format!("invalid binding identifier: `{source}` canonicalizes to `{identifier}`"),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+    Ok(identifier)
 }
 
 fn parse_identifier_reference(
@@ -5825,6 +5899,15 @@ fn strip_contextual_keyword<'a>(source: &'a str, keyword: &str) -> Option<&'a st
     }
 }
 
+fn strip_async_function_keyword(source: &str) -> Option<&str> {
+    let after_async = strip_contextual_keyword(source, "async")?;
+    let (after_trivia, saw_line_terminator) = trim_directive_trivia(after_async);
+    if saw_line_terminator {
+        return None;
+    }
+    strip_contextual_keyword(after_trivia, "function")
+}
+
 fn parse_yield_expression(
     expression: &str,
     rest: &str,
@@ -5943,11 +6026,46 @@ fn parse_primary_expression(
         return parse_new_expression(rest.trim(), span, context, recursion_depth);
     }
 
+    // Async function expressions require no LineTerminator between `async`
+    // and `function`; comments without a terminator remain lexical trivia.
+    if let Some((identifier, identifier_end)) = canonical_leading_source_identifier(expression)
+        && identifier == "async"
+        && &expression[..identifier_end] != "async"
+    {
+        let (after_identifier, _) = trim_directive_trivia(&expression[identifier_end..]);
+        if starts_with_keyword(after_identifier, "function") {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "escaped IdentifierName spelling cannot act as the contextual `async` keyword",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
+        }
+    }
+    if let Some(after_async) = strip_contextual_keyword(expression, "async") {
+        let (after_trivia, saw_line_terminator) = trim_directive_trivia(after_async);
+        if let Some(rest) = after_trivia.strip_prefix("function").filter(|rest| {
+            rest.starts_with('(')
+                || rest.starts_with('*')
+                || trim_directive_trivia(rest).0.len() < rest.len()
+        }) {
+            if saw_line_terminator {
+                return Err(ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    "line terminator is not allowed between `async` and a function expression",
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                ));
+            }
+            return parse_function_expression(rest, true, span, context, recursion_depth);
+        }
+    }
+
     // Function expression: `function(a, b) { ... }` or `function name(a, b) { ... }`
     if let Some(rest) = expression.strip_prefix("function").filter(|r| {
         r.starts_with('(') || r.starts_with('*') || trim_directive_trivia(r).0.len() < r.len()
     }) {
-        return parse_function_expression(rest, span, context, recursion_depth);
+        return parse_function_expression(rest, false, span, context, recursion_depth);
     }
 
     // Class expression: `class { ... }`, `class Name { ... }`, or
@@ -6198,9 +6316,15 @@ fn validate_parameter_binding_names(
     strict_mode: bool,
     is_async: bool,
     is_generator: bool,
+    is_arrow: bool,
     span: &SourceSpan,
     context: &ParseExecutionContext<'_>,
 ) -> ParseResult<()> {
+    let is_simple = params
+        .iter()
+        .all(|parameter| matches!(&parameter.pattern, BindingPattern::Identifier(_)));
+    let duplicates_are_error = strict_mode || is_async || is_generator || is_arrow || !is_simple;
+    let mut seen = BTreeSet::new();
     for name in params
         .iter()
         .flat_map(|parameter| parameter.pattern.binding_names())
@@ -6213,6 +6337,14 @@ fn validate_parameter_binding_names(
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 format!("invalid function parameter binding `{name}` in its grammar context"),
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
+        }
+        if !seen.insert(name) && duplicates_are_error {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                format!("duplicate function parameter binding `{name}` is not allowed"),
                 context.source_label.to_string(),
                 Some(span.clone()),
             ));
@@ -6266,7 +6398,7 @@ fn parse_arrow_body(
     let has_own_use_strict_directive =
         block_source.is_some_and(|(block_src, _)| has_use_strict_directive(block_src));
     let strict_mode = context.strict_mode || has_own_use_strict_directive;
-    validate_parameter_binding_names(&params, strict_mode, is_async, false, span, context)?;
+    validate_parameter_binding_names(&params, strict_mode, is_async, false, true, span, context)?;
     validate_use_strict_parameter_list(&params, has_own_use_strict_directive, span, context)?;
 
     with_grammar_context(
@@ -9051,10 +9183,12 @@ fn is_identifier(input: &str) -> bool {
     chars.all(is_identifier_continue)
 }
 
-fn is_module_binding_identifier(input: &str) -> bool {
-    is_identifier(input)
-        && !is_disallowed_module_binding_name(input)
-        && !matches!(input, "eval" | "arguments")
+fn canonical_module_binding_identifier(input: &str) -> Option<String> {
+    let input = trim_binding_pattern_trivia(input)?;
+    let identifier = canonical_source_identifier_name(input)?;
+    (!is_disallowed_module_binding_name(&identifier)
+        && !matches!(identifier.as_str(), "eval" | "arguments"))
+    .then_some(identifier)
 }
 
 fn is_always_reserved_word(name: &str) -> bool {
@@ -9114,17 +9248,53 @@ fn is_strict_reserved_word(name: &str) -> bool {
     )
 }
 
-fn is_context_identifier_reference(name: &str, context: &ParseExecutionContext<'_>) -> bool {
+fn is_identifier_reference_in_grammar(
+    name: &str,
+    goal: ParseGoal,
+    strict_mode: bool,
+    await_identifier_reserved: bool,
+    yield_identifier_reserved: bool,
+) -> bool {
     !is_always_reserved_word(name)
-        && !(context.strict_mode && is_strict_reserved_word(name))
-        && !(context.yield_identifier_reserved && name == "yield")
-        && !((context.goal == ParseGoal::Module || context.await_identifier_reserved)
-            && name == "await")
+        && !(strict_mode && is_strict_reserved_word(name))
+        && !(yield_identifier_reserved && name == "yield")
+        && !((goal == ParseGoal::Module || await_identifier_reserved) && name == "await")
+}
+
+fn is_binding_identifier_in_grammar(
+    name: &str,
+    goal: ParseGoal,
+    strict_mode: bool,
+    await_identifier_reserved: bool,
+    yield_identifier_reserved: bool,
+) -> bool {
+    is_identifier_reference_in_grammar(
+        name,
+        goal,
+        strict_mode,
+        await_identifier_reserved,
+        yield_identifier_reserved,
+    ) && !(strict_mode && matches!(name, "eval" | "arguments"))
+}
+
+fn is_context_identifier_reference(name: &str, context: &ParseExecutionContext<'_>) -> bool {
+    is_identifier_reference_in_grammar(
+        name,
+        context.goal,
+        context.strict_mode,
+        context.await_identifier_reserved,
+        context.yield_identifier_reserved,
+    )
 }
 
 fn is_context_binding_identifier(name: &str, context: &ParseExecutionContext<'_>) -> bool {
-    is_context_identifier_reference(name, context)
-        && !(context.strict_mode && matches!(name, "eval" | "arguments"))
+    is_binding_identifier_in_grammar(
+        name,
+        context.goal,
+        context.strict_mode,
+        context.await_identifier_reserved,
+        context.yield_identifier_reserved,
+    )
 }
 
 fn is_disallowed_module_binding_name(name: &str) -> bool {
@@ -10269,7 +10439,47 @@ fn parse_try_catch_statement(
                     Some(span.clone()),
                 )
             })?;
-            (Some(p.trim().to_string()), r)
+            let parameter_source = trim_binding_pattern_trivia(p).ok_or_else(|| {
+                ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    "catch binding has unterminated lexical trivia",
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                )
+            })?;
+            let parameter_pattern = parse_binding_pattern(parameter_source, &span, context)?;
+            let mut seen_names = BTreeSet::new();
+            if parameter_pattern
+                .binding_names()
+                .into_iter()
+                .any(|name| !seen_names.insert(name.to_string()))
+            {
+                return Err(ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    "catch BindingPattern cannot contain duplicate binding names",
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                ));
+            }
+            let parameter = match parameter_pattern {
+                BindingPattern::Identifier(name) => name,
+                // CatchClause's legacy AST carrier is still a String. Parse
+                // structured patterns here so every nested binding is checked,
+                // while preserving the source spelling until that carrier is
+                // widened by its dedicated destructuring work.
+                BindingPattern::ObjectPattern(_) | BindingPattern::ArrayPattern(_) => {
+                    parameter_source.to_string()
+                }
+                BindingPattern::AssignmentPattern { .. } | BindingPattern::Rest(_) => {
+                    return Err(ParseError::new(
+                        ParseErrorCode::UnsupportedSyntax,
+                        "catch parameter must be a BindingIdentifier or BindingPattern",
+                        context.source_label.to_string(),
+                        Some(span.clone()),
+                    ));
+                }
+            };
+            (Some(parameter), r)
         } else {
             (None, after_catch)
         };
@@ -10512,6 +10722,7 @@ fn parse_continue_statement(statement: &str, span: SourceSpan) -> ParseResult<St
 /// `rest` is the text after the `function` keyword (already stripped).
 fn parse_function_expression(
     rest: &str,
+    is_async: bool,
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
     _recursion_depth: u64,
@@ -10522,7 +10733,7 @@ fn parse_function_expression(
     let (rest, _) = trim_directive_trivia(rest);
 
     // Parse optional name (function expressions can be anonymous).
-    let (name, rest) = if rest.starts_with('(') {
+    let (name_source, rest) = if rest.starts_with('(') {
         (None, rest)
     } else {
         let paren_idx = rest.find('(').ok_or_else(|| {
@@ -10535,11 +10746,7 @@ fn parse_function_expression(
         })?;
         let name = rest[..paren_idx].trim();
         (
-            if name.is_empty() {
-                None
-            } else {
-                Some(name.to_string())
-            },
+            if name.is_empty() { None } else { Some(name) },
             &rest[paren_idx..],
         )
     };
@@ -10566,23 +10773,46 @@ fn parse_function_expression(
     let goal = ParseGoal::Script;
     let has_own_use_strict_directive = has_use_strict_directive(body_src);
     let strict_mode = context.strict_mode || has_own_use_strict_directive;
+    // FunctionExpression does not inherit the surrounding Await/Yield grammar
+    // parameters for its optional name. Async/generator expressions supply
+    // their own restrictions; ordinary named expressions reset both.
+    let name = name_source
+        .map(|source| {
+            parse_required_binding_identifier(
+                source,
+                span,
+                context,
+                strict_mode,
+                is_async,
+                is_generator,
+            )
+        })
+        .transpose()?;
     let params = with_grammar_context(
         context,
         strict_mode,
-        false,
+        is_async,
         is_generator,
         false,
         false,
         |context| parse_arrow_params(params_src, span, context),
     )?;
-    validate_parameter_binding_names(&params, strict_mode, false, is_generator, span, context)?;
+    validate_parameter_binding_names(
+        &params,
+        strict_mode,
+        is_async,
+        is_generator,
+        false,
+        span,
+        context,
+    )?;
     validate_use_strict_parameter_list(&params, has_own_use_strict_directive, span, context)?;
     let body_stmts = with_grammar_context(
         context,
         strict_mode,
-        false,
+        is_async,
         is_generator,
-        false,
+        is_async,
         is_generator,
         |context| parse_body_statements(body_src, goal, span, context),
     )?;
@@ -10594,7 +10824,7 @@ fn parse_function_expression(
             body: body_stmts,
             span: span.clone(),
         },
-        is_async: false,
+        is_async,
         is_generator,
     })
 }
@@ -10605,6 +10835,14 @@ fn parse_class_declaration(
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<Statement> {
     let (name, super_class, methods) = parse_class_parts(statement, &span, context)?;
+    if name.is_none() {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "class declarations require a binding name",
+            context.source_label.to_string(),
+            Some(span),
+        ));
+    }
 
     Ok(Statement::ClassDeclaration(ClassDeclaration {
         name,
@@ -10641,7 +10879,7 @@ fn parse_class_parts(
     let rest = source.strip_prefix("class").unwrap_or(source).trim_start();
 
     // Parse optional class name and optional `extends` clause.
-    let (name, rest) = if rest.starts_with('{') || rest.starts_with("extends ") {
+    let (name_source, rest) = if rest.starts_with('{') || rest.starts_with("extends ") {
         (None, rest)
     } else {
         // Name is everything up to `{` or `extends`.
@@ -10651,14 +10889,25 @@ fn parse_class_parts(
             .min(rest.find(" extends ").unwrap_or(rest.len()));
         let name = rest[..end].trim();
         (
-            if name.is_empty() {
-                None
-            } else {
-                Some(name.to_string())
-            },
+            if name.is_empty() { None } else { Some(name) },
             &rest[end..],
         )
     };
+    // Class definitions are always strict. Their optional binding name still
+    // inherits the surrounding Await/Yield grammar parameters (so `class
+    // await {}` is valid in sloppy Script but not inside an async function).
+    let name = name_source
+        .map(|source| {
+            parse_required_binding_identifier(
+                source,
+                span,
+                context,
+                true,
+                context.await_identifier_reserved,
+                context.yield_identifier_reserved,
+            )
+        })
+        .transpose()?;
 
     let rest = rest.trim_start();
 
@@ -10789,7 +11038,7 @@ fn parse_class_body(
         let params = with_grammar_context(context, true, false, false, false, false, |context| {
             parse_arrow_params(params_src, span, context)
         })?;
-        validate_parameter_binding_names(&params, true, false, false, span, context)?;
+        validate_parameter_binding_names(&params, true, false, false, false, span, context)?;
         validate_use_strict_parameter_list(&params, has_own_use_strict_directive, span, context)?;
         let body_stmts =
             with_grammar_context(context, true, false, false, false, false, |context| {
@@ -10857,21 +11106,21 @@ fn parse_function_declaration(
     span: SourceSpan,
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<Statement> {
-    let is_async = statement.starts_with("async ");
-    let rest = if is_async {
-        statement
-            .strip_prefix("async ")
-            .unwrap_or(statement)
-            .trim_start()
+    let (is_async, rest) = if let Some(rest) = strip_async_function_keyword(statement) {
+        (true, rest)
     } else {
-        statement
+        (
+            false,
+            strip_contextual_keyword(statement, "function").unwrap_or(statement),
+        )
     };
-    let rest = rest.strip_prefix("function").unwrap_or(rest).trim_start();
+    let (rest, _) = trim_directive_trivia(rest);
     let is_generator = rest.starts_with('*');
-    let rest = if is_generator { &rest[1..] } else { rest }.trim_start();
+    let rest = if is_generator { &rest[1..] } else { rest };
+    let (rest, _) = trim_directive_trivia(rest);
 
     // Parse function name (optional for expressions, required for declarations).
-    let (name, rest) = if rest.starts_with('(') {
+    let (name_source, rest) = if rest.starts_with('(') {
         (None, rest)
     } else {
         // Extract name up to '('.
@@ -10885,16 +11134,12 @@ fn parse_function_declaration(
         })?;
         let name = rest[..paren_idx].trim();
         (
-            if name.is_empty() {
-                None
-            } else {
-                Some(name.to_string())
-            },
+            if name.is_empty() { None } else { Some(name) },
             &rest[paren_idx..],
         )
     };
 
-    if name.is_none() {
+    if name_source.is_none() {
         return Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "function declarations require a binding name",
@@ -10926,6 +11171,22 @@ fn parse_function_declaration(
     let goal = ParseGoal::Script; // Function bodies use script goal.
     let has_own_use_strict_directive = has_use_strict_directive(body_src);
     let strict_mode = context.strict_mode || has_own_use_strict_directive;
+    // FunctionDeclaration names inherit the surrounding Await/Yield grammar
+    // parameters. The declaration's own async/generator marker constrains its
+    // parameters and body, but does not by itself reserve the declaration name
+    // (`async function await(){}` is valid in sloppy Script).
+    let name = name_source
+        .map(|source| {
+            parse_required_binding_identifier(
+                source,
+                &span,
+                context,
+                strict_mode,
+                context.await_identifier_reserved,
+                context.yield_identifier_reserved,
+            )
+        })
+        .transpose()?;
     let params = with_grammar_context(
         context,
         strict_mode,
@@ -10935,7 +11196,15 @@ fn parse_function_declaration(
         false,
         |context| parse_arrow_params(params_src, &span, context),
     )?;
-    validate_parameter_binding_names(&params, strict_mode, is_async, is_generator, &span, context)?;
+    validate_parameter_binding_names(
+        &params,
+        strict_mode,
+        is_async,
+        is_generator,
+        false,
+        &span,
+        context,
+    )?;
     validate_use_strict_parameter_list(&params, has_own_use_strict_directive, &span, context)?;
     let body_stmts = with_grammar_context(
         context,
@@ -12162,6 +12431,26 @@ mod tests {
                 )
         ));
 
+        let tree = parser
+            .parse(
+                r"let holder = async function y\u0069eld() {};",
+                ParseGoal::Script,
+            )
+            .expect("valid async function-expression name should canonicalize");
+        assert!(matches!(
+            &tree.body[0],
+            Statement::VariableDeclaration(declaration)
+                if matches!(
+                    declaration.declarations[0].initializer.as_ref(),
+                    Some(Expression::Function {
+                        name: Some(name),
+                        is_async: true,
+                        is_generator: false,
+                        ..
+                    }) if name == "yield"
+                )
+        ));
+
         let mut trivia_run = String::from("let\n");
         trivia_run.push_str(&"/* trivia-only physical line */\n".repeat(256));
         trivia_run.push_str("value = 1;");
@@ -12974,6 +13263,328 @@ mod tests {
             let error = parser
                 .parse(source, ParseGoal::Module)
                 .expect_err("Module bindings must apply strict identifier restrictions");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
+        }
+    }
+
+    #[test]
+    fn declaration_catch_and_import_names_canonicalize_bd_7vm4l() {
+        let parser = CanonicalEs2020Parser;
+
+        let tree = parser
+            .parse(r"function v\u0061lue() {}", ParseGoal::Script)
+            .expect("escaped function declaration name should parse");
+        assert!(matches!(
+            &tree.body[0],
+            Statement::FunctionDeclaration(function)
+                if function.name.as_deref() == Some("value")
+        ));
+
+        let tree = parser
+            .parse(r"let holder = function n\u0061med() {};", ParseGoal::Script)
+            .expect("escaped function expression name should parse");
+        assert!(matches!(
+            &tree.body[0],
+            Statement::VariableDeclaration(declaration)
+                if matches!(
+                    declaration.declarations[0].initializer.as_ref(),
+                    Some(Expression::Function { name: Some(name), .. }) if name == "named"
+                )
+        ));
+
+        let tree = parser
+            .parse(r"class V\u0061lue {}", ParseGoal::Script)
+            .expect("escaped class declaration name should parse");
+        assert!(matches!(
+            &tree.body[0],
+            Statement::ClassDeclaration(class) if class.name.as_deref() == Some("Value")
+        ));
+
+        let tree = parser
+            .parse(r"let holder = class N\u0061med {};", ParseGoal::Script)
+            .expect("escaped class expression name should parse");
+        assert!(matches!(
+            &tree.body[0],
+            Statement::VariableDeclaration(declaration)
+                if matches!(
+                    declaration.declarations[0].initializer.as_ref(),
+                    Some(Expression::ClassExpression { name: Some(name), .. }) if name == "Named"
+                )
+        ));
+
+        let tree = parser
+            .parse(
+                r"try { throw 1 } catch (e\u0072r) { err }",
+                ParseGoal::Script,
+            )
+            .expect("escaped catch binding should parse");
+        assert!(matches!(
+            &tree.body[0],
+            Statement::TryCatch(statement)
+                if statement.handler.as_ref().and_then(|handler| handler.parameter.as_deref())
+                    == Some("err")
+        ));
+
+        let tree = parser
+            .parse(
+                r"import v\u0061lue, {d\u0065fault as f\u0061llback, st\u0061tic as alias} from 'pkg';
+                   import * as n\u0061mes from 'other';",
+                ParseGoal::Module,
+            )
+            .expect("escaped import IdentifierNames and bindings should parse");
+        assert!(matches!(
+            &tree.body[0],
+            Statement::Import(import)
+                if matches!(
+                    &import.clause,
+                    ImportClause::DefaultAndNamed { default, specifiers }
+                        if default == "value"
+                            && specifiers[0].import_name == "default"
+                            && specifiers[0].local_name == "fallback"
+                            && specifiers[1].import_name == "static"
+                            && specifiers[1].local_name == "alias"
+                )
+        ));
+        assert!(matches!(
+            &tree.body[1],
+            Statement::Import(import)
+                if matches!(&import.clause, ImportClause::Namespace { local } if local == "names")
+        ));
+    }
+
+    #[test]
+    fn binding_names_allow_only_boundary_lexical_trivia_bd_7vm4l() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "function value/* trailing */() {}",
+            "function value\u{FEFF}() {}",
+            "class Value/* trailing */ {}",
+            "class Value\u{FEFF} {}",
+        ] {
+            parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|error| {
+                    panic!("boundary lexical trivia should remain valid in `{source}`: {error:?}")
+                });
+        }
+
+        for source in [
+            "import value/* trailing */ from 'pkg';",
+            "import * as names/* trailing */ from 'pkg';",
+            "import {source/* trailing */ as local, other as alias/* trailing */} from 'pkg';",
+            "import value/**/from 'pkg';",
+            "import * as names/**/from 'pkg';",
+            "import {source as local}/**/from 'pkg';",
+            "import value\u{FEFF}from 'pkg';",
+            "import from from 'pkg';",
+        ] {
+            parser
+                .parse(source, ParseGoal::Module)
+                .unwrap_or_else(|error| {
+                    panic!("import boundary trivia should remain valid in `{source}`: {error:?}")
+                });
+        }
+
+        for source in [
+            "function va/* internal */lue() {}",
+            "class Va/* internal */lue {}",
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("internal trivia cannot splice one binding identifier");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
+        }
+
+        for source in [
+            "import va/* internal */lue from 'pkg';",
+            "import {sou/* internal */rce as local} from 'pkg';",
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Module)
+                .expect_err("internal trivia cannot splice one import identifier");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
+        }
+    }
+
+    #[test]
+    fn async_function_expression_line_terminator_boundary_bd_7vm4l() {
+        let parser = CanonicalEs2020Parser;
+
+        for (source, expected_name, expected_generator) in [
+            (
+                "async/**/function declared() {} let observed = declared;",
+                "declared",
+                false,
+            ),
+            (
+                "async\u{FEFF}function bomDeclared() {}",
+                "bomDeclared",
+                false,
+            ),
+            ("async/**/function/**/ * generated() {}", "generated", true),
+        ] {
+            let tree = parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|error| {
+                    panic!("trivia-separated async declaration should parse: {error:?}")
+                });
+            assert!(matches!(
+                &tree.body[0],
+                Statement::FunctionDeclaration(function)
+                    if function.name.as_deref() == Some(expected_name)
+                        && function.is_async
+                        && function.is_generator == expected_generator
+            ));
+        }
+
+        let tree = parser
+            .parse(
+                "let holder = async/**/function named() {};",
+                ParseGoal::Script,
+            )
+            .expect("a block comment without a line terminator remains async-function trivia");
+        assert!(matches!(
+            &tree.body[0],
+            Statement::VariableDeclaration(declaration)
+                if matches!(
+                    declaration.declarations[0].initializer.as_ref(),
+                    Some(Expression::Function {
+                        name: Some(name),
+                        is_async: true,
+                        is_generator: false,
+                        ..
+                    }) if name == "named"
+                )
+        ));
+
+        for (asi_source, expected_name) in [
+            ("let holder = async/*\n*/function named() {};", "named"),
+            (
+                "let holder = a\\u0073ync/*\n*/function escapedNamed() {};",
+                "escapedNamed",
+            ),
+            (
+                "let holder = a\\u{73}ync/*\n*/function bracedNamed() {};",
+                "bracedNamed",
+            ),
+        ] {
+            assert_eq!(split_statement_segments(asi_source).len(), 2);
+            let tree = parser
+                .parse(asi_source, ParseGoal::Script)
+                .expect("a line terminator before a named function declaration triggers ASI");
+            assert!(matches!(
+                &tree.body[..],
+                [
+                    Statement::VariableDeclaration(declaration),
+                    Statement::FunctionDeclaration(function)
+                ] if matches!(
+                    declaration.declarations[0].initializer.as_ref(),
+                    Some(Expression::Identifier(name)) if name == "async"
+                ) && function.name.as_deref() == Some(expected_name)
+            ));
+        }
+
+        for source in [
+            "let holder = async/*\n*/function() {};",
+            "let holder = (async/*\n*/function named() {});",
+            "let holder = a\\u0073ync/*\n*/function() {};",
+            "let holder = a\\u0073ync/**/function named() {};",
+            "let holder = (a\\u0073ync/*\n*/function named() {});",
+            "let holder = a\\u{73}ync/*\n*/function() {};",
+            "let holder = a\\u{73}ync/**/function named() {};",
+            "let holder = (a\\u{73}ync/*\n*/function named() {});",
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("a function expression cannot cross an async line terminator");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
+        }
+    }
+
+    #[test]
+    fn canonical_reserved_bindings_fail_across_carriers_bd_7vm4l() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            r"var r\u0065turn = 1",
+            r"function invalid(r\u0065turn) {}",
+            r"var {return: r\u0065turn} = source",
+            r"try {} catch (r\u0065turn) {}",
+            r"for (var r\u0065turn = 0; ; ) {}",
+            r"for (var r\u0065turn in source) {}",
+            r"for (var r\u0065turn of source) {}",
+            r"function r\u0065turn() {}",
+            r"let holder = function r\u0065turn() {};",
+            r"class r\u0065turn {}",
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("canonical reserved binding must be rejected");
+            assert_eq!(
+                error.code,
+                ParseErrorCode::UnsupportedSyntax,
+                "wrong rejection for `{source}`"
+            );
+        }
+
+        for source in [
+            r"import r\u0065turn from 'pkg'",
+            r"import {value as r\u0065turn} from 'pkg'",
+            r"import {value as local, other as l\u006fcal} from 'pkg'",
+            r"import {st\u0061tic} from 'pkg'",
+            r"function aw\u0061it() {}",
+            r"class aw\u0061it {}",
+            r"try {} catch (aw\u0061it) {}",
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Module)
+                .expect_err("invalid canonical module binding must be rejected");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
+        }
+    }
+
+    #[test]
+    fn binding_name_contexts_do_not_conflate_properties_bd_7vm4l() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            r"async function aw\u0061it() {}",
+            r"function* y\u0069eld() {}",
+            r"let ordinaryAwait = function aw\u0061it() {};",
+            r"let ordinaryYield = function y\u0069eld() {};",
+            r"let asyncYield = async function y\u0069eld() {};",
+            r"class aw\u0061it {}",
+            r"try {} catch (l\u0065t) {}",
+            r"'use strict'; try {} catch (aw\u0061it) {}",
+            r"try {} catch ({r\u0065turn: value}) {}",
+            r"function duplicate(value, v\u0061lue) { return value; }",
+        ] {
+            parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|error| {
+                    panic!("`{source}` should retain its grammar-specific acceptance: {error:?}")
+                });
+        }
+
+        for source in [
+            r"function st\u0061tic() {'use strict';}",
+            r"let named = function* y\u0069eld() {};",
+            r"class st\u0061tic {}",
+            r"async function outer() { function aw\u0061it() {} }",
+            r"function* outer() { function y\u0069eld() {} }",
+            r"try {} catch ({value: r\u0065turn}) {}",
+            r"function duplicate(value, v\u0061lue) {'use strict';}",
+            r"let duplicate = (value, v\u0061lue) => value;",
+            r"function duplicate([value, v\u0061lue]) {}",
+            r"try {} catch ([value, v\u0061lue]) {}",
+            r"function ev\u0061l() {'use strict';}",
+            r"class ev\u0061l {}",
+            r"'use strict'; try {} catch (ev\u0061l) {}",
+            r"let invalid = async function aw\u0061it() {};",
+            r"let invalid = async function* aw\u0061it() {};",
+            r"let invalid = async function* y\u0069eld() {};",
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("binding grammar restriction must be enforced");
             assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
         }
     }
@@ -15197,15 +15808,15 @@ strict"; var static = 1; }"#,
 
     #[test]
     fn module_binding_identifier_rejects_keywords() {
-        assert!(!is_module_binding_identifier("for"));
-        assert!(!is_module_binding_identifier("await"));
-        assert!(!is_module_binding_identifier("interface"));
+        assert!(canonical_module_binding_identifier("for").is_none());
+        assert!(canonical_module_binding_identifier("await").is_none());
+        assert!(canonical_module_binding_identifier("interface").is_none());
     }
 
     #[test]
     fn module_binding_identifier_accepts_valid_names() {
-        assert!(is_module_binding_identifier("dep"));
-        assert!(is_module_binding_identifier("_local1"));
+        assert!(canonical_module_binding_identifier("dep").is_some());
+        assert!(canonical_module_binding_identifier("_local1").is_some());
     }
 
     #[test]

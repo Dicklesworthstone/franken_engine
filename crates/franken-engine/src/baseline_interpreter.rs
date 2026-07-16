@@ -2121,6 +2121,10 @@ pub enum BuiltinFunctionKind {
     TlsSocketGetCipher,
     TlsSocketIsSessionReused,
     TlsSocketGetSession,
+    /// `Readable.prototype.unshift(chunk)` over the engine-owned queue
+    /// (bd-fw7zd). Appended at the true enum tail because the discriminant
+    /// participates in deterministic register hashing.
+    StreamReadableUnshift,
 }
 
 impl BuiltinFunctionKind {
@@ -3329,6 +3333,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StreamReadablePush => "push",
             BuiltinFunctionKind::StreamReadableToArray => "toArray",
             BuiltinFunctionKind::StreamReadableRead => "read",
+            BuiltinFunctionKind::StreamReadableUnshift => "unshift",
             BuiltinFunctionKind::StreamReadableSetEncoding => "setEncoding",
             BuiltinFunctionKind::StreamReadableDestroy => "destroy",
             BuiltinFunctionKind::StreamWritableWrite => "write",
@@ -6679,7 +6684,11 @@ impl InterpreterCore {
         module
             .constant_pool
             .get(name_pool_index as usize)
-            .map(|name| Cow::Borrowed(name.as_str()))
+            .map(|name| {
+                name.as_str()
+                    .map(Cow::Borrowed)
+                    .unwrap_or_else(|| Cow::Owned(name.to_string()))
+            })
             .unwrap_or_else(|| Cow::Owned(format!("__binding_{name_pool_index}")))
     }
 
@@ -13226,6 +13235,16 @@ impl InterpreterCore {
         if state.object_mode {
             return Ok(Some((value, 1)));
         }
+        if state.decode_utf8
+            && state.utf8_pending.is_empty()
+            && let Value::Str(text) = &value
+        {
+            // A JavaScript string is already decoded. Preserve its exact
+            // UTF-16 code units (including a lone surrogate returned by a
+            // preceding read(n)) instead of round-tripping through the lossy
+            // UTF-8 projection used for byte inputs.
+            return Ok(Some((value.clone(), text.utf16_len())));
+        }
         let bytes: Cow<'_, [u8]> = match &value {
             Value::Str(text) => Cow::Borrowed(text.as_bytes()),
             Value::Object(_) => {
@@ -13455,12 +13474,7 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let object_id = self.readable_receiver_id(receiver)?;
-        if args.count > 0 && !matches!(self.builtin_arg(args, 0)?, Some(Value::Undefined) | None) {
-            return Err(InterpreterError::TypeError {
-                expected: "Readable.read() without a size in this stream slice".to_string(),
-                got: "explicit size".to_string(),
-            });
-        }
+        let requested_size = self.readable_requested_size(args)?;
         let should_pull = self
             .readable_from_streams
             .get(&object_id)
@@ -13480,7 +13494,18 @@ impl InterpreterCore {
             self.schedule_readable_from_pump(object_id);
             return Ok(Value::Null);
         }
+        if requested_size == Some(0) {
+            return Ok(Value::Null);
+        }
+        if !projected.object_mode
+            && requested_size.is_some_and(|size| size > projected.buffered_length)
+            && !projected.eof_requested
+        {
+            self.schedule_readable_from_pump(object_id);
+            return Ok(Value::Null);
+        }
 
+        let mut raw_allocation_checkpoint = None;
         let result = if projected.object_mode {
             let chunk = projected
                 .buffer
@@ -13489,54 +13514,72 @@ impl InterpreterCore {
             projected.buffered_length = projected.buffered_length.saturating_sub(chunk.units);
             chunk.value
         } else if projected.decode_utf8 {
-            let decoded_bytes = projected.buffer.iter().try_fold(0usize, |total, chunk| {
+            let unit_bytes = u64::try_from(projected.buffered_length)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(2);
+            // `from_code_units` may transiently own both its intermediate
+            // three-byte-per-unit UTF-8 replacement String and the copied
+            // Arc<str>, plus a two-byte-per-unit exact-unit Arc. Account the
+            // worst sequential result/remainder peak together with the
+            // already-live transactional state clone and Vec<u16>, before any
+            // of those infallible host allocations.
+            let string_bytes = u64::try_from(projected.buffered_length)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(10)
+                .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_mul(6));
+            let temporary_bytes = Self::estimate_readable_from_state_bytes(&projected)
+                .saturating_add(unit_bytes)
+                .saturating_add(string_bytes);
+            self.check_temporary_memory_budget(temporary_bytes)?;
+            let mut units = Vec::new();
+            units
+                .try_reserve_exact(projected.buffered_length)
+                .map_err(|_| {
+                    self.memory_budget_error(
+                        self.estimated_memory_bytes.saturating_add(temporary_bytes),
+                        self.heap_object_count_u32(),
+                    )
+                })?;
+            for chunk in &projected.buffer {
                 let Value::Str(value) = &chunk.value else {
                     return Err(InterpreterError::TypeError {
                         expected: "decoded Readable string chunk".to_string(),
                         got: chunk.value.type_name().to_string(),
                     });
                 };
-                total
-                    .checked_add(value.len())
-                    .ok_or_else(|| InterpreterError::RangeError {
-                        message: "decoded Readable result overflows host address space".to_string(),
-                    })
-            })?;
-            self.check_buffer_temporary_bytes(decoded_bytes)?;
-            let mut text = String::new();
-            text.try_reserve_exact(decoded_bytes).map_err(|_| {
-                self.memory_budget_error(
-                    self.estimated_memory_bytes
-                        .saturating_add(u64::try_from(decoded_bytes).unwrap_or(u64::MAX)),
-                    self.heap_object_count_u32(),
-                )
-            })?;
-            while let Some(chunk) = projected.buffer.pop_front() {
-                projected.buffered_length = projected.buffered_length.saturating_sub(chunk.units);
-                match chunk.value {
-                    Value::Str(value) => text.push_str(&value),
-                    _ => unreachable!("decoded queue invariant was checked before allocation"),
-                }
+                units.extend(value.encode_utf16());
             }
-            Value::str(text)
+            let consumed = requested_size.unwrap_or(units.len()).min(units.len());
+            let result = Value::Str(JsString::from_code_units(&units[..consumed]));
+            let remainder = &units[consumed..];
+            projected.buffer.clear();
+            projected.buffered_length = remainder.len();
+            if !remainder.is_empty() {
+                projected.buffer.push_back(ReadableBufferedChunk {
+                    value: Value::Str(JsString::from_code_units(remainder)),
+                    label: projected.lifecycle_label.clone(),
+                    units: remainder.len(),
+                });
+            }
+            result
         } else {
             let single_buffer = projected
                 .buffer
                 .front()
                 .and_then(|chunk| match chunk.value {
                     Value::Object(buffer_id)
-                        if projected.buffer.len() == 1 && self.is_buffer_object(buffer_id) =>
+                        if projected.buffer.len() == 1
+                            && requested_size
+                                .is_none_or(|size| size >= projected.buffered_length)
+                            && self.is_buffer_object(buffer_id) =>
                     {
                         Some(buffer_id)
                     }
                     _ => None,
                 });
             if let Some(buffer_id) = single_buffer {
-                let chunk = projected
-                    .buffer
-                    .pop_front()
-                    .expect("single Buffer queue was checked as non-empty");
-                projected.buffered_length = projected.buffered_length.saturating_sub(chunk.units);
+                projected.buffer.clear();
+                projected.buffered_length = 0;
                 Value::Object(buffer_id)
             } else {
                 self.check_buffer_temporary_bytes(projected.buffered_length)?;
@@ -13551,13 +13594,11 @@ impl InterpreterCore {
                             self.heap_object_count_u32(),
                         )
                     })?;
-                while let Some(chunk) = projected.buffer.pop_front() {
-                    projected.buffered_length =
-                        projected.buffered_length.saturating_sub(chunk.units);
-                    match chunk.value {
+                for chunk in &projected.buffer {
+                    match &chunk.value {
                         Value::Str(value) => bytes.extend_from_slice(value.as_bytes()),
                         value @ Value::Object(_) => {
-                            let view = self.buffer_like_view(&value)?;
+                            let view = self.buffer_like_view(value)?;
                             bytes.extend_from_slice(self.typed_array_view_bytes(&view)?);
                         }
                         value => {
@@ -13568,19 +13609,181 @@ impl InterpreterCore {
                         }
                     }
                 }
-                Value::Object(self.alloc_buffer_from_bytes(&bytes)?)
+                let consumed = requested_size.unwrap_or(bytes.len()).min(bytes.len());
+                let checkpoint = (self.heap.len(), self.estimated_memory_bytes);
+                let result = match self.alloc_buffer_from_bytes(&bytes[..consumed]) {
+                    Ok(result) => Value::Object(result),
+                    Err(error) => {
+                        self.rollback_heap_to_len(checkpoint.0);
+                        self.estimated_memory_bytes = checkpoint.1;
+                        return Err(error);
+                    }
+                };
+                let remainder = &bytes[consumed..];
+                projected.buffer.clear();
+                projected.buffered_length = remainder.len();
+                if !remainder.is_empty() {
+                    let remainder_len = remainder.len();
+                    let remainder_buffer = match self.alloc_buffer_from_bytes(remainder) {
+                        Ok(remainder) => remainder,
+                        Err(error) => {
+                            self.rollback_heap_to_len(checkpoint.0);
+                            self.estimated_memory_bytes = checkpoint.1;
+                            return Err(error);
+                        }
+                    };
+                    projected.buffer.push_back(ReadableBufferedChunk {
+                        value: Value::Object(remainder_buffer),
+                        label: projected.lifecycle_label.clone(),
+                        units: remainder_len,
+                    });
+                }
+                raw_allocation_checkpoint = Some(checkpoint);
+                result
             }
         };
         let should_prefetch = !projected.push_only
             && projected.buffer.is_empty()
             && !projected.eof_requested
             && projected.phase == ReadableFromPumpPhase::Data;
-        self.commit_readable_state(object_id, projected)?;
+        if let Err(error) = self.commit_readable_state(object_id, projected) {
+            if let Some((heap_len, estimated_memory_bytes)) = raw_allocation_checkpoint {
+                self.rollback_heap_to_len(heap_len);
+                self.estimated_memory_bytes = estimated_memory_bytes;
+            }
+            return Err(error);
+        }
         if should_prefetch {
             let _ = self.readable_pull_source_chunk(object_id)?;
         }
         self.schedule_readable_from_pump(object_id);
         Ok(result)
+    }
+
+    fn readable_requested_size(&self, args: RegRange) -> Result<Option<usize>, InterpreterError> {
+        let Some(value) = self.builtin_arg(args, 0)? else {
+            return Ok(None);
+        };
+        let numeric = match value {
+            Value::Undefined => return Ok(None),
+            Value::Int(value) => {
+                return Ok(Some(usize::try_from(value.max(0)).unwrap_or(usize::MAX)));
+            }
+            Value::Float(value) if value.inner().is_finite() => value.inner().trunc(),
+            Value::Str(value) => return Ok(Self::readable_string_size_prefix(&value)),
+            _ => return Ok(None),
+        };
+        if numeric <= 0.0 {
+            return Ok(Some(0));
+        }
+        if numeric >= usize::MAX as f64 {
+            return Ok(Some(usize::MAX));
+        }
+        Ok(Some(numeric as usize))
+    }
+
+    /// Node's stream implementation uses a leading base-10 integer scan for
+    /// string read sizes rather than ECMAScript `Number(...)`: `"2tail"`
+    /// requests two units, `"1e2"` requests one, and a string without a
+    /// decimal prefix falls back to an unsized read.
+    fn readable_string_size_prefix(value: &JsString) -> Option<usize> {
+        let text = value.as_utf8_projection().trim_start();
+        let bytes = text.as_bytes();
+        let (negative, start) = match bytes.first() {
+            Some(b'-') => (true, 1),
+            Some(b'+') => (false, 1),
+            _ => (false, 0),
+        };
+        let mut saw_digit = false;
+        let mut size = 0usize;
+        for byte in bytes.iter().skip(start) {
+            if !byte.is_ascii_digit() {
+                break;
+            }
+            saw_digit = true;
+            size = size
+                .saturating_mul(10)
+                .saturating_add(usize::from(*byte - b'0'));
+        }
+        if !saw_digit {
+            None
+        } else if negative {
+            Some(0)
+        } else {
+            Some(size)
+        }
+    }
+
+    fn readable_unshift(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let object_id = self.readable_receiver_id(receiver)?;
+        let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let trigger_label = if args.count > 0 {
+            self.get_register_label(args.start)?
+                .clone()
+                .join(&match &value {
+                    Value::Object(object_id) => self.binary_storage_label(*object_id),
+                    _ => Label::Public,
+                })
+        } else {
+            Label::Public
+        };
+        let Some(mut projected) = self.clone_readable_state_with_budget(object_id)? else {
+            return Ok(Value::Bool(false));
+        };
+        if projected.phase != ReadableFromPumpPhase::Data || projected.destroy_requested {
+            return Ok(Value::Bool(false));
+        }
+        let before_eof = !projected.eof_requested;
+        if value == Value::Null {
+            return Ok(Value::Bool(false));
+        }
+        let empty_byte_chunk = !projected.object_mode
+            && match &value {
+                Value::Undefined => true,
+                Value::Str(text) => text.utf16_len() == 0,
+                Value::Object(_) => self
+                    .buffer_like_view(&value)
+                    .is_ok_and(|view| view.byte_length == 0),
+                _ => false,
+            };
+        if empty_byte_chunk {
+            return Ok(Value::Bool(before_eof));
+        }
+        projected.lifecycle_label = projected.lifecycle_label.join(&trigger_label);
+        let Some((value, units)) = self.readable_normalize_push_value(&mut projected, value)?
+        else {
+            self.commit_readable_state(object_id, projected)?;
+            return Ok(Value::Bool(
+                !self
+                    .readable_from_streams
+                    .get(&object_id)
+                    .is_some_and(|state| state.eof_requested),
+            ));
+        };
+        let buffered_length = projected
+            .buffered_length
+            .checked_add(units)
+            .ok_or_else(|| InterpreterError::RangeError {
+                message: "Readable buffered length overflows host address space".to_string(),
+            })?;
+        projected
+            .buffer
+            .try_reserve(1)
+            .map_err(|_| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
+        projected.buffer.push_front(ReadableBufferedChunk {
+            value,
+            label: projected.lifecycle_label.clone(),
+            units,
+        });
+        projected.buffered_length = buffered_length;
+        projected.data_readable_pending = true;
+        self.commit_readable_state(object_id, projected)?;
+        self.schedule_readable_from_pump(object_id);
+        Ok(Value::Bool(before_eof))
     }
 
     fn readable_set_encoding(
@@ -13898,6 +14101,58 @@ impl InterpreterCore {
 
     /// Execute one finite-readable phase without holding the stream-state or
     /// listener-table borrow across user callback re-entrancy.
+    fn drive_readable_read_callback(
+        &mut self,
+        object_id: ObjectId,
+        module: &Ir3Module,
+        snapshot: ReadableFromState,
+    ) -> Result<bool, InterpreterError> {
+        let Some(read_callback) = snapshot.read_callback.clone() else {
+            return Ok(false);
+        };
+        if !snapshot.push_only
+            || snapshot.eof_requested
+            || snapshot.phase != ReadableFromPumpPhase::Data
+            || snapshot.read_callback_active
+        {
+            return Ok(false);
+        }
+        let before = (
+            snapshot.buffer.len(),
+            snapshot.eof_requested,
+            snapshot.phase,
+            snapshot.utf8_pending.len(),
+        );
+        let mut active = snapshot;
+        active.read_callback_active = true;
+        let lifecycle_label = active.lifecycle_label.clone();
+        let high_water_mark = active.high_water_mark;
+        self.commit_readable_state(object_id, active)?;
+        let invocation = self.invoke_inline_method_call_with_argument_label(
+            Some(module),
+            read_callback,
+            Value::Object(object_id),
+            vec![Value::Int(
+                i64::try_from(high_water_mark).unwrap_or(i64::MAX),
+            )],
+            Some(lifecycle_label),
+        );
+        if let Some(state) = self.readable_from_streams.get_mut(&object_id) {
+            state.read_callback_active = false;
+            let after = (
+                state.buffer.len(),
+                state.eof_requested,
+                state.phase,
+                state.utf8_pending.len(),
+            );
+            if after != before {
+                self.schedule_readable_from_pump(object_id);
+            }
+        }
+        invocation?;
+        Ok(true)
+    }
+
     fn drive_readable_from_pump(
         &mut self,
         object_id: ObjectId,
@@ -13952,6 +14207,17 @@ impl InterpreterCore {
                         emission?;
                         return Ok(());
                     }
+                    if projected.push_only
+                        && !projected.eof_requested
+                        && projected.buffered_length < projected.high_water_mark
+                        && self.drive_readable_read_callback(
+                            object_id,
+                            module,
+                            projected.clone(),
+                        )?
+                    {
+                        return Ok(());
+                    }
                     if projected.eof_requested && projected.buffer.is_empty() {
                         projected.phase = ReadableFromPumpPhase::End;
                         self.commit_readable_state(object_id, projected)?;
@@ -14004,45 +14270,7 @@ impl InterpreterCore {
                 }
 
                 if snapshot.push_only {
-                    let Some(read_callback) = snapshot.read_callback.clone() else {
-                        return Ok(());
-                    };
-                    if snapshot.read_callback_active {
-                        return Ok(());
-                    }
-                    let before = (
-                        snapshot.buffer.len(),
-                        snapshot.eof_requested,
-                        snapshot.phase,
-                        snapshot.utf8_pending.len(),
-                    );
-                    let mut active = snapshot;
-                    active.read_callback_active = true;
-                    let lifecycle_label = active.lifecycle_label.clone();
-                    let high_water_mark = active.high_water_mark;
-                    self.commit_readable_state(object_id, active)?;
-                    let invocation = self.invoke_inline_method_call_with_argument_label(
-                        Some(module),
-                        read_callback,
-                        Value::Object(object_id),
-                        vec![Value::Int(
-                            i64::try_from(high_water_mark).unwrap_or(i64::MAX),
-                        )],
-                        Some(lifecycle_label),
-                    );
-                    if let Some(state) = self.readable_from_streams.get_mut(&object_id) {
-                        state.read_callback_active = false;
-                        let after = (
-                            state.buffer.len(),
-                            state.eof_requested,
-                            state.phase,
-                            state.utf8_pending.len(),
-                        );
-                        if after != before {
-                            self.schedule_readable_from_pump(object_id);
-                        }
-                    }
-                    invocation?;
+                    let _ = self.drive_readable_read_callback(object_id, module, snapshot)?;
                     return Ok(());
                 }
 
@@ -17616,6 +17844,9 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::StreamReadableRead => {
                 self.readable_read(receiver.unwrap_or(Value::Undefined), args)
+            }
+            BuiltinFunctionKind::StreamReadableUnshift => {
+                self.readable_unshift(receiver.unwrap_or(Value::Undefined), args)
             }
             BuiltinFunctionKind::StreamReadableSetEncoding => {
                 self.readable_set_encoding(receiver.unwrap_or(Value::Undefined), args)
@@ -21399,7 +21630,7 @@ impl InterpreterCore {
                             pool_size: module.constant_pool.len() as u32,
                         },
                     )?;
-                    self.write_reg(dst, Value::str(s.as_str()))?;
+                    self.write_reg(dst, Value::Str(s.clone()))?;
                     self.ip += 1;
                 }
                 Ir3Instruction::LoadBool { dst, value } => {
@@ -22660,7 +22891,7 @@ impl InterpreterCore {
                     let name = module
                         .constant_pool
                         .get(name_pool_index as usize)
-                        .cloned()
+                        .map(ToString::to_string)
                         .unwrap_or_else(|| format!("__export_{name_pool_index}"));
                     let value = self.read_reg(src)?;
                     self.register_module_export(&name, value)?;
@@ -24015,7 +24246,7 @@ impl InterpreterCore {
                     let name = module
                         .constant_pool
                         .get(name_pool_index as usize)
-                        .cloned()
+                        .map(ToString::to_string)
                         .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
                     let binding_kind = BindingKind::from_u8(kind)?;
                     let previous_scope_bytes = self.scope_chain_memory_bytes();
@@ -26598,6 +26829,9 @@ impl InterpreterCore {
             )),
             ("Readable", "read") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamReadableRead,
+            )),
+            ("Readable", "unshift") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::StreamReadableUnshift,
             )),
             ("Readable", "setEncoding") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamReadableSetEncoding,
@@ -50482,7 +50716,7 @@ mod active_builtin_regressions {
     #[test]
     fn iterator_close_calls_return_method_on_runtime_iterator() {
         let mut module = halted_test_module();
-        module.constant_pool = vec!["closed".to_string(), "done".to_string()];
+        module.constant_pool = vec!["closed".into(), "done".into()];
         module.instructions = vec![
             Ir3Instruction::LoadThis { dst: 0 },
             Ir3Instruction::LoadStr {
@@ -51246,10 +51480,10 @@ mod async_runtime_tests_current {
             });
         }
         let mut module = test_module_with_functions(instructions, functions);
-        module.constant_pool.push("log".to_string());
+        module.constant_pool.push("log".into());
         module
             .constant_pool
-            .extend(markers.iter().map(|marker| (*marker).to_string()));
+            .extend(markers.iter().map(|marker| (*marker).into()));
         module
     }
 
@@ -51557,7 +51791,7 @@ mod async_runtime_tests_current {
                 rest_param_index: None,
             }],
         );
-        module.constant_pool.push("from-get-trap".to_string());
+        module.constant_pool.push("from-get-trap".into());
 
         let mut core = test_interpreter();
         let target = core
@@ -51627,8 +51861,8 @@ mod async_runtime_tests_current {
                 rest_param_index: None,
             }],
         );
-        module.constant_pool.push("trap-b".to_string());
-        module.constant_pool.push("trap-a".to_string());
+        module.constant_pool.push("trap-b".into());
+        module.constant_pool.push("trap-a".into());
 
         let mut core = test_interpreter();
         let target = core
@@ -51698,9 +51932,7 @@ mod async_runtime_tests_current {
                 rest_param_index: None,
             }],
         );
-        module
-            .constant_pool
-            .push("from-instruction-trap".to_string());
+        module.constant_pool.push("from-instruction-trap".into());
 
         let mut core = test_interpreter();
         let target = core
@@ -51923,7 +52155,7 @@ mod async_runtime_tests_current {
                 rest_param_index: None,
             }],
         );
-        module.constant_pool.push("boom".to_string());
+        module.constant_pool.push("boom".into());
 
         let mut core = test_interpreter();
         core.closures.push(ClosureValue {
@@ -61065,7 +61297,7 @@ mod async_runtime_tests_current {
             ],
             Vec::new(),
         );
-        module.constant_pool.push("read".to_string());
+        module.constant_pool.push("read".into());
 
         let mut core = test_interpreter();
         let Value::Object(readable) = core
@@ -61094,6 +61326,211 @@ mod async_runtime_tests_current {
             core.get_register_label(3).expect("read result label"),
             &Label::Secret,
             "engine-owned queue provenance must taint direct read() results"
+        );
+    }
+
+    #[test]
+    fn readable_sized_read_and_unshift_preserve_exact_units_and_memory_bd_fw7zd() {
+        let mut core = test_interpreter();
+        let Value::Object(readable) = core
+            .construct_stream_readable(RegRange { start: 0, count: 0 })
+            .expect("custom Readable")
+        else {
+            panic!("Readable constructor must return an object");
+        };
+        core.write_reg(0, Value::str("utf8"))
+            .expect("encoding register");
+        core.readable_set_encoding(Value::Object(readable), RegRange { start: 0, count: 1 })
+            .expect("setEncoding");
+
+        let original = JsString::from_code_units(&[0xd83d, 0xde00, 0x00e9, 0x0061]);
+        core.write_reg(1, Value::Str(original))
+            .expect("push register");
+        core.readable_push(Value::Object(readable), RegRange { start: 1, count: 1 })
+            .expect("push exact string");
+        core.write_reg(1, Value::Null).expect("EOF register");
+        core.readable_push(Value::Object(readable), RegRange { start: 1, count: 1 })
+            .expect("request EOF");
+
+        core.write_reg(2, Value::Int(1)).expect("size register");
+        let Value::Str(first) = core
+            .readable_read(Value::Object(readable), RegRange { start: 2, count: 1 })
+            .expect("read one UTF-16 unit")
+        else {
+            panic!("decoded read must return a string");
+        };
+        assert_eq!(first.code_units_vec(), vec![0xd83d]);
+        assert_eq!(
+            core.readable_from_streams
+                .get(&readable)
+                .expect("live Readable")
+                .buffered_length,
+            3
+        );
+
+        core.write_reg(3, Value::Str(first))
+            .expect("unshift register");
+        core.set_register_label(3, Label::Secret)
+            .expect("secret unshift label");
+        assert_eq!(
+            core.readable_unshift(Value::Object(readable), RegRange { start: 3, count: 1 })
+                .expect("unshift exact prefix"),
+            Value::Bool(false),
+            "unshift after push(null) restores data but reports the EOF request"
+        );
+        let Value::Str(restored) = core
+            .readable_read(Value::Object(readable), RegRange { start: 2, count: 0 })
+            .expect("read restored prefix")
+        else {
+            panic!("decoded read must return a string");
+        };
+        assert_eq!(
+            restored.code_units_vec(),
+            vec![0xd83d, 0xde00, 0x00e9, 0x0061]
+        );
+        assert_eq!(
+            core.readable_from_streams
+                .get(&readable)
+                .expect("live Readable")
+                .lifecycle_label,
+            Label::Secret
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn readable_sized_raw_read_retains_buffer_remainder_bd_fw7zd() {
+        let mut core = test_interpreter();
+        for (raw, expected) in [
+            ("1e2", Some(1)),
+            ("2tail", Some(2)),
+            ("0x10", Some(0)),
+            ("nonnumeric", None),
+        ] {
+            core.write_reg(7, Value::str(raw)).expect("string size");
+            assert_eq!(
+                core.readable_requested_size(RegRange { start: 7, count: 1 })
+                    .expect("coerce stream size"),
+                expected,
+                "leading decimal size coercion for {raw:?}"
+            );
+        }
+        let Value::Object(readable) = core
+            .construct_stream_readable(RegRange { start: 0, count: 0 })
+            .expect("custom Readable")
+        else {
+            panic!("Readable constructor must return an object");
+        };
+        core.write_reg(0, Value::str("abcd"))
+            .expect("push register");
+        core.readable_push(Value::Object(readable), RegRange { start: 0, count: 1 })
+            .expect("push bytes");
+        core.write_reg(1, Value::Int(2)).expect("size register");
+        let Value::Object(first) = core
+            .readable_read(Value::Object(readable), RegRange { start: 1, count: 1 })
+            .expect("read byte prefix")
+        else {
+            panic!("byte-mode read must return a Buffer");
+        };
+        let first_view = core
+            .buffer_like_view(&Value::Object(first))
+            .expect("first Buffer view");
+        assert_eq!(core.typed_array_view_bytes(&first_view).unwrap(), b"ab");
+        let Value::Object(second) = core
+            .readable_read(Value::Object(readable), RegRange { start: 0, count: 0 })
+            .expect("read retained suffix")
+        else {
+            panic!("byte-mode read must return a Buffer");
+        };
+        let second_view = core
+            .buffer_like_view(&Value::Object(second))
+            .expect("second Buffer view");
+        assert_eq!(core.typed_array_view_bytes(&second_view).unwrap(), b"cd");
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn readable_decoded_read_refusal_is_state_atomic_bd_fw7zd() {
+        let mut core = test_interpreter();
+        let Value::Object(readable) = core
+            .construct_stream_readable(RegRange { start: 0, count: 0 })
+            .expect("custom Readable")
+        else {
+            panic!("Readable constructor must return an object");
+        };
+        core.write_reg(0, Value::str("utf8"))
+            .expect("encoding register");
+        core.readable_set_encoding(Value::Object(readable), RegRange { start: 0, count: 1 })
+            .expect("setEncoding");
+        core.write_reg(1, Value::str("abcdef"))
+            .expect("push register");
+        core.readable_push(Value::Object(readable), RegRange { start: 1, count: 1 })
+            .expect("push decoded data");
+        core.write_reg(2, Value::Int(2)).expect("size register");
+
+        let before_state = core
+            .readable_from_streams
+            .get(&readable)
+            .expect("live Readable")
+            .clone();
+        let before_heap_len = core.heap.len();
+        let before_memory = core.estimated_memory_bytes();
+        let state_clone_bytes = InterpreterCore::estimate_readable_from_state_bytes(&before_state);
+        core.config.max_total_memory_bytes = before_memory.saturating_add(state_clone_bytes);
+        assert!(matches!(
+            core.readable_read(Value::Object(readable), RegRange { start: 2, count: 1 }),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.readable_from_streams[&readable], before_state);
+        assert_eq!(core.heap.len(), before_heap_len);
+        assert_eq!(core.estimated_memory_bytes(), before_memory);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn readable_unshift_byte_mode_noop_chunks_match_node_bd_fw7zd() {
+        let mut core = test_interpreter();
+        let Value::Object(readable) = core
+            .construct_stream_readable(RegRange { start: 0, count: 0 })
+            .expect("custom Readable")
+        else {
+            panic!("Readable constructor must return an object");
+        };
+        for (value, expected) in [
+            (Value::Null, Value::Bool(false)),
+            (Value::Undefined, Value::Bool(true)),
+            (Value::str(""), Value::Bool(true)),
+        ] {
+            core.write_reg(0, value).expect("unshift register");
+            assert_eq!(
+                core.readable_unshift(Value::Object(readable), RegRange { start: 0, count: 1 })
+                    .expect("no-op unshift"),
+                expected
+            );
+            assert!(core.readable_from_streams[&readable].buffer.is_empty());
+        }
+        core.readable_request_eof(readable, Label::Public)
+            .expect("request EOF");
+        core.write_reg(0, Value::str(""))
+            .expect("empty post-EOF chunk");
+        assert_eq!(
+            core.readable_unshift(Value::Object(readable), RegRange { start: 0, count: 1 })
+                .expect("post-EOF no-op unshift"),
+            Value::Bool(false)
+        );
+        assert!(core.readable_from_streams[&readable].buffer.is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
         );
     }
 
@@ -62173,7 +62610,7 @@ mod async_runtime_tests_current {
             ],
             vec![],
         );
-        module.constant_pool.push("data".to_string());
+        module.constant_pool.push("data".into());
 
         let mut core = test_interpreter();
         let secret_obj = core
@@ -62308,7 +62745,7 @@ mod async_runtime_tests_current {
             ],
             vec![],
         );
-        module.constant_pool.push("data".to_string());
+        module.constant_pool.push("data".into());
 
         let mut core = test_interpreter();
         let public_obj = core
@@ -62535,7 +62972,7 @@ mod async_runtime_tests_current {
                 rest_param_index: None,
             }],
         );
-        module.constant_pool.push("reduce".to_string());
+        module.constant_pool.push("reduce".into());
 
         let mut core = test_interpreter();
         let array_id = core
@@ -62614,7 +63051,7 @@ mod async_runtime_tests_current {
                 rest_param_index: None,
             }],
         );
-        module.constant_pool.push("reduce".to_string());
+        module.constant_pool.push("reduce".into());
 
         let mut core = test_interpreter();
         let array_id = core
@@ -62766,7 +63203,7 @@ mod async_runtime_tests_current {
                 rest_param_index: None,
             }],
         );
-        module.constant_pool.push("reduce".to_string());
+        module.constant_pool.push("reduce".into());
 
         let mut core = test_interpreter();
         let array_id = core
@@ -63231,7 +63668,7 @@ mod async_runtime_tests_current {
                 rest_param_index: None,
             }],
         );
-        module.constant_pool.push("recovered".to_string());
+        module.constant_pool.push("recovered".into());
 
         let mut core = test_interpreter();
         core.closures.push(ClosureValue {
@@ -63285,7 +63722,7 @@ mod async_runtime_tests_current {
                 rest_param_index: None,
             }],
         );
-        module.constant_pool.push("boom".to_string());
+        module.constant_pool.push("boom".into());
 
         let mut core = test_interpreter();
         core.closures.push(ClosureValue {
@@ -63466,7 +63903,7 @@ mod function_prototype_call_apply_tests_current {
                 rest_param_index: None,
             }],
         );
-        module.constant_pool.push("offset".to_string());
+        module.constant_pool.push("offset".into());
 
         let mut core = test_interpreter();
         let this_id = seed_object(&mut core, &[("offset", Value::Int(7))]);
@@ -63523,7 +63960,7 @@ mod function_prototype_call_apply_tests_current {
                 rest_param_index: None,
             }],
         );
-        module.constant_pool.push("base".to_string());
+        module.constant_pool.push("base".into());
 
         let mut core = test_interpreter();
         let this_id = seed_object(&mut core, &[("base", Value::Int(5))]);
@@ -63638,7 +64075,7 @@ mod function_prototype_call_apply_tests_current {
                 rest_param_index: None,
             }],
         );
-        module.constant_pool.push("offset".to_string());
+        module.constant_pool.push("offset".into());
 
         let mut core = test_interpreter();
         let array_like_id = seed_array_like(&mut core, &[Value::Int(1), Value::Int(2)]);
@@ -64208,7 +64645,7 @@ mod tests {
 
     fn test_module_with_pool(instructions: Vec<Ir3Instruction>, pool: Vec<String>) -> Ir3Module {
         let mut m = test_module(instructions);
-        m.constant_pool = pool;
+        m.constant_pool = pool.into_iter().map(Into::into).collect();
         m
     }
 
@@ -64296,7 +64733,7 @@ mod tests {
                 rest_param_index: None,
             }],
         );
-        module.constant_pool = constant_pool;
+        module.constant_pool = constant_pool.into_iter().map(Into::into).collect();
         module
     }
 
@@ -66017,7 +66454,7 @@ mod tests {
                 },
             ],
         );
-        module.constant_pool.push("result".to_string());
+        module.constant_pool.push("result".into());
 
         let mut core = quickjs_test_core();
         let iterable_id = core
@@ -69291,9 +69728,9 @@ mod tests {
                 ],
             );
             m.constant_pool = vec![
-                "prototype".to_string(),
-                "testMethod".to_string(),
-                "method called".to_string(),
+                "prototype".into(),
+                "testMethod".into(),
+                "method called".into(),
             ];
             m
         };
@@ -69402,7 +69839,7 @@ mod tests {
                     },
                 ],
             );
-            m.constant_pool = vec!["prototype".to_string(), "__proto__".to_string()];
+            m.constant_pool = vec!["prototype".into(), "__proto__".into()];
             m
         };
         core.set_reg(0, Value::Function(0));
@@ -70278,7 +70715,7 @@ mod tests {
                     rest_param_index: None,
                 }],
             );
-            module.constant_pool.push("boom".to_string());
+            module.constant_pool.push("boom".into());
 
             let mut core = test_interpreter();
             core.closures.push(ClosureValue {

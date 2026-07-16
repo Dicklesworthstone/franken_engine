@@ -3,11 +3,11 @@
 //!
 //! The reference contract is the Bun 1.3.14 lockstep corpus in sibling
 //! `franken_node/crates/franken-node/tests/fixtures/compat_corpus/{stream_ext,stream}`.
-//! This suite records the deliberate 52/65 (80%) target slice. The thirteen
+//! This suite records a deliberate 54/65 target slice. The eleven
 //! deferred cases are async-iterable/async-iterator consumption (0003, 0024,
 //! 0048), byte-HWM backpressure (0027, 0028, 0053, 0059), Duplex (0031),
-//! post-terminal misuse errors (0040, 0041), buffer surgery (0042, 0043), and
-//! asynchronous Transform callbacks (0065).
+//! post-terminal misuse errors (0040, 0041), and asynchronous Transform
+//! callbacks (0065).
 //! Acceptance clusters are unignored only when their lowering/runtime slice
 //! lands, so ordinary package test runs remain a truthful green checkpoint
 //! throughout the staged implementation.
@@ -96,6 +96,8 @@ const TARGET_FIXTURE_IDS: &[&str] = &[
     "tc::stream::0037",
     "tc::stream::0038",
     "tc::stream::0039",
+    "tc::stream::0042",
+    "tc::stream::0043",
     "tc::stream::0044",
     "tc::stream::0045",
     "tc::stream::0046",
@@ -138,6 +140,8 @@ const IMPLEMENTED_FIXTURE_IDS: &[&str] = &[
     "tc::stream::0035",
     "tc::stream::0036",
     "tc::stream::0037",
+    "tc::stream::0042",
+    "tc::stream::0043",
     "tc::stream::0044",
     "tc::stream::0046",
     "tc::stream::0047",
@@ -152,7 +156,7 @@ const IMPLEMENTED_FIXTURE_IDS: &[&str] = &[
 #[test]
 fn target_and_implemented_inventories_are_explicit() {
     let unique = TARGET_FIXTURE_IDS.iter().copied().collect::<BTreeSet<_>>();
-    assert_eq!(TARGET_FIXTURE_IDS.len(), 52);
+    assert_eq!(TARGET_FIXTURE_IDS.len(), 54);
     assert_eq!(unique.len(), TARGET_FIXTURE_IDS.len());
     assert!(TARGET_FIXTURE_IDS.windows(2).all(|pair| pair[0] < pair[1]));
 
@@ -160,7 +164,7 @@ fn target_and_implemented_inventories_are_explicit() {
         .iter()
         .copied()
         .collect::<BTreeSet<_>>();
-    assert_eq!(IMPLEMENTED_FIXTURE_IDS.len(), 30);
+    assert_eq!(IMPLEMENTED_FIXTURE_IDS.len(), 32);
     assert_eq!(implemented.len(), IMPLEMENTED_FIXTURE_IDS.len());
     assert!(IMPLEMENTED_FIXTURE_IDS.iter().all(|id| unique.contains(id)));
 }
@@ -497,6 +501,41 @@ fn readable_custom_push_paused_read_and_encoding() {
             expected: "string:enc\nend",
         },
         EvalCase {
+            ids: &["tc::stream::0042"],
+            description: "decoded read(n) consumes exact UTF-16 code-unit slices",
+            source: r#"
+                const { Readable } = require('stream');
+                const readable = new Readable({ read() {} });
+                readable.setEncoding('utf8');
+                readable.push('abcdef');
+                readable.push(null);
+                readable.on('readable', () => {
+                  let chunk;
+                  while ((chunk = readable.read(2)) !== null) console.log('chunk:' + chunk);
+                });
+                readable.on('end', () => console.log('end'));
+            "#,
+            expected: "chunk:ab\nchunk:cd\nchunk:ef\nend",
+        },
+        EvalCase {
+            ids: &["tc::stream::0043"],
+            description: "unshift restores a decoded prefix after EOF was requested",
+            source: r#"
+                const { Readable } = require('stream');
+                const readable = new Readable({ read() {} });
+                readable.setEncoding('utf8');
+                readable.push('xyz');
+                readable.push(null);
+                readable.once('readable', () => {
+                  const first = readable.read(1);
+                  readable.unshift(first);
+                  console.log('back:' + readable.read(3));
+                  console.log('after:' + String(readable.read()));
+                });
+            "#,
+            expected: "back:xyz\nafter:null",
+        },
+        EvalCase {
             ids: &[],
             description: "byte-mode data is Buffer-backed and UTF-8 decoding retains split suffixes",
             source: r#"
@@ -527,6 +566,21 @@ fn readable_custom_push_paused_read_and_encoding() {
                 console.log('parked');
             "#,
             expected: "parked",
+        },
+        EvalCase {
+            ids: &[],
+            description: "an oversized paused read requests another low-water _read turn",
+            source: r#"
+                const { Readable } = require('stream');
+                const pieces = ['a', 'b', null];
+                const readable = new Readable({ read() { this.push(pieces.shift()); } });
+                readable.on('readable', () => {
+                  const chunk = readable.read(2);
+                  if (chunk !== null) console.log('filled:' + chunk.toString());
+                });
+                readable.on('end', () => console.log('end'));
+            "#,
+            expected: "filled:ab\nend",
         },
         EvalCase {
             ids: &[],

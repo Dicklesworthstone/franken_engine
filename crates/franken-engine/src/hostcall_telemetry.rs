@@ -15,6 +15,12 @@
 //! [`crate::forensic_replayer::IncidentTrace::with_telemetry_recorder`] copies
 //! the recorder's records and drop counts into an incident trace, giving the
 //! Probabilistic Guardplane a completeness-aware runtime evidence feed.
+//! A zero drop count proves only that every record submitted by an instrumented
+//! dispatch site was retained; each policy-relevant dispatch family must still
+//! route through a telemetry wrapper. `module:require` and `module:import`
+//! joined that covered set in bd-juz83. Capability denials happen before
+//! dispatch and remain in the hostcall decision log rather than this
+//! post-dispatch stream.
 //!
 //! Plan reference: Section 10.5, item 3.
 //! Cross-refs: 9A.2 (Probabilistic Guardplane), 9E.9 (normative
@@ -70,6 +76,8 @@ pub enum HostcallType {
     Builtin,
     /// Internal promise/microtask machinery (`promise:resolve`, `promise:all`, …).
     Promise,
+    /// Module loading (`module:require`, `module:import`).
+    ModuleLoad,
 }
 
 impl fmt::Display for HostcallType {
@@ -89,6 +97,7 @@ impl fmt::Display for HostcallType {
             Self::Console => "console",
             Self::Builtin => "builtin",
             Self::Promise => "promise",
+            Self::ModuleLoad => "module-load",
         };
         f.write_str(s)
     }
@@ -106,6 +115,11 @@ impl HostcallType {
             Self::TimerCreate
         } else if tag.starts_with("promise:") {
             Self::Promise
+        } else if matches!(
+            tag,
+            "module:require" | "module:import" | "module.import" | "module_load"
+        ) {
+            Self::ModuleLoad
         } else if tag.starts_with("number:") || tag.starts_with("builtin:") {
             Self::Builtin
         } else if tag == "fs:read" || tag == "fs.read" || tag == "fs_read" {
@@ -208,7 +222,9 @@ pub struct HostcallTelemetryRecord {
     pub extension_id: String,
     /// Category of hostcall.
     pub hostcall_type: HostcallType,
-    /// Capability exercised by this hostcall.
+    /// Capability class exercised by this hostcall. This classifies the
+    /// operation; consult the hostcall decision log to prove that a live gate
+    /// granted it (some non-HostCall IR effects are not yet gated).
     pub capability_used: RuntimeCapability,
     /// SHA-256 hash of the call arguments (privacy-preserving).
     pub arguments_hash: ContentHash,
@@ -656,14 +672,15 @@ impl TelemetryRecorder {
     }
 
     /// Total telemetry records dropped across all reasons (see
-    /// [`Self::drop_counts`]). Zero on a healthy, complete stream.
+    /// [`Self::drop_counts`]). Zero means all submitted records were retained;
+    /// dispatch-site capture coverage is established separately.
     pub fn dropped_records(&self) -> u64 {
         self.dropped.total()
     }
 
-    /// Whether the recorder has dropped any record — i.e. the telemetry
-    /// stream is incomplete and the guardplane must not read an absence of
-    /// events as an absence of activity.
+    /// Whether the recorder has dropped any submitted record. A true result
+    /// makes the telemetry stream incomplete; a false result does not by
+    /// itself prove that every dispatch family is instrumented.
     pub fn has_dropped_records(&self) -> bool {
         self.dropped.any()
     }
@@ -686,9 +703,10 @@ impl TelemetryRecorder {
     /// Compute the overall content hash of all records and any observed drops.
     /// Records are sorted by record_id for insertion-order independence.
     ///
-    /// Complete streams retain their historical hash. Incomplete streams add
-    /// a domain-separated drop-count suffix so a retained record prefix cannot
-    /// hash identically after a refused security-relevant tail (bd-0332s).
+    /// Zero-drop recorder streams retain their historical hash. Streams with
+    /// refused submissions add a domain-separated drop-count suffix so a
+    /// retained record prefix cannot hash identically after a refused
+    /// security-relevant tail (bd-0332s).
     pub fn content_hash(&self) -> ContentHash {
         let mut buf = Vec::new();
         let mut sorted: Vec<_> = self.records.iter().collect();
@@ -939,6 +957,7 @@ mod tests {
         assert_eq!(HostcallType::Console.to_string(), "console");
         assert_eq!(HostcallType::Builtin.to_string(), "builtin");
         assert_eq!(HostcallType::Promise.to_string(), "promise");
+        assert_eq!(HostcallType::ModuleLoad.to_string(), "module-load");
     }
 
     #[test]
@@ -954,6 +973,22 @@ mod tests {
         assert_eq!(
             HostcallType::from_capability_tag("promise:all"),
             HostcallType::Promise
+        );
+        assert_eq!(
+            HostcallType::from_capability_tag("module:require"),
+            HostcallType::ModuleLoad
+        );
+        assert_eq!(
+            HostcallType::from_capability_tag("module:import"),
+            HostcallType::ModuleLoad
+        );
+        assert_eq!(
+            HostcallType::from_capability_tag("module.import"),
+            HostcallType::ModuleLoad
+        );
+        assert_eq!(
+            HostcallType::from_capability_tag("module_load"),
+            HostcallType::ModuleLoad
         );
         assert_eq!(
             HostcallType::from_capability_tag("number:parse_int"),
@@ -1000,6 +1035,7 @@ mod tests {
             HostcallType::Console,
             HostcallType::Builtin,
             HostcallType::Promise,
+            HostcallType::ModuleLoad,
         ] {
             // SAFETY: HostcallType derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).

@@ -74,8 +74,10 @@ pub struct IncidentTrace {
     pub telemetry_log: Vec<HostcallTelemetryRecord>,
     /// Per-reason records refused by the source telemetry recorder.
     ///
-    /// Zero is the only complete stream. The default preserves decoding of
-    /// incident traces serialized before completeness evidence was added.
+    /// Zero proves that every record submitted by an instrumented dispatch
+    /// site was retained; dispatch-site coverage is a separate invariant. The
+    /// default preserves decoding of incident traces serialized before drop
+    /// evidence was added.
     #[serde(default)]
     pub telemetry_drop_counts: TelemetryDropCounts,
     /// Posterior history: (step_index, posterior_after_update).

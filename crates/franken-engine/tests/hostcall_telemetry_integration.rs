@@ -685,6 +685,10 @@ fn serde_hostcall_type_all_variants() {
         HostcallType::CryptoOp,
         HostcallType::IpcSend,
         HostcallType::IpcRecv,
+        HostcallType::Console,
+        HostcallType::Builtin,
+        HostcallType::Promise,
+        HostcallType::ModuleLoad,
     ];
     for v in variants {
         let json = serde_json::to_string(&v).unwrap();
@@ -829,7 +833,7 @@ fn serde_telemetry_record() {
 // ===========================================================================
 
 #[test]
-fn display_hostcall_type_all_11() {
+fn display_hostcall_type_all_variants() {
     let cases = [
         (HostcallType::FsRead, "fs-read"),
         (HostcallType::FsWrite, "fs-write"),
@@ -842,6 +846,10 @@ fn display_hostcall_type_all_11() {
         (HostcallType::CryptoOp, "crypto-op"),
         (HostcallType::IpcSend, "ipc-send"),
         (HostcallType::IpcRecv, "ipc-recv"),
+        (HostcallType::Console, "console"),
+        (HostcallType::Builtin, "builtin"),
+        (HostcallType::Promise, "promise"),
+        (HostcallType::ModuleLoad, "module-load"),
     ];
     for (variant, expected) in cases {
         assert_eq!(variant.to_string(), expected);

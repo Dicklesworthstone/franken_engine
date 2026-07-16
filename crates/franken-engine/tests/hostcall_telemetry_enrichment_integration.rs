@@ -102,7 +102,7 @@ fn small_recorder(capacity: usize) -> TelemetryRecorder {
 // =========================================================================
 
 #[test]
-fn enrichment_hostcall_type_ordering_all_11() {
+fn enrichment_hostcall_type_ordering_all_variants() {
     let all = [
         HostcallType::FsRead,
         HostcallType::FsWrite,
@@ -115,6 +115,10 @@ fn enrichment_hostcall_type_ordering_all_11() {
         HostcallType::CryptoOp,
         HostcallType::IpcSend,
         HostcallType::IpcRecv,
+        HostcallType::Console,
+        HostcallType::Builtin,
+        HostcallType::Promise,
+        HostcallType::ModuleLoad,
     ];
     // Each consecutive pair should maintain Ord invariant.
     for i in 0..all.len() - 1 {
@@ -149,6 +153,10 @@ fn enrichment_hostcall_type_hash_all_distinct() {
         HostcallType::CryptoOp,
         HostcallType::IpcSend,
         HostcallType::IpcRecv,
+        HostcallType::Console,
+        HostcallType::Builtin,
+        HostcallType::Promise,
+        HostcallType::ModuleLoad,
     ];
     let mut hashes = BTreeSet::new();
     for variant in &all {
@@ -156,7 +164,7 @@ fn enrichment_hostcall_type_hash_all_distinct() {
         variant.hash(&mut hasher);
         hashes.insert(hasher.finish());
     }
-    assert_eq!(hashes.len(), 11);
+    assert_eq!(hashes.len(), 15);
 }
 
 // =========================================================================

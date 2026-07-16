@@ -2,9 +2,10 @@
 //! [`InterpreterCore`] (bd-qi3hs).
 //!
 //! Drives real JavaScript source through the full pipeline
-//! (parse -> IR0 -> IR1 -> IR2 -> IR3 -> interpreter execution) and asserts
-//! that the interpreter's hostcall dispatch sites feed the recorder with
-//! schema-valid, deterministic, replay-aligned records.
+//! (parse -> IR0 -> IR1 -> IR2 -> IR3 -> interpreter execution), plus focused
+//! public-IR dispatch probes for capability paths intentionally rejected by
+//! source lowering, and asserts that hostcall dispatch sites feed the recorder
+//! with schema-valid, deterministic, replay-aligned records.
 //!
 //! These tests guard against the failure mode the recorder shipped with for
 //! months (cf. closed bd-ygbaj): the schema existed but no production code
@@ -12,18 +13,40 @@
 //! `telemetry_log` was always empty. Each test below would be silently green
 //! before the wiring landed.
 
+use std::fs;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use frankenengine_engine::ast::ParseGoal;
-use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore};
+use frankenengine_engine::baseline_interpreter::{
+    InterpreterConfig, InterpreterCore, InterpreterError,
+};
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::forensic_replayer::{IncidentMetadata, IncidentTrace};
-use frankenengine_engine::hostcall_telemetry::{HostcallResult, HostcallType};
-use frankenengine_engine::ir_contract::Ir0Module;
+use frankenengine_engine::hostcall_telemetry::{
+    HostcallResult, HostcallTelemetryRecord, HostcallType,
+};
+use frankenengine_engine::ir_contract::{
+    CapabilityTag, Ir0Module, Ir3Instruction, Ir3Module, IrHeader, IrLevel, IrSchemaVersion,
+    RegRange,
+};
 use frankenengine_engine::lowering_pipeline::{
     lower_ir0_to_ir1, lower_ir1_to_ir2, lower_ir2_to_ir3,
 };
 use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser};
 
 fn make_core(trace_id: &str) -> InterpreterCore {
+    make_core_with_capabilities(trace_id, &[])
+}
+
+fn make_core_with_capabilities(
+    trace_id: &str,
+    additional_capabilities: &[RuntimeCapability],
+) -> InterpreterCore {
+    InterpreterCore::new(interpreter_config(additional_capabilities), trace_id)
+}
+
+fn interpreter_config(additional_capabilities: &[RuntimeCapability]) -> InterpreterConfig {
     let mut config = InterpreterConfig::quickjs_defaults();
     config
         .granted_capabilities
@@ -38,7 +61,18 @@ fn make_core(trace_id: &str) -> InterpreterCore {
         .granted_capabilities
         .insert(RuntimeCapability::Console);
     config.granted_capabilities.insert(RuntimeCapability::Timer);
-    InterpreterCore::new(config, trace_id)
+    config
+        .granted_capabilities
+        .extend(additional_capabilities.iter().copied());
+    config
+}
+
+fn temp_module_root(prefix: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    std::env::temp_dir().join(format!("franken_engine_{prefix}_{nanos}"))
 }
 
 /// Drive real JS source through the full lowering + execution pipeline and
@@ -200,10 +234,323 @@ fn fresh_interpreter_has_empty_recorder() {
 }
 
 #[test]
-fn incident_trace_with_telemetry_recorder_carries_complete_evidence() {
+fn require_failure_emits_deterministic_module_load_record() {
+    fn run_once() -> (InterpreterError, Vec<HostcallTelemetryRecord>) {
+        // Bare `require(...)` is correctly rejected as ambient authority by
+        // source lowering. Exercise the public IR dispatch boundary directly,
+        // which remains reachable by validated/loaded IR modules.
+        let module = Ir3Module {
+            header: IrHeader {
+                schema_version: IrSchemaVersion::CURRENT,
+                level: IrLevel::Ir3,
+                source_hash: None,
+                source_label: "bd-juz83-require-telemetry".to_string(),
+            },
+            instructions: vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("module:require".to_string()),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 1,
+                },
+            ],
+            constant_pool: Vec::new(),
+            function_table: Vec::new(),
+            specialization: None,
+            required_capabilities: Vec::new(),
+        };
+
+        let mut core =
+            make_core_with_capabilities("trace-require-bd-juz83", &[RuntimeCapability::ModuleLoad]);
+        let error = core
+            .execute(&module)
+            .expect_err("non-string require must fail after dispatch");
+        (error, core.hostcall_telemetry().records().to_vec())
+    }
+
+    let (first_error, first_records) = run_once();
+    assert!(matches!(
+        first_error,
+        InterpreterError::RequireSpecifierNotString { got } if got == "number"
+    ));
+    let require_records = first_records
+        .iter()
+        .filter(|record| record.hostcall_type == HostcallType::ModuleLoad)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        require_records.len(),
+        1,
+        "one require dispatch must emit exactly one module-load record"
+    );
+    let record = require_records[0];
+    assert_eq!(record.capability_used, RuntimeCapability::ModuleLoad);
+    assert!(matches!(
+        record.result_status,
+        HostcallResult::Error { code: 12 }
+    ));
+    assert!(record.verify_integrity());
+
+    let (second_error, second_records) = run_once();
+    assert_eq!(
+        first_error.to_string(),
+        second_error.to_string(),
+        "control-flow failure must be deterministic"
+    );
+    assert_eq!(
+        first_records, second_records,
+        "module-load telemetry must be byte-identical across replays"
+    );
+}
+
+#[test]
+fn import_module_without_module_grant_still_records_current_dispatch_contract() {
+    let root = temp_module_root("bd_juz83_import_without_grant");
+    fs::create_dir_all(&root).expect("create module root");
+    let module = Ir3Module {
+        header: IrHeader {
+            schema_version: IrSchemaVersion::CURRENT,
+            level: IrLevel::Ir3,
+            source_hash: None,
+            source_label: root.join("main.mjs").display().to_string(),
+        },
+        instructions: vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+        ],
+        constant_pool: vec!["./missing.mjs".to_string()],
+        function_table: Vec::new(),
+        specialization: None,
+        required_capabilities: Vec::new(),
+    };
+
+    // ImportModule is a ReadEffect whose required capability is currently lost
+    // between IR2 and IR3. Preserve that established execution contract while
+    // proving the dispatch is no longer invisible to telemetry.
+    let mut config = interpreter_config(&[]);
+    config.module_root = Some(root.display().to_string());
+    let mut core = InterpreterCore::new(config, "trace-import-capture-bd-juz83");
+    let error = core
+        .execute(&module)
+        .expect_err("missing import should reach module resolution without a ModuleLoad grant");
+    assert!(matches!(
+        error,
+        InterpreterError::ModuleResolutionFailed { .. }
+    ));
+    let records = core.hostcall_telemetry().records();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].hostcall_type, HostcallType::ModuleLoad);
+    assert!(matches!(
+        records[0].result_status,
+        HostcallResult::Error { .. }
+    ));
+    assert!(records[0].verify_integrity());
+}
+
+#[test]
+fn direct_import_hostcall_alias_emits_module_load_record() {
+    let module = Ir3Module {
+        header: IrHeader {
+            schema_version: IrSchemaVersion::CURRENT,
+            level: IrLevel::Ir3,
+            source_hash: None,
+            source_label: "bd-juz83-direct-import-hostcall".to_string(),
+        },
+        instructions: vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 9 },
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("module.import".to_string()),
+                args: RegRange { start: 0, count: 1 },
+                dst: 1,
+            },
+        ],
+        constant_pool: Vec::new(),
+        function_table: Vec::new(),
+        specialization: None,
+        required_capabilities: Vec::new(),
+    };
+
+    let mut core = make_core_with_capabilities(
+        "trace-direct-import-bd-juz83",
+        &[RuntimeCapability::ModuleLoad],
+    );
+    let error = core
+        .execute(&module)
+        .expect_err("non-string import hostcall must fail after dispatch");
+    assert!(matches!(
+        error,
+        InterpreterError::ImportSpecifierNotString { got } if got == "number"
+    ));
+    let records = core.hostcall_telemetry().records();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].hostcall_type, HostcallType::ModuleLoad);
+    assert_eq!(records[0].capability_used, RuntimeCapability::ModuleLoad);
+    assert!(matches!(
+        records[0].result_status,
+        HostcallResult::Error { .. }
+    ));
+    assert!(records[0].verify_integrity());
+}
+
+#[test]
+fn apply_hostcall_module_load_aliases_record_inner_and_outer_without_drops() {
+    fn run_target(target_capability: &str, suffix: &str) {
+        let root = temp_module_root(&format!("bd_juz83_apply_{suffix}"));
+        fs::create_dir_all(&root).expect("create module root");
+        fs::write(root.join("dep.cjs"), "module.exports = 23;\n").expect("write dependency module");
+
+        let module = Ir3Module {
+            header: IrHeader {
+                schema_version: IrSchemaVersion::CURRENT,
+                level: IrLevel::Ir3,
+                source_hash: None,
+                source_label: root.join("main.mjs").display().to_string(),
+            },
+            instructions: vec![
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 0,
+                },
+                Ir3Instruction::NewArray { dst: 1 },
+                Ir3Instruction::LoadStr {
+                    dst: 2,
+                    pool_index: 1,
+                },
+                Ir3Instruction::ArrayPush {
+                    array: 1,
+                    element: 2,
+                },
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("builtin:ApplyHostCall".to_string()),
+                    args: RegRange { start: 0, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::Return { value: 3 },
+            ],
+            constant_pool: vec![target_capability.to_string(), "./dep.cjs".to_string()],
+            function_table: Vec::new(),
+            specialization: None,
+            required_capabilities: Vec::new(),
+        };
+
+        let mut config = interpreter_config(&[RuntimeCapability::ModuleLoad]);
+        config.module_root = Some(root.display().to_string());
+        let mut core = InterpreterCore::new(config, format!("trace-apply-{suffix}-bd-juz83"));
+        core.execute(&module)
+            .expect("ApplyHostCall module-load target should execute");
+
+        assert_eq!(
+            core.hostcall_telemetry().drop_counts(),
+            Default::default(),
+            "nested ApplyHostCall completion must preserve timestamp monotonicity"
+        );
+        let records = core.hostcall_telemetry().records();
+        assert_eq!(records.len(), 2, "target={target_capability}");
+        assert_eq!(records[0].hostcall_type, HostcallType::ModuleLoad);
+        assert_eq!(records[1].hostcall_type, HostcallType::Builtin);
+        assert!(records.iter().all(|record| record.verify_integrity()));
+    }
+
+    run_target("module:require", "require");
+    run_target("module:import", "import_colon");
+    run_target("module.import", "import_dot");
+    run_target("module_load", "canonical");
+}
+
+#[test]
+fn nested_module_require_product_path_captures_every_dispatch() {
+    fn run_once() -> Vec<HostcallTelemetryRecord> {
+        let root = temp_module_root("bd_juz83_nested_require");
+        fs::create_dir_all(&root).expect("create module root");
+        fs::write(root.join("dep.cjs"), "module.exports = 17;\n").expect("write dependency module");
+        fs::write(
+            root.join("entry.cjs"),
+            "module.exports = module.require('./dep.cjs');\n",
+        )
+        .expect("write entry module");
+
+        let module = Ir3Module {
+            header: IrHeader {
+                schema_version: IrSchemaVersion::CURRENT,
+                level: IrLevel::Ir3,
+                source_hash: None,
+                source_label: root.join("main.mjs").display().to_string(),
+            },
+            instructions: vec![
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 0,
+                },
+                Ir3Instruction::ImportModule {
+                    specifier: 0,
+                    dst: 1,
+                },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            constant_pool: vec!["./entry.cjs".to_string()],
+            function_table: Vec::new(),
+            specialization: None,
+            required_capabilities: Vec::new(),
+        };
+
+        // ImportModule and first-class module.require do not yet carry a live
+        // ModuleLoad gate because IR/profile authority propagation is
+        // incomplete (bd-iyp3h). This product-path probe deliberately omits
+        // the grant so telemetry wiring cannot change established execution.
+        let mut config = interpreter_config(&[]);
+        config.module_root = Some(root.display().to_string());
+        let mut core = InterpreterCore::new(config, "trace-module-load-bd-juz83");
+        let result = core
+            .execute(&module)
+            .expect("nested module.require product path should execute");
+        let decisions = result
+            .hostcall_decisions
+            .iter()
+            .map(|decision| (decision.capability.0.as_str(), decision.allowed))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            decisions,
+            Vec::<(&str, bool)>::new(),
+            "capture wiring must not silently add gates before bd-iyp3h aligns module authority"
+        );
+
+        assert_eq!(
+            core.hostcall_telemetry().drop_counts(),
+            Default::default(),
+            "nested completion order must not trigger a recorder drop"
+        );
+        core.hostcall_telemetry().records().to_vec()
+    }
+
+    let first_records = run_once();
+    assert_eq!(
+        first_records.len(),
+        2,
+        "outer module:import and inner first-class module.require must each be captured"
+    );
+    for record in &first_records {
+        assert_eq!(record.hostcall_type, HostcallType::ModuleLoad);
+        assert_eq!(record.capability_used, RuntimeCapability::ModuleLoad);
+        assert_eq!(record.result_status, HostcallResult::Success);
+        assert!(record.verify_integrity());
+    }
+    assert_eq!(
+        first_records,
+        run_once(),
+        "nested module-load telemetry must be byte-identical across replays"
+    );
+}
+
+#[test]
+fn incident_trace_with_telemetry_recorder_carries_retention_evidence() {
     // The forensic_replayer bridge: an IncidentTrace seeded from interpreter
     // recorder state carries both the live records and the source recorder's
-    // completeness evidence.
+    // drop evidence. Dispatch-site capture coverage is tested independently.
     let core = run_to_core(
         "trace-incident",
         "console.log('seed-bd-qi3hs'); console.error('uh-oh');",
@@ -255,7 +602,7 @@ fn incident_trace_with_telemetry_recorder_carries_complete_evidence() {
     assert_eq!(
         bridged.telemetry_drop_counts,
         core.hostcall_telemetry().drop_counts(),
-        "bridged trace must retain source-recorder completeness evidence"
+        "bridged trace must retain source-recorder drop evidence"
     );
 
     // The trace's content hash must change once real records replace the

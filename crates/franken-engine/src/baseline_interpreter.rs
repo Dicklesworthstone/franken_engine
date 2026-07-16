@@ -15327,24 +15327,22 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         match builtin.kind {
             BuiltinFunctionKind::Require => {
-                let spec_val = if args.count > 0 {
-                    self.read_reg(args.start)?
-                } else {
-                    Value::Undefined
-                };
-                let specifier = match spec_val {
-                    Value::Str(s) => s,
-                    other => {
-                        return Err(InterpreterError::RequireSpecifierNotString {
-                            got: other.type_name().to_string(),
-                        });
-                    }
-                };
                 let previous_module_specifier = self.current_module_specifier.clone();
                 if !builtin.module_specifier.is_empty() {
                     self.current_module_specifier = Some(builtin.module_specifier.to_string());
                 }
-                let result = self.require_module(module, &specifier);
+                // First-class `require` values (`const req = require`) and
+                // `module.require(...)` arrive as ordinary Call/CallMethod
+                // instructions, so they do not pass through the IR3 HostCall
+                // arm's shared gate. Preserve that established product
+                // behavior while making the dispatch observable; unifying its
+                // authority declaration/profile grant with direct HostCall is
+                // tracked in bd-iyp3h.
+                self.emit_witness(
+                    WitnessEventKind::HostcallDispatched,
+                    Some("cap:module:require"),
+                );
+                let result = self.dispatch_require_hostcall(args, Some(module));
                 self.current_module_specifier = previous_module_specifier;
                 result
             }
@@ -20505,20 +20503,12 @@ impl InterpreterCore {
                     let result = if is_promise_cap {
                         self.dispatch_promise_hostcall(&capability.0, args, Some(module))?
                     } else if capability.0 == "module:require" {
-                        let spec_val = if args.count > 0 {
-                            self.read_reg(args.start)?
-                        } else {
-                            Value::Undefined
-                        };
-                        let specifier = match spec_val {
-                            Value::Str(s) => s,
-                            other => {
-                                return Err(InterpreterError::RequireSpecifierNotString {
-                                    got: other.type_name().to_string(),
-                                });
-                            }
-                        };
-                        self.require_module(module, &specifier)?
+                        self.dispatch_require_hostcall(args, Some(module))?
+                    } else if matches!(
+                        capability.0.as_str(),
+                        "module:import" | "module.import" | "module_load"
+                    ) {
+                        self.dispatch_import_hostcall(&capability.0, args, Some(module))?
                     } else if capability.0.starts_with("number:") {
                         self.dispatch_number_hostcall(&capability.0, args)?
                     } else if capability.0.starts_with("console:") {
@@ -20593,16 +20583,18 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::ImportModule { specifier, dst } => {
-                    let spec_val = self.read_reg(specifier)?;
-                    let specifier_str = match spec_val {
-                        Value::Str(s) => s,
-                        other => {
-                            return Err(InterpreterError::ImportSpecifierNotString {
-                                got: other.type_name().to_string(),
-                            });
-                        }
-                    };
-                    let namespace = self.import_module(module, &specifier_str)?;
+                    self.emit_witness(
+                        WitnessEventKind::HostcallDispatched,
+                        Some("cap:module:import"),
+                    );
+                    let namespace = self.dispatch_import_hostcall(
+                        "module:import",
+                        RegRange {
+                            start: specifier,
+                            count: 1,
+                        },
+                        Some(module),
+                    )?;
                     self.write_reg(dst, namespace)?;
                     self.ip += 1;
                 }
@@ -26498,6 +26490,95 @@ impl InterpreterCore {
         let outcome = self.dispatch_promise_hostcall_inner(cap, args, module);
         self.record_hostcall_telemetry(cap, args, timestamp_ns, args_hash, &outcome);
         outcome
+    }
+
+    /// Dispatch a CommonJS `require` and emit exactly one completeness-aware
+    /// telemetry record for both success and failure.
+    fn dispatch_require_hostcall(
+        &mut self,
+        args: RegRange,
+        module: Option<&Ir3Module>,
+    ) -> Result<Value, InterpreterError> {
+        let args_hash = self.hostcall_arguments_hash(args);
+        let outcome = self.dispatch_require_hostcall_inner(args, module);
+        // Module evaluation can recursively complete another module hostcall.
+        // Record in completion order so nested records remain timestamp-
+        // monotonic while retaining deterministic instruction-clock time.
+        let timestamp_ns = self.instructions_executed;
+        self.record_hostcall_telemetry("module:require", args, timestamp_ns, args_hash, &outcome);
+        outcome
+    }
+
+    fn dispatch_require_hostcall_inner(
+        &mut self,
+        args: RegRange,
+        module: Option<&Ir3Module>,
+    ) -> Result<Value, InterpreterError> {
+        let spec_val = if args.count > 0 {
+            self.read_reg(args.start)?
+        } else {
+            Value::Undefined
+        };
+        let specifier = match spec_val {
+            Value::Str(specifier) => specifier,
+            other => {
+                return Err(InterpreterError::RequireSpecifierNotString {
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        let module = module.ok_or_else(|| InterpreterError::InternalError {
+            details: "module:require apply hostcall missing module context".to_string(),
+        })?;
+        self.require_module(module, &specifier)
+    }
+
+    /// Dispatch an ESM import and emit exactly one module-load telemetry record
+    /// for both success and failure.
+    ///
+    /// `ImportModule` is currently an IR read effect rather than a HostCall and
+    /// IR2 -> IR3 does not preserve its `module.import` required capability.
+    /// Keep capture coverage here without silently introducing a live gate
+    /// that product profiles cannot satisfy; authority propagation is tracked
+    /// separately in bd-iyp3h.
+    fn dispatch_import_hostcall(
+        &mut self,
+        capability: &str,
+        args: RegRange,
+        module: Option<&Ir3Module>,
+    ) -> Result<Value, InterpreterError> {
+        let args_hash = self.hostcall_arguments_hash(args);
+        let outcome = self.dispatch_import_hostcall_inner(args, module);
+        // See `dispatch_require_hostcall`: nested module evaluation records
+        // inner completions first, so the outer record takes its timestamp at
+        // completion as well.
+        let timestamp_ns = self.instructions_executed;
+        self.record_hostcall_telemetry(capability, args, timestamp_ns, args_hash, &outcome);
+        outcome
+    }
+
+    fn dispatch_import_hostcall_inner(
+        &mut self,
+        args: RegRange,
+        module: Option<&Ir3Module>,
+    ) -> Result<Value, InterpreterError> {
+        let specifier_value = if args.count > 0 {
+            self.read_reg(args.start)?
+        } else {
+            Value::Undefined
+        };
+        let specifier = match specifier_value {
+            Value::Str(specifier) => specifier,
+            other => {
+                return Err(InterpreterError::ImportSpecifierNotString {
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        let module = module.ok_or_else(|| InterpreterError::InternalError {
+            details: "module import hostcall missing module context".to_string(),
+        })?;
+        self.import_module(module, &specifier)
     }
 
     fn dispatch_promise_hostcall_inner(
@@ -32897,9 +32978,13 @@ impl InterpreterCore {
         // previous failed or test-only direct dispatch must never taint the
         // next, unrelated hostcall.
         self.clear_pending_hostcall_result_label();
-        let timestamp_ns = self.instructions_executed;
         let args_hash = self.hostcall_arguments_hash(args);
         let outcome = self.dispatch_builtin_hostcall_inner(cap, args, module);
+        // ApplyHostCall and callback-running builtins can complete nested
+        // hostcalls. Record the outer builtin in completion order so its
+        // deterministic timestamp cannot precede an already-retained inner
+        // record and trigger a false monotonicity drop (bd-juz83).
+        let timestamp_ns = self.instructions_executed;
         self.record_hostcall_telemetry(cap, args, timestamp_ns, args_hash, &outcome);
         outcome
     }
@@ -33016,23 +33101,9 @@ impl InterpreterCore {
             if cap.starts_with("promise:") {
                 this.dispatch_promise_hostcall(cap, delegated_args, module)
             } else if cap == "module:require" {
-                let spec_val = if delegated_args.count > 0 {
-                    this.read_reg(delegated_args.start)?
-                } else {
-                    Value::Undefined
-                };
-                let specifier = match spec_val {
-                    Value::Str(s) => s,
-                    other => {
-                        return Err(InterpreterError::RequireSpecifierNotString {
-                            got: other.type_name().to_string(),
-                        });
-                    }
-                };
-                let module = module.ok_or_else(|| InterpreterError::InternalError {
-                    details: "module:require apply hostcall missing module context".to_string(),
-                })?;
-                this.require_module(module, &specifier)
+                this.dispatch_require_hostcall(delegated_args, module)
+            } else if matches!(cap, "module:import" | "module.import" | "module_load") {
+                this.dispatch_import_hostcall(cap, delegated_args, module)
             } else if cap.starts_with("number:") {
                 this.dispatch_number_hostcall(cap, delegated_args)
             } else if cap.starts_with("console:") {
@@ -33584,6 +33655,11 @@ impl InterpreterCore {
                     });
                 }
                 check_hostcall_capability_gate(self, &target_cap, self.ip as u32)?;
+                let recordable_target = recordable_capability_tag(&target_cap);
+                self.emit_witness(
+                    WitnessEventKind::HostcallDispatched,
+                    Some(&format!("cap:{recordable_target}")),
+                );
                 let values = self.array_like_argument_values(self.read_reg(args.start + 1)?)?;
                 self.dispatch_hostcall_with_value_args(&target_cap, values, module)
             }
@@ -45370,13 +45446,19 @@ impl InterpreterCore {
     /// path (bd-qi3hs). Pass this recorder to
     /// [`crate::forensic_replayer::IncidentTrace::with_telemetry_recorder`] so
     /// replay receives both retained records and completeness evidence.
+    /// Drop counts cover instrumented dispatch sites; they are not a substitute
+    /// for keeping every policy-relevant dispatch family wired to the recorder.
+    /// Capability denials occur before dispatch and are retained in the
+    /// execution result's `hostcall_decisions`, not this post-dispatch stream.
     pub fn hostcall_telemetry(&self) -> &TelemetryRecorder {
         &self.telemetry_recorder
     }
 
-    /// Best-effort recording for a single completed hostcall. Backpressure and
-    /// other recorder errors are swallowed so telemetry can never block JS
-    /// execution; the recorder is observability, not enforcement.
+    /// Best-effort recording for a single completed hostcall. Capability
+    /// denials occur before this point and are recorded by the shared gate in
+    /// `HostcallDecisionRecord`. Backpressure and other recorder errors are
+    /// swallowed so telemetry can never block JS execution; the recorder is
+    /// observability, not enforcement.
     fn record_hostcall_telemetry(
         &mut self,
         cap: &str,

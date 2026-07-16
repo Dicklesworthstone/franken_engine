@@ -6830,65 +6830,20 @@ fn try_parse_conditional(
     None
 }
 
-/// Find the index of a top-level `:` (not inside nested delimiters or quotes).
+/// Find the index of a top-level `:` outside nested delimiters and lexical
+/// literals. In particular, RegExp character classes and escapes may contain
+/// bracket/colon bytes that must not close a computed object key.
 fn find_top_level_colon(s: &str) -> Option<usize> {
-    let bytes = s.as_bytes();
-    let mut depth_paren: i64 = 0;
-    let mut depth_bracket: i64 = 0;
-    let mut depth_brace: i64 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
-    for (i, &b) in bytes.iter().enumerate() {
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if b == b'\\' {
-                escaped = true;
-                continue;
-            }
-            if b == q {
-                in_quote = None;
-            }
-            continue;
+    let mut colon = None;
+    scan_binding_pattern_source_until(s, |index, ch, depth, quoted| {
+        if !quoted && depth == 0 && ch == ':' {
+            colon = Some(index);
+            false
+        } else {
+            true
         }
-        match b {
-            b'\'' | b'"' | b'`' => {
-                in_quote = Some(b);
-                continue;
-            }
-            b'(' => {
-                depth_paren += 1;
-                continue;
-            }
-            b')' => {
-                depth_paren -= 1;
-                continue;
-            }
-            b'[' => {
-                depth_bracket += 1;
-                continue;
-            }
-            b']' => {
-                depth_bracket -= 1;
-                continue;
-            }
-            b'{' => {
-                depth_brace += 1;
-                continue;
-            }
-            b'}' => {
-                depth_brace -= 1;
-                continue;
-            }
-            _ => {}
-        }
-        if depth_paren == 0 && depth_bracket == 0 && depth_brace == 0 && b == b':' {
-            return Some(i);
-        }
-    }
-    None
+    });
+    colon
 }
 
 /// Find the `:` that matches the *first* top-level `?` of a ternary, given the
@@ -13529,6 +13484,60 @@ strict"; var static = 1; }"#,
                     .contains("computed object-literal property key")
             );
         }
+    }
+
+    #[test]
+    fn computed_object_literal_key_scans_are_regexp_aware_bd_egjks() {
+        let tree = parse_script(r"({[/]/]: 7, [/[/]/]: 8, [/\]/]: 9, [/[:,\]]/g]: 10})");
+        let Expression::ObjectLiteral(properties) = first_expr(&tree) else {
+            panic!("expected object literal");
+        };
+        assert_eq!(properties.len(), 4);
+        for (property, (pattern, flags, value)) in properties.iter().zip([
+            ("]", "", 7),
+            ("[/]", "", 8),
+            (r"\]", "", 9),
+            (r"[:,\]]", "g", 10),
+        ]) {
+            assert!(property.computed);
+            assert!(matches!(
+                &property.key,
+                Expression::RegExpLiteral {
+                    pattern: actual_pattern,
+                    flags: actual_flags,
+                } if actual_pattern == pattern && actual_flags == flags
+            ));
+            assert!(matches!(
+                &property.value,
+                Expression::NumericLiteral(actual) if *actual == value
+            ));
+        }
+
+        let tree = parse_script("({[left / right]: 1, [nested[key]]: 2, [']']: 3, [`]`]: 4})");
+        let Expression::ObjectLiteral(properties) = first_expr(&tree) else {
+            panic!("expected mixed computed-key object literal");
+        };
+        assert!(matches!(
+            &properties[0].key,
+            Expression::Binary {
+                operator: BinaryOperator::Divide,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &properties[1].key,
+            Expression::Member { computed: true, .. }
+        ));
+        assert!(matches!(
+            &properties[2].key,
+            Expression::StringLiteral(value) if value == "]"
+        ));
+        assert!(matches!(
+            &properties[3].key,
+            Expression::TemplateLiteral { quasis, expressions }
+                if matches!(quasis.as_slice(), [value] if value == "]")
+                    && expressions.is_empty()
+        ));
     }
 
     #[test]

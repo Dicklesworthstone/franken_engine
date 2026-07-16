@@ -15975,6 +15975,51 @@ mod tests {
     }
 
     #[test]
+    fn regexp_computed_object_keys_lower_bd_egjks() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                "let object = { [/]/]: 7, [/[/]/]: 8 }; \
+                 object[/]/] * 10 + object[/[/]/];",
+                ParseGoal::Script,
+            )
+            .expect("RegExp computed-key source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_egjks.js");
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("RegExp computed keys should lower to IR1")
+            .module;
+        assert_eq!(
+            ir1.ops
+                .iter()
+                .filter(|op| matches!(
+                    op,
+                    Ir1Op::HostCall { capability, arg_count: 2 }
+                        if capability == "regexp:create"
+                ))
+                .count(),
+            4
+        );
+        assert_eq!(
+            ir1.ops
+                .iter()
+                .filter(|op| matches!(op, Ir1Op::NewObject { count: 2 }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            ir1.ops
+                .iter()
+                .filter(|op| matches!(
+                    op,
+                    Ir1Op::GetProperty {
+                        key: Ir1PropertyKey::Dynamic
+                    }
+                ))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
     fn mixed_object_spread_preserves_target_and_override_order_bd_ibsn4() {
         let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
             "let {a, b, c} = {...{a: 1, b: 2}, b: 9, c: 3};\

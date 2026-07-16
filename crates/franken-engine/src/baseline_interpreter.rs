@@ -19,8 +19,9 @@
 //! difference is in policy (instruction budget, register limit, dispatch
 //! strategy), not in a second engine backend.
 //!
-//! `BTreeMap`/`BTreeSet` for deterministic ordering; hot-path JIT counters use
-//! private non-observable storage where iteration order is never exposed.
+//! `BTreeMap`/`BTreeSet` provide deterministic internal ordering; observable
+//! data properties use explicit ECMAScript own-key order. Hot-path JIT counters
+//! use private non-observable storage where iteration order is never exposed.
 //! `#![forbid(unsafe_code)]` — no unsafe anywhere.
 //!
 //! Plan reference: Section 10.2 item 8, bd-2f8.
@@ -50,6 +51,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
+use frankenengine_core::object_model::OrderedStringMap;
 use frankenengine_extension_host::host_io::{
     FsDirEntry, FsMetaResult, FsMetadata, FsOperation, HostIoProvider, HostIoRecorder,
 };
@@ -3743,8 +3745,8 @@ impl DataViewIntegerKind {
 /// A heap-allocated object with string-keyed properties.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeapObject {
-    /// Property storage (BTreeMap for deterministic ordering).
-    pub properties: BTreeMap<String, Value>,
+    /// Data properties in ECMAScript own-key order with deterministic lookup.
+    pub properties: OrderedStringMap<Value>,
     /// Prototype link used by membership operators and constructor instances.
     pub prototype: Option<ObjectId>,
     /// Constructor function index that allocated this object via `Construct`.
@@ -12351,8 +12353,8 @@ impl InterpreterCore {
     /// Node-ish parity for the recognized fields:
     /// - `method`: trimmed + upper-cased; defaults to `"GET"` when absent/blank.
     /// - `headers`: a nested `{ name: value }` object; values are coerced to
-    ///   strings and emitted in the object's deterministic `BTreeMap` key order
-    ///   so the recorded effect is byte-reproducible. Non-stringable header
+    ///   strings and emitted in ECMAScript own-key order so the recorded effect
+    ///   is byte-reproducible and matches ordinary object enumeration. Non-stringable header
     ///   values are skipped rather than mis-framed.
     /// - `body`: a string (or stringified integer) becomes the request body;
     ///   anything else — including the `http.request` writable-stream form that
@@ -17739,9 +17741,9 @@ impl InterpreterCore {
         let previous_export_bytes = record
             .exports
             .get(name)
-            .map(|previous| Self::estimate_property_entry_bytes(name, previous))
+            .map(|previous| Self::estimate_plain_string_map_entry_bytes(name, previous))
             .unwrap_or(0);
-        let next_export_bytes = Self::estimate_property_entry_bytes(name, &value);
+        let next_export_bytes = Self::estimate_plain_string_map_entry_bytes(name, &value);
         self.apply_memory_component_delta(previous_export_bytes, next_export_bytes)?;
         let previous_export = {
             let record = self
@@ -33413,8 +33415,8 @@ impl InterpreterCore {
     }
 
     /// bd-qmy52: `querystring.stringify` body over a heap object: own
-    /// properties in the engine's `Object.keys` order (deterministic BTreeMap
-    /// order — DISC-013; Node uses insertion order), array values expand to
+    /// properties in ECMAScript `Object.keys` order (canonical array indices
+    /// numerically first, then other strings by creation order), array values expand to
     /// repeated `key=element` pairs (an EMPTY array contributes nothing, bun:
     /// `stringify({e: [], f: 'y'})` is `'f=y'`), other values stringify via
     /// [`Self::qs_stringify_primitive`]; keys and values escape with
@@ -42706,10 +42708,17 @@ impl InterpreterCore {
         root_estimate
     }
 
-    fn estimate_property_entry_bytes(key: &str, value: &Value) -> u64 {
+    fn estimate_plain_string_map_entry_bytes(key: &str, value: &Value) -> u64 {
         MEMORY_ESTIMATE_MAP_ENTRY_BYTES
             .saturating_add(Self::estimate_string_bytes(key))
             .saturating_add(Self::estimate_value_bytes(value))
+    }
+
+    fn estimate_property_entry_bytes(key: &str, value: &Value) -> u64 {
+        Self::estimate_plain_string_map_entry_bytes(key, value)
+            // OrderedStringMap owns a second key for its ES-order
+            // index/vector spine in addition to the lookup-map key.
+            .saturating_add(Self::estimate_string_bytes(key))
     }
 
     fn estimate_event_listener_record_bytes(event: &str, record: &EventListenerRecord) -> u64 {
@@ -43219,7 +43228,7 @@ impl InterpreterCore {
                 .modules
                 .values()
                 .flat_map(|record| record.exports.iter())
-                .map(|(name, value)| Self::estimate_property_entry_bytes(name, value)),
+                .map(|(name, value)| Self::estimate_plain_string_map_entry_bytes(name, value)),
         )
     }
 
@@ -65238,6 +65247,19 @@ mod tests {
     }
 
     #[test]
+    fn ordered_heap_property_estimator_charges_only_its_second_key() {
+        let key = "payload";
+        let value = Value::str("hello world");
+        let plain = InterpreterCore::estimate_plain_string_map_entry_bytes(key, &value);
+        let ordered = InterpreterCore::estimate_property_entry_bytes(key, &value);
+
+        assert_eq!(
+            ordered,
+            plain.saturating_add(InterpreterCore::estimate_string_bytes(key))
+        );
+    }
+
+    #[test]
     fn set_and_remove_object_property_update_memory_incrementally() {
         let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "property-memory-delta");
@@ -68652,7 +68674,7 @@ mod tests {
             interpreter.set_heap_object_at(
                 200,
                 HeapObject {
-                    properties: BTreeMap::new(),
+                    properties: OrderedStringMap::new(),
                     prototype: None,
                     ..Default::default()
                 },
@@ -68941,7 +68963,7 @@ mod tests {
             interpreter.set_heap_object_at(
                 200,
                 HeapObject {
-                    properties: BTreeMap::new(),
+                    properties: OrderedStringMap::new(),
                     prototype: None,
                     ..Default::default()
                 },
@@ -71363,12 +71385,12 @@ mod tests {
         core.set_heap_object_at(
             array_id.0 as usize,
             Object {
-                properties: BTreeMap::from([
+                properties: OrderedStringMap::from(BTreeMap::from([
                     ("length".to_string(), Value::Int(3)),
                     ("0".to_string(), Value::str("first")),
                     ("1".to_string(), Value::str("second")),
                     ("2".to_string(), Value::str("third")),
-                ]),
+                ])),
                 ..Default::default()
             },
         );
@@ -71621,6 +71643,180 @@ mod tests {
             .cloned()
             .expect("Object.entries should produce a first entry");
         assert_array_tag(&mut core, first_entry);
+    }
+
+    #[test]
+    fn baseline_data_property_consumers_use_es_own_key_order() {
+        let mut core = quickjs_test_core();
+        let object_id = core
+            .alloc_object_with_prototype(None)
+            .expect("source object should allocate");
+        for (key, value) in [
+            ("b", 1),
+            ("10", 2),
+            ("2", 3),
+            ("01", 4),
+            ("4294967295", 5),
+            ("0", 6),
+            ("a", 7),
+            ("4294967294", 9),
+        ] {
+            core.set_object_property(object_id, key.to_string(), Value::Int(value))
+                .expect("data property should be accepted");
+        }
+        core.set_object_property(object_id, "b".to_string(), Value::Int(8))
+            .expect("updating a property should retain its position");
+        assert!(
+            core.remove_object_property(object_id, "b")
+                .expect("property removal should succeed")
+        );
+        core.set_object_property(object_id, "b".to_string(), Value::Int(8))
+            .expect("re-adding a property should append it");
+
+        let expected_keys = vec![
+            "0".to_string(),
+            "2".to_string(),
+            "10".to_string(),
+            "4294967294".to_string(),
+            "01".to_string(),
+            "4294967295".to_string(),
+            "a".to_string(),
+            "b".to_string(),
+        ];
+        assert_eq!(
+            core.ordinary_own_property_key_values(object_id).unwrap(),
+            expected_keys
+                .iter()
+                .map(|key| Value::str(key.as_str()))
+                .collect::<Vec<_>>()
+        );
+
+        core.set_reg(0, Value::Object(object_id));
+        let keys = core
+            .dispatch_builtin_hostcall("builtin:ObjectKeys", RegRange { start: 0, count: 1 }, None)
+            .expect("Object.keys should succeed");
+        let Value::Object(keys_id) = keys else {
+            panic!("Object.keys should return an array");
+        };
+        assert_eq!(
+            core.read_array_like_values(keys_id),
+            expected_keys
+                .iter()
+                .map(|key| Value::str(key.as_str()))
+                .collect::<Vec<_>>()
+        );
+
+        core.set_reg(0, Value::Object(object_id));
+        let values = core
+            .dispatch_builtin_hostcall(
+                "builtin:ObjectValues",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("Object.values should succeed");
+        let Value::Object(values_id) = values else {
+            panic!("Object.values should return an array");
+        };
+        assert_eq!(
+            core.read_array_like_values(values_id),
+            vec![
+                Value::Int(6),
+                Value::Int(3),
+                Value::Int(2),
+                Value::Int(9),
+                Value::Int(4),
+                Value::Int(5),
+                Value::Int(7),
+                Value::Int(8),
+            ]
+        );
+
+        core.set_reg(0, Value::Object(object_id));
+        let entries = core
+            .dispatch_builtin_hostcall(
+                "builtin:ObjectEntries",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("Object.entries should succeed");
+        let Value::Object(entries_id) = entries else {
+            panic!("Object.entries should return an array");
+        };
+        let entry_keys = core
+            .read_array_like_values(entries_id)
+            .into_iter()
+            .map(|entry| {
+                let Value::Object(entry_id) = entry else {
+                    panic!("Object.entries member should be a pair array");
+                };
+                core.read_array_like_values(entry_id)
+                    .into_iter()
+                    .next()
+                    .expect("entry pair should contain a key")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            entry_keys,
+            expected_keys
+                .iter()
+                .map(|key| Value::str(key.as_str()))
+                .collect::<Vec<_>>()
+        );
+
+        core.set_reg(0, Value::Object(object_id));
+        let reflected = core
+            .dispatch_builtin_hostcall(
+                "builtin:ReflectOwnKeys",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("Reflect.ownKeys should succeed");
+        let Value::Object(reflected_id) = reflected else {
+            panic!("Reflect.ownKeys should return an array");
+        };
+        assert_eq!(
+            core.read_array_like_values(reflected_id),
+            expected_keys
+                .iter()
+                .map(|key| Value::str(key.as_str()))
+                .collect::<Vec<_>>()
+        );
+
+        let assigned_id = core
+            .alloc_object_with_prototype(None)
+            .expect("Object.assign target should allocate");
+        core.set_reg(0, Value::Object(assigned_id));
+        core.set_reg(1, Value::Object(object_id));
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ObjectAssign",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .expect("Object.assign should succeed"),
+            Value::Object(assigned_id)
+        );
+        assert_eq!(
+            core.heap[assigned_id.0 as usize]
+                .properties
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            expected_keys
+        );
+
+        assert_eq!(core.collect_for_in_keys(object_id).unwrap(), expected_keys);
+        assert_eq!(
+            core.qs_stringify_object(object_id, "&", "="),
+            "0=6&2=3&10=2&4294967294=9&01=4&4294967295=5&a=7&b=8"
+        );
+        assert_eq!(
+            core.json_stringify_value(&Value::Object(object_id), &mut Vec::new()),
+            Some(
+                r#"{"0":6,"2":3,"10":2,"4294967294":9,"01":4,"4294967295":5,"a":7,"b":8}"#
+                    .to_string()
+            )
+        );
     }
 
     #[test]
@@ -72530,8 +72726,8 @@ mod json_stringify_bd9a8cz3_tests {
     //! bd-9a8cz.3: `JSON.stringify` object/array serialization (was a `"{}"` stub
     //! for every object). Reachable from eval because lowering recognizes
     //! `JSON.stringify` as a builtin call (`object_json_builtin_call_capability`)
-    //! with no eval-scope global binding required. Keys serialize in the engine's
-    //! deterministic (BTreeMap-sorted) order.
+    //! with no eval-scope global binding required. Keys serialize in ECMAScript
+    //! own-key order.
     fn eval_value(source: &str) -> String {
         let mut engine = crate::HybridRouter::default();
         match engine.eval(source) {

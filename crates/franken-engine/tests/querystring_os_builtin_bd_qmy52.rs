@@ -221,8 +221,6 @@ fn parse_falsy_sep_and_eq_use_defaults() {
 
 #[test]
 fn stringify_basic_pairs() {
-    // Keys chosen already in the engine's deterministic (sorted) property
-    // order so the assertion is order-independent (see DISC-013 pin below).
     let src = r#"
         const qs = require('querystring');
         console.log(qs.stringify({ abc: 'xyz', foo: 'bar' }));
@@ -231,17 +229,13 @@ fn stringify_basic_pairs() {
 }
 
 #[test]
-fn stringify_key_order_is_engine_deterministic_order_disc_013() {
-    // DISC-013 (bd-qporw): engine objects enumerate own string keys in
-    // deterministic BTreeMap order, not ECMAScript insertion order. Node/bun
-    // emit 'foo=bar&baz=qux' here; the engine's deterministic storage yields
-    // the sorted order. This pin is intentional — it documents the known
-    // divergence rather than conformance.
+fn stringify_key_order_matches_node_insertion_order_disc_013() {
+    // Node 20.19.4 and bun 1.3.14 both retain this property-creation order.
     let src = r#"
         const qs = require('querystring');
         console.log(qs.stringify({ foo: 'bar', baz: 'qux' }));
     "#;
-    assert_eq!(eval_console(src), "baz=qux&foo=bar");
+    assert_eq!(eval_console(src), "foo=bar&baz=qux");
 }
 
 #[test]
@@ -279,12 +273,12 @@ fn stringify_escapes_space_plus_and_unicode() {
     let src = r#"
         const qs = require('querystring');
         console.log(qs.stringify({ a: 'x y', b: 'p+q' }));
-        console.log(qs.stringify({ v: 'café', w: '中' }));
+        console.log(qs.stringify({ w: '中', v: 'café' }));
         console.log(qs.stringify({ 'k y': 'v&=' }));
     "#;
     assert_eq!(
         eval_console(src),
-        "a=x%20y&b=p%2Bq\nv=caf%C3%A9&w=%E4%B8%AD\nk%20y=v%26%3D"
+        "a=x%20y&b=p%2Bq\nw=%E4%B8%AD&v=caf%C3%A9\nk%20y=v%26%3D"
     );
 }
 
@@ -292,12 +286,12 @@ fn stringify_escapes_space_plus_and_unicode() {
 fn stringify_numbers_and_booleans() {
     let src = r#"
         const qs = require('querystring');
-        console.log(qs.stringify({ f: 1.5, n: 42, t: true, x: false }));
+        console.log(qs.stringify({ n: 42, f: 1.5, t: true, x: false }));
         console.log(qs.stringify({ a: [1, 'x', true] }));
     "#;
     assert_eq!(
         eval_console(src),
-        "f=1.5&n=42&t=true&x=false\na=1&a=x&a=true"
+        "n=42&f=1.5&t=true&x=false\na=1&a=x&a=true"
     );
 }
 

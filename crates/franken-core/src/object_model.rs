@@ -24,6 +24,300 @@ use serde::{Deserialize, Serialize};
 use crate::js_string::JsString;
 
 // ---------------------------------------------------------------------------
+// OrderedStringMap — baseline string-key property carrier
+// ---------------------------------------------------------------------------
+
+/// A string-keyed map with deterministic ES own-property iteration order.
+///
+/// Lookup remains backed by a [`BTreeMap`]. Observable iteration follows
+/// ECMAScript `[[OwnPropertyKeys]]` string-key order: canonical array indices
+/// (`0` through `4294967294`) numerically first, followed by all other strings
+/// in property-creation order. Updating an existing key retains its position;
+/// deleting and re-inserting a non-index key appends it.
+///
+/// Serde intentionally keeps the historical map-shaped representation. The
+/// order in a decoded map becomes the recovered creation order for non-index
+/// strings, so existing replay/checkpoint payloads remain readable without a
+/// sidecar field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderedStringMap<V> {
+    by_key: BTreeMap<String, V>,
+    array_indices: BTreeMap<u32, String>,
+    string_insertion_order: Vec<String>,
+}
+
+impl<V> Default for OrderedStringMap<V> {
+    fn default() -> Self {
+        Self {
+            by_key: BTreeMap::new(),
+            array_indices: BTreeMap::new(),
+            string_insertion_order: Vec::new(),
+        }
+    }
+}
+
+impl<V> OrderedStringMap<V> {
+    /// Create empty ordered storage.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Return the number of entries.
+    pub fn len(&self) -> usize {
+        self.by_key.len()
+    }
+
+    /// Return whether the map has no entries.
+    pub fn is_empty(&self) -> bool {
+        self.by_key.is_empty()
+    }
+
+    /// Return a shared value for `key`.
+    pub fn get(&self, key: &str) -> Option<&V> {
+        self.by_key.get(key)
+    }
+
+    /// Return a mutable value for `key` without changing its position.
+    pub fn get_mut(&mut self, key: &str) -> Option<&mut V> {
+        self.by_key.get_mut(key)
+    }
+
+    /// Return whether `key` is present.
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.by_key.contains_key(key)
+    }
+
+    /// Insert or replace a value.
+    ///
+    /// New canonical array indices join the numeric index set. New ordinary
+    /// strings append to creation order. Replacing a value moves neither.
+    pub fn insert(&mut self, key: String, value: V) -> Option<V> {
+        if !self.by_key.contains_key(&key) {
+            if let Some(index) = canonical_array_index(&key) {
+                self.array_indices.insert(index, key.clone());
+            } else {
+                self.string_insertion_order.push(key.clone());
+            }
+        }
+        self.by_key.insert(key, value)
+    }
+
+    /// Return the ordinary-string creation position for `key`.
+    ///
+    /// Canonical array indices have numeric rather than creation ordering, so
+    /// they return `None` even when present. This is crate-visible for exact
+    /// rollback of a temporarily removed baseline data property.
+    pub(crate) fn string_insertion_position(&self, key: &str) -> Option<usize> {
+        self.string_insertion_order
+            .iter()
+            .position(|candidate| candidate == key)
+    }
+
+    /// Insert a previously removed ordinary string at its original position.
+    ///
+    /// Existing keys and canonical array indices use ordinary [`Self::insert`]
+    /// semantics. This is intentionally narrower than a public arbitrary-order
+    /// mutation API: its sole purpose is transaction rollback.
+    pub(crate) fn insert_at_string_position(
+        &mut self,
+        key: String,
+        value: V,
+        position: usize,
+    ) -> Option<V> {
+        if self.by_key.contains_key(&key) || canonical_array_index(&key).is_some() {
+            return self.insert(key, value);
+        }
+        let position = position.min(self.string_insertion_order.len());
+        self.string_insertion_order.insert(position, key.clone());
+        self.by_key.insert(key, value)
+    }
+
+    /// Remove `key` and its ordering entry.
+    pub fn remove(&mut self, key: &str) -> Option<V> {
+        let removed = self.by_key.remove(key);
+        if removed.is_some() {
+            if let Some(index) = canonical_array_index(key) {
+                self.array_indices.remove(&index);
+            } else {
+                self.string_insertion_order
+                    .retain(|candidate| candidate != key);
+            }
+        }
+        removed
+    }
+
+    /// Remove all entries and ordering state.
+    pub fn clear(&mut self) {
+        self.by_key.clear();
+        self.array_indices.clear();
+        self.string_insertion_order.clear();
+    }
+
+    /// Retain only entries for which `keep` returns true.
+    pub fn retain<F>(&mut self, mut keep: F)
+    where
+        F: FnMut(&String, &mut V) -> bool,
+    {
+        self.by_key.retain(|key, value| keep(key, value));
+        let by_key = &self.by_key;
+        self.array_indices.retain(|_, key| by_key.contains_key(key));
+        self.string_insertion_order
+            .retain(|key| by_key.contains_key(key));
+    }
+
+    /// Iterate keys in ES own-property string-key order.
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        self.array_indices
+            .values()
+            .chain(self.string_insertion_order.iter())
+    }
+
+    /// Iterate values in ES own-property string-key order.
+    pub fn values(&self) -> impl Iterator<Item = &V> {
+        self.iter().map(|(_, value)| value)
+    }
+
+    /// Iterate entries in ES own-property string-key order.
+    pub fn iter(&self) -> OrderedStringMapIter<'_, V> {
+        OrderedStringMapIter {
+            keys: self
+                .array_indices
+                .values()
+                .chain(self.string_insertion_order.iter()),
+            by_key: &self.by_key,
+        }
+    }
+}
+
+impl<V> From<BTreeMap<String, V>> for OrderedStringMap<V> {
+    fn from(by_key: BTreeMap<String, V>) -> Self {
+        by_key.into_iter().collect()
+    }
+}
+
+impl<V> FromIterator<(String, V)> for OrderedStringMap<V> {
+    fn from_iter<T: IntoIterator<Item = (String, V)>>(iter: T) -> Self {
+        let mut map = Self::new();
+        for (key, value) in iter {
+            map.insert(key, value);
+        }
+        map
+    }
+}
+
+impl<V: Serialize> Serialize for OrderedStringMap<V> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap as _;
+
+        let mut map = serializer.serialize_map(Some(self.len()))?;
+        for (key, value) in self {
+            map.serialize_entry(key, value)?;
+        }
+        map.end()
+    }
+}
+
+impl<'de, V: Deserialize<'de>> Deserialize<'de> for OrderedStringMap<V> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct OrderedStringMapVisitor<V>(std::marker::PhantomData<fn() -> V>);
+
+        impl<'de, V: Deserialize<'de>> serde::de::Visitor<'de> for OrderedStringMapVisitor<V> {
+            type Value = OrderedStringMap<V>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a string-keyed map")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut access: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut map = OrderedStringMap::new();
+                while let Some((key, value)) = access.next_entry::<String, V>()? {
+                    map.insert(key, value);
+                }
+                Ok(map)
+            }
+        }
+
+        deserializer.deserialize_map(OrderedStringMapVisitor(std::marker::PhantomData))
+    }
+}
+
+/// Iterator over [`OrderedStringMap`] entries.
+pub struct OrderedStringMapIter<'a, V> {
+    keys: std::iter::Chain<
+        std::collections::btree_map::Values<'a, u32, String>,
+        std::slice::Iter<'a, String>,
+    >,
+    by_key: &'a BTreeMap<String, V>,
+}
+
+impl<'a, V> Iterator for OrderedStringMapIter<'a, V> {
+    type Item = (&'a String, &'a V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        for key in self.keys.by_ref() {
+            if let Some(value) = self.by_key.get(key) {
+                return Some((key, value));
+            }
+        }
+        None
+    }
+}
+
+impl<'a, V> IntoIterator for &'a OrderedStringMap<V> {
+    type Item = (&'a String, &'a V);
+    type IntoIter = OrderedStringMapIter<'a, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+/// Owning iterator over [`OrderedStringMap`] entries.
+pub struct OrderedStringMapIntoIter<V> {
+    keys: std::vec::IntoIter<String>,
+    by_key: BTreeMap<String, V>,
+}
+
+impl<V> Iterator for OrderedStringMapIntoIter<V> {
+    type Item = (String, V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        for key in self.keys.by_ref() {
+            if let Some(value) = self.by_key.remove(&key) {
+                return Some((key, value));
+            }
+        }
+        None
+    }
+}
+
+impl<V> IntoIterator for OrderedStringMap<V> {
+    type Item = (String, V);
+    type IntoIter = OrderedStringMapIntoIter<V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        let keys = self
+            .array_indices
+            .into_values()
+            .chain(self.string_insertion_order)
+            .collect::<Vec<_>>()
+            .into_iter();
+        OrderedStringMapIntoIter {
+            keys,
+            by_key: self.by_key,
+        }
+    }
+}
+
+fn canonical_array_index(key: &str) -> Option<u32> {
+    let index = key.parse::<u32>().ok()?;
+    (index < u32::MAX && index.to_string() == key).then_some(index)
+}
+
+// ---------------------------------------------------------------------------
 // PropertyKey — string or symbol
 // ---------------------------------------------------------------------------
 
@@ -2373,6 +2667,69 @@ mod tests {
 
     fn str_val(s: &str) -> JsValue {
         JsValue::str(s)
+    }
+
+    #[test]
+    fn ordered_string_map_uses_es_string_key_order() {
+        let mut map = OrderedStringMap::new();
+        for (key, value) in [
+            ("b", 1),
+            ("10", 2),
+            ("2", 3),
+            ("01", 4),
+            ("4294967295", 5),
+            ("0", 6),
+            ("a", 7),
+            ("4294967294", 8),
+        ] {
+            map.insert(key.to_string(), value);
+        }
+
+        assert_eq!(
+            map.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["0", "2", "10", "4294967294", "b", "01", "4294967295", "a"]
+        );
+        assert_eq!(
+            map.values().copied().collect::<Vec<_>>(),
+            vec![6, 3, 2, 8, 1, 4, 5, 7]
+        );
+    }
+
+    #[test]
+    fn ordered_string_map_updates_in_place_and_readds_at_end() {
+        let mut map = OrderedStringMap::new();
+        map.insert("b".to_string(), 1);
+        map.insert("a".to_string(), 2);
+        assert_eq!(map.insert("b".to_string(), 3), Some(1));
+        assert_eq!(
+            map.iter()
+                .map(|(key, value)| (key.as_str(), *value))
+                .collect::<Vec<_>>(),
+            vec![("b", 3), ("a", 2)]
+        );
+
+        assert_eq!(map.remove("b"), Some(3));
+        map.insert("b".to_string(), 4);
+        assert_eq!(
+            map.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
+    }
+
+    #[test]
+    fn ordered_string_map_serde_stays_map_shaped_and_recovers_order() {
+        const LEGACY_MAP: &str = r#"{"b":1,"a":2,"2":3,"1":4}"#;
+        let map: OrderedStringMap<i32> =
+            serde_json::from_str(LEGACY_MAP).expect("legacy map should deserialize");
+
+        assert_eq!(
+            map.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["1", "2", "b", "a"]
+        );
+        assert_eq!(
+            serde_json::to_string(&map).expect("ordered map should serialize"),
+            r#"{"1":4,"2":3,"b":1,"a":2}"#
+        );
     }
 
     // -----------------------------------------------------------------------

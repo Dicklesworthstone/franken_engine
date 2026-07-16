@@ -263,38 +263,47 @@ test reports, not buried in const sets (see DISC-005 below).
 - **Reviewed:** 2026-05-29
 - **Next review:** 2026-06-28
 
-### DISC-013: Baseline-interpreter own-property enumeration still uses deterministic `BTreeMap` order
+### DISC-013: Own-property enumeration carriers require explicit ECMAScript order
 
-- **Status:** PARTIALLY RESOLVED; ACCEPTED only for the remaining baseline-interpreter lane
+- **Status:** PARTIALLY RESOLVED; ACCEPTED only for the remaining accessor/symbol baseline gaps
 - **ES2020 ref:** §9.1.11 (`[[OwnPropertyKeys]]`), plus callers such as
   `Object.keys`, `Object.values`, `Object.entries`, `Reflect.ownKeys`,
   `for...in`, and `JSON.stringify`
 - **Affected harnesses:** `tests/youtube_botguard_js_conformance.rs` and the
   querystring/JSON/for-in baseline-interpreter surfaces.
-- **Resolved surface:** `bd-n8eta.1` replaced the public descriptor-property
+- **Resolved surfaces:** `bd-n8eta.1` replaced the public descriptor-property
   maps in both `franken-engine::object_model` and `franken-core::object_model`
   with deterministic ordered storage. Canonically spelled integer indices sort
   numerically; strings and symbols retain creation order; updates keep
   position; delete plus re-create appends. The existing JSON pair-sequence
   schema remains readable, and ambiguous duplicate-key sequences fail closed.
-- **Remaining symptom:** The separate `baseline_interpreter::HeapObject`
-  storage is still a `BTreeMap<String, Value>`. Consequently HybridRouter
-  `Object.keys`, querystring, JSON serialization, for-in, and ordinary Proxy
-  fallback enumeration can still return lexical rather than donor insertion
-  order. For example, `Object.keys({b:2,a:1})` can still observe `a,b` there.
-- **Test verdict expression:** The descriptor-model integration test now proves
-  the donor order `b,a` after numeric keys. The BotGuard and product-path
-  compatibility cases continue to expose the baseline-interpreter residual.
-- **Rationale for the remaining ACCEPTED scope:** The baseline heap is a
-  separate serialized runtime carrier. Its repair must update object statics,
-  `for...in`, ordinary Proxy fallback, querystring, JSON serialization,
-  persisted/replay shapes, memory accounting, and goldens together in later
-  `bd-n8eta` children. Keeping that residual explicit avoids overstating the
-  descriptor-model slice as product-path conformance.
+  `bd-n8eta.2` replaces both executable baseline data-property maps with a
+  BTree-backed ordered carrier while retaining their historical map-shaped
+  serde/replay representation. Object statics, assign/spread, ordinary
+  Proxy/Reflect fallback, querystring, JSON serialization, and for-in now share
+  canonical numeric-index-then-creation-order iteration. Full and incremental
+  memory accounting charge the carrier's duplicate ordering key, and rejected
+  core accessor conversions restore the exact prior data-property position.
+- **Remaining symptom:** `franken-core` still stores accessor descriptors in a
+  separate map and appends them after data keys during for-in collection, so a
+  mixed data/accessor creation sequence cannot yet retain one unified order.
+  The string-key-only baseline carrier also does not model Symbol keys; the
+  descriptor object model does. These are explicit non-goals of `bd-n8eta.2`.
+- **Test verdict expression:** Descriptor and baseline carrier tests prove
+  canonical index boundaries, donor order `b,a`, update stability,
+  delete/re-create append, map-shaped serde recovery, and failed-write rollback.
+  Product-path querystring fixtures 0010/0013/0020 now assert Node/Bun insertion
+  order rather than the former lexical divergence pin.
+- **Rationale for the remaining ACCEPTED scope:** A complete repair needs one
+  creation-order carrier shared by core data and accessor descriptors plus an
+  explicit baseline Symbol-key representation and compatible wire semantics.
+  Keeping that residual explicit avoids overstating the data-property slice as
+  full accessor/symbol conformance.
 - **Tracking beads:** bd-qporw (original decision), bd-n8eta (runtime repair),
-  bd-n8eta.1 (descriptor-model slice)
-- **Reviewed:** 2026-07-14
-- **Next review:** 2026-08-13
+  bd-n8eta.1 (descriptor-model slice), bd-n8eta.2 (baseline data-property slice),
+  bd-n8eta.3 (core mixed data/accessor order), bd-n8eta.4 (baseline Symbol keys)
+- **Reviewed:** 2026-07-16
+- **Next review:** 2026-08-15
 
 ## Resolved divergences
 

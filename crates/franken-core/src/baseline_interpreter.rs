@@ -19,7 +19,8 @@
 //! difference is in policy (instruction budget, register limit, dispatch
 //! strategy), not in a second engine backend.
 //!
-//! `BTreeMap`/`BTreeSet` for deterministic ordering.
+//! `BTreeMap`/`BTreeSet` provide deterministic internal ordering; observable
+//! data properties use explicit ECMAScript own-key order.
 //! `#![forbid(unsafe_code)]` — no unsafe anywhere.
 //!
 //! Plan reference: Section 10.2 item 8, bd-2f8.
@@ -50,6 +51,7 @@ use crate::js_string::JsString;
 use crate::lowering_pipeline::{
     CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX, LoweringContext, lower_ir0_to_ir3,
 };
+use crate::object_model::OrderedStringMap;
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 use crate::runtime_config::ExecutionConfig;
 
@@ -500,8 +502,8 @@ pub struct ObjectId(pub u32);
 /// A heap-allocated object with string-keyed properties.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct HeapObject {
-    /// Property storage (BTreeMap for deterministic ordering).
-    pub properties: BTreeMap<String, Value>,
+    /// Data properties in ECMAScript own-key order with deterministic lookup.
+    pub properties: OrderedStringMap<Value>,
     /// Accessor descriptor storage, parallel to `properties` so the baseline
     /// heap can model the object_model accessor/data split.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -2218,7 +2220,7 @@ impl InterpreterCore {
         let slot_idx = slot as usize;
         while self.heap.len() <= slot_idx {
             self.heap.push(HeapObject {
-                properties: std::collections::BTreeMap::new(),
+                properties: OrderedStringMap::new(),
                 accessors: std::collections::BTreeMap::new(),
                 prototype: None,
                 constructor_function: None,
@@ -9644,8 +9646,8 @@ impl InterpreterCore {
     }
 
     /// bd-qmy52: `querystring.stringify` body over a heap object: own
-    /// properties in the engine's `Object.keys` order (deterministic BTreeMap
-    /// order — DISC-013; Node uses insertion order), array values expand to
+    /// properties in ECMAScript `Object.keys` order (canonical array indices
+    /// numerically first, then other strings by creation order), array values expand to
     /// repeated `key=element` pairs (an EMPTY array contributes nothing, bun:
     /// `stringify({e: [], f: 'y'})` is `'f=y'`), other values stringify via
     /// [`Self::qs_stringify_primitive`]; keys and values escape with
@@ -10089,6 +10091,9 @@ impl InterpreterCore {
             .map(|(key, value)| {
                 MEMORY_ESTIMATE_MAP_ENTRY_BYTES
                     .saturating_add(Self::estimate_string_bytes(key))
+                    // OrderedStringMap owns a second key for its ES-order
+                    // index/vector spine in addition to the lookup-map key.
+                    .saturating_add(Self::estimate_string_bytes(key))
                     .saturating_add(Self::estimate_value_bytes(value))
             })
             .sum::<u64>();
@@ -10475,12 +10480,14 @@ impl InterpreterCore {
         key: String,
         value: Value,
     ) -> Result<(), InterpreterError> {
-        let (previous_data, previous_accessor, property_key) = {
+        let (previous_data, previous_data_position, previous_accessor, property_key) = {
             let object = self
                 .heap
                 .get_mut(object_id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
             if let Some((kind, property_key)) = Self::decode_accessor_definition_key(&key) {
+                let previous_data_position =
+                    object.properties.string_insertion_position(&property_key);
                 let previous_data = object.properties.remove(&property_key);
                 let previous_accessor = object.accessors.get(&property_key).cloned();
                 let accessor = object.accessors.entry(property_key.clone()).or_default();
@@ -10488,11 +10495,16 @@ impl InterpreterCore {
                     AccessorKind::Get => accessor.get = Some(value),
                     AccessorKind::Set => accessor.set = Some(value),
                 }
-                (previous_data, previous_accessor, property_key)
+                (
+                    previous_data,
+                    previous_data_position,
+                    previous_accessor,
+                    property_key,
+                )
             } else {
                 let previous_accessor = object.accessors.remove(&key);
                 let previous_data = object.properties.insert(key.clone(), value);
-                (previous_data, previous_accessor, key.clone())
+                (previous_data, None, previous_accessor, key.clone())
             }
         };
         if let Err(err) = self.sync_estimated_memory_bytes() {
@@ -10501,7 +10513,15 @@ impl InterpreterCore {
                 .get_mut(object_id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
             if let Some(previous) = previous_data {
-                object.properties.insert(property_key.clone(), previous);
+                if let Some(position) = previous_data_position {
+                    object.properties.insert_at_string_position(
+                        property_key.clone(),
+                        previous,
+                        position,
+                    );
+                } else {
+                    object.properties.insert(property_key.clone(), previous);
+                }
             } else {
                 object.properties.remove(&property_key);
             }
@@ -15986,7 +16006,7 @@ mod tests {
         assert!(core.heap[keys_id.0 as usize].is_array);
         assert_eq!(
             core.read_array_like_values(keys_id),
-            vec![Value::str("a"), Value::str("b")]
+            vec![Value::str("b"), Value::str("a")]
         );
 
         let values = core
@@ -15999,8 +16019,83 @@ mod tests {
         assert!(core.heap[values_id.0 as usize].is_array);
         assert_eq!(
             core.read_array_like_values(values_id),
-            vec![Value::Int(1), Value::Int(2)]
+            vec![Value::Int(2), Value::Int(1)]
         );
+    }
+
+    #[test]
+    fn baseline_data_property_consumers_use_es_own_key_order() {
+        let mut core = quickjs_test_core();
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        for (key, value) in [
+            ("b", 1),
+            ("10", 2),
+            ("2", 3),
+            ("01", 4),
+            ("4294967295", 5),
+            ("0", 6),
+            ("a", 7),
+            ("4294967294", 9),
+        ] {
+            core.set_object_property(object_id, key.to_string(), Value::Int(value))
+                .unwrap();
+        }
+        core.set_object_property(object_id, "b".to_string(), Value::Int(8))
+            .unwrap();
+        assert!(core.remove_object_property(object_id, "b").unwrap());
+        core.set_object_property(object_id, "b".to_string(), Value::Int(8))
+            .unwrap();
+
+        let expected_keys = vec![
+            "0".to_string(),
+            "2".to_string(),
+            "10".to_string(),
+            "4294967294".to_string(),
+            "01".to_string(),
+            "4294967295".to_string(),
+            "a".to_string(),
+            "b".to_string(),
+        ];
+        assert_eq!(core.own_enumerable_keys(object_id).unwrap(), expected_keys);
+        assert_eq!(core.collect_for_in_keys(object_id).unwrap(), expected_keys);
+        assert_eq!(
+            core.qs_stringify_object(object_id, "&", "="),
+            "0=6&2=3&10=2&4294967294=9&01=4&4294967295=5&a=7&b=8"
+        );
+    }
+
+    #[test]
+    fn failed_accessor_conversion_restores_data_property_order() {
+        let mut core = quickjs_test_core();
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(object_id, "a".to_string(), Value::Int(1))
+            .unwrap();
+        core.set_object_property(object_id, "b".to_string(), Value::Int(2))
+            .unwrap();
+        let memory_before = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = memory_before;
+
+        let error = core
+            .set_object_property(
+                object_id,
+                format!("{IR_ACCESSOR_GET_PREFIX}a"),
+                Value::str("x".repeat(512)),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(
+            core.own_enumerable_keys(object_id).unwrap(),
+            vec!["a".to_string(), "b".to_string()]
+        );
+        assert_eq!(
+            core.heap[object_id.0 as usize].properties.get("a"),
+            Some(&Value::Int(1))
+        );
+        assert!(!core.heap[object_id.0 as usize].accessors.contains_key("a"));
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
     }
 
     #[test]

@@ -3302,7 +3302,7 @@ fn lower_destructuring_to_ir1_with_parameter_tdz(
                 binding_index,
                 scope_id,
                 label_counter,
-                parameter_tdz.as_deref_mut(),
+                parameter_tdz,
             )?;
         }
     }

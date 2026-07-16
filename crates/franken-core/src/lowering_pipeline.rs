@@ -2193,9 +2193,9 @@ fn restore_class_expression_self_binding(
     }
 }
 
-fn emit_reference_error_throw(ops: &mut Vec<Ir1Op>, name: &str) {
+fn emit_reference_error_throw_message(ops: &mut Vec<Ir1Op>, message: String) {
     ops.push(Ir1Op::LoadLiteral {
-        value: Ir1Literal::String(format!("{name} is not defined")),
+        value: Ir1Literal::String(message),
     });
     ops.push(Ir1Op::HostCall {
         capability: "builtin:ReferenceError".to_string(),
@@ -2205,6 +2205,45 @@ fn emit_reference_error_throw(ops: &mut Vec<Ir1Op>, name: &str) {
     ops.push(Ir1Op::LoadLiteral {
         value: Ir1Literal::Undefined,
     });
+}
+
+fn emit_reference_error_throw(ops: &mut Vec<Ir1Op>, name: &str) {
+    emit_reference_error_throw_message(ops, format!("{name} is not defined"));
+}
+
+fn emit_parameter_tdz_throw(ops: &mut Vec<Ir1Op>, name: &str) {
+    emit_reference_error_throw_message(
+        ops,
+        format!("Cannot access '{name}' before initialization"),
+    );
+}
+
+/// Rewrite only the operations emitted for a parameter default expression.
+/// The surrounding default branch remains intact, so an access in a dead
+/// branch does not throw. Function bodies are opaque here: capturing defaults
+/// continue to use their dedicated fail-closed frontier until bd-wqbac.
+fn rewrite_parameter_tdz_accesses(ops: &mut Vec<Ir1Op>, start: usize, state: &ParameterTdzState) {
+    let default_ops = ops.drain(start..).collect::<Vec<_>>();
+    for op in default_ops {
+        let referenced_binding = match &op {
+            Ir1Op::LoadBinding { binding_id }
+            | Ir1Op::StoreBinding { binding_id }
+            | Ir1Op::AssignOp { binding_id, .. } => state.uninitialized.get(binding_id),
+            _ => None,
+        };
+        let Some(name) = referenced_binding else {
+            ops.push(op);
+            continue;
+        };
+
+        if matches!(op, Ir1Op::StoreBinding { .. } | Ir1Op::AssignOp { .. }) {
+            // StoreBinding and AssignOp consume an RHS and leave the assigned
+            // value on the IR1 stack. Match that net stack effect before the
+            // synthetic unreachable Undefined emitted by the throw helper.
+            ops.push(Ir1Op::Pop);
+        }
+        emit_parameter_tdz_throw(ops, name);
+    }
 }
 
 /// Class bodies use ordinary function lowering, but an unresolved bare name
@@ -2451,8 +2490,50 @@ fn contains_computed_destructuring_key(pattern: &BindingPattern) -> bool {
 #[derive(Default)]
 struct FunctionParameterPlan<'a> {
     param_names: Vec<String>,
-    destructure_params: Vec<(String, &'a BindingPattern, &'a SourceSpan)>,
+    destructure_params: Vec<(usize, String, &'a BindingPattern, &'a SourceSpan)>,
+    parameter_bindings: Vec<(usize, BindingId, String)>,
     rest_param_index: Option<u32>,
+}
+
+/// Parameter bindings that are not yet initialized at a particular point in
+/// the source-ordered parameter prologue. Argument carrier registers are
+/// populated before the prologue runs, so this explicit lowering state keeps
+/// those raw values from making self/later parameter references observable.
+#[derive(Clone, Default)]
+struct ParameterTdzState {
+    uninitialized: BTreeMap<BindingId, String>,
+}
+
+impl ParameterTdzState {
+    fn at_formal(parameter_bindings: &[(usize, BindingId, String)], formal_index: usize) -> Self {
+        Self {
+            uninitialized: parameter_bindings
+                .iter()
+                .filter(|(index, _, _)| *index >= formal_index)
+                .map(|(_, binding_id, name)| (*binding_id, name.clone()))
+                .collect(),
+        }
+    }
+
+    fn mark_binding_initialized(
+        &mut self,
+        name: &str,
+        binding_lookup: &BTreeMap<String, BindingId>,
+    ) {
+        if let Some(binding_id) = binding_lookup.get(name) {
+            self.uninitialized.remove(binding_id);
+        }
+    }
+
+    fn mark_pattern_initialized(
+        &mut self,
+        pattern: &BindingPattern,
+        binding_lookup: &BTreeMap<String, BindingId>,
+    ) {
+        for name in pattern.binding_names() {
+            self.mark_binding_initialized(name, binding_lookup);
+        }
+    }
 }
 
 fn parameter_prologue_referenced_binding_ids(ops: &[Ir1Op]) -> BTreeSet<BindingId> {
@@ -2546,7 +2627,7 @@ fn allocate_function_parameter_bindings<'a>(
         } else {
             let synthetic_name = format!("@@franken_internal_param_{index}");
             param_names.push(synthetic_name.clone());
-            destructure_params.push((synthetic_name, &param.pattern, &param.span));
+            destructure_params.push((index, synthetic_name, &param.pattern, &param.span));
         }
     }
 
@@ -2561,7 +2642,7 @@ fn allocate_function_parameter_bindings<'a>(
         )
         .map_err(LoweringPipelineError::SemanticViolation)?;
     }
-    for (_, pattern, _) in &destructure_params {
+    for (_, _, pattern, _) in &destructure_params {
         for bound_name in pattern.binding_names() {
             let _ = alloc_binding(
                 body_bindings,
@@ -2574,16 +2655,30 @@ fn allocate_function_parameter_bindings<'a>(
             .map_err(LoweringPipelineError::SemanticViolation)?;
         }
     }
+    let mut parameter_bindings = Vec::new();
+    for (formal_index, param) in params.iter().enumerate() {
+        for name in param.pattern.binding_names() {
+            let binding_id =
+                *body_lookup
+                    .get(name)
+                    .ok_or(LoweringPipelineError::InvariantViolation {
+                        detail: "user parameter binding must be allocated before its TDZ plan",
+                    })?;
+            parameter_bindings.push((formal_index, binding_id, name.to_string()));
+        }
+    }
     Ok(FunctionParameterPlan {
         param_names,
         destructure_params,
+        parameter_bindings,
         rest_param_index,
     })
 }
 
 #[allow(clippy::too_many_arguments)]
 fn lower_function_parameter_prologue(
-    destructure_params: &[(String, &BindingPattern, &SourceSpan)],
+    destructure_params: &[(usize, String, &BindingPattern, &SourceSpan)],
+    parameter_bindings: &[(usize, BindingId, String)],
     outer_lookup: &BTreeMap<String, BindingId>,
     body_ops: &mut Vec<Ir1Op>,
     body_bindings: &mut Vec<ResolvedBinding>,
@@ -2599,14 +2694,15 @@ fn lower_function_parameter_prologue(
     let mut prologue_lookup = parameter_lookup.clone();
     seed_function_outer_static_bindings(outer_lookup, &mut prologue_lookup, body_binding_index);
     let prologue_start = body_ops.len();
-    for (synthetic_name, pattern, span) in destructure_params {
+    for (formal_index, synthetic_name, pattern, span) in destructure_params {
         let source_binding_id = *prologue_lookup.get(synthetic_name).ok_or(
             LoweringPipelineError::InvariantViolation {
                 detail: "synthetic parameter source binding must be allocated before its prologue",
             },
         )?;
         let prologue_op_start = body_ops.len();
-        lower_destructuring_to_ir1(
+        let mut parameter_tdz = ParameterTdzState::at_formal(parameter_bindings, *formal_index);
+        lower_destructuring_to_ir1_with_parameter_tdz(
             pattern,
             source_binding_id,
             body_ops,
@@ -2615,6 +2711,7 @@ fn lower_function_parameter_prologue(
             body_binding_index,
             body_scope,
             body_label_counter,
+            Some(&mut parameter_tdz),
         )?;
         if body_ops[prologue_op_start..].iter().any(|op| match op {
             Ir1Op::CreateFunction {
@@ -2834,6 +2931,31 @@ fn lower_destructuring_to_ir1(
     scope_id: ScopeId,
     label_counter: &mut u32,
 ) -> Result<(), LoweringPipelineError> {
+    lower_destructuring_to_ir1_with_parameter_tdz(
+        pattern,
+        source_bid,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        scope_id,
+        label_counter,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_destructuring_to_ir1_with_parameter_tdz(
+    pattern: &BindingPattern,
+    source_bid: BindingId,
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    scope_id: ScopeId,
+    label_counter: &mut u32,
+    mut parameter_tdz: Option<&mut ParameterTdzState>,
+) -> Result<(), LoweringPipelineError> {
     if contains_object_rest(pattern) && contains_computed_destructuring_key(pattern) {
         return Err(unsupported_frontier_expression_error(
             "object_rest_computed_key",
@@ -2896,8 +3018,12 @@ fn lower_destructuring_to_ir1(
                         ops.push(Ir1Op::Pop);
                     }
 
-                    if !matches!(inner.as_ref(), BindingPattern::Identifier(_)) {
-                        lower_destructuring_to_ir1(
+                    if matches!(inner.as_ref(), BindingPattern::Identifier(_)) {
+                        if let Some(state) = parameter_tdz.as_deref_mut() {
+                            state.mark_binding_initialized(target_name, binding_lookup);
+                        }
+                    } else {
+                        lower_destructuring_to_ir1_with_parameter_tdz(
                             inner,
                             rest_bid,
                             ops,
@@ -2906,6 +3032,7 @@ fn lower_destructuring_to_ir1(
                             binding_index,
                             scope_id,
                             label_counter,
+                            parameter_tdz.as_deref_mut(),
                         )?;
                     }
 
@@ -2939,6 +3066,9 @@ fn lower_destructuring_to_ir1(
                             binding_id: target_bid,
                         });
                         ops.push(Ir1Op::Pop);
+                        if let Some(state) = parameter_tdz.as_deref_mut() {
+                            state.mark_binding_initialized(target_name, binding_lookup);
+                        }
                     }
                     _ => {
                         let temp_binding = alloc_internal_binding(
@@ -2952,7 +3082,7 @@ fn lower_destructuring_to_ir1(
                             binding_id: temp_binding,
                         });
                         ops.push(Ir1Op::Pop);
-                        lower_destructuring_to_ir1(
+                        lower_destructuring_to_ir1_with_parameter_tdz(
                             &prop.value,
                             temp_binding,
                             ops,
@@ -2961,6 +3091,7 @@ fn lower_destructuring_to_ir1(
                             binding_index,
                             scope_id,
                             label_counter,
+                            parameter_tdz.as_deref_mut(),
                         )?;
                     }
                 }
@@ -2997,6 +3128,9 @@ fn lower_destructuring_to_ir1(
                             binding_id: target_bid,
                         });
                         ops.push(Ir1Op::Pop);
+                        if let Some(state) = parameter_tdz.as_deref_mut() {
+                            state.mark_binding_initialized(target_name, binding_lookup);
+                        }
                     }
                     continue;
                 }
@@ -3024,6 +3158,9 @@ fn lower_destructuring_to_ir1(
                             binding_id: target_bid,
                         });
                         ops.push(Ir1Op::Pop);
+                        if let Some(state) = parameter_tdz.as_deref_mut() {
+                            state.mark_binding_initialized(target_name, binding_lookup);
+                        }
                     }
                     _ => {
                         let temp_binding = alloc_internal_binding(
@@ -3037,7 +3174,7 @@ fn lower_destructuring_to_ir1(
                             binding_id: temp_binding,
                         });
                         ops.push(Ir1Op::Pop);
-                        lower_destructuring_to_ir1(
+                        lower_destructuring_to_ir1_with_parameter_tdz(
                             element,
                             temp_binding,
                             ops,
@@ -3046,6 +3183,7 @@ fn lower_destructuring_to_ir1(
                             binding_index,
                             scope_id,
                             label_counter,
+                            parameter_tdz.as_deref_mut(),
                         )?;
                     }
                 }
@@ -3074,6 +3212,10 @@ fn lower_destructuring_to_ir1(
                 label_id: default_label,
             });
 
+            // The supplied and default arms are alternatives. Lower each
+            // BindingInitialization with the same pre-branch TDZ state, then
+            // merge by marking the whole left-hand pattern initialized.
+            let parameter_tdz_before_branch = parameter_tdz.as_deref().cloned();
             match left.as_ref() {
                 BindingPattern::Identifier(name) => {
                     if let Some(&target_bid) = binding_lookup.get(name.as_str()) {
@@ -3087,7 +3229,8 @@ fn lower_destructuring_to_ir1(
                     }
                 }
                 _ => {
-                    lower_destructuring_to_ir1(
+                    let mut branch_tdz = parameter_tdz_before_branch.clone();
+                    lower_destructuring_to_ir1_with_parameter_tdz(
                         left,
                         source_bid,
                         ops,
@@ -3096,6 +3239,7 @@ fn lower_destructuring_to_ir1(
                         binding_index,
                         scope_id,
                         label_counter,
+                        branch_tdz.as_mut(),
                     )?;
                 }
             }
@@ -3104,6 +3248,7 @@ fn lower_destructuring_to_ir1(
             });
 
             ops.push(Ir1Op::Label { id: default_label });
+            let default_expression_start = ops.len();
             lower_expression_to_ir1(
                 right,
                 ops,
@@ -3113,6 +3258,9 @@ fn lower_destructuring_to_ir1(
                 scope_id,
                 label_counter,
             )?;
+            if let Some(state) = parameter_tdz_before_branch.as_ref() {
+                rewrite_parameter_tdz_accesses(ops, default_expression_start, state);
+            }
             ops.push(Ir1Op::StoreBinding {
                 binding_id: source_bid,
             });
@@ -3130,7 +3278,8 @@ fn lower_destructuring_to_ir1(
                     }
                 }
                 _ => {
-                    lower_destructuring_to_ir1(
+                    let mut branch_tdz = parameter_tdz_before_branch;
+                    lower_destructuring_to_ir1_with_parameter_tdz(
                         left,
                         source_bid,
                         ops,
@@ -3139,15 +3288,19 @@ fn lower_destructuring_to_ir1(
                         binding_index,
                         scope_id,
                         label_counter,
+                        branch_tdz.as_mut(),
                     )?;
                 }
             }
 
             ops.push(Ir1Op::Label { id: end_label });
+            if let Some(state) = parameter_tdz.as_deref_mut() {
+                state.mark_pattern_initialized(left, binding_lookup);
+            }
         }
         BindingPattern::Rest(inner) => {
             // Rest at top level (unusual but valid). Recurse into inner.
-            lower_destructuring_to_ir1(
+            lower_destructuring_to_ir1_with_parameter_tdz(
                 inner,
                 source_bid,
                 ops,
@@ -3156,6 +3309,7 @@ fn lower_destructuring_to_ir1(
                 binding_index,
                 scope_id,
                 label_counter,
+                parameter_tdz.as_deref_mut(),
             )?;
         }
     }
@@ -4260,6 +4414,7 @@ fn lower_statement_to_ir1_with_flow(
             let FunctionParameterPlan {
                 param_names,
                 destructure_params,
+                parameter_bindings,
                 rest_param_index,
             } = allocate_function_parameter_bindings(
                 &func.params,
@@ -4280,6 +4435,7 @@ fn lower_statement_to_ir1_with_flow(
             let parameter_binding_names = body_lookup.keys().cloned().collect();
             let parameter_prologue_captures = lower_function_parameter_prologue(
                 &destructure_params,
+                &parameter_bindings,
                 binding_lookup,
                 &mut body_ops,
                 &mut body_bindings,
@@ -4377,6 +4533,7 @@ fn lower_statement_to_ir1_with_flow(
             let FunctionParameterPlan {
                 param_names,
                 destructure_params,
+                parameter_bindings,
                 rest_param_index,
             } = if let Some(ctor) = constructor {
                 allocate_function_parameter_bindings(
@@ -4392,6 +4549,7 @@ fn lower_statement_to_ir1_with_flow(
             let parameter_binding_names = body_lookup.keys().cloned().collect();
             let parameter_prologue_captures = lower_function_parameter_prologue(
                 &destructure_params,
+                &parameter_bindings,
                 binding_lookup,
                 &mut body_ops,
                 &mut body_bindings,
@@ -4549,6 +4707,7 @@ fn lower_statement_to_ir1_with_flow(
                 let FunctionParameterPlan {
                     param_names: m_param_names,
                     destructure_params: m_destructure_params,
+                    parameter_bindings: m_parameter_bindings,
                     rest_param_index: m_rest_param_index,
                 } = allocate_function_parameter_bindings(
                     &method.params,
@@ -4571,6 +4730,7 @@ fn lower_statement_to_ir1_with_flow(
                 let parameter_binding_names = m_lookup.keys().cloned().collect();
                 let parameter_prologue_captures = lower_function_parameter_prologue(
                     &m_destructure_params,
+                    &m_parameter_bindings,
                     binding_lookup,
                     &mut m_body_ops,
                     &mut m_bindings,
@@ -8266,6 +8426,7 @@ fn lower_class_expression_to_ir1(
     let FunctionParameterPlan {
         param_names,
         destructure_params,
+        parameter_bindings,
         rest_param_index,
     } = if let Some(ctor) = constructor {
         allocate_function_parameter_bindings(
@@ -8281,6 +8442,7 @@ fn lower_class_expression_to_ir1(
     let parameter_binding_names = body_lookup.keys().cloned().collect();
     let parameter_prologue_captures = lower_function_parameter_prologue(
         &destructure_params,
+        &parameter_bindings,
         binding_lookup,
         &mut body_ops,
         &mut body_bindings,
@@ -8447,6 +8609,7 @@ fn lower_class_expression_to_ir1(
         let FunctionParameterPlan {
             param_names: method_param_names,
             destructure_params: method_destructure_params,
+            parameter_bindings: method_parameter_bindings,
             rest_param_index: method_rest_param_index,
         } = allocate_function_parameter_bindings(
             &method.params,
@@ -8469,6 +8632,7 @@ fn lower_class_expression_to_ir1(
         let parameter_binding_names = method_lookup.keys().cloned().collect();
         let parameter_prologue_captures = lower_function_parameter_prologue(
             &method_destructure_params,
+            &method_parameter_bindings,
             binding_lookup,
             &mut method_body_ops,
             &mut method_bindings,
@@ -9261,19 +9425,43 @@ fn lower_expression_to_ir1(
                     _ => {}
                 }
 
-                lower_expression_to_ir1(
-                    right,
-                    ops,
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    root_scope_id,
-                    label_counter,
-                )?;
-                ops.push(Ir1Op::AssignOp {
-                    binding_id,
-                    operator: *operator,
-                });
+                if let Some(binary_operator) = compound_assignment_binary_operator(*operator) {
+                    // GetValue(left) precedes RHS evaluation for a compound
+                    // assignment. Besides preserving the pre-RHS value when
+                    // the RHS mutates this binding, the early load is where a
+                    // parameter TDZ check must fire.
+                    ops.push(Ir1Op::LoadBinding { binding_id });
+                    lower_expression_to_ir1(
+                        right,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    ops.push(Ir1Op::BinaryOp {
+                        operator: binary_operator,
+                    });
+                    ops.push(Ir1Op::AssignOp {
+                        binding_id,
+                        operator: AssignmentOperator::Assign,
+                    });
+                } else {
+                    lower_expression_to_ir1(
+                        right,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    ops.push(Ir1Op::AssignOp {
+                        binding_id,
+                        operator: *operator,
+                    });
+                }
             } else if let Expression::Member {
                 object,
                 property,
@@ -10367,6 +10555,7 @@ fn lower_expression_to_ir1(
             let FunctionParameterPlan {
                 param_names,
                 destructure_params,
+                parameter_bindings,
                 rest_param_index,
             } = allocate_function_parameter_bindings(
                 params,
@@ -10378,6 +10567,7 @@ fn lower_expression_to_ir1(
             let parameter_binding_names = body_lookup.keys().cloned().collect();
             let parameter_prologue_captures = lower_function_parameter_prologue(
                 &destructure_params,
+                &parameter_bindings,
                 binding_lookup,
                 &mut body_ops,
                 &mut body_bindings,
@@ -10482,6 +10672,7 @@ fn lower_expression_to_ir1(
             let FunctionParameterPlan {
                 param_names,
                 destructure_params,
+                parameter_bindings,
                 rest_param_index,
             } = allocate_function_parameter_bindings(
                 params,
@@ -10502,6 +10693,7 @@ fn lower_expression_to_ir1(
             let parameter_binding_names = body_lookup.keys().cloned().collect();
             let parameter_prologue_captures = lower_function_parameter_prologue(
                 &destructure_params,
+                &parameter_bindings,
                 binding_lookup,
                 &mut body_ops,
                 &mut body_bindings,
@@ -15526,6 +15718,186 @@ mod tests {
                  + classExpression.collect({ value: 5 }, undefined, 0);",
         );
         assert_eq!(value, Value::Int(25));
+    }
+
+    #[test]
+    fn earlier_parameter_defaults_execute_across_function_shapes_bd_1e0tp() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function declared(a = 1, b = a) { return b; }\
+             let arrow = (a = 1, b = a) => b;\
+             let expressed = function(a = 1, b = a) { return b; };\
+             class Declared {\
+                 constructor(a = 1, b = a) { this.value = b; }\
+                 method(a = 1, b = a) { return b; }\
+             }\
+             let Expressed = class {\
+                 constructor(a = 1, b = a) { this.value = b; }\
+                 method(a = 1, b = a) { return b; }\
+             };\
+             function outer() {\
+                 return function nested(a = 1, b = a) { return b; };\
+             }\
+             function captured(a = 1, b = a) { return () => b; }\
+             let declaredInstance = new Declared();\
+             let expressedInstance = new Expressed();\
+             declared() + arrow() + expressed()\
+                 + declaredInstance.value + declaredInstance.method()\
+                 + expressedInstance.value + expressedInstance.method()\
+                 + outer()() + captured()();",
+        );
+        assert_eq!(value, Value::Int(9));
+    }
+
+    #[test]
+    fn self_and_later_parameter_reads_throw_reference_error_bd_1e0tp() {
+        let cases = [
+            (
+                "declaration self",
+                "function target(a = a) {} try { target(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "ReferenceError:Cannot access 'a' before initialization",
+            ),
+            (
+                "declaration later even when supplied",
+                "function target(a = b, b = 2) {} try { target(undefined, 9); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "ReferenceError:Cannot access 'b' before initialization",
+            ),
+            (
+                "arrow",
+                "let target = (a = b, b = 2) => a; try { target(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "ReferenceError:Cannot access 'b' before initialization",
+            ),
+            (
+                "function expression",
+                "let target = function(a = b, b = 2) { return a; }; try { target(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "ReferenceError:Cannot access 'b' before initialization",
+            ),
+            (
+                "constructor",
+                "class Target { constructor(a = b, b = 2) {} } try { new Target(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "ReferenceError:Cannot access 'b' before initialization",
+            ),
+            (
+                "method",
+                "let target = class { method(a = b, b = 2) {} }; try { new target().method(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "ReferenceError:Cannot access 'b' before initialization",
+            ),
+            (
+                "nested function",
+                "function outer() { return function inner(a = b, b = 2) {}; } try { outer()(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "ReferenceError:Cannot access 'b' before initialization",
+            ),
+        ];
+
+        for (shape, source, expected) in cases {
+            let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(source);
+            assert_eq!(value, Value::str(expected), "{shape}");
+        }
+    }
+
+    #[test]
+    fn parameter_tdz_tracks_pattern_order_and_rest_bd_1e0tp() {
+        let (_, _, earlier) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function target({ a = 1, b = a } = {}, [c = 2, d = c] = []) {\
+                 return a * 1000 + b * 100 + c * 10 + d;\
+             }\
+             target();",
+        );
+        assert_eq!(earlier, Value::Int(1_122));
+
+        for (shape, source, expected_name) in [
+            (
+                "object self",
+                "function target({ a = a } = {}) {} try { target(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "a",
+            ),
+            (
+                "object later",
+                "function target({ a = b, b = 2 } = {}) {} try { target(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "b",
+            ),
+            (
+                "array later",
+                "function target([a = b, b = 2] = []) {} try { target(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "b",
+            ),
+            (
+                "later rest",
+                "function target(a = rest, ...rest) {} try { target(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "rest",
+            ),
+        ] {
+            let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(source);
+            assert_eq!(
+                value,
+                Value::str(format!(
+                    "ReferenceError:Cannot access '{expected_name}' before initialization"
+                )),
+                "{shape}"
+            );
+        }
+
+        let (_, _, compound_effects) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let effects = { count: 0 };\
+             function sideEffect() { effects.count = effects.count + 1; return 1; }\
+             function target(a = (b += sideEffect()), b = 0) {}\
+             try { target(); } catch (error) {}\
+             effects.count;",
+        );
+        assert_eq!(
+            compound_effects,
+            Value::Int(0),
+            "compound assignment must read the TDZ binding before its RHS"
+        );
+
+        let (_, _, compound_snapshot) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let value = 1;\
+             let result = (value += (value = 10));\
+             result * 100 + value;",
+        );
+        assert_eq!(
+            compound_snapshot,
+            Value::Int(1_111),
+            "compound assignment must combine the pre-RHS binding value"
+        );
+    }
+
+    #[test]
+    fn parameter_tdz_checks_are_branch_sensitive_and_cover_writes_bd_1e0tp() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function deadLater(a = true ? 1 : b, b = 2) { return a; }\
+             function deadSelf(a = false ? a : 1) { return a; }\
+             function supplied(a = b, b = 2) { return a; }\
+             function earlierWrite(a = 1, b = (a = 3)) { return a + b; }\
+             deadLater() + deadSelf() + supplied(7, 9) + earlierWrite();",
+        );
+        assert_eq!(value, Value::Int(15));
+
+        for (shape, source, expected_name) in [
+            (
+                "write later",
+                "function target(a = (b = 3), b) {} try { target(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "b",
+            ),
+            (
+                "write self",
+                "function target(a = (a = 3)) {} try { target(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "a",
+            ),
+            (
+                "typeof later",
+                "function target(a = typeof b, b = 2) {} try { target(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "b",
+            ),
+        ] {
+            let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(source);
+            assert_eq!(
+                value,
+                Value::str(format!(
+                    "ReferenceError:Cannot access '{expected_name}' before initialization"
+                )),
+                "{shape}"
+            );
+        }
     }
 
     #[test]

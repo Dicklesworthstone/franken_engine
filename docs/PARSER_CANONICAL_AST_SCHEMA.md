@@ -76,6 +76,28 @@ Hash contract (v1):
   2. new compatibility vectors,
   3. migration note in this doc and parser verification docs.
 
+## FrankenCore Native Parser Schema v2
+
+The repository split now has two parser AST seams. The compatibility parser in
+`crates/franken-engine` retains the v1 contract described above. The native
+parser/lowering path in `crates/franken-core` advances its
+`CANONICAL_AST_SCHEMA_VERSION` to `franken-engine.parser-ast.schema.v2` for
+`bd-1tafi`.
+
+Schema v2 adds `pre_loop_initializer` to the canonical `ForInStatement` map.
+It is the ordinary expression value for the non-strict Script Annex-B form
+`for (var identifier = initializer in object)` and explicit `Null` for every
+other for-in head. This preserves the canonical no-omission rule and makes the
+one-time pre-loop side effect hash-visible. Existing core canonical hashes that
+contain a for-in statement therefore intentionally change under the v2 schema
+tag.
+
+The derived JSON/serde carrier remains backward-readable: the field defaults
+to `None` when absent and is skipped while serializing `None`. This keeps legacy
+IR0 JSON readable without weakening canonical v2, where the field is always
+present. Consumers must bind cached core canonical hashes to the reported
+schema version and regenerate v2 hashes rather than comparing them to v1.
+
 ## Compatibility Checks
 
 Pinned by tests:
@@ -88,6 +110,9 @@ Pinned by tests:
     - `export default true` (module) -> `sha256:ebb993de589945a2cf22f17db58200599ae3e1e6c21cd33a0fc59eab99fd8ef6`
 - [`crates/franken-engine/tests/ast_integration.rs`](../crates/franken-engine/tests/ast_integration.rs)
   - contract constants/accessors and hash prefix checks
+- [`crates/franken-core/src/ast.rs`](../crates/franken-core/src/ast.rs)
+  - core v2 Annex-B for-in vector ->
+    `sha256:166c2e3ca50abc0b25c83ce8cfefb4be4a7eac33e7337809f1594e22ff9fe963`
 
 ## Replay Commands
 

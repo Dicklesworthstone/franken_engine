@@ -10191,18 +10191,36 @@ fn try_parse_for_in_of(
         } else {
             lhs
         };
-        let Ok(binding) = parse_binding_pattern(binding_src, span, context) else {
+        let Ok(parsed_binding) = parse_binding_pattern(binding_src, span, context) else {
             continue;
         };
-        // The AST has no distinct pre-loop initializer field. Reject a
-        // top-level initializer rather than mis-lowering it as a per-iteration
-        // destructuring default; defaults nested inside a pattern remain valid.
-        if matches!(
-            &binding,
-            BindingPattern::AssignmentPattern { .. } | BindingPattern::Rest(_)
-        ) {
-            continue;
-        }
+        // Annex B.3.5 permits exactly one legacy loop-head initializer:
+        // `for (var BindingIdentifier = AssignmentExpression in Expression)`
+        // in non-strict Script code. Keep it separate from binding-pattern
+        // defaults so lowering can evaluate it once before the RHS, including
+        // when enumeration is empty. Every lexical, for-of, assignment-target,
+        // destructuring, strict, module, rest, and multi-declarator form keeps
+        // the ordinary early-error posture.
+        let (binding, pre_loop_initializer) = match parsed_binding {
+            BindingPattern::AssignmentPattern { left, right }
+                if keyword == "in"
+                    && binding_kind == Some(VariableDeclarationKind::Var)
+                    && goal == ParseGoal::Script
+                    && !context.strict_mode
+                    && matches!(
+                        split_var_declarator_segments(binding_src).as_slice(),
+                        [declarator] if *declarator == binding_src
+                    )
+                    && !matches!(&right, Expression::Raw(_)) =>
+            {
+                let BindingPattern::Identifier(name) = *left else {
+                    continue;
+                };
+                (BindingPattern::Identifier(name), Some(right))
+            }
+            BindingPattern::AssignmentPattern { .. } | BindingPattern::Rest(_) => continue,
+            binding => (binding, None),
+        };
         // ES2020's for-of early errors reserve bare `async`; declaration
         // bindings and the analogous for-in assignment target remain valid.
         if keyword == "of"
@@ -10211,10 +10229,10 @@ fn try_parse_for_in_of(
         {
             continue;
         }
-        selected = Some((keyword, binding_kind, binding, rhs));
+        selected = Some((keyword, binding_kind, binding, pre_loop_initializer, rhs));
         break;
     }
-    let Some((keyword, binding_kind, binding, rhs)) = selected else {
+    let Some((keyword, binding_kind, binding, pre_loop_initializer, rhs)) = selected else {
         return Ok(None);
     };
     if let Some(kind) = binding_kind {
@@ -10229,6 +10247,7 @@ fn try_parse_for_in_of(
         Ok(Some(Statement::ForIn(ForInStatement {
             binding,
             binding_kind,
+            pre_loop_initializer,
             object,
             body: Box::new(body),
             span: span.clone(),
@@ -12923,7 +12942,6 @@ mod tests {
             "for (var value = 1 of [2]) {}",
             "for (let [value] = [1] of [[2]]) {}",
             "for (var [value] = [1] in {x: 1}) {}",
-            "for (var value = 1 in {x: 1}) {}",
             "'use strict'; for (var value = 1 in {x: 1}) {}",
             "for (let of values) {}",
             "'use strict'; for (let in {x: 1}) {}",
@@ -16939,9 +16957,92 @@ strict"; var static = 1; }"#,
             Statement::ForIn(s) => {
                 assert_eq!(s.binding.as_identifier(), Some("key"));
                 assert_eq!(s.binding_kind, Some(VariableDeclarationKind::Let));
+                assert!(s.pre_loop_initializer.is_none());
             }
             other => panic!("expected ForIn, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn legacy_var_for_in_initializer_has_distinct_ast_bd_1tafi() {
+        let tree = parse_script("for (var value = init() in object) {}");
+        let Statement::ForIn(stmt) = &tree.body[0] else {
+            panic!("expected legacy var ForIn, got {:?}", tree.body[0]);
+        };
+        assert_eq!(stmt.binding, BindingPattern::Identifier("value".into()));
+        assert_eq!(stmt.binding_kind, Some(VariableDeclarationKind::Var));
+        let Some(Expression::Call { callee, arguments }) = &stmt.pre_loop_initializer else {
+            panic!(
+                "expected distinct call initializer, got {:?}",
+                stmt.pre_loop_initializer
+            );
+        };
+        assert_eq!(callee.as_ref(), &Expression::Identifier("init".into()));
+        assert!(arguments.is_empty());
+        assert_eq!(stmt.object, Expression::Identifier("object".into()));
+
+        let trivia_tree = parse_script(
+            "for (var/* head */\u{FEFF}value/* name */=/* eq */init()/* init */in object) {}",
+        );
+        let Statement::ForIn(trivia_stmt) = &trivia_tree.body[0] else {
+            panic!("expected trivia-separated legacy var ForIn");
+        };
+        assert_eq!(trivia_stmt.binding, stmt.binding);
+        assert_eq!(trivia_stmt.pre_loop_initializer, stmt.pre_loop_initializer);
+        assert_eq!(trivia_stmt.object, stmt.object);
+
+        let candidate_tree = parse_script("for (var value = seed() in lhs() in rhs()) {}");
+        let Statement::ForIn(candidate_stmt) = &candidate_tree.body[0] else {
+            panic!("expected first viable top-level `in` to form a ForIn head");
+        };
+        assert!(matches!(
+            &candidate_stmt.pre_loop_initializer,
+            Some(Expression::Call { callee, arguments })
+                if arguments.is_empty()
+                    && callee.as_ref() == &Expression::Identifier("seed".into())
+        ));
+        assert!(matches!(
+            &candidate_stmt.object,
+            Expression::Binary {
+                operator: BinaryOperator::In,
+                left,
+                right,
+            } if matches!(left.as_ref(), Expression::Call { callee, arguments }
+                if arguments.is_empty()
+                    && callee.as_ref() == &Expression::Identifier("lhs".into()))
+                && matches!(right.as_ref(), Expression::Call { callee, arguments }
+                    if arguments.is_empty()
+                        && callee.as_ref() == &Expression::Identifier("rhs".into()))
+        ));
+    }
+
+    #[test]
+    fn legacy_var_for_in_initializer_rejects_non_annex_b_heads_bd_1tafi() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "'use strict'; for (var value = 1 in object) {}",
+            "for (var value = 1 of values) {}",
+            "for (let value = 1 in object) {}",
+            "for (const value = 1 in object) {}",
+            "for (value = 1 in object) {}",
+            "for (var [value] = [1] in object) {}",
+            "for (var {value} = source in object) {}",
+            "for (var value = 1, other in object) {}",
+            "for (var value = 1, in object) {}",
+            "for (var value = ; in object) {}",
+            "for (var value = @ in object) {}",
+        ] {
+            assert!(
+                parser.parse(source, ParseGoal::Script).is_err(),
+                "non-Annex-B loop head must be rejected: {source}"
+            );
+        }
+        assert!(
+            parser
+                .parse("for (var value = 1 in object) {}", ParseGoal::Module,)
+                .is_err(),
+            "module code is strict and must reject the Annex-B extension"
+        );
     }
 
     #[test]

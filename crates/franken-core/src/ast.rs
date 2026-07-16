@@ -13,7 +13,7 @@ use crate::deterministic_serde::{self, CanonicalValue};
 /// Versioned canonical AST contract binding schema + hash semantics.
 pub const CANONICAL_AST_CONTRACT_VERSION: &str = "franken-engine.parser-ast.contract.v1";
 /// Versioned schema identifier for canonical AST structure and key ordering.
-pub const CANONICAL_AST_SCHEMA_VERSION: &str = "franken-engine.parser-ast.schema.v1";
+pub const CANONICAL_AST_SCHEMA_VERSION: &str = "franken-engine.parser-ast.schema.v2";
 /// Hash algorithm used by `SyntaxTree::canonical_hash`.
 pub const CANONICAL_AST_HASH_ALGORITHM: &str = "sha256";
 /// Prefix used in canonical AST hash strings.
@@ -912,6 +912,13 @@ impl ForStatement {
 pub struct ForInStatement {
     pub binding: BindingPattern,
     pub binding_kind: Option<VariableDeclarationKind>,
+    /// Annex B.3.5 initializer evaluated once before the right-hand side.
+    ///
+    /// The parser only populates this for a non-strict Script `var`
+    /// BindingIdentifier head. Keeping the field optional and absent from the
+    /// ordinary serialized shape preserves compatibility with existing IR0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_loop_initializer: Option<Expression>,
     pub object: Expression,
     pub body: Box<Statement>,
     pub span: SourceSpan,
@@ -926,6 +933,13 @@ impl ForInStatement {
             self.binding_kind
                 .as_ref()
                 .map(|k| CanonicalValue::String(k.as_str().to_string()))
+                .unwrap_or(CanonicalValue::Null),
+        );
+        map.insert(
+            "pre_loop_initializer".to_string(),
+            self.pre_loop_initializer
+                .as_ref()
+                .map(Expression::canonical_value)
                 .unwrap_or(CanonicalValue::Null),
         );
         map.insert("object".to_string(), self.object.canonical_value());
@@ -2223,7 +2237,7 @@ mod tests {
         );
         assert_eq!(
             CANONICAL_AST_SCHEMA_VERSION,
-            "franken-engine.parser-ast.schema.v1"
+            "franken-engine.parser-ast.schema.v2"
         );
         assert_eq!(CANONICAL_AST_HASH_ALGORITHM, "sha256");
         assert_eq!(CANONICAL_AST_HASH_PREFIX, "sha256:");
@@ -3732,6 +3746,7 @@ mod tests {
         let stmt = Statement::ForIn(ForInStatement {
             binding: BindingPattern::Identifier("key".to_string()),
             binding_kind: Some(VariableDeclarationKind::Const),
+            pre_loop_initializer: None,
             object: Expression::Identifier("obj".to_string()),
             body: Box::new(Statement::Block(make_block_stmt(vec![]))),
             span: make_span(),
@@ -4134,6 +4149,7 @@ mod tests {
             Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("k".to_string()),
                 binding_kind: None,
+                pre_loop_initializer: None,
                 object: Expression::NullLiteral,
                 body: Box::new(make_expr_stmt(Expression::NullLiteral)),
                 span: span.clone(),
@@ -4237,6 +4253,7 @@ mod tests {
             Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("k".to_string()),
                 binding_kind: None,
+                pre_loop_initializer: None,
                 object: Expression::NullLiteral,
                 body: Box::new(make_expr_stmt(Expression::NullLiteral)),
                 span: span.clone(),
@@ -4407,6 +4424,7 @@ mod tests {
         let stmt = ForInStatement {
             binding: BindingPattern::Identifier("k".to_string()),
             binding_kind: None,
+            pre_loop_initializer: None,
             object: Expression::Identifier("obj".to_string()),
             body: Box::new(make_expr_stmt(Expression::NullLiteral)),
             span: make_span(),
@@ -4414,9 +4432,69 @@ mod tests {
         if let CanonicalValue::Map(map) = stmt.canonical_value() {
             assert_eq!(map["binding_kind"], CanonicalValue::Null);
             assert!(map.contains_key("binding"));
+            assert_eq!(map["pre_loop_initializer"], CanonicalValue::Null);
         } else {
             panic!("expected map");
         }
+    }
+
+    #[test]
+    fn for_in_pre_loop_initializer_preserves_legacy_serde_and_canonicalizes_field_bd_1tafi() {
+        let without_initializer = ForInStatement {
+            binding: BindingPattern::Identifier("key".to_string()),
+            binding_kind: Some(VariableDeclarationKind::Var),
+            pre_loop_initializer: None,
+            object: Expression::Identifier("object".to_string()),
+            body: Box::new(make_expr_stmt(Expression::NullLiteral)),
+            span: make_span(),
+        };
+        let legacy_json = serde_json::to_value(&without_initializer).unwrap();
+        assert!(legacy_json.get("pre_loop_initializer").is_none());
+        let restored_legacy: ForInStatement = serde_json::from_value(legacy_json).unwrap();
+        assert_eq!(restored_legacy, without_initializer);
+
+        let with_initializer = ForInStatement {
+            pre_loop_initializer: Some(Expression::NumericLiteral(7)),
+            ..without_initializer.clone()
+        };
+        let json = serde_json::to_string(&with_initializer).unwrap();
+        let restored: ForInStatement = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, with_initializer);
+
+        let CanonicalValue::Map(without_map) = without_initializer.canonical_value() else {
+            panic!("expected canonical map");
+        };
+        let CanonicalValue::Map(with_map) = with_initializer.canonical_value() else {
+            panic!("expected canonical map");
+        };
+        assert_eq!(
+            without_map.get("pre_loop_initializer"),
+            Some(&CanonicalValue::Null)
+        );
+        assert_eq!(
+            with_map.get("pre_loop_initializer"),
+            Some(&Expression::NumericLiteral(7).canonical_value())
+        );
+    }
+
+    #[test]
+    fn for_in_pre_loop_initializer_pins_schema_v2_hash_bd_1tafi() {
+        let tree = SyntaxTree {
+            goal: ParseGoal::Script,
+            body: vec![Statement::ForIn(ForInStatement {
+                binding: BindingPattern::Identifier("key".to_string()),
+                binding_kind: Some(VariableDeclarationKind::Var),
+                pre_loop_initializer: Some(Expression::NumericLiteral(7)),
+                object: Expression::Identifier("object".to_string()),
+                body: Box::new(Statement::Block(make_block_stmt(Vec::new()))),
+                span: make_span(),
+            })],
+            span: make_span(),
+        };
+        assert_eq!(
+            tree.canonical_hash(),
+            "sha256:166c2e3ca50abc0b25c83ce8cfefb4be4a7eac33e7337809f1594e22ff9fe963"
+        );
     }
 
     #[test]
@@ -4730,6 +4808,7 @@ mod tests {
             Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("k".to_string()),
                 binding_kind: Some(VariableDeclarationKind::Let),
+                pre_loop_initializer: None,
                 object: Expression::Identifier("obj".to_string()),
                 body: Box::new(make_expr_stmt(Expression::NullLiteral)),
                 span: make_span(),
@@ -5222,6 +5301,7 @@ mod tests {
         let stmt = ForInStatement {
             binding: BindingPattern::Identifier("key".to_string()),
             binding_kind: Some(VariableDeclarationKind::Const),
+            pre_loop_initializer: None,
             object: Expression::Identifier("obj".to_string()),
             body: Box::new(make_expr_stmt(Expression::NullLiteral)),
             span: make_span(),

@@ -915,7 +915,9 @@ fn path_statement_contains_usage<F: Fn(&Expression) -> bool>(stmt: &Statement, u
                 || path_statement_contains_usage(&for_stmt.body, uses)
         }
         Statement::ForIn(for_in) => {
-            uses(&for_in.object) || path_statement_contains_usage(&for_in.body, uses)
+            for_in.pre_loop_initializer.as_ref().is_some_and(uses)
+                || uses(&for_in.object)
+                || path_statement_contains_usage(&for_in.body, uses)
         }
         Statement::ForOf(for_of) => {
             uses(&for_of.iterable) || path_statement_contains_usage(&for_of.body, uses)
@@ -3393,17 +3395,17 @@ fn lower_statement_to_ir1_with_flow(
             restore_block_lexical_bindings(binding_lookup, for_enclosing_bindings);
         }
         Statement::ForIn(for_in_stmt) => {
-            // Lowering: for (let k in obj) { body }
-            //   1. Evaluate object expression → push on stack
-            //   2. ForInInit → pop object, push enumerator
-            //   3. loop_label:
-            //   4. ForInNext { done_label: end } → push next key (or jump)
-            //   5. StoreBinding(k) → bind key to loop variable
-            //   6. Pop
-            //   7. body
-            //   8. Jump → loop_label
-            //   9. end_label:
-            //  10. IteratorClose (break path wired through control_flow)
+            // Lowering: for (var k = init in obj) { body }
+            //   1. For the Annex-B form only, evaluate init and store k once
+            //   2. Evaluate object expression → push on stack
+            //   3. ForInInit → pop object, push enumerator
+            //   4. loop_label:
+            //   5. ForInNext { done_label: end } → push next key (or jump)
+            //   6. StoreBinding(k) → bind key to loop variable
+            //   7. Pop
+            //   8. body
+            //   9. Jump → loop_label
+            //  10. end_label:
             let for_in_enclosing_bindings = if matches!(
                 for_in_stmt.binding_kind,
                 Some(VariableDeclarationKind::Let | VariableDeclarationKind::Const)
@@ -3420,6 +3422,42 @@ fn lower_statement_to_ir1_with_flow(
                 )
             } else {
                 BTreeMap::new()
+            };
+
+            let pre_loop_binding_id = if let Some(initializer) = &for_in_stmt.pre_loop_initializer {
+                if for_in_stmt.binding_kind != Some(VariableDeclarationKind::Var)
+                    || !matches!(&for_in_stmt.binding, BindingPattern::Identifier(_))
+                {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "for-in pre-loop initializer requires a var identifier binding",
+                    });
+                }
+                // Annex B resolves the hoisted `var` binding before evaluating
+                // the initializer, then performs PutValue before touching the
+                // RHS. The later key assignment reuses this exact binding ID.
+                let binding_id = alloc_pattern_primary_binding(
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    &for_in_stmt.binding,
+                    BindingKind::Var,
+                )
+                .map_err(LoweringPipelineError::SemanticViolation)?;
+                lower_expression_to_ir1(
+                    initializer,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    label_counter,
+                )?;
+                ops.push(Ir1Op::StoreBinding { binding_id });
+                ops.push(Ir1Op::Pop);
+                Some(binding_id)
+            } else {
+                None
             };
 
             // A lexical loop-head binding is already in its TDZ while the
@@ -3448,24 +3486,28 @@ fn lower_statement_to_ir1_with_flow(
             });
 
             // Bind the yielded key to the loop variable.
-            let bid = match for_in_stmt.binding_kind {
-                None => resolve_assignment_pattern_primary_binding(
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    scope_id,
-                    &for_in_stmt.binding,
-                ),
-                Some(kind) => alloc_pattern_primary_binding(
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    scope_id,
-                    &for_in_stmt.binding,
-                    binding_kind_for_variable_declaration(kind),
-                ),
+            let bid = if let Some(binding_id) = pre_loop_binding_id {
+                binding_id
+            } else {
+                match for_in_stmt.binding_kind {
+                    None => resolve_assignment_pattern_primary_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        &for_in_stmt.binding,
+                    ),
+                    Some(kind) => alloc_pattern_primary_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        &for_in_stmt.binding,
+                        binding_kind_for_variable_declaration(kind),
+                    ),
+                }
+                .map_err(LoweringPipelineError::SemanticViolation)?
             };
-            let bid = bid.map_err(LoweringPipelineError::SemanticViolation)?;
             // For simple identifier patterns, store to the primary binding.
             // For destructuring patterns, use a dedicated internal source binding.
             let source_binding_id = if matches!(for_in_stmt.binding, BindingPattern::Identifier(_))
@@ -14438,6 +14480,7 @@ mod tests {
         let ir0 = stmt_ir0(vec![Statement::ForIn(ForInStatement {
             binding: BindingPattern::Identifier("k".into()),
             binding_kind: Some(VariableDeclarationKind::Let),
+            pre_loop_initializer: None,
             object: Expression::Identifier("obj".into()),
             body: Box::new(Statement::Expression(ExpressionStatement {
                 expression: Expression::Identifier("k".into()),
@@ -14456,6 +14499,95 @@ mod tests {
             ops.iter().any(|op| matches!(op, Ir1Op::ForInNext { .. })),
             "missing ForInNext"
         );
+    }
+
+    #[test]
+    fn legacy_var_for_in_initializer_precedes_rhs_and_reuses_binding_bd_1tafi() {
+        let call = |name: &str| Expression::Call {
+            callee: Box::new(Expression::Identifier(name.into())),
+            arguments: Vec::new(),
+        };
+        let statement = Statement::ForIn(ForInStatement {
+            binding: BindingPattern::Identifier("key".into()),
+            binding_kind: Some(VariableDeclarationKind::Var),
+            pre_loop_initializer: Some(call("init")),
+            object: call("rhs"),
+            body: Box::new(Statement::Expression(ExpressionStatement {
+                expression: Expression::Identifier("key".into()),
+                span: span(),
+            })),
+            span: span(),
+        });
+        assert!(path_statement_contains_usage(&statement, &|expression| {
+            matches!(expression, Expression::Call { callee, .. }
+                if callee.as_ref() == &Expression::Identifier("init".into()))
+        }));
+
+        let result = lower_ir0_to_ir1(&stmt_ir0(vec![statement]))
+            .expect("legacy var for-in initializer should lower");
+        let ops = &result.module.ops;
+        let binding_id = |name: &str| {
+            result.module.scopes[0]
+                .bindings
+                .iter()
+                .find(|binding| binding.name == name)
+                .unwrap_or_else(|| panic!("missing binding for {name}"))
+                .binding_id
+        };
+        let key_id = binding_id("key");
+        let init_id = binding_id("init");
+        let rhs_id = binding_id("rhs");
+        let position = |predicate: &dyn Fn(&Ir1Op) -> bool| {
+            ops.iter()
+                .position(predicate)
+                .expect("expected ordered IR1 operation")
+        };
+        let init_load = position(
+            &|op| matches!(op, Ir1Op::LoadBinding { binding_id } if *binding_id == init_id),
+        );
+        let rhs_load = position(
+            &|op| matches!(op, Ir1Op::LoadBinding { binding_id } if *binding_id == rhs_id),
+        );
+        let for_in_init = position(&|op| matches!(op, Ir1Op::ForInInit));
+        let for_in_next = position(&|op| matches!(op, Ir1Op::ForInNext { .. }));
+        let key_stores = ops
+            .iter()
+            .enumerate()
+            .filter_map(|(index, op)| {
+                matches!(op, Ir1Op::StoreBinding { binding_id } if *binding_id == key_id)
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(key_stores.len(), 2);
+        assert!(
+            init_load < key_stores[0]
+                && key_stores[0] < rhs_load
+                && rhs_load < for_in_init
+                && for_in_init < for_in_next
+                && for_in_next < key_stores[1],
+            "expected initializer/store before RHS/enumeration and the same key binding afterward: {ops:?}"
+        );
+    }
+
+    #[test]
+    fn forged_for_in_pre_loop_initializer_fails_closed_bd_1tafi() {
+        let ir0 = stmt_ir0(vec![Statement::ForIn(ForInStatement {
+            binding: BindingPattern::Identifier("key".into()),
+            binding_kind: Some(VariableDeclarationKind::Let),
+            pre_loop_initializer: Some(Expression::NumericLiteral(1)),
+            object: Expression::ObjectLiteral(Vec::new()),
+            body: Box::new(Statement::Block(BlockStatement {
+                body: Vec::new(),
+                span: span(),
+            })),
+            span: span(),
+        })]);
+        assert!(matches!(
+            lower_ir0_to_ir1(&ir0),
+            Err(LoweringPipelineError::InvariantViolation {
+                detail: "for-in pre-loop initializer requires a var identifier binding"
+            })
+        ));
     }
 
     #[test]
@@ -15688,6 +15820,43 @@ mod tests {
     }
 
     #[test]
+    fn legacy_var_for_in_initializer_executes_once_before_rhs_bd_1tafi() {
+        let (_, _, empty_object) = lower_and_execute_deferred_source_bd_6pvhn(
+            "var order = 0; \
+             function init() { order = order * 10 + 1; return 7; } \
+             function rhs() { order = order * 10 + 2; return {}; } \
+             for (var key = init() in rhs()) { order = 999; } \
+             order * 10 + key;",
+        );
+        assert_eq!(
+            empty_object,
+            Value::Int(127),
+            "initializer and RHS must run in source order even with no keys"
+        );
+
+        let (_, _, multiple_keys) = lower_and_execute_deferred_source_bd_6pvhn(
+            "var count = 0; \
+             function init() { count = count + 1; return 'seed'; } \
+             for (var key = init() in {alpha: 1, beta: 2}) {} \
+             count * 10 + (key === 'beta' ? 2 : 0);",
+        );
+        assert_eq!(
+            multiple_keys,
+            Value::Int(12),
+            "initializer must run once before yielded keys overwrite the var binding"
+        );
+
+        let (_, _, deferred_function) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function retained() { \
+                 for (var key = 7 in {}) {} \
+                 return key; \
+             } \
+             retained();",
+        );
+        assert_eq!(deferred_function, Value::Int(7));
+    }
+
+    #[test]
     fn unicode_and_escaped_binding_names_execute_canonically_bd_t4947() {
         let (_, _, direct) = lower_and_execute_deferred_source_bd_6pvhn(
             r"let π = 7;
@@ -16795,6 +16964,7 @@ mod tests {
             Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("k".into()),
                 binding_kind: Some(VariableDeclarationKind::Let),
+                pre_loop_initializer: None,
                 object: Expression::Identifier("obj".into()),
                 body: Box::new(Statement::Expression(ExpressionStatement {
                     expression: Expression::NumericLiteral(1),
@@ -16878,6 +17048,7 @@ mod tests {
             Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("k".into()),
                 binding_kind: None,
+                pre_loop_initializer: None,
                 object: Expression::Identifier("obj".into()),
                 body: Box::new(Statement::Expression(ExpressionStatement {
                     expression: Expression::NumericLiteral(1),

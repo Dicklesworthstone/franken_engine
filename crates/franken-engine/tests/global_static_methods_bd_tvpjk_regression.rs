@@ -105,6 +105,34 @@ fn array_is_array_member_reads_are_first_class() {
 }
 
 #[test]
+fn callable_only_builtin_values_reject_construction() {
+    assert_eq!(
+        eval(
+            "var caught = ''; try { new (Array.isArray)([]); } catch (e) { caught = e.name; } caught;"
+        ),
+        "TypeError"
+    );
+    for source in [
+        "new (Array.isArray)([]);",
+        "let predicate = Array.isArray; new predicate([]);",
+        "new (console.log)();",
+        "new (Promise.resolve)();",
+    ] {
+        let result = eval(source);
+        assert!(result.contains("type error"), "{source}: {result}");
+        assert!(
+            result.contains("constructible function"),
+            "{source}: {result}"
+        );
+    }
+}
+
+#[test]
+fn function_builtin_remains_constructible() {
+    assert_eq!(eval("typeof new Function('return 1;');"), "function");
+}
+
+#[test]
 fn array_is_array_value_works_as_array_callback() {
     assert_eq!(eval("[[1], [2,3], []].every(Array.isArray);"), "true");
     assert_eq!(eval("[[1], {0:2}, []].every(Array.isArray);"), "false");

@@ -2077,6 +2077,18 @@ pub enum BuiltinFunctionKind {
     StreamWritableDestroy,
 }
 
+impl BuiltinFunctionKind {
+    /// Whether this first-class builtin implements ECMAScript `[[Construct]]`.
+    ///
+    /// Most builtins exposed by this interpreter are callable methods. The
+    /// `Function` constructor is the sole constructible builtin value; other
+    /// global constructors lower directly to dedicated hostcalls instead of
+    /// passing through [`Value::BuiltinFunction`] (bd-zyndq).
+    const fn is_constructible(self) -> bool {
+        matches!(self, Self::FunctionConstructor)
+    }
+}
+
 /// First-class builtin callable value with the module provenance needed for
 /// deterministic CommonJS resolution.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -21177,6 +21189,15 @@ impl InterpreterCore {
                     }
 
                     if let Value::BuiltinFunction(builtin) = &callee_val {
+                        if !builtin.kind.is_constructible() {
+                            return Err(InterpreterError::TypeError {
+                                expected: "constructible function".to_string(),
+                                got: format!(
+                                    "callable-only builtin function {}",
+                                    builtin.display_name()
+                                ),
+                            });
+                        }
                         let result = self.dispatch_builtin_function(module, builtin, args, None)?;
                         // IFC: a `new Builtin(...)` result derives entirely from
                         // its argument registers, so the dst label is the join
@@ -59669,10 +59690,11 @@ mod async_runtime_tests_current {
 
         let mut core = test_interpreter();
         core.mutate_registers(|r| {
-            r[0] = Value::Int(42);
-            // `IteratorSelf` is a guaranteed-Ok, no-receiver builtin; the
-            // specific builtin is irrelevant — we exercise the arm's label join.
-            r[3] = Value::BuiltinFunction(BuiltinFunction::iterator_self(0));
+            r[0] = Value::str("return 42;");
+            // `Function` is the one first-class builtin with [[Construct]].
+            // The result is a generated callable artifact, which lets this
+            // test continue to exercise the constructible-builtin label join.
+            r[3] = Value::BuiltinFunction(BuiltinFunction::function_constructor());
         });
         core.set_register_label(0, crate::ifc_artifacts::Label::Secret)
             .expect("arg label should be settable");

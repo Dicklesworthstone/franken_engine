@@ -62,8 +62,10 @@
 //!   projection. [`ExactPropertyMap`] provides the wire-safe exact-key carrier
 //!   for the staged bd-b12xs migration; runtime integration remains a later
 //!   child.
-//! - Source-literal lone-surrogate escapes (`"\uD800"`) remain fail-closed in
-//!   the parser; paired escapes already heal (bd-k9jb0).
+//! - `franken-core` quoted source literals now preserve lone-surrogate escapes
+//!   exactly through AST/IR lowering (bd-vltnh). The duplicated
+//!   `franken-engine` parser/lowering mirror remains a separate landing step;
+//!   template-literal quasis are also outside this quoted-literal slice.
 //! - Relational ordering: the derived [`Ord`] remains projection-first (with
 //!   exact units as tiebreak) for deterministic collections and wire/hash
 //!   stability. ES relational semantics — lexicographic over exact UTF-16
@@ -77,6 +79,8 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
+
+use crate::deterministic_serde::CanonicalValue;
 
 /// Serde map key marking the exact-code-unit payload of a string that
 /// contains lone surrogates. Well-formed strings serialize as plain strings.
@@ -163,6 +167,31 @@ impl JsString {
     /// Exact UTF-16 code units, collected.
     pub fn code_units_vec(&self) -> Vec<u16> {
         self.encode_utf16().collect()
+    }
+
+    /// Convert this string to its deterministic canonical representation.
+    ///
+    /// Well-formed content remains a plain canonical string, preserving the
+    /// exact encoding bytes used before [`JsString`] became an AST carrier.
+    /// Content with lone surrogates uses the same `$wtf16` tag as serde and
+    /// records every exact UTF-16 code unit as an unsigned integer.
+    pub fn canonical_value(&self) -> CanonicalValue {
+        match &self.units {
+            None => CanonicalValue::String(self.utf8.to_string()),
+            Some(units) => {
+                let mut map = BTreeMap::new();
+                map.insert(
+                    WTF16_MAP_KEY.to_string(),
+                    CanonicalValue::Array(
+                        units
+                            .iter()
+                            .map(|unit| CanonicalValue::U64(u64::from(*unit)))
+                            .collect(),
+                    ),
+                );
+                CanonicalValue::Map(map)
+            }
+        }
     }
 
     /// The ECMAScript `length` of the string: its UTF-16 code-unit count.
@@ -928,6 +957,47 @@ mod tests {
         let a = serde_json::to_vec(&JsString::from_code_units(&[0xD800])).expect("a");
         let b = serde_json::to_vec(&JsString::from_code_units(&[0xD801])).expect("b");
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn canonical_well_formed_encoding_preserves_plain_string_bytes() {
+        let string = JsString::from("a\u{1F600}b");
+        let historical = CanonicalValue::String("a\u{1F600}b".to_string());
+
+        assert_eq!(string.canonical_value(), historical);
+        assert_eq!(
+            crate::deterministic_serde::encode_value(&string.canonical_value()),
+            crate::deterministic_serde::encode_value(&historical)
+        );
+    }
+
+    #[test]
+    fn canonical_encoding_distinguishes_lone_surrogate_units() {
+        let high_d800 = JsString::from_code_units(&[0xD800]);
+        let high_d801 = JsString::from_code_units(&[0xD801]);
+
+        let canonical_d800 = high_d800.canonical_value();
+        let canonical_d801 = high_d801.canonical_value();
+        let mut expected_d800 = BTreeMap::new();
+        expected_d800.insert(
+            "$wtf16".to_string(),
+            CanonicalValue::Array(vec![CanonicalValue::U64(0xD800)]),
+        );
+        assert_eq!(canonical_d800, CanonicalValue::Map(expected_d800));
+        assert_eq!(
+            crate::deterministic_serde::encode_value(&canonical_d800),
+            vec![
+                0x07, 0, 0, 0, 1, // map with one entry
+                0, 0, 0, 6, b'$', b'w', b't', b'f', b'1', b'6', 0x06, 0, 0, 0,
+                1, // array with one entry
+                0x01, 0, 0, 0, 0, 0, 0, 0xD8, 0,
+            ]
+        );
+        assert_ne!(canonical_d800, canonical_d801);
+        assert_ne!(
+            crate::deterministic_serde::encode_value(&canonical_d800),
+            crate::deterministic_serde::encode_value(&canonical_d801)
+        );
     }
 
     #[test]

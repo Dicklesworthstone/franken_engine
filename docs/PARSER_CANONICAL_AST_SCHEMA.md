@@ -98,6 +98,23 @@ IR0 JSON readable without weakening canonical v2, where the field is always
 present. Consumers must bind cached core canonical hashes to the reported
 schema version and regenerate v2 hashes rather than comparing them to v1.
 
+## FrankenCore Native Parser Schema v3
+
+The native `franken-core` parser advances to
+`franken-engine.parser-ast.schema.v3` for `bd-vltnh`. Schema v3 widens
+`Expression::StringLiteral` from Rust `String` to the exact ECMAScript
+`JsString` carrier so quoted source escapes such as `"\uD800"` survive as
+their original UTF-16 code units.
+
+Well-formed literal values retain the historical `CanonicalValue::String`
+shape and byte encoding. A value containing a lone surrogate is encoded as a
+tagged canonical map whose `$wtf16` entry is the exact array of UTF-16 units.
+Derived serde follows the same compatibility rule: historical plain JSON
+strings remain readable and byte-stable, while exact values use
+`{"$wtf16":[...]}`. Consumers must bind caches to schema v3 even when a
+particular well-formed tree happens to retain its previous canonical payload
+bytes.
+
 ## Compatibility Checks
 
 Pinned by tests:
@@ -111,7 +128,9 @@ Pinned by tests:
 - [`crates/franken-engine/tests/ast_integration.rs`](../crates/franken-engine/tests/ast_integration.rs)
   - contract constants/accessors and hash prefix checks
 - [`crates/franken-core/src/ast.rs`](../crates/franken-core/src/ast.rs)
-  - core v2 Annex-B for-in vector ->
+  - core v3 lone-surrogate string-literal vector (`D800`) ->
+    `sha256:2d2912b4ee4142810f692d25a6f154e758dccf2aeb9926f5abebab7f5d63773a`
+  - core v3 Annex-B for-in vector (payload bytes unchanged from v2) ->
     `sha256:166c2e3ca50abc0b25c83ce8cfefb4be4a7eac33e7337809f1594e22ff9fe963`
 
 ## Replay Commands

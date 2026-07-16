@@ -18,6 +18,7 @@ use crate::ast::{AssignmentOperator, BinaryOperator, SyntaxTree, UnaryOperator};
 use crate::deterministic_serde::{self, CanonicalValue};
 use crate::hash_tiers::ContentHash;
 use crate::ifc_artifacts::Label;
+use crate::js_string::JsString;
 
 fn is_false(value: &bool) -> bool {
     !*value
@@ -36,9 +37,12 @@ pub struct IrSchemaVersion {
 }
 
 impl IrSchemaVersion {
+    /// `0.2.0` widens JavaScript literal carriers and the IR3 constant pool to
+    /// exact UTF-16 [`JsString`] values. Historical well-formed strings retain
+    /// their plain-string JSON wire shape; lone-surrogate values use `$wtf16`.
     pub const CURRENT: Self = Self {
         major: 0,
-        minor: 1,
+        minor: 2,
         patch: 0,
     };
 
@@ -1129,7 +1133,7 @@ impl Ir1Op {
 /// Literal values in IR1.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Ir1Literal {
-    String(String),
+    String(JsString),
     Integer(i64),
     /// Floating-point literal stored as IEEE 754 bits for deterministic serde.
     Float(u64),
@@ -1147,7 +1151,7 @@ impl Ir1Literal {
                     "kind".to_string(),
                     CanonicalValue::String("string".to_string()),
                 );
-                map.insert("value".to_string(), CanonicalValue::String(value.clone()));
+                map.insert("value".to_string(), value.canonical_value());
             }
             Self::Integer(value) => {
                 map.insert(
@@ -2641,8 +2645,8 @@ pub struct Ir3Module {
     pub header: IrHeader,
     /// Flat instruction array.
     pub instructions: Vec<Ir3Instruction>,
-    /// String constant pool.
-    pub constant_pool: Vec<String>,
+    /// Exact ECMAScript string constant pool.
+    pub constant_pool: Vec<JsString>,
     /// Function table with entry points and frame layout.
     pub function_table: Vec<Ir3FunctionDesc>,
     /// Proof-to-specialization linkage (if specialized).
@@ -2675,7 +2679,7 @@ impl Ir3Module {
             CanonicalValue::Array(
                 self.constant_pool
                     .iter()
-                    .map(|s| CanonicalValue::String(s.clone()))
+                    .map(JsString::canonical_value)
                     .collect(),
             ),
         );
@@ -3135,6 +3139,40 @@ pub fn verify_ir4_linkage(witness: &Ir4Module, ir3_hash: &ContentHash) -> Result
     Ok(())
 }
 
+/// Verify that an IR header can be read by the current core schema.
+///
+/// Major versions must match, older minor versions remain readable, future
+/// minor versions are rejected, and patch differences do not affect wire
+/// compatibility.
+pub fn verify_schema_version(header: &IrHeader) -> Result<(), IrError> {
+    let current = IrSchemaVersion::CURRENT;
+    let provided = &header.schema_version;
+
+    if current.major != provided.major {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            format!(
+                "incompatible major version: current {}, provided {}",
+                current, provided
+            ),
+            header.level,
+        ));
+    }
+
+    if current.minor < provided.minor {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            format!(
+                "unsupported future minor version: current {}, provided {}",
+                current, provided
+            ),
+            header.level,
+        ));
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Structured events
 // ---------------------------------------------------------------------------
@@ -3352,7 +3390,7 @@ mod tests {
 
     #[test]
     fn schema_version_display() {
-        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.1.0");
+        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.2.0");
     }
 
     #[test]
@@ -3361,6 +3399,57 @@ mod tests {
         let json = serde_json::to_string(&version).unwrap();
         let restored: IrSchemaVersion = serde_json::from_str(&json).unwrap();
         assert_eq!(version, restored);
+    }
+
+    #[test]
+    fn schema_version_validation_enforces_core_compatibility_window_bd_vltnh() {
+        let header = |schema_version, level| IrHeader {
+            schema_version,
+            level,
+            source_hash: None,
+            source_label: "schema-check".to_string(),
+        };
+
+        assert!(verify_schema_version(&header(IrSchemaVersion::CURRENT, IrLevel::Ir3)).is_ok());
+        assert!(
+            verify_schema_version(&header(
+                IrSchemaVersion {
+                    major: IrSchemaVersion::CURRENT.major,
+                    minor: 1,
+                    patch: u32::MAX,
+                },
+                IrLevel::Ir1,
+            ))
+            .is_ok(),
+            "core 0.2 readers retain plain-string 0.1 compatibility"
+        );
+
+        for (version, level, expected_message) in [
+            (
+                IrSchemaVersion {
+                    major: IrSchemaVersion::CURRENT.major.saturating_add(1),
+                    minor: 0,
+                    patch: 0,
+                },
+                IrLevel::Ir2,
+                "incompatible major version",
+            ),
+            (
+                IrSchemaVersion {
+                    major: IrSchemaVersion::CURRENT.major,
+                    minor: IrSchemaVersion::CURRENT.minor.saturating_add(1),
+                    patch: 0,
+                },
+                IrLevel::Ir4,
+                "unsupported future minor version",
+            ),
+        ] {
+            let error = verify_schema_version(&header(version, level))
+                .expect_err("unsupported schema must fail closed");
+            assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
+            assert_eq!(error.level, level);
+            assert!(error.message.contains(expected_message));
+        }
     }
 
     #[test]
@@ -3595,7 +3684,7 @@ mod tests {
     fn ir1_all_ops_canonical() {
         let ops = vec![
             Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("hello".to_string()),
+                value: Ir1Literal::String("hello".into()),
             },
             Ir1Op::LoadLiteral {
                 value: Ir1Literal::Integer(42),
@@ -3884,12 +3973,32 @@ mod tests {
         ir3.instructions
             .push(Ir3Instruction::LoadInt { dst: 0, value: 42 });
         ir3.instructions.push(Ir3Instruction::Halt);
-        ir3.constant_pool.push("hello".to_string());
+        ir3.constant_pool.push("hello".into());
         ir3.required_capabilities
             .push(CapabilityTag("fs:read".to_string()));
         let json = serde_json::to_string(&ir3).unwrap();
         let restored: Ir3Module = serde_json::from_str(&json).unwrap();
         assert_eq!(ir3, restored);
+    }
+
+    #[test]
+    fn ir3_exact_string_pool_roundtrips_and_hashes_exact_units_bd_vltnh() {
+        let source_hash = ContentHash::compute(b"bd-vltnh");
+        let mut high_d800 = Ir3Module::new(source_hash, "d800.js");
+        high_d800
+            .constant_pool
+            .push(JsString::from_code_units(&[0xD800]));
+        let mut high_d801 = Ir3Module::new(source_hash, "d800.js");
+        high_d801
+            .constant_pool
+            .push(JsString::from_code_units(&[0xD801]));
+
+        let json = serde_json::to_string(&high_d800).unwrap();
+        assert_eq!(serde_json::from_str::<Ir3Module>(&json).unwrap(), high_d800);
+        assert_ne!(
+            deterministic_serde::encode_value(&high_d800.canonical_value()),
+            deterministic_serde::encode_value(&high_d801.canonical_value())
+        );
     }
 
     // -- IR4 --
@@ -4465,7 +4574,8 @@ mod tests {
     #[test]
     fn ir1_literal_serde_roundtrip() {
         for lit in [
-            Ir1Literal::String("hello".to_string()),
+            Ir1Literal::String("hello".into()),
+            Ir1Literal::String(JsString::from_code_units(&[0xD800])),
             Ir1Literal::Integer(i64::MIN),
             Ir1Literal::Integer(0),
             Ir1Literal::Boolean(true),
@@ -4798,7 +4908,7 @@ mod tests {
     fn ir1_op_serde_all_variants() {
         let ops = vec![
             Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("s".to_string()),
+                value: Ir1Literal::String("s".into()),
             },
             Ir1Op::LoadBinding { binding_id: 0 },
             Ir1Op::StoreBinding { binding_id: 1 },
@@ -5272,7 +5382,7 @@ mod tests {
     fn schema_version_current_value() {
         let v = IrSchemaVersion::CURRENT;
         assert_eq!(v.major, 0);
-        assert_eq!(v.minor, 1);
+        assert_eq!(v.minor, 2);
         assert_eq!(v.patch, 0);
     }
 
@@ -5689,7 +5799,7 @@ mod tests {
     #[test]
     fn ir1_literal_canonical_value_all_variants() {
         let cases: Vec<(Ir1Literal, &str)> = vec![
-            (Ir1Literal::String("hello".to_string()), "string"),
+            (Ir1Literal::String("hello".into()), "string"),
             (Ir1Literal::Integer(42), "integer"),
             (Ir1Literal::Boolean(false), "boolean"),
             (Ir1Literal::Null, "null"),

@@ -130,7 +130,7 @@ the owning type's module tier and Rust visibility rules.
 - `guardplane_adapter`: enums `GuardplaneTrustLevel`, `GuardplaneOperation`; structs `GuardplaneExtensionContext`, `GuardplaneDecisionRecord`, `GuardplaneExecutionSummary`, `GuardplaneAdapter`.
 - `hash_tiers`: enums `HashTier`, `HashAlgorithm`; structs `IntegrityHash`, `ContentHash`, `AuthenticityHash`, `HashEvent`.
 - `ifc_artifacts`: enums `Label`, `ClearanceClass`, `Ir2LabelSource`, `FlowAuthorizationAdvisory`, `FlowCheckResult`, `ProofMethod`, `DeclassificationDecision`, `ClaimStrength`, `IfcValidationError`; structs `IfcSchemaVersion`, `DeclassificationObligation`, `FlowEnvelope`, `FlowAuthorizationAssessment`, `FlowRule`, `DeclassificationRoute`, `FlowPolicy`, `FlowProof`, `DeclassificationReceipt`, `ConfinementClaim`.
-- `ir_contract`: constants `IR_ACCESSOR_GET_PREFIX`, `IR_ACCESSOR_SET_PREFIX`, `IR_SUPER_CONSTRUCTOR_PROPERTY`, `IR_SUPER_PROTOTYPE_PROPERTY`; type aliases `BindingId`, `Reg`, `InstrIndex`; enums `IrLevel`, `BindingKind`, `ScopeKind`, `Ir1PropertyKey`, `IteratorCloseReason`, `Ir1Op`, `Ir1Literal`, `EffectBoundary`, `Ir3Instruction`, `WitnessEventKind`, `ExecutionOutcome`, `IrErrorCode`; structs `IrSchemaVersion`, `IrHeader`, `Ir0Module`, `ScopeId`, `ResolvedBinding`, `ScopeNode`, `Ir1Module`, `CapabilityTag`, `FlowAnnotation`, `Ir2Op`, `Ir2Module`, `RegRange`, `Ir3FunctionDesc`, `SpecializationLinkage`, `Ir3Module`, `WitnessEvent`, `HostcallDecisionRecord`, `Ir4Module`, `IrError`, `IrContractEvent`, `IrVerifier`; functions `verify_ir0_hash`, `verify_ir1_source`, `verify_ir3_specialization`, `verify_ir4_linkage`, `error_code`.
+- `ir_contract`: constants `IR_ACCESSOR_GET_PREFIX`, `IR_ACCESSOR_SET_PREFIX`, `IR_SUPER_CONSTRUCTOR_PROPERTY`, `IR_SUPER_PROTOTYPE_PROPERTY`; type aliases `BindingId`, `Reg`, `InstrIndex`; enums `IrLevel`, `BindingKind`, `ScopeKind`, `Ir1PropertyKey`, `IteratorCloseReason`, `Ir1Op`, `Ir1Literal`, `EffectBoundary`, `Ir3Instruction`, `WitnessEventKind`, `ExecutionOutcome`, `IrErrorCode`; structs `IrSchemaVersion`, `IrHeader`, `Ir0Module`, `ScopeId`, `ResolvedBinding`, `ScopeNode`, `Ir1Module`, `CapabilityTag`, `FlowAnnotation`, `Ir2Op`, `Ir2Module`, `RegRange`, `Ir3FunctionDesc`, `SpecializationLinkage`, `Ir3Module`, `WitnessEvent`, `HostcallDecisionRecord`, `Ir4Module`, `IrError`, `IrContractEvent`, `IrVerifier`; functions `verify_schema_version`, `verify_ir0_hash`, `verify_ir1_source`, `verify_ir3_specialization`, `verify_ir4_linkage`, `error_code`.
 - `js_string`: structs `JsString`, `CodeUnits`, `ExactPropertyMap`.
 - `lowering_pipeline`: enum `LoweringPipelineError`; structs `LoweringContext`, `LoweringEvent`, `InvariantCheck`, `PassWitness`, `IsomorphismLedgerEntry`, `LoweringPassResult`, `LoweringPipelineOutput`, `Ir2FlowProofArtifact`, `FlowProofArtifactEntry`, `DeniedFlowArtifactEntry`, `RequiredDeclassificationArtifactEntry`, `RuntimeCheckpointArtifactEntry`; functions `lower_ir0_to_ir3`, `validate_ir0_static_semantics`, `lower_ir0_to_ir1`, `lower_ir1_to_ir2`, `lower_ir2_to_ir3`.
 - `object_model`: enums `PropertyKey`, `WellKnownSymbol`, `JsValue`, `PropertyDescriptor`, `ObjectError`, `ManagedObject`; structs `OrderedStringMap`, `OrderedStringMapIter`, `OrderedStringMapIntoIter`, `ExactOrderedStringMap`, `ExactOrderedStringMapIter`, `ExactOrderedStringMapIntoIter`, `SymbolId`, `OrderedProperties`, `OrderedPropertiesIter`, `ObjectHandle`, `OrdinaryObject`, `ProxyObject`, `ObjectHeap`, `SymbolRegistry`, `ProxyInvariantChecker`, `Reflect`, `ReflectApplyRequest`, `ReflectConstructRequest`.
@@ -287,6 +287,22 @@ new decoders must continue to accept all historical payloads. Because this
 checkpoint adds no IR operation or serialized IR shape,
 `IrSchemaVersion::CURRENT` remains `0.1.0`; later IR-shape work must version
 that schema independently while the package line is still unreleased.
+
+### Exact quoted-string schema checkpoint (`bd-vltnh`, core-first)
+
+The core-first `bd-vltnh` landing is that independently versioned IR-shape
+change. `frankenengine-core` advances `IrSchemaVersion::CURRENT` to `0.2.0`
+and its canonical AST schema to `franken-engine.parser-ast.schema.v3` while
+widening quoted AST literals, IR1 string literals, and the IR3 constant pool
+to `JsString`. Well-formed strings retain their historical leaf wire and
+canonical representation; strings containing lone UTF-16 surrogates use the
+tagged `$wtf16` unit representation. New core readers therefore remain able to
+read old plain-string JSON artifacts. Artifact consumers must validate the IR
+header and reject unsupported schema versions before decoding; an old
+plain-string reader also cannot decode a tagged exact value. The duplicated
+`frankenengine-engine` seam remains on its prior schema until the mirror
+landing; this checkpoint alone does not close `bd-vltnh` or authorize a
+release.
 
 The descriptor object model already exposes `object_model::SymbolId`,
 `object_model::PropertyKey::{String, Symbol}`, and `JsValue::Symbol`; the

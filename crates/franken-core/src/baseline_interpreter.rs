@@ -2161,6 +2161,30 @@ pub struct InterpreterCore {
 }
 
 impl InterpreterCore {
+    fn module_specifier_string(value: &JsString) -> Result<&str, InterpreterError> {
+        value.as_str().ok_or_else(|| InterpreterError::TypeError {
+            expected: "well-formed UTF-8 module specifier".to_string(),
+            got: "ECMAScript string containing a lone surrogate".to_string(),
+        })
+    }
+
+    fn metadata_pool_string(
+        module: &Ir3Module,
+        pool_index: u32,
+        missing_fallback: String,
+    ) -> Result<String, InterpreterError> {
+        let Some(value) = module.constant_pool.get(pool_index as usize) else {
+            return Ok(missing_fallback);
+        };
+        value
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "well-formed UTF-8 metadata string".to_string(),
+                got: "ECMAScript string containing a lone surrogate".to_string(),
+            })
+    }
+
     /// Create a new interpreter core with the given configuration.
     pub fn new(config: InterpreterConfig, trace_id: impl Into<String>) -> Self {
         let max_regs = config.max_registers as usize;
@@ -3029,11 +3053,12 @@ impl InterpreterCore {
                         });
                     }
                 };
+                let specifier = Self::module_specifier_string(&specifier)?;
                 let previous_module_specifier = self.current_module_specifier.clone();
                 if !builtin.module_specifier.is_empty() {
                     self.current_module_specifier = Some(builtin.module_specifier.clone());
                 }
-                let result = self.require_module(module, &specifier);
+                let result = self.require_module(module, specifier);
                 self.current_module_specifier = previous_module_specifier;
                 result
             }
@@ -4548,7 +4573,7 @@ impl InterpreterCore {
                             pool_size: module.constant_pool.len() as u32,
                         })?
                         .clone();
-                    self.write_reg(dst, Value::str(s))?;
+                    self.write_reg(dst, Value::Str(s))?;
                     self.ip += 1;
                 }
                 Ir3Instruction::LoadBool { dst, value } => {
@@ -5265,7 +5290,8 @@ impl InterpreterCore {
                                 });
                             }
                         };
-                        self.require_module(module, &specifier)?
+                        let specifier = Self::module_specifier_string(&specifier)?;
+                        self.require_module(module, specifier)?
                     } else if capability.0.starts_with("number:") {
                         self.dispatch_number_hostcall(&capability.0, args)?
                     } else if capability.0.starts_with("console:") {
@@ -5291,7 +5317,8 @@ impl InterpreterCore {
                             });
                         }
                     };
-                    let namespace = self.import_module(module, &specifier_str)?;
+                    let specifier_str = Self::module_specifier_string(&specifier_str)?;
+                    let namespace = self.import_module(module, specifier_str)?;
                     self.write_reg(dst, namespace)?;
                     self.ip += 1;
                 }
@@ -5299,11 +5326,11 @@ impl InterpreterCore {
                     name_pool_index,
                     src,
                 } => {
-                    let name = module
-                        .constant_pool
-                        .get(name_pool_index as usize)
-                        .cloned()
-                        .unwrap_or_else(|| format!("__export_{name_pool_index}"));
+                    let name = Self::metadata_pool_string(
+                        module,
+                        name_pool_index,
+                        format!("__export_{name_pool_index}"),
+                    )?;
                     let value = self.read_reg(src)?;
                     self.register_module_export(&name, value)?;
                     self.ip += 1;
@@ -6539,6 +6566,11 @@ impl InterpreterCore {
                     continue;
                 }
                 Ir3Instruction::PushCapture { name_pool_index } => {
+                    let _ = Self::metadata_pool_string(
+                        module,
+                        name_pool_index,
+                        format!("__capture_{name_pool_index}"),
+                    )?;
                     self.pending_captures.push(name_pool_index);
                     self.ip += 1;
                 }
@@ -6566,11 +6598,11 @@ impl InterpreterCore {
                     name_pool_index,
                     kind,
                 } => {
-                    let name = module
-                        .constant_pool
-                        .get(name_pool_index as usize)
-                        .cloned()
-                        .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
+                    let name = Self::metadata_pool_string(
+                        module,
+                        name_pool_index,
+                        format!("__binding_{name_pool_index}"),
+                    )?;
                     let binding_kind = BindingKind::from_u8(kind);
                     let replaced = self
                         .scope_chain
@@ -6592,11 +6624,11 @@ impl InterpreterCore {
                     dst,
                     name_pool_index,
                 } => {
-                    let name = module
-                        .constant_pool
-                        .get(name_pool_index as usize)
-                        .cloned()
-                        .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
+                    let name = Self::metadata_pool_string(
+                        module,
+                        name_pool_index,
+                        format!("__binding_{name_pool_index}"),
+                    )?;
                     let (val, label) = if let Some((_, binding)) = self.scope_chain.resolve(&name) {
                         if !binding.initialized {
                             return Err(InterpreterError::UninitializedBinding {
@@ -6623,11 +6655,11 @@ impl InterpreterCore {
                     src,
                     name_pool_index,
                 } => {
-                    let name = module
-                        .constant_pool
-                        .get(name_pool_index as usize)
-                        .cloned()
-                        .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
+                    let name = Self::metadata_pool_string(
+                        module,
+                        name_pool_index,
+                        format!("__binding_{name_pool_index}"),
+                    )?;
                     let val = self.read_reg(src)?;
                     let label = self.read_reg_label(src)?;
                     let mut previous = None;
@@ -6661,11 +6693,11 @@ impl InterpreterCore {
                     name_pool_index,
                     src,
                 } => {
-                    let name = module
-                        .constant_pool
-                        .get(name_pool_index as usize)
-                        .cloned()
-                        .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
+                    let name = Self::metadata_pool_string(
+                        module,
+                        name_pool_index,
+                        format!("__binding_{name_pool_index}"),
+                    )?;
                     let val = self.read_reg(src)?;
                     let label = self.read_reg_label(src)?;
                     let mut previous = None;
@@ -12479,7 +12511,7 @@ mod tests {
 
     fn test_module_with_pool(instructions: Vec<Ir3Instruction>, pool: Vec<String>) -> Ir3Module {
         let mut m = test_module(instructions);
-        m.constant_pool = pool;
+        m.constant_pool = pool.into_iter().map(Into::into).collect();
         m
     }
 
@@ -13267,6 +13299,69 @@ mod tests {
         );
         let result = quickjs_execute(&m).unwrap();
         assert_eq!(result.value, Value::str("hello"));
+    }
+
+    #[test]
+    fn load_str_preserves_lone_surrogate_constant_bd_vltnh() {
+        let exact = JsString::from_code_units(&[0xD800]);
+        let mut module = test_module(vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::Halt,
+        ]);
+        module.constant_pool.push(exact.clone());
+
+        let result = quickjs_execute(&module).unwrap();
+        assert_eq!(result.value, Value::Str(exact));
+    }
+
+    #[test]
+    fn metadata_pool_consumers_reject_lone_surrogate_entries_bd_vltnh() {
+        for instruction in [
+            Ir3Instruction::PushCapture { name_pool_index: 0 },
+            Ir3Instruction::DeclareBinding {
+                name_pool_index: 0,
+                kind: BindingKind::Let as u8,
+            },
+        ] {
+            let mut module = test_module(vec![instruction, Ir3Instruction::Halt]);
+            module
+                .constant_pool
+                .push(JsString::from_code_units(&[0xD800]));
+
+            let error = quickjs_execute(&module).unwrap_err();
+            assert!(matches!(error, InterpreterError::TypeError { .. }));
+        }
+    }
+
+    #[test]
+    fn module_specifier_strings_reject_lone_surrogates_bd_vltnh() {
+        let ordinary = JsString::from("./fixture.js");
+        assert_eq!(
+            InterpreterCore::module_specifier_string(&ordinary).unwrap(),
+            "./fixture.js"
+        );
+
+        let exact = JsString::from_code_units(&[0xD800]);
+        let error = InterpreterCore::module_specifier_string(&exact).unwrap_err();
+        assert!(matches!(error, InterpreterError::TypeError { .. }));
+
+        let mut module = test_module(vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::Halt,
+        ]);
+        module.constant_pool.push(exact);
+        let error = quickjs_execute(&module).unwrap_err();
+        assert!(matches!(error, InterpreterError::TypeError { .. }));
     }
 
     #[test]
@@ -20311,7 +20406,7 @@ mod tests {
                     rest_param_index: None,
                 }],
             );
-            module.constant_pool.push("boom".to_string());
+            module.constant_pool.push("boom".into());
 
             core.execute(&module)
                 .expect("async throw should reject its promise without aborting");

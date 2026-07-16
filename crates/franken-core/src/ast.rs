@@ -9,11 +9,12 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::deterministic_serde::{self, CanonicalValue};
+use crate::js_string::JsString;
 
 /// Versioned canonical AST contract binding schema + hash semantics.
 pub const CANONICAL_AST_CONTRACT_VERSION: &str = "franken-engine.parser-ast.contract.v1";
 /// Versioned schema identifier for canonical AST structure and key ordering.
-pub const CANONICAL_AST_SCHEMA_VERSION: &str = "franken-engine.parser-ast.schema.v2";
+pub const CANONICAL_AST_SCHEMA_VERSION: &str = "franken-engine.parser-ast.schema.v3";
 /// Hash algorithm used by `SyntaxTree::canonical_hash`.
 pub const CANONICAL_AST_HASH_ALGORITHM: &str = "sha256";
 /// Prefix used in canonical AST hash strings.
@@ -1544,7 +1545,7 @@ impl ArrowBody {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Expression {
     Identifier(String),
-    StringLiteral(String),
+    StringLiteral(JsString),
     NumericLiteral(i64),
     /// Floating-point literal stored as IEEE 754 bits (u64) for deterministic
     /// replay and Eq derivation. Use `f64::from_bits()` to recover the value.
@@ -1669,7 +1670,7 @@ impl Expression {
                     "kind".to_string(),
                     CanonicalValue::String("string".to_string()),
                 );
-                map.insert("value".to_string(), CanonicalValue::String(value.clone()));
+                map.insert("value".to_string(), value.canonical_value());
             }
             Self::NumericLiteral(value) => {
                 map.insert(
@@ -2015,7 +2016,17 @@ impl std::fmt::Display for Expression {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Identifier(value) => write!(f, "{value}"),
-            Self::StringLiteral(value) => write!(f, "\"{value}\""),
+            Self::StringLiteral(value) => {
+                if let Some(value) = value.as_str() {
+                    write!(f, "\"{value}\"")
+                } else {
+                    f.write_str("\"")?;
+                    for unit in value.encode_utf16() {
+                        write!(f, "\\u{unit:04X}")?;
+                    }
+                    f.write_str("\"")
+                }
+            }
             Self::NumericLiteral(value) => write!(f, "{value}"),
             Self::FloatLiteral(bits) => {
                 let value = f64::from_bits(*bits);
@@ -2083,8 +2094,17 @@ mod tests {
             "answer"
         );
         assert_eq!(
-            Expression::StringLiteral("hello".to_string()).to_string(),
+            Expression::StringLiteral(JsString::from("hello")).to_string(),
             "\"hello\""
+        );
+        assert_eq!(
+            Expression::StringLiteral(JsString::from_code_units(&[0x0061, 0xD800, 0x0062]))
+                .to_string(),
+            r#""\u0061\uD800\u0062""#
+        );
+        assert_ne!(
+            Expression::StringLiteral(JsString::from_code_units(&[0xD800])).to_string(),
+            Expression::StringLiteral(JsString::from_code_units(&[0xD801])).to_string()
         );
         assert_eq!(Expression::NumericLiteral(42).to_string(), "42");
         assert_eq!(Expression::BooleanLiteral(true).to_string(), "true");
@@ -2215,6 +2235,22 @@ mod tests {
     }
 
     #[test]
+    fn schema_v3_lone_surrogate_tree_pins_canonical_hash_bd_vltnh() {
+        let tree = SyntaxTree {
+            goal: ParseGoal::Script,
+            body: vec![make_expr_stmt(Expression::StringLiteral(
+                JsString::from_code_units(&[0xD800]),
+            ))],
+            span: make_span(),
+        };
+
+        assert_eq!(
+            tree.canonical_hash(),
+            "sha256:2d2912b4ee4142810f692d25a6f154e758dccf2aeb9926f5abebab7f5d63773a"
+        );
+    }
+
+    #[test]
     fn syntax_tree_canonical_hash_has_sha256_prefix() {
         let tree = SyntaxTree {
             goal: ParseGoal::Script,
@@ -2237,7 +2273,7 @@ mod tests {
         );
         assert_eq!(
             CANONICAL_AST_SCHEMA_VERSION,
-            "franken-engine.parser-ast.schema.v2"
+            "franken-engine.parser-ast.schema.v3"
         );
         assert_eq!(CANONICAL_AST_HASH_ALGORITHM, "sha256");
         assert_eq!(CANONICAL_AST_HASH_PREFIX, "sha256:");
@@ -2544,7 +2580,7 @@ mod tests {
 
     #[test]
     fn expression_string_literal_canonical_value() {
-        let expr = Expression::StringLiteral("hello".to_string());
+        let expr = Expression::StringLiteral(JsString::from("hello"));
         match expr.canonical_value() {
             CanonicalValue::Map(map) => {
                 assert_eq!(
@@ -2558,6 +2594,54 @@ mod tests {
             }
             _ => panic!("expected map"),
         }
+    }
+
+    #[test]
+    fn expression_string_literal_well_formed_bytes_remain_stable() {
+        let expr = Expression::StringLiteral(JsString::from("hello"));
+        let mut historical = BTreeMap::new();
+        historical.insert(
+            "kind".to_string(),
+            CanonicalValue::String("string".to_string()),
+        );
+        historical.insert(
+            "value".to_string(),
+            CanonicalValue::String("hello".to_string()),
+        );
+
+        assert_eq!(
+            deterministic_serde::encode_value(&expr.canonical_value()),
+            deterministic_serde::encode_value(&CanonicalValue::Map(historical))
+        );
+        assert_eq!(
+            serde_json::to_vec(&expr).expect("serialize ordinary string literal"),
+            br#"{"StringLiteral":"hello"}"#
+        );
+    }
+
+    #[test]
+    fn expression_string_literal_lone_surrogates_stay_distinct() {
+        let high_d800 = Expression::StringLiteral(JsString::from_code_units(&[0xD800]));
+        let high_d801 = Expression::StringLiteral(JsString::from_code_units(&[0xD801]));
+
+        let canonical_d800 = high_d800.canonical_value();
+        let canonical_d801 = high_d801.canonical_value();
+        assert_ne!(
+            deterministic_serde::encode_value(&canonical_d800),
+            deterministic_serde::encode_value(&canonical_d801)
+        );
+
+        let serde_d800 = serde_json::to_vec(&high_d800).expect("serialize D800 literal");
+        let serde_d801 = serde_json::to_vec(&high_d801).expect("serialize D801 literal");
+        assert_ne!(serde_d800, serde_d801);
+        assert_eq!(
+            serde_json::from_slice::<Expression>(&serde_d800).expect("deserialize D800 literal"),
+            high_d800
+        );
+        assert_eq!(
+            serde_json::from_slice::<Expression>(&serde_d801).expect("deserialize D801 literal"),
+            high_d801
+        );
     }
 
     #[test]
@@ -2696,7 +2780,7 @@ mod tests {
     fn expression_variants_round_trip_through_serde() {
         let expressions = vec![
             Expression::Identifier("x".to_string()),
-            Expression::StringLiteral("hello".to_string()),
+            Expression::StringLiteral(JsString::from("hello")),
             Expression::NumericLiteral(42),
             Expression::BooleanLiteral(true),
             Expression::NullLiteral,
@@ -2716,7 +2800,7 @@ mod tests {
     #[test]
     fn expression_equality_distinguishes_variants() {
         let id = Expression::Identifier("x".to_string());
-        let string = Expression::StringLiteral("x".to_string());
+        let string = Expression::StringLiteral(JsString::from("x"));
         let raw = Expression::Raw("x".to_string());
         assert_ne!(id, string);
         assert_ne!(id, raw);
@@ -2868,7 +2952,7 @@ mod tests {
     #[test]
     fn expression_await_serde_roundtrip_deep() {
         let expr = Expression::Await(Box::new(Expression::Await(Box::new(
-            Expression::StringLiteral("deep".to_string()),
+            Expression::StringLiteral(JsString::from("deep")),
         ))));
         let json = serde_json::to_string(&expr).unwrap();
         let restored: Expression = serde_json::from_str(&json).unwrap();
@@ -2982,7 +3066,7 @@ mod tests {
     #[test]
     fn export_declaration_serde_roundtrip() {
         let export = ExportDeclaration {
-            kind: ExportKind::Default(Expression::StringLiteral("value".to_string())),
+            kind: ExportKind::Default(Expression::StringLiteral(JsString::from("value"))),
             span: SourceSpan::new(0, 25, 1, 1, 1, 26),
         };
         let json = serde_json::to_string(&export).unwrap();
@@ -2994,7 +3078,7 @@ mod tests {
     fn all_expression_canonical_kinds_are_unique() {
         let expressions = vec![
             Expression::Identifier("a".to_string()),
-            Expression::StringLiteral("a".to_string()),
+            Expression::StringLiteral(JsString::from("a")),
             Expression::NumericLiteral(0),
             Expression::BooleanLiteral(true),
             Expression::NullLiteral,
@@ -3287,7 +3371,7 @@ mod tests {
             callee: Box::new(Expression::Identifier("fn".to_string())),
             arguments: vec![
                 Expression::NumericLiteral(1),
-                Expression::StringLiteral("a".to_string()),
+                Expression::StringLiteral(JsString::from("a")),
             ],
         };
         match expr.canonical_value() {
@@ -3447,7 +3531,7 @@ mod tests {
     #[test]
     fn object_property_canonical_value_includes_all_fields() {
         let prop = ObjectProperty {
-            key: Expression::StringLiteral("k".to_string()),
+            key: Expression::StringLiteral(JsString::from("k")),
             value: Expression::NumericLiteral(42),
             computed: true,
             shorthand: false,
@@ -3587,8 +3671,8 @@ mod tests {
             },
             Expression::Conditional {
                 test: Box::new(Expression::BooleanLiteral(true)),
-                consequent: Box::new(Expression::StringLiteral("a".to_string())),
-                alternate: Box::new(Expression::StringLiteral("b".to_string())),
+                consequent: Box::new(Expression::StringLiteral(JsString::from("a"))),
+                alternate: Box::new(Expression::StringLiteral(JsString::from("b"))),
             },
             Expression::Call {
                 callee: Box::new(Expression::Identifier("f".to_string())),
@@ -3852,7 +3936,7 @@ mod tests {
         let stmt = Statement::Throw(ThrowStatement {
             argument: Expression::New {
                 callee: Box::new(Expression::Identifier("Error".to_string())),
-                arguments: vec![Expression::StringLiteral("oops".to_string())],
+                arguments: vec![Expression::StringLiteral(JsString::from("oops"))],
             },
             span: make_span(),
         });
@@ -4478,7 +4562,7 @@ mod tests {
     }
 
     #[test]
-    fn for_in_pre_loop_initializer_pins_schema_v2_hash_bd_1tafi() {
+    fn for_in_pre_loop_initializer_pins_schema_v3_hash_bd_1tafi() {
         let tree = SyntaxTree {
             goal: ParseGoal::Script,
             body: vec![Statement::ForIn(ForInStatement {
@@ -4642,7 +4726,7 @@ mod tests {
     fn all_expression_canonical_kinds_complete() {
         let expressions: Vec<Expression> = vec![
             Expression::Identifier("a".to_string()),
-            Expression::StringLiteral("s".to_string()),
+            Expression::StringLiteral(JsString::from("s")),
             Expression::NumericLiteral(0),
             Expression::BooleanLiteral(true),
             Expression::NullLiteral,
@@ -4755,7 +4839,7 @@ mod tests {
                 span: make_span(),
             }),
             Statement::Throw(ThrowStatement {
-                argument: Expression::StringLiteral("err".to_string()),
+                argument: Expression::StringLiteral(JsString::from("err")),
                 span: make_span(),
             }),
             Statement::TryCatch(TryCatchStatement {
@@ -5029,7 +5113,7 @@ mod tests {
     #[test]
     fn object_property_serde_roundtrip() {
         let prop = ObjectProperty {
-            key: Expression::StringLiteral("name".to_string()),
+            key: Expression::StringLiteral(JsString::from("name")),
             value: Expression::NumericLiteral(42),
             computed: true,
             shorthand: false,
@@ -5070,7 +5154,7 @@ mod tests {
     fn arrow_body_block_serde_roundtrip() {
         let body = ArrowBody::Block(BlockStatement {
             body: vec![Statement::Return(ReturnStatement {
-                argument: Some(Expression::StringLiteral("ok".to_string())),
+                argument: Some(Expression::StringLiteral(JsString::from("ok"))),
                 span: make_span(),
             })],
             span: make_span(),
@@ -5083,7 +5167,7 @@ mod tests {
     #[test]
     fn switch_case_serde_roundtrip() {
         let case = SwitchCase {
-            test: Some(Expression::StringLiteral("a".to_string())),
+            test: Some(Expression::StringLiteral(JsString::from("a"))),
             consequent: vec![
                 make_expr_stmt(Expression::Identifier("doA".to_string())),
                 Statement::Break(BreakStatement {

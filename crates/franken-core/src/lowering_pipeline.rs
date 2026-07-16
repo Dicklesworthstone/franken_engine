@@ -23,6 +23,7 @@ use crate::ir_contract::{
     Ir3Instruction, Ir3Module, IrError, IrLevel, IteratorCloseReason, Reg, RegRange,
     ResolvedBinding, ScopeId, ScopeKind, ScopeNode, verify_ir1_source, verify_ir3_specialization,
 };
+use crate::js_string::JsString;
 use crate::parser::{
     PARSER_DIAGNOSTIC_HASH_ALGORITHM, PARSER_DIAGNOSTIC_HASH_PREFIX,
     PARSER_DIAGNOSTIC_TAXONOMY_VERSION, ParseDiagnosticCategory, ParseDiagnosticSeverity,
@@ -552,7 +553,7 @@ fn is_require_path_module_initializer(
     }
     matches!(
         arguments.as_slice(),
-        [Expression::StringLiteral(spec)] if is_path_module_specifier(spec)
+        [spec] if well_formed_string_literal(spec).is_some_and(is_path_module_specifier)
     )
 }
 
@@ -627,9 +628,9 @@ fn path_receiver_namespace_with<F: Fn(&Expression) -> bool>(
         computed: false,
     } = object
         && is_module_object(inner)
-        && let Expression::Identifier(ns) | Expression::StringLiteral(ns) = property.as_ref()
+        && let Some(ns) = well_formed_static_name(property)
     {
-        return match ns.as_str() {
+        return match ns {
             "posix" => Some(PathModuleNamespace::Posix),
             "win32" => Some(PathModuleNamespace::Win32),
             _ => None,
@@ -651,7 +652,7 @@ fn is_path_module_object(expr: &Expression, binding_lookup: &BTreeMap<String, Bi
                 if name == "require" && !binding_lookup.contains_key(name.as_str()))
                 && matches!(
                     arguments.as_slice(),
-                    [Expression::StringLiteral(spec)] if is_path_module_specifier(spec)
+                    [spec] if well_formed_string_literal(spec).is_some_and(is_path_module_specifier)
                 )
         }
         _ => false,
@@ -675,10 +676,7 @@ fn path_builtin_call_capability(
     };
     let namespace =
         path_receiver_namespace_with(object, &|expr| is_path_module_object(expr, binding_lookup))?;
-    let method = match property.as_ref() {
-        Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
-        _ => return None,
-    };
+    let method = well_formed_static_name(property)?;
     path_method_capability(namespace, method)
 }
 
@@ -693,10 +691,9 @@ fn path_member_constant(
 ) -> Option<&'static str> {
     let namespace =
         path_receiver_namespace_with(object, &|expr| is_path_module_object(expr, binding_lookup))?;
-    let prop = match (computed, property) {
-        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
-        (true, Expression::StringLiteral(name)) => name.as_str(),
-        _ => return None,
+    let prop = match computed {
+        false => well_formed_static_name(property)?,
+        true => well_formed_string_literal(property)?,
     };
     path_namespace_property_constant(namespace, prop)
 }
@@ -719,9 +716,8 @@ fn is_path_alias_method_callee(callee: &Expression, alias_names: &BTreeSet<Strin
     ) else {
         return false;
     };
-    matches!(property.as_ref(),
-        Expression::Identifier(m) | Expression::StringLiteral(m)
-            if path_method_capability(namespace, m).is_some())
+    well_formed_static_name(property)
+        .is_some_and(|method| path_method_capability(namespace, method).is_some())
 }
 
 /// bd-tu0c3: scan-time twin of [`path_member_constant`]: true when `expr` is a
@@ -741,9 +737,8 @@ fn is_path_alias_property_read(expr: &Expression, alias_names: &BTreeSet<String>
     ) else {
         return false;
     };
-    matches!(property.as_ref(),
-        Expression::Identifier(p) | Expression::StringLiteral(p)
-            if path_namespace_property_constant(namespace, p).is_some())
+    well_formed_static_name(property)
+        .is_some_and(|property| path_namespace_property_constant(namespace, property).is_some())
 }
 
 /// bd-tu0c3: recursively scan `expr` for a call whose callee satisfies
@@ -1043,7 +1038,7 @@ fn is_require_querystring_module_initializer(
     }
     matches!(
         arguments.as_slice(),
-        [Expression::StringLiteral(spec)] if is_querystring_module_specifier(spec)
+        [spec] if well_formed_string_literal(spec).is_some_and(is_querystring_module_specifier)
     )
 }
 
@@ -1077,7 +1072,8 @@ fn is_querystring_module_object(
                 if name == "require" && !binding_lookup.contains_key(name.as_str()))
                 && matches!(
                     arguments.as_slice(),
-                    [Expression::StringLiteral(spec)] if is_querystring_module_specifier(spec)
+                    [spec] if well_formed_string_literal(spec)
+                        .is_some_and(is_querystring_module_specifier)
                 )
         }
         _ => false,
@@ -1101,10 +1097,7 @@ fn querystring_builtin_call_capability(
     if !is_querystring_module_object(object, binding_lookup) {
         return None;
     }
-    let method = match property.as_ref() {
-        Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
-        _ => return None,
-    };
+    let method = well_formed_static_name(property)?;
     querystring_method_capability(method)
 }
 
@@ -1123,9 +1116,8 @@ fn is_querystring_alias_method_callee(callee: &Expression, alias_names: &BTreeSe
     if !matches!(object.as_ref(), Expression::Identifier(name) if alias_names.contains(name)) {
         return false;
     }
-    matches!(property.as_ref(),
-        Expression::Identifier(m) | Expression::StringLiteral(m)
-            if querystring_method_capability(m).is_some())
+    well_formed_static_name(property)
+        .is_some_and(|method| querystring_method_capability(method).is_some())
 }
 
 /// bd-qmy52: compute the set of identifier names that are BOTH bound via
@@ -1197,7 +1189,7 @@ fn is_require_os_module_initializer(
     }
     matches!(
         arguments.as_slice(),
-        [Expression::StringLiteral(spec)] if is_os_module_specifier(spec)
+        [spec] if well_formed_string_literal(spec).is_some_and(is_os_module_specifier)
     )
 }
 
@@ -1264,7 +1256,7 @@ fn is_os_module_object(expr: &Expression, binding_lookup: &BTreeMap<String, Bind
                 if name == "require" && !binding_lookup.contains_key(name.as_str()))
                 && matches!(
                     arguments.as_slice(),
-                    [Expression::StringLiteral(spec)] if is_os_module_specifier(spec)
+                    [spec] if well_formed_string_literal(spec).is_some_and(is_os_module_specifier)
                 )
         }
         _ => false,
@@ -1288,10 +1280,7 @@ fn os_builtin_call_capability(
     if !is_os_module_object(object, binding_lookup) {
         return None;
     }
-    let method = match property.as_ref() {
-        Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
-        _ => return None,
-    };
+    let method = well_formed_static_name(property)?;
     os_method_capability(method)
 }
 
@@ -1307,6 +1296,25 @@ const STATIC_BUILTIN_GLOBALS: [&str; 5] = ["Object", "Array", "String", "Math", 
 /// unshadowed reads are undefined, but a real outer lexical binding with the
 /// same name must still propagate into a nested function and shadow the seam.
 const DIRECT_CALL_INTRINSIC_GLOBALS: [&str; 1] = ["require"];
+
+/// Return a UTF-8-exact static name without ever projecting a lone UTF-16
+/// surrogate through U+FFFD. Identifiers are always well formed; quoted
+/// names participate only while their exact JS string has a lossless `str`
+/// view. Runtime string literal lowering does not use this helper.
+fn well_formed_static_name(expression: &Expression) -> Option<&str> {
+    match expression {
+        Expression::Identifier(name) => Some(name.as_str()),
+        Expression::StringLiteral(name) => name.as_str(),
+        _ => None,
+    }
+}
+
+fn well_formed_string_literal(expression: &Expression) -> Option<&str> {
+    match expression {
+        Expression::StringLiteral(value) => value.as_str(),
+        _ => None,
+    }
+}
 
 fn is_static_builtin_global(name: &str) -> bool {
     STATIC_BUILTIN_GLOBALS.contains(&name)
@@ -1334,10 +1342,9 @@ fn static_builtin_call_capability(
     if binding_lookup.contains_key(global.as_str()) {
         return None;
     }
-    let property_name = match (*computed, property.as_ref()) {
-        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
-        (true, Expression::StringLiteral(name)) => name.as_str(),
-        _ => return None,
+    let property_name = match *computed {
+        false => well_formed_static_name(property)?,
+        true => well_formed_string_literal(property)?,
     };
     match (global.as_str(), property_name) {
         ("Object", "keys") => Some("builtin:ObjectKeys"),
@@ -1371,10 +1378,9 @@ fn static_builtin_member_factory_capability(
     if binding_lookup.contains_key(global.as_str()) {
         return None;
     }
-    let property_name = match (computed, property) {
-        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
-        (true, Expression::StringLiteral(name)) => name.as_str(),
-        _ => return None,
+    let property_name = match computed {
+        false => well_formed_static_name(property)?,
+        true => well_formed_string_literal(property)?,
     };
     match (global.as_str(), property_name) {
         ("Array", "isArray") => Some("builtin:ArrayIsArrayFunction"),
@@ -1394,10 +1400,9 @@ fn os_member_read_lowering(
     if !is_os_module_object(object, binding_lookup) {
         return None;
     }
-    let prop = match (computed, property) {
-        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
-        (true, Expression::StringLiteral(name)) => name.as_str(),
-        _ => return None,
+    let prop = match computed {
+        false => well_formed_static_name(property)?,
+        true => well_formed_string_literal(property)?,
     };
     os_property_read_lowering(prop)
 }
@@ -1415,9 +1420,7 @@ fn is_os_alias_method_callee(callee: &Expression, alias_names: &BTreeSet<String>
     if !matches!(object.as_ref(), Expression::Identifier(name) if alias_names.contains(name)) {
         return false;
     }
-    matches!(property.as_ref(),
-        Expression::Identifier(m) | Expression::StringLiteral(m)
-            if os_method_capability(m).is_some())
+    well_formed_static_name(property).is_some_and(|method| os_method_capability(method).is_some())
 }
 
 /// bd-qmy52: scan-time twin of [`os_member_read_lowering`]: true when `expr`
@@ -1435,9 +1438,8 @@ fn is_os_alias_property_read(expr: &Expression, alias_names: &BTreeSet<String>) 
     if !matches!(object.as_ref(), Expression::Identifier(name) if alias_names.contains(name)) {
         return false;
     }
-    matches!(property.as_ref(),
-        Expression::Identifier(p) | Expression::StringLiteral(p)
-            if os_property_read_lowering(p).is_some())
+    well_formed_static_name(property)
+        .is_some_and(|property| os_property_read_lowering(property).is_some())
 }
 
 /// bd-qmy52: true when `expr` contains a recognized os usage on one of
@@ -2195,7 +2197,7 @@ fn restore_class_expression_self_binding(
 
 fn emit_reference_error_throw_message(ops: &mut Vec<Ir1Op>, message: String) {
     ops.push(Ir1Op::LoadLiteral {
-        value: Ir1Literal::String(message),
+        value: Ir1Literal::String(message.into()),
     });
     ops.push(Ir1Op::HostCall {
         capability: "builtin:ReferenceError".to_string(),
@@ -2819,20 +2821,7 @@ fn split_named_export_clause(clause: &str) -> Option<(&str, &str)> {
 }
 
 fn parse_quoted_export_source(input: &str) -> Option<String> {
-    if input.len() < 2 {
-        return None;
-    }
-    let bytes = input.as_bytes();
-    let first = bytes[0];
-    let last = bytes[bytes.len() - 1];
-    if (first == b'\'' && last == b'\'') || (first == b'"' && last == b'"') {
-        let inner = &input[1..input.len() - 1];
-        if inner.contains('\n') || inner.contains('\r') {
-            return None;
-        }
-        return Some(inner.to_string());
-    }
-    None
+    crate::parser::parse_quoted_string(input)
 }
 
 fn alloc_pattern_primary_binding(
@@ -2910,9 +2899,13 @@ fn resolve_assignment_pattern_primary_binding(
     Ok(first_target.unwrap_or(0))
 }
 
-fn object_pattern_static_key(prop: &ObjectPatternProperty, fallback_name: Option<&str>) -> String {
-    canonical_static_object_property_key(&prop.key)
-        .unwrap_or_else(|_| fallback_name.unwrap_or_default().to_string())
+fn object_pattern_static_key(
+    prop: &ObjectPatternProperty,
+    fallback_name: Option<&str>,
+) -> Result<String, LoweringPipelineError> {
+    reject_known_lone_surrogate_property_key(&prop.key, "core.object_pattern_lone_surrogate_key")?;
+    Ok(canonical_static_object_property_key(&prop.key)
+        .unwrap_or_else(|_| fallback_name.unwrap_or_default().to_string()))
 }
 
 /// Emit IR1 ops to destructure a value (already stored in `source_bid`) into
@@ -3040,7 +3033,7 @@ fn lower_destructuring_to_ir1_with_parameter_tdz(
                 }
 
                 let target_names = prop.value.binding_names();
-                let key_str = object_pattern_static_key(prop, target_names.first().copied());
+                let key_str = object_pattern_static_key(prop, target_names.first().copied())?;
                 rest_excluded_keys.push(key_str.clone());
 
                 let target_name = match target_names.first() {
@@ -4693,7 +4686,16 @@ fn lower_statement_to_ir1_with_flow(
             {
                 let method_name = match &method.key {
                     Expression::Identifier(name) => name.clone(),
-                    Expression::StringLiteral(s) => s.clone(),
+                    Expression::StringLiteral(s) => s
+                        .as_str()
+                        .map(str::to_string)
+                        .ok_or_else(|| unsupported_frontier_expression_error(
+                            "class_method_lone_surrogate_key",
+                            "FE-LOWER-UNSUPPORTED-STATIC-OBJECT-KEY-0001",
+                            "core.class_method_lone_surrogate_key",
+                            "class method keys containing lone surrogates require exact property-key support",
+                            None,
+                        ))?,
                     _ => "anonymous_method".to_string(),
                 };
 
@@ -6977,7 +6979,7 @@ pub fn lower_ir2_to_ir3(
                                 .push(Ir3Instruction::LoadFloat { dst, bits: *bits });
                         }
                         Ir1Literal::String(s) => {
-                            let pool_index = push_constant(&mut ir3.constant_pool, s);
+                            let pool_index = push_constant(&mut ir3.constant_pool, s.clone());
                             ir3.instructions
                                 .push(Ir3Instruction::LoadStr { dst, pool_index });
                         }
@@ -8597,7 +8599,16 @@ fn lower_class_expression_to_ir1(
     {
         let method_name = match &method.key {
             Expression::Identifier(name) => name.clone(),
-            Expression::StringLiteral(name) => name.clone(),
+            Expression::StringLiteral(name) => name
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| unsupported_frontier_expression_error(
+                    "class_method_lone_surrogate_key",
+                    "FE-LOWER-UNSUPPORTED-STATIC-OBJECT-KEY-0001",
+                    "core.class_method_lone_surrogate_key",
+                    "class method keys containing lone surrogates require exact property-key support",
+                    None,
+                ))?,
             _ => "anonymous_method".to_string(),
         };
         let mut method_body_ops = Vec::new();
@@ -8798,8 +8809,10 @@ fn lower_class_expression_to_ir1(
 }
 
 fn canonical_static_object_property_key(key: &Expression) -> Result<String, LoweringPipelineError> {
+    if let Some(name) = well_formed_static_name(key) {
+        return Ok(name.to_string());
+    }
     match key {
-        Expression::Identifier(name) | Expression::StringLiteral(name) => Ok(name.clone()),
         Expression::NumericLiteral(value) => Ok(value.to_string()),
         Expression::FloatLiteral(bits) => {
             let mut buffer = ryu_js::Buffer::new();
@@ -8813,6 +8826,22 @@ fn canonical_static_object_property_key(key: &Expression) -> Result<String, Lowe
             None,
         )),
     }
+}
+
+fn reject_known_lone_surrogate_property_key(
+    key: &Expression,
+    site_id: &str,
+) -> Result<(), LoweringPipelineError> {
+    if matches!(key, Expression::StringLiteral(value) if value.as_str().is_none()) {
+        return Err(unsupported_frontier_expression_error(
+            "lone_surrogate_property_key",
+            "FE-LOWER-UNSUPPORTED-STATIC-OBJECT-KEY-0001",
+            site_id,
+            "property keys containing lone surrogates require exact property-key support",
+            None,
+        ));
+    }
+    Ok(())
 }
 
 fn lower_expression_to_ir1(
@@ -8925,7 +8954,7 @@ fn lower_expression_to_ir1(
         }
         Expression::Raw(raw) => {
             ops.push(Ir1Op::LoadLiteral {
-                value: Ir1Literal::String(raw.clone()),
+                value: Ir1Literal::String(raw.clone().into()),
             });
             if raw.contains('(') {
                 ops.push(Ir1Op::Call { arg_count: 0 });
@@ -8950,10 +8979,10 @@ fn lower_expression_to_ir1(
             // Load pattern and flags as string literals, then create RegExp.
             // For now, emit a hostcall to regexp:create.
             ops.push(Ir1Op::LoadLiteral {
-                value: Ir1Literal::String(pattern.clone()),
+                value: Ir1Literal::String(pattern.clone().into()),
             });
             ops.push(Ir1Op::LoadLiteral {
-                value: Ir1Literal::String(flags.clone()),
+                value: Ir1Literal::String(flags.clone().into()),
             });
             ops.push(Ir1Op::HostCall {
                 capability: "regexp:create".to_string(),
@@ -10137,7 +10166,7 @@ fn lower_expression_to_ir1(
                 path_member_constant(object, property, *computed, binding_lookup)
             {
                 ops.push(Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String(constant.to_string()),
+                    value: Ir1Literal::String(constant.into()),
                 });
                 return Ok(());
             }
@@ -10154,7 +10183,7 @@ fn lower_expression_to_ir1(
                 match lowering {
                     OsMemberReadLowering::StringConstant(constant) => {
                         ops.push(Ir1Op::LoadLiteral {
-                            value: Ir1Literal::String(constant.to_string()),
+                            value: Ir1Literal::String(constant.into()),
                         });
                     }
                     OsMemberReadLowering::ConstantsHostcall => {
@@ -10476,6 +10505,10 @@ fn lower_expression_to_ir1(
                     } else {
                         // Normal property - emit key and value, then set
                         if prop.computed {
+                            reject_known_lone_surrogate_property_key(
+                                &prop.key,
+                                "core.object_literal_computed_lone_surrogate_key",
+                            )?;
                             lower_expression_to_ir1(
                                 &prop.key,
                                 ops,
@@ -10488,7 +10521,7 @@ fn lower_expression_to_ir1(
                         } else {
                             let key_str = canonical_static_object_property_key(&prop.key)?;
                             ops.push(Ir1Op::LoadLiteral {
-                                value: Ir1Literal::String(key_str),
+                                value: Ir1Literal::String(key_str.into()),
                             });
                         }
                         lower_expression_to_ir1(
@@ -10514,6 +10547,10 @@ fn lower_expression_to_ir1(
                 // No spreads - use original batch approach
                 for prop in properties {
                     if prop.computed {
+                        reject_known_lone_surrogate_property_key(
+                            &prop.key,
+                            "core.object_literal_computed_lone_surrogate_key",
+                        )?;
                         lower_expression_to_ir1(
                             &prop.key,
                             ops,
@@ -10526,7 +10563,7 @@ fn lower_expression_to_ir1(
                     } else {
                         let key_str = canonical_static_object_property_key(&prop.key)?;
                         ops.push(Ir1Op::LoadLiteral {
-                            value: Ir1Literal::String(key_str),
+                            value: Ir1Literal::String(key_str.into()),
                         });
                     }
                     lower_expression_to_ir1(
@@ -10823,7 +10860,7 @@ fn lower_expression_to_ir1(
             // Interleave quasis and expressions: quasi[0], expr[0], quasi[1], ..., quasi[N-1]
             for (i, quasi) in quasis.iter().enumerate() {
                 ops.push(Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String(quasi.clone()),
+                    value: Ir1Literal::String(quasi.clone().into()),
                 });
                 if i < expressions.len() {
                     lower_expression_to_ir1(
@@ -10874,6 +10911,10 @@ fn lower_member_property_key_to_ir1(
     label_counter: &mut u32,
 ) -> Result<Ir1PropertyKey, LoweringPipelineError> {
     if computed {
+        reject_known_lone_surrogate_property_key(
+            property,
+            "core.member_computed_lone_surrogate_key",
+        )?;
         lower_expression_to_ir1(
             property,
             ops,
@@ -10888,7 +10929,17 @@ fn lower_member_property_key_to_ir1(
 
     let key = match property {
         Expression::Identifier(name) => name.clone(),
-        Expression::StringLiteral(value) => value.clone(),
+        Expression::StringLiteral(value) => {
+            value.as_str().map(str::to_string).ok_or_else(|| {
+                unsupported_frontier_expression_error(
+                    "member_lone_surrogate_key",
+                    "FE-LOWER-UNSUPPORTED-STATIC-OBJECT-KEY-0001",
+                    "core.member_lone_surrogate_key",
+                    "member keys containing lone surrogates require exact property-key support",
+                    None,
+                )
+            })?
+        }
         Expression::NumericLiteral(value) => value.to_string(),
         _ => "unknown".to_string(),
     };
@@ -11171,11 +11222,11 @@ fn lower_literal_to_ir3(
     value: &Ir1Literal,
     dst: Reg,
     instructions: &mut Vec<Ir3Instruction>,
-    constant_pool: &mut Vec<String>,
+    constant_pool: &mut Vec<JsString>,
 ) {
     match value {
         Ir1Literal::String(text) => {
-            let pool_index = push_constant(constant_pool, text);
+            let pool_index = push_constant(constant_pool, text.clone());
             instructions.push(Ir3Instruction::LoadStr { dst, pool_index });
         }
         Ir1Literal::Integer(value) => {
@@ -11192,12 +11243,13 @@ fn lower_literal_to_ir3(
     }
 }
 
-fn push_constant(pool: &mut Vec<String>, value: &str) -> u32 {
-    if let Some(index) = pool.iter().position(|entry| entry == value) {
+fn push_constant(pool: &mut Vec<JsString>, value: impl Into<JsString>) -> u32 {
+    let value = value.into();
+    if let Some(index) = pool.iter().position(|entry| entry == &value) {
         return u32::try_from(index).unwrap_or(u32::MAX);
     }
 
-    pool.push(value.to_string());
+    pool.push(value);
     u32::try_from(pool.len() - 1).unwrap_or(u32::MAX)
 }
 
@@ -11717,7 +11769,7 @@ mod tests {
     fn dynamic_hostcall_paths_insert_runtime_ifc_guard() {
         let mut ir1 = Ir1Module::new(ContentHash::compute(b"flow-ir0"), "dynamic_flow.js");
         ir1.ops.push(Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("secret_token".to_string()),
+            value: Ir1Literal::String("secret_token".into()),
         });
         ir1.ops.push(Ir1Op::HostCall {
             capability: "hostcall.invoke".to_string(),
@@ -11789,7 +11841,7 @@ mod tests {
             param_names: Vec::new(),
             body_ops: vec![
                 Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String("secret_token".to_string()),
+                    value: Ir1Literal::String("secret_token".into()),
                 },
                 Ir1Op::HostCall {
                     capability: "hostcall.invoke".to_string(),
@@ -11864,7 +11916,7 @@ mod tests {
             param_names: Vec::new(),
             body_ops: vec![
                 Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String("secret_token".to_string()),
+                    value: Ir1Literal::String("secret_token".into()),
                 },
                 Ir1Op::HostCall {
                     capability: "declassify.audit".to_string(),
@@ -11961,7 +12013,7 @@ mod tests {
     fn statically_proven_hostcall_skips_runtime_ifc_guard() {
         let mut ir1 = Ir1Module::new(ContentHash::compute(b"flow-ir0"), "static_flow.js");
         ir1.ops.push(Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("hostcall<\"fs.read\">".to_string()),
+            value: Ir1Literal::String("hostcall<\"fs.read\">".into()),
         });
         ir1.ops.push(Ir1Op::Return);
 
@@ -11996,7 +12048,7 @@ mod tests {
     fn ir2_flow_proof_artifact_records_static_proof() {
         let mut ir1 = Ir1Module::new(ContentHash::compute(b"flow-ir0"), "static_flow.js");
         ir1.ops.push(Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("hostcall<\"fs.read\">".to_string()),
+            value: Ir1Literal::String("hostcall<\"fs.read\">".into()),
         });
         ir1.ops.push(Ir1Op::Return);
 
@@ -12024,7 +12076,7 @@ mod tests {
     fn ir2_flow_proof_artifact_records_dynamic_runtime_checkpoint() {
         let mut ir1 = Ir1Module::new(ContentHash::compute(b"flow-ir0"), "dynamic_flow.js");
         ir1.ops.push(Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("secret_token".to_string()),
+            value: Ir1Literal::String("secret_token".into()),
         });
         ir1.ops.push(Ir1Op::HostCall {
             capability: "hostcall.invoke".to_string(),
@@ -12581,7 +12633,7 @@ mod tests {
     #[test]
     fn classify_load_literal_string_hostcall() {
         let (effect, cap, _flow) = classify_ir1_op(&Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("hostcall<\"fs.read\">".to_string()),
+            value: Ir1Literal::String("hostcall<\"fs.read\">".into()),
         });
         assert_eq!(effect, EffectBoundary::HostcallEffect);
         assert!(cap.is_some());
@@ -12591,7 +12643,7 @@ mod tests {
     #[test]
     fn classify_load_literal_string_plain() {
         let (effect, cap, flow) = classify_ir1_op(&Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("hello".to_string()),
+            value: Ir1Literal::String("hello".into()),
         });
         assert_eq!(effect, EffectBoundary::Pure);
         assert!(cap.is_none());
@@ -12702,7 +12754,7 @@ mod tests {
         let mut instructions = Vec::new();
         let mut pool = Vec::new();
         lower_literal_to_ir3(
-            &Ir1Literal::String("hello".to_string()),
+            &Ir1Literal::String("hello".into()),
             0,
             &mut instructions,
             &mut pool,
@@ -12978,6 +13030,24 @@ mod tests {
             .iter()
             .any(|op| matches!(op, Ir1Op::ExportBinding { name, .. } if name == "bar"));
         assert!(has_export);
+    }
+
+    #[test]
+    fn lower_reexport_uses_cooked_module_source_bd_vltnh() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                r#"export { foo as bar } from ".\u002Fdep.js""#,
+                ParseGoal::Module,
+            )
+            .expect("escaped re-export source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "named_reexport_escape.mjs");
+        let result = lower_ir0_to_ir1(&ir0).expect("escaped re-export should lower");
+
+        assert!(
+            result.module.ops.iter().any(
+                |op| matches!(op, Ir1Op::ImportModule { specifier } if specifier == "./dep.js")
+            )
+        );
     }
 
     #[test]
@@ -13342,7 +13412,7 @@ mod tests {
         let tree = SyntaxTree {
             goal: ParseGoal::Script,
             body: vec![Statement::Expression(ExpressionStatement {
-                expression: Expression::StringLiteral("hello world".to_string()),
+                expression: Expression::StringLiteral("hello world".into()),
                 span: span(),
             })],
             span: span(),
@@ -13355,8 +13425,30 @@ mod tests {
             output
                 .ir3
                 .constant_pool
-                .contains(&"hello world".to_string())
+                .contains(&JsString::from("hello world"))
         );
+    }
+
+    #[test]
+    fn quoted_surrogate_literals_reach_runtime_as_exact_units_bd_vltnh() {
+        for (source, expected_units) in [
+            (r#""\uD800";"#, vec![0xD800]),
+            (r#""\uDC00";"#, vec![0xDC00]),
+            (r#""a\uD800b";"#, vec![0x0061, 0xD800, 0x0062]),
+            (r#""\uD83D\uDE00";"#, vec![0xD83D, 0xDE00]),
+        ] {
+            let expected = JsString::from_code_units(&expected_units);
+            let (ir1, ir3, value) = lower_and_execute_deferred_source_bd_6pvhn(source);
+
+            assert!(ir1.ops.iter().any(|op| matches!(
+                op,
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String(literal)
+                } if literal == &expected
+            )));
+            assert!(ir3.constant_pool.contains(&expected));
+            assert_eq!(value, Value::Str(expected), "source {source:?}");
+        }
     }
 
     // -- scope_binding_ids_are_unique --
@@ -13421,7 +13513,7 @@ mod tests {
         let labels = BTreeMap::new();
         let secret = infer_data_label_for_op(
             &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("my_secret_key".to_string()),
+                value: Ir1Literal::String("my_secret_key".into()),
             },
             &labels,
             Label::Public,
@@ -13430,7 +13522,7 @@ mod tests {
 
         let token = infer_data_label_for_op(
             &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("AUTH_TOKEN".to_string()),
+                value: Ir1Literal::String("AUTH_TOKEN".into()),
             },
             &labels,
             Label::Public,
@@ -13439,7 +13531,7 @@ mod tests {
 
         let api_key = infer_data_label_for_op(
             &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("my_api_key_here".to_string()),
+                value: Ir1Literal::String("my_api_key_here".into()),
             },
             &labels,
             Label::Public,
@@ -13448,7 +13540,7 @@ mod tests {
 
         let password = infer_data_label_for_op(
             &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("user_password".to_string()),
+                value: Ir1Literal::String("user_password".into()),
             },
             &labels,
             Label::Public,
@@ -13457,7 +13549,7 @@ mod tests {
 
         let credential = infer_data_label_for_op(
             &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("credential_store".to_string()),
+                value: Ir1Literal::String("credential_store".into()),
             },
             &labels,
             Label::Public,
@@ -13470,7 +13562,7 @@ mod tests {
         let labels = BTreeMap::new();
         let public = infer_data_label_for_op(
             &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("hello world".to_string()),
+                value: Ir1Literal::String("hello world".into()),
             },
             &labels,
             Label::Public,
@@ -14420,6 +14512,43 @@ mod tests {
                 diagnostic.site_id,
                 "core.object_literal_static_property_key"
             );
+        }
+    }
+
+    #[test]
+    fn statically_known_lone_surrogate_property_keys_fail_closed_bd_vltnh() {
+        let exact_key = || Expression::StringLiteral(JsString::from_code_units(&[0xD800]));
+        let cases = [
+            (
+                Expression::Member {
+                    object: Box::new(Expression::Identifier("object".into())),
+                    property: Box::new(exact_key()),
+                    computed: true,
+                },
+                "core.member_computed_lone_surrogate_key",
+            ),
+            (
+                Expression::ObjectLiteral(vec![ObjectProperty {
+                    key: exact_key(),
+                    value: Expression::NumericLiteral(1),
+                    computed: true,
+                    shorthand: false,
+                }]),
+                "core.object_literal_computed_lone_surrogate_key",
+            ),
+        ];
+
+        for (expression, expected_site) in cases {
+            let error = lower_ir0_to_ir1(&expr_ir0(expression))
+                .expect_err("exact property keys need an exact runtime key carrier");
+            let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
+                panic!("expected unsupported exact property-key diagnostic");
+            };
+            assert_eq!(
+                diagnostic.diagnostic_code,
+                "FE-LOWER-UNSUPPORTED-STATIC-OBJECT-KEY-0001"
+            );
+            assert_eq!(diagnostic.site_id, expected_site);
         }
     }
 
@@ -17633,7 +17762,7 @@ mod tests {
                 kind: VariableDeclarationKind::Let,
                 declarations: vec![VariableDeclarator {
                     pattern: BindingPattern::Identifier("k".into()),
-                    initializer: Some(Expression::StringLiteral(String::new())),
+                    initializer: Some(Expression::StringLiteral(String::new().into())),
                     span: span(),
                 }],
                 span: span(),
@@ -18273,6 +18402,31 @@ mod tests {
             get_props.contains(&"b"),
             "should emit GetProperty for 'b', got: {get_props:?}"
         );
+    }
+
+    #[test]
+    fn object_destructuring_lone_surrogate_key_fails_closed_bd_vltnh() {
+        let ir0 = stmt_ir0(vec![Statement::VariableDeclaration(VariableDeclaration {
+            kind: VariableDeclarationKind::Const,
+            declarations: vec![VariableDeclarator {
+                pattern: BindingPattern::ObjectPattern(vec![ObjectPatternProperty {
+                    key: Expression::StringLiteral(JsString::from_code_units(&[0xD800])),
+                    value: BindingPattern::Identifier("value".into()),
+                    computed: false,
+                    shorthand: false,
+                }]),
+                initializer: Some(Expression::Identifier("source".into())),
+                span: span(),
+            }],
+            span: span(),
+        })]);
+
+        let error = lower_ir0_to_ir1(&ir0)
+            .expect_err("exact object-pattern keys need an exact runtime key carrier");
+        let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
+            panic!("expected unsupported exact object-pattern key diagnostic");
+        };
+        assert_eq!(diagnostic.site_id, "core.object_pattern_lone_surrogate_key");
     }
 
     #[test]

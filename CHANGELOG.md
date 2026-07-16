@@ -21,6 +21,19 @@ The first conventional release, `v0.1.0`, was published on 2026-05-29. Current `
 
 No `Value::Symbol`, typed executable property-key carrier, `symbol_state`, tag, or release is introduced here.
 
+### Core exact quoted-string schema slice (`bd-vltnh`)
+
+The subsequent core-first `bd-vltnh` slice advances
+`frankenengine-core::ir_contract::IrSchemaVersion::CURRENT` to `0.2.0` and
+the native core AST schema to `franken-engine.parser-ast.schema.v3`. Quoted
+source literals, IR1 string literals, and the core IR3 constant pool now carry
+exact `JsString` values, including lone UTF-16 surrogates. Historical
+well-formed strings keep their prior leaf serde/canonical shape; exact values
+use the tagged `$wtf16` unit representation. The duplicated
+`frankenengine-engine` parser/IR mirror remains at its prior schema until the
+second `bd-vltnh` landing, so this checkpoint is not the bead closeout and is
+not a release.
+
 ---
 
 ## Post-Snapshot Update — Claim-Evidence Integrity Capstone (2026-06-21)

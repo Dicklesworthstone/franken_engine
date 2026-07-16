@@ -2395,27 +2395,6 @@ fn validate_rest_parameter_abi(
     Ok(Some(rest_index as u32))
 }
 
-/// Object-rest lowering needs an own-property clone/exclusion operation that
-/// FrankenCore does not yet expose. Reject it in parameter prologues instead
-/// of silently reading a property literally named after the rest binding.
-fn contains_unsupported_parameter_object_rest(pattern: &BindingPattern) -> bool {
-    match pattern {
-        BindingPattern::Identifier(_) => false,
-        BindingPattern::ObjectPattern(properties) => properties.iter().any(|property| {
-            matches!(&property.value, BindingPattern::Rest(_))
-                || contains_unsupported_parameter_object_rest(&property.value)
-        }),
-        BindingPattern::ArrayPattern(elements) => elements
-            .iter()
-            .flatten()
-            .any(contains_unsupported_parameter_object_rest),
-        BindingPattern::Rest(inner) => contains_unsupported_parameter_object_rest(inner),
-        BindingPattern::AssignmentPattern { left, .. } => {
-            contains_unsupported_parameter_object_rest(left)
-        }
-    }
-}
-
 fn contains_unsupported_parameter_nested_rest(pattern: &BindingPattern) -> bool {
     match pattern {
         BindingPattern::Identifier(_) => false,
@@ -2435,20 +2414,33 @@ fn contains_unsupported_parameter_nested_rest(pattern: &BindingPattern) -> bool 
     }
 }
 
-fn contains_unsupported_parameter_computed_key(pattern: &BindingPattern) -> bool {
+fn contains_object_rest(pattern: &BindingPattern) -> bool {
     match pattern {
         BindingPattern::Identifier(_) => false,
         BindingPattern::ObjectPattern(properties) => properties.iter().any(|property| {
-            property.computed || contains_unsupported_parameter_computed_key(&property.value)
+            matches!(&property.value, BindingPattern::Rest(_))
+                || contains_object_rest(&property.value)
+        }),
+        BindingPattern::ArrayPattern(elements) => {
+            elements.iter().flatten().any(contains_object_rest)
+        }
+        BindingPattern::Rest(inner) => contains_object_rest(inner),
+        BindingPattern::AssignmentPattern { left, .. } => contains_object_rest(left),
+    }
+}
+
+fn contains_computed_destructuring_key(pattern: &BindingPattern) -> bool {
+    match pattern {
+        BindingPattern::Identifier(_) => false,
+        BindingPattern::ObjectPattern(properties) => properties.iter().any(|property| {
+            property.computed || contains_computed_destructuring_key(&property.value)
         }),
         BindingPattern::ArrayPattern(elements) => elements
             .iter()
             .flatten()
-            .any(contains_unsupported_parameter_computed_key),
-        BindingPattern::Rest(inner) => contains_unsupported_parameter_computed_key(inner),
-        BindingPattern::AssignmentPattern { left, .. } => {
-            contains_unsupported_parameter_computed_key(left)
-        }
+            .any(contains_computed_destructuring_key),
+        BindingPattern::Rest(inner) => contains_computed_destructuring_key(inner),
+        BindingPattern::AssignmentPattern { left, .. } => contains_computed_destructuring_key(left),
     }
 }
 
@@ -2518,18 +2510,6 @@ fn allocate_function_parameter_bindings<'a>(
     let rest_param_index = validate_rest_parameter_abi(params)?;
     if let Some(param) = params
         .iter()
-        .find(|param| contains_unsupported_parameter_object_rest(&param.pattern))
-    {
-        return Err(unsupported_frontier_expression_error(
-            "function_parameter_object_rest",
-            "FE-LOWER-UNSUPPORTED-OBJECT-REST-PARAM-0001",
-            "core.function_parameter_object_rest",
-            "object-rest parameter patterns require own-property exclusion lowering",
-            Some(param.span.clone()),
-        ));
-    }
-    if let Some(param) = params
-        .iter()
         .find(|param| contains_unsupported_parameter_nested_rest(&param.pattern))
     {
         return Err(unsupported_frontier_expression_error(
@@ -2542,7 +2522,7 @@ fn allocate_function_parameter_bindings<'a>(
     }
     if let Some(param) = params
         .iter()
-        .find(|param| contains_unsupported_parameter_computed_key(&param.pattern))
+        .find(|param| contains_computed_destructuring_key(&param.pattern))
     {
         return Err(unsupported_frontier_expression_error(
             "function_parameter_computed_destructuring_key",
@@ -2833,6 +2813,11 @@ fn resolve_assignment_pattern_primary_binding(
     Ok(first_target.unwrap_or(0))
 }
 
+fn object_pattern_static_key(prop: &ObjectPatternProperty, fallback_name: Option<&str>) -> String {
+    canonical_static_object_property_key(&prop.key)
+        .unwrap_or_else(|_| fallback_name.unwrap_or_default().to_string())
+}
+
 /// Emit IR1 ops to destructure a value (already stored in `source_bid`) into
 /// the individual bindings declared by `pattern`. For object patterns this
 /// emits `LoadBinding(source) + GetProperty(key) + StoreBinding(target) + Pop`
@@ -2849,13 +2834,88 @@ fn lower_destructuring_to_ir1(
     scope_id: ScopeId,
     label_counter: &mut u32,
 ) -> Result<(), LoweringPipelineError> {
+    if contains_object_rest(pattern) && contains_computed_destructuring_key(pattern) {
+        return Err(unsupported_frontier_expression_error(
+            "object_rest_computed_key",
+            "FE-LOWER-UNSUPPORTED-OBJECT-REST-COMPUTED-KEY-0001",
+            "core.object_rest_computed_key",
+            "object-rest exclusions require evaluate-once dynamic property-key lowering",
+            None,
+        ));
+    }
+
     match pattern {
         BindingPattern::Identifier(_) => {
             // Simple binding — already handled by StoreBinding above.
         }
         BindingPattern::ObjectPattern(props) => {
+            let mut rest_excluded_keys = Vec::new();
             for prop in props {
+                if let BindingPattern::Rest(inner) = &prop.value {
+                    let target_names = inner.binding_names();
+                    let target_name = match target_names.first() {
+                        Some(name) => *name,
+                        None => continue,
+                    };
+
+                    let rest_bid = if matches!(inner.as_ref(), BindingPattern::Identifier(_)) {
+                        match binding_lookup.get(target_name) {
+                            Some(binding_id) => *binding_id,
+                            None => continue,
+                        }
+                    } else {
+                        alloc_internal_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            "destructure_rest",
+                        )?
+                    };
+
+                    // Object rest is a shallow own-property clone followed by
+                    // exclusion of every statically named property that was
+                    // consumed earlier in the pattern.
+                    ops.push(Ir1Op::NewObject { count: 0 });
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: source_bid,
+                    });
+                    ops.push(Ir1Op::SpreadIntoObject);
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: rest_bid,
+                    });
+                    ops.push(Ir1Op::Pop);
+
+                    for key in &rest_excluded_keys {
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: rest_bid,
+                        });
+                        ops.push(Ir1Op::DeleteProperty {
+                            key: Ir1PropertyKey::Static(key.clone()),
+                        });
+                        ops.push(Ir1Op::Pop);
+                    }
+
+                    if !matches!(inner.as_ref(), BindingPattern::Identifier(_)) {
+                        lower_destructuring_to_ir1(
+                            inner,
+                            rest_bid,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            label_counter,
+                        )?;
+                    }
+
+                    continue;
+                }
+
                 let target_names = prop.value.binding_names();
+                let key_str = object_pattern_static_key(prop, target_names.first().copied());
+                rest_excluded_keys.push(key_str.clone());
+
                 let target_name = match target_names.first() {
                     Some(n) => *n,
                     None => continue,
@@ -2863,18 +2923,6 @@ fn lower_destructuring_to_ir1(
                 let target_bid = match binding_lookup.get(target_name) {
                     Some(bid) => *bid,
                     None => continue,
-                };
-
-                // Determine the property key string.
-                let key_str = if prop.shorthand {
-                    target_name.to_string()
-                } else {
-                    match &prop.key {
-                        Expression::Identifier(name) => name.clone(),
-                        Expression::StringLiteral(s) => s.clone(),
-                        Expression::NumericLiteral(n) => n.to_string(),
-                        _ => target_name.to_string(),
-                    }
                 };
 
                 // Load the source object, get the property, store to target binding.
@@ -15590,19 +15638,61 @@ mod tests {
     }
 
     #[test]
-    fn object_rest_parameter_patterns_fail_closed_bd_ur3tk_10() {
-        let error = lower_rest_source_to_ir3(
-            "function unsupported({ kept, ...rest }, ...tail) { return rest; }",
-        )
-        .expect_err("object rest must not silently lower as an ordinary property");
-        let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
-            panic!("expected fail-closed object-rest parameter diagnostic");
-        };
-        assert_eq!(
-            diagnostic.diagnostic_code,
-            "FE-LOWER-UNSUPPORTED-OBJECT-REST-PARAM-0001"
+    fn object_rest_parameter_patterns_execute_bd_vkf78() {
+        let (ir1, module, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function project({ kept, 1.5: decimal, ...rest }) {\
+                 rest.extra = rest.extra + 1;\
+                 return kept * 1000 + decimal * 100 + rest.extra * 10\
+                     + (rest.kept === undefined ? 1 : 0)\
+                     + (rest['1.5'] === undefined ? 2 : 0);\
+             }\
+             let source = { kept: 2, '1.5': 3, extra: 4 };\
+             let result = project(source);\
+             result * 100 + source.extra;",
         );
-        assert_eq!(diagnostic.site_id, "core.function_parameter_object_rest");
+
+        let body_ir1 = deferred_ir1_body_bd_6pvhn(&ir1, "project");
+        assert!(
+            body_ir1
+                .iter()
+                .any(|op| matches!(op, Ir1Op::SpreadIntoObject)),
+            "object-rest parameter prologue must clone the source object"
+        );
+        assert_eq!(
+            body_ir1
+                .iter()
+                .filter(|op| matches!(op, Ir1Op::DeleteProperty { .. }))
+                .count(),
+            2,
+            "the prologue must exclude both preceding static keys"
+        );
+        let body_ir3 = deferred_ir3_body_bd_6pvhn(&module, "project");
+        assert!(
+            body_ir3
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::SpreadIntoObject { .. }))
+        );
+        assert_eq!(
+            body_ir3
+                .iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::DeleteProperty { .. }))
+                .count(),
+            2
+        );
+        assert_eq!(value, Value::Int(235_304));
+    }
+
+    #[test]
+    fn nested_and_empty_exclusion_object_rest_parameters_execute_bd_vkf78() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function nested({ box: { kept, ...inside }, ...outside }) {\
+                 return kept * 100 + inside.left * 10 + outside.tail;\
+             }\
+             function copy({ ...rest }) { return rest.a + rest.b; }\
+             nested({ box: { kept: 5, left: 6 }, tail: 7 }) * 100\
+                 + copy({ a: 8, b: 9 });",
+        );
+        assert_eq!(value, Value::Int(56_717));
     }
 
     #[test]
@@ -15635,6 +15725,28 @@ mod tests {
             "FE-LOWER-UNSUPPORTED-COMPUTED-PARAM-KEY-0001"
         );
         assert_eq!(diagnostic.site_id, "core.function_parameter_computed_key");
+    }
+
+    #[test]
+    fn computed_object_rest_declarations_fail_closed_bd_vkf78() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                "let key = 'kept';\
+                 let { [key]: value, ...rest } = { kept: 3, left: 4 };",
+                ParseGoal::Script,
+            )
+            .expect("computed object-rest declaration should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_vkf78_computed.js");
+        let error = lower_ir0_to_ir1(&ir0)
+            .expect_err("computed object-rest exclusions must not use a guessed static key");
+        let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
+            panic!("expected fail-closed computed object-rest diagnostic");
+        };
+        assert_eq!(
+            diagnostic.diagnostic_code,
+            "FE-LOWER-UNSUPPORTED-OBJECT-REST-COMPUTED-KEY-0001"
+        );
+        assert_eq!(diagnostic.site_id, "core.object_rest_computed_key");
     }
 
     fn static_property_key_cases_bd_h4esx() -> Vec<(&'static str, &'static str)> {
@@ -17831,6 +17943,95 @@ mod tests {
         // Verify binding "x" exists.
         let scope = result.module.scopes.first().expect("root scope");
         assert!(scope.bindings.iter().any(|b| b.name == "x"));
+    }
+
+    #[test]
+    fn object_rest_declaration_clones_and_excludes_static_keys_bd_vkf78() {
+        let ir0 = stmt_ir0(vec![Statement::VariableDeclaration(VariableDeclaration {
+            kind: VariableDeclarationKind::Const,
+            declarations: vec![VariableDeclarator {
+                pattern: BindingPattern::ObjectPattern(vec![
+                    ObjectPatternProperty {
+                        key: Expression::Identifier("kept".into()),
+                        value: BindingPattern::Identifier("kept".into()),
+                        computed: false,
+                        shorthand: true,
+                    },
+                    ObjectPatternProperty {
+                        key: Expression::FloatLiteral(1.5_f64.to_bits()),
+                        value: BindingPattern::Identifier("decimal".into()),
+                        computed: false,
+                        shorthand: false,
+                    },
+                    ObjectPatternProperty {
+                        key: Expression::Identifier("rest".into()),
+                        value: BindingPattern::Rest(Box::new(BindingPattern::Identifier(
+                            "rest".into(),
+                        ))),
+                        computed: false,
+                        shorthand: false,
+                    },
+                ]),
+                initializer: Some(Expression::Identifier("source".into())),
+                span: span(),
+            }],
+            span: span(),
+        })]);
+
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("object-rest declaration should lower to IR1")
+            .module;
+        assert_eq!(
+            ir1.ops
+                .iter()
+                .filter(|op| matches!(op, Ir1Op::SpreadIntoObject))
+                .count(),
+            1
+        );
+        let deleted_keys = ir1
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Ir1Op::DeleteProperty {
+                    key: Ir1PropertyKey::Static(key),
+                } => Some(key.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(deleted_keys, vec!["kept", "1.5"]);
+        let scope = ir1.scopes.first().expect("root scope");
+        assert!(scope.bindings.iter().any(|binding| binding.name == "rest"));
+
+        let ir3 = lower_ir0_to_ir3(
+            &ir0,
+            &LoweringContext::new("trace-object-rest", "decision-object-rest", "policy"),
+        )
+        .expect("object-rest declaration should lower through IR3")
+        .ir3;
+        assert!(
+            ir3.instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::SpreadIntoObject { .. }))
+        );
+        assert_eq!(
+            ir3.instructions
+                .iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::DeleteProperty { .. }))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn object_rest_declaration_executes_without_aliasing_source_bd_vkf78() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let source = { kept: 1, left: 2 };\
+             let { kept, ...rest } = source;\
+             rest.left = 9;\
+             let { ...copy } = { a: 3, b: 4 };\
+             source.left * 100 + rest.left * 10 + copy.a + copy.b;",
+        );
+        assert_eq!(value, Value::Int(297));
     }
 
     #[test]

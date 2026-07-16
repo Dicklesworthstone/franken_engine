@@ -2,14 +2,16 @@
 //!
 //! The expected outputs below are pinned against Bun 1.3.14, the reference
 //! runtime used by franken_node's compatibility corpus in
-//! `crates/franken-node/tests/fixtures/compat_corpus/buffer/`.
+//! `crates/franken-node/tests/fixtures/compat_corpus/buffer/`. Focused tests
+//! outside that corpus follow Node when Bun differs (for example, Node skips
+//! encoding validation when `Buffer.prototype.toString` selects an empty range).
 //!
 //! Coverage accounting:
 //!
 //! | Corpus cases | Requirements | Status |
 //! | --- | ---: | --- |
 //! | 0001-0027 | 27 | asserted through the public router |
-//! | 0028-0030 | 3 | ignored follow-up: structured Node error objects/codes |
+//! | 0028-0030 | 3 | asserted through the public router |
 //!
 //! The extra tests pin lowering/runtime invariants that the corpus depends on
 //! but does not isolate: a local `Buffer` binding must shadow the global,
@@ -882,7 +884,6 @@ fn buffer_copy_infinite_bounds_coerce_to_zero_but_finite_negatives_throw() {
 }
 
 #[test]
-#[ignore = "bd-ys3f4 follow-up: structured Node Buffer error objects/codes"]
 fn structured_node_error_codes_0028_through_0030() {
     let cases = [
         CorpusCase {
@@ -928,4 +929,51 @@ fn structured_node_error_codes_0028_through_0030() {
     ];
 
     assert_cases(&cases);
+}
+
+#[test]
+fn structured_range_codes_distinguish_size_and_integer_read_failures() {
+    let source = r#"
+        for (const size of [-1, NaN, Infinity]) {
+          try { Buffer.alloc(size); }
+          catch (error) { console.log(error.code); }
+        }
+
+        const short = Buffer.alloc(2);
+        for (const offset of [0, 2, -1, Infinity]) {
+          try { short.readUInt32LE(offset); }
+          catch (error) { console.log(error.code); }
+        }
+
+        const exact = Buffer.alloc(4);
+        for (const offset of [1, -1, 0.1, Infinity]) {
+          try { exact.readUInt32LE(offset); }
+          catch (error) { console.log(error.code); }
+        }
+        console.log(exact.readUInt32LE(undefined));
+    "#;
+    assert_eq!(
+        eval_console(source),
+        "ERR_OUT_OF_RANGE\nERR_OUT_OF_RANGE\nERR_OUT_OF_RANGE\nERR_BUFFER_OUT_OF_BOUNDS\nERR_BUFFER_OUT_OF_BOUNDS\nERR_BUFFER_OUT_OF_BOUNDS\nERR_BUFFER_OUT_OF_BOUNDS\nERR_OUT_OF_RANGE\nERR_OUT_OF_RANGE\nERR_OUT_OF_RANGE\nERR_OUT_OF_RANGE\n0"
+    );
+}
+
+#[test]
+fn buffer_to_string_codes_unknown_encodings_but_skips_empty_ranges() {
+    let source = r#"
+        for (const encoding of ['bogus', 123, null, {}]) {
+          try { Buffer.from('a').toString(encoding); }
+          catch (error) {
+            console.log(error instanceof TypeError);
+            console.log(error.code);
+          }
+        }
+        console.log('[' + Buffer.alloc(0).toString('bogus') + ']');
+        console.log('[' + Buffer.from('a').toString('bogus', 1, 1) + ']');
+        console.log('[' + Buffer.from('a').toString('bogus', 9, 10) + ']');
+    "#;
+    assert_eq!(
+        eval_console(source),
+        "true\nERR_UNKNOWN_ENCODING\ntrue\nERR_UNKNOWN_ENCODING\ntrue\nERR_UNKNOWN_ENCODING\ntrue\nERR_UNKNOWN_ENCODING\n[]\n[]\n[]"
+    );
 }

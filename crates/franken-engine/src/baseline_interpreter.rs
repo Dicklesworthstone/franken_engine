@@ -28566,6 +28566,39 @@ impl InterpreterCore {
         }
     }
 
+    /// Build and arm a catchable Node-style Buffer error carrying an own
+    /// `code` property. Buffer's public API distinguishes several validation
+    /// failures by code even when they share the same JavaScript error class.
+    fn throw_buffer_node_error(
+        &mut self,
+        name: &str,
+        code: &str,
+        message: String,
+    ) -> InterpreterError {
+        let thrown = match self.construct_buffer_node_error(name, code, message) {
+            Ok(value) => value,
+            Err(err) => return err,
+        };
+        self.pending_exception = Some(thrown.clone());
+        self.pending_exception_label = Label::Public;
+        InterpreterError::UncaughtException {
+            value: Self::uncaught_exception_description(&thrown),
+        }
+    }
+
+    fn construct_buffer_node_error(
+        &mut self,
+        name: &str,
+        code: &str,
+        message: String,
+    ) -> Result<Value, InterpreterError> {
+        let prototype = self.ensure_builtin_prototype(name)?;
+        let error_id = self.alloc_object_with_prototype(Some(prototype))?;
+        self.initialize_error_like_object(error_id, name, message)?;
+        self.set_object_property(error_id, "code".to_string(), Value::str(code))?;
+        Ok(Value::Object(error_id))
+    }
+
     fn check_buffer_temporary_bytes(&self, bytes: usize) -> Result<(), InterpreterError> {
         let bytes = u64::try_from(bytes).map_err(|_| InterpreterError::RangeError {
             message: "Buffer temporary allocation exceeds memory accounting range".to_string(),
@@ -28881,7 +28914,17 @@ impl InterpreterCore {
     }
 
     fn buffer_alloc(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
-        let length = self.required_buffer_size_arg(args)?;
+        let length = match self.required_buffer_size_arg(args) {
+            Ok(length) => length,
+            Err(InterpreterError::RangeError { message }) => {
+                return Err(self.throw_buffer_node_error(
+                    "RangeError",
+                    "ERR_OUT_OF_RANGE",
+                    message,
+                ));
+            }
+            Err(err) => return Err(err),
+        };
         let fill = self.builtin_arg(args, 1)?;
         let pattern = if length == 0 {
             None
@@ -29058,13 +29101,33 @@ impl InterpreterCore {
         ))
     }
 
-    fn buffer_to_string(&self, receiver: Value, args: RegRange) -> Result<Value, InterpreterError> {
+    fn buffer_to_string(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
         let (_, view) = self.buffer_receiver_view(receiver, "toString")?;
-        let encoding = self.buffer_encoding(self.builtin_arg(args, 0)?, "utf8")?;
         let start = self.buffer_clamped_bound_arg(args, 1, view.length, 0)?;
         let end = self.buffer_clamped_bound_arg(args, 2, view.length, view.length)?;
+        if start >= end {
+            return Ok(Value::str(""));
+        }
+        let encoding = match self.builtin_arg(args, 0)? {
+            None | Some(Value::Undefined) => "utf8".to_string(),
+            Some(value) => self.value_to_string(&value).to_ascii_lowercase(),
+        };
         let bytes = self.typed_array_view_bytes(&view)?;
-        let text = self.encode_buffer_bytes(&bytes[start..end.max(start)], &encoding)?;
+        let text = match self.encode_buffer_bytes(&bytes[start..end], &encoding) {
+            Ok(text) => text,
+            Err(InterpreterError::TypeError { .. }) => {
+                return Err(self.throw_buffer_node_error(
+                    "TypeError",
+                    "ERR_UNKNOWN_ENCODING",
+                    format!("Unknown encoding: {encoding}"),
+                ));
+            }
+            Err(err) => return Err(err),
+        };
         Ok(Value::str(text))
     }
 
@@ -29269,8 +29332,62 @@ impl InterpreterCore {
         args: RegRange,
         offset: u32,
     ) -> Result<usize, InterpreterError> {
-        let value = self.builtin_arg(args, offset)?.unwrap_or(Value::Int(0));
+        let value = match self.builtin_arg(args, offset)? {
+            None | Some(Value::Undefined) => Value::Int(0),
+            Some(value) => value,
+        };
         self.typed_array_index_from_value(TypedArrayKind::Uint8, "offset", &value)
+    }
+
+    fn buffer_read_integer_offset(
+        &mut self,
+        args: RegRange,
+        view: &TypedArrayView,
+        width: usize,
+    ) -> Result<usize, InterpreterError> {
+        let value = match self.builtin_arg(args, 0)? {
+            None | Some(Value::Undefined) => Value::Int(0),
+            Some(value) => value,
+        };
+        let number = match &value {
+            Value::Int(value) => *value as f64,
+            Value::Float(value) => value.inner(),
+            other => {
+                return Err(self.throw_buffer_node_error(
+                    "TypeError",
+                    "ERR_INVALID_ARG_TYPE",
+                    format!(
+                        "The \"offset\" argument must be of type number. Received type {}",
+                        other.type_name()
+                    ),
+                ));
+            }
+        };
+        if number.is_nan() || (number.is_finite() && number.fract() != 0.0) {
+            return Err(self.throw_buffer_node_error(
+                "RangeError",
+                "ERR_OUT_OF_RANGE",
+                format!("The value of \"offset\" is out of range. Received {number}"),
+            ));
+        }
+        if view.byte_length < width {
+            return Err(self.throw_buffer_node_error(
+                "RangeError",
+                "ERR_BUFFER_OUT_OF_BOUNDS",
+                "Attempt to access memory outside buffer bounds".to_string(),
+            ));
+        }
+        let maximum = view.byte_length - width;
+        if !number.is_finite() || number < 0.0 || number > maximum as f64 {
+            return Err(self.throw_buffer_node_error(
+                "RangeError",
+                "ERR_OUT_OF_RANGE",
+                format!(
+                    "The value of \"offset\" is out of range. It must be >= 0 and <= {maximum}. Received {number}"
+                ),
+            ));
+        }
+        Ok(number as usize)
     }
 
     fn buffer_integer_range(
@@ -29310,15 +29427,16 @@ impl InterpreterCore {
     }
 
     fn buffer_read_integer(
-        &self,
+        &mut self,
         receiver: Value,
         args: RegRange,
         kind: BufferIntegerKind,
         little_endian: bool,
     ) -> Result<Value, InterpreterError> {
         let (_, view) = self.buffer_receiver_view(receiver, "read integer")?;
-        let offset = self.buffer_integer_offset(args, 0)?;
-        let range = self.buffer_integer_range(&view, offset, kind.byte_width())?;
+        let width = kind.byte_width();
+        let offset = self.buffer_read_integer_offset(args, &view, width)?;
+        let range = self.buffer_integer_range(&view, offset, width)?;
         self.with_array_buffer_bytes(view.buffer, |bytes| {
             let slot = bytes
                 .get(range)

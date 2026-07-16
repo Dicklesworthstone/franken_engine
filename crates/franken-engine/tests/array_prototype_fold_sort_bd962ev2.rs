@@ -58,6 +58,19 @@ fn reduce_right_folds_from_the_end() {
 }
 
 #[test]
+fn reduce_and_reduce_right_accept_first_class_builtin_callbacks() {
+    // Array.isArray observes the accumulator (callback argument 0), so these
+    // cases also pin the callback argument order with an explicit initial value.
+    assert_eq!(eval_value("[1].reduce(Array.isArray, []);"), "true");
+    assert_eq!(eval_value("[1].reduceRight(Array.isArray, {});"), "false");
+
+    // Without an initial value, reduce seeds from the left and reduceRight
+    // seeds from the right before invoking the builtin callback.
+    assert_eq!(eval_value("[[1], 2].reduce(Array.isArray);"), "true");
+    assert_eq!(eval_value("[2, [1]].reduceRight(Array.isArray);"), "true");
+}
+
+#[test]
 fn sort_default_is_lexicographic() {
     assert_eq!(eval_value("let a = [3, 1, 2]; a.sort(); a[0];"), "1");
     assert_eq!(eval_value("let a = [3, 1, 2]; a.sort(); a[2];"), "3");

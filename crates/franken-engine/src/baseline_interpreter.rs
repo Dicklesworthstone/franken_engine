@@ -30806,6 +30806,11 @@ impl InterpreterCore {
             expected: "module-backed reducer callback".to_string(),
             got: "Array.prototype.reduce called without module context".to_string(),
         })?;
+        let element_index =
+            i64::try_from(element_index).map_err(|_| InterpreterError::TypeError {
+                expected: "array reducer callback index within i64".to_string(),
+                got: element_index.to_string(),
+            })?;
         let function_index = match callback {
             Value::Function(index) => *index,
             Value::Closure(closure_id) => {
@@ -30816,6 +30821,19 @@ impl InterpreterCore {
                         got: format!("closure#{closure_id} not found"),
                     })?
                     .function_index
+            }
+            Value::BuiltinFunction(_) => {
+                return self.invoke_inline_method_call(
+                    Some(module),
+                    callback.clone(),
+                    Value::Undefined,
+                    vec![
+                        accumulator,
+                        current_value,
+                        Value::Int(element_index),
+                        Value::Object(array_id),
+                    ],
+                );
             }
             other => {
                 return Err(InterpreterError::TypeError {
@@ -30834,7 +30852,7 @@ impl InterpreterCore {
         let mut local_registers = vec![Value::Undefined; register_count];
         Self::write_local_register(&mut local_registers, 0, accumulator)?;
         Self::write_local_register(&mut local_registers, 1, current_value)?;
-        Self::write_local_register(&mut local_registers, 2, Value::Int(element_index as i64))?;
+        Self::write_local_register(&mut local_registers, 2, Value::Int(element_index))?;
         Self::write_local_register(&mut local_registers, 3, Value::Object(array_id))?;
 
         let mut instruction_pointer = function.entry as usize;

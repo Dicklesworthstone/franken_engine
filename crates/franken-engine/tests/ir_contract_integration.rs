@@ -29,6 +29,7 @@ use frankenengine_engine::ir_contract::{
     SpecializationLinkage, WitnessEvent, WitnessEventKind, error_code, verify_ir0_hash,
     verify_ir1_source, verify_ir3_specialization, verify_ir4_linkage,
 };
+use frankenengine_engine::js_string::JsString;
 
 // ============================================================================
 // Helpers
@@ -119,7 +120,7 @@ fn make_ir3(source_hash: ContentHash) -> Ir3Module {
     });
     ir3.instructions.push(Ir3Instruction::Return { value: 2 });
     ir3.instructions.push(Ir3Instruction::Halt);
-    ir3.constant_pool.push("hello".to_string());
+    ir3.constant_pool.push("hello".into());
     ir3.function_table.push(Ir3FunctionDesc {
         entry: 0,
         arity: 0,
@@ -181,13 +182,13 @@ fn build_full_pipeline() -> (Ir0Module, Ir1Module, Ir2Module, Ir3Module, Ir4Modu
 fn schema_version_current_values() {
     let v = IrSchemaVersion::CURRENT;
     assert_eq!(v.major, 0);
-    assert_eq!(v.minor, 1);
+    assert_eq!(v.minor, 2);
     assert_eq!(v.patch, 0);
 }
 
 #[test]
 fn schema_version_display() {
-    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.1.0");
+    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.2.0");
     let custom = IrSchemaVersion {
         major: 2,
         minor: 3,
@@ -474,7 +475,7 @@ fn scope_node_serde_roundtrip() {
 #[test]
 fn ir1_literal_all_variants_canonical_and_serde() {
     let literals = vec![
-        Ir1Literal::String("hello world".to_string()),
+        Ir1Literal::String("hello world".into()),
         Ir1Literal::Integer(i64::MAX),
         Ir1Literal::Integer(i64::MIN),
         Ir1Literal::Integer(0),
@@ -503,7 +504,7 @@ fn ir1_literal_all_variants_canonical_and_serde() {
 fn ir1_op_all_variants_canonical() {
     let ops = vec![
         Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("test".to_string()),
+            value: Ir1Literal::String("test".into()),
         },
         Ir1Op::LoadLiteral {
             value: Ir1Literal::Integer(99),
@@ -542,7 +543,7 @@ fn ir1_op_all_variants_canonical() {
 fn ir1_op_serde_roundtrip_all_variants() {
     let ops = vec![
         Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("x".to_string()),
+            value: Ir1Literal::String("x".into()),
         },
         Ir1Op::LoadBinding { binding_id: 42 },
         Ir1Op::StoreBinding { binding_id: 7 },
@@ -1487,7 +1488,7 @@ fn ir_error_construction() {
 fn ir_error_display_format() {
     let err = IrError::new(
         IrErrorCode::SchemaVersionMismatch,
-        "expected 0.1.0",
+        "expected 0.2.0",
         IrLevel::Ir1,
     );
     let display = err.to_string();
@@ -1496,7 +1497,7 @@ fn ir_error_display_format() {
         display.contains("IR_SCHEMA_VERSION_MISMATCH"),
         "display={display}"
     );
-    assert!(display.contains("expected 0.1.0"), "display={display}");
+    assert!(display.contains("expected 0.2.0"), "display={display}");
 }
 
 #[test]
@@ -2225,12 +2226,36 @@ fn ir3_large_constant_pool() {
     let src = ContentHash::compute(b"src");
     let mut ir3 = Ir3Module::new(src, "large-pool.js");
     for i in 0..100 {
-        ir3.constant_pool.push(format!("string_{i}"));
+        ir3.constant_pool.push(format!("string_{i}").into());
     }
     let json = serde_json::to_string(&ir3).unwrap();
     let restored: Ir3Module = serde_json::from_str(&json).unwrap();
     assert_eq!(ir3, restored);
     assert_eq!(ir3.content_hash(), restored.content_hash());
+}
+
+#[test]
+fn ir3_exact_constant_pool_roundtrips_and_distinguishes_units_bd_vltnh() {
+    let source_hash = ContentHash::compute(b"bd-vltnh-integration");
+    let mut high_d800 = Ir3Module::new(source_hash, "exact.js");
+    high_d800
+        .constant_pool
+        .push(JsString::from_code_units(&[0xD800]));
+    let mut high_d801 = Ir3Module::new(source_hash, "exact.js");
+    high_d801
+        .constant_pool
+        .push(JsString::from_code_units(&[0xD801]));
+
+    let json = serde_json::to_vec(&high_d800).expect("serialize exact IR3 pool");
+    assert!(
+        json.windows(br#"{"$wtf16":[55296]}"#.len())
+            .any(|window| window == br#"{"$wtf16":[55296]}"#)
+    );
+    assert_eq!(
+        serde_json::from_slice::<Ir3Module>(&json).expect("deserialize exact IR3 pool"),
+        high_d800
+    );
+    assert_ne!(high_d800.content_hash(), high_d801.content_hash());
 }
 
 #[test]
@@ -2554,7 +2579,7 @@ fn ir3_property_access_instructions() {
         dst: 3,
     });
     ir3.instructions.push(Ir3Instruction::Halt);
-    ir3.constant_pool.push("prop".to_string());
+    ir3.constant_pool.push("prop".into());
 
     let json = serde_json::to_string(&ir3).unwrap();
     let restored: Ir3Module = serde_json::from_str(&json).unwrap();

@@ -112,7 +112,7 @@ fn make_ir3(ir2_hash: ContentHash) -> Ir3Module {
         dst: 3,
     });
     ir3.instructions.push(Ir3Instruction::Return { value: 3 });
-    ir3.constant_pool.push("hello".to_string());
+    ir3.constant_pool.push("hello".into());
     ir3.function_table.push(Ir3FunctionDesc {
         entry: 0,
         arity: 0,
@@ -749,7 +749,7 @@ fn scope_kind_serde_round_trip() {
 fn ir_schema_version_current_is_stable() {
     let v = IrSchemaVersion::CURRENT;
     assert_eq!(v.major, 0);
-    assert_eq!(v.minor, 1);
+    assert_eq!(v.minor, 2);
 }
 
 #[test]
@@ -1275,7 +1275,7 @@ fn enrichment_ir1_all_ops_serde_roundtrip() {
             value: Ir1Literal::Integer(99),
         },
         Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("hello".to_string()),
+            value: Ir1Literal::String("hello".into()),
         },
         Ir1Op::LoadLiteral {
             value: Ir1Literal::Boolean(true),
@@ -1480,10 +1480,10 @@ fn enrichment_ir3_hash_changes_with_instruction_order() {
 fn enrichment_ir3_hash_changes_with_constant_pool() {
     let h = ContentHash::compute(b"ir2");
     let mut m1 = Ir3Module::new(h, "test.js");
-    m1.constant_pool.push("alpha".to_string());
+    m1.constant_pool.push("alpha".into());
 
     let mut m2 = Ir3Module::new(h, "test.js");
-    m2.constant_pool.push("beta".to_string());
+    m2.constant_pool.push("beta".into());
 
     assert_ne!(m1.content_hash(), m2.content_hash());
 }
@@ -1767,7 +1767,7 @@ fn enrichment_ir_contract_event_serde_roundtrip_error() {
 #[test]
 fn enrichment_ir1_literal_all_variants_serde() {
     let literals = [
-        Ir1Literal::String("test".to_string()),
+        Ir1Literal::String("test".into()),
         Ir1Literal::Integer(42),
         Ir1Literal::Integer(-1),
         Ir1Literal::Integer(0),

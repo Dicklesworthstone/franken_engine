@@ -16840,8 +16840,8 @@ impl InterpreterCore {
         let constant_pool = module.constant_pool.iter().fold(
             u64::try_from(module.constant_pool.capacity())
                 .unwrap_or(u64::MAX)
-                .saturating_mul(std::mem::size_of::<String>() as u64),
-            |total, value| total.saturating_add(Self::estimate_string_bytes(value)),
+                .saturating_mul(std::mem::size_of::<JsString>() as u64),
+            |total, value| total.saturating_add(Self::estimate_js_string_bytes(value)),
         );
         let function_table = module.function_table.iter().fold(
             u64::try_from(module.function_table.capacity())
@@ -68518,6 +68518,21 @@ mod tests {
             err,
             InterpreterError::MemoryBudgetExceeded { max_bytes: 1, .. }
         ));
+    }
+
+    #[test]
+    fn retained_module_program_bytes_counts_exact_string_pool_backing_bd_vltnh() {
+        let empty = test_module(Vec::new());
+        let mut exact = test_module(Vec::new());
+        exact.constant_pool = vec![JsString::from_code_units(&[0xD800])];
+
+        let empty_bytes = InterpreterCore::retained_module_program_bytes(&empty, "test");
+        let exact_bytes = InterpreterCore::retained_module_program_bytes(&exact, "test");
+        let expected_delta = (std::mem::size_of::<JsString>() as u64).saturating_add(
+            InterpreterCore::estimate_js_string_bytes(&exact.constant_pool[0]),
+        );
+
+        assert_eq!(exact_bytes.saturating_sub(empty_bytes), expected_delta);
     }
 
     #[test]

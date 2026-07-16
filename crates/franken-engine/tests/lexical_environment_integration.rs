@@ -217,7 +217,7 @@ fn binding_names_preserved_through_lowering() {
             var_decl(
                 VariableDeclarationKind::Let,
                 "alpha",
-                Some(Expression::StringLiteral("hello".to_string())),
+                Some(Expression::StringLiteral("hello".to_string().into())),
             ),
             var_decl(
                 VariableDeclarationKind::Const,
@@ -725,7 +725,7 @@ fn ir3_execution_of_mixed_declarations() {
             var_decl(
                 VariableDeclarationKind::Let,
                 "l",
-                Some(Expression::StringLiteral("hello".to_string())),
+                Some(Expression::StringLiteral("hello".to_string().into())),
             ),
             var_decl(
                 VariableDeclarationKind::Const,
@@ -857,7 +857,7 @@ fn lowering_pipeline_determinism_for_binding_resolution() {
             var_decl(
                 VariableDeclarationKind::Const,
                 "b",
-                Some(Expression::StringLiteral("test".to_string())),
+                Some(Expression::StringLiteral("test".to_string().into())),
             ),
         ],
     );

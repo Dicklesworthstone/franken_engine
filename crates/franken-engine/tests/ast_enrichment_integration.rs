@@ -31,7 +31,7 @@ fn num(n: i64) -> Expression {
 }
 
 fn str_lit(s: &str) -> Expression {
-    Expression::StringLiteral(s.to_string())
+    Expression::StringLiteral(s.into())
 }
 
 fn expr_stmt(e: Expression) -> Statement {
@@ -1005,7 +1005,7 @@ fn enrichment_constants_are_stable() {
     );
     assert_eq!(
         CANONICAL_AST_SCHEMA_VERSION,
-        "franken-engine.parser-ast.schema.v1"
+        "franken-engine.parser-ast.schema.v2"
     );
     assert_eq!(CANONICAL_AST_HASH_ALGORITHM, "sha256");
     assert_eq!(CANONICAL_AST_HASH_PREFIX, "sha256:");
@@ -1583,7 +1583,7 @@ fn enrichment_all_expression_canonical_kinds_unique() {
     use frankenengine_engine::deterministic_serde::CanonicalValue;
     let exprs: Vec<Expression> = vec![
         Expression::Identifier("a".to_string()),
-        Expression::StringLiteral("b".to_string()),
+        Expression::StringLiteral("b".into()),
         Expression::NumericLiteral(0),
         Expression::BooleanLiteral(true),
         Expression::NullLiteral,

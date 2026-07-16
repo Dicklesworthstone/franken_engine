@@ -507,7 +507,9 @@ fn ir3_execution_of_numeric_literal() {
 fn ir3_execution_of_string_literal() {
     let tree = make_tree(
         ParseGoal::Script,
-        vec![expr_stmt(Expression::StringLiteral("hello".to_string()))],
+        vec![expr_stmt(Expression::StringLiteral(
+            "hello".to_string().into(),
+        ))],
     );
     let ir0 = Ir0Module::from_syntax_tree(tree, "str.js");
     let ctx = LoweringContext::new("trace-str", "decision-str", "policy-str");
@@ -594,7 +596,7 @@ fn ir3_execution_of_logical_compound_member_assignment_preserves_result_semantic
             body.push(var_decl(
                 VariableDeclarationKind::Const,
                 "key",
-                Some(Expression::StringLiteral("x".to_string())),
+                Some(Expression::StringLiteral("x".to_string().into())),
             ));
         }
         body.push(var_decl(
@@ -683,7 +685,7 @@ fn ir3_execution_is_deterministic() {
             var_decl(
                 VariableDeclarationKind::Let,
                 "b",
-                Some(Expression::StringLiteral("test".to_string())),
+                Some(Expression::StringLiteral("test".to_string().into())),
             ),
         ],
     );
@@ -870,7 +872,7 @@ fn mixed_literal_types_execute_successfully() {
             var_decl(
                 VariableDeclarationKind::Let,
                 "s",
-                Some(Expression::StringLiteral("hi".to_string())),
+                Some(Expression::StringLiteral("hi".to_string().into())),
             ),
             var_decl(
                 VariableDeclarationKind::Let,

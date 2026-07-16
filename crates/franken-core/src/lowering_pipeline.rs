@@ -7382,7 +7382,7 @@ pub fn lower_ir2_to_ir3(
                     ir3.instructions.push(Ir3Instruction::NewArray { dst });
                     for (i, val_reg) in elems.into_iter().enumerate() {
                         let key_reg = alloc_register(&mut fn_reg);
-                        let pool_index = push_constant(&mut ir3.constant_pool, &i.to_string());
+                        let pool_index = push_constant(&mut ir3.constant_pool, i.to_string());
                         ir3.instructions.push(Ir3Instruction::LoadStr {
                             dst: key_reg,
                             pool_index,

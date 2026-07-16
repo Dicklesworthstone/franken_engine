@@ -62,7 +62,7 @@ fn math_round_edge_cases_integration() {
 #[test]
 fn console_info_dispatch_integration() {
     let module = Ir3Module {
-        constant_pool: vec!["Info level message".to_string()],
+        constant_pool: vec!["Info level message".into()],
         ..test_module(vec![
             Ir3Instruction::LoadStr {
                 dst: 0,
@@ -92,9 +92,9 @@ fn console_info_dispatch_integration() {
 fn console_info_vs_other_levels_integration() {
     let module = Ir3Module {
         constant_pool: vec![
-            "Log message".to_string(),
-            "Info message".to_string(),
-            "Warn message".to_string(),
+            "Log message".into(),
+            "Info message".into(),
+            "Warn message".into(),
         ],
         ..test_module(vec![
             Ir3Instruction::LoadStr {

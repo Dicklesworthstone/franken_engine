@@ -38,7 +38,7 @@ fn execute(
 fn error_property_module(source_label: &str, message: &str, property: &str) -> Ir3Module {
     let error_tag = CapabilityTag("builtin:Error".to_string());
     let mut module = Ir3Module::new(ContentHash::compute(source_label.as_bytes()), source_label);
-    module.constant_pool = vec![message.to_string(), property.to_string()];
+    module.constant_pool = vec![message.into(), property.into()];
     module.instructions = vec![
         Ir3Instruction::LoadStr {
             dst: 0,
@@ -67,7 +67,7 @@ fn error_property_module(source_label: &str, message: &str, property: &str) -> I
 fn integer_error_message_module(source_label: &str) -> Ir3Module {
     let error_tag = CapabilityTag("builtin:Error".to_string());
     let mut module = Ir3Module::new(ContentHash::compute(source_label.as_bytes()), source_label);
-    module.constant_pool = vec!["message".to_string()];
+    module.constant_pool = vec!["message".into()];
     module.instructions = vec![
         Ir3Instruction::LoadInt { dst: 0, value: 42 },
         Ir3Instruction::HostCall {
@@ -93,7 +93,7 @@ fn integer_error_message_module(source_label: &str) -> Ir3Module {
 fn nested_error_stack_module(source_label: &str) -> Ir3Module {
     let error_tag = CapabilityTag("builtin:Error".to_string());
     let mut module = Ir3Module::new(ContentHash::compute(source_label.as_bytes()), source_label);
-    module.constant_pool = vec!["nested failure".to_string(), "stack".to_string()];
+    module.constant_pool = vec!["nested failure".into(), "stack".into()];
     module.instructions = vec![
         Ir3Instruction::CreateClosure {
             dst: 0,

@@ -607,7 +607,10 @@ fn multi_const_all_initialized_succeeds() {
             VariableDeclarationKind::Const,
             &[
                 ("x", Some(Expression::NumericLiteral(1))),
-                ("y", Some(Expression::StringLiteral("two".to_string()))),
+                (
+                    "y",
+                    Some(Expression::StringLiteral("two".to_string().into())),
+                ),
             ],
         )],
         "multi_const.js",
@@ -666,7 +669,7 @@ fn full_pipeline_script_with_all_literal_types() {
             var_decl(
                 VariableDeclarationKind::Let,
                 "s",
-                Some(Expression::StringLiteral("hi".to_string())),
+                Some(Expression::StringLiteral("hi".to_string().into())),
             ),
             var_decl(
                 VariableDeclarationKind::Let,
@@ -693,7 +696,7 @@ fn full_pipeline_script_with_all_literal_types() {
     let ir0 = Ir0Module::from_syntax_tree(tree, "all_literals.js");
     let ctx = LoweringContext::new("trace-al", "decision-al", "policy-al");
     let output = lower_ir0_to_ir3(&ir0, &ctx).expect("all-literal pipeline should succeed");
-    assert!(output.ir3.constant_pool.contains(&"hi".to_string()));
+    assert!(output.ir3.constant_pool.iter().any(|value| value == "hi"));
 }
 
 // =========================================================================
@@ -845,7 +848,7 @@ fn default_export_with_string_literal() {
     let result = lower(
         ParseGoal::Module,
         vec![export_default(Expression::StringLiteral(
-            "exported".to_string(),
+            "exported".to_string().into(),
         ))],
         "default_str_export.mjs",
     );

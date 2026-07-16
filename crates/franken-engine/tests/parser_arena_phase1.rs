@@ -634,7 +634,7 @@ fn arena_export_default_roundtrip() {
     let tree = SyntaxTree {
         goal: ParseGoal::Module,
         body: vec![Statement::Export(ExportDeclaration {
-            kind: ExportKind::Default(Expression::StringLiteral("hello".to_string())),
+            kind: ExportKind::Default(Expression::StringLiteral("hello".to_string().into())),
             span: span(0, 22, 1, 1),
         })],
         span: span(0, 22, 1, 1),

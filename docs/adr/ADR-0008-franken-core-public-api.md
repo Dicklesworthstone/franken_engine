@@ -288,7 +288,7 @@ checkpoint adds no IR operation or serialized IR shape,
 `IrSchemaVersion::CURRENT` remains `0.1.0`; later IR-shape work must version
 that schema independently while the package line is still unreleased.
 
-### Exact quoted-string schema checkpoint (`bd-vltnh`, core-first)
+### Exact quoted-string schema checkpoint (`bd-vltnh`)
 
 The core-first `bd-vltnh` landing is that independently versioned IR-shape
 change. `frankenengine-core` advances `IrSchemaVersion::CURRENT` to `0.2.0`
@@ -299,10 +299,15 @@ canonical representation; strings containing lone UTF-16 surrogates use the
 tagged `$wtf16` unit representation. New core readers therefore remain able to
 read old plain-string JSON artifacts. Artifact consumers must validate the IR
 header and reject unsupported schema versions before decoding; an old
-plain-string reader also cannot decode a tagged exact value. The duplicated
-`frankenengine-engine` seam remains on its prior schema until the mirror
-landing; this checkpoint alone does not close `bd-vltnh` or authorize a
-release.
+plain-string reader also cannot decode a tagged exact value.
+
+The second landing applies the same carrier to the `frankenengine-engine`
+mirror, advancing its canonical AST schema to
+`franken-engine.parser-ast.schema.v2` and its `IrSchemaVersion::CURRENT` to
+`0.2.0`. The engine parser arena, AST/IR serde and canonical values, IR3
+constant pool, and baseline string loads now preserve the same exact code
+units. UTF-8-only module-specifier metadata remains separately tracked by
+`bd-lfq44`; the schema change creates no tag or release.
 
 The descriptor object model already exposes `object_model::SymbolId`,
 `object_model::PropertyKey::{String, Symbol}`, and `JsValue::Symbol`; the

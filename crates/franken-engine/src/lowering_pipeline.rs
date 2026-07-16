@@ -10,8 +10,8 @@ use crate::lowering_arena::LoweringArena;
 
 /// Optimized constant pool with O(log n) deduplication instead of O(n) linear search.
 struct ConstantPool {
-    pool: Vec<String>,
-    index: BTreeMap<String, u32>,
+    pool: Vec<JsString>,
+    index: BTreeMap<JsString, u32>,
 }
 
 impl ConstantPool {
@@ -22,18 +22,19 @@ impl ConstantPool {
         }
     }
 
-    fn push(&mut self, value: &str) -> u32 {
-        if let Some(&existing_index) = self.index.get(value) {
+    fn push(&mut self, value: impl Into<JsString>) -> u32 {
+        let value = value.into();
+        if let Some(&existing_index) = self.index.get(&value) {
             return existing_index;
         }
 
         let new_index = u32::try_from(self.pool.len()).unwrap_or(u32::MAX);
-        self.pool.push(value.to_string());
-        self.index.insert(value.to_string(), new_index);
+        self.pool.push(value.clone());
+        self.index.insert(value, new_index);
         new_index
     }
 
-    fn into_vec(self) -> Vec<String> {
+    fn into_vec(self) -> Vec<JsString> {
         self.pool
     }
 }
@@ -59,6 +60,7 @@ use crate::ir_contract::{
     RegRange, ResolvedBinding, ScopeId, ScopeKind, ScopeNode, verify_ir1_source,
     verify_ir3_specialization,
 };
+use crate::js_string::JsString;
 use crate::parser::{
     PARSER_DIAGNOSTIC_HASH_ALGORITHM, PARSER_DIAGNOSTIC_HASH_PREFIX,
     PARSER_DIAGNOSTIC_TAXONOMY_VERSION, ParseDiagnosticCategory, ParseDiagnosticSeverity,
@@ -2333,20 +2335,7 @@ fn split_named_export_clause(clause: &str) -> Option<(&str, &str)> {
 }
 
 fn parse_quoted_export_source(input: &str) -> Option<String> {
-    if input.len() < 2 {
-        return None;
-    }
-    let bytes = input.as_bytes();
-    let first = bytes[0];
-    let last = bytes[bytes.len() - 1];
-    if (first == b'\'' && last == b'\'') || (first == b'"' && last == b'"') {
-        let inner = &input[1..input.len() - 1];
-        if inner.contains('\n') || inner.contains('\r') {
-            return None;
-        }
-        return Some(inner.to_string());
-    }
-    None
+    crate::parser::parse_quoted_string(input)
 }
 
 fn alloc_pattern_primary_binding(
@@ -2377,14 +2366,16 @@ fn alloc_pattern_primary_binding(
     Ok(first_user_binding.unwrap_or(0))
 }
 
-fn object_pattern_static_key(prop: &ObjectPatternProperty, fallback_name: Option<&str>) -> String {
-    match &prop.key {
-        Expression::Identifier(name) => name.clone(),
-        Expression::StringLiteral(value) => value.clone(),
-        Expression::NumericLiteral(value) => value.to_string(),
-        Expression::BigIntLiteral(value) => value.clone(),
-        _ => fallback_name.unwrap_or_default().to_string(),
-    }
+fn object_pattern_static_key(
+    prop: &ObjectPatternProperty,
+    fallback_name: Option<&str>,
+) -> Result<String, LoweringPipelineError> {
+    reject_known_lone_surrogate_property_key(
+        &prop.key,
+        "engine.object_pattern_lone_surrogate_key",
+    )?;
+    Ok(canonical_static_object_property_key(&prop.key)
+        .unwrap_or_else(|_| fallback_name.unwrap_or_default().to_string()))
 }
 
 /// Emit IR1 ops to destructure a value (already stored in `source_bid`) into
@@ -2471,7 +2462,7 @@ fn lower_destructuring_to_ir1(
                 }
 
                 let target_names = prop.value.binding_names();
-                let excluded_key = object_pattern_static_key(prop, target_names.first().copied());
+                let excluded_key = object_pattern_static_key(prop, target_names.first().copied())?;
                 rest_excluded_keys.push(excluded_key.clone());
 
                 let target_name = match target_names.first() {
@@ -4812,11 +4803,12 @@ fn lower_statement_to_ir1_with_flow(
                 .iter()
                 .filter(|m| m.kind != MethodKind::Constructor)
             {
-                let method_name = match &method.key {
-                    Expression::Identifier(name) => name.clone(),
-                    Expression::StringLiteral(s) => s.clone(),
-                    _ => "anonymous_method".to_string(),
-                };
+                reject_known_lone_surrogate_property_key(
+                    &method.key,
+                    "engine.class_method_lone_surrogate_key",
+                )?;
+                let method_name = canonical_static_object_property_key(&method.key)
+                    .unwrap_or_else(|_| "anonymous_method".to_string());
 
                 // Lower method body with its own scope.
                 // Identifier params keep their name; non-identifier patterns
@@ -6775,7 +6767,7 @@ pub fn lower_ir2_to_ir3(
                 if part_regs.is_empty() {
                     // Empty template literal => empty string.
                     lower_literal_to_ir3_optimized(
-                        &Ir1Literal::String(String::new()),
+                        &Ir1Literal::String(String::new().into()),
                         dst,
                         &mut ir3.instructions,
                         &mut constant_pool,
@@ -7145,7 +7137,7 @@ pub fn lower_ir2_to_ir3(
                                 .push(Ir3Instruction::LoadFloat { dst, bits: *bits });
                         }
                         Ir1Literal::String(s) => {
-                            let pool_index = push_constant_optimized(&mut constant_pool, s);
+                            let pool_index = push_constant_optimized(&mut constant_pool, s.clone());
                             ir3.instructions
                                 .push(Ir3Instruction::LoadStr { dst, pool_index });
                         }
@@ -7551,8 +7543,7 @@ pub fn lower_ir2_to_ir3(
                     ir3.instructions.push(Ir3Instruction::NewArray { dst });
                     for (i, val_reg) in elems.into_iter().enumerate() {
                         let key_reg = alloc_register(&mut fn_reg);
-                        let pool_index =
-                            push_constant_optimized(&mut constant_pool, &i.to_string());
+                        let pool_index = push_constant_optimized(&mut constant_pool, i.to_string());
                         ir3.instructions.push(Ir3Instruction::LoadStr {
                             dst: key_reg,
                             pool_index,
@@ -7668,7 +7659,8 @@ pub fn lower_ir2_to_ir3(
                     if !temp_free_vars.is_empty() {
                         ir3.instructions.push(Ir3Instruction::PushScope);
                         for name in &temp_free_vars {
-                            let pool_idx = push_constant_optimized(&mut constant_pool, name);
+                            let pool_idx =
+                                push_constant_optimized(&mut constant_pool, name.as_str());
                             ir3.instructions.push(Ir3Instruction::DeclareBinding {
                                 name_pool_index: pool_idx,
                                 kind: 0,
@@ -7756,7 +7748,8 @@ pub fn lower_ir2_to_ir3(
                     if !temp_free_vars.is_empty() {
                         ir3.instructions.push(Ir3Instruction::PushScope);
                         for name in &temp_free_vars {
-                            let pool_idx = push_constant_optimized(&mut constant_pool, name);
+                            let pool_idx =
+                                push_constant_optimized(&mut constant_pool, name.as_str());
                             ir3.instructions.push(Ir3Instruction::DeclareBinding {
                                 name_pool_index: pool_idx,
                                 kind: 0,
@@ -7895,7 +7888,7 @@ pub fn lower_ir2_to_ir3(
                     let dst = alloc_register(&mut fn_reg);
                     if part_regs.is_empty() {
                         lower_literal_to_ir3_optimized(
-                            &Ir1Literal::String(String::new()),
+                            &Ir1Literal::String(String::new().into()),
                             dst,
                             &mut ir3.instructions,
                             &mut constant_pool,
@@ -8934,7 +8927,7 @@ const PREDECLARED_RUNTIME_GLOBALS: &[&str] = &[
 
 fn emit_reference_error_throw(ops: &mut Vec<Ir1Op>, name: &str) {
     ops.push(Ir1Op::LoadLiteral {
-        value: Ir1Literal::String(format!("{name} is not defined")),
+        value: Ir1Literal::String(format!("{name} is not defined").into()),
     });
     ops.push(Ir1Op::HostCall {
         capability: "builtin:ReferenceError".to_string(),
@@ -9206,9 +9199,8 @@ fn lower_typeof_operand_suppressing_ambient(
             let Expression::Identifier(obj_name) = object.as_ref() else {
                 return Ok(false);
             };
-            let prop_name = match property.as_ref() {
-                Expression::Identifier(p) | Expression::StringLiteral(p) => p.as_str(),
-                _ => return Ok(false),
+            let Some(prop_name) = well_formed_static_name(property) else {
+                return Ok(false);
             };
             let is_shadowed = if obj_name == "process" {
                 has_source_lexical_binding(binding_lookup, obj_name)
@@ -9341,7 +9333,7 @@ fn lower_spread_apply_hostcall_to_ir1(
     span_table: &mut Vec<Ir1OpSpanEntry>,
 ) -> Result<(), LoweringPipelineError> {
     ops.push(Ir1Op::LoadLiteral {
-        value: Ir1Literal::String(capability.to_string()),
+        value: Ir1Literal::String(capability.into()),
     });
     let mut array_elements = Vec::with_capacity(leading_arguments.len() + arguments.len());
     array_elements.extend(leading_arguments.iter().cloned().map(Some));
@@ -9793,7 +9785,7 @@ fn lower_expression_to_ir1_inner(
         }
         Expression::Raw(raw) => {
             ops.push(Ir1Op::LoadLiteral {
-                value: Ir1Literal::String(raw.clone()),
+                value: Ir1Literal::String(raw.clone().into()),
             });
             if raw.contains('(') {
                 ops.push(Ir1Op::Call { arg_count: 0 });
@@ -9818,10 +9810,10 @@ fn lower_expression_to_ir1_inner(
         Expression::RegExpLiteral { pattern, flags } => {
             // Load pattern and flags as string literals, then create RegExp.
             ops.push(Ir1Op::LoadLiteral {
-                value: Ir1Literal::String(pattern.clone()),
+                value: Ir1Literal::String(pattern.clone().into()),
             });
             ops.push(Ir1Op::LoadLiteral {
-                value: Ir1Literal::String(flags.clone()),
+                value: Ir1Literal::String(flags.clone().into()),
             });
             ops.push(Ir1Op::HostCall {
                 capability: "builtin:RegExp".to_string(),
@@ -10067,7 +10059,7 @@ fn lower_expression_to_ir1_inner(
                 && !is_lexically_shadowed(binding_lookup, name)
             {
                 ops.push(Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String("function".to_string()),
+                    value: Ir1Literal::String("function".into()),
                 });
                 return Ok(());
             }
@@ -11160,7 +11152,7 @@ fn lower_expression_to_ir1_inner(
                 if fs_call.accepts_arity(arguments.len()) {
                     if fs_call.carries_operation_discriminator() {
                         ops.push(Ir1Op::LoadLiteral {
-                            value: Ir1Literal::String(fs_call.discriminator()),
+                            value: Ir1Literal::String(fs_call.discriminator().into()),
                         });
                     }
                     for arg in arguments {
@@ -11235,7 +11227,7 @@ fn lower_expression_to_ir1_inner(
                 if fs_call.accepts_arity(arguments.len()) {
                     if fs_call.carries_operation_discriminator() {
                         ops.push(Ir1Op::LoadLiteral {
-                            value: Ir1Literal::String(fs_call.discriminator()),
+                            value: Ir1Literal::String(fs_call.discriminator().into()),
                         });
                     }
                     for arg in arguments {
@@ -12369,7 +12361,7 @@ fn lower_expression_to_ir1_inner(
                 path_member_constant(object, property, *computed, binding_lookup)
             {
                 ops.push(Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String(constant.to_string()),
+                    value: Ir1Literal::String(constant.into()),
                 });
                 return Ok(());
             }
@@ -12387,7 +12379,7 @@ fn lower_expression_to_ir1_inner(
                 match lowering {
                     OsMemberReadLowering::StringConstant(constant) => {
                         ops.push(Ir1Op::LoadLiteral {
-                            value: Ir1Literal::String(constant.to_string()),
+                            value: Ir1Literal::String(constant.into()),
                         });
                     }
                     OsMemberReadLowering::ConstantsHostcall => {
@@ -12415,7 +12407,7 @@ fn lower_expression_to_ir1_inner(
                     }
                     TlsMemberReadLowering::StringConstant(value) => {
                         ops.push(Ir1Op::LoadLiteral {
-                            value: Ir1Literal::String(value.to_string()),
+                            value: Ir1Literal::String(value.into()),
                         });
                     }
                 }
@@ -12465,7 +12457,7 @@ fn lower_expression_to_ir1_inner(
             // construction + unique-symbol identity remain out of scope.)
             if symbol_iterator_member(object, property, *computed, binding_lookup) {
                 ops.push(Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String("@@iterator".to_string()),
+                    value: Ir1Literal::String("@@iterator".into()),
                 });
                 return Ok(());
             }
@@ -12814,6 +12806,10 @@ fn lower_expression_to_ir1_inner(
                             ObjectPropertyKind::Data => {
                                 // Normal property - emit key and value, then set.
                                 if prop.computed {
+                                    reject_known_lone_surrogate_property_key(
+                                        &prop.key,
+                                        "engine.object_literal_computed_lone_surrogate_key",
+                                    )?;
                                     lower_expression_to_ir1(
                                         &prop.key,
                                         ops,
@@ -12825,15 +12821,9 @@ fn lower_expression_to_ir1_inner(
                                         span_table,
                                     )?;
                                 } else {
-                                    let key_str = match &prop.key {
-                                        Expression::Identifier(name) => name.clone(),
-                                        Expression::StringLiteral(s) => s.clone(),
-                                        Expression::NumericLiteral(n) => n.to_string(),
-                                        Expression::BigIntLiteral(n) => n.clone(),
-                                        other => format!("{other:?}"),
-                                    };
+                                    let key_str = canonical_static_object_property_key(&prop.key)?;
                                     ops.push(Ir1Op::LoadLiteral {
-                                        value: Ir1Literal::String(key_str),
+                                        value: Ir1Literal::String(key_str.into()),
                                     });
                                 }
                                 lower_expression_to_ir1(
@@ -12863,6 +12853,10 @@ fn lower_expression_to_ir1_inner(
                             }
                             ObjectPropertyKind::Get | ObjectPropertyKind::Set => {
                                 let property_key = if prop.computed {
+                                    reject_known_lone_surrogate_property_key(
+                                        &prop.key,
+                                        "engine.object_accessor_computed_lone_surrogate_key",
+                                    )?;
                                     lower_expression_to_ir1(
                                         &prop.key,
                                         ops,
@@ -12875,13 +12869,7 @@ fn lower_expression_to_ir1_inner(
                                     )?;
                                     Ir1PropertyKey::Dynamic
                                 } else {
-                                    let key_str = match &prop.key {
-                                        Expression::Identifier(name) => name.clone(),
-                                        Expression::StringLiteral(s) => s.clone(),
-                                        Expression::NumericLiteral(n) => n.to_string(),
-                                        Expression::BigIntLiteral(n) => n.clone(),
-                                        other => format!("{other:?}"),
-                                    };
+                                    let key_str = canonical_static_object_property_key(&prop.key)?;
                                     Ir1PropertyKey::Static(key_str)
                                 };
                                 lower_expression_to_ir1(
@@ -12911,6 +12899,10 @@ fn lower_expression_to_ir1_inner(
                 // No spreads - use original batch approach
                 for prop in properties {
                     if prop.computed {
+                        reject_known_lone_surrogate_property_key(
+                            &prop.key,
+                            "engine.object_literal_computed_lone_surrogate_key",
+                        )?;
                         lower_expression_to_ir1(
                             &prop.key,
                             ops,
@@ -12922,15 +12914,9 @@ fn lower_expression_to_ir1_inner(
                             span_table,
                         )?;
                     } else {
-                        let key_str = match &prop.key {
-                            Expression::Identifier(name) => name.clone(),
-                            Expression::StringLiteral(s) => s.clone(),
-                            Expression::NumericLiteral(n) => n.to_string(),
-                            Expression::BigIntLiteral(n) => n.clone(),
-                            other => format!("{other:?}"),
-                        };
+                        let key_str = canonical_static_object_property_key(&prop.key)?;
                         ops.push(Ir1Op::LoadLiteral {
-                            value: Ir1Literal::String(key_str),
+                            value: Ir1Literal::String(key_str.into()),
                         });
                     }
                     lower_expression_to_ir1(
@@ -13643,7 +13629,7 @@ fn lower_expression_to_ir1_inner(
             // Interleave quasis and expressions: quasi[0], expr[0], quasi[1], ..., quasi[N-1]
             for (i, quasi) in quasis.iter().enumerate() {
                 ops.push(Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String(quasi.clone()),
+                    value: Ir1Literal::String(quasi.clone().into()),
                 });
                 if i < expressions.len() {
                     lower_expression_to_ir1(
@@ -13876,11 +13862,12 @@ fn lower_expression_to_ir1_inner(
             }
 
             for method in body.iter().filter(|m| m.kind != MethodKind::Constructor) {
-                let method_name = match &method.key {
-                    Expression::Identifier(name) => name.clone(),
-                    Expression::StringLiteral(s) => s.clone(),
-                    _ => "anonymous_method".to_string(),
-                };
+                reject_known_lone_surrogate_property_key(
+                    &method.key,
+                    "engine.class_expression_method_lone_surrogate_key",
+                )?;
+                let method_name = canonical_static_object_property_key(&method.key)
+                    .unwrap_or_else(|_| "anonymous_method".to_string());
                 // Identifier params keep their name; non-identifier patterns
                 // (default `x = v` / destructuring) get a synthetic `__param_N`
                 // slot destructured at body entry (bd-7yrmf, class-expression-
@@ -14067,6 +14054,60 @@ fn lower_expression_to_ir1_inner(
     Ok(())
 }
 
+/// Return a UTF-8-exact static name without projecting an unpaired UTF-16
+/// unit through the lossy `JsString` display view.
+fn well_formed_static_name(expression: &Expression) -> Option<&str> {
+    match expression {
+        Expression::Identifier(name) => Some(name.as_str()),
+        Expression::StringLiteral(name) => name.as_str(),
+        _ => None,
+    }
+}
+
+fn well_formed_string_literal(expression: &Expression) -> Option<&str> {
+    match expression {
+        Expression::StringLiteral(value) => value.as_str(),
+        _ => None,
+    }
+}
+
+fn canonical_static_object_property_key(key: &Expression) -> Result<String, LoweringPipelineError> {
+    if let Some(name) = well_formed_static_name(key) {
+        return Ok(name.to_string());
+    }
+    match key {
+        Expression::NumericLiteral(value) => Ok(value.to_string()),
+        Expression::BigIntLiteral(value) => Ok(value.clone()),
+        Expression::FloatLiteral(bits) => {
+            let mut buffer = ryu_js::Buffer::new();
+            Ok(buffer.format(f64::from_bits(*bits)).to_string())
+        }
+        _ => Err(unsupported_frontier_expression_error(
+            "object_literal_static_property_key",
+            "FE-LOWER-UNSUPPORTED-STATIC-OBJECT-KEY-0001",
+            "engine.object_literal_static_property_key",
+            "static object property keys require a canonical property-name AST form",
+            None,
+        )),
+    }
+}
+
+fn reject_known_lone_surrogate_property_key(
+    key: &Expression,
+    site_id: &str,
+) -> Result<(), LoweringPipelineError> {
+    if matches!(key, Expression::StringLiteral(value) if value.as_str().is_none()) {
+        return Err(unsupported_frontier_expression_error(
+            "lone_surrogate_property_key",
+            "FE-LOWER-UNSUPPORTED-STATIC-OBJECT-KEY-0001",
+            site_id,
+            "property keys containing lone surrogates require exact property-key support",
+            None,
+        ));
+    }
+    Ok(())
+}
+
 fn math_object_property_name<'a>(
     object: &'a Expression,
     property: &'a Expression,
@@ -14079,12 +14120,9 @@ fn math_object_property_name<'a>(
         return None;
     }
 
-    match (computed, property) {
-        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => {
-            Some(name.as_str())
-        }
-        (true, Expression::StringLiteral(name)) => Some(name.as_str()),
-        _ => None,
+    match computed {
+        false => well_formed_static_name(property),
+        true => well_formed_string_literal(property),
     }
 }
 
@@ -14105,12 +14143,9 @@ fn symbol_iterator_member(
     {
         return false;
     }
-    match (computed, property) {
-        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => {
-            name == "iterator"
-        }
-        (true, Expression::StringLiteral(name)) => name == "iterator",
-        _ => false,
+    match computed {
+        false => well_formed_static_name(property).is_some_and(|name| name == "iterator"),
+        true => well_formed_string_literal(property).is_some_and(|name| name == "iterator"),
     }
 }
 
@@ -14315,10 +14350,9 @@ fn date_builtin_call_capability(
     {
         return None;
     }
-    let method = match (*computed, property.as_ref()) {
-        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
-        (true, Expression::StringLiteral(name)) => name.as_str(),
-        _ => return None,
+    let method = match *computed {
+        false => well_formed_static_name(property)?,
+        true => well_formed_string_literal(property)?,
     };
     match method {
         "now" => Some("builtin:DateNow"),
@@ -14348,10 +14382,9 @@ fn promise_builtin_call_capability(
     {
         return None;
     }
-    let method = match (*computed, property.as_ref()) {
-        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
-        (true, Expression::StringLiteral(name)) => name.as_str(),
-        _ => return None,
+    let method = match *computed {
+        false => well_formed_static_name(property)?,
+        true => well_formed_string_literal(property)?,
     };
     match method {
         "resolve" => Some("promise:resolve"),
@@ -14382,10 +14415,9 @@ fn console_builtin_call_capability(
     {
         return None;
     }
-    let method = match (*computed, property.as_ref()) {
-        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
-        (true, Expression::StringLiteral(name)) => name.as_str(),
-        _ => return None,
+    let method = match *computed {
+        false => well_formed_static_name(property)?,
+        true => well_formed_string_literal(property)?,
     };
     match method {
         "log" => Some("console:log"),
@@ -14433,10 +14465,8 @@ fn is_require_fs_module_initializer(
     {
         return false;
     }
-    matches!(
-        arguments.as_slice(),
-        [Expression::StringLiteral(spec)] if is_fs_module_specifier(spec)
-    )
+    matches!(arguments.as_slice(), [spec]
+        if well_formed_string_literal(spec).is_some_and(is_fs_module_specifier))
 }
 
 /// True when `callee` is a non-computed member access `<obj>.readFileSync` /
@@ -14458,9 +14488,8 @@ fn is_fs_alias_method_callee(callee: &Expression, alias_names: &BTreeSet<String>
     else {
         return false;
     };
-    let method = match property.as_ref() {
-        Expression::Identifier(method) | Expression::StringLiteral(method) => method.as_str(),
-        _ => return false,
+    let Some(method) = well_formed_static_name(property) else {
+        return false;
     };
     match object.as_ref() {
         Expression::Identifier(obj) if alias_names.contains(obj) => {
@@ -14472,9 +14501,8 @@ fn is_fs_alias_method_callee(callee: &Expression, alias_names: &BTreeSet<String>
             computed: false,
             ..
         } if matches!(fs_object.as_ref(), Expression::Identifier(obj) if alias_names.contains(obj))
-            && matches!(promises_property.as_ref(),
-                Expression::Identifier(name) | Expression::StringLiteral(name)
-                    if name == "promises") =>
+            && well_formed_static_name(promises_property)
+                .is_some_and(|name| name == "promises") =>
         {
             matches!(method, "readFile" | "writeFile" | "mkdir" | "readdir")
         }
@@ -14492,9 +14520,8 @@ fn is_fs_alias_constant_member(expr: &Expression, alias_names: &BTreeSet<String>
     else {
         return false;
     };
-    let constant = match property.as_ref() {
-        Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
-        _ => return false,
+    let Some(constant) = well_formed_static_name(property) else {
+        return false;
     };
     if !matches!(constant, "F_OK" | "R_OK" | "W_OK" | "X_OK") {
         return false;
@@ -14505,9 +14532,7 @@ fn is_fs_alias_constant_member(expr: &Expression, alias_names: &BTreeSet<String>
         computed: false,
         ..
     } if matches!(fs_object.as_ref(), Expression::Identifier(alias) if alias_names.contains(alias))
-        && matches!(constants_property.as_ref(),
-            Expression::Identifier(name) | Expression::StringLiteral(name)
-                if name == "constants"))
+        && well_formed_static_name(constants_property).is_some_and(|name| name == "constants"))
 }
 
 /// Recursively scan `expr` for a call whose callee satisfies `is_target` — the
@@ -14705,10 +14730,7 @@ fn fs_constants_member_value(
     if computed {
         return None;
     }
-    let constant = match property {
-        Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
-        _ => return None,
-    };
+    let constant = well_formed_static_name(property)?;
     let Expression::Member {
         object: fs_object,
         property: constants_property,
@@ -14719,9 +14741,7 @@ fn fs_constants_member_value(
         return None;
     };
     if !is_fs_module_object(fs_object, binding_lookup)
-        || !matches!(constants_property.as_ref(),
-            Expression::Identifier(name) | Expression::StringLiteral(name)
-                if name == "constants")
+        || !well_formed_static_name(constants_property).is_some_and(|name| name == "constants")
     {
         return None;
     }
@@ -14783,10 +14803,7 @@ fn fs_builtin_call_capability(
     if !is_fs_module_object(object, binding_lookup) {
         return None;
     }
-    let method = match property.as_ref() {
-        Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
-        _ => return None,
-    };
+    let method = well_formed_static_name(property)?;
     fs_sync_builtin_spec(method)
 }
 
@@ -14826,10 +14843,8 @@ fn is_require_path_module_initializer(
     {
         return false;
     }
-    matches!(
-        arguments.as_slice(),
-        [Expression::StringLiteral(spec)] if is_path_module_specifier(spec)
-    )
+    matches!(arguments.as_slice(), [spec]
+        if well_formed_string_literal(spec).is_some_and(is_path_module_specifier))
 }
 
 /// Which Node `path` namespace a recognized receiver selects (bd-tu0c3). The
@@ -14907,9 +14922,9 @@ fn path_receiver_namespace_with<F: Fn(&Expression) -> bool>(
         ..
     } = object
         && is_module_object(inner)
-        && let Expression::Identifier(ns) | Expression::StringLiteral(ns) = property.as_ref()
+        && let Some(ns) = well_formed_static_name(property)
     {
-        return match ns.as_str() {
+        return match ns {
             "posix" => Some(PathModuleNamespace::Posix),
             "win32" => Some(PathModuleNamespace::Win32),
             _ => None,
@@ -14931,10 +14946,8 @@ fn is_path_module_object(expr: &Expression, binding_lookup: &BTreeMap<String, Bi
         } => {
             matches!(callee.as_ref(), Expression::Identifier(name)
                 if name == "require" && !is_lexically_shadowed(binding_lookup, name))
-                && matches!(
-                    arguments.as_slice(),
-                    [Expression::StringLiteral(spec)] if is_path_module_specifier(spec)
-                )
+                && matches!(arguments.as_slice(), [spec]
+                    if well_formed_string_literal(spec).is_some_and(is_path_module_specifier))
         }
         _ => false,
     }
@@ -14960,10 +14973,7 @@ fn path_builtin_call_capability(
     };
     let namespace =
         path_receiver_namespace_with(object, &|expr| is_path_module_object(expr, binding_lookup))?;
-    let method = match property.as_ref() {
-        Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
-        _ => return None,
-    };
+    let method = well_formed_static_name(property)?;
     path_method_capability(namespace, method)
 }
 
@@ -14979,10 +14989,9 @@ fn path_member_constant(
 ) -> Option<&'static str> {
     let namespace =
         path_receiver_namespace_with(object, &|expr| is_path_module_object(expr, binding_lookup))?;
-    let prop = match (computed, property) {
-        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
-        (true, Expression::StringLiteral(name)) => name.as_str(),
-        _ => return None,
+    let prop = match computed {
+        false => well_formed_static_name(property)?,
+        true => well_formed_string_literal(property)?,
     };
     path_namespace_property_constant(namespace, prop)
 }
@@ -15006,9 +15015,8 @@ fn is_path_alias_method_callee(callee: &Expression, alias_names: &BTreeSet<Strin
     ) else {
         return false;
     };
-    matches!(property.as_ref(),
-        Expression::Identifier(m) | Expression::StringLiteral(m)
-            if path_method_capability(namespace, m).is_some())
+    well_formed_static_name(property)
+        .is_some_and(|method| path_method_capability(namespace, method).is_some())
 }
 
 /// bd-tu0c3: scan-time twin of [`path_member_constant`]: true when `expr` is a
@@ -15030,9 +15038,8 @@ fn is_path_alias_property_read(expr: &Expression, alias_names: &BTreeSet<String>
     ) else {
         return false;
     };
-    matches!(property.as_ref(),
-        Expression::Identifier(p) | Expression::StringLiteral(p)
-            if path_namespace_property_constant(namespace, p).is_some())
+    well_formed_static_name(property)
+        .is_some_and(|property| path_namespace_property_constant(namespace, property).is_some())
 }
 
 /// bd-tu0c3: recursively scan `expr` for a member READ satisfying `is_target` —
@@ -15283,10 +15290,8 @@ fn is_require_querystring_module_initializer(
     {
         return false;
     }
-    matches!(
-        arguments.as_slice(),
-        [Expression::StringLiteral(spec)] if is_querystring_module_specifier(spec)
-    )
+    matches!(arguments.as_slice(), [spec]
+        if well_formed_string_literal(spec).is_some_and(is_querystring_module_specifier))
 }
 
 /// bd-qmy52: capability tag for a recognized `querystring` method. Single
@@ -15320,10 +15325,9 @@ fn is_querystring_module_object(
         } => {
             matches!(callee.as_ref(), Expression::Identifier(name)
                 if name == "require" && !is_lexically_shadowed(binding_lookup, name))
-                && matches!(
-                    arguments.as_slice(),
-                    [Expression::StringLiteral(spec)] if is_querystring_module_specifier(spec)
-                )
+                && matches!(arguments.as_slice(), [spec]
+                    if well_formed_string_literal(spec)
+                        .is_some_and(is_querystring_module_specifier))
         }
         _ => false,
     }
@@ -15348,10 +15352,7 @@ fn querystring_builtin_call_capability(
     if !is_querystring_module_object(object, binding_lookup) {
         return None;
     }
-    let method = match property.as_ref() {
-        Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
-        _ => return None,
-    };
+    let method = well_formed_static_name(property)?;
     querystring_method_capability(method)
 }
 
@@ -15371,9 +15372,8 @@ fn is_querystring_alias_method_callee(callee: &Expression, alias_names: &BTreeSe
     if !matches!(object.as_ref(), Expression::Identifier(name) if alias_names.contains(name)) {
         return false;
     }
-    matches!(property.as_ref(),
-        Expression::Identifier(m) | Expression::StringLiteral(m)
-            if querystring_method_capability(m).is_some())
+    well_formed_static_name(property)
+        .is_some_and(|method| querystring_method_capability(method).is_some())
 }
 
 /// bd-qmy52: compute the set of identifier names that are BOTH bound via
@@ -15457,10 +15457,8 @@ fn is_require_timers_module_initializer(
     {
         return false;
     }
-    matches!(
-        arguments.as_slice(),
-        [Expression::StringLiteral(spec)] if is_timers_module_specifier(spec)
-    )
+    matches!(arguments.as_slice(), [spec]
+        if well_formed_string_literal(spec).is_some_and(is_timers_module_specifier))
 }
 
 /// bd-suwvw: true when `expr` is exactly `require('timers/promises')` /
@@ -15480,10 +15478,8 @@ fn is_require_timers_promises_module_initializer(
     {
         return false;
     }
-    matches!(
-        arguments.as_slice(),
-        [Expression::StringLiteral(spec)] if is_timers_promises_module_specifier(spec)
-    )
+    matches!(arguments.as_slice(), [spec]
+        if well_formed_string_literal(spec).is_some_and(is_timers_promises_module_specifier))
 }
 
 /// bd-suwvw: true when `expr` IS the timers module object at lowering time —
@@ -15548,10 +15544,7 @@ fn timers_promises_builtin_call_capability(
     if !is_timers_promises_module_object(object, binding_lookup) {
         return None;
     }
-    let method = match property.as_ref() {
-        Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
-        _ => return None,
-    };
+    let method = well_formed_static_name(property)?;
     timers_promises_method_capability(method)
 }
 
@@ -15572,10 +15565,7 @@ fn timers_member_global_read(
     if !is_timers_module_object(object, binding_lookup) {
         return None;
     }
-    let name = match property {
-        Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
-        _ => return None,
-    };
+    let name = well_formed_static_name(property)?;
     timers_module_export_global(name)
 }
 
@@ -15597,9 +15587,8 @@ fn is_timers_alias_member(expr: &Expression, alias_names: &BTreeSet<String>) -> 
     if !matches!(object.as_ref(), Expression::Identifier(name) if alias_names.contains(name)) {
         return false;
     }
-    matches!(property.as_ref(),
-        Expression::Identifier(m) | Expression::StringLiteral(m)
-            if timers_module_export_global(m).is_some())
+    well_formed_static_name(property)
+        .is_some_and(|name| timers_module_export_global(name).is_some())
 }
 
 /// bd-suwvw: scan-time twin for timers/promises (member CALLS only — the
@@ -15620,9 +15609,8 @@ fn is_timers_promises_alias_method_callee(
     if !matches!(object.as_ref(), Expression::Identifier(name) if alias_names.contains(name)) {
         return false;
     }
-    matches!(property.as_ref(),
-        Expression::Identifier(m) | Expression::StringLiteral(m)
-            if timers_promises_method_capability(m).is_some())
+    well_formed_static_name(property)
+        .is_some_and(|method| timers_promises_method_capability(method).is_some())
 }
 
 /// bd-suwvw: deep usage-scan walker for the timers module families. Unlike
@@ -15814,10 +15802,8 @@ fn is_require_net_module_initializer(
     {
         return false;
     }
-    matches!(
-        arguments.as_slice(),
-        [Expression::StringLiteral(specifier)] if is_net_module_specifier(specifier)
-    )
+    matches!(arguments.as_slice(), [specifier]
+        if well_formed_string_literal(specifier).is_some_and(is_net_module_specifier))
 }
 
 fn net_method_capability(method: &str) -> Option<&'static str> {
@@ -15858,10 +15844,7 @@ fn net_member_name<'a>(
     if !is_net_module_object(object, binding_lookup) {
         return None;
     }
-    match property.as_ref() {
-        Expression::Identifier(name) | Expression::StringLiteral(name) => Some(name),
-        _ => None,
-    }
+    well_formed_static_name(property)
 }
 
 fn net_builtin_call_capability(
@@ -15897,10 +15880,7 @@ fn module_alias_member_name<'a>(callee: &'a Expression, alias: &str) -> Option<&
     if !matches!(object.as_ref(), Expression::Identifier(name) if name == alias) {
         return None;
     }
-    match property.as_ref() {
-        Expression::Identifier(name) | Expression::StringLiteral(name) => Some(name),
-        _ => None,
-    }
+    well_formed_static_name(property)
 }
 
 fn net_alias_member_name<'a>(callee: &'a Expression, alias: &str) -> Option<&'a str> {
@@ -17016,8 +16996,8 @@ fn is_require_tls_module_initializer(
     };
     matches!(callee.as_ref(), Expression::Identifier(name)
         if name == "require" && !is_lexically_shadowed(binding_lookup, name))
-        && matches!(arguments.as_slice(),
-            [Expression::StringLiteral(specifier)] if is_tls_module_specifier(specifier))
+        && matches!(arguments.as_slice(), [specifier]
+            if well_formed_string_literal(specifier).is_some_and(is_tls_module_specifier))
 }
 
 fn tls_method_capability(method: &str) -> Option<&'static str> {
@@ -17070,10 +17050,7 @@ fn tls_member_name<'a>(
     if !is_tls_module_object(object, binding_lookup) {
         return None;
     }
-    match property.as_ref() {
-        Expression::Identifier(name) | Expression::StringLiteral(name) => Some(name),
-        _ => None,
-    }
+    well_formed_static_name(property)
 }
 
 fn tls_builtin_call_capability(
@@ -17092,10 +17069,10 @@ fn tls_member_read_lowering(
     if !is_tls_module_object(object, binding_lookup) {
         return None;
     }
-    let property = match (computed, property) {
-        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
-        _ => return None,
-    };
+    if computed {
+        return None;
+    }
+    let property = well_formed_static_name(property)?;
     tls_property_read_lowering(property)
 }
 
@@ -17283,10 +17260,8 @@ fn is_require_stream_module_initializer(
     {
         return false;
     }
-    matches!(
-        arguments.as_slice(),
-        [Expression::StringLiteral(specifier)] if is_stream_module_specifier(specifier)
-    )
+    matches!(arguments.as_slice(), [specifier]
+        if well_formed_string_literal(specifier).is_some_and(is_stream_module_specifier))
 }
 
 fn is_stream_readable_from_direct_call(expr: &Expression, local: &str) -> bool {
@@ -17298,9 +17273,7 @@ fn is_stream_readable_from_direct_call(expr: &Expression, local: &str) -> bool {
                 computed: false,
                 ..
             } if matches!(object.as_ref(), Expression::Identifier(name) if name == local)
-                && matches!(property.as_ref(),
-                    Expression::Identifier(name) | Expression::StringLiteral(name)
-                        if name == "from")))
+                && well_formed_static_name(property).is_some_and(|name| name == "from")))
 }
 
 fn is_stream_constructor_use(expr: &Expression, local: &str) -> bool {
@@ -17334,9 +17307,8 @@ fn confirmed_stream_readable_destructured_requires(
                 }
                 for property in properties {
                     if property.computed
-                        || !matches!(&property.key,
-                            Expression::Identifier(name) | Expression::StringLiteral(name)
-                                if name == "Readable")
+                        || !well_formed_static_name(&property.key)
+                            .is_some_and(|name| name == "Readable")
                     {
                         continue;
                     }
@@ -17379,9 +17351,8 @@ fn confirmed_stream_writable_destructured_requires(
                 }
                 for property in properties {
                     if property.computed
-                        || !matches!(&property.key,
-                            Expression::Identifier(name) | Expression::StringLiteral(name)
-                                if name == "Writable")
+                        || !well_formed_static_name(&property.key)
+                            .is_some_and(|name| name == "Writable")
                     {
                         continue;
                     }
@@ -17470,10 +17441,7 @@ fn confirmed_stream_destructure_locals(
         if property.computed {
             return None;
         }
-        let constructor = match &property.key {
-            Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
-            _ => return None,
-        };
+        let constructor = well_formed_static_name(&property.key)?;
         let BindingPattern::Identifier(local) = &property.value else {
             return None;
         };
@@ -17537,9 +17505,9 @@ fn stream_readable_from_call_capability(
     matches!(object.as_ref(), Expression::Identifier(name)
         if binding_lookup.contains_key(&stream_readable_binding_sentinel(name)))
     .then_some(())?;
-    matches!(property.as_ref(),
-        Expression::Identifier(name) | Expression::StringLiteral(name) if name == "from")
-    .then_some("builtin:StreamReadableFrom")
+    well_formed_static_name(property)
+        .is_some_and(|name| name == "from")
+        .then_some("builtin:StreamReadableFrom")
 }
 
 // ---------------------------------------------------------------------------
@@ -17588,10 +17556,8 @@ fn is_require_events_module_initializer(
     {
         return false;
     }
-    matches!(
-        arguments.as_slice(),
-        [Expression::StringLiteral(specifier)] if is_events_module_specifier(specifier)
-    )
+    matches!(arguments.as_slice(), [specifier]
+        if well_formed_string_literal(specifier).is_some_and(is_events_module_specifier))
 }
 
 fn event_emitter_constructor_capability(
@@ -17617,9 +17583,7 @@ fn event_emitter_default_max_listeners_member(
     }
     matches!(object, Expression::Identifier(name)
         if binding_lookup.contains_key(&event_emitter_binding_sentinel(name)))
-        && matches!(property,
-            Expression::Identifier(name) | Expression::StringLiteral(name)
-                if name == "defaultMaxListeners")
+        && well_formed_static_name(property).is_some_and(|name| name == "defaultMaxListeners")
 }
 
 fn events_capture_rejections_member(
@@ -17633,9 +17597,7 @@ fn events_capture_rejections_member(
     }
     matches!(object, Expression::Identifier(name)
         if binding_lookup.contains_key(&events_module_alias_sentinel(name)))
-        && matches!(property,
-            Expression::Identifier(name) | Expression::StringLiteral(name)
-                if name == "captureRejections")
+        && well_formed_static_name(property).is_some_and(|name| name == "captureRejections")
 }
 
 fn is_event_emitter_usage(expr: &Expression, local: &str) -> bool {
@@ -17650,9 +17612,8 @@ fn is_event_emitter_usage(expr: &Expression, local: &str) -> bool {
             ..
         } => {
             matches!(object.as_ref(), Expression::Identifier(name) if name == local)
-                && matches!(property.as_ref(),
-                    Expression::Identifier(name) | Expression::StringLiteral(name)
-                        if name == "defaultMaxListeners")
+                && well_formed_static_name(property)
+                    .is_some_and(|name| name == "defaultMaxListeners")
         }
         _ => false,
     }
@@ -17666,9 +17627,8 @@ fn is_events_alias_capture_rejections_read(expr: &Expression, alias: &str) -> bo
             computed: false,
             ..
         } if matches!(object.as_ref(), Expression::Identifier(name) if name == alias)
-            && matches!(property.as_ref(),
-                Expression::Identifier(name) | Expression::StringLiteral(name)
-                    if name == "captureRejections"))
+            && well_formed_static_name(property)
+                .is_some_and(|name| name == "captureRejections"))
 }
 
 fn is_events_once_direct_call(expr: &Expression, local: &str) -> bool {
@@ -17686,9 +17646,7 @@ fn is_events_alias_once_call(expr: &Expression, alias: &str) -> bool {
                 computed: false,
                 ..
             } if matches!(object.as_ref(), Expression::Identifier(name) if name == alias)
-                && matches!(property.as_ref(),
-                    Expression::Identifier(name) | Expression::StringLiteral(name)
-                        if name == "once")))
+                && well_formed_static_name(property).is_some_and(|name| name == "once")))
 }
 
 fn confirmed_event_emitter_destructured_requires(
@@ -17709,9 +17667,8 @@ fn confirmed_event_emitter_destructured_requires(
                 }
                 for property in properties {
                     if property.computed
-                        || !matches!(&property.key,
-                            Expression::Identifier(name) | Expression::StringLiteral(name)
-                                if name == "EventEmitter")
+                        || !well_formed_static_name(&property.key)
+                            .is_some_and(|name| name == "EventEmitter")
                     {
                         continue;
                     }
@@ -17751,9 +17708,8 @@ fn confirmed_events_once_destructured_requires(
                 }
                 for property in properties {
                     if property.computed
-                        || !matches!(&property.key,
-                            Expression::Identifier(name) | Expression::StringLiteral(name)
-                                if name == "once")
+                        || !well_formed_static_name(&property.key)
+                            .is_some_and(|name| name == "once")
                     {
                         continue;
                     }
@@ -17851,15 +17807,11 @@ fn confirmed_events_destructure_locals(
         let BindingPattern::Identifier(local) = &property.value else {
             return None;
         };
-        let confirmed = match &property.key {
-            Expression::Identifier(name) | Expression::StringLiteral(name)
-                if name == "EventEmitter" =>
-            {
+        let confirmed = match well_formed_static_name(&property.key) {
+            Some("EventEmitter") => {
                 binding_lookup.contains_key(&event_emitter_binding_sentinel(local))
             }
-            Expression::Identifier(name) | Expression::StringLiteral(name) if name == "once" => {
-                binding_lookup.contains_key(&events_once_binding_sentinel(local))
-            }
+            Some("once") => binding_lookup.contains_key(&events_once_binding_sentinel(local)),
             _ => false,
         };
         if !confirmed {
@@ -17901,9 +17853,7 @@ fn events_once_call_capability(
             ..
         } if matches!(object.as_ref(), Expression::Identifier(name)
             if binding_lookup.contains_key(&events_module_alias_sentinel(name)))
-            && matches!(property.as_ref(),
-                Expression::Identifier(name) | Expression::StringLiteral(name)
-                    if name == "once") =>
+            && well_formed_static_name(property).is_some_and(|name| name == "once") =>
         {
             Some("builtin:EventsOnce")
         }
@@ -17941,10 +17891,8 @@ fn is_require_os_module_initializer(
     {
         return false;
     }
-    matches!(
-        arguments.as_slice(),
-        [Expression::StringLiteral(spec)] if is_os_module_specifier(spec)
-    )
+    matches!(arguments.as_slice(), [spec]
+        if well_formed_string_literal(spec).is_some_and(is_os_module_specifier))
 }
 
 /// bd-qmy52: capability tag for a recognized `os` method. Single source of
@@ -18011,10 +17959,8 @@ fn is_os_module_object(expr: &Expression, binding_lookup: &BTreeMap<String, Bind
         } => {
             matches!(callee.as_ref(), Expression::Identifier(name)
                 if name == "require" && !is_lexically_shadowed(binding_lookup, name))
-                && matches!(
-                    arguments.as_slice(),
-                    [Expression::StringLiteral(spec)] if is_os_module_specifier(spec)
-                )
+                && matches!(arguments.as_slice(), [spec]
+                    if well_formed_string_literal(spec).is_some_and(is_os_module_specifier))
         }
         _ => false,
     }
@@ -18038,10 +17984,7 @@ fn os_builtin_call_capability(
     if !is_os_module_object(object, binding_lookup) {
         return None;
     }
-    let method = match property.as_ref() {
-        Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
-        _ => return None,
-    };
+    let method = well_formed_static_name(property)?;
     os_method_capability(method)
 }
 
@@ -18057,10 +18000,9 @@ fn os_member_read_lowering(
     if !is_os_module_object(object, binding_lookup) {
         return None;
     }
-    let prop = match (computed, property) {
-        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
-        (true, Expression::StringLiteral(name)) => name.as_str(),
-        _ => return None,
+    let prop = match computed {
+        false => well_formed_static_name(property)?,
+        true => well_formed_string_literal(property)?,
     };
     os_property_read_lowering(prop)
 }
@@ -18079,9 +18021,7 @@ fn is_os_alias_method_callee(callee: &Expression, alias_names: &BTreeSet<String>
     if !matches!(object.as_ref(), Expression::Identifier(name) if alias_names.contains(name)) {
         return false;
     }
-    matches!(property.as_ref(),
-        Expression::Identifier(m) | Expression::StringLiteral(m)
-            if os_method_capability(m).is_some())
+    well_formed_static_name(property).is_some_and(|method| os_method_capability(method).is_some())
 }
 
 /// bd-qmy52: scan-time twin of [`os_member_read_lowering`]: true when `expr`
@@ -18100,9 +18040,8 @@ fn is_os_alias_property_read(expr: &Expression, alias_names: &BTreeSet<String>) 
     if !matches!(object.as_ref(), Expression::Identifier(name) if alias_names.contains(name)) {
         return false;
     }
-    matches!(property.as_ref(),
-        Expression::Identifier(p) | Expression::StringLiteral(p)
-            if os_property_read_lowering(p).is_some())
+    well_formed_static_name(property)
+        .is_some_and(|property| os_property_read_lowering(property).is_some())
 }
 
 /// bd-qmy52: true when `expr` contains a recognized os usage on one of
@@ -18191,10 +18130,8 @@ fn is_require_http_module_initializer(
     {
         return false;
     }
-    matches!(
-        arguments.as_slice(),
-        [Expression::StringLiteral(spec)] if is_http_module_specifier(spec)
-    )
+    matches!(arguments.as_slice(), [spec]
+        if well_formed_string_literal(spec).is_some_and(is_http_module_specifier))
 }
 
 /// bd-656a2: true when `callee` is a non-computed member access `<obj>.get` /
@@ -18218,9 +18155,7 @@ fn is_http_alias_method_callee(callee: &Expression, alias_names: &BTreeSet<Strin
     if !alias_names.contains(obj) {
         return false;
     }
-    matches!(property.as_ref(),
-        Expression::Identifier(m) | Expression::StringLiteral(m)
-            if m == "get" || m == "request")
+    well_formed_static_name(property).is_some_and(|method| matches!(method, "get" | "request"))
 }
 
 /// bd-656a2: usage-lookahead predicate — does `expr` contain a call to
@@ -18300,10 +18235,8 @@ fn http_builtin_call_capability(
             ..
         } => {
             matches!(require_callee.as_ref(), Expression::Identifier(name) if name == "require")
-                && matches!(
-                    require_args.as_slice(),
-                    [Expression::StringLiteral(spec)] if is_http_module_specifier(spec)
-                )
+                && matches!(require_args.as_slice(), [spec]
+                    if well_formed_string_literal(spec).is_some_and(is_http_module_specifier))
         }
         // binding form: identifier aliased to the http module.
         Expression::Identifier(alias) => {
@@ -18314,10 +18247,7 @@ fn http_builtin_call_capability(
     if !receiver_is_http_module {
         return None;
     }
-    let method = match property.as_ref() {
-        Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
-        _ => return None,
-    };
+    let method = well_formed_static_name(property)?;
     match method {
         // `http.get(url)` auto-ends and carries no writable request body, so it
         // keeps the immediate `net:request` egress (the round trip fires at the
@@ -18509,10 +18439,8 @@ fn fs_callback_builtin_call_capability(
             ..
         } => {
             matches!(require_callee.as_ref(), Expression::Identifier(name) if name == "require")
-                && matches!(
-                    require_args.as_slice(),
-                    [Expression::StringLiteral(spec)] if is_fs_module_specifier(spec)
-                )
+                && matches!(require_args.as_slice(), [spec]
+                    if well_formed_string_literal(spec).is_some_and(is_fs_module_specifier))
         }
         // binding form: identifier aliased to the fs module.
         Expression::Identifier(alias) => {
@@ -18523,10 +18451,7 @@ fn fs_callback_builtin_call_capability(
     if !receiver_is_fs_module {
         return None;
     }
-    let method = match property.as_ref() {
-        Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
-        _ => return None,
-    };
+    let method = well_formed_static_name(property)?;
     match method {
         "readFile" => Some("fs:read"),
         "writeFile" => Some("fs:write"),
@@ -18670,19 +18595,14 @@ fn confirmed_fs_destructured_requires(
                     if prop.computed {
                         continue;
                     }
-                    let capability = match &prop.key {
-                        Expression::Identifier(name) | Expression::StringLiteral(name) => {
-                            match name.as_str() {
-                                // sync forms
-                                "readFileSync" => "fs:read",
-                                "writeFileSync" => "fs:write",
-                                // async callback forms — same fs: capability; the
-                                // trailing callback closure is detected at dispatch.
-                                "readFile" => "fs:read",
-                                "writeFile" => "fs:write",
-                                _ => continue,
-                            }
-                        }
+                    let capability = match well_formed_static_name(&prop.key) {
+                        // sync forms
+                        Some("readFileSync") => "fs:read",
+                        Some("writeFileSync") => "fs:write",
+                        // async callback forms — same fs: capability; the
+                        // trailing callback closure is detected at dispatch.
+                        Some("readFile") => "fs:read",
+                        Some("writeFile") => "fs:write",
                         _ => continue,
                     };
                     if let BindingPattern::Identifier(local) = &prop.value {
@@ -18854,10 +18774,8 @@ fn is_require_fs_promises_module_initializer(
     {
         return false;
     }
-    matches!(
-        arguments.as_slice(),
-        [Expression::StringLiteral(spec)] if is_fs_promises_module_specifier(spec)
-    )
+    matches!(arguments.as_slice(), [spec]
+        if well_formed_string_literal(spec).is_some_and(is_fs_promises_module_specifier))
 }
 
 /// Sentinel recording that `name` is bound to the fs/promises module via
@@ -18904,9 +18822,8 @@ fn is_fs_promises_alias_method_callee(callee: &Expression, alias_names: &BTreeSe
     if !alias_names.contains(obj) {
         return false;
     }
-    matches!(property.as_ref(),
-        Expression::Identifier(m) | Expression::StringLiteral(m)
-            if fs_promises_method_spec(m).is_some())
+    well_formed_static_name(property)
+        .is_some_and(|method| fs_promises_method_spec(method).is_some())
 }
 
 /// Confirmed fs/promises module aliases (bd-1xl17.c): names bound via
@@ -19021,10 +18938,9 @@ fn fs_promises_builtin_call_capability(
             ..
         } => {
             matches!(require_callee.as_ref(), Expression::Identifier(name) if name == "require")
-                && matches!(
-                    require_args.as_slice(),
-                    [Expression::StringLiteral(spec)] if is_fs_promises_module_specifier(spec)
-                )
+                && matches!(require_args.as_slice(), [spec]
+                    if well_formed_string_literal(spec)
+                        .is_some_and(is_fs_promises_module_specifier))
         }
         // binding form: identifier aliased to the fs/promises module.
         Expression::Identifier(alias) => {
@@ -19038,10 +18954,7 @@ fn fs_promises_builtin_call_capability(
     if !receiver_is_fs_promises {
         return None;
     }
-    let method = match property.as_ref() {
-        Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
-        _ => return None,
-    };
+    let method = well_formed_static_name(property)?;
     fs_promises_method_spec(method)
 }
 
@@ -19064,8 +18977,8 @@ fn is_fs_promises_subobject(
     else {
         return false;
     };
-    let property_is_promises = matches!(property.as_ref(),
-        Expression::Identifier(name) | Expression::StringLiteral(name) if name == "promises");
+    let property_is_promises =
+        well_formed_static_name(property).is_some_and(|name| name == "promises");
     if !property_is_promises {
         return false;
     }
@@ -19101,14 +19014,9 @@ fn confirmed_fs_promises_destructured_requires(
                     if prop.computed {
                         continue;
                     }
-                    let capability = match &prop.key {
-                        Expression::Identifier(name) | Expression::StringLiteral(name) => {
-                            match name.as_str() {
-                                "readFile" => "fs:read",
-                                "writeFile" => "fs:write",
-                                _ => continue,
-                            }
-                        }
+                    let capability = match well_formed_static_name(&prop.key) {
+                        Some("readFile") => "fs:read",
+                        Some("writeFile") => "fs:write",
                         _ => continue,
                     };
                     if let BindingPattern::Identifier(local) = &prop.value {
@@ -19153,9 +19061,8 @@ fn confirmed_fs_promises_subobject_destructures(
                     if prop.computed {
                         continue;
                     }
-                    let key_is_promises = matches!(&prop.key,
-                        Expression::Identifier(name) | Expression::StringLiteral(name)
-                            if name == "promises");
+                    let key_is_promises =
+                        well_formed_static_name(&prop.key).is_some_and(|name| name == "promises");
                     if !key_is_promises {
                         continue;
                     }
@@ -19255,10 +19162,9 @@ fn promise_static_member_capability(
     {
         return None;
     }
-    let method = match (computed, property) {
-        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
-        (true, Expression::StringLiteral(name)) => name.as_str(),
-        _ => return None,
+    let method = match computed {
+        false => well_formed_static_name(property)?,
+        true => well_formed_string_literal(property)?,
     };
     match method {
         "resolve" => Some("builtin:PromiseResolveFunction"),
@@ -19317,10 +19223,9 @@ fn reflect_builtin_call_capability(
     {
         return None;
     }
-    let method = match (*computed, property.as_ref()) {
-        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
-        (true, Expression::StringLiteral(name)) => name.as_str(),
-        _ => return None,
+    let method = match *computed {
+        false => well_formed_static_name(property)?,
+        true => well_formed_string_literal(property)?,
     };
     match method {
         "has" => Some("builtin:ReflectHas"),
@@ -19401,10 +19306,7 @@ fn timer_builtin_call_capability(
             if !is_timers_module_object(object, binding_lookup) {
                 return None;
             }
-            let method = match property.as_ref() {
-                Expression::Identifier(name) | Expression::StringLiteral(name) => name.as_str(),
-                _ => return None,
-            };
+            let method = well_formed_static_name(property)?;
             timers_module_export_global(method).and_then(timer_global_capability)
         }
         _ => None,
@@ -19524,10 +19426,9 @@ fn static_builtin_member_factory_capability(
     if is_lexically_shadowed(binding_lookup, global) {
         return None;
     }
-    let property_name = match (computed, property) {
-        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
-        (true, Expression::StringLiteral(name)) => name.as_str(),
-        _ => return None,
+    let property_name = match computed {
+        false => well_formed_static_name(property)?,
+        true => well_formed_string_literal(property)?,
     };
     match (global.as_str(), property_name) {
         ("Array", "isArray") => Some("builtin:ArrayIsArrayFunction"),
@@ -19565,10 +19466,9 @@ fn object_json_builtin_call_capability(
     if is_lexically_shadowed(binding_lookup, global) {
         return None;
     }
-    let property_name = match (*computed, property.as_ref()) {
-        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
-        (true, Expression::StringLiteral(name)) => name.as_str(),
-        _ => return None,
+    let property_name = match *computed {
+        false => well_formed_static_name(property)?,
+        true => well_formed_string_literal(property)?,
     };
     match (global.as_str(), property_name) {
         ("Object", "keys") => Some("builtin:ObjectKeys"),
@@ -19643,10 +19543,9 @@ fn object_receiver_static_call_capability(
     if global.as_str() != "Object" || is_lexically_shadowed(binding_lookup, global) {
         return None;
     }
-    let property_name = match (*computed, property.as_ref()) {
-        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
-        (true, Expression::StringLiteral(name)) => name.as_str(),
-        _ => return None,
+    let property_name = match *computed {
+        false => well_formed_static_name(property)?,
+        true => well_formed_string_literal(property)?,
     };
     match property_name {
         "is" => Some("builtin:ObjectIs"),
@@ -19686,10 +19585,9 @@ fn number_static_builtin_call_capability(
     if global.as_str() != "Number" || is_lexically_shadowed(binding_lookup, global) {
         return None;
     }
-    let property_name = match (*computed, property.as_ref()) {
-        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
-        (true, Expression::StringLiteral(name)) => name.as_str(),
-        _ => return None,
+    let property_name = match *computed {
+        false => well_formed_static_name(property)?,
+        true => well_formed_string_literal(property)?,
     };
     match property_name {
         "isInteger" => Some("builtin:NumberIsInteger"),
@@ -19726,10 +19624,9 @@ fn buffer_static_builtin_call_capability(
     if global.as_str() != "Buffer" || is_lexically_shadowed(binding_lookup, global) {
         return None;
     }
-    let property_name = match (*computed, property.as_ref()) {
-        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
-        (true, Expression::StringLiteral(name)) => name.as_str(),
-        _ => return None,
+    let property_name = match *computed {
+        false => well_formed_static_name(property)?,
+        true => well_formed_string_literal(property)?,
     };
     match property_name {
         "from" => Some("builtin:BufferFrom"),
@@ -19756,12 +19653,9 @@ fn array_literal_builtin_call_capability(callee: &Expression) -> Option<&'static
     if *computed || !matches!(object.as_ref(), Expression::ArrayLiteral(_)) {
         return None;
     }
-    match property.as_ref() {
-        Expression::Identifier(name) | Expression::StringLiteral(name) if name == "some" => {
-            Some("builtin:ArrayPrototypeSome")
-        }
-        _ => None,
-    }
+    well_formed_static_name(property)
+        .is_some_and(|name| name == "some")
+        .then_some("builtin:ArrayPrototypeSome")
 }
 
 fn string_literal_builtin_call_capability(callee: &Expression) -> Option<&'static str> {
@@ -19777,12 +19671,9 @@ fn string_literal_builtin_call_capability(callee: &Expression) -> Option<&'stati
     if *computed || !matches!(object.as_ref(), Expression::StringLiteral(_)) {
         return None;
     }
-    match property.as_ref() {
-        Expression::Identifier(name) | Expression::StringLiteral(name) if name == "charAt" => {
-            Some("builtin:StringPrototypeCharAt")
-        }
-        _ => None,
-    }
+    well_formed_static_name(property)
+        .is_some_and(|name| name == "charAt")
+        .then_some("builtin:StringPrototypeCharAt")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -19798,6 +19689,10 @@ fn lower_member_property_key_to_ir1(
     span_table: &mut Vec<Ir1OpSpanEntry>,
 ) -> Result<Ir1PropertyKey, LoweringPipelineError> {
     if computed {
+        reject_known_lone_surrogate_property_key(
+            property,
+            "engine.member_computed_lone_surrogate_key",
+        )?;
         lower_expression_to_ir1(
             property,
             ops,
@@ -19813,7 +19708,17 @@ fn lower_member_property_key_to_ir1(
 
     let key = match property {
         Expression::Identifier(name) => name.clone(),
-        Expression::StringLiteral(value) => value.clone(),
+        Expression::StringLiteral(value) => {
+            value.as_str().map(str::to_string).ok_or_else(|| {
+                unsupported_frontier_expression_error(
+                    "member_lone_surrogate_key",
+                    "FE-LOWER-UNSUPPORTED-STATIC-OBJECT-KEY-0001",
+                    "engine.member_lone_surrogate_key",
+                    "member keys containing lone surrogates require exact property-key support",
+                    None,
+                )
+            })?
+        }
         Expression::NumericLiteral(value) => value.to_string(),
         Expression::BigIntLiteral(value) => value.clone(),
         _ => "unknown".to_string(),
@@ -20122,7 +20027,7 @@ fn lower_literal_to_ir3_optimized(
 ) {
     match value {
         Ir1Literal::String(text) => {
-            let pool_index = push_constant_optimized(constant_pool, text);
+            let pool_index = push_constant_optimized(constant_pool, text.clone());
             instructions.push(Ir3Instruction::LoadStr { dst, pool_index });
         }
         Ir1Literal::Integer(value) => {
@@ -20143,7 +20048,7 @@ fn lower_literal_to_ir3_optimized(
     }
 }
 
-fn push_constant_optimized(constant_pool: &mut ConstantPool, value: &str) -> u32 {
+fn push_constant_optimized(constant_pool: &mut ConstantPool, value: impl Into<JsString>) -> u32 {
     constant_pool.push(value)
 }
 
@@ -20688,7 +20593,7 @@ mod tests {
     fn dynamic_hostcall_paths_insert_runtime_ifc_guard() {
         let mut ir1 = Ir1Module::new(ContentHash::compute(b"flow-ir0"), "dynamic_flow.js");
         ir1.ops.push(Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("secret_token".to_string()),
+            value: Ir1Literal::String("secret_token".into()),
         });
         ir1.ops.push(Ir1Op::HostCall {
             capability: "hostcall.invoke".to_string(),
@@ -20791,7 +20696,7 @@ mod tests {
     fn ir2_flow_proof_artifact_records_static_proof() {
         let mut ir1 = Ir1Module::new(ContentHash::compute(b"flow-ir0"), "static_flow.js");
         ir1.ops.push(Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("hostcall<\"fs.read\">".to_string()),
+            value: Ir1Literal::String("hostcall<\"fs.read\">".into()),
         });
         ir1.ops.push(Ir1Op::Return);
 
@@ -20819,7 +20724,7 @@ mod tests {
     fn ir2_flow_proof_artifact_records_dynamic_runtime_checkpoint() {
         let mut ir1 = Ir1Module::new(ContentHash::compute(b"flow-ir0"), "dynamic_flow.js");
         ir1.ops.push(Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("secret_token".to_string()),
+            value: Ir1Literal::String("secret_token".into()),
         });
         ir1.ops.push(Ir1Op::HostCall {
             capability: "hostcall.invoke".to_string(),
@@ -21501,7 +21406,7 @@ mod tests {
     #[test]
     fn classify_load_literal_string_hostcall() {
         let (effect, cap, _flow) = classify_ir1_op(&Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("hostcall<\"fs.read\">".to_string()),
+            value: Ir1Literal::String("hostcall<\"fs.read\">".into()),
         });
         assert_eq!(effect, EffectBoundary::HostcallEffect);
         assert!(cap.is_some());
@@ -21514,7 +21419,7 @@ mod tests {
     #[test]
     fn classify_load_literal_string_plain() {
         let (effect, cap, flow) = classify_ir1_op(&Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("hello".to_string()),
+            value: Ir1Literal::String("hello".into()),
         });
         assert_eq!(effect, EffectBoundary::Pure);
         assert!(cap.is_none());
@@ -21618,6 +21523,34 @@ mod tests {
         assert_eq!(pool.into_vec().len(), 2);
     }
 
+    #[test]
+    fn push_constant_optimized_distinguishes_exact_utf16_units_bd_vltnh() {
+        let mut pool = ConstantPool::new();
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let d801 = JsString::from_code_units(&[0xD801]);
+
+        assert_eq!(push_constant_optimized(&mut pool, d800.clone()), 0);
+        assert_eq!(push_constant_optimized(&mut pool, d801.clone()), 1);
+        assert_eq!(push_constant_optimized(&mut pool, d800.clone()), 0);
+        assert_eq!(pool.into_vec(), vec![d800, d801]);
+    }
+
+    #[test]
+    fn static_float_property_keys_use_ecmascript_number_spelling_bd_vltnh() {
+        for (value, expected) in [
+            (1e-7_f64, "1e-7"),
+            (1e20_f64, "100000000000000000000"),
+            (1e21_f64, "1e+21"),
+            (-0.0_f64, "0"),
+        ] {
+            assert_eq!(
+                canonical_static_object_property_key(&Expression::FloatLiteral(value.to_bits()))
+                    .expect("float property key should canonicalize"),
+                expected
+            );
+        }
+    }
+
     // -- lower_literal_to_ir3_optimized --
 
     #[test]
@@ -21625,7 +21558,7 @@ mod tests {
         let mut instructions = Vec::new();
         let mut pool = ConstantPool::new();
         lower_literal_to_ir3_optimized(
-            &Ir1Literal::String("hello".to_string()),
+            &Ir1Literal::String("hello".into()),
             0,
             &mut instructions,
             &mut pool,
@@ -21638,7 +21571,7 @@ mod tests {
                 pool_index: 0
             }
         ));
-        assert_eq!(pool.into_vec(), vec!["hello"]);
+        assert_eq!(pool.into_vec(), vec![JsString::from("hello")]);
     }
 
     #[test]
@@ -24164,7 +24097,7 @@ mod tests {
         let tree = SyntaxTree {
             goal: ParseGoal::Script,
             body: vec![Statement::Expression(ExpressionStatement {
-                expression: Expression::StringLiteral("hello world".to_string()),
+                expression: Expression::StringLiteral("hello world".into()),
                 span: span(),
             })],
             span: span(),
@@ -24177,8 +24110,27 @@ mod tests {
             output
                 .ir3
                 .constant_pool
-                .contains(&"hello world".to_string())
+                .iter()
+                .any(|value| value == "hello world")
         );
+    }
+
+    #[test]
+    fn full_pipeline_preserves_exact_string_literal_units_bd_vltnh() {
+        let exact = JsString::from_code_units(&[0x0061, 0xD800, 0x0062]);
+        let tree = SyntaxTree {
+            goal: ParseGoal::Script,
+            body: vec![Statement::Expression(ExpressionStatement {
+                expression: Expression::StringLiteral(exact.clone()),
+                span: span(),
+            })],
+            span: span(),
+        };
+        let ir0 = Ir0Module::from_syntax_tree(tree, "exact-string-literal.js");
+        let context = LoweringContext::new("trace-exact", "decision-exact", "policy-exact");
+        let output = lower_ir0_to_ir3(&ir0, &context).expect("exact literal should lower");
+
+        assert!(output.ir3.constant_pool.contains(&exact));
     }
 
     // -- scope_binding_ids_are_unique --
@@ -24243,7 +24195,7 @@ mod tests {
         let labels = BTreeMap::new();
         let secret = infer_data_label_for_op(
             &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("my_secret_key".to_string()),
+                value: Ir1Literal::String("my_secret_key".into()),
             },
             &labels,
             Label::Public,
@@ -24252,7 +24204,7 @@ mod tests {
 
         let token = infer_data_label_for_op(
             &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("AUTH_TOKEN".to_string()),
+                value: Ir1Literal::String("AUTH_TOKEN".into()),
             },
             &labels,
             Label::Public,
@@ -24261,7 +24213,7 @@ mod tests {
 
         let api_key = infer_data_label_for_op(
             &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("my_api_key_here".to_string()),
+                value: Ir1Literal::String("my_api_key_here".into()),
             },
             &labels,
             Label::Public,
@@ -24270,7 +24222,7 @@ mod tests {
 
         let password = infer_data_label_for_op(
             &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("user_password".to_string()),
+                value: Ir1Literal::String("user_password".into()),
             },
             &labels,
             Label::Public,
@@ -24279,7 +24231,7 @@ mod tests {
 
         let credential = infer_data_label_for_op(
             &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("credential_store".to_string()),
+                value: Ir1Literal::String("credential_store".into()),
             },
             &labels,
             Label::Public,
@@ -24292,7 +24244,7 @@ mod tests {
         let labels = BTreeMap::new();
         let public = infer_data_label_for_op(
             &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("hello world".to_string()),
+                value: Ir1Literal::String("hello world".into()),
             },
             &labels,
             Label::Public,
@@ -25197,7 +25149,7 @@ mod tests {
             .ir3
             .constant_pool
             .iter()
-            .position(String::is_empty)
+            .position(|value| value.is_empty())
             .expect("empty template literal should load an empty string constant");
         let empty_pool_index =
             u32::try_from(empty_pool_index).expect("constant pool index should fit in u32");
@@ -25253,7 +25205,7 @@ mod tests {
             .ir3
             .constant_pool
             .iter()
-            .position(String::is_empty)
+            .position(|value| value.is_empty())
             .expect("empty template literal should load an empty string constant");
         let empty_pool_index =
             u32::try_from(empty_pool_index).expect("constant pool index should fit in u32");
@@ -25364,7 +25316,7 @@ mod tests {
                     params: Vec::new(),
                     body: BlockStatement {
                         body: vec![Statement::Return(ReturnStatement {
-                            argument: Some(Expression::StringLiteral("ok".to_string())),
+                            argument: Some(Expression::StringLiteral("ok".into())),
                             span: span(),
                         })],
                         span: span(),
@@ -27717,7 +27669,7 @@ mod tests {
         let large_body: Vec<Statement> = (0..large_body_size)
             .map(|i| {
                 Statement::Expression(ExpressionStatement {
-                    expression: Expression::StringLiteral(format!("stmt_{}", i)),
+                    expression: Expression::StringLiteral(format!("stmt_{}", i).into()),
                     span: SourceSpan::new(0, 10, 1, 1, 1, 11),
                 })
             })
@@ -27763,7 +27715,7 @@ mod tests {
         let large_body: Vec<Statement> = (0..large_body_size)
             .map(|i| {
                 Statement::Expression(ExpressionStatement {
-                    expression: Expression::StringLiteral(format!("stmt_{}", i)),
+                    expression: Expression::StringLiteral(format!("stmt_{}", i).into()),
                     span: SourceSpan::new(0, 10, 1, 1, 1, 11),
                 })
             })
@@ -28017,7 +27969,7 @@ mod tests {
         });
 
         let expr_stmt2 = Statement::Expression(ExpressionStatement {
-            expression: Expression::StringLiteral("test".to_string()),
+            expression: Expression::StringLiteral("test".into()),
             span: span(),
         });
 
@@ -28217,11 +28169,11 @@ mod tests {
                     right: Box::new(Expression::NumericLiteral(0)),
                 },
                 consequent: Box::new(Statement::Expression(ExpressionStatement {
-                    expression: Expression::StringLiteral("positive".to_string()),
+                    expression: Expression::StringLiteral("positive".into()),
                     span: span(),
                 })),
                 alternate: Some(Box::new(Statement::Expression(ExpressionStatement {
-                    expression: Expression::StringLiteral("non-positive".to_string()),
+                    expression: Expression::StringLiteral("non-positive".into()),
                     span: span(),
                 }))),
                 span: span(),
@@ -28285,7 +28237,7 @@ mod tests {
                     kind: VariableDeclarationKind::Const,
                     declarations: vec![VariableDeclarator {
                         pattern: BindingPattern::Identifier("message".to_string()),
-                        initializer: Some(Expression::StringLiteral("Hello, world!".to_string())),
+                        initializer: Some(Expression::StringLiteral("Hello, world!".into())),
                         span: span(),
                     }],
                     span: span(),

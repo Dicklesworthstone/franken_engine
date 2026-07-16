@@ -44,7 +44,7 @@ fn test_config() -> InterpreterConfig {
 
 fn test_module_with_object_operations() -> Ir3Module {
     let mut m = Ir3Module::new(ContentHash::compute(b"gc-write-barrier"), "test-gc");
-    m.constant_pool = vec!["test_property".to_string()];
+    m.constant_pool = vec!["test_property".into()];
     m.instructions = vec![
         // Create an object
         Ir3Instruction::NewObject { dst: 0 },

@@ -58,7 +58,7 @@ fn test_module(instructions: Vec<Ir3Instruction>, constant_pool: Vec<String>) ->
             source_label: "baseline-malformed-dispatch-golden".to_string(),
         },
         instructions,
-        constant_pool,
+        constant_pool: constant_pool.into_iter().map(Into::into).collect(),
         function_table: Vec::new(),
         specialization: None,
         required_capabilities: Vec::new(),

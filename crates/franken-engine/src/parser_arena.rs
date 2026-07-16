@@ -9,6 +9,7 @@ use crate::ast::{
     ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree, VariableDeclaration,
     VariableDeclarationKind, VariableDeclarator,
 };
+use crate::js_string::JsString;
 
 const HANDLE_GENERATION: u32 = 1;
 const SPAN_ESTIMATED_BYTES: u64 = 48;
@@ -241,7 +242,7 @@ pub struct ArenaVariableDeclarator {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArenaExpression {
     Identifier(String),
-    StringLiteral(String),
+    StringLiteral(JsString),
     NumericLiteral(i64),
     BigIntLiteral(String),
     FloatLiteral(u64),
@@ -557,7 +558,7 @@ impl ParserArena {
             }
             Expression::StringLiteral(value) => {
                 self.charge_bytes(EXPR_BASE_ESTIMATED_BYTES)?;
-                self.charge_bytes(string_bytes(value))?;
+                self.charge_bytes(js_string_bytes(value))?;
                 ArenaExpression::StringLiteral(value.clone())
             }
             Expression::NumericLiteral(value) => {
@@ -841,6 +842,18 @@ fn string_bytes(value: &str) -> u64 {
     u64::try_from(value.len()).unwrap_or(u64::MAX)
 }
 
+fn js_string_bytes(value: &JsString) -> u64 {
+    let utf8_projection_bytes = string_bytes(value.as_utf8_projection());
+    if value.is_well_formed() {
+        utf8_projection_bytes
+    } else {
+        let exact_unit_bytes = u64::try_from(value.encode_utf16().count())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(2);
+        utf8_projection_bytes.saturating_add(exact_unit_bytes)
+    }
+}
+
 fn statement_kind_name(statement: &Statement) -> &'static str {
     match statement {
         Statement::Import(_) => "import",
@@ -949,7 +962,17 @@ fn node_audit_descriptor(node: &ArenaNode) -> String {
 fn expression_audit_descriptor(expression: &ArenaExpression) -> String {
     match expression {
         ArenaExpression::Identifier(value) => format!("identifier {}", value),
-        ArenaExpression::StringLiteral(value) => format!("string {}", value),
+        ArenaExpression::StringLiteral(value) => match value.as_str() {
+            Some(value) => format!("string {value}"),
+            None => format!(
+                "string utf16:{}",
+                value
+                    .encode_utf16()
+                    .map(|unit| format!("{unit:04X}"))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+        },
         ArenaExpression::NumericLiteral(value) => format!("number {}", value),
         ArenaExpression::BigIntLiteral(value) => format!("bigint {}", value),
         ArenaExpression::FloatLiteral(bits) => format!("float bits:{}", bits),
@@ -1042,7 +1065,7 @@ mod tests {
                     },
                     VariableDeclarator {
                         pattern: BindingPattern::Identifier("label".to_string()),
-                        initializer: Some(Expression::StringLiteral("ready".to_string())),
+                        initializer: Some(Expression::StringLiteral("ready".into())),
                         span: test_span(),
                     },
                     VariableDeclarator {
@@ -1292,7 +1315,7 @@ mod tests {
     fn from_syntax_tree_all_expression_types() {
         let expressions = vec![
             Expression::Identifier("x".to_string()),
-            Expression::StringLiteral("hello".to_string()),
+            Expression::StringLiteral("hello".into()),
             Expression::NumericLiteral(123),
             Expression::BooleanLiteral(true),
             Expression::NullLiteral,
@@ -1331,6 +1354,37 @@ mod tests {
             .to_syntax_tree()
             .expect("operation should succeed for valid inputs");
         assert_eq!(recovered, tree);
+    }
+
+    #[test]
+    fn roundtrip_exact_string_literal_preserves_code_units_bd_vltnh() {
+        let exact = JsString::from_code_units(&[0x0061, 0xD800, 0x0062]);
+        let tree = SyntaxTree {
+            goal: ParseGoal::Script,
+            body: vec![Statement::Expression(ExpressionStatement {
+                expression: Expression::StringLiteral(exact.clone()),
+                span: test_span(),
+            })],
+            span: test_span(),
+        };
+
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
+            .expect("exact literal should fit the default arena budget");
+        let recovered = arena
+            .to_syntax_tree()
+            .expect("exact literal should materialize from the arena");
+
+        assert_eq!(recovered, tree);
+        let Statement::Expression(statement) = &recovered.body[0] else {
+            panic!("expected expression statement");
+        };
+        let Expression::StringLiteral(value) = &statement.expression else {
+            panic!("expected string literal");
+        };
+        assert_eq!(
+            value.encode_utf16().collect::<Vec<_>>(),
+            [0x0061, 0xD800, 0x0062]
+        );
     }
 
     #[test]
@@ -1712,7 +1766,7 @@ mod tests {
                 .contains("identifier")
         );
         assert!(
-            expression_audit_descriptor(&ArenaExpression::StringLiteral("hi".to_string()))
+            expression_audit_descriptor(&ArenaExpression::StringLiteral("hi".into()))
                 .contains("string")
         );
         assert!(expression_audit_descriptor(&ArenaExpression::NumericLiteral(42)).contains("42"));
@@ -1752,6 +1806,12 @@ mod tests {
     fn string_bytes_measurement() {
         assert_eq!(string_bytes("hello"), 5);
         assert_eq!(string_bytes(""), 0);
+    }
+
+    #[test]
+    fn js_string_bytes_accounts_for_exact_unit_backing() {
+        assert_eq!(js_string_bytes(&JsString::from("hello")), 5);
+        assert_eq!(js_string_bytes(&JsString::from_code_units(&[0xD800])), 5);
     }
 
     #[test]
@@ -1810,7 +1870,7 @@ mod tests {
                     span: test_span(),
                 }),
                 Statement::Export(ExportDeclaration {
-                    kind: ExportKind::Default(Expression::StringLiteral("default".to_string())),
+                    kind: ExportKind::Default(Expression::StringLiteral("default".into())),
                     span: test_span(),
                 }),
                 Statement::Expression(ExpressionStatement {
@@ -2160,11 +2220,11 @@ mod tests {
             goal: ParseGoal::Script,
             body: vec![
                 Statement::Expression(ExpressionStatement {
-                    expression: Expression::StringLiteral("a".repeat(1000)),
+                    expression: Expression::StringLiteral("a".repeat(1000).into()),
                     span: test_span(),
                 }),
                 Statement::Expression(ExpressionStatement {
-                    expression: Expression::StringLiteral("b".repeat(1000)),
+                    expression: Expression::StringLiteral("b".repeat(1000).into()),
                     span: test_span(),
                 }),
             ],

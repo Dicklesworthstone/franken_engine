@@ -34,7 +34,7 @@ fn module(
             source_label: "baseline-object-to-string-fuzz".to_string(),
         },
         instructions,
-        constant_pool,
+        constant_pool: constant_pool.into_iter().map(Into::into).collect(),
         function_table,
         specialization: None,
         required_capabilities: Vec::new(),

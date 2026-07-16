@@ -44,7 +44,7 @@ fn async_module(mut body: Vec<Ir3Instruction>, constant_pool: Vec<String>) -> Ir
         "promise_pending_state.js",
     );
     module.instructions = instructions;
-    module.constant_pool = constant_pool;
+    module.constant_pool = constant_pool.into_iter().map(Into::into).collect();
     module.function_table = vec![Ir3FunctionDesc {
         entry: function_entry,
         arity: 0,

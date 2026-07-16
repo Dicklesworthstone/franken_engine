@@ -37,11 +37,7 @@ fn test_config() -> InterpreterConfig {
 
 fn create_date_object_module(timestamp_ms: i64) -> Ir3Module {
     let mut m = Ir3Module::new(ContentHash::compute(b"date-test"), "date-locale-test");
-    m.constant_pool = vec![
-        "__type".to_string(),
-        "Date".to_string(),
-        "__timestamp".to_string(),
-    ];
+    m.constant_pool = vec!["__type".into(), "Date".into(), "__timestamp".into()];
     m.instructions = vec![
         // Create a Date object with specific timestamp
         Ir3Instruction::NewObject { dst: 0 },
@@ -81,7 +77,7 @@ fn create_date_object_module(timestamp_ms: i64) -> Ir3Module {
 fn create_locale_date_format_module(timestamp_ms: i64, locale: &str, method: &str) -> Ir3Module {
     let mut m = create_date_object_module(timestamp_ms);
     let locale_pool_index = m.constant_pool.len() as u32;
-    m.constant_pool.push(locale.to_string());
+    m.constant_pool.push(locale.into());
 
     // Add locale formatting call
     let mut additional_instructions = vec![
@@ -411,7 +407,7 @@ fn invalid_date_handling() {
 
     // Create an object that's not a proper Date
     let mut m = Ir3Module::new(ContentHash::compute(b"invalid-date"), "invalid-date-test");
-    m.constant_pool = vec!["en-US".to_string()];
+    m.constant_pool = vec!["en-US".into()];
     m.instructions = vec![
         // Create regular object (not a Date)
         Ir3Instruction::NewObject { dst: 0 },

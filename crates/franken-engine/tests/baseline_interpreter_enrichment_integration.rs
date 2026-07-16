@@ -61,7 +61,7 @@ fn test_module(instructions: Vec<Ir3Instruction>) -> Ir3Module {
 
 fn test_module_with_pool(instructions: Vec<Ir3Instruction>, pool: Vec<String>) -> Ir3Module {
     let mut m = test_module(instructions);
-    m.constant_pool = pool;
+    m.constant_pool = pool.into_iter().map(Into::into).collect();
     m
 }
 

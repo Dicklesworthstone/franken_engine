@@ -1568,6 +1568,7 @@ dependencies = [
  "rand 0.8.6",
  "regex",
  "rustix",
+ "ryu-js",
  "serde",
  "serde_json",
  "sha2 0.10.9",

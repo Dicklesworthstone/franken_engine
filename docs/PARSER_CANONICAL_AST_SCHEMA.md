@@ -3,15 +3,16 @@
 This document freezes the parser canonical AST schema + hash contract for
 `bd-2mds.1.1.2`.
 
-## Contract IDs (v1)
+## Historical Contract IDs (v1)
 
 - `contract_version`: `franken-engine.parser-ast.contract.v1`
 - `schema_version`: `franken-engine.parser-ast.schema.v1`
 - `hash_algorithm`: `sha256`
 - `hash_prefix`: `sha256:`
 
-Source of truth: [`crates/franken-engine/src/ast.rs`](../crates/franken-engine/src/ast.rs)
-constants:
+The historical v1 vector remains pinned by `GoldenVersionVector::v1()`. Live
+constants are exposed by
+[`crates/franken-engine/src/ast.rs`](../crates/franken-engine/src/ast.rs):
 
 - `CANONICAL_AST_CONTRACT_VERSION`
 - `CANONICAL_AST_SCHEMA_VERSION`
@@ -66,7 +67,7 @@ Hash contract (v1):
 
 ## Compatibility Policy
 
-- v1 is fail-closed for drift in:
+- Each live schema vector is fail-closed for drift in:
   - contract constants,
   - canonical encoding algorithm,
   - hash prefix/algorithm,
@@ -76,11 +77,30 @@ Hash contract (v1):
   2. new compatibility vectors,
   3. migration note in this doc and parser verification docs.
 
+## Engine Compatibility Parser Schema v2
+
+The compatibility parser in `crates/franken-engine` advances its live
+`CANONICAL_AST_SCHEMA_VERSION` to `franken-engine.parser-ast.schema.v2` for
+`bd-vltnh`. The contract version, hash algorithm, and hash prefix remain v1.
+
+Schema v2 widens `Expression::StringLiteral` and the parser arena mirror from
+Rust `String` to the exact ECMAScript `JsString` carrier. Well-formed values
+retain the historical canonical string leaf and plain JSON string shape. A
+value containing a lone surrogate is represented canonically and in serde as
+`{"$wtf16":[...]}`, preserving every UTF-16 code unit without projecting it
+through UTF-8. A valid surrogate pair normalizes to its ordinary Unicode scalar
+string representation.
+
+The historical engine v1 vector remains available for artifact identification;
+`GoldenVersionVector::v2()` and `GoldenVersionVector::current()` bind live
+compatibility checks to schema v2. The pinned v2 `D800` syntax-tree vector is:
+
+`sha256:2d2912b4ee4142810f692d25a6f154e758dccf2aeb9926f5abebab7f5d63773a`
+
 ## FrankenCore Native Parser Schema v2
 
-The repository split now has two parser AST seams. The compatibility parser in
-`crates/franken-engine` retains the v1 contract described above. The native
-parser/lowering path in `crates/franken-core` advances its
+The repository split has two parser AST seams with independent schema histories.
+The native parser/lowering path in `crates/franken-core` advances its
 `CANONICAL_AST_SCHEMA_VERSION` to `franken-engine.parser-ast.schema.v2` for
 `bd-1tafi`.
 
@@ -123,10 +143,13 @@ Pinned by tests:
   - contract constants/accessors are stable
   - hash vectors:
     - `-7` (script) -> `sha256:d959b7cbce9a409871d9a288d6feb3c043bdf3ce6ee54ff39051909db432adc4`
-    - `import dep from "pkg"` (module) -> `sha256:6f9b81a8dfbaad70c345e5508dd1fae29d3d6cfdc1d18954d3486abd00d75f6c`
+    - `import dep from "pkg"` (module) -> `sha256:184b65136745331fa73eb839c7d3e2d444cda607e80547a8a03b19e6c5779874`
     - `export default true` (module) -> `sha256:ebb993de589945a2cf22f17db58200599ae3e1e6c21cd33a0fc59eab99fd8ef6`
 - [`crates/franken-engine/tests/ast_integration.rs`](../crates/franken-engine/tests/ast_integration.rs)
-  - contract constants/accessors and hash prefix checks
+  - engine v2 contract constants/accessors and hash prefix checks
+  - exact `D800` serde, canonical-value, and pinned hash checks
+- [`crates/franken-engine/src/parser_arena.rs`](../crates/franken-engine/src/parser_arena.rs)
+  - exact string-literal arena round-trip without UTF-8 projection
 - [`crates/franken-core/src/ast.rs`](../crates/franken-core/src/ast.rs)
   - core v3 lone-surrogate string-literal vector (`D800`) ->
     `sha256:2d2912b4ee4142810f692d25a6f154e758dccf2aeb9926f5abebab7f5d63773a`

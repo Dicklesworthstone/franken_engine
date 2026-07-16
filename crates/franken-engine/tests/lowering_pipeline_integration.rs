@@ -63,7 +63,7 @@ fn script_ir0_string(value: &str) -> Ir0Module {
     let tree = SyntaxTree {
         goal: ParseGoal::Script,
         body: vec![Statement::Expression(ExpressionStatement {
-            expression: Expression::StringLiteral(value.to_string()),
+            expression: Expression::StringLiteral(value.to_string().into()),
             span: span(),
         })],
         span: span(),
@@ -798,7 +798,7 @@ fn ir1_to_ir2_classifies_import_as_read_effect() {
 fn ir1_to_ir2_flow_annotation_for_secret_string() {
     let mut ir1 = Ir1Module::new(ContentHash::compute(b"test-ir0"), "secret_test.js");
     ir1.ops.push(Ir1Op::LoadLiteral {
-        value: Ir1Literal::String("my_secret_token".to_string()),
+        value: Ir1Literal::String("my_secret_token".to_string().into()),
     });
     ir1.ops.push(Ir1Op::HostCall {
         capability: "hostcall.invoke".to_string(),
@@ -848,7 +848,7 @@ fn ir1_to_ir2_invariant_checks_include_flow_metrics() {
 fn ir1_to_ir2_hostcall_string_literal_extracts_capability() {
     let mut ir1 = Ir1Module::new(ContentHash::compute(b"test-ir0"), "hostcall_extract.js");
     ir1.ops.push(Ir1Op::LoadLiteral {
-        value: Ir1Literal::String("hostcall<\"fs.read\">".to_string()),
+        value: Ir1Literal::String("hostcall<\"fs.read\">".to_string().into()),
     });
     ir1.ops.push(Ir1Op::Return);
 
@@ -949,7 +949,8 @@ fn ir2_to_ir3_string_literal_goes_to_constant_pool() {
         result
             .module
             .constant_pool
-            .contains(&"hello world".to_string()),
+            .iter()
+            .any(|value| value == "hello world"),
         "constant pool should contain the string literal"
     );
 
@@ -984,7 +985,11 @@ fn ir2_to_ir3_import_module_emits_load_str_for_specifier() {
     let result = lower_ir2_to_ir3(&ir2).expect("ir2->ir3");
 
     assert!(
-        result.module.constant_pool.contains(&"lodash".to_string()),
+        result
+            .module
+            .constant_pool
+            .iter()
+            .any(|value| value == "lodash"),
         "constant pool should contain the import specifier"
     );
 }
@@ -1099,7 +1104,7 @@ fn ir2_to_ir3_witness_invariant_checks() {
 fn dynamic_hostcall_inserts_ifc_runtime_guard() {
     let mut ir1 = Ir1Module::new(ContentHash::compute(b"flow-ir0"), "dynamic_flow.js");
     ir1.ops.push(Ir1Op::LoadLiteral {
-        value: Ir1Literal::String("secret_token".to_string()),
+        value: Ir1Literal::String("secret_token".to_string().into()),
     });
     ir1.ops.push(Ir1Op::HostCall {
         capability: "hostcall.invoke".to_string(),
@@ -1147,7 +1152,7 @@ fn dynamic_hostcall_inserts_ifc_runtime_guard() {
 fn static_hostcall_skips_ifc_runtime_guard() {
     let mut ir1 = Ir1Module::new(ContentHash::compute(b"flow-ir0"), "static_flow.js");
     ir1.ops.push(Ir1Op::LoadLiteral {
-        value: Ir1Literal::String("hostcall<\"fs.read\">".to_string()),
+        value: Ir1Literal::String("hostcall<\"fs.read\">".to_string().into()),
     });
     ir1.ops.push(Ir1Op::Return);
 
@@ -1174,7 +1179,7 @@ fn static_hostcall_skips_ifc_runtime_guard() {
 fn public_data_through_hostcall_no_guard() {
     let mut ir1 = Ir1Module::new(ContentHash::compute(b"flow-ir0"), "public_flow.js");
     ir1.ops.push(Ir1Op::LoadLiteral {
-        value: Ir1Literal::String("hello world".to_string()),
+        value: Ir1Literal::String("hello world".to_string().into()),
     });
     ir1.ops.push(Ir1Op::HostCall {
         capability: "hostcall.invoke".to_string(),
@@ -1304,7 +1309,8 @@ fn full_pipeline_string_literal_in_constant_pool() {
         output
             .ir3
             .constant_pool
-            .contains(&"test string".to_string())
+            .iter()
+            .any(|value| value == "test string")
     );
 }
 
@@ -1318,7 +1324,7 @@ fn full_pipeline_all_literal_types() {
                 span: span(),
             }),
             Statement::Expression(ExpressionStatement {
-                expression: Expression::StringLiteral("str".to_string()),
+                expression: Expression::StringLiteral("str".to_string().into()),
                 span: span(),
             }),
             Statement::Expression(ExpressionStatement {
@@ -1628,8 +1634,20 @@ fn import_then_export_then_expression_complex_module() {
     let output = run_full_pipeline(&ir0);
 
     // Both imports should appear in constant pool
-    assert!(output.ir3.constant_pool.contains(&"react".to_string()));
-    assert!(output.ir3.constant_pool.contains(&"lodash".to_string()));
+    assert!(
+        output
+            .ir3
+            .constant_pool
+            .iter()
+            .any(|value| value == "react")
+    );
+    assert!(
+        output
+            .ir3
+            .constant_pool
+            .iter()
+            .any(|value| value == "lodash")
+    );
 
     // Should have hostcall for the explicit sink call.
     let has_hostcall = output
@@ -1685,11 +1703,13 @@ fn secret_data_in_module_export_requires_declassification() {
         goal: ParseGoal::Module,
         body: vec![
             Statement::Expression(ExpressionStatement {
-                expression: Expression::StringLiteral("my_password_hash".to_string()),
+                expression: Expression::StringLiteral("my_password_hash".to_string().into()),
                 span: span(),
             }),
             Statement::Export(ExportDeclaration {
-                kind: ExportKind::Default(Expression::StringLiteral("API_KEY_value".to_string())),
+                kind: ExportKind::Default(Expression::StringLiteral(
+                    "API_KEY_value".to_string().into(),
+                )),
                 span: span(),
             }),
         ],
@@ -1720,7 +1740,7 @@ fn pipeline_with_hostcall_marker_in_string() {
     let tree = SyntaxTree {
         goal: ParseGoal::Script,
         body: vec![Statement::Expression(ExpressionStatement {
-            expression: Expression::StringLiteral("hostcall<\"net.write\">".to_string()),
+            expression: Expression::StringLiteral("hostcall<\"net.write\">".to_string().into()),
             span: span(),
         })],
         span: span(),
@@ -1924,15 +1944,15 @@ fn constant_pool_deduplicates_identical_strings() {
         goal: ParseGoal::Script,
         body: vec![
             Statement::Expression(ExpressionStatement {
-                expression: Expression::StringLiteral("hello".to_string()),
+                expression: Expression::StringLiteral("hello".to_string().into()),
                 span: span(),
             }),
             Statement::Expression(ExpressionStatement {
-                expression: Expression::StringLiteral("hello".to_string()),
+                expression: Expression::StringLiteral("hello".to_string().into()),
                 span: span(),
             }),
             Statement::Expression(ExpressionStatement {
-                expression: Expression::StringLiteral("world".to_string()),
+                expression: Expression::StringLiteral("world".to_string().into()),
                 span: span(),
             }),
         ],
@@ -1946,10 +1966,16 @@ fn constant_pool_deduplicates_identical_strings() {
         .ir3
         .constant_pool
         .iter()
-        .filter(|s| s.as_str() == "hello")
+        .filter(|s| s.as_str() == Some("hello"))
         .count();
     assert_eq!(hello_count, 1, "constant pool should deduplicate 'hello'");
-    assert!(output.ir3.constant_pool.contains(&"world".to_string()));
+    assert!(
+        output
+            .ir3
+            .constant_pool
+            .iter()
+            .any(|value| value == "world")
+    );
 }
 
 // ============================================================================

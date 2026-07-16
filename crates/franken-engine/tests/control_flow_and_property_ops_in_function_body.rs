@@ -308,7 +308,7 @@ fn test_property_operations_deterministic_lowering() {
         operator: UnaryOperator::Delete,
         argument: Box::new(Expression::Member {
             object: Box::new(Expression::Identifier("target".to_string())),
-            property: Box::new(Expression::StringLiteral("dynamicKey".to_string())),
+            property: Box::new(Expression::StringLiteral("dynamicKey".to_string().into())),
             computed: true,
             span: None,
         }),

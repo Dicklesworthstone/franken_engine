@@ -34,7 +34,7 @@ fn module_for_console_caps(console_caps: &[&str]) -> Ir3Module {
             source_label: "baseline-console-zero-cap".to_string(),
         },
         instructions,
-        constant_pool,
+        constant_pool: constant_pool.into_iter().map(Into::into).collect(),
         function_table: Vec::new(),
         specialization: None,
         required_capabilities: Vec::new(),

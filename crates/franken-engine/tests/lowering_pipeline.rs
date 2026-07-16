@@ -805,7 +805,7 @@ fn enrichment_numeric_literal_lowering_produces_ir3() {
 fn enrichment_string_literal_lowering_produces_ir3() {
     let ir0 = make_ir0(
         vec![make_expr_stmt(Expression::StringLiteral(
-            "hello".to_string(),
+            "hello".to_string().into(),
         ))],
         ParseGoal::Script,
         "enr_str.js",
@@ -1720,7 +1720,7 @@ fn enrichment_delete_member_lowering() {
 fn enrichment_determinism_same_ast_identical_hashes() {
     let body = vec![
         make_expr_stmt(Expression::NumericLiteral(100)),
-        make_expr_stmt(Expression::StringLiteral("abc".to_string())),
+        make_expr_stmt(Expression::StringLiteral("abc".to_string().into())),
     ];
     let ir0 = make_ir0(body.clone(), ParseGoal::Script, "enr_det1.js");
     let ctx = default_ctx();
@@ -2236,7 +2236,9 @@ fn enrichment_zero_numeric_literal() {
 #[test]
 fn enrichment_empty_string_literal() {
     let ir0 = make_ir0(
-        vec![make_expr_stmt(Expression::StringLiteral(String::new()))],
+        vec![make_expr_stmt(Expression::StringLiteral(
+            String::new().into(),
+        ))],
         ParseGoal::Script,
         "enr_empty_str.js",
     );

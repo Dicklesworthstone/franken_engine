@@ -138,7 +138,7 @@ fn arena_conformance_cases() -> Vec<ArenaConformanceCase> {
             ParseGoal::Script,
             vec![expression_statement(
                 "'hello';",
-                Expression::StringLiteral("hello".to_string()),
+                Expression::StringLiteral("hello".to_string().into()),
             )],
             vec!["string hello".to_string()],
         ),
@@ -243,7 +243,7 @@ fn arena_conformance_cases() -> Vec<ArenaConformanceCase> {
                 vec![variable_declarator(
                     "const label = 'ok';",
                     "label",
-                    Some(Expression::StringLiteral("ok".to_string())),
+                    Some(Expression::StringLiteral("ok".to_string().into())),
                 )],
             )],
             vec![
@@ -280,7 +280,7 @@ fn arena_conformance_cases() -> Vec<ArenaConformanceCase> {
                     variable_declarator(
                         "let left = 1, right = 'r';",
                         "right",
-                        Some(Expression::StringLiteral("r".to_string())),
+                        Some(Expression::StringLiteral("r".to_string().into())),
                     ),
                 ],
             )],

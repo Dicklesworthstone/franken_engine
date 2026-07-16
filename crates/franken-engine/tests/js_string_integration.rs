@@ -12,9 +12,8 @@
 //!   paired form heals;
 //! - `JSON.parse`/`JSON.stringify` round-trip lone surrogates exactly.
 //!
-//! Source-literal lone-surrogate ESCAPES (`"\uD800"` in JS source) remain
-//! fail-closed in the parser, so JSON tests construct their inputs at
-//! runtime via `String.fromCharCode` / `JSON.stringify`.
+//! Source-literal lone-surrogate escapes (`"\uD800"` in JS source) retain
+//! their exact UTF-16 units through parsing, lowering, and execution.
 
 use std::collections::BTreeSet;
 
@@ -82,6 +81,20 @@ fn emoji_literal_round_trips_as_supplementary_code_point() {
     assert_eq!(s.as_str(), Some("😀"));
     assert_eq!(s.code_units_vec(), vec![0xD83D, 0xDE00]);
     assert_eq!(s.utf16_len(), 2);
+}
+
+#[test]
+fn source_literal_surrogate_escapes_execute_as_exact_units_bd_vltnh() {
+    let high = expect_string("source-literal-high", r#""\uD800";"#);
+    assert!(!high.is_well_formed());
+    assert_eq!(high.code_units_vec(), [0xD800]);
+
+    let low = expect_string("source-literal-low", r#""\uDC00";"#);
+    assert!(!low.is_well_formed());
+    assert_eq!(low.code_units_vec(), [0xDC00]);
+
+    expect_true("source-literal-distinct", r#""\uD800" !== "\uD801";"#);
+    expect_true("source-literal-pair-heals", r#""\uD83D\uDE00" === "😀";"#);
 }
 
 #[test]
@@ -167,8 +180,8 @@ fn json_round_trips_lone_surrogate_value_exactly() {
 #[test]
 fn json_parse_combines_paired_surrogate_escapes_in_json_text() {
     // The JSON text is built at runtime ('\\u' is a literal backslash + u in
-    // JS source), so the parser's fail-closed posture on source-literal lone
-    // escapes is not involved.
+    // JS source), keeping this test focused on JSON.parse rather than source
+    // literal cooking.
     expect_true(
         "json-parse-paired",
         "JSON.parse('\"' + '\\\\uD83D' + '\\\\uDE00' + '\"') === '😀';",

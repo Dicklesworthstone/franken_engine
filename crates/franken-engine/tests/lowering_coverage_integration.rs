@@ -145,7 +145,7 @@ fn determinism_let_declaration() {
         vec![make_var_decl(
             VariableDeclarationKind::Let,
             "y",
-            Some(Expression::StringLiteral("hello".to_string())),
+            Some(Expression::StringLiteral("hello".to_string().into())),
         )],
     );
     let a = run_full(&ir0);
@@ -219,7 +219,7 @@ fn determinism_all_literal_types() {
         ParseGoal::Script,
         vec![
             make_expr_stmt(Expression::NumericLiteral(0)),
-            make_expr_stmt(Expression::StringLiteral("text".to_string())),
+            make_expr_stmt(Expression::StringLiteral("text".to_string().into())),
             make_expr_stmt(Expression::BooleanLiteral(true)),
             make_expr_stmt(Expression::BooleanLiteral(false)),
             make_expr_stmt(Expression::NullLiteral),
@@ -584,7 +584,7 @@ fn ir3_string_literal_uses_constant_pool() {
     let ir0 = make_ir0(
         ParseGoal::Script,
         vec![make_expr_stmt(Expression::StringLiteral(
-            "hello world".to_string(),
+            "hello world".to_string().into(),
         ))],
     );
     let output = run_full(&ir0);
@@ -592,7 +592,8 @@ fn ir3_string_literal_uses_constant_pool() {
         output
             .ir3
             .constant_pool
-            .contains(&"hello world".to_string())
+            .iter()
+            .any(|value| value == "hello world")
     );
     let has_load_str = output
         .ir3
@@ -660,7 +661,13 @@ fn ir3_undefined_literal_produces_load_undefined() {
 fn ir3_import_uses_constant_pool_for_specifier() {
     let ir0 = make_ir0(ParseGoal::Module, vec![make_import("lodash", Some("_"))]);
     let output = run_full(&ir0);
-    assert!(output.ir3.constant_pool.contains(&"lodash".to_string()));
+    assert!(
+        output
+            .ir3
+            .constant_pool
+            .iter()
+            .any(|value| value == "lodash")
+    );
 }
 
 // ===========================================================================
@@ -887,7 +894,7 @@ fn static_semantics_module_with_imports_and_exports_integrates() {
             make_var_decl(
                 VariableDeclarationKind::Const,
                 "App",
-                Some(Expression::StringLiteral("component".to_string())),
+                Some(Expression::StringLiteral("component".to_string().into())),
             ),
             make_default_export(Expression::NumericLiteral(1)),
         ],
@@ -975,7 +982,7 @@ fn complex_module_with_all_syntax_families() {
                 "state",
                 Some(Expression::BooleanLiteral(false)),
             ),
-            make_expr_stmt(Expression::StringLiteral("init".to_string())),
+            make_expr_stmt(Expression::StringLiteral("init".to_string().into())),
             make_expr_stmt(Expression::NullLiteral),
             make_expr_stmt(Expression::UndefinedLiteral),
             make_default_export(Expression::NumericLiteral(42)),
@@ -1010,7 +1017,7 @@ fn mixed_var_and_expression_statements() {
             make_var_decl(
                 VariableDeclarationKind::Var,
                 "b",
-                Some(Expression::StringLiteral("test".to_string())),
+                Some(Expression::StringLiteral("test".to_string().into())),
             ),
             make_expr_stmt(Expression::Raw("fn()".to_string())),
         ],
@@ -1376,7 +1383,9 @@ fn lowering_return_without_argument() {
 fn lowering_throw_statement() {
     let ir0 = make_ir0(
         ParseGoal::Script,
-        vec![make_throw(Expression::StringLiteral("err".to_string()))],
+        vec![make_throw(Expression::StringLiteral(
+            "err".to_string().into(),
+        ))],
     );
     let output = run_full(&ir0);
     assert_eq!(output.witnesses.len(), 3);
@@ -1448,18 +1457,22 @@ fn lowering_switch_statement() {
             vec![
                 SwitchCase {
                     test: Some(Expression::NumericLiteral(1)),
-                    consequent: vec![make_expr_stmt(Expression::StringLiteral("one".to_string()))],
+                    consequent: vec![make_expr_stmt(Expression::StringLiteral(
+                        "one".to_string().into(),
+                    ))],
                     span: span(),
                 },
                 SwitchCase {
                     test: Some(Expression::NumericLiteral(2)),
-                    consequent: vec![make_expr_stmt(Expression::StringLiteral("two".to_string()))],
+                    consequent: vec![make_expr_stmt(Expression::StringLiteral(
+                        "two".to_string().into(),
+                    ))],
                     span: span(),
                 },
                 SwitchCase {
                     test: None, // default
                     consequent: vec![make_expr_stmt(Expression::StringLiteral(
-                        "default".to_string(),
+                        "default".to_string().into(),
                     ))],
                     span: span(),
                 },
@@ -1514,7 +1527,7 @@ fn lowering_function_declaration() {
             "greet",
             &["name"],
             vec![make_return(Some(Expression::StringLiteral(
-                "hello".to_string(),
+                "hello".to_string().into(),
             )))],
         )],
     );
@@ -1859,7 +1872,7 @@ fn lowering_call_expression() {
         ParseGoal::Script,
         vec![make_expr_stmt(Expression::Call {
             callee: Box::new(Expression::Identifier("console".to_string())),
-            arguments: vec![Expression::StringLiteral("hello".to_string())],
+            arguments: vec![Expression::StringLiteral("hello".to_string().into())],
             span: None,
         })],
     );
@@ -2019,7 +2032,7 @@ fn lowering_logical_compound_member_assignment_uses_short_circuit_ops() {
             body.push(make_var_decl(
                 VariableDeclarationKind::Const,
                 "propKey",
-                Some(Expression::StringLiteral("prop".to_string())),
+                Some(Expression::StringLiteral("prop".to_string().into())),
             ));
         }
         body.push(make_expr_stmt(Expression::Assignment {
@@ -2236,7 +2249,7 @@ fn lowering_object_literal_computed_key() {
         ParseGoal::Script,
         vec![make_expr_stmt(Expression::ObjectLiteral(vec![
             ObjectProperty {
-                key: Expression::StringLiteral("dynamic-key".to_string()),
+                key: Expression::StringLiteral("dynamic-key".to_string().into()),
                 value: Expression::NumericLiteral(42),
                 computed: true,
                 shorthand: false,
@@ -2359,7 +2372,9 @@ fn determinism_try_catch_in_function() {
             "safe",
             &[],
             vec![make_try_catch(
-                vec![make_throw(Expression::StringLiteral("oops".to_string()))],
+                vec![make_throw(Expression::StringLiteral(
+                    "oops".to_string().into(),
+                ))],
                 Some("e"),
                 vec![make_expr_stmt(Expression::NumericLiteral(0))],
                 Some(vec![make_expr_stmt(Expression::NumericLiteral(99))]),
@@ -2394,8 +2409,8 @@ fn determinism_complex_expression_tree() {
                 }),
                 right: Box::new(Expression::NumericLiteral(0)),
             }),
-            consequent: Box::new(Expression::StringLiteral("pos".to_string())),
-            alternate: Box::new(Expression::StringLiteral("neg".to_string())),
+            consequent: Box::new(Expression::StringLiteral("pos".to_string().into())),
+            alternate: Box::new(Expression::StringLiteral("neg".to_string().into())),
         })],
     );
     let a = run_full(&ir0);
@@ -2419,7 +2434,7 @@ fn determinism_switch_with_mixed_cases() {
                     SwitchCase {
                         test: Some(Expression::NumericLiteral(1)),
                         consequent: vec![
-                            make_expr_stmt(Expression::StringLiteral("one".to_string())),
+                            make_expr_stmt(Expression::StringLiteral("one".to_string().into())),
                             Statement::Break(BreakStatement {
                                 label: None,
                                 span: span(),
@@ -2430,14 +2445,14 @@ fn determinism_switch_with_mixed_cases() {
                     SwitchCase {
                         test: Some(Expression::NumericLiteral(2)),
                         consequent: vec![make_expr_stmt(Expression::StringLiteral(
-                            "two".to_string(),
+                            "two".to_string().into(),
                         ))],
                         span: span(),
                     },
                     SwitchCase {
                         test: None,
                         consequent: vec![make_expr_stmt(Expression::StringLiteral(
-                            "other".to_string(),
+                            "other".to_string().into(),
                         ))],
                         span: span(),
                     },
@@ -2509,7 +2524,7 @@ fn hash_differs_add_vs_subtract() {
 
 #[test]
 fn hash_differs_return_vs_throw() {
-    let val = Expression::StringLiteral("value".to_string());
+    let val = Expression::StringLiteral("value".to_string().into());
     let ir0_ret = make_ir0(ParseGoal::Script, vec![make_return(Some(val.clone()))]);
     let ir0_throw = make_ir0(ParseGoal::Script, vec![make_throw(val)]);
     let out_ret = run_full(&ir0_ret);
@@ -2679,7 +2694,9 @@ fn witness_invariants_pass_for_control_flow() {
         ),
         (
             "throw",
-            vec![make_throw(Expression::StringLiteral("err".to_string()))],
+            vec![make_throw(Expression::StringLiteral(
+                "err".to_string().into(),
+            ))],
         ),
         (
             "try-catch",

@@ -2006,7 +2006,7 @@ mod tests {
             vec![var_decl(
                 VariableDeclarationKind::Let,
                 "y",
-                Some(Expression::StringLiteral("hello".to_string())),
+                Some(Expression::StringLiteral("hello".to_string().into())),
                 1,
             )],
         );
@@ -3903,7 +3903,7 @@ mod tests {
             ParseGoal::Script,
             vec![expr_stmt(
                 Expression::ObjectLiteral(vec![ObjectProperty {
-                    key: Expression::StringLiteral("k".to_string()),
+                    key: Expression::StringLiteral("k".to_string().into()),
                     value: Expression::Await(Box::new(Expression::Identifier("p".to_string()))),
                     computed: false,
                     shorthand: false,
@@ -4217,7 +4217,7 @@ mod tests {
     fn collect_refs_from_object_literal() {
         use crate::ast::{ObjectProperty, ObjectPropertyKind};
         let expr = Expression::ObjectLiteral(vec![ObjectProperty {
-            key: Expression::StringLiteral("k".to_string()),
+            key: Expression::StringLiteral("k".to_string().into()),
             value: Expression::Identifier("v".to_string()),
             computed: false,
             shorthand: false,

@@ -29,10 +29,25 @@ the native core AST schema to `franken-engine.parser-ast.schema.v3`. Quoted
 source literals, IR1 string literals, and the core IR3 constant pool now carry
 exact `JsString` values, including lone UTF-16 surrogates. Historical
 well-formed strings keep their prior leaf serde/canonical shape; exact values
-use the tagged `$wtf16` unit representation. The duplicated
-`frankenengine-engine` parser/IR mirror remains at its prior schema until the
-second `bd-vltnh` landing, so this checkpoint is not the bead closeout and is
-not a release.
+use the tagged `$wtf16` unit representation. At that checkpoint the duplicated
+`frankenengine-engine` parser/IR mirror still remained at its prior schema;
+the engine section below records the subsequent mirror landing. Neither
+checkpoint is a release.
+
+### Engine exact quoted-string schema slice (`bd-vltnh`)
+
+The engine mirror now advances `IrSchemaVersion::CURRENT` to `0.2.0` and its
+live canonical AST schema to `franken-engine.parser-ast.schema.v2`. Quoted
+expression literals cook directly into exact `JsString` code units, and that
+carrier is preserved through the parser arena, AST serde/canonical values,
+IR1 literals, IR3 constant-pool deduplication, and baseline `LoadStr`
+execution. Ordinary well-formed strings retain their historical JSON and
+canonical leaf shape; lone units use the tagged `$wtf16` representation and
+remain distinct through an end-to-end source parse, lower, and execute cycle.
+
+Module-specifier metadata remains a separate UTF-8-only boundary tracked by
+`bd-lfq44`, while contextual legacy decimal escapes remain tracked by
+`bd-xcqzp`. This schema landing creates no tag or release.
 
 ---
 

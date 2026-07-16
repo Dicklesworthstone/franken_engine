@@ -528,7 +528,7 @@ fn binding_names_match_declarations() {
             var_decl(
                 VariableDeclarationKind::Let,
                 "beta",
-                Some(Expression::StringLiteral("hi".to_string())),
+                Some(Expression::StringLiteral("hi".to_string().into())),
                 2,
             ),
             var_decl(
@@ -866,7 +866,7 @@ fn expression_only_program() {
         ParseGoal::Script,
         vec![
             expr_stmt(Expression::NumericLiteral(1), 1),
-            expr_stmt(Expression::StringLiteral("hello".to_string()), 2),
+            expr_stmt(Expression::StringLiteral("hello".to_string().into()), 2),
             expr_stmt(Expression::BooleanLiteral(false), 3),
             expr_stmt(Expression::NullLiteral, 4),
             expr_stmt(Expression::UndefinedLiteral, 5),

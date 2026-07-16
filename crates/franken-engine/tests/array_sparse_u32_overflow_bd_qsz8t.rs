@@ -35,7 +35,7 @@ fn test_module_with_pool(instructions: Vec<Ir3Instruction>, pool: Vec<String>) -
             source_label: "bd-qsz8t".to_string(),
         },
         instructions,
-        constant_pool: pool,
+        constant_pool: pool.into_iter().map(Into::into).collect(),
         function_table: Vec::new(),
         specialization: None,
         required_capabilities: Vec::new(),

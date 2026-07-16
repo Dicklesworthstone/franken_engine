@@ -104,14 +104,14 @@ fn class_declaration_lowers_constructor_static_and_prototype_methods() {
                 "staticMethod",
                 true,
                 vec![return_stmt(Expression::StringLiteral(
-                    "static called".to_string(),
+                    "static called".to_string().into(),
                 ))],
             ),
             method(
                 "instanceMethod",
                 false,
                 vec![return_stmt(Expression::StringLiteral(
-                    "instance called".to_string(),
+                    "instance called".to_string().into(),
                 ))],
             ),
         ],
@@ -207,7 +207,9 @@ fn class_expression_lowers_without_leaking_name_to_outer_scope() {
             method(
                 "render",
                 false,
-                vec![return_stmt(Expression::StringLiteral("ok".to_string()))],
+                vec![return_stmt(Expression::StringLiteral(
+                    "ok".to_string().into(),
+                ))],
             ),
         ],
     });

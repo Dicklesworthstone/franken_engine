@@ -27,6 +27,7 @@ use crate::ast::{
     WithStatement,
 };
 use crate::deterministic_serde::{self, CanonicalValue};
+use crate::js_string::JsString;
 
 pub type ParseResult<T> = Result<T, ParseError>;
 
@@ -2321,11 +2322,13 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
 
     for (line_idx, segment) in text.split_inclusive('\n').enumerate() {
         let line_no = (line_idx as u64).saturating_add(1);
-        let line = segment
-            .strip_suffix('\n')
-            .unwrap_or(segment)
-            .strip_suffix('\r')
-            .unwrap_or(segment.strip_suffix('\n').unwrap_or(segment));
+        let (line, line_ending) = if let Some(line) = segment.strip_suffix("\r\n") {
+            (line, "\r\n")
+        } else if let Some(line) = segment.strip_suffix('\n') {
+            (line, "\n")
+        } else {
+            (segment, "")
+        };
 
         if line_idx == 0 {
             let line_without_bom = line.strip_prefix('\u{feff}').unwrap_or(line);
@@ -2372,13 +2375,16 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 current_text.push_str(line);
             }
         } else {
-            let preserve_leading_whitespace =
-                in_quote.is_some() || in_block_comment || in_regex_literal;
-            current_text.push(' ');
-            if preserve_leading_whitespace {
+            if in_quote.is_some() {
                 current_text.push_str(line);
             } else {
-                current_text.push_str(line.trim_start());
+                let preserve_leading_whitespace = in_block_comment || in_regex_literal;
+                current_text.push(' ');
+                if preserve_leading_whitespace {
+                    current_text.push_str(line);
+                } else {
+                    current_text.push_str(line.trim_start());
+                }
             }
         }
 
@@ -2503,6 +2509,16 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                     trailing_identifier.clear();
                 }
             }
+        }
+
+        // Preserve physical line terminators while a quoted token is open.
+        // The exact string cooker must distinguish a backslash continuation
+        // (which removes the terminator) from a raw LF/CRLF (which is invalid
+        // in single- and double-quoted literals). The old synthetic space
+        // collapsed both cases and could silently change the literal value.
+        if in_quote.is_some() && !line_ending.is_empty() {
+            current_text.push_str(line_ending);
+            escaped = false;
         }
 
         byte_offset = byte_offset.saturating_add(segment.len() as u64);
@@ -3436,8 +3452,9 @@ fn parse_named_export_clause(
     let specifiers = &inner_and_trailing[..close_index];
     validate_named_export_specifiers(specifiers, source_label, span)?;
 
+    let canonical_head = canonicalize_whitespace(&clause[..close_index + 2]);
     let trailing = inner_and_trailing[close_index + 1..].trim();
-    if !trailing.is_empty() {
+    let canonical_source = if !trailing.is_empty() {
         let Some(source_raw) = trailing.strip_prefix("from").map(str::trim_start) else {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
@@ -3447,17 +3464,30 @@ fn parse_named_export_clause(
             ));
         };
 
-        if parse_quoted_string(source_raw).is_none() {
-            return Err(ParseError::new(
+        let source = parse_quoted_string(source_raw).ok_or_else(|| {
+            ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "export source must be quoted",
                 source_label.to_string(),
                 Some(span.clone()),
-            ));
-        }
-    }
+            )
+        })?;
+        Some(serde_json::to_string(&source).map_err(|error| {
+            ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                format!("export source could not be canonicalized: {error}"),
+                source_label.to_string(),
+                Some(span.clone()),
+            )
+        })?)
+    } else {
+        None
+    };
 
-    Ok(canonicalize_whitespace(clause))
+    Ok(match canonical_source {
+        Some(source) => format!("{canonical_head} from {source}"),
+        None => canonical_head,
+    })
 }
 
 fn validate_named_export_specifiers(
@@ -4223,37 +4253,29 @@ fn parse_primary_expression(
 ) -> ParseResult<Expression> {
     let expression = expression.trim();
 
-    if let Some(value) = parse_quoted_string(expression) {
+    if let Some(value) = parse_quoted_expression_string(expression) {
         return Ok(Expression::StringLiteral(value));
     }
 
-    // Reject unterminated / malformed string literals (bd-wa01t). An expression
-    // starting with `'` or `"` that did not parse as a balanced string literal
-    // would otherwise fall through to `Expression::Raw`, silently passing
-    // malformed source on to lowering instead of fail-closed parsing.
-    //
-    // EXCEPTION (bd-bulsc): a *balanced* string literal may be the base of a
-    // postfix member/call/index chain (`"abc".split(",")`). In that case the
-    // whole expression is not a pure string (so `parse_quoted_string` above
-    // returned `None`), but it is well-formed — fall through to
-    // `try_parse_postfix` below, which parses the tail as postfix on the
-    // `StringLiteral` base. Only fail closed when the leading quote does not
-    // open a balanced literal followed by a `.`/`[`/`(` tail.
-    if let Some(first) = expression.as_bytes().first()
-        && (*first == b'"' || *first == b'\'')
-    {
-        let string_prefixed_postfix = leading_string_literal_end(expression).is_some_and(|end| {
-            let tail = expression[end..].trim_start();
-            tail.starts_with('.') || tail.starts_with('[') || tail.starts_with('(')
-        });
-        if !string_prefixed_postfix {
+    // A malformed quoted expression must not fall through to `Raw`. A valid,
+    // balanced quoted literal may still be the base of a postfix chain such
+    // as `"abc".length`; record that valid leading literal and let the real
+    // postfix parser validate its complete tail below.
+    let has_valid_quoted_prefix = if matches!(expression.as_bytes().first(), Some(b'"' | b'\'')) {
+        let valid = leading_string_literal_end(expression)
+            .and_then(|end| parse_quoted_expression_string(&expression[..end]))
+            .is_some();
+        if !valid {
             return Err(unsupported_expression_syntax_error(
                 "unterminated or malformed string literal",
                 span,
                 context,
             ));
         }
-    }
+        true
+    } else {
+        false
+    };
 
     // Regex literal: /pattern/flags
     if let Some((pattern, flags)) = parse_regexp_literal(expression) {
@@ -4425,6 +4447,14 @@ fn parse_primary_expression(
     // Call expression: callee(args) or callee(args).member etc.
     if let Some(result) = try_parse_postfix(expression, span, context, recursion_depth) {
         return result;
+    }
+
+    if has_valid_quoted_prefix {
+        return Err(unsupported_expression_syntax_error(
+            "unsupported or malformed string-literal postfix expression",
+            span,
+            context,
+        ));
     }
 
     // Unterminated template literal (bd-no788 cases 1-3). A *complete* template
@@ -5998,14 +6028,14 @@ fn try_parse_postfix(
                 .iter()
                 .map(|quasi| {
                     let cooked = unescape_string_literal(quasi).unwrap_or_else(|| quasi.clone());
-                    Some(Expression::StringLiteral(cooked))
+                    Some(Expression::StringLiteral(cooked.into()))
                 })
                 .collect();
             // `.raw` array (bd-vl55w): parse_template_literal keeps quasis raw
             // (escapes included literally), so use them as-is for `.raw`.
             let raw_strings: Vec<Option<Expression>> = quasis
                 .iter()
-                .map(|quasi| Some(Expression::StringLiteral(quasi.clone())))
+                .map(|quasi| Some(Expression::StringLiteral(quasi.clone().into())))
                 .collect();
             // ES2020 §12.2.9: the strings array carries a `.raw` sibling array
             // (used by String.raw and `tag` functions reading `s.raw[i]`). An
@@ -7136,66 +7166,154 @@ fn parse_f64_numeric_literal(input: &str) -> Option<f64> {
     digits_ref.parse::<f64>().ok()
 }
 
-/// If `expr` begins with a string literal (`"..."` or `'...'`), return the byte
-/// index just past its closing quote. Unlike [`parse_quoted_string`], the literal
-/// need not span the whole input, so a string literal can be recognized as the
-/// base of a postfix member/call/index chain (`"abc".split(",")`, bd-bulsc).
-///
-/// Returns `None` for a genuinely unterminated literal (no closing quote, or an
-/// embedded newline before it — mirroring `parse_quoted_string`'s single-line
-/// acceptance), so the bd-wa01t fail-closed guard still fires for malformed input.
-/// Quotes, backslash, and newlines are ASCII, so byte scanning is UTF-8-safe and
-/// the returned index lands on a char boundary (just past an ASCII quote).
-fn leading_string_literal_end(expr: &str) -> Option<usize> {
-    let bytes = expr.as_bytes();
-    let quote = *bytes.first()?;
-    if quote != b'"' && quote != b'\'' {
-        return None;
-    }
-    let mut i = 1;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'\\' => i += 2,              // skip the escaped byte
-            b'\n' | b'\r' => return None, // unterminated single-line literal
-            c if c == quote => return Some(i + 1),
-            _ => i += 1,
-        }
-    }
-    None // ran off the end without a closing quote
+fn push_char_utf16(units: &mut Vec<u16>, value: char) {
+    let mut encoded = [0_u16; 2];
+    units.extend_from_slice(value.encode_utf16(&mut encoded));
 }
 
-fn parse_quoted_string(input: &str) -> Option<String> {
-    if input.len() < 2 {
+/// Decode the numeric payload after a `\u` escape without forcing it through
+/// Rust's Unicode-scalar-only `char` carrier. Four-digit escapes denote one
+/// UTF-16 code unit and may therefore be a surrogate. Braced escapes denote a
+/// code point up to U+10FFFF; values in the surrogate range remain one exact
+/// code unit, matching ECMAScript string values.
+fn decode_quoted_unicode_escape(
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+) -> Option<u32> {
+    if chars.peek() == Some(&'{') {
+        chars.next();
+        let mut value = 0_u32;
+        let mut digits = 0_u32;
+        loop {
+            match chars.next()? {
+                '}' if digits > 0 => break,
+                '}' => return None,
+                ch => {
+                    value = value.checked_mul(16)?.checked_add(ch.to_digit(16)?)?;
+                    if value > 0x10_FFFF {
+                        return None;
+                    }
+                    digits += 1;
+                }
+            }
+        }
+        Some(value)
+    } else {
+        let mut value = 0_u32;
+        for _ in 0..4 {
+            value = value
+                .checked_mul(16)?
+                .checked_add(chars.next()?.to_digit(16)?)?;
+        }
+        Some(value)
+    }
+}
+
+/// If `expr` begins with a quoted literal, return the byte index immediately
+/// after its closing delimiter. This scanner recognizes only the lexical
+/// extent; callers must still run [`parse_quoted_expression_string`] over the
+/// returned prefix to validate escape payloads.
+fn leading_string_literal_end(expr: &str) -> Option<usize> {
+    let mut chars = expr.char_indices().peekable();
+    let (_, delimiter) = chars.next()?;
+    if !matches!(delimiter, '\'' | '"') {
         return None;
     }
-    let first = input.as_bytes()[0];
-    let last = input.as_bytes()[input.len() - 1];
-    if (first == b'\'' && last == b'\'') || (first == b'"' && last == b'"') {
-        let inner = &input[1..input.len() - 1];
-        if inner.contains('\n') || inner.contains('\r') {
-            return None;
+
+    while let Some((index, ch)) = chars.next() {
+        match ch {
+            '\\' => {
+                let (_, escaped) = chars.next()?;
+                if escaped == '\r' && chars.peek().is_some_and(|(_, next)| *next == '\n') {
+                    chars.next();
+                }
+            }
+            '\n' | '\r' => return None,
+            ch if ch == delimiter => return Some(index + ch.len_utf8()),
+            _ => {}
         }
-        return unescape_string_literal(inner);
     }
     None
 }
 
-/// Translate ES2020 string-literal escape sequences in the already-delimited
-/// inner content (no surrounding quotes) into their character values
-/// (bd-kmdzx). Single- and double-quoted literals share identical escape
-/// semantics. Returns `None` for a malformed escape (incomplete `\x`/`\u`,
-/// out-of-range code point, trailing backslash) so the caller fails closed with
-/// a parse error rather than silently keeping corrupt content — matching the
-/// ES2020 early SyntaxError for bad escapes. Raw line terminators are rejected
-/// by the caller before this runs, so `\n`/`\t`/… here are always the
-/// two-character backslash forms, never literal control characters.
-/// Decode the body of a `\u` escape (the part after the `u`): either
-/// `{H...}` with one or more hex digits denoting a code point `<= 0x10FFFF`,
-/// or exactly four hex digits denoting a UTF-16 code unit. Returns the
-/// numeric value WITHOUT converting to `char`, so the caller can combine an
-/// adjacent high+low surrogate escape pair into one supplementary code point
-/// (bd-k9jb0). Returns `None` for malformed content (non-hex digit, empty or
-/// unterminated braces, out-of-range code point).
+/// Cook one quoted expression literal into its exact ECMAScript UTF-16 value.
+/// Unlike a Rust `String`, [`JsString`] can retain unpaired surrogate escapes.
+/// Adjacent high/low units are normalized by `JsString::from_code_units`, so
+/// paired escapes still heal to the ordinary UTF-8 fast representation.
+fn parse_quoted_expression_string(input: &str) -> Option<JsString> {
+    if input.len() < 2 {
+        return None;
+    }
+    let delimiter = input.chars().next()?;
+    if !matches!(delimiter, '\'' | '"') || input.chars().next_back()? != delimiter {
+        return None;
+    }
+    let inner = &input[delimiter.len_utf8()..input.len() - delimiter.len_utf8()];
+    let mut units = Vec::with_capacity(inner.len());
+    let mut chars = inner.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            if ch == delimiter || matches!(ch, '\n' | '\r') {
+                return None;
+            }
+            push_char_utf16(&mut units, ch);
+            continue;
+        }
+
+        let escaped = chars.next()?;
+        match escaped {
+            '\n' | '\u{2028}' | '\u{2029}' => {}
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+            }
+            'n' => units.push(u16::from(b'\n')),
+            't' => units.push(u16::from(b'\t')),
+            'r' => units.push(u16::from(b'\r')),
+            'b' => units.push(0x0008),
+            'f' => units.push(0x000C),
+            'v' => units.push(0x000B),
+            '0' if !chars.peek().is_some_and(char::is_ascii_digit) => units.push(0),
+            '0' => return None,
+            // Legacy decimal escapes depend on Script/strict context. Reject
+            // them here until the contextual parser lane handles Annex B.
+            '1'..='9' => return None,
+            '\\' => units.push(u16::from(b'\\')),
+            '\'' => units.push(u16::from(b'\'')),
+            '"' => units.push(u16::from(b'"')),
+            '`' => units.push(u16::from(b'`')),
+            'x' => {
+                let high = chars.next()?.to_digit(16)?;
+                let low = chars.next()?.to_digit(16)?;
+                units.push(u16::try_from(high * 16 + low).ok()?);
+            }
+            'u' => {
+                let value = decode_quoted_unicode_escape(&mut chars)?;
+                if let Ok(unit) = u16::try_from(value) {
+                    units.push(unit);
+                } else {
+                    push_char_utf16(&mut units, char::from_u32(value)?);
+                }
+            }
+            // ES NonEscapeCharacter: the escape contributes the character.
+            other => push_char_utf16(&mut units, other),
+        }
+    }
+    Some(JsString::from_code_units(&units))
+}
+
+/// Parse a quoted string for UTF-8-only syntax fields such as module
+/// specifiers. Exact values containing an unpaired surrogate are rejected
+/// rather than projected to U+FFFD.
+pub(crate) fn parse_quoted_string(input: &str) -> Option<String> {
+    parse_quoted_expression_string(input)?
+        .as_str()
+        .map(str::to_string)
+}
+
+/// Legacy UTF-8 cooker retained for template-literal quasis. Quoted
+/// expression literals use [`parse_quoted_expression_string`] so lone UTF-16
+/// units are never forced through this scalar-only seam.
 fn decode_unicode_escape_value(
     chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
 ) -> Option<u32> {
@@ -7223,7 +7341,9 @@ fn decode_unicode_escape_value(
     } else {
         let mut code: u32 = 0;
         for _ in 0..4 {
-            code = code * 16 + chars.next()?.to_digit(16)?;
+            code = code
+                .checked_mul(16)?
+                .checked_add(chars.next()?.to_digit(16)?)?;
         }
         Some(code)
     }
@@ -7231,7 +7351,6 @@ fn decode_unicode_escape_value(
 
 fn unescape_string_literal(inner: &str) -> Option<String> {
     if !inner.contains('\\') {
-        // Fast path: nothing to unescape.
         return Some(inner.to_string());
     }
     let mut out = String::with_capacity(inner.len());
@@ -7241,61 +7360,39 @@ fn unescape_string_literal(inner: &str) -> Option<String> {
             out.push(ch);
             continue;
         }
-        // Backslash begins an escape sequence; consume the descriptor char.
-        let esc = chars.next()?;
-        match esc {
+        match chars.next()? {
             'n' => out.push('\n'),
             't' => out.push('\t'),
             'r' => out.push('\r'),
             'b' => out.push('\u{0008}'),
             'f' => out.push('\u{000C}'),
             'v' => out.push('\u{000B}'),
-            // `\0` is the NUL character only when not the start of a legacy
-            // octal escape (i.e. not followed by another digit).
             '0' if !chars.peek().is_some_and(|c| c.is_ascii_digit()) => out.push('\0'),
             '\\' => out.push('\\'),
             '\'' => out.push('\''),
             '"' => out.push('"'),
             '`' => out.push('`'),
             'x' => {
-                // `\xHH`: exactly two hex digits.
-                let hi = chars.next()?.to_digit(16)?;
-                let lo = chars.next()?.to_digit(16)?;
-                out.push(char::from_u32(hi * 16 + lo)?);
+                let high = chars.next()?.to_digit(16)?;
+                let low = chars.next()?.to_digit(16)?;
+                out.push(char::from_u32(high * 16 + low)?);
             }
             'u' => {
-                let first = decode_unicode_escape_value(&mut chars)?;
-                let ch = if (0xD800..=0xDBFF).contains(&first) {
-                    // High surrogate. JS strings are UTF-16 code-unit
-                    // sequences, so an adjacent high+low surrogate escape
-                    // pair denotes one supplementary code point
-                    // (`"\uD83D\uDE00" === "😀"`), in any escape spelling
-                    // (bd-k9jb0). A lone surrogate VALUE is unrepresentable
-                    // in the engine's UTF-8 string model, so a high
-                    // surrogate not followed by a low-surrogate escape
-                    // stays a fail-closed decode error (bd-neika).
-                    if chars.peek() != Some(&'\\') {
-                        return None;
-                    }
-                    chars.next();
-                    if chars.next()? != 'u' {
+                let high = decode_unicode_escape_value(&mut chars)?;
+                let decoded = if (0xD800..=0xDBFF).contains(&high) {
+                    if chars.next()? != '\\' || chars.next()? != 'u' {
                         return None;
                     }
                     let low = decode_unicode_escape_value(&mut chars)?;
                     if !(0xDC00..=0xDFFF).contains(&low) {
                         return None;
                     }
-                    let code_point = 0x10000 + ((first - 0xD800) << 10) + (low - 0xDC00);
-                    char::from_u32(code_point)?
+                    char::from_u32(0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00))?
                 } else {
-                    // Lone low surrogates (0xDC00..=0xDFFF) fail here via
-                    // from_u32, matching the fail-closed posture (bd-neika).
-                    char::from_u32(first)?
+                    char::from_u32(high)?
                 };
-                out.push(ch);
+                out.push(decoded);
             }
-            // Any other escaped character is the identity of that character
-            // (ES2020 non-strict `NonEscapeCharacter`), e.g. `\q` -> `q`.
             other => out.push(other),
         }
     }
@@ -10046,10 +10143,7 @@ mod tests {
         let tree = parser.parse("'hello'", ParseGoal::Script).expect("parse");
         match &tree.body[0] {
             Statement::Expression(expr) => {
-                assert_eq!(
-                    expr.expression,
-                    Expression::StringLiteral("hello".to_string())
-                );
+                assert_eq!(expr.expression, Expression::StringLiteral("hello".into()));
             }
             _ => panic!("expected expression statement"),
         }
@@ -10061,13 +10155,187 @@ mod tests {
         let tree = parser.parse("\"world\"", ParseGoal::Script).expect("parse");
         match &tree.body[0] {
             Statement::Expression(expr) => {
-                assert_eq!(
-                    expr.expression,
-                    Expression::StringLiteral("world".to_string())
-                );
+                assert_eq!(expr.expression, Expression::StringLiteral("world".into()));
             }
             _ => panic!("expected expression statement"),
         }
+    }
+
+    #[test]
+    fn string_literal_surrogate_escapes_preserve_exact_utf16_bd_vltnh() {
+        let cases: [(&str, &[u16], bool); 5] = [
+            (r#""\uD800""#, &[0xD800], false),
+            (r"'\uDC00'", &[0xDC00], false),
+            (r#""\u{D800}""#, &[0xD800], false),
+            (r#""a\uD800b""#, &[0x0061, 0xD800, 0x0062], false),
+            (r#""\uD83D\uDE00""#, &[0xD83D, 0xDE00], true),
+        ];
+
+        for (source, expected_units, expected_well_formed) in cases {
+            let tree = CanonicalEs2020Parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("{source:?} should parse: {error}"));
+            let Statement::Expression(expression) = &tree.body[0] else {
+                panic!("{source:?} should be an expression statement");
+            };
+            let Expression::StringLiteral(value) = &expression.expression else {
+                panic!("{source:?} should produce a string literal");
+            };
+            assert_eq!(value.code_units_vec(), expected_units, "{source:?}");
+            assert_eq!(value.is_well_formed(), expected_well_formed, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn string_literal_ordinary_escapes_are_cooked_bd_vltnh() {
+        for (source, expected) in [
+            (r#""\n\t\r\b\f\v\0""#, "\n\t\r\u{0008}\u{000C}\u{000B}\0"),
+            (r#""\x41\u0042\u{43}""#, "ABC"),
+            (r#""\q""#, "q"),
+            (r#""\"""#, "\""),
+        ] {
+            let value = parse_quoted_expression_string(source)
+                .unwrap_or_else(|| panic!("{source:?} should cook"));
+            assert_eq!(value, expected, "{source:?}");
+            assert!(value.is_well_formed(), "{source:?}");
+        }
+    }
+
+    #[test]
+    fn string_literal_line_continuations_and_astral_escape_bd_vltnh() {
+        for source in [
+            "\"a\\\nb\"",
+            "\"a\\\rb\"",
+            "\"a\\\r\nb\"",
+            "\"a\\\u{2028}b\"",
+            "\"a\\\u{2029}b\"",
+        ] {
+            let value = parse_quoted_expression_string(source)
+                .unwrap_or_else(|| panic!("{source:?} should cook"));
+            assert_eq!(value, "ab", "{source:?}");
+        }
+
+        for (source, expected) in [
+            ("\"a\u{2028}b\"", "a\u{2028}b"),
+            ("\"a\u{2029}b\"", "a\u{2029}b"),
+        ] {
+            assert_eq!(
+                parse_quoted_expression_string(source)
+                    .unwrap_or_else(|| panic!("{source:?} should cook")),
+                expected,
+                "{source:?}"
+            );
+            let tree = CanonicalEs2020Parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("{source:?} should parse: {error}"));
+            assert!(matches!(
+                first_expr(&tree),
+                Expression::StringLiteral(value) if value == expected
+            ));
+        }
+
+        assert_eq!(
+            parse_quoted_expression_string(r#""\u{1F600}""#)
+                .expect("braced astral escape should cook")
+                .code_units_vec(),
+            [0xD83D, 0xDE00]
+        );
+        assert_eq!(
+            parse_quoted_expression_string("\"\\uD83D\\\n\\uDE00\"")
+                .expect("continuation may separate surrogate escapes")
+                .code_units_vec(),
+            [0xD83D, 0xDE00]
+        );
+
+        for source in ["\"a\\\nb\"", "\"a\\\rb\"", "\"a\\\r\nb\""] {
+            let tree = CanonicalEs2020Parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("{source:?} should parse: {error}"));
+            assert!(matches!(
+                first_expr(&tree),
+                Expression::StringLiteral(value) if value == "ab"
+            ));
+        }
+
+        let nul_then_digit = CanonicalEs2020Parser
+            .parse("\"\\0\\\n8\"", ParseGoal::Script)
+            .expect("line continuation after NUL escape must reset decimal lookahead");
+        assert!(matches!(
+            first_expr(&nul_then_digit),
+            Expression::StringLiteral(value) if value.code_units_vec() == [0x0000, 0x0038]
+        ));
+
+        for source in ["\"a\nb\"", "\"a\rb\"", "\"a\r\nb\""] {
+            let error = CanonicalEs2020Parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("raw LF/CRLF in a quoted literal must fail closed");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn malformed_quoted_expression_literals_fail_closed_bd_vltnh() {
+        for source in [
+            "\"unterminated",
+            "\"trailing\\",
+            r#""\x""#,
+            r#""\xZZ""#,
+            r#""\u""#,
+            r#""\u12""#,
+            r#""\u{}""#,
+            r#""\u{110000}""#,
+            r#""a"b""#,
+            "\"\\u\\\n0041\"",
+            "\"\\x\\\n41\"",
+            "\"\\u{4\\\n1}\"",
+        ] {
+            let error = CanonicalEs2020Parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("malformed quoted source must fail closed");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn legacy_decimal_escapes_fail_closed_until_contextualized_bd_xcqzp() {
+        for source in [r#""\1""#, r#""\8""#, r#""\9""#, r#""\08""#] {
+            let error = CanonicalEs2020Parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("context-free cooking must not guess legacy decimal semantics");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn quoted_expression_postfix_base_uses_exact_cooker_bd_vltnh() {
+        let tree = CanonicalEs2020Parser
+            .parse(r#""\uD800".length"#, ParseGoal::Script)
+            .expect("exact quoted literal may be a postfix base");
+        assert!(matches!(
+            first_expr(&tree),
+            Expression::Member { object, property, computed: false, .. }
+                if matches!(object.as_ref(), Expression::StringLiteral(value)
+                    if value.code_units_vec() == [0xD800])
+                    && matches!(property.as_ref(), Expression::Identifier(name)
+                        if name == "length")
+        ));
+
+        for source in [r#""\xZZ".length"#, r#""a"b".length"#, r#""a"."#, r#""a"["#] {
+            let error = CanonicalEs2020Parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("malformed quoted postfix source must fail closed");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn utf8_module_string_wrapper_rejects_lone_units_bd_vltnh() {
+        assert_eq!(parse_quoted_string(r#""\uD800""#), None);
+        assert_eq!(parse_quoted_string(r"'\uDC00'"), None);
+        assert_eq!(
+            parse_quoted_string(r#""\uD83D\uDE00""#),
+            Some("😀".to_string())
+        );
     }
 
     #[test]
@@ -10269,7 +10537,7 @@ mod tests {
                 assert_eq!(first.name(), Some("first"));
                 assert_eq!(
                     first.initializer,
-                    Some(Expression::StringLiteral("a,b".to_string()))
+                    Some(Expression::StringLiteral("a,b".into()))
                 );
                 let second = &variable_declaration.declarations[1];
                 assert_eq!(second.name(), Some("second"));
@@ -11156,6 +11424,20 @@ mod tests {
             },
             _ => panic!("expected export statement"),
         }
+    }
+
+    #[test]
+    fn export_named_clause_cooks_source_without_collapsing_inner_space_bd_vltnh() {
+        let tree = CanonicalEs2020Parser
+            .parse("export { dep } from \"pkg  name\"", ParseGoal::Module)
+            .expect("named export source should parse");
+        let Statement::Export(export) = &tree.body[0] else {
+            panic!("expected named export clause");
+        };
+        assert!(matches!(
+            &export.kind,
+            ExportKind::NamedClause(clause) if clause == "{ dep } from \"pkg  name\""
+        ));
     }
 
     #[test]

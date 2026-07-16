@@ -79,7 +79,7 @@ fn test_constructor_with_arguments() {
         callee: Box::new(Expression::Identifier("Foo".to_string())),
         arguments: vec![
             Expression::NumericLiteral(1),
-            Expression::StringLiteral("hello".to_string()),
+            Expression::StringLiteral("hello".to_string().into()),
             Expression::ObjectLiteral(vec![ObjectProperty {
                 key: Expression::Identifier("x".to_string()),
                 value: Expression::NumericLiteral(1),
@@ -244,7 +244,7 @@ fn test_constructor_deterministic_lowering() {
         callee: Box::new(Expression::Identifier("TestClass".to_string())),
         arguments: vec![
             Expression::NumericLiteral(42),
-            Expression::StringLiteral("test".to_string()),
+            Expression::StringLiteral("test".to_string().into()),
         ],
     };
 

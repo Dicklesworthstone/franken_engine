@@ -110,7 +110,7 @@ fn export_named_tree() -> SyntaxTree {
 fn all_expression_types_tree() -> SyntaxTree {
     let expressions = vec![
         Expression::Identifier("x".to_string()),
-        Expression::StringLiteral("hello".to_string()),
+        Expression::StringLiteral("hello".to_string().into()),
         Expression::NumericLiteral(123),
         Expression::BooleanLiteral(true),
         Expression::BooleanLiteral(false),
@@ -154,7 +154,9 @@ fn mixed_statement_tree() -> SyntaxTree {
                 span: make_span(21, 50),
             }),
             Statement::Export(ExportDeclaration {
-                kind: ExportKind::Default(Expression::StringLiteral("default_val".to_string())),
+                kind: ExportKind::Default(Expression::StringLiteral(
+                    "default_val".to_string().into(),
+                )),
                 span: make_span(51, 80),
             }),
             Statement::Export(ExportDeclaration {
@@ -676,7 +678,7 @@ fn arena_expression_identifier() {
 
 #[test]
 fn arena_expression_string_literal() {
-    let expr = ArenaExpression::StringLiteral("hello world".to_string());
+    let expr = ArenaExpression::StringLiteral("hello world".to_string().into());
     if let ArenaExpression::StringLiteral(v) = &expr {
         assert_eq!(v, "hello world");
     } else {
@@ -739,7 +741,7 @@ fn arena_expression_raw() {
 
 #[test]
 fn arena_expression_clone_and_equality() {
-    let expr = ArenaExpression::StringLiteral("test".to_string());
+    let expr = ArenaExpression::StringLiteral("test".to_string().into());
     let cloned = expr.clone();
     assert_eq!(expr, cloned);
 }
@@ -1572,11 +1574,11 @@ fn bytes_used_increases_with_more_content() {
         goal: ParseGoal::Script,
         body: vec![
             Statement::Expression(ExpressionStatement {
-                expression: Expression::StringLiteral("a".repeat(1000)),
+                expression: Expression::StringLiteral("a".repeat(1000).into()),
                 span: make_span(0, 1000),
             }),
             Statement::Expression(ExpressionStatement {
-                expression: Expression::StringLiteral("b".repeat(1000)),
+                expression: Expression::StringLiteral("b".repeat(1000).into()),
                 span: make_span(1000, 2000),
             }),
         ],
@@ -1770,7 +1772,7 @@ fn cross_concern_string_heavy_tree_bytes_accounting() {
     let tree = SyntaxTree {
         goal: ParseGoal::Script,
         body: vec![Statement::Expression(ExpressionStatement {
-            expression: Expression::StringLiteral(long_string),
+            expression: Expression::StringLiteral(long_string.into()),
             span: make_span(0, 10_000),
         })],
         span: make_span(0, 10_000),
@@ -1786,7 +1788,7 @@ fn cross_concern_budget_bytes_rejects_large_string() {
     let tree = SyntaxTree {
         goal: ParseGoal::Script,
         body: vec![Statement::Expression(ExpressionStatement {
-            expression: Expression::StringLiteral(long_string),
+            expression: Expression::StringLiteral(long_string.into()),
             span: make_span(0, 100),
         })],
         span: make_span(0, 100),
@@ -1843,7 +1845,7 @@ fn edge_empty_string_literal() {
     let tree = SyntaxTree {
         goal: ParseGoal::Script,
         body: vec![Statement::Expression(ExpressionStatement {
-            expression: Expression::StringLiteral(String::new()),
+            expression: Expression::StringLiteral(String::new().into()),
             span: make_span(0, 2),
         })],
         span: make_span(0, 2),
@@ -1963,7 +1965,7 @@ fn edge_unicode_in_strings() {
     let tree = SyntaxTree {
         goal: ParseGoal::Script,
         body: vec![Statement::Expression(ExpressionStatement {
-            expression: Expression::StringLiteral("\u{1F600}\u{1F601}\u{1F602}".to_string()),
+            expression: Expression::StringLiteral("\u{1F600}\u{1F601}\u{1F602}".to_string().into()),
             span: make_span(0, 12),
         })],
         span: make_span(0, 12),

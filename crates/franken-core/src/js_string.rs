@@ -62,10 +62,10 @@
 //!   projection. [`ExactPropertyMap`] provides the wire-safe exact-key carrier
 //!   for the staged bd-b12xs migration; runtime integration remains a later
 //!   child.
-//! - `franken-core` quoted source literals now preserve lone-surrogate escapes
-//!   exactly through AST/IR lowering (bd-vltnh). The duplicated
-//!   `franken-engine` parser/lowering mirror remains a separate landing step;
-//!   template-literal quasis are also outside this quoted-literal slice.
+//! - `franken-core` and `franken-engine` quoted source literals now preserve
+//!   lone-surrogate escapes exactly through AST/IR lowering (bd-vltnh).
+//!   Template-literal quasis and exact module-specifier metadata remain
+//!   separate compatibility boundaries.
 //! - Relational ordering: the derived [`Ord`] remains projection-first (with
 //!   exact units as tiebreak) for deterministic collections and wire/hash
 //!   stability. ES relational semantics — lexicographic over exact UTF-16

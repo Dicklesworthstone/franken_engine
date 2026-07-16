@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::{
     ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, ExportKind, Expression,
-    FunctionParam, ImportClause, MethodDefinition, MethodKind, ParseGoal, SourceSpan, Statement,
-    UnaryOperator, UpdateOperator, VariableDeclarationKind,
+    FunctionParam, ImportClause, MethodDefinition, MethodKind, ObjectPatternProperty, ParseGoal,
+    SourceSpan, Statement, UnaryOperator, UpdateOperator, VariableDeclarationKind,
 };
 use crate::flow_lattice::{
     Clearance, DeclassificationObligation, FlowCheckResult as LatticeFlowCheckResult,
@@ -2849,7 +2849,7 @@ fn lower_destructuring_to_ir1(
             // Simple binding — already handled by StoreBinding above.
         }
         BindingPattern::ObjectPattern(props) => {
-            let mut rest_excluded_keys = Vec::new();
+            let mut rest_excluded_keys: Vec<String> = Vec::new();
             for prop in props {
                 if let BindingPattern::Rest(inner) = &prop.value {
                     let target_names = inner.binding_names();

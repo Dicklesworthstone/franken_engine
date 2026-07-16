@@ -447,6 +447,74 @@ fn buffer_byte_length_handles_invalid_encodings_estimates_and_binary_views() {
 }
 
 #[test]
+fn buffer_ascii_uses_low_code_unit_bytes_and_masks_decoded_bytes() {
+    let source = r#"
+        const input = String.fromCharCode(
+          0x80, 0xff, 0x100, 0x20ac, 0xd83d, 0xde00, 0xd800
+        );
+        const encoded = Buffer.from(input, 'ascii');
+        const decoded = Buffer.from([0x80, 0xff, 0xe9]).toString('ASCII');
+        console.log(encoded.toString('hex') === '80ff00ac3d0000');
+        console.log(
+          decoded.length === 3 &&
+          decoded.charCodeAt(0) === 0 &&
+          decoded.charCodeAt(1) === 0x7f &&
+          decoded.charCodeAt(2) === 0x69
+        );
+        console.log(Buffer.byteLength(input, 'AsCiI') === 7);
+    "#;
+    assert_eq!(eval_console(source), "true\ntrue\ntrue");
+}
+
+#[test]
+fn buffer_utf16le_aliases_preserve_exact_units_and_ignore_odd_tail_bytes() {
+    let source = r#"
+        const input = 'Aé' + String.fromCharCode(0xd83d, 0xde00, 0xd800);
+        const aliases = ['ucs2', 'ucs-2', 'utf16le', 'utf-16le', 'UTF-16LE'];
+        for (let i = 0; i < aliases.length; i++) {
+          const alias = aliases[i];
+          const encoded = Buffer.from(input, alias);
+          console.log(
+            encoded.toString('hex') === '4100e9003dd800de00d8' &&
+            encoded.toString(alias) === input &&
+            Buffer.byteLength(input, alias) === 10
+          );
+        }
+
+        const decoded = Buffer.from([
+          0x41, 0x00, 0x80, 0xff, 0x3d, 0xd8,
+          0x00, 0xde, 0x00, 0xd8, 0x42
+        ]).toString('ucs-2');
+        console.log(
+          decoded.length === 5 &&
+          decoded.charCodeAt(0) === 0x41 &&
+          decoded.charCodeAt(1) === 0xff80 &&
+          decoded.charCodeAt(2) === 0xd83d &&
+          decoded.charCodeAt(3) === 0xde00 &&
+          decoded.charCodeAt(4) === 0xd800
+        );
+        console.log(Buffer.from([0x61, 0x00, 0x62]).toString('utf-16le') === 'a');
+        console.log(
+          Buffer.from([0x00, 0x61, 0x00, 0x62]).toString('utf16le', 1, 4) === 'a'
+        );
+        const loneLow = String.fromCharCode(0xdc00);
+        console.log(
+          Buffer.from(loneLow, 'ucs2').toString('hex') === '00dc' &&
+          Buffer.from([0x00, 0xdc]).toString('utf16le') === loneLow
+        );
+        const pair = Buffer.from('😀', 'utf-16le');
+        console.log(
+          pair.toString('ucs-2', 0, 2).charCodeAt(0) === 0xd83d &&
+          pair.toString('ucs2', 2, 4).charCodeAt(0) === 0xde00
+        );
+    "#;
+    assert_eq!(
+        eval_console(source),
+        "true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue"
+    );
+}
+
+#[test]
 fn buffer_search_accepts_encoding_as_the_second_argument() {
     let source = r#"
         const b = Buffer.from('hello');
@@ -456,6 +524,24 @@ fn buffer_search_accepts_encoding_as_the_second_argument() {
         console.log(b.includes('6c', 'hex'));
     "#;
     assert_eq!(eval_console(source), "0\ntrue\n2\ntrue");
+}
+
+#[test]
+fn buffer_utf16le_string_search_uses_node_code_unit_alignment() {
+    let source = r#"
+        const aligned = Buffer.from([0x61, 0x00, 0x62, 0x00]);
+        console.log(aligned.indexOf('a', 'ucs2'));
+        console.log(aligned.indexOf('a', 1, 'ucs-2'));
+        console.log(aligned.indexOf('a', 2, 'utf16le'));
+
+        const oddOnly = Buffer.from([0x00, 0x61, 0x00, 0x62]);
+        console.log(oddOnly.indexOf('a', 'utf-16le'));
+        console.log(oddOnly.includes('a', 'UTF-16LE'));
+
+        const later = Buffer.from([0x00, 0x00, 0x61, 0x00]);
+        console.log(later.indexOf('a', 1, 'ucs2'));
+    "#;
+    assert_eq!(eval_console(source), "0\n0\n-1\n-1\nfalse\n2");
 }
 
 #[test]

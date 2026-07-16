@@ -28575,7 +28575,7 @@ impl InterpreterCore {
 
     fn decode_buffer_string(
         &self,
-        text: &str,
+        text: &JsString,
         encoding: &str,
     ) -> Result<Vec<u8>, InterpreterError> {
         use base64::Engine as _;
@@ -28585,13 +28585,27 @@ impl InterpreterCore {
                 self.check_buffer_temporary_bytes(text.len())?;
                 Ok(text.as_bytes().to_vec())
             }
-            "latin1" | "binary" => {
-                let code_units = text.encode_utf16().count();
+            "ascii" | "latin1" | "binary" => {
+                let code_units = text.utf16_len();
                 self.check_buffer_temporary_bytes(code_units)?;
                 Ok(text
                     .encode_utf16()
                     .map(|unit| unit.to_le_bytes()[0])
                     .collect())
+            }
+            "ucs2" | "ucs-2" | "utf16le" | "utf-16le" => {
+                let byte_length = text.utf16_len().checked_mul(2).ok_or_else(|| {
+                    InterpreterError::RangeError {
+                        message: "UTF-16LE Buffer input size overflows host address space"
+                            .to_string(),
+                    }
+                })?;
+                self.check_buffer_temporary_bytes(byte_length)?;
+                let mut decoded = Vec::with_capacity(byte_length);
+                for unit in text.encode_utf16() {
+                    decoded.extend_from_slice(&unit.to_le_bytes());
+                }
+                Ok(decoded)
             }
             "hex" => {
                 let raw = text.as_bytes();
@@ -28657,12 +28671,19 @@ impl InterpreterCore {
         &self,
         bytes: &[u8],
         encoding: &str,
-    ) -> Result<String, InterpreterError> {
+    ) -> Result<JsString, InterpreterError> {
         use base64::Engine as _;
 
+        let may_retain_exact_units = matches!(encoding, "ucs2" | "ucs-2" | "utf16le" | "utf-16le");
         let maximum_output = match encoding {
             "utf8" | "utf-8" => bytes.len().checked_mul(3),
+            "ascii" => Some(bytes.len()),
             "latin1" | "binary" | "hex" => bytes.len().checked_mul(2),
+            "ucs2" | "ucs-2" | "utf16le" | "utf-16le" => {
+                // Decoding may briefly retain the u16 scratch vector, its
+                // exact-unit copy, and the lossy UTF-8 projection together.
+                bytes.len().checked_mul(4)
+            }
             "base64" | "base64url" => bytes
                 .len()
                 .checked_add(2)
@@ -28675,15 +28696,44 @@ impl InterpreterCore {
         })?;
         let maximum_output = u64::try_from(maximum_output)
             .unwrap_or(u64::MAX)
-            .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES);
+            .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES)
+            .saturating_add(if may_retain_exact_units {
+                // A malformed JsString owns a second Arc allocation for its
+                // exact UTF-16 units in addition to the UTF-8 projection.
+                MEMORY_ESTIMATE_STRING_BASE_BYTES
+            } else {
+                0
+            });
         self.check_temporary_memory_budget(maximum_output)?;
 
         match encoding {
-            "utf8" | "utf-8" => Ok(String::from_utf8_lossy(bytes).into_owned()),
-            "latin1" | "binary" => Ok(bytes.iter().map(|byte| char::from(*byte)).collect()),
-            "hex" => Ok(hex::encode(bytes)),
-            "base64" => Ok(base64::engine::general_purpose::STANDARD.encode(bytes)),
-            "base64url" => Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)),
+            "utf8" | "utf-8" => Ok(String::from_utf8_lossy(bytes).into_owned().into()),
+            "ascii" => Ok(bytes
+                .iter()
+                .map(|byte| char::from(*byte & 0x7f))
+                .collect::<String>()
+                .into()),
+            "latin1" | "binary" => Ok(bytes
+                .iter()
+                .map(|byte| char::from(*byte))
+                .collect::<String>()
+                .into()),
+            "ucs2" | "ucs-2" | "utf16le" | "utf-16le" => {
+                let units = bytes
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|pair| u16::from_le_bytes(*pair))
+                    .collect::<Vec<_>>();
+                Ok(JsString::from_code_units(&units))
+            }
+            "hex" => Ok(hex::encode(bytes).into()),
+            "base64" => Ok(base64::engine::general_purpose::STANDARD
+                .encode(bytes)
+                .into()),
+            "base64url" => Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(bytes)
+                .into()),
             _ => Err(InterpreterError::TypeError {
                 expected: "a recognized Node BufferEncoding".to_string(),
                 got: encoding.to_string(),
@@ -28884,7 +28934,14 @@ impl InterpreterCore {
                 };
                 match encoding.as_str() {
                     "utf8" | "utf-8" => text.len(),
-                    "latin1" | "binary" => text.encode_utf16().count(),
+                    "ascii" | "latin1" | "binary" => text.utf16_len(),
+                    "ucs2" | "ucs-2" | "utf16le" | "utf-16le" => text
+                        .utf16_len()
+                        .checked_mul(2)
+                        .ok_or_else(|| InterpreterError::RangeError {
+                            message: "UTF-16LE Buffer byte length overflows host address space"
+                                .to_string(),
+                        })?,
                     "hex" => text.len() / 2,
                     "base64" | "base64url" => {
                         // Node intentionally returns an encoded-length estimate
@@ -29056,17 +29113,22 @@ impl InterpreterCore {
         &self,
         value: Value,
         encoding: Option<Value>,
-    ) -> Result<Vec<u8>, InterpreterError> {
+    ) -> Result<(Vec<u8>, bool), InterpreterError> {
         match value {
             Value::Str(text) => {
                 let encoding = self.buffer_encoding(encoding, "utf8")?;
+                let is_utf16le =
+                    matches!(encoding.as_str(), "ucs2" | "ucs-2" | "utf16le" | "utf-16le");
                 self.decode_buffer_string(&text, &encoding)
+                    .map(|needle| (needle, is_utf16le))
             }
             Value::Int(_) | Value::Float(_) => {
                 self.check_buffer_temporary_bytes(1)?;
-                Ok(vec![Self::typed_array_u8_value(&value)])
+                Ok((vec![Self::typed_array_u8_value(&value)], false))
             }
-            Value::Object(_) => self.bytes_for_buffer_like(&value),
+            Value::Object(_) => self
+                .bytes_for_buffer_like(&value)
+                .map(|needle| (needle, false)),
             other => Err(InterpreterError::TypeError {
                 expected: "string, number, Buffer, or Uint8Array search value".to_string(),
                 got: other.type_name().to_string(),
@@ -29078,28 +29140,60 @@ impl InterpreterCore {
         let (_, view) = self.buffer_receiver_view(receiver, "indexOf")?;
         let needle_value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let second = self.builtin_arg(args, 1)?;
-        let (start, encoding) = match second {
-            Some(encoding @ Value::Str(_)) => (0, Some(encoding)),
-            _ => (
-                self.typed_array_relative_index_arg(args, 1, view.length, 0)?,
-                self.builtin_arg(args, 2)?,
-            ),
+        let (offset, encoding) = match second {
+            Some(encoding @ Value::Str(_)) => (None, Some(encoding)),
+            offset => (offset, self.builtin_arg(args, 2)?),
         };
-        let needle = self.buffer_search_needle(needle_value, encoding)?;
+        let (needle, is_utf16le_string) = self.buffer_search_needle(needle_value, encoding)?;
+        // Node's string-search binding rounds an odd UCS-2 haystack length
+        // down before normalizing byteOffset and then searches u16 units from
+        // floor(byteOffset / 2). Buffer needles use a separate binding and do
+        // not take this path.
+        let search_length = if is_utf16le_string {
+            view.length & !1
+        } else {
+            view.length
+        };
+        let start = match offset {
+            None | Some(Value::Undefined) => 0,
+            Some(value) => {
+                Self::clamp_relative_index(Self::value_as_integer(&value), search_length)
+            }
+        };
         let bytes = self.typed_array_view_bytes(&view)?;
         if needle.is_empty() {
             return Ok(Value::Int(i64::try_from(start).unwrap_or(i64::MAX)));
         }
-        let found = bytes
-            .get(start..)
-            .and_then(|remaining| {
-                remaining
-                    .windows(needle.len())
-                    .position(|window| window == needle)
-            })
-            .and_then(|relative| start.checked_add(relative))
-            .and_then(|index| i64::try_from(index).ok())
-            .unwrap_or(-1);
+        let found = if is_utf16le_string {
+            start
+                .checked_add(needle.len())
+                .filter(|end| *end <= search_length)
+                .and_then(|_| {
+                    let haystack_units = bytes[..search_length].as_chunks::<2>().0;
+                    let needle_units = needle.as_chunks::<2>().0;
+                    let unit_start = start / 2;
+                    haystack_units
+                        .get(unit_start..)
+                        .and_then(|remaining| {
+                            remaining
+                                .windows(needle_units.len())
+                                .position(|window| window == needle_units)
+                        })
+                        .and_then(|relative| unit_start.checked_add(relative))
+                        .and_then(|unit_index| unit_index.checked_mul(2))
+                })
+        } else {
+            bytes
+                .get(start..)
+                .and_then(|remaining| {
+                    remaining
+                        .windows(needle.len())
+                        .position(|window| window == needle)
+                })
+                .and_then(|relative| start.checked_add(relative))
+        }
+        .and_then(|index| i64::try_from(index).ok())
+        .unwrap_or(-1);
         Ok(Value::Int(found))
     }
 

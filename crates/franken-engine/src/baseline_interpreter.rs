@@ -238,6 +238,15 @@ const MEMORY_ESTIMATE_EVENT_PROMISE_WAITER_BASE_BYTES: u64 = 48;
 const MEMORY_ESTIMATE_LOOPBACK_SERVER_BASE_BYTES: u64 = 128;
 const MEMORY_ESTIMATE_LOOPBACK_SOCKET_BASE_BYTES: u64 = 256;
 const MEMORY_ESTIMATE_LOOPBACK_TASK_BASE_BYTES: u64 = 96;
+/// TLS ALPN identifiers are one-byte-length-prefixed, and the complete
+/// ProtocolNameList is bounded by its u16 wire length. Enforce those protocol
+/// bounds before iterating or allocating from a guest-controlled array-like.
+const MAX_TLS_ALPN_PROTOCOL_BYTES: usize = u8::MAX as usize;
+const MAX_TLS_ALPN_WIRE_BYTES: u64 = u16::MAX as u64;
+/// The hermetic loopback surface accepts DNS/IP host strings only. Bounding
+/// them to the maximum textual DNS name prevents attacker-sized host/SNI
+/// clones before connection admission and metadata installation.
+const MAX_LOOPBACK_HOST_BYTES: usize = 253;
 /// Conservative base charge for one finite `Readable.from` side-table entry.
 /// A retained string source and custom IFC label are charged separately.
 const MEMORY_ESTIMATE_READABLE_FROM_BASE_BYTES: u64 = 64;
@@ -2106,6 +2115,12 @@ pub enum BuiltinFunctionKind {
     NetSocketUnref,
     NetSocketSetNoDelay,
     NetSocketSetKeepAlive,
+    /// TLS-specific observations on a hermetic loopback socket (bd-70cv1).
+    TlsSocketGetPeerCertificate,
+    TlsSocketGetProtocol,
+    TlsSocketGetCipher,
+    TlsSocketIsSessionReused,
+    TlsSocketGetSession,
 }
 
 impl BuiltinFunctionKind {
@@ -3336,6 +3351,11 @@ impl BuiltinFunction {
             BuiltinFunctionKind::NetSocketUnref => "unref",
             BuiltinFunctionKind::NetSocketSetNoDelay => "setNoDelay",
             BuiltinFunctionKind::NetSocketSetKeepAlive => "setKeepAlive",
+            BuiltinFunctionKind::TlsSocketGetPeerCertificate => "getPeerCertificate",
+            BuiltinFunctionKind::TlsSocketGetProtocol => "getProtocol",
+            BuiltinFunctionKind::TlsSocketGetCipher => "getCipher",
+            BuiltinFunctionKind::TlsSocketIsSessionReused => "isSessionReused",
+            BuiltinFunctionKind::TlsSocketGetSession => "getSession",
             BuiltinFunctionKind::ArrayPush => "push",
             BuiltinFunctionKind::ArrayPop => "pop",
             BuiltinFunctionKind::ArrayShift => "shift",
@@ -5882,7 +5902,21 @@ struct LoopbackServerState {
     active_connections: BTreeSet<ObjectId>,
     close_requested: bool,
     close_scheduled: bool,
+    tls: Option<HermeticTlsServerState>,
     lifecycle_label: Label,
+}
+
+/// TLS-shaped metadata layered over an engine-owned loopback server. This is
+/// deliberately not a rustls/OS socket: it models Node's verification and
+/// negotiated-session API without granting ambient network authority
+/// (bd-70cv1).
+#[derive(Debug, Clone)]
+struct HermeticTlsServerState {
+    has_certificate: bool,
+    certificate_der: Vec<u8>,
+    request_cert: bool,
+    reject_unauthorized: bool,
+    alpn_protocols: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -5910,7 +5944,24 @@ struct LoopbackSocketState {
     pending_end: bool,
     pending_outbound: VecDeque<LoopbackBufferedData>,
     pending_outbound_end: bool,
+    tls: Option<HermeticTlsSocketState>,
     lifecycle_label: Label,
+}
+
+/// TLS session observations that cannot be forged through guest heap writes.
+/// Application bytes still use the loopback socket queues; successful
+/// verification is required before those queues are linked to a peer.
+#[derive(Debug, Clone)]
+struct HermeticTlsSocketState {
+    server_side: bool,
+    handshake_complete: bool,
+    reject_unauthorized: bool,
+    servername: Option<String>,
+    authorized: bool,
+    authorization_error: Option<String>,
+    alpn_protocols: Vec<String>,
+    negotiated_alpn: Option<String>,
+    peer_certificate_der: Vec<u8>,
 }
 
 /// Deferred loopback lifecycle/data actions dispatched on the existing
@@ -7411,7 +7462,37 @@ impl InterpreterCore {
         Ok(())
     }
 
+    fn estimate_tls_server_state_bytes(tls: &HermeticTlsServerState) -> u64 {
+        (tls.certificate_der.len() as u64).saturating_add(Self::saturating_sum(
+            tls.alpn_protocols.iter().map(|protocol| {
+                MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(protocol.len() as u64)
+            }),
+        ))
+    }
+
+    fn estimate_tls_socket_state_bytes(tls: &HermeticTlsSocketState) -> u64 {
+        tls.servername
+            .as_ref()
+            .map_or(0, |name| {
+                MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(name.len() as u64)
+            })
+            .saturating_add(tls.authorization_error.as_ref().map_or(0, |error| {
+                MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(error.len() as u64)
+            }))
+            .saturating_add(tls.negotiated_alpn.as_ref().map_or(0, |protocol| {
+                MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(protocol.len() as u64)
+            }))
+            .saturating_add(tls.peer_certificate_der.len() as u64)
+            .saturating_add(Self::saturating_sum(tls.alpn_protocols.iter().map(
+                |protocol| MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(protocol.len() as u64),
+            )))
+    }
+
     fn estimate_loopback_server_state_bytes(state: &LoopbackServerState) -> u64 {
+        let tls_bytes = state
+            .tls
+            .as_ref()
+            .map_or(0, Self::estimate_tls_server_state_bytes);
         MEMORY_ESTIMATE_LOOPBACK_SERVER_BASE_BYTES
             .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES)
             .saturating_add(state.address.len() as u64)
@@ -7419,6 +7500,7 @@ impl InterpreterCore {
                 (state.active_connections.len() as u64)
                     .saturating_mul(MEMORY_ESTIMATE_MAP_ENTRY_BYTES),
             )
+            .saturating_add(tls_bytes)
             .saturating_add(Self::estimate_label_bytes(&state.lifecycle_label))
     }
 
@@ -7430,9 +7512,14 @@ impl InterpreterCore {
                     .saturating_add(Self::estimate_label_bytes(&data.label))
             }))
         };
+        let tls_bytes = state
+            .tls
+            .as_ref()
+            .map_or(0, Self::estimate_tls_socket_state_bytes);
         MEMORY_ESTIMATE_LOOPBACK_SOCKET_BASE_BYTES
             .saturating_add(queued_data(&state.pending_data))
             .saturating_add(queued_data(&state.pending_outbound))
+            .saturating_add(tls_bytes)
             .saturating_add(Self::estimate_label_bytes(&state.lifecycle_label))
     }
 
@@ -7518,9 +7605,21 @@ impl InterpreterCore {
     }
 
     fn construct_loopback_server(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        self.construct_loopback_server_with_tls(args, None)
+    }
+
+    fn construct_loopback_server_with_tls(
+        &mut self,
+        args: RegRange,
+        tls: Option<HermeticTlsServerState>,
+    ) -> Result<Value, InterpreterError> {
         let lifecycle_label = self.writable_invocation_label(args)?;
+        let is_tls = tls.is_some();
         let object_id = self.alloc_object_with_properties(&[
-            ("__type", Value::str("NetServer")),
+            (
+                "__type",
+                Value::str(if is_tls { "TlsServer" } else { "NetServer" }),
+            ),
             ("__maxListeners", Value::Int(10)),
             ("listening", Value::Bool(false)),
         ])?;
@@ -7531,13 +7630,23 @@ impl InterpreterCore {
             active_connections: BTreeSet::new(),
             close_requested: false,
             close_scheduled: false,
+            tls,
             lifecycle_label,
         };
         let retained_bytes = Self::estimate_loopback_server_state_bytes(&state);
         self.apply_memory_component_delta(0, retained_bytes)?;
         self.loopback_servers.insert(object_id, state);
         if let Some(callback) = self.last_callable_arg(args)? {
-            self.add_loopback_listener(object_id, "connection", callback, false)?;
+            self.add_loopback_listener(
+                object_id,
+                if is_tls {
+                    "secureConnection"
+                } else {
+                    "connection"
+                },
+                callback,
+                false,
+            )?;
         }
         Ok(Value::Object(object_id))
     }
@@ -7579,12 +7688,243 @@ impl InterpreterCore {
             pending_end: false,
             pending_outbound: VecDeque::new(),
             pending_outbound_end: false,
+            tls: None,
             lifecycle_label,
         };
         let retained_bytes = Self::estimate_loopback_socket_state_bytes(&state);
         self.apply_memory_component_delta(0, retained_bytes)?;
         self.loopback_sockets.insert(object_id, state);
         Ok(object_id)
+    }
+
+    fn tls_option_bool(&self, options: &Value, key: &str, default: bool) -> bool {
+        match self.fs_object_property(options, key) {
+            Some(Value::Bool(value)) => value,
+            _ => default,
+        }
+    }
+
+    fn tls_option_has_string(&self, options: &Value, key: &str) -> bool {
+        matches!(self.fs_object_property(options, key), Some(Value::Str(_)))
+    }
+
+    fn tls_option_string_array(
+        &self,
+        options: &Value,
+        key: &str,
+        additional_temporary_bytes: u64,
+    ) -> Result<Vec<String>, InterpreterError> {
+        let Some(Value::Object(array)) = self.fs_object_property(options, key) else {
+            return Ok(Vec::new());
+        };
+        let length = self.array_like_length(array)?;
+        let length_u64 = u64::try_from(length).unwrap_or(u64::MAX);
+        if length_u64 > MAX_TLS_ALPN_WIRE_BYTES {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "TLS ALPN protocol count {length_u64} exceeds bounded wire length {MAX_TLS_ALPN_WIRE_BYTES}"
+                ),
+            });
+        }
+
+        let mut string_count = 0u64;
+        let mut wire_bytes = 0u64;
+        let mut cloned_string_bytes = 0u64;
+        for index in 0..length {
+            let Some(Value::Str(protocol)) = self.array_index_value(array, index)? else {
+                continue;
+            };
+            if protocol.is_empty() || protocol.len() > MAX_TLS_ALPN_PROTOCOL_BYTES {
+                return Err(InterpreterError::RangeError {
+                    message: format!(
+                        "TLS ALPN protocol length {} is outside the supported 1..={MAX_TLS_ALPN_PROTOCOL_BYTES} byte range",
+                        protocol.len()
+                    ),
+                });
+            }
+            string_count = string_count.saturating_add(1);
+            wire_bytes = wire_bytes.saturating_add(1 + protocol.len() as u64);
+            cloned_string_bytes = cloned_string_bytes.saturating_add(
+                MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(protocol.len() as u64),
+            );
+        }
+        if wire_bytes > MAX_TLS_ALPN_WIRE_BYTES {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "TLS ALPN wire length {wire_bytes} exceeds {MAX_TLS_ALPN_WIRE_BYTES} bytes"
+                ),
+            });
+        }
+        let vector_bytes = string_count.saturating_mul(MEMORY_ESTIMATE_MAP_ENTRY_BYTES);
+        self.check_temporary_memory_budget(
+            additional_temporary_bytes
+                .saturating_add(vector_bytes)
+                .saturating_add(cloned_string_bytes),
+        )?;
+
+        let capacity = usize::try_from(string_count).unwrap_or(usize::MAX);
+        let mut protocols = Vec::with_capacity(capacity);
+        for index in 0..length {
+            if let Some(Value::Str(protocol)) = self.array_index_value(array, index)? {
+                protocols.push(protocol.to_string());
+            }
+        }
+        Ok(protocols)
+    }
+
+    fn decode_tls_certificate_pem(&self, pem: &str) -> Result<Vec<u8>, InterpreterError> {
+        use base64::Engine as _;
+
+        let Some((_, body)) = pem.split_once("-----BEGIN CERTIFICATE-----") else {
+            return Ok(Vec::new());
+        };
+        let Some((body, _)) = body.split_once("-----END CERTIFICATE-----") else {
+            return Ok(Vec::new());
+        };
+        // Filtering and base64 decoding may briefly hold both the compacted
+        // payload and decoded DER. Include fixed socket/server construction
+        // headroom so those temporaries cannot combine with the subsequent
+        // committed TLS state to cross the configured memory ceiling.
+        self.check_temporary_memory_budget(
+            (body.len() as u64)
+                .saturating_mul(2)
+                .saturating_add(64 * 1024),
+        )?;
+        let encoded: String = body.chars().filter(|ch| !ch.is_whitespace()).collect();
+        Ok(base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .unwrap_or_default())
+    }
+
+    fn construct_tls_server(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        let options = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let certificate_der = match self.fs_object_property(&options, "cert") {
+            Some(Value::Str(pem)) => self.decode_tls_certificate_pem(&pem)?,
+            _ => Vec::new(),
+        };
+        let alpn_protocols = self.tls_option_string_array(
+            &options,
+            "ALPNProtocols",
+            (certificate_der.len() as u64).saturating_add(64 * 1024),
+        )?;
+        let tls = HermeticTlsServerState {
+            has_certificate: !certificate_der.is_empty()
+                && self.tls_option_has_string(&options, "key"),
+            certificate_der,
+            request_cert: self.tls_option_bool(&options, "requestCert", false),
+            reject_unauthorized: self.tls_option_bool(&options, "rejectUnauthorized", true),
+            alpn_protocols,
+        };
+        self.construct_loopback_server_with_tls(args, Some(tls))
+    }
+
+    fn install_tls_socket_metadata(
+        &mut self,
+        socket: ObjectId,
+        tls: HermeticTlsSocketState,
+    ) -> Result<(), InterpreterError> {
+        let Some(state) = self.loopback_sockets.get(&socket) else {
+            return Err(InterpreterError::ObjectNotFound { id: socket.0 });
+        };
+        let previous_tls_bytes = state
+            .tls
+            .as_ref()
+            .map_or(0, Self::estimate_tls_socket_state_bytes);
+        let next_tls_bytes = Self::estimate_tls_socket_state_bytes(&tls);
+        let property_keys = [
+            "__type",
+            "encrypted",
+            "authorized",
+            "authorizationError",
+            "servername",
+            "alpnProtocol",
+        ];
+        let heap_index = socket.0 as usize;
+        let Some(object) = self.heap.get(heap_index) else {
+            return Err(InterpreterError::ObjectNotFound { id: socket.0 });
+        };
+        let previous_property_bytes = Self::saturating_sum(property_keys.iter().map(|key| {
+            object
+                .properties
+                .get(key)
+                .map_or(0, |value| Self::estimate_property_entry_bytes(key, value))
+        }));
+        let scalar_property_bytes = |key: &str| {
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                .saturating_add(Self::estimate_string_bytes(key).saturating_mul(2))
+        };
+        let string_property_bytes = |key: &str, value: &str| {
+            scalar_property_bytes(key).saturating_add(Self::estimate_string_bytes(value))
+        };
+        let authorization_error_bytes = if tls.handshake_complete {
+            tls.authorization_error.as_ref().map_or_else(
+                || scalar_property_bytes("authorizationError"),
+                |error| string_property_bytes("authorizationError", error),
+            )
+        } else {
+            scalar_property_bytes("authorizationError")
+        };
+        let servername_bytes = tls.servername.as_ref().map_or_else(
+            || scalar_property_bytes("servername"),
+            |name| string_property_bytes("servername", name),
+        );
+        let alpn_protocol_bytes = tls.negotiated_alpn.as_ref().map_or_else(
+            || scalar_property_bytes("alpnProtocol"),
+            |protocol| string_property_bytes("alpnProtocol", protocol),
+        );
+        let next_property_bytes = string_property_bytes("__type", "TlsSocket")
+            .saturating_add(scalar_property_bytes("encrypted"))
+            .saturating_add(scalar_property_bytes("authorized"))
+            .saturating_add(authorization_error_bytes)
+            .saturating_add(servername_bytes)
+            .saturating_add(alpn_protocol_bytes);
+        // Prove the simultaneous side-table plus heap-mirror high-water mark
+        // before cloning any attacker-controlled string into a Value. After
+        // this point all modeled fallible checks precede the atomic commit.
+        self.check_temporary_memory_budget(next_tls_bytes.saturating_add(next_property_bytes))?;
+        let authorized = tls.authorized;
+        let authorization_error = if tls.handshake_complete {
+            tls.authorization_error
+                .as_ref()
+                .map_or(Value::Undefined, |error| Value::str(error.as_str()))
+        } else {
+            Value::Undefined
+        };
+        let servername = tls
+            .servername
+            .as_ref()
+            .map_or(Value::Undefined, |name| Value::str(name.as_str()));
+        let alpn_protocol = tls
+            .negotiated_alpn
+            .as_ref()
+            .map_or(Value::Bool(false), |protocol| Value::str(protocol.as_str()));
+        let property_updates = [
+            ("__type", Value::str("TlsSocket")),
+            ("encrypted", Value::Bool(true)),
+            ("authorized", Value::Bool(authorized)),
+            ("authorizationError", authorization_error),
+            ("servername", servername),
+            ("alpnProtocol", alpn_protocol),
+        ];
+        self.apply_memory_component_delta(
+            previous_tls_bytes.saturating_add(previous_property_bytes),
+            next_tls_bytes.saturating_add(next_property_bytes),
+        )?;
+
+        self.loopback_sockets
+            .get_mut(&socket)
+            .expect("TLS socket was validated before atomic metadata commit")
+            .tls = Some(tls);
+        self.mutate_heap(|heap| {
+            let object = heap
+                .get_mut(heap_index)
+                .expect("TLS socket heap object was validated before atomic metadata commit");
+            for (key, value) in property_updates {
+                object.properties.insert(key.to_string(), value);
+            }
+        });
+        self.gc_write_barrier(socket);
+        Ok(())
     }
 
     fn loopback_port_from_value(&self, value: &Value) -> Option<u16> {
@@ -7601,38 +7941,149 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<String, InterpreterError> {
         if matches!(first, Value::Object(_)) {
-            return Ok(self
-                .fs_object_property(first, "host")
-                .map(|value| self.value_to_string(&value))
-                .unwrap_or_else(|| "127.0.0.1".to_string()));
+            let Some(value) = self.fs_object_property(first, "host") else {
+                return Ok("127.0.0.1".to_string());
+            };
+            return self.bounded_loopback_host_string(&value);
         }
         if args.count >= 2 {
             let candidate = self.read_reg(args.start + 1)?;
-            if let Value::Str(host) = candidate {
-                return Ok(host.to_string());
+            if candidate.is_callable() {
+                return Ok("127.0.0.1".to_string());
             }
+            return self.bounded_loopback_host_string(&candidate);
         }
         Ok("127.0.0.1".to_string())
     }
 
+    fn bounded_loopback_host_string(&self, value: &Value) -> Result<String, InterpreterError> {
+        let source_len = match value {
+            Value::Str(host) => host
+                .as_str()
+                .map_or(MAX_LOOPBACK_HOST_BYTES.saturating_add(1), str::len),
+            Value::BigInt(host) => host.len(),
+            _ => 0,
+        };
+        if source_len > MAX_LOOPBACK_HOST_BYTES {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "loopback host length {source_len} exceeds {MAX_LOOPBACK_HOST_BYTES} bytes"
+                ),
+            });
+        }
+        let temporary_host_bytes = match value {
+            Value::Str(host) => Self::estimate_js_string_bytes(host),
+            Value::BigInt(host) => Self::estimate_string_bytes(host),
+            _ => Self::estimate_string_bytes("[bounded loopback host]"),
+        };
+        self.check_temporary_memory_budget(temporary_host_bytes.saturating_add(64 * 1024))?;
+        let host = match value {
+            Value::Undefined | Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) => {
+                self.value_to_string(value)
+            }
+            Value::Str(host) => host.as_str().unwrap_or_default().to_string(),
+            Value::BigInt(host) => host.to_string(),
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "bounded primitive loopback host".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        if host.len() > MAX_LOOPBACK_HOST_BYTES {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "loopback host length {} exceeds {MAX_LOOPBACK_HOST_BYTES} bytes",
+                    host.len()
+                ),
+            });
+        }
+        Ok(host)
+    }
+
     fn connect_loopback_socket(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        self.connect_loopback_socket_with_tls(args, false)
+    }
+
+    fn connect_tls_socket(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        self.connect_loopback_socket_with_tls(args, true)
+    }
+
+    fn connect_loopback_socket_with_tls(
+        &mut self,
+        args: RegRange,
+        is_tls: bool,
+    ) -> Result<Value, InterpreterError> {
         let first = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let port = self.loopback_port_from_value(&first);
-        let host = match self.loopback_host_from_connect_args(&first, args)?.as_str() {
-            "localhost" => "127.0.0.1".to_string(),
-            host => host.to_string(),
-        };
-        let lifecycle_label = self.writable_invocation_label(args)?;
-        let client = self.construct_loopback_socket(false, port, lifecycle_label)?;
-        if let Some(callback) = self.last_callable_arg(args)? {
-            self.add_loopback_listener(client, "connect", callback, true)?;
+        let mut host = self.loopback_host_from_connect_args(&first, args)?;
+        if host == "localhost" {
+            host = "127.0.0.1".to_string();
         }
+        let prepared_tls = if is_tls {
+            let reject_unauthorized = self.tls_option_bool(&first, "rejectUnauthorized", true);
+            let servername_value = match self
+                .fs_object_property(&first, "servername")
+                .or_else(|| self.fs_object_property(&first, "host"))
+            {
+                Some(Value::Str(value)) => Some(value),
+                _ => None,
+            };
+            if servername_value
+                .as_ref()
+                .is_some_and(|value| value.len() > MAX_LOOPBACK_HOST_BYTES)
+            {
+                return Err(InterpreterError::RangeError {
+                    message: format!(
+                        "TLS servername length exceeds {MAX_LOOPBACK_HOST_BYTES} bytes"
+                    ),
+                });
+            }
+            let servername_bytes = servername_value.as_ref().map_or(0, |value| {
+                MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(value.len() as u64)
+            });
+            let alpn_protocols = self.tls_option_string_array(
+                &first,
+                "ALPNProtocols",
+                servername_bytes
+                    .saturating_add(Self::estimate_string_bytes(&host))
+                    .saturating_add(64 * 1024),
+            )?;
+            let servername = servername_value.map(|value| value.to_string());
+            Some(HermeticTlsSocketState {
+                server_side: false,
+                handshake_complete: false,
+                reject_unauthorized,
+                servername,
+                authorized: false,
+                authorization_error: Some("DEPTH_ZERO_SELF_SIGNED_CERT".to_string()),
+                alpn_protocols,
+                negotiated_alpn: None,
+                peer_certificate_der: Vec::new(),
+            })
+        } else {
+            None
+        };
         let server = port.and_then(|port| {
             self.loopback_servers.iter().find_map(|(object_id, state)| {
                 (state.listening && state.port == Some(port) && state.address == host)
                     .then_some(*object_id)
             })
         });
+        drop(host);
+        let lifecycle_label = self.writable_invocation_label(args)?;
+        let client = self.construct_loopback_socket(false, port, lifecycle_label)?;
+        if let Some(callback) = self.last_callable_arg(args)? {
+            self.add_loopback_listener(
+                client,
+                if is_tls { "secureConnect" } else { "connect" },
+                callback,
+                true,
+            )?;
+        }
+        if let Some(tls) = prepared_tls {
+            self.install_tls_socket_metadata(client, tls)?;
+        }
         if let Some(server) = server {
             self.schedule_loopback_task(PendingLoopbackTask::Connect { client, server })?;
         } else {
@@ -8105,6 +8556,189 @@ impl InterpreterCore {
         Ok(Value::Object(socket))
     }
 
+    fn tls_socket_id(&self, receiver: Value) -> Result<ObjectId, InterpreterError> {
+        let socket = Self::loopback_socket_receiver(receiver)?;
+        let has_tls_state = self
+            .loopback_sockets
+            .get(&socket)
+            .is_some_and(|state| state.tls.is_some());
+        if !has_tls_state {
+            return Err(InterpreterError::TypeError {
+                expected: "tls.TLSSocket receiver".to_string(),
+                got: "net.Socket".to_string(),
+            });
+        }
+        Ok(socket)
+    }
+
+    fn tls_socket_get_peer_certificate(
+        &mut self,
+        receiver: Value,
+    ) -> Result<Value, InterpreterError> {
+        let socket = self.tls_socket_id(receiver)?;
+        let has_peer_certificate = self
+            .loopback_sockets
+            .get(&socket)
+            .and_then(|state| state.tls.as_ref())
+            .is_some_and(|tls| {
+                tls.handshake_complete && !tls.server_side && !tls.peer_certificate_der.is_empty()
+            });
+        if !has_peer_certificate {
+            return Ok(Value::Object(self.alloc_object_with_properties(&[])?));
+        }
+        let peer_certificate_der = {
+            let tls = self
+                .loopback_sockets
+                .get_mut(&socket)
+                .and_then(|state| state.tls.as_mut())
+                .expect("TLS socket was validated before certificate access");
+            std::mem::take(&mut tls.peer_certificate_der)
+        };
+        let raw_result = self.alloc_buffer_from_bytes(&peer_certificate_der);
+        self.loopback_sockets
+            .get_mut(&socket)
+            .and_then(|state| state.tls.as_mut())
+            .expect("TLS socket exists while restoring certificate state")
+            .peer_certificate_der = peer_certificate_der;
+        let raw = raw_result?;
+        let certificate_label = self.loopback_socket_label(socket);
+        self.join_binary_storage_label(raw, &certificate_label)?;
+        Ok(Value::Object(self.alloc_object_with_properties(&[(
+            "raw",
+            Value::Object(raw),
+        )])?))
+    }
+
+    fn tls_handshake_complete(&self, receiver: Value) -> Result<bool, InterpreterError> {
+        let socket = self.tls_socket_id(receiver)?;
+        Ok(self
+            .loopback_sockets
+            .get(&socket)
+            .and_then(|state| state.tls.as_ref())
+            .is_some_and(|tls| tls.handshake_complete))
+    }
+
+    fn tls_socket_get_protocol(&self, receiver: Value) -> Result<Value, InterpreterError> {
+        if !self.tls_handshake_complete(receiver)? {
+            return Ok(Value::Undefined);
+        }
+        Ok(Value::str("TLSv1.3"))
+    }
+
+    fn tls_socket_get_cipher(&mut self, receiver: Value) -> Result<Value, InterpreterError> {
+        if !self.tls_handshake_complete(receiver)? {
+            return Ok(Value::Undefined);
+        }
+        Ok(Value::Object(self.alloc_object_with_properties(&[
+            ("name", Value::str("TLS_AES_256_GCM_SHA384")),
+            ("standardName", Value::str("TLS_AES_256_GCM_SHA384")),
+            ("version", Value::str("TLSv1.3")),
+        ])?))
+    }
+
+    fn tls_socket_is_session_reused(&self, receiver: Value) -> Result<Value, InterpreterError> {
+        let _ = self.tls_socket_id(receiver)?;
+        Ok(Value::Bool(false))
+    }
+
+    fn tls_socket_get_session(&self, receiver: Value) -> Result<Value, InterpreterError> {
+        if !self.tls_handshake_complete(receiver)? {
+            return Ok(Value::Undefined);
+        }
+        Ok(Value::Null)
+    }
+
+    fn tls_check_server_identity(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        use std::net::IpAddr;
+
+        let host = self
+            .builtin_arg(args, 0)?
+            .map(|value| self.value_to_string(&value))
+            .unwrap_or_default();
+        let certificate = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+        let subject_alt_name = self
+            .fs_object_property(&certificate, "subjectaltname")
+            .map(|value| self.value_to_string(&value));
+        let common_name = self
+            .fs_object_property(&certificate, "subject")
+            .and_then(|subject| self.fs_object_property(&subject, "CN"))
+            .map(|value| self.value_to_string(&value));
+        let host_ip = host.parse::<IpAddr>().ok();
+        let alt_matches = subject_alt_name.as_deref().is_some_and(|names| {
+            names.split(',').any(|entry| {
+                let entry = entry.trim();
+                if let Some(host_ip) = host_ip {
+                    entry
+                        .strip_prefix("IP Address:")
+                        .and_then(|address| address.parse::<IpAddr>().ok())
+                        == Some(host_ip)
+                } else {
+                    entry
+                        .strip_prefix("DNS:")
+                        .is_some_and(|dns_name| dns_name.eq_ignore_ascii_case(&host))
+                }
+            })
+        });
+        // RFC 6125-style precedence: once a certificate supplies a SAN, the
+        // legacy subject CN must not override a SAN mismatch.
+        let identity_matches = if host_ip.is_some() {
+            alt_matches
+        } else if subject_alt_name.is_some() {
+            alt_matches
+        } else {
+            common_name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case(&host))
+        };
+        if identity_matches {
+            return Ok(Value::Undefined);
+        }
+        let prototype = self.ensure_builtin_prototype("Error")?;
+        let error = self.alloc_object_with_prototype(Some(prototype))?;
+        self.initialize_error_like_object(
+            error,
+            "Error",
+            format!("Host name {host} does not match the certificate"),
+        )?;
+        self.set_object_property(
+            error,
+            "code".to_string(),
+            Value::str("ERR_TLS_CERT_ALTNAME_INVALID"),
+        )?;
+        Ok(Value::Object(error))
+    }
+
+    fn tls_root_certificates(&mut self) -> Result<Value, InterpreterError> {
+        let roots = [Value::str(
+            "-----BEGIN CERTIFICATE-----\nFRANKEN ENGINE HERMETIC ROOT\n-----END CERTIFICATE-----",
+        )];
+        Ok(Value::Object(self.alloc_array_from_values(&roots)?))
+    }
+
+    fn tls_get_ciphers(&mut self) -> Result<Value, InterpreterError> {
+        let ciphers = [
+            Value::str("tls_aes_256_gcm_sha384"),
+            Value::str("tls_aes_128_gcm_sha256"),
+        ];
+        Ok(Value::Object(self.alloc_array_from_values(&ciphers)?))
+    }
+
+    fn tls_create_secure_context(&mut self) -> Result<Value, InterpreterError> {
+        Ok(Value::Object(self.alloc_object_with_properties(&[(
+            "__type",
+            Value::str("TlsSecureContext"),
+        )])?))
+    }
+
+    fn net_socket_instanceof(&self, args: RegRange) -> Result<Value, InterpreterError> {
+        let candidate = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let is_socket = match candidate {
+            Value::Object(object_id) => self.loopback_sockets.contains_key(&object_id),
+            _ => false,
+        };
+        Ok(Value::Bool(is_socket))
+    }
+
     fn emit_loopback_event(
         &mut self,
         module: Option<&Ir3Module>,
@@ -8169,10 +8803,111 @@ impl InterpreterCore {
                     })?;
                     return Ok(());
                 }
+                // Cloning TLS records below is intentional: the connection
+                // admission path must release immutable side-table borrows
+                // before it can allocate the accepted socket. Preflight a
+                // conservative simultaneous peak: both transient records,
+                // their persistent endpoint copies, plus fixed heap/task/error
+                // headroom. Subsequent per-allocation checks alone would miss
+                // this combined high-water mark.
+                let tls_clone_bytes = self
+                    .loopback_sockets
+                    .get(&client)
+                    .and_then(|state| state.tls.as_ref())
+                    .map_or(0, Self::estimate_tls_socket_state_bytes)
+                    .saturating_add(
+                        self.loopback_servers
+                            .get(&server)
+                            .and_then(|state| state.tls.as_ref())
+                            .map_or(0, Self::estimate_tls_server_state_bytes),
+                    );
+                self.check_temporary_memory_budget(
+                    tls_clone_bytes.saturating_mul(3).saturating_add(128 * 1024),
+                )?;
+                let client_tls = self
+                    .loopback_sockets
+                    .get(&client)
+                    .and_then(|state| state.tls.clone());
+                let server_tls = self
+                    .loopback_servers
+                    .get(&server)
+                    .and_then(|state| state.tls.clone());
                 let remote_port = self
                     .loopback_servers
                     .get(&server)
                     .and_then(|state| state.port);
+                let failure = match (client_tls.as_ref(), server_tls.as_ref()) {
+                    (None, Some(_)) => Some("ERR_SSL_HTTP_REQUEST"),
+                    (Some(_), None) => Some("ERR_SSL_WRONG_VERSION_NUMBER"),
+                    (Some(_), Some(server_tls)) if !server_tls.has_certificate => {
+                        Some("ERR_SSL_NO_CERTIFICATE_ASSIGNED")
+                    }
+                    (Some(client_tls), Some(_)) if client_tls.reject_unauthorized => {
+                        Some("DEPTH_ZERO_SELF_SIGNED_CERT")
+                    }
+                    // The hermetic TLS model deliberately has no trust-store
+                    // or certificate-chain validator for client identities.
+                    // A server that requires authorization must therefore
+                    // fail closed instead of treating an absent/unverified
+                    // client certificate as authenticated.
+                    (Some(_), Some(server_tls))
+                        if server_tls.request_cert && server_tls.reject_unauthorized =>
+                    {
+                        Some("UNABLE_TO_VERIFY_LEAF_SIGNATURE")
+                    }
+                    _ => None,
+                };
+                if let Some(code) = failure {
+                    let label = self
+                        .loopback_socket_label(client)
+                        .join(&self.loopback_server_label(server));
+                    if let Some(server_tls) = server_tls.as_ref() {
+                        let failed_socket =
+                            self.construct_loopback_socket(false, remote_port, label.clone())?;
+                        let failed_tls = HermeticTlsSocketState {
+                            server_side: true,
+                            handshake_complete: false,
+                            reject_unauthorized: server_tls.reject_unauthorized,
+                            servername: client_tls.as_ref().and_then(|tls| tls.servername.clone()),
+                            authorized: false,
+                            authorization_error: Some(code.to_string()),
+                            alpn_protocols: server_tls.alpn_protocols.clone(),
+                            negotiated_alpn: None,
+                            peer_certificate_der: Vec::new(),
+                        };
+                        self.install_tls_socket_metadata(failed_socket, failed_tls)?;
+                        if let Some(state) = self.loopback_sockets.get_mut(&failed_socket) {
+                            state.destroyed = true;
+                        }
+                        self.set_object_property(
+                            failed_socket,
+                            "destroyed".to_string(),
+                            Value::Bool(true),
+                        )?;
+                        let prototype = self.ensure_builtin_prototype("Error")?;
+                        let error = self.alloc_object_with_prototype(Some(prototype))?;
+                        self.initialize_error_like_object(
+                            error,
+                            "Error",
+                            format!("TLS handshake failed: {code}"),
+                        )?;
+                        self.set_object_property(error, "code".to_string(), Value::str(code))?;
+                        let _ = self.emit_loopback_event(
+                            module,
+                            server,
+                            "tlsClientError",
+                            vec![Value::Object(error), Value::Object(failed_socket)],
+                            label.clone(),
+                        )?;
+                    }
+                    self.schedule_loopback_task(PendingLoopbackTask::Error {
+                        target: client,
+                        code: code.to_string(),
+                        label,
+                        close_after: true,
+                    })?;
+                    return Ok(());
+                }
                 let connection_label = self
                     .loopback_sockets
                     .get(&client)
@@ -8188,6 +8923,36 @@ impl InterpreterCore {
                 self.join_loopback_socket_label(client, &connection_label)?;
                 let accepted =
                     self.construct_loopback_socket(true, remote_port, connection_label.clone())?;
+                if let (Some(mut client_tls), Some(server_tls)) = (client_tls, server_tls) {
+                    let negotiated_alpn = server_tls
+                        .alpn_protocols
+                        .iter()
+                        .find(|server_protocol| {
+                            client_tls
+                                .alpn_protocols
+                                .iter()
+                                .any(|client_protocol| client_protocol == *server_protocol)
+                        })
+                        .cloned();
+                    client_tls.handshake_complete = true;
+                    client_tls.negotiated_alpn = negotiated_alpn.clone();
+                    client_tls.peer_certificate_der = server_tls.certificate_der.clone();
+                    let accepted_tls = HermeticTlsSocketState {
+                        server_side: true,
+                        handshake_complete: true,
+                        reject_unauthorized: server_tls.reject_unauthorized,
+                        servername: client_tls.servername.clone(),
+                        authorized: false,
+                        authorization_error: server_tls
+                            .request_cert
+                            .then(|| "UNABLE_TO_GET_ISSUER_CERT".to_string()),
+                        alpn_protocols: server_tls.alpn_protocols,
+                        negotiated_alpn,
+                        peer_certificate_der: Vec::new(),
+                    };
+                    self.install_tls_socket_metadata(client, client_tls)?;
+                    self.install_tls_socket_metadata(accepted, accepted_tls)?;
+                }
                 self.apply_memory_component_delta(0, MEMORY_ESTIMATE_MAP_ENTRY_BYTES)?;
                 self.loopback_servers
                     .get_mut(&server)
@@ -8233,14 +8998,30 @@ impl InterpreterCore {
                 let _ = self.emit_loopback_event(
                     module,
                     server,
-                    "connection",
+                    if self
+                        .loopback_servers
+                        .get(&server)
+                        .is_some_and(|state| state.tls.is_some())
+                    {
+                        "secureConnection"
+                    } else {
+                        "connection"
+                    },
                     vec![Value::Object(accepted)],
                     connection_label.clone(),
                 )?;
                 let _ = self.emit_loopback_event(
                     module,
                     client,
-                    "connect",
+                    if self
+                        .loopback_sockets
+                        .get(&client)
+                        .is_some_and(|state| state.tls.is_some())
+                    {
+                        "secureConnect"
+                    } else {
+                        "connect"
+                    },
                     Vec::new(),
                     connection_label,
                 )?;
@@ -16897,6 +17678,19 @@ impl InterpreterCore {
             | BuiltinFunctionKind::NetSocketSetNoDelay
             | BuiltinFunctionKind::NetSocketSetKeepAlive => {
                 self.loopback_socket_chainable(receiver.unwrap_or(Value::Undefined), args)
+            }
+            BuiltinFunctionKind::TlsSocketGetPeerCertificate => self
+                .tls_socket_get_peer_certificate(receiver.unwrap_or(Value::Undefined)),
+            BuiltinFunctionKind::TlsSocketGetProtocol => {
+                self.tls_socket_get_protocol(receiver.unwrap_or(Value::Undefined))
+            }
+            BuiltinFunctionKind::TlsSocketGetCipher => {
+                self.tls_socket_get_cipher(receiver.unwrap_or(Value::Undefined))
+            }
+            BuiltinFunctionKind::TlsSocketIsSessionReused => self
+                .tls_socket_is_session_reused(receiver.unwrap_or(Value::Undefined)),
+            BuiltinFunctionKind::TlsSocketGetSession => {
+                self.tls_socket_get_session(receiver.unwrap_or(Value::Undefined))
             }
             BuiltinFunctionKind::ArrayPush => {
                 // ES2020 23.1.3.20: append each argument to `this` at the
@@ -25826,120 +26620,135 @@ impl InterpreterCore {
             ("Writable", "destroy") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamWritableDestroy,
             )),
-            ("NetServer", "listen") => Some(BuiltinFunction::new_kind(
+            ("NetServer" | "TlsServer", "listen") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::NetServerListen,
             )),
-            ("NetServer", "address") => Some(BuiltinFunction::new_kind(
+            ("NetServer" | "TlsServer", "address") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::NetServerAddress,
             )),
-            ("NetServer", "close") => Some(BuiltinFunction::new_kind(
+            ("NetServer" | "TlsServer", "close") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::NetServerClose,
             )),
-            ("NetSocket", "write") => Some(BuiltinFunction::new_kind(
+            ("NetSocket" | "TlsSocket", "write") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::NetSocketWrite,
             )),
-            ("NetSocket", "end") => {
+            ("NetSocket" | "TlsSocket", "end") => {
                 Some(BuiltinFunction::new_kind(BuiltinFunctionKind::NetSocketEnd))
             }
-            ("NetSocket", "destroy") => Some(BuiltinFunction::new_kind(
+            ("NetSocket" | "TlsSocket", "destroy") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::NetSocketDestroy,
             )),
-            ("NetSocket", "setEncoding") => Some(BuiltinFunction::new_kind(
+            ("NetSocket" | "TlsSocket", "setEncoding") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::NetSocketSetEncoding,
             )),
-            ("NetSocket", "pause") => Some(BuiltinFunction::new_kind(
+            ("NetSocket" | "TlsSocket", "pause") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::NetSocketPause,
             )),
-            ("NetSocket", "resume") => Some(BuiltinFunction::new_kind(
+            ("NetSocket" | "TlsSocket", "resume") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::NetSocketResume,
             )),
-            ("NetSocket", "ref") => {
+            ("NetSocket" | "TlsSocket", "ref") => {
                 Some(BuiltinFunction::new_kind(BuiltinFunctionKind::NetSocketRef))
             }
-            ("NetSocket", "unref") => Some(BuiltinFunction::new_kind(
+            ("NetSocket" | "TlsSocket", "unref") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::NetSocketUnref,
             )),
-            ("NetSocket", "setNoDelay") => Some(BuiltinFunction::new_kind(
+            ("NetSocket" | "TlsSocket", "setNoDelay") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::NetSocketSetNoDelay,
             )),
-            ("NetSocket", "setKeepAlive") => Some(BuiltinFunction::new_kind(
+            ("NetSocket" | "TlsSocket", "setKeepAlive") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::NetSocketSetKeepAlive,
+            )),
+            ("TlsSocket", "getPeerCertificate") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::TlsSocketGetPeerCertificate,
+            )),
+            ("TlsSocket", "getProtocol") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::TlsSocketGetProtocol,
+            )),
+            ("TlsSocket", "getCipher") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::TlsSocketGetCipher,
+            )),
+            ("TlsSocket", "isSessionReused") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::TlsSocketIsSessionReused,
+            )),
+            ("TlsSocket", "getSession") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::TlsSocketGetSession,
             )),
             // bd-3894s / bd-2dmnn: standalone EventEmitter objects and both HTTP
             // stream tags resolve against one receiver-aware EventEmitter method
             // surface and one listener side table.
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket",
                 "on" | "addListener",
             ) => Some(BuiltinFunction::emitter_on()),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket",
                 "once",
             ) => Some(BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterOnce)),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket",
                 "off" | "removeListener",
             ) => Some(BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterOff)),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket",
                 "removeAllListeners",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterRemoveAllListeners,
             )),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket",
                 "listenerCount",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterListenerCount,
             )),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket",
                 "eventNames",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterEventNames,
             )),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket",
                 "prependListener",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterPrependListener,
             )),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket",
                 "prependOnceListener",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterPrependOnceListener,
             )),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket",
                 "emit",
             ) => Some(BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterEmit)),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket",
                 "getMaxListeners",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterGetMaxListeners,
             )),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket",
                 "setMaxListeners",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterSetMaxListeners,
             )),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket",
                 "listeners",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterListeners,
@@ -34966,6 +35775,13 @@ impl InterpreterCore {
                 self.set_object_property(socket, "connecting".to_string(), Value::Bool(false))?;
                 Ok(Value::Object(socket))
             }
+            "builtin:NetSocketInstanceOf" => self.net_socket_instanceof(args),
+            "builtin:TlsRootCertificates" => self.tls_root_certificates(),
+            "builtin:TlsGetCiphers" => self.tls_get_ciphers(),
+            "builtin:TlsCreateSecureContext" => self.tls_create_secure_context(),
+            "builtin:TlsCheckServerIdentity" => self.tls_check_server_identity(args),
+            "builtin:TlsCreateServer" => self.construct_tls_server(args),
+            "builtin:TlsConnect" => self.connect_tls_socket(args),
             "builtin:EventsOnce" => {
                 // bd-asw4m.1: static `events.once(emitter, event)` is pure
                 // runtime bookkeeping. It creates a pending Promise plus linked

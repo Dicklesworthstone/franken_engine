@@ -1,0 +1,23 @@
+{
+  "schema_version": "franken-engine.parser-phase0-performance-artifact-receipt.v1",
+  "trace_id": "trace.parser.phase0",
+  "decision_id": "decision.parser.phase0",
+  "policy_id": "policy.parser.scalar_reference.v1",
+  "component": "parser_phase0_generator",
+  "mode": "degraded_receipt",
+  "artifact_path": "parser_phase0_performance_artifact_receipt.json",
+  "reason_code": "FE-PARSER-PHASE0-ARTIFACT-RECEIPT-0001",
+  "reason_id": "profiler_unavailable",
+  "stage": "capture_preflight",
+  "consumer_action": "treat_as_unsupported_environment",
+  "placeholder_rejected": true,
+  "outcome": "degraded_mode_receipt_generated",
+  "error_code": "none",
+  "generated_at_utc": "2026-07-17T09:55:15Z",
+  "explanation": "Performance profiling tooling not available in current environment. Real flamegraph capture requires perf, cargo-flamegraph, or similar profiling infrastructure.",
+  "alternative_evidence": {
+    "latency_metrics": "Available in baseline.json",
+    "grammar_completeness": "Available in baseline.json",
+    "determinism_proof": "Available in proof_note.md"
+  }
+}

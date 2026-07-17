@@ -16,14 +16,15 @@
 
 - fixture_catalog: crates/franken-engine/tests/fixtures/parser_phase0_semantic_fixtures.json
 - fixture_count: 21
+- deterministic_hash_validation: true
 - canonical fixture hashes pinned in fixture catalog and verified in
   `crates/franken-engine/tests/parser_phase0_semantic_fixtures.rs`.
 
 ## Latency Snapshot (local reference only)
 
-- p50_ns: 158064
-- p95_ns: 276976
-- p99_ns: 317040
+- p50_ns: 159377
+- p95_ns: 289751
+- p99_ns: 305800
 
 ## Isomorphism / Safety Notes
 

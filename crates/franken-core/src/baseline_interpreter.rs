@@ -9453,12 +9453,13 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         match cap {
-            "builtin:ReferenceError" => {
+            "builtin:ReferenceError" | "builtin:TypeError" => {
                 let message = self
                     .optional_arg(args, 0)?
                     .map_or_else(String::new, |value| self.value_to_string(&value));
+                let name = cap.strip_prefix("builtin:").unwrap_or(cap);
                 let object_id = self.alloc_object_with_properties(&[
-                    ("name", Value::str("ReferenceError")),
+                    ("name", Value::str(name)),
                     ("message", Value::str(message)),
                 ])?;
                 Ok(Value::Object(object_id))

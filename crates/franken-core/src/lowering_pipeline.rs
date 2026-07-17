@@ -2195,18 +2195,26 @@ fn restore_class_expression_self_binding(
     }
 }
 
-fn emit_reference_error_throw_message(ops: &mut Vec<Ir1Op>, message: String) {
+fn emit_error_throw_message(ops: &mut Vec<Ir1Op>, capability: &str, message: String) {
     ops.push(Ir1Op::LoadLiteral {
         value: Ir1Literal::String(message.into()),
     });
     ops.push(Ir1Op::HostCall {
-        capability: "builtin:ReferenceError".to_string(),
+        capability: capability.to_string(),
         arg_count: 1,
     });
     ops.push(Ir1Op::Throw);
     ops.push(Ir1Op::LoadLiteral {
         value: Ir1Literal::Undefined,
     });
+}
+
+fn emit_reference_error_throw_message(ops: &mut Vec<Ir1Op>, message: String) {
+    emit_error_throw_message(ops, "builtin:ReferenceError", message);
+}
+
+fn emit_type_error_throw_message(ops: &mut Vec<Ir1Op>, message: String) {
+    emit_error_throw_message(ops, "builtin:TypeError", message);
 }
 
 fn emit_reference_error_throw(ops: &mut Vec<Ir1Op>, name: &str) {
@@ -2852,6 +2860,32 @@ fn emit_destructuring_property_key(key: &DestructuringPropertyKey, ops: &mut Vec
     }
 }
 
+fn emit_object_binding_coercibility_check(
+    source_bid: BindingId,
+    ops: &mut Vec<Ir1Op>,
+    label_counter: &mut u32,
+) {
+    let error_label = alloc_label(label_counter);
+    let continue_label = alloc_label(label_counter);
+
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: source_bid,
+    });
+    ops.push(Ir1Op::JumpIfNullish {
+        label_id: error_label,
+    });
+    ops.push(Ir1Op::Jump {
+        label_id: continue_label,
+    });
+    ops.push(Ir1Op::Label { id: error_label });
+    emit_type_error_throw_message(ops, "Cannot destructure null or undefined".to_string());
+    // The synthetic undefined after Throw keeps generic expression lowering
+    // structurally total. Discard it here so both control-flow arms have the
+    // same compile-time value-stack shape; it is unreachable at runtime.
+    ops.push(Ir1Op::Pop);
+    ops.push(Ir1Op::Label { id: continue_label });
+}
+
 /// Emit IR1 ops to destructure a value (already stored in `source_bid`) into
 /// the individual bindings declared by `pattern`. For object patterns this
 /// emits `LoadBinding(source) + GetProperty(key) + StoreBinding(target) + Pop`
@@ -2898,6 +2932,7 @@ fn lower_destructuring_to_ir1_with_parameter_tdz(
             // Simple binding — already handled by StoreBinding above.
         }
         BindingPattern::ObjectPattern(props) => {
+            emit_object_binding_coercibility_check(source_bid, ops, label_counter);
             let mut rest_excluded_keys = Vec::<DestructuringPropertyKey>::new();
             for prop in props {
                 if let BindingPattern::Rest(inner) = &prop.value {
@@ -16512,6 +16547,92 @@ mod tests {
         );
 
         assert_eq!(value, Value::str("2:abcd"));
+    }
+
+    #[test]
+    fn nullish_object_bindings_throw_before_computed_keys_bd_sbv6g() {
+        let (ir1, module, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let state = { calls: 0, caught: 0 };\
+             function key() { state.calls = state.calls + 1; return 'picked'; }\
+             try { let { [key()]: picked } = null; }\
+             catch (error) {\
+                 state.caught = state.caught + (error.name === 'TypeError' ? 1 : 100);\
+             }\
+             try { let { [key()]: picked } = undefined; }\
+             catch (error) {\
+                 state.caught = state.caught + (error.name === 'TypeError' ? 1 : 100);\
+             }\
+             function project({ [key()]: picked }) { return picked; }\
+             try { project(); }\
+             catch (error) {\
+                 state.caught = state.caught + (error.name === 'TypeError' ? 1 : 100);\
+             }\
+             try { project(null); }\
+             catch (error) {\
+                 state.caught = state.caught + (error.name === 'TypeError' ? 1 : 100);\
+             }\
+             state.calls * 1000 + state.caught;",
+        );
+
+        let first_guard = ir1
+            .ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::JumpIfNullish { .. }))
+            .expect("object binding must emit a nullish guard");
+        let first_dynamic_key_call = ir1
+            .ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::Call { .. }))
+            .expect("computed binding key must call key()");
+        let first_dynamic_get = ir1
+            .ops
+            .iter()
+            .position(|op| {
+                matches!(
+                    op,
+                    Ir1Op::GetProperty {
+                        key: Ir1PropertyKey::Dynamic
+                    }
+                )
+            })
+            .expect("computed binding key must drive dynamic GetProperty");
+        assert!(first_guard < first_dynamic_key_call);
+        assert!(first_dynamic_key_call < first_dynamic_get);
+        assert!(ir1.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::HostCall { capability, .. } if capability == "builtin:TypeError"
+        )));
+        assert!(
+            module
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::JumpIfNullish { .. }))
+        );
+        assert_eq!(value, Value::Int(4));
+    }
+
+    #[test]
+    fn object_coercibility_precedes_empty_rest_nested_and_loop_patterns_bd_sbv6g() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let state = { calls: 0, caught: 0 };\
+             function key() { state.calls = state.calls + 1; return 'picked'; }\
+             try { let {} = null; }\
+             catch (error) { state.caught = state.caught + (error.name === 'TypeError'); }\
+             try { let { ...rest } = undefined; }\
+             catch (error) { state.caught = state.caught + (error.name === 'TypeError'); }\
+             try { let { box: { [key()]: picked } } = { box: null }; }\
+             catch (error) { state.caught = state.caught + (error.name === 'TypeError'); }\
+             let picked = 0;\
+             try { for ({ [key()]: picked } of [null]) {} }\
+             catch (error) { state.caught = state.caught + (error.name === 'TypeError'); }\
+             let {} = 1;\
+             let {} = false;\
+             let {} = '';\
+             let {} = 'ordinary';\
+             state.calls * 1000 + state.caught;",
+        );
+
+        assert_eq!(value, Value::Int(4));
     }
 
     fn static_property_key_cases_bd_h4esx() -> Vec<(&'static str, &'static str)> {

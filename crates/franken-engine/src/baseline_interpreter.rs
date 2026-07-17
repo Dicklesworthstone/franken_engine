@@ -22363,9 +22363,8 @@ impl InterpreterCore {
                 let values: Vec<Value> = self.url_search_params[&object_id]
                     .pairs
                     .iter()
-                    .filter_map(|(candidate, value)| {
-                        (candidate == &name).then(|| Value::str(value))
-                    })
+                    .filter(|&(candidate, _)| candidate == &name)
+                    .map(|(_, value)| Value::str(value))
                     .collect();
                 Ok(Value::Object(self.alloc_array_from_values(&values)?))
             }
@@ -39018,10 +39017,7 @@ impl InterpreterCore {
         )?;
         let previous_heap_len = self.heap.len();
         let previous_estimated_bytes = self.estimated_memory_bytes;
-        let object_id = match self.alloc_object_with_prototype(None) {
-            Ok(object_id) => object_id,
-            Err(error) => return Err(error),
-        };
+        let object_id = self.alloc_object_with_prototype(None)?;
         if let Err(error) = self.apply_memory_component_delta(0, retained_bytes) {
             self.rollback_heap_to_len(previous_heap_len);
             self.estimated_memory_bytes = previous_estimated_bytes;

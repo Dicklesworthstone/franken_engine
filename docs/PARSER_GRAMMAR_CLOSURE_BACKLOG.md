@@ -16,7 +16,7 @@ This document defines the canonical, machine-checkable backlog for scalar-refere
 
 - Target family count: **20/20** (exactly the matrix family set)
 - Promotion policy must remain compatible with:
-  - canonical AST schema: `franken-engine.parser-ast.schema.v3`
+  - canonical AST schema: `franken-engine.parser-ast.schema.v4`
   - diagnostics schema/taxonomy:
     - `franken-engine.parser-diagnostics.schema.v1`
     - `franken-engine.parser-diagnostics.taxonomy.v1`

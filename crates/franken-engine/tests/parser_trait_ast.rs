@@ -138,13 +138,60 @@ fn parser_supports_named_export_clause_forms() {
     assert!(matches!(
         &tree.body[1],
         Statement::Export(export)
-            if matches!(&export.kind, ExportKind::NamedClause(clause) if clause == "{ local as published }")
+            if matches!(&export.kind, ExportKind::NamedClause(clause)
+                if clause.canonical_head() == "{ local as published }" && clause.source().is_none())
     ));
     assert!(matches!(
         &tree.body[2],
         Statement::Export(export)
-            if matches!(&export.kind, ExportKind::NamedClause(clause) if clause == "{ default as dep } from \"pkg\"")
+            if matches!(&export.kind, ExportKind::NamedClause(clause)
+                if clause.canonical_head() == "{ default as dep }"
+                    && clause.source().and_then(|source| source.as_str()) == Some("pkg"))
     ));
+}
+
+#[test]
+fn parser_preserves_exact_import_and_reexport_sources_bd_lfq44() {
+    let parser = CanonicalEs2020Parser;
+    let tree = parser
+        .parse(
+            r#"import "\uD800";
+import "\uDC00";
+export { first } from "\uD800";
+export { second } from "\uDC00";"#,
+            ParseGoal::Module,
+        )
+        .expect("exact module sources should parse");
+
+    let import_source = |index| match &tree.body[index] {
+        Statement::Import(import) => &import.source,
+        other => panic!("expected import at {index}, got {other:?}"),
+    };
+    assert_eq!(import_source(0).code_units_vec(), vec![0xD800]);
+    assert_eq!(import_source(1).code_units_vec(), vec![0xDC00]);
+    assert_ne!(
+        tree.body[0].canonical_value(),
+        tree.body[1].canonical_value()
+    );
+
+    let export_source = |index| match &tree.body[index] {
+        Statement::Export(export) => match &export.kind {
+            ExportKind::NamedClause(clause) => clause.source().expect("re-export source"),
+            other => panic!("expected named export at {index}, got {other:?}"),
+        },
+        other => panic!("expected export at {index}, got {other:?}"),
+    };
+    assert_eq!(export_source(2).code_units_vec(), vec![0xD800]);
+    assert_eq!(export_source(3).code_units_vec(), vec![0xDC00]);
+    assert_ne!(
+        tree.body[2].canonical_value(),
+        tree.body[3].canonical_value()
+    );
+
+    let json = serde_json::to_string(&tree).unwrap();
+    assert!(json.contains(r#""$wtf16":[55296]"#));
+    assert!(json.contains(r#""$wtf16":[56320]"#));
+    assert_eq!(serde_json::from_str::<SyntaxTree>(&json).unwrap(), tree);
 }
 
 #[test]
@@ -214,7 +261,7 @@ fn canonical_ast_contract_metadata_is_versioned_and_stable() {
     );
     assert_eq!(
         CANONICAL_AST_SCHEMA_VERSION,
-        "franken-engine.parser-ast.schema.v3"
+        "franken-engine.parser-ast.schema.v4"
     );
     assert_eq!(CANONICAL_AST_HASH_ALGORITHM, "sha256");
     assert_eq!(CANONICAL_AST_HASH_PREFIX, "sha256:");

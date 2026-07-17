@@ -5,7 +5,7 @@
 
 #![allow(clippy::clone_on_copy)]
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 
 use crate::deterministic_serde::{self, CanonicalValue};
@@ -14,7 +14,7 @@ use crate::js_string::{JsString, canonical_js_string_value};
 /// Versioned canonical AST contract binding schema + hash semantics.
 pub const CANONICAL_AST_CONTRACT_VERSION: &str = "franken-engine.parser-ast.contract.v1";
 /// Versioned schema identifier for canonical AST structure and key ordering.
-pub const CANONICAL_AST_SCHEMA_VERSION: &str = "franken-engine.parser-ast.schema.v3";
+pub const CANONICAL_AST_SCHEMA_VERSION: &str = "franken-engine.parser-ast.schema.v4";
 /// Hash algorithm used by `SyntaxTree::canonical_hash`.
 pub const CANONICAL_AST_HASH_ALGORITHM: &str = "sha256";
 /// Prefix used in canonical AST hash strings.
@@ -345,7 +345,7 @@ impl ImportClause {
 pub struct ImportDeclaration {
     pub clause: ImportClause,
     pub binding: Option<String>,
-    pub source: String,
+    pub source: JsString,
     pub span: SourceSpan,
 }
 
@@ -360,16 +360,206 @@ impl ImportDeclaration {
                     None => CanonicalValue::Null,
                 },
             ),
-            ("source", CanonicalValue::str(self.source.clone())),
+            ("source", canonical_js_string_value(&self.source)),
             ("span", self.span.canonical_value()),
         ])
+    }
+}
+
+/// Canonical metadata for a named export clause.
+///
+/// Historically `ExportKind::NamedClause` carried one UTF-8 `String` such as
+/// `{ value } from "dep"`.  Keeping the binding head separate from the cooked
+/// module source lets re-export specifiers retain exact ECMAScript UTF-16 code
+/// units without making lowerers parse a display projection.  The custom wire
+/// representation keeps every historical ordinary string byte-for-byte:
+/// source-free and well-formed-source clauses still serialize as that same
+/// full string, while the novel lone-surrogate case uses a namespaced object.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedExportClause {
+    canonical_head: String,
+    source: Option<JsString>,
+    historical_wire: Option<String>,
+}
+
+impl NamedExportClause {
+    pub fn new(canonical_head: impl Into<String>, source: Option<JsString>) -> Self {
+        let canonical_head = canonical_head.into();
+        let historical_wire = match &source {
+            None => Some(canonical_head.clone()),
+            Some(source) => source.as_str().map(|source| {
+                let quoted = serde_json::to_string(source)
+                    .expect("serializing a valid UTF-8 module source should succeed");
+                format!("{canonical_head} from {quoted}")
+            }),
+        };
+        Self {
+            canonical_head,
+            source,
+            historical_wire,
+        }
+    }
+
+    pub fn canonical_head(&self) -> &str {
+        &self.canonical_head
+    }
+
+    pub fn source(&self) -> Option<&JsString> {
+        self.source.as_ref()
+    }
+
+    /// Return the historical scalar string representation when it is exact.
+    /// Lone-surrogate sources deliberately return `None`; callers must use the
+    /// structured source rather than a lossy UTF-8 projection.
+    pub fn historical_wire_text(&self) -> Option<String> {
+        self.historical_wire().map(str::to_string)
+    }
+
+    pub(crate) fn historical_wire(&self) -> Option<&str> {
+        self.historical_wire.as_deref()
+    }
+
+    pub fn canonical_value(&self) -> CanonicalValue {
+        if let Some(text) = self.historical_wire_text() {
+            return CanonicalValue::str(text);
+        }
+
+        let source = self
+            .source
+            .as_ref()
+            .expect("a non-scalar named-export wire value must have a source");
+        CanonicalValue::map_from_entries([(
+            "$module_source",
+            CanonicalValue::map_from_entries([
+                (
+                    "canonical_head",
+                    CanonicalValue::str(self.canonical_head.clone()),
+                ),
+                ("source", canonical_js_string_value(source)),
+            ]),
+        )])
+    }
+
+    fn from_legacy_wire_text(text: String) -> Self {
+        let mut search_end = text.len();
+        while let Some(index) = text[..search_end].rfind(" from ") {
+            let source_raw = &text[index + " from ".len()..];
+            if let Some(source) = crate::parser::parse_quoted_string(source_raw) {
+                let canonical_head = text[..index].to_string();
+                return if source.is_well_formed() {
+                    Self {
+                        canonical_head,
+                        source: Some(source),
+                        historical_wire: Some(text),
+                    }
+                } else {
+                    Self::new(canonical_head, Some(source))
+                };
+            }
+            search_end = index;
+        }
+        Self {
+            canonical_head: text.clone(),
+            source: None,
+            historical_wire: Some(text),
+        }
+    }
+}
+
+impl From<String> for NamedExportClause {
+    fn from(value: String) -> Self {
+        Self::from_legacy_wire_text(value)
+    }
+}
+
+impl From<&str> for NamedExportClause {
+    fn from(value: &str) -> Self {
+        Self::from_legacy_wire_text(value.to_string())
+    }
+}
+
+#[derive(Serialize)]
+struct ExactModuleSourceRef<'a> {
+    canonical_head: &'a str,
+    source: &'a JsString,
+}
+
+#[derive(Serialize)]
+struct ExactModuleSourceEnvelopeRef<'a> {
+    #[serde(rename = "$module_source")]
+    module_source: ExactModuleSourceRef<'a>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExactModuleSource {
+    canonical_head: String,
+    source: JsString,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExactModuleSourceEnvelope {
+    #[serde(rename = "$module_source")]
+    module_source: ExactModuleSource,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum NamedExportClauseWire {
+    Historical(String),
+    Exact(ExactModuleSourceEnvelope),
+}
+
+impl Serialize for NamedExportClause {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if let Some(text) = self.historical_wire_text() {
+            return text.serialize(serializer);
+        }
+
+        let source = self
+            .source
+            .as_ref()
+            .expect("a non-scalar named-export wire value must have a source");
+        ExactModuleSourceEnvelopeRef {
+            module_source: ExactModuleSourceRef {
+                canonical_head: &self.canonical_head,
+                source,
+            },
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for NamedExportClause {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match NamedExportClauseWire::deserialize(deserializer)? {
+            NamedExportClauseWire::Historical(text) => Ok(Self::from_legacy_wire_text(text)),
+            NamedExportClauseWire::Exact(ExactModuleSourceEnvelope { module_source }) => {
+                if module_source.source.is_well_formed() {
+                    return Err(<D::Error as serde::de::Error>::custom(
+                        "$module_source is reserved for non-well-formed UTF-16 sources",
+                    ));
+                }
+                Ok(Self::new(
+                    module_source.canonical_head,
+                    Some(module_source.source),
+                ))
+            }
+        }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExportKind {
     Default(Expression),
-    NamedClause(String),
+    NamedClause(NamedExportClause),
 }
 
 impl ExportKind {
@@ -381,7 +571,7 @@ impl ExportKind {
             ]),
             Self::NamedClause(clause) => CanonicalValue::map_from_entries([
                 ("kind", CanonicalValue::str("named")),
-                ("value", CanonicalValue::str(clause.clone())),
+                ("value", clause.canonical_value()),
             ]),
         }
     }
@@ -2010,7 +2200,7 @@ mod tests {
         );
         assert_eq!(
             CANONICAL_AST_SCHEMA_VERSION,
-            "franken-engine.parser-ast.schema.v3"
+            "franken-engine.parser-ast.schema.v4"
         );
         assert_eq!(CANONICAL_AST_HASH_ALGORITHM, "sha256");
         assert_eq!(CANONICAL_AST_HASH_PREFIX, "sha256:");
@@ -2081,7 +2271,7 @@ mod tests {
                         local: "x".to_string(),
                     },
                     binding: Some("x".to_string()),
-                    source: "mod".to_string(),
+                    source: "mod".into(),
                     span: make_span(),
                 }),
                 make_expr_stmt(Expression::NumericLiteral(1)),
@@ -2107,13 +2297,13 @@ mod tests {
         let import = Statement::Import(ImportDeclaration {
             clause: ImportClause::SideEffect,
             binding: None,
-            source: "x".to_string(),
+            source: "x".into(),
             span: span.clone(),
         });
         assert_eq!(import.span(), &span);
 
         let export = Statement::Export(ExportDeclaration {
-            kind: ExportKind::NamedClause("foo".to_string()),
+            kind: ExportKind::NamedClause("foo".into()),
             span: span.clone(),
         });
         assert_eq!(export.span(), &span);
@@ -2143,7 +2333,7 @@ mod tests {
                 local: "dep".to_string(),
             },
             binding: Some("dep".to_string()),
-            source: "pkg".to_string(),
+            source: "pkg".into(),
             span: make_span(),
         });
         match stmt.canonical_value() {
@@ -2225,7 +2415,7 @@ mod tests {
                 local: "foo".to_string(),
             },
             binding: Some("foo".to_string()),
-            source: "bar".to_string(),
+            source: "bar".into(),
             span: make_span(),
         };
         match import.canonical_value() {
@@ -2248,7 +2438,7 @@ mod tests {
         let import = ImportDeclaration {
             clause: ImportClause::SideEffect,
             binding: None,
-            source: "side-effect".to_string(),
+            source: "side-effect".into(),
             span: make_span(),
         };
         match import.canonical_value() {
@@ -2280,7 +2470,7 @@ mod tests {
 
     #[test]
     fn export_kind_named_clause_canonical_value() {
-        let kind = ExportKind::NamedClause("{ a, b }".to_string());
+        let kind = ExportKind::NamedClause("{ a, b }".into());
         match kind.canonical_value() {
             CanonicalValue::Map(map) => {
                 assert_eq!(
@@ -2294,6 +2484,136 @@ mod tests {
             }
             _ => panic!("expected map"),
         }
+    }
+
+    #[test]
+    fn named_export_clause_preserves_historical_wire_strings_bd_lfq44() {
+        let local = NamedExportClause::new("{ value }", None);
+        assert_eq!(
+            serde_json::to_string(&local).expect("serialize local export clause"),
+            r#""{ value }""#
+        );
+
+        let reexport = NamedExportClause::new("{ value }", Some("dep".into()));
+        let historical = r#""{ value } from \"dep\"""#;
+        assert_eq!(
+            serde_json::to_string(&reexport).expect("serialize ordinary re-export clause"),
+            historical
+        );
+        assert_eq!(
+            serde_json::from_str::<NamedExportClause>(historical)
+                .expect("read historical re-export clause"),
+            reexport
+        );
+
+        let repeated_from = r#""{ from } from \"dep\"""#;
+        let decoded: NamedExportClause = serde_json::from_str(repeated_from)
+            .expect("the final from delimiter identifies the source");
+        assert_eq!(decoded.canonical_head(), "{ from }");
+        assert_eq!(decoded.source().and_then(JsString::as_str), Some("dep"));
+
+        let source_contains_delimiter = r#""{ from } from \"a from b\"""#;
+        let decoded: NamedExportClause = serde_json::from_str(source_contains_delimiter)
+            .expect("a from delimiter inside the quoted source is not structural");
+        assert_eq!(decoded.canonical_head(), "{ from }");
+        assert_eq!(
+            decoded.source().and_then(JsString::as_str),
+            Some("a from b")
+        );
+        assert_eq!(
+            serde_json::to_string(&decoded).unwrap(),
+            source_contains_delimiter
+        );
+
+        let single_quoted = r#""{ value } from 'dep'""#;
+        let decoded: NamedExportClause = serde_json::from_str(single_quoted)
+            .expect("historical scalar payload with single quotes remains readable");
+        assert_eq!(
+            serde_json::to_string(&decoded).unwrap(),
+            single_quoted,
+            "historical scalar wire bytes must survive a read/write cycle"
+        );
+    }
+
+    #[test]
+    fn named_export_clause_exact_wire_is_tagged_and_injective_bd_lfq44() {
+        let d800 = NamedExportClause::new("{ value }", Some(JsString::from_code_units(&[0xD800])));
+        let dc00 = NamedExportClause::new("{ value }", Some(JsString::from_code_units(&[0xDC00])));
+        let json = serde_json::to_string(&d800).expect("serialize exact re-export clause");
+        assert_eq!(
+            json,
+            r#"{"$module_source":{"canonical_head":"{ value }","source":{"$wtf16":[55296]}}}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<NamedExportClause>(&json)
+                .expect("round-trip exact re-export clause"),
+            d800
+        );
+
+        let historical_scalar = r#""{ value } from \"\\uD800\"""#;
+        assert_eq!(
+            serde_json::to_string(
+                &serde_json::from_str::<NamedExportClause>(historical_scalar)
+                    .expect("read an exact source from the historical scalar envelope"),
+            )
+            .expect("canonicalize the exact historical source"),
+            json,
+            "exact sources have one canonical tagged wire form"
+        );
+        assert_ne!(d800, dc00);
+        assert_ne!(d800.canonical_value(), dc00.canonical_value());
+
+        let noncanonical = r#"{"$module_source":{"canonical_head":"{ value }","source":"dep"}}"#;
+        assert!(
+            serde_json::from_str::<NamedExportClause>(noncanonical).is_err(),
+            "well-formed sources have exactly one historical string encoding"
+        );
+        for noncanonical in [
+            r#"{"$module_source":{"canonical_head":"{ value }","source":{"$wtf16":[55296]},"extra":true}}"#,
+            r#"{"$module_source":{"canonical_head":"{ value }","source":{"$wtf16":[55296]}},"extra":true}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<NamedExportClause>(noncanonical).is_err(),
+                "the exact module-source envelope has a closed field set"
+            );
+        }
+    }
+
+    #[test]
+    fn import_source_serde_preserves_utf8_and_distinguishes_exact_units_bd_lfq44() {
+        let ordinary = ImportDeclaration {
+            clause: ImportClause::SideEffect,
+            binding: None,
+            source: "pkg".into(),
+            span: make_span(),
+        };
+        let ordinary_json =
+            serde_json::to_value(&ordinary).expect("serialize ordinary import declaration");
+        assert_eq!(
+            ordinary_json.get("source"),
+            Some(&serde_json::Value::String("pkg".to_string()))
+        );
+        let CanonicalValue::Map(ordinary_canonical) = ordinary.canonical_value() else {
+            panic!("import declaration canonical form must be a map");
+        };
+        assert_eq!(
+            ordinary_canonical.get("source"),
+            Some(&CanonicalValue::str("pkg"))
+        );
+
+        let mut d800 = ordinary.clone();
+        d800.source = JsString::from_code_units(&[0xD800]);
+        let mut dc00 = ordinary;
+        dc00.source = JsString::from_code_units(&[0xDC00]);
+        assert_eq!(
+            serde_json::to_value(&d800)
+                .expect("serialize exact import declaration")
+                .get("source")
+                .cloned(),
+            Some(serde_json::json!({"$wtf16": [55296]}))
+        );
+        assert_ne!(d800, dc00);
+        assert_ne!(d800.canonical_value(), dc00.canonical_value());
     }
 
     // -----------------------------------------------------------------------
@@ -2570,7 +2890,7 @@ mod tests {
                         local: "dep".to_string(),
                     },
                     binding: Some("dep".to_string()),
-                    source: "pkg".to_string(),
+                    source: "pkg".into(),
                     span: SourceSpan::new(0, 18, 1, 1, 1, 19),
                 }),
                 Statement::Export(ExportDeclaration {
@@ -2646,7 +2966,7 @@ mod tests {
         let stmt = Statement::Import(ImportDeclaration {
             clause: ImportClause::SideEffect,
             binding: None,
-            source: "side-effect-module".to_string(),
+            source: "side-effect-module".into(),
             span: make_span(),
         });
         let json = serde_json::to_string(&stmt).expect("serialize derived Serialize");
@@ -2658,7 +2978,7 @@ mod tests {
     #[test]
     fn export_kind_named_vs_default_different_canonical_value() {
         let default = ExportKind::Default(Expression::Identifier("x".to_string()));
-        let named = ExportKind::NamedClause("x".to_string());
+        let named = ExportKind::NamedClause("x".into());
         assert_ne!(default.canonical_value(), named.canonical_value());
     }
 
@@ -2726,7 +3046,7 @@ mod tests {
                 local: "myDep".to_string(),
             },
             binding: Some("myDep".to_string()),
-            source: "some-package".to_string(),
+            source: "some-package".into(),
             span: make_span(),
         };
         let cloned = original.clone();
@@ -2761,7 +3081,7 @@ mod tests {
                 Statement::Import(ImportDeclaration {
                     clause: ImportClause::SideEffect,
                     binding: None,
-                    source: "effects".to_string(),
+                    source: "effects".into(),
                     span: make_span(),
                 }),
                 make_expr_stmt(Expression::BooleanLiteral(true)),
@@ -2792,7 +3112,7 @@ mod tests {
                 local: "x".to_string(),
             },
             binding: Some("x".to_string()),
-            source: "mod".to_string(),
+            source: "mod".into(),
             span: make_span(),
         };
         let json = serde_json::to_string(&import).expect("serialize derived Serialize");
@@ -2804,7 +3124,7 @@ mod tests {
     #[test]
     fn export_declaration_json_field_presence() {
         let export = ExportDeclaration {
-            kind: ExportKind::NamedClause("foo".to_string()),
+            kind: ExportKind::NamedClause("foo".into()),
             span: make_span(),
         };
         let json = serde_json::to_string(&export).expect("serialize derived Serialize");
@@ -3914,11 +4234,11 @@ mod tests {
             Statement::Import(ImportDeclaration {
                 clause: ImportClause::SideEffect,
                 binding: None,
-                source: "m".to_string(),
+                source: "m".into(),
                 span: span.clone(),
             }),
             Statement::Export(ExportDeclaration {
-                kind: ExportKind::NamedClause("x".to_string()),
+                kind: ExportKind::NamedClause("x".into()),
                 span: span.clone(),
             }),
             Statement::VariableDeclaration(VariableDeclaration {
@@ -4897,7 +5217,7 @@ mod tests {
             serde_json::from_str(&json_d).expect("deserialize known-valid JSON");
         assert_eq!(default, restored_d);
 
-        let named = ExportKind::NamedClause("{ foo, bar }".to_string());
+        let named = ExportKind::NamedClause("{ foo, bar }".into());
         let json_n = serde_json::to_string(&named).expect("serialize derived Serialize");
         let restored_n: ExportKind =
             serde_json::from_str(&json_n).expect("deserialize known-valid JSON");
@@ -4911,7 +5231,7 @@ mod tests {
                 local: "React".to_string(),
             },
             binding: Some("React".to_string()),
-            source: "react".to_string(),
+            source: "react".into(),
             span: SourceSpan::new(0, 25, 1, 1, 1, 26),
         };
         let json = serde_json::to_string(&import).expect("serialize derived Serialize");

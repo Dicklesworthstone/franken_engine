@@ -1051,12 +1051,14 @@ fn lower_ir0_to_ir1_with_ambient_grant(
                         // way when confirmed — its `http.get/request(...)` calls are
                         // recognized + capability-gated at the member-call sites via
                         // the shared http module-alias sentinel.
-                        if (is_fs_module_specifier(&import.source)
+                        if (module_source_matches(&import.source, is_fs_module_specifier)
                             && binding_lookup.contains_key(&fs_module_alias_sentinel(local)))
-                            || (is_fs_promises_module_specifier(&import.source)
-                                && binding_lookup
-                                    .contains_key(&fs_promises_module_alias_sentinel(local)))
-                            || (is_http_module_specifier(&import.source)
+                            || (module_source_matches(
+                                &import.source,
+                                is_fs_promises_module_specifier,
+                            ) && binding_lookup
+                                .contains_key(&fs_promises_module_alias_sentinel(local)))
+                            || (module_source_matches(&import.source, is_http_module_specifier)
                                 && binding_lookup.contains_key(&http_module_alias_sentinel(local)))
                         {
                             ir1.ops.push(Ir1Op::LoadLiteral {
@@ -1090,12 +1092,14 @@ fn lower_ir0_to_ir1_with_ambient_grant(
                         // its member-call sites via the shared http module-alias
                         // sentinel, so both the module load and the `default`
                         // extraction (which would fault) are skipped.
-                        if (is_fs_module_specifier(&import.source)
+                        if (module_source_matches(&import.source, is_fs_module_specifier)
                             && binding_lookup.contains_key(&fs_module_alias_sentinel(local)))
-                            || (is_fs_promises_module_specifier(&import.source)
-                                && binding_lookup
-                                    .contains_key(&fs_promises_module_alias_sentinel(local)))
-                            || (is_http_module_specifier(&import.source)
+                            || (module_source_matches(
+                                &import.source,
+                                is_fs_promises_module_specifier,
+                            ) && binding_lookup
+                                .contains_key(&fs_promises_module_alias_sentinel(local)))
+                            || (module_source_matches(&import.source, is_http_module_specifier)
                                 && binding_lookup.contains_key(&http_module_alias_sentinel(local)))
                         {
                             ir1.ops.push(Ir1Op::LoadLiteral {
@@ -1136,7 +1140,7 @@ fn lower_ir0_to_ir1_with_ambient_grant(
                         // the calls are recognized at their direct-call sites by
                         // `http_named_import_call_capability`.
                         let complete_stream_named_import =
-                            is_stream_module_specifier(&import.source)
+                            module_source_matches(&import.source, is_stream_module_specifier)
                                 && !specifiers.is_empty()
                                 && specifiers
                                     .iter()
@@ -1158,29 +1162,33 @@ fn lower_ir0_to_ir1_with_ambient_grant(
                                         ),
                                         _ => false,
                                     });
-                        let complete_stream_promises_named_import =
-                            is_stream_promises_module_specifier(&import.source)
-                                && !specifiers.is_empty()
-                                && specifiers.iter().all(|spec| {
-                                    spec.import_name == "pipeline"
-                                        && binding_lookup.contains_key(
-                                            &stream_promises_pipeline_binding_sentinel(
-                                                &spec.local_name,
-                                            ),
-                                        )
-                                });
-                        let named_builtin_import = (is_fs_module_specifier(&import.source)
-                            && specifiers.iter().any(|spec| {
-                                binding_lookup.contains_key(&fs_named_import_sentinel(
-                                    &spec.local_name,
-                                    "fs:read",
-                                )) || binding_lookup.contains_key(&fs_named_import_sentinel(
-                                    &spec.local_name,
-                                    "fs:write",
-                                ))
-                            }))
-                            || (is_fs_promises_module_specifier(&import.source)
+                        let complete_stream_promises_named_import = module_source_matches(
+                            &import.source,
+                            is_stream_promises_module_specifier,
+                        ) && !specifiers.is_empty()
+                            && specifiers.iter().all(|spec| {
+                                spec.import_name == "pipeline"
+                                    && binding_lookup.contains_key(
+                                        &stream_promises_pipeline_binding_sentinel(
+                                            &spec.local_name,
+                                        ),
+                                    )
+                            });
+                        let named_builtin_import =
+                            (module_source_matches(&import.source, is_fs_module_specifier)
                                 && specifiers.iter().any(|spec| {
+                                    binding_lookup.contains_key(&fs_named_import_sentinel(
+                                        &spec.local_name,
+                                        "fs:read",
+                                    )) || binding_lookup.contains_key(&fs_named_import_sentinel(
+                                        &spec.local_name,
+                                        "fs:write",
+                                    ))
+                                }))
+                                || (module_source_matches(
+                                    &import.source,
+                                    is_fs_promises_module_specifier,
+                                ) && specifiers.iter().any(|spec| {
                                     binding_lookup.contains_key(&fs_promises_named_import_sentinel(
                                         &spec.local_name,
                                         "fs:read",
@@ -1191,8 +1199,10 @@ fn lower_ir0_to_ir1_with_ambient_grant(
                                         ),
                                     )
                                 }))
-                            || (is_http_module_specifier(&import.source)
-                                && specifiers.iter().any(|spec| {
+                                || (module_source_matches(
+                                    &import.source,
+                                    is_http_module_specifier,
+                                ) && specifiers.iter().any(|spec| {
                                     binding_lookup.contains_key(&http_named_import_sentinel(
                                         &spec.local_name,
                                         "net:request",
@@ -1201,16 +1211,21 @@ fn lower_ir0_to_ir1_with_ambient_grant(
                                         "net:client_request",
                                     ))
                                 }))
-                            || (is_events_module_specifier(&import.source)
-                                && specifiers.iter().any(|spec| {
+                                || (module_source_matches(
+                                    &import.source,
+                                    is_events_module_specifier,
+                                ) && specifiers.iter().any(|spec| {
                                     binding_lookup.contains_key(&events_once_binding_sentinel(
                                         &spec.local_name,
                                     ))
                                 }))
-                            || complete_stream_named_import
-                            || complete_stream_promises_named_import;
-                        if (is_stream_module_specifier(&import.source)
-                            || is_stream_promises_module_specifier(&import.source))
+                                || complete_stream_named_import
+                                || complete_stream_promises_named_import;
+                        if (module_source_matches(&import.source, is_stream_module_specifier)
+                            || module_source_matches(
+                                &import.source,
+                                is_stream_promises_module_specifier,
+                            ))
                             && !complete_stream_named_import
                             && !complete_stream_promises_named_import
                         {
@@ -1393,8 +1408,8 @@ fn lower_ir0_to_ir1_with_ambient_grant(
                     ir1.ops.push(Ir1Op::Pop);
                 }
                 ExportKind::NamedClause(clause) => {
-                    let specifiers = parse_named_export_clause_bindings(clause);
-                    if let Some(source_specifier) = parse_named_export_clause_source(clause) {
+                    let specifiers = parse_named_export_clause_bindings(clause.canonical_head());
+                    if let Some(source_specifier) = clause.source().cloned() {
                         if specifiers.is_empty() {
                             ir1.ops.push(Ir1Op::ImportModule {
                                 specifier: source_specifier,
@@ -2403,11 +2418,7 @@ fn prepare_function_body_bindings(
 
 fn parse_named_export_clause_bindings(clause: &str) -> Vec<(String, String)> {
     let trimmed = clause.trim();
-    let local_clause = split_named_export_clause(trimmed)
-        .map(|(head, _)| head.trim())
-        .unwrap_or(trimmed);
-
-    if let Some(inner) = local_clause
+    if let Some(inner) = trimmed
         .strip_prefix('{')
         .and_then(|body| body.strip_suffix('}'))
     {
@@ -2439,20 +2450,6 @@ fn parse_named_export_clause_bindings(clause: &str) -> Vec<(String, String)> {
     } else {
         vec![(trimmed.to_string(), trimmed.to_string())]
     }
-}
-
-fn parse_named_export_clause_source(clause: &str) -> Option<String> {
-    let trimmed = clause.trim();
-    let (_head, source_raw) = split_named_export_clause(trimmed)?;
-    parse_quoted_export_source(source_raw.trim())
-}
-
-fn split_named_export_clause(clause: &str) -> Option<(&str, &str)> {
-    clause.split_once(" from ")
-}
-
-fn parse_quoted_export_source(input: &str) -> Option<String> {
-    crate::parser::parse_quoted_string(input)
 }
 
 fn alloc_pattern_primary_binding(
@@ -6027,7 +6024,7 @@ pub fn lower_ir2_to_ir3(
             }
             Ir1Op::ImportModule { specifier } => {
                 let string_reg = alloc_register(&mut register_cursor);
-                let pool_index = push_constant_optimized(&mut constant_pool, specifier);
+                let pool_index = push_constant_optimized(&mut constant_pool, specifier.clone());
                 ir3.instructions.push(Ir3Instruction::LoadStr {
                     dst: string_reg,
                     pool_index,
@@ -14715,6 +14712,13 @@ fn console_builtin_call_capability(
     }
 }
 
+/// Apply a UTF-8 module recognizer only when the AST source has an exact
+/// scalar view. Lone UTF-16 units must continue through ordinary module
+/// loading rather than aliasing a built-in through their lossy projection.
+fn module_source_matches(source: &JsString, predicate: fn(&str) -> bool) -> bool {
+    source.as_str().is_some_and(predicate)
+}
+
 /// True when `specifier` names the Node filesystem module — `fs` or `node:fs`
 /// (bd-1xl17.a/.b). Shared by every fs recognizer (require initializer, ESM
 /// import clauses, inline member call) so the accepted specifier set stays
@@ -18302,7 +18306,7 @@ fn confirmed_stream_readable_named_imports(body: &[Statement]) -> BTreeSet<Strin
     let mut candidates = BTreeSet::new();
     for stmt in body {
         if let Statement::Import(import) = stmt
-            && is_stream_module_specifier(&import.source)
+            && module_source_matches(&import.source, is_stream_module_specifier)
             && let ImportClause::Named { specifiers } = &import.clause
         {
             for specifier in specifiers {
@@ -18327,7 +18331,7 @@ fn confirmed_stream_writable_named_imports(body: &[Statement]) -> BTreeSet<Strin
     let mut candidates = BTreeSet::new();
     for stmt in body {
         if let Statement::Import(import) = stmt
-            && is_stream_module_specifier(&import.source)
+            && module_source_matches(&import.source, is_stream_module_specifier)
             && let ImportClause::Named { specifiers } = &import.clause
         {
             for specifier in specifiers {
@@ -18348,7 +18352,7 @@ fn confirmed_stream_passthrough_named_imports(body: &[Statement]) -> BTreeSet<St
     let mut candidates = BTreeSet::new();
     for stmt in body {
         if let Statement::Import(import) = stmt
-            && is_stream_module_specifier(&import.source)
+            && module_source_matches(&import.source, is_stream_module_specifier)
             && let ImportClause::Named { specifiers } = &import.clause
         {
             for specifier in specifiers {
@@ -18375,9 +18379,9 @@ fn confirmed_stream_named_export(
     for stmt in body {
         if let Statement::Import(import) = stmt
             && (if promises_module {
-                is_stream_promises_module_specifier(&import.source)
+                module_source_matches(&import.source, is_stream_promises_module_specifier)
             } else {
-                is_stream_module_specifier(&import.source)
+                module_source_matches(&import.source, is_stream_module_specifier)
             })
             && let ImportClause::Named { specifiers } = &import.clause
         {
@@ -18785,7 +18789,7 @@ fn confirmed_events_once_named_imports(body: &[Statement]) -> BTreeSet<String> {
     let mut candidates = BTreeSet::new();
     for stmt in body {
         if let Statement::Import(import) = stmt
-            && is_events_module_specifier(&import.source)
+            && module_source_matches(&import.source, is_events_module_specifier)
             && let ImportClause::Named { specifiers } = &import.clause
         {
             for specifier in specifiers {
@@ -19348,7 +19352,7 @@ fn confirmed_http_namespace_import_aliases(body: &[Statement]) -> BTreeSet<Strin
     let mut candidates = BTreeSet::new();
     for stmt in body {
         if let Statement::Import(import) = stmt
-            && is_http_module_specifier(&import.source)
+            && module_source_matches(&import.source, is_http_module_specifier)
         {
             match &import.clause {
                 ImportClause::Namespace { local } | ImportClause::Default { local } => {
@@ -19381,7 +19385,7 @@ fn confirmed_http_named_imports(body: &[Statement]) -> BTreeMap<String, &'static
     let mut candidates: BTreeMap<String, &'static str> = BTreeMap::new();
     for stmt in body {
         if let Statement::Import(import) = stmt
-            && is_http_module_specifier(&import.source)
+            && module_source_matches(&import.source, is_http_module_specifier)
             && let ImportClause::Named { specifiers } = &import.clause
         {
             for spec in specifiers {
@@ -19551,7 +19555,7 @@ fn confirmed_fs_namespace_import_aliases(body: &[Statement]) -> BTreeSet<String>
     let mut candidates = BTreeSet::new();
     for stmt in body {
         if let Statement::Import(import) = stmt
-            && is_fs_module_specifier(&import.source)
+            && module_source_matches(&import.source, is_fs_module_specifier)
         {
             match &import.clause {
                 ImportClause::Namespace { local } | ImportClause::Default { local } => {
@@ -19588,7 +19592,7 @@ fn confirmed_fs_named_imports(body: &[Statement]) -> BTreeMap<String, &'static s
     let mut candidates: BTreeMap<String, &'static str> = BTreeMap::new();
     for stmt in body {
         if let Statement::Import(import) = stmt
-            && is_fs_module_specifier(&import.source)
+            && module_source_matches(&import.source, is_fs_module_specifier)
             && let ImportClause::Named { specifiers } = &import.clause
         {
             for spec in specifiers {
@@ -19762,7 +19766,7 @@ fn confirmed_fs_promises_named_imports(body: &[Statement]) -> BTreeMap<String, &
     let mut candidates: BTreeMap<String, &'static str> = BTreeMap::new();
     for stmt in body {
         if let Statement::Import(import) = stmt
-            && is_fs_promises_module_specifier(&import.source)
+            && module_source_matches(&import.source, is_fs_promises_module_specifier)
             && let ImportClause::Named { specifiers } = &import.clause
         {
             for spec in specifiers {
@@ -19935,7 +19939,7 @@ fn confirmed_fs_promises_namespace_import_aliases(body: &[Statement]) -> BTreeSe
     let mut candidates = BTreeSet::new();
     for stmt in body {
         if let Statement::Import(import) = stmt
-            && is_fs_promises_module_specifier(&import.source)
+            && module_source_matches(&import.source, is_fs_promises_module_specifier)
         {
             match &import.clause {
                 ImportClause::Namespace { local } | ImportClause::Default { local } => {
@@ -22025,15 +22029,15 @@ mod tests {
         // emitted IR3 (ExecIR). These goldens freeze the canonical instruction bytes
         // (`Ir3Module::canonical_bytes`) and the content hash of `lower_ir0_to_ir3` for
         // fixed pure programs, so any future arena/region change that perturbs ExecIR is
-        // caught. The frozen values are byte-identical to the pre-ALIEN-2 output: the
-        // arena change is allocation-only, and the unmodified `lowering_pipeline` suite
-        // confirms transparency.
+        // caught. Allocation-only changes must remain byte-identical; an explicit IR
+        // schema migration may re-bless the header and content hash while the instruction
+        // body remains unchanged. These values include the bd-lfq44 schema 0.3 header.
         let cases: Vec<(&str, Ir0Module, &str, &str)> = vec![
             (
                 "numeric_literal",
                 script_ir0(),
-                "07000000060000000d636f6e7374616e745f706f6f6c06000000000000000e66756e6374696f6e5f7461626c650600000001070000000500000005617269747901000000000000000000000005656e7472790100000000000000000000000a6672616d655f73697a650100000000000000020000000c69735f67656e657261746f720300000000046e616d6505000000046d61696e000000066865616465720700000004000000056c6576656c05000000036972330000000e736368656d615f76657273696f6e0700000003000000056d616a6f72010000000000000000000000056d696e6f720100000000000000010000000570617463680100000000000000000000000b736f757263655f686173680400000020303f14373b30ea41b4eadad1a514630f613e6f59054da50b4510c5844f2e2e3c0000000c736f757263655f6c6162656c050000000a666978747572652e6a730000000c696e737472756374696f6e730600000004070000000300000003647374010000000000000001000000026f7005000000086c6f61645f696e740000000576616c756502000000000000002a070000000300000003647374010000000000000000000000026f7005000000046d6f7665000000037372630100000000000000010700000002000000026f70050000000672657475726e0000000576616c75650100000000000000000700000001000000026f70050000000468616c740000001572657175697265645f6361706162696c697469657306000000000000000e7370656369616c697a6174696f6e08",
-                "sha256:ecd939b3a5ef36743753d4e00454d6980d6924f416d6e22fa753dfe51e39fc96",
+                "07000000060000000d636f6e7374616e745f706f6f6c06000000000000000e66756e6374696f6e5f7461626c650600000001070000000500000005617269747901000000000000000000000005656e7472790100000000000000000000000a6672616d655f73697a650100000000000000020000000c69735f67656e657261746f720300000000046e616d6505000000046d61696e000000066865616465720700000004000000056c6576656c05000000036972330000000e736368656d615f76657273696f6e0700000003000000056d616a6f72010000000000000000000000056d696e6f720100000000000000030000000570617463680100000000000000000000000b736f757263655f686173680400000020fc480d8eee9030c3e48eec5ea84f38eba286337531dac032473ca4f069f21ae30000000c736f757263655f6c6162656c050000000a666978747572652e6a730000000c696e737472756374696f6e730600000004070000000300000003647374010000000000000001000000026f7005000000086c6f61645f696e740000000576616c756502000000000000002a070000000300000003647374010000000000000000000000026f7005000000046d6f7665000000037372630100000000000000010700000002000000026f70050000000672657475726e0000000576616c75650100000000000000000700000001000000026f70050000000468616c740000001572657175697265645f6361706162696c697469657306000000000000000e7370656369616c697a6174696f6e08",
+                "sha256:dc1610f09f2defc8e46c24f1bdc652982c62d022eedf9137f19ea9c42ea02711",
             ),
             (
                 "let_decl",
@@ -22053,8 +22057,8 @@ mod tests {
                     };
                     Ir0Module::from_syntax_tree(tree, "alien2_let.js")
                 },
-                "07000000060000000d636f6e7374616e745f706f6f6c06000000000000000e66756e6374696f6e5f7461626c650600000001070000000500000005617269747901000000000000000000000005656e7472790100000000000000000000000a6672616d655f73697a650100000000000000030000000c69735f67656e657261746f720300000000046e616d6505000000046d61696e000000066865616465720700000004000000056c6576656c05000000036972330000000e736368656d615f76657273696f6e0700000003000000056d616a6f72010000000000000000000000056d696e6f720100000000000000010000000570617463680100000000000000000000000b736f757263655f68617368040000002086435dbdff5e5df3e3f44e86d2e1e078d60687bd39a8466a24e2c0789e2d72890000000c736f757263655f6c6162656c050000000d616c69656e325f6c65742e6a730000000c696e737472756374696f6e730600000004070000000300000003647374010000000000000001000000026f7005000000086c6f61645f696e740000000576616c7565020000000000000007070000000300000003647374010000000000000002000000026f7005000000046d6f7665000000037372630100000000000000010700000002000000026f70050000000672657475726e0000000576616c75650100000000000000000700000001000000026f70050000000468616c740000001572657175697265645f6361706162696c697469657306000000000000000e7370656369616c697a6174696f6e08",
-                "sha256:a71a734d6631d67cc7ad53945a4afd4e395220036f50a3aa8ccd4bf15ec888f5",
+                "07000000060000000d636f6e7374616e745f706f6f6c06000000000000000e66756e6374696f6e5f7461626c650600000001070000000500000005617269747901000000000000000000000005656e7472790100000000000000000000000a6672616d655f73697a650100000000000000030000000c69735f67656e657261746f720300000000046e616d6505000000046d61696e000000066865616465720700000004000000056c6576656c05000000036972330000000e736368656d615f76657273696f6e0700000003000000056d616a6f72010000000000000000000000056d696e6f720100000000000000030000000570617463680100000000000000000000000b736f757263655f6861736804000000204d5db6a71870692af53861f9c11bc9e52d77b6717b3b410cfef40dee570e59a40000000c736f757263655f6c6162656c050000000d616c69656e325f6c65742e6a730000000c696e737472756374696f6e730600000004070000000300000003647374010000000000000001000000026f7005000000086c6f61645f696e740000000576616c7565020000000000000007070000000300000003647374010000000000000002000000026f7005000000046d6f7665000000037372630100000000000000010700000002000000026f70050000000672657475726e0000000576616c75650100000000000000000700000001000000026f70050000000468616c740000001572657175697265645f6361706162696c697469657306000000000000000e7370656369616c697a6174696f6e08",
+                "sha256:c31bd2904c5ef75544f694f69e633cb0b2d5b679c207f87c3d2f966dd1e31f7e",
             ),
             (
                 "const_decl",
@@ -22074,8 +22078,8 @@ mod tests {
                     };
                     Ir0Module::from_syntax_tree(tree, "alien2_const.js")
                 },
-                "07000000060000000d636f6e7374616e745f706f6f6c06000000000000000e66756e6374696f6e5f7461626c650600000001070000000500000005617269747901000000000000000000000005656e7472790100000000000000000000000a6672616d655f73697a650100000000000000030000000c69735f67656e657261746f720300000000046e616d6505000000046d61696e000000066865616465720700000004000000056c6576656c05000000036972330000000e736368656d615f76657273696f6e0700000003000000056d616a6f72010000000000000000000000056d696e6f720100000000000000010000000570617463680100000000000000000000000b736f757263655f6861736804000000207a00fca09adab0d998f80872a6b2523fdf6925b7804d623f897e73e709fea9c50000000c736f757263655f6c6162656c050000000f616c69656e325f636f6e73742e6a730000000c696e737472756374696f6e730600000004070000000300000003647374010000000000000001000000026f7005000000086c6f61645f696e740000000576616c756502000000000000002a070000000300000003647374010000000000000002000000026f7005000000046d6f7665000000037372630100000000000000010700000002000000026f70050000000672657475726e0000000576616c75650100000000000000000700000001000000026f70050000000468616c740000001572657175697265645f6361706162696c697469657306000000000000000e7370656369616c697a6174696f6e08",
-                "sha256:f2548dddeacd9ea93265e7a1df871005169443f9838a04f1512450da8a3179dd",
+                "07000000060000000d636f6e7374616e745f706f6f6c06000000000000000e66756e6374696f6e5f7461626c650600000001070000000500000005617269747901000000000000000000000005656e7472790100000000000000000000000a6672616d655f73697a650100000000000000030000000c69735f67656e657261746f720300000000046e616d6505000000046d61696e000000066865616465720700000004000000056c6576656c05000000036972330000000e736368656d615f76657273696f6e0700000003000000056d616a6f72010000000000000000000000056d696e6f720100000000000000030000000570617463680100000000000000000000000b736f757263655f68617368040000002095283e2d6bf7e5ac85bc939aad7bf97e5aabc4675c0e0edb1098ac2296afea660000000c736f757263655f6c6162656c050000000f616c69656e325f636f6e73742e6a730000000c696e737472756374696f6e730600000004070000000300000003647374010000000000000001000000026f7005000000086c6f61645f696e740000000576616c756502000000000000002a070000000300000003647374010000000000000002000000026f7005000000046d6f7665000000037372630100000000000000010700000002000000026f70050000000672657475726e0000000576616c75650100000000000000000700000001000000026f70050000000468616c740000001572657175697265645f6361706162696c697469657306000000000000000e7370656369616c697a6174696f6e08",
+                "sha256:a7135ba7d555fb703436e2033955a13313c40cfc91c7968394bda3de2963d98a",
             ),
         ];
 
@@ -22426,7 +22430,7 @@ mod tests {
     #[test]
     fn classify_import_module() {
         let (effect, cap, flow) = classify_ir1_op(&Ir1Op::ImportModule {
-            specifier: "mod".to_string(),
+            specifier: "mod".into(),
         });
         assert_eq!(effect, EffectBoundary::ReadEffect);
         assert!(cap.is_some());
@@ -22778,7 +22782,7 @@ mod tests {
                 clause: ImportClause::Default {
                     local: "_".to_string(),
                 },
-                source: "lodash".to_string(),
+                source: "lodash".into(),
                 binding: Some("_".to_string()),
                 span: span(),
             })],
@@ -22831,13 +22835,15 @@ mod tests {
 
     fn ops_have_fs_import_module(ops: &[Ir1Op]) -> bool {
         ops.iter().any(|op| {
-            matches!(op, Ir1Op::ImportModule { specifier } if is_fs_module_specifier(specifier))
+            matches!(op, Ir1Op::ImportModule { specifier }
+                if module_source_matches(specifier, is_fs_module_specifier))
         })
     }
 
     fn ops_have_http_import_module(ops: &[Ir1Op]) -> bool {
         ops.iter().any(|op| {
-            matches!(op, Ir1Op::ImportModule { specifier } if is_http_module_specifier(specifier))
+            matches!(op, Ir1Op::ImportModule { specifier }
+                if module_source_matches(specifier, is_http_module_specifier))
         })
     }
 
@@ -24380,7 +24386,7 @@ mod tests {
     fn ops_have_fs_promises_import_module(ops: &[Ir1Op]) -> bool {
         ops.iter().any(|op| {
             matches!(op, Ir1Op::ImportModule { specifier }
-                if is_fs_promises_module_specifier(specifier))
+                if module_source_matches(specifier, is_fs_promises_module_specifier))
         })
     }
 
@@ -24877,7 +24883,7 @@ mod tests {
                     span: span(),
                 }),
                 Statement::Export(ExportDeclaration {
-                    kind: ExportKind::NamedClause("{ foo as published }".to_string()),
+                    kind: ExportKind::NamedClause("{ foo as published }".into()),
                     span: span(),
                 }),
             ],
@@ -24899,7 +24905,7 @@ mod tests {
         let tree = SyntaxTree {
             goal: ParseGoal::Module,
             body: vec![Statement::Export(ExportDeclaration {
-                kind: ExportKind::NamedClause("{ foo as bar } from \"./dep.js\"".to_string()),
+                kind: ExportKind::NamedClause("{ foo as bar } from \"./dep.js\"".into()),
                 span: span(),
             })],
             span: span(),
@@ -24925,7 +24931,7 @@ mod tests {
         let tree = SyntaxTree {
             goal: ParseGoal::Module,
             body: vec![Statement::Export(ExportDeclaration {
-                kind: ExportKind::NamedClause("{ bar }".to_string()),
+                kind: ExportKind::NamedClause("{ bar }".into()),
                 span: span(),
             })],
             span: span(),
@@ -24947,7 +24953,7 @@ mod tests {
             goal: ParseGoal::Module,
             body: vec![
                 Statement::Export(ExportDeclaration {
-                    kind: ExportKind::NamedClause("{ foo }".to_string()),
+                    kind: ExportKind::NamedClause("{ foo }".into()),
                     span: span(),
                 }),
                 Statement::VariableDeclaration(VariableDeclaration {
@@ -25245,7 +25251,7 @@ mod tests {
                     clause: ImportClause::Default {
                         local: "_".to_string(),
                     },
-                    source: "lodash".to_string(),
+                    source: "lodash".into(),
                     binding: Some("_".to_string()),
                     span: span(),
                 }),
@@ -25478,7 +25484,7 @@ mod tests {
         let labels = BTreeMap::new();
         let label = infer_data_label_for_op(
             &Ir1Op::ImportModule {
-                specifier: "lodash".to_string(),
+                specifier: "lodash".into(),
             },
             &labels,
             Label::Public,

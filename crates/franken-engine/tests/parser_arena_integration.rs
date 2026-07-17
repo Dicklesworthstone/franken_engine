@@ -33,6 +33,7 @@ use frankenengine_engine::ast::{
     ExportDeclaration, ExportKind, Expression, ExpressionStatement, ImportClause,
     ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree,
 };
+use frankenengine_engine::js_string::JsString;
 use frankenengine_engine::parser_arena::{
     ArenaBudget, ArenaBudgetKind, ArenaError, ArenaExpression, ArenaNode, ExpressionHandle,
     HandleAuditEntry, HandleAuditKind, NodeHandle, ParserArena, SpanHandle,
@@ -65,7 +66,7 @@ fn import_tree() -> SyntaxTree {
                 local: "foo".to_string(),
             },
             binding: Some("foo".to_string()),
-            source: "./foo.js".to_string(),
+            source: "./foo.js".into(),
             span: make_span(0, 20),
         })],
         span: make_span(0, 20),
@@ -78,7 +79,7 @@ fn import_no_binding_tree() -> SyntaxTree {
         body: vec![Statement::Import(ImportDeclaration {
             clause: ImportClause::SideEffect,
             binding: None,
-            source: "./side-effects.js".to_string(),
+            source: "./side-effects.js".into(),
             span: make_span(0, 30),
         })],
         span: make_span(0, 30),
@@ -100,7 +101,7 @@ fn export_named_tree() -> SyntaxTree {
     SyntaxTree {
         goal: ParseGoal::Module,
         body: vec![Statement::Export(ExportDeclaration {
-            kind: ExportKind::NamedClause("{ baz }".to_string()),
+            kind: ExportKind::NamedClause("{ baz }".into()),
             span: make_span(0, 15),
         })],
         span: make_span(0, 15),
@@ -144,13 +145,13 @@ fn mixed_statement_tree() -> SyntaxTree {
                     local: "fs".to_string(),
                 },
                 binding: Some("fs".to_string()),
-                source: "node:fs".to_string(),
+                source: "node:fs".into(),
                 span: make_span(0, 20),
             }),
             Statement::Import(ImportDeclaration {
                 clause: ImportClause::SideEffect,
                 binding: None,
-                source: "./polyfill.js".to_string(),
+                source: "./polyfill.js".into(),
                 span: make_span(21, 50),
             }),
             Statement::Export(ExportDeclaration {
@@ -160,7 +161,7 @@ fn mixed_statement_tree() -> SyntaxTree {
                 span: make_span(51, 80),
             }),
             Statement::Export(ExportDeclaration {
-                kind: ExportKind::NamedClause("{ alpha, beta }".to_string()),
+                kind: ExportKind::NamedClause("{ alpha, beta }".into()),
                 span: make_span(81, 110),
             }),
             Statement::Expression(ExpressionStatement {
@@ -580,7 +581,7 @@ fn arena_error_clone() {
 fn arena_node_import_with_binding() {
     let node = ArenaNode::Import {
         binding: Some("mod".to_string()),
-        source: "./mod.js".to_string(),
+        source: "./mod.js".into(),
         span: SpanHandle::from_parts(0, 1),
     };
     if let ArenaNode::Import {
@@ -590,7 +591,7 @@ fn arena_node_import_with_binding() {
     } = &node
     {
         assert_eq!(binding.as_deref(), Some("mod"));
-        assert_eq!(source, "./mod.js");
+        assert_eq!(source.as_str(), Some("./mod.js"));
         assert_eq!(span.index(), 0);
     } else {
         panic!("expected Import variant");
@@ -601,7 +602,7 @@ fn arena_node_import_with_binding() {
 fn arena_node_import_without_binding() {
     let node = ArenaNode::Import {
         binding: None,
-        source: "./side.js".to_string(),
+        source: "./side.js".into(),
         span: SpanHandle::from_parts(1, 1),
     };
     if let ArenaNode::Import { binding, .. } = &node {
@@ -628,11 +629,12 @@ fn arena_node_export_default() {
 #[test]
 fn arena_node_export_named_clause() {
     let node = ArenaNode::ExportNamedClause {
-        clause: "{ x, y }".to_string(),
+        clause: "{ x, y }".into(),
         span: SpanHandle::from_parts(3, 1),
     };
     if let ArenaNode::ExportNamedClause { clause, .. } = &node {
-        assert_eq!(clause, "{ x, y }");
+        assert_eq!(clause.canonical_head(), "{ x, y }");
+        assert!(clause.source().is_none());
     } else {
         panic!("expected ExportNamedClause variant");
     }
@@ -655,7 +657,7 @@ fn arena_node_expression_statement() {
 fn arena_node_clone_and_equality() {
     let node = ArenaNode::Import {
         binding: Some("a".to_string()),
-        source: "b".to_string(),
+        source: "b".into(),
         span: SpanHandle::from_parts(0, 1),
     };
     let cloned = node.clone();
@@ -939,7 +941,7 @@ fn node_lookup_returns_correct_variant_import() {
     } = node
     {
         assert_eq!(binding.as_deref(), Some("foo"));
-        assert_eq!(source, "./foo.js");
+        assert_eq!(source.as_str(), Some("./foo.js"));
     } else {
         panic!("expected Import node");
     }
@@ -961,7 +963,8 @@ fn node_lookup_returns_correct_variant_export_named() {
     let handle = arena.statement_handles()[0];
     let node = arena.node(handle).expect("node lookup");
     if let ArenaNode::ExportNamedClause { clause, .. } = node {
-        assert_eq!(clause, "{ baz }");
+        assert_eq!(clause.canonical_head(), "{ baz }");
+        assert!(clause.source().is_none());
     } else {
         panic!("expected ExportNamedClause");
     }
@@ -1216,6 +1219,46 @@ fn roundtrip_import_without_binding() {
     let arena = default_arena(&tree);
     let recovered = arena.to_syntax_tree().unwrap();
     assert_eq!(recovered, tree);
+}
+
+#[test]
+fn exact_module_sources_roundtrip_without_aliasing_bd_lfq44() {
+    let import_tree = |source: JsString| SyntaxTree {
+        goal: ParseGoal::Module,
+        body: vec![Statement::Import(ImportDeclaration {
+            clause: ImportClause::SideEffect,
+            binding: None,
+            source,
+            span: make_span(0, 16),
+        })],
+        span: make_span(0, 16),
+    };
+
+    let d800_tree = import_tree(JsString::from_code_units(&[0xD800]));
+    let dc00_tree = import_tree(JsString::from_code_units(&[0xDC00]));
+    let d800_arena = default_arena(&d800_tree);
+    let dc00_arena = default_arena(&dc00_tree);
+
+    assert_ne!(
+        d800_arena.canonical_hash().expect("D800 arena hash"),
+        dc00_arena.canonical_hash().expect("DC00 arena hash"),
+        "distinct exact module sources must not alias"
+    );
+
+    let d800_roundtrip = d800_arena.to_syntax_tree().expect("D800 round-trip");
+    let dc00_roundtrip = dc00_arena.to_syntax_tree().expect("DC00 round-trip");
+    assert_eq!(d800_roundtrip, d800_tree);
+    assert_eq!(dc00_roundtrip, dc00_tree);
+
+    let Statement::Import(d800_import) = &d800_roundtrip.body[0] else {
+        panic!("expected D800 import");
+    };
+    let Statement::Import(dc00_import) = &dc00_roundtrip.body[0] else {
+        panic!("expected DC00 import");
+    };
+    assert_eq!(d800_import.source.code_units_vec(), vec![0xD800]);
+    assert_eq!(dc00_import.source.code_units_vec(), vec![0xDC00]);
+    assert_ne!(d800_import.source, dc00_import.source);
 }
 
 #[test]
@@ -1816,7 +1859,7 @@ fn cross_concern_import_binding_affects_bytes() {
                 local: "longBindingName".to_string(),
             },
             binding: Some("longBindingName".to_string()),
-            source: "./m.js".to_string(),
+            source: "./m.js".into(),
             span: make_span(0, 30),
         })],
         span: make_span(0, 30),
@@ -1826,7 +1869,7 @@ fn cross_concern_import_binding_affects_bytes() {
         body: vec![Statement::Import(ImportDeclaration {
             clause: ImportClause::SideEffect,
             binding: None,
-            source: "./m.js".to_string(),
+            source: "./m.js".into(),
             span: make_span(0, 30),
         })],
         span: make_span(0, 30),
@@ -1980,7 +2023,7 @@ fn edge_export_named_empty_clause() {
     let tree = SyntaxTree {
         goal: ParseGoal::Module,
         body: vec![Statement::Export(ExportDeclaration {
-            kind: ExportKind::NamedClause(String::new()),
+            kind: ExportKind::NamedClause(String::new().into()),
             span: make_span(0, 5),
         })],
         span: make_span(0, 5),

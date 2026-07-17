@@ -117,7 +117,7 @@ the owning type's module tier and Rust visibility rules.
 
 ### Stable Boundary Modules
 
-- `ast`: constants `CANONICAL_AST_CONTRACT_VERSION`, `CANONICAL_AST_SCHEMA_VERSION`, `CANONICAL_AST_HASH_ALGORITHM`, `CANONICAL_AST_HASH_PREFIX`; enums `ParseGoal`, `Statement`, `ImportClause`, `ExportKind`, `BindingPattern`, `VariableDeclarationKind`, `MethodKind`, `BinaryOperator`, `UnaryOperator`, `AssignmentOperator`, `ArrowBody`, `Expression`; structs `SourceSpan`, `SyntaxTree`, `ImportSpecifier`, `ImportDeclaration`, `ExportDeclaration`, `ObjectPatternProperty`, `VariableDeclarator`, `VariableDeclaration`, `ExpressionStatement`, `BlockStatement`, `IfStatement`, `ForStatement`, `ForInStatement`, `ForOfStatement`, `WhileStatement`, `DoWhileStatement`, `ReturnStatement`, `ThrowStatement`, `CatchClause`, `TryCatchStatement`, `SwitchCase`, `SwitchStatement`, `BreakStatement`, `ContinueStatement`, `FunctionParam`, `FunctionDeclaration`, `MethodDefinition`, `ClassDeclaration`, `ObjectProperty`.
+- `ast`: constants `CANONICAL_AST_CONTRACT_VERSION`, `CANONICAL_AST_SCHEMA_VERSION`, `CANONICAL_AST_HASH_ALGORITHM`, `CANONICAL_AST_HASH_PREFIX`; enums `ParseGoal`, `Statement`, `ImportClause`, `ExportKind`, `BindingPattern`, `VariableDeclarationKind`, `MethodKind`, `BinaryOperator`, `UnaryOperator`, `AssignmentOperator`, `ArrowBody`, `Expression`; structs `SourceSpan`, `SyntaxTree`, `ImportSpecifier`, `ImportDeclaration`, `NamedExportClause`, `ExportDeclaration`, `ObjectPatternProperty`, `VariableDeclarator`, `VariableDeclaration`, `ExpressionStatement`, `BlockStatement`, `IfStatement`, `ForStatement`, `ForInStatement`, `ForOfStatement`, `WhileStatement`, `DoWhileStatement`, `ReturnStatement`, `ThrowStatement`, `CatchClause`, `TryCatchStatement`, `SwitchCase`, `SwitchStatement`, `BreakStatement`, `ContinueStatement`, `FunctionParam`, `FunctionDeclaration`, `MethodDefinition`, `ClassDeclaration`, `ObjectProperty`.
 - `baseline_interpreter`: constants `DETERMINISTIC_PROFILE_LABEL`, `THROUGHPUT_PROFILE_LABEL`, `LEGACY_QUICKJS_PROFILE_LABEL`, `LEGACY_V8_PROFILE_LABEL`; type aliases `ExtensionId`, `ObjectRef`, `PropertyKey`; trait `InterpreterHook`; enums `Value`, `BuiltinFunctionKind`, `AllocKind`, `FunctionRef`, `HookAction`, `InterpreterError`, `ConsoleLevel`, `LaneChoice`, `LaneReason`; structs `ActiveTimer`, `Float64`, `BuiltinFunction`, `ObjectId`, `HeapObject`, `AccessorProperty`, `ChallengeToken`, `HookContext`, `DecisionReceipt`, `EvidenceLog`, `InterpreterConfig`, `InterpreterEvent`, `ConsoleEntry`, `ExecutionResult`, `ExecutionSeed`, `EagerExecutionSeed`, `InterpreterCore`, `QuickJsLane`, `V8Lane`, `RoutedResult`, `LaneRouter`.
 - `capability`: enums `RuntimeCapability`, `ProfileKind`; structs `CapabilityProfile`, `CapabilityDenied`; functions `require_capability`, `require_all`.
 - `closure_model`: enums `EnvValue`, `EnvironmentKind`, `ScopeError`; structs `ClosureHandle`, `EnvironmentHandle`, `BindingSlot`, `EnvironmentRecord`, `ClosureCapture`, `Closure`, `ScopeChain`, `ClosureStore`.
@@ -306,8 +306,8 @@ mirror, advancing its canonical AST schema to
 `franken-engine.parser-ast.schema.v2` and its `IrSchemaVersion::CURRENT` to
 `0.2.0`. The engine parser arena, AST/IR serde and canonical values, IR3
 constant pool, and baseline string loads now preserve the same exact code
-units. UTF-8-only module-specifier metadata remains separately tracked by
-`bd-lfq44`; the schema change creates no tag or release.
+units. The later exact module-source checkpoint below resolves the separately
+tracked `bd-lfq44`; neither schema change creates a tag or release.
 
 ### Canonical root EOF coordinate checkpoint (`bd-4tt6s`)
 
@@ -351,8 +351,38 @@ no direct imports, constructions, or matches of core `Ir1Op` or
 `Ir3Instruction`. In-core exhaustive matches are updated atomically across
 canonical encoding, lowering, effect classification, interpreter dispatch,
 and instruction mnemonic reporting. The separate `frankenengine-engine` IR
-mirror remains on its own `0.2.0` schema until separately versioned mirror
-work adds an equivalent operation.
+mirror remains on its own `0.2.0` schema. The later module-source checkpoint
+advances that mirror independently without adding `CopyDataProperties` to it.
+
+### Exact module-source schema checkpoint (`bd-lfq44`)
+
+Both public ASTs change the stable `ImportDeclaration::source` field from
+`String` to `JsString`, and `ExportKind::NamedClause` now carries the public
+`NamedExportClause` value object rather than an undifferentiated `String`.
+Both public IR1 enums likewise change `ImportModule::specifier` from `String`
+to `JsString`. These are intentional source-shape changes on the unreleased
+`0.2.0` Cargo compatibility line; package versions and `Cargo.lock` do not
+advance again.
+
+The compatibility engine AST advances from v3 to v4 and its IR schema from
+`0.2.0` to `0.3.0`. The native core AST advances from v4 to v5 and its IR
+schema from `0.3.0` to `0.4.0`. Same-major current readers retain historical
+plain-string inputs. Old readers continue to reject the new exact tagged
+values rather than reinterpret them.
+
+Ordinary import and named-export serde/canonical bytes remain unchanged. Exact
+imports use the established `$wtf16` `JsString` representation. A named export
+with a non-well-formed source uses one namespaced `$module_source` payload that
+contains its canonical binding head and exact source; a well-formed source is
+invalid in that tagged form so every value has one canonical encoding.
+
+Parser and lowering consumers must use `NamedExportClause::canonical_head()`
+and `source()` directly. They must not reconstruct loader identity from a
+display string or replacement-character projection. Runtime import dispatch
+retains `JsString` through IR execution and converts to `&str` only at the
+existing filesystem path boundary, rejecting a non-well-formed value before
+path or cache lookup. The independent `module_resolver` and `esm_loader` APIs
+do not consume this parser/IR path and remain outside this schema migration.
 
 The descriptor object model already exposes `object_model::SymbolId`,
 `object_model::PropertyKey::{String, Symbol}`, and `JsValue::Symbol`; the

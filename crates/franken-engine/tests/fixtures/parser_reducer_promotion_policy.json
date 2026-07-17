@@ -2,7 +2,7 @@
   "schema_version": "franken-engine.parser-reducer-promotion.policy.v1",
   "policy_id": "policy-parser-reducer-promotion-v1",
   "parser_mode": "scalar_reference",
-  "ast_contract_schema": "franken-engine.parser-ast.schema.v3",
+  "ast_contract_schema": "franken-engine.parser-ast.schema.v4",
   "diagnostics_schema": "franken-engine.parser-diagnostics.schema.v1",
   "diagnostics_taxonomy": "franken-engine.parser-diagnostics.taxonomy.v1",
   "provenance_hash_algorithm": "sha256",

@@ -25,9 +25,9 @@ use frankenengine_engine::ir_contract::{
     BindingKind, CapabilityTag, EffectBoundary, ExecutionOutcome, FlowAnnotation,
     HostcallDecisionRecord, Ir0Module, Ir1Literal, Ir1Module, Ir1Op, Ir2Module, Ir2Op,
     Ir3FunctionDesc, Ir3Instruction, Ir3Module, Ir4Module, IrContractEvent, IrError, IrErrorCode,
-    IrLevel, IrSchemaVersion, IrVerifier, RegRange, ResolvedBinding, ScopeId, ScopeKind, ScopeNode,
-    SpecializationLinkage, WitnessEvent, WitnessEventKind, error_code, verify_ir0_hash,
-    verify_ir1_source, verify_ir3_specialization, verify_ir4_linkage,
+    IrHeader, IrLevel, IrSchemaVersion, IrVerifier, RegRange, ResolvedBinding, ScopeId, ScopeKind,
+    ScopeNode, SpecializationLinkage, WitnessEvent, WitnessEventKind, error_code, verify_ir0_hash,
+    verify_ir1_source, verify_ir3_specialization, verify_ir4_linkage, verify_schema_version,
 };
 use frankenengine_engine::js_string::JsString;
 
@@ -182,13 +182,13 @@ fn build_full_pipeline() -> (Ir0Module, Ir1Module, Ir2Module, Ir3Module, Ir4Modu
 fn schema_version_current_values() {
     let v = IrSchemaVersion::CURRENT;
     assert_eq!(v.major, 0);
-    assert_eq!(v.minor, 2);
+    assert_eq!(v.minor, 3);
     assert_eq!(v.patch, 0);
 }
 
 #[test]
 fn schema_version_display() {
-    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.2.0");
+    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.3.0");
     let custom = IrSchemaVersion {
         major: 2,
         minor: 3,
@@ -243,6 +243,27 @@ fn schema_version_ordering() {
     };
     assert!(v010 < v020);
     assert!(v020 < v100);
+}
+
+#[test]
+fn schema_version_030_retains_historical_minor_compatibility_bd_lfq44() {
+    let header = |minor| IrHeader {
+        schema_version: IrSchemaVersion {
+            major: 0,
+            minor,
+            patch: 0,
+        },
+        level: IrLevel::Ir1,
+        source_hash: None,
+        source_label: "compat.mjs".to_string(),
+    };
+
+    assert!(verify_schema_version(&header(1)).is_ok());
+    assert!(verify_schema_version(&header(2)).is_ok());
+    assert!(verify_schema_version(&header(3)).is_ok());
+    let error = verify_schema_version(&header(4)).expect_err("future minor must be rejected");
+    assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
+    assert!(error.message.contains("0.3.0"));
 }
 
 // ============================================================================
@@ -523,7 +544,7 @@ fn ir1_op_all_variants_canonical() {
         Ir1Op::Call { arg_count: 5 },
         Ir1Op::Return,
         Ir1Op::ImportModule {
-            specifier: "./module.js".to_string(),
+            specifier: "./module.js".into(),
         },
         Ir1Op::ExportBinding {
             name: "default".to_string(),
@@ -550,7 +571,7 @@ fn ir1_op_serde_roundtrip_all_variants() {
         Ir1Op::Call { arg_count: 0 },
         Ir1Op::Return,
         Ir1Op::ImportModule {
-            specifier: "mod".to_string(),
+            specifier: "mod".into(),
         },
         Ir1Op::ExportBinding {
             name: "y".to_string(),
@@ -564,6 +585,36 @@ fn ir1_op_serde_roundtrip_all_variants() {
         let restored: Ir1Op = serde_json::from_str(&json).unwrap();
         assert_eq!(*op, restored);
     }
+}
+
+#[test]
+fn ir1_import_module_wire_preserves_ordinary_and_exact_sources_bd_lfq44() {
+    let ordinary = Ir1Op::ImportModule {
+        specifier: "pkg".into(),
+    };
+    assert_eq!(
+        serde_json::to_string(&ordinary).unwrap(),
+        r#"{"ImportModule":{"specifier":"pkg"}}"#
+    );
+
+    let exact = |unit| Ir1Op::ImportModule {
+        specifier: JsString::from_code_units(&[unit]),
+    };
+    let d800 = exact(0xD800);
+    let dc00 = exact(0xDC00);
+    assert_eq!(
+        serde_json::to_string(&d800).unwrap(),
+        r#"{"ImportModule":{"specifier":{"$wtf16":[55296]}}}"#
+    );
+    assert_ne!(d800.canonical_value(), dc00.canonical_value());
+    assert_ne!(
+        serde_json::to_string(&d800).unwrap(),
+        serde_json::to_string(&dc00).unwrap()
+    );
+    assert_eq!(
+        serde_json::from_str::<Ir1Op>(&serde_json::to_string(&d800).unwrap()).unwrap(),
+        d800
+    );
 }
 
 // ============================================================================
@@ -1488,7 +1539,7 @@ fn ir_error_construction() {
 fn ir_error_display_format() {
     let err = IrError::new(
         IrErrorCode::SchemaVersionMismatch,
-        "expected 0.2.0",
+        "expected 0.3.0",
         IrLevel::Ir1,
     );
     let display = err.to_string();
@@ -1497,7 +1548,7 @@ fn ir_error_display_format() {
         display.contains("IR_SCHEMA_VERSION_MISMATCH"),
         "display={display}"
     );
-    assert!(display.contains("expected 0.2.0"), "display={display}");
+    assert!(display.contains("expected 0.3.0"), "display={display}");
 }
 
 #[test]

@@ -66,12 +66,14 @@ alone.
 
 ## Active Parity Exception: `CopyDataProperties` IR
 
-`bd-f1ixz` advances the core IR schema to `0.3.0` with additive
+`bd-f1ixz` advanced the core IR schema to `0.3.0` with additive
 `Ir1Op::CopyDataProperties` and `Ir3Instruction::CopyDataProperties` variants.
-The independently owned engine IR mirror remains at schema `0.2.0` without
-those variants. The `ir_contract` row therefore stays `pending_graduation`
-with ownership unsettled: future parity work must reconcile the versioned
-wire, lowering, and execution behavior before changing that status.
+`bd-lfq44` subsequently advances the core schema to `0.4.0` and the engine
+mirror to `0.3.0` for exact module-specifier carriers. The engine mirror still
+lacks the `CopyDataProperties` variants, so the `ir_contract` row remains
+`pending_graduation` with ownership unsettled: future parity work must
+reconcile the versioned wire, lowering, and execution behavior before changing
+that status.
 
 ## Active Parity Exception: Executable Symbol Keys
 

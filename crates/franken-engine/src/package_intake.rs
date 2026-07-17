@@ -51,7 +51,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::ast::{ParseGoal, Statement};
+use crate::ast::{ExportKind, ParseGoal, Statement};
 use crate::authority_footprint::{
     AnalysisCompleteness, AuthorityFootprintReport, CheckFindingKind, SourceLocation,
     analyze_authority_footprint,
@@ -564,14 +564,30 @@ fn extract_es_module(source: &str, label: &str) -> ExtractedModule {
         match statement {
             Statement::Import(decl) => {
                 has_module_syntax = true;
+                let Some(specifier) = decl.source.as_str() else {
+                    // The package-intake resolver remains UTF-8 based. Preserve
+                    // the pre-v4 outcome for an exact, non-well-formed module
+                    // source instead of projecting it lossily into a graph key.
+                    return empty();
+                };
                 imports.push(ImportEdge {
-                    specifier: decl.source.clone(),
+                    specifier: specifier.to_string(),
                     location: SourceLocation::from(decl.span),
                 });
             }
-            Statement::Export(_) => {
+            Statement::Export(decl) => {
                 // Re-export sources are folded into the export clause in v1 and
                 // are not split out as edges; their presence still marks ESM.
+                if matches!(
+                    &decl.kind,
+                    ExportKind::NamedClause(clause)
+                        if clause.source().is_some_and(|source| source.as_str().is_none())
+                ) {
+                    // Before the v4 AST carrier, this exact source made the
+                    // whole parse unusable. Keep that outcome until the intake
+                    // graph itself has an exact module-key representation.
+                    return empty();
+                }
                 has_module_syntax = true;
             }
             _ => {}
@@ -1108,6 +1124,15 @@ pub fn onboard_package(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_import_and_reexport_sources_keep_the_pre_v4_unusable_outcome_bd_lfq44() {
+        for source in [r#"import "\uD800";"#, r#"export { value } from "\uD800";"#] {
+            let extracted = extract_es_module(source, "bd-lfq44-exact-module-source.js");
+            assert_eq!(extracted.syntax, ModuleSyntax::CommonJs, "{source}");
+            assert!(extracted.imports.is_empty(), "{source}");
+        }
+    }
 
     /// Build a temporary package on disk and return (root, cleanup-on-drop).
     struct TempPackage {

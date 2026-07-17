@@ -511,7 +511,7 @@ impl AstCheck {
             Self::SideEffectImport { source } => {
                 if imports(tree).any(|import| {
                     matches!(&import.clause, ImportClause::SideEffect)
-                        && import.source.as_str() == *source
+                        && import.source.as_str() == Some(*source)
                 }) {
                     Ok(())
                 } else {
@@ -523,7 +523,7 @@ impl AstCheck {
                     matches!(&import.clause, ImportClause::Default { local: actual } if actual.as_str() == *local)
                         && import.binding.as_deref() == Some(*local)
                         && import.clause.binding_names() == vec![*local]
-                        && import.source.as_str() == *source
+                        && import.source.as_str() == Some(*source)
                 }) {
                     Ok(())
                 } else {
@@ -536,7 +536,7 @@ impl AstCheck {
                 source,
             } => {
                 if imports(tree).any(|import| {
-                    import.source.as_str() == *source
+                    import.source.as_str() == Some(*source)
                         && matches!(&import.clause, ImportClause::Named { specifiers } if specifiers.iter().any(|specifier| specifier.import_name.as_str() == *import_name && specifier.local_name.as_str() == *local_name))
                 }) {
                     Ok(())
@@ -551,7 +551,7 @@ impl AstCheck {
                     matches!(&import.clause, ImportClause::Namespace { local: actual } if actual.as_str() == *local)
                         && import.binding.as_deref() == Some(*local)
                         && import.clause.binding_names() == vec![*local]
-                        && import.source.as_str() == *source
+                        && import.source.as_str() == Some(*source)
                 }) {
                     Ok(())
                 } else {
@@ -572,7 +572,7 @@ impl AstCheck {
                         } if actual_default.as_str() == *default && actual_namespace.as_str() == *namespace
                     ) && import.binding.as_deref() == Some(*default)
                         && import.clause.binding_names() == vec![*default, *namespace]
-                        && import.source.as_str() == *source
+                        && import.source.as_str() == Some(*source)
                 }) {
                     Ok(())
                 } else {
@@ -590,7 +590,8 @@ impl AstCheck {
             }
             Self::NamedExportClause { clause } => {
                 if exports(tree).any(|export| {
-                    matches!(&export.kind, ExportKind::NamedClause(actual) if actual == clause)
+                    matches!(&export.kind, ExportKind::NamedClause(actual)
+                        if actual.historical_wire_text().as_deref() == Some(*clause))
                 }) {
                     Ok(())
                 } else {
@@ -609,7 +610,8 @@ impl AstCheck {
                     )
                 });
                 let has_export = exports(tree).any(|export| {
-                    matches!(&export.kind, ExportKind::NamedClause(actual) if actual == clause)
+                    matches!(&export.kind, ExportKind::NamedClause(actual)
+                        if actual.historical_wire_text().as_deref() == Some(*clause))
                 });
                 if has_binding && has_export {
                     Ok(())

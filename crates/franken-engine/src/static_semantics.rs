@@ -572,15 +572,17 @@ fn analyze_statement(
                     }
                 }
                 ExportKind::NamedClause(clause) => {
-                    // Extract individual specifier names from the clause string.
-                    // The clause is canonicalized from the parser as `{ a, b as c }`.
-                    let specifier_names = extract_export_specifier_names(clause);
+                    // Export-name checks consume only the canonical binding
+                    // head; exact re-export source metadata is a loader key,
+                    // not part of the exported-name namespace.
+                    let canonical_head = clause.canonical_head();
+                    let specifier_names = extract_export_specifier_names(canonical_head);
                     if specifier_names.is_empty() {
                         // Entire clause as single name (legacy or single-specifier).
-                        if !state.export_names.insert(clause.clone()) {
+                        if !state.export_names.insert(canonical_head.to_string()) {
                             state.push_error(
                                 StaticErrorKind::DuplicateExport,
-                                format!("duplicate export name '{}'", clause),
+                                format!("duplicate export name '{canonical_head}'"),
                                 export.span,
                             );
                         }
@@ -1931,7 +1933,7 @@ mod tests {
                 None => ImportClause::SideEffect,
             },
             binding: binding.map(ToString::to_string),
-            source: source.to_string(),
+            source: source.into(),
             span: span(line),
         })
     }
@@ -1945,7 +1947,7 @@ mod tests {
 
     fn export_named(name: &str, line: u64) -> Statement {
         Statement::Export(ExportDeclaration {
-            kind: ExportKind::NamedClause(name.to_string()),
+            kind: ExportKind::NamedClause(name.into()),
             span: span(line),
         })
     }
@@ -5907,11 +5909,11 @@ mod tests {
             ParseGoal::Module,
             vec![
                 Statement::Export(ExportDeclaration {
-                    kind: ExportKind::NamedClause("{ a }".to_string()),
+                    kind: ExportKind::NamedClause("{ a }".into()),
                     span: span(1),
                 }),
                 Statement::Export(ExportDeclaration {
-                    kind: ExportKind::NamedClause("{ a }".to_string()),
+                    kind: ExportKind::NamedClause("{ a }".into()),
                     span: span(2),
                 }),
             ],
@@ -5934,7 +5936,7 @@ mod tests {
             vec![
                 export_default(Expression::NumericLiteral(42), 1),
                 Statement::Export(ExportDeclaration {
-                    kind: ExportKind::NamedClause("{ x as default }".to_string()),
+                    kind: ExportKind::NamedClause("{ x as default }".into()),
                     span: span(2),
                 }),
             ],
@@ -5955,11 +5957,11 @@ mod tests {
             ParseGoal::Module,
             vec![
                 Statement::Export(ExportDeclaration {
-                    kind: ExportKind::NamedClause("{ a, b }".to_string()),
+                    kind: ExportKind::NamedClause("{ a, b }".into()),
                     span: span(1),
                 }),
                 Statement::Export(ExportDeclaration {
-                    kind: ExportKind::NamedClause("{ c }".to_string()),
+                    kind: ExportKind::NamedClause("{ c }".into()),
                     span: span(2),
                 }),
             ],

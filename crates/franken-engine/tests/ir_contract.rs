@@ -749,7 +749,7 @@ fn scope_kind_serde_round_trip() {
 fn ir_schema_version_current_is_stable() {
     let v = IrSchemaVersion::CURRENT;
     assert_eq!(v.major, 0);
-    assert_eq!(v.minor, 2);
+    assert_eq!(v.minor, 3);
 }
 
 #[test]
@@ -1291,7 +1291,7 @@ fn enrichment_ir1_all_ops_serde_roundtrip() {
         Ir1Op::Call { arg_count: 3 },
         Ir1Op::Return,
         Ir1Op::ImportModule {
-            specifier: "mod".to_string(),
+            specifier: "mod".into(),
         },
         Ir1Op::ExportBinding {
             name: "x".to_string(),

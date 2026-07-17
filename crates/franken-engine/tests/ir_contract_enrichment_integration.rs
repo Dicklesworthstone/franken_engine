@@ -196,13 +196,13 @@ fn enrichment_verifier_emits_error_events_on_failure() {
 fn enrichment_schema_version_current() {
     let v = IrSchemaVersion::CURRENT;
     assert_eq!(v.major, 0);
-    assert_eq!(v.minor, 2);
+    assert_eq!(v.minor, 3);
     assert_eq!(v.patch, 0);
 }
 
 #[test]
 fn enrichment_schema_version_display() {
-    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.2.0");
+    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.3.0");
     let custom = IrSchemaVersion {
         major: 2,
         minor: 3,
@@ -512,7 +512,7 @@ fn enrichment_ir1_op_all_variants_serde_sample() {
         Ir1Op::Call { arg_count: 2 },
         Ir1Op::Return,
         Ir1Op::ImportModule {
-            specifier: "react".to_string(),
+            specifier: "react".into(),
         },
         Ir1Op::ExportBinding {
             name: "default".to_string(),

@@ -19787,6 +19787,25 @@ impl InterpreterCore {
         )
     }
 
+    fn module_specifier_diagnostic(specifier: &JsString) -> String {
+        specifier
+            .encode_utf16()
+            .map(|unit| format!("\\u{unit:04X}"))
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    /// Convert at the UTF-8-backed loader boundary without allowing lone
+    /// UTF-16 units to alias through `JsString`'s lossy display projection.
+    fn utf8_module_specifier(specifier: &JsString) -> Result<&str, InterpreterError> {
+        specifier
+            .as_str()
+            .ok_or_else(|| InterpreterError::ModuleResolutionFailed {
+                specifier: Self::module_specifier_diagnostic(specifier),
+                reason: ModuleResolutionFailureReason::MalformedSpecifier,
+            })
+    }
+
     fn resolve_specifier_base(&self, specifier: &str) -> Result<PathBuf, InterpreterError> {
         if Path::new(specifier).is_absolute() {
             return Err(InterpreterError::ModuleResolutionFailed {
@@ -20328,8 +20347,9 @@ impl InterpreterCore {
     fn import_module(
         &mut self,
         module: &Ir3Module,
-        specifier: &str,
+        specifier: &JsString,
     ) -> Result<Value, InterpreterError> {
+        let specifier = Self::utf8_module_specifier(specifier)?;
         self.run_pre_import_hook(module, specifier)?;
         let resolved = self.resolve_module_specifier(specifier)?;
         let is_cjs = Path::new(&resolved)
@@ -20343,8 +20363,9 @@ impl InterpreterCore {
     fn require_module(
         &mut self,
         module: &Ir3Module,
-        specifier: &str,
+        specifier: &JsString,
     ) -> Result<Value, InterpreterError> {
+        let specifier = Self::utf8_module_specifier(specifier)?;
         self.run_pre_import_hook(module, specifier)?;
         let resolved = self.resolve_require_specifier(specifier)?;
         let is_cjs = match Path::new(&resolved)
@@ -71745,6 +71766,42 @@ mod tests {
         let mut m = test_module(instructions);
         m.function_table = functions;
         m
+    }
+
+    #[test]
+    fn exact_module_specifier_boundary_is_injective_bd_lfq44() {
+        let ordinary = JsString::from("./fixture.js");
+        assert_eq!(
+            InterpreterCore::utf8_module_specifier(&ordinary)
+                .expect("ordinary module source has an exact UTF-8 view"),
+            "./fixture.js"
+        );
+
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let dc00 = JsString::from_code_units(&[0xDC00]);
+        assert_eq!(d800.as_utf8_projection(), dc00.as_utf8_projection());
+
+        let module = test_module(Vec::new());
+        for (specifier, expected_label) in [(&d800, "\\uD800"), (&dc00, "\\uDC00")] {
+            let mut core = InterpreterCore::new(
+                InterpreterConfig::quickjs_defaults(),
+                "bd-lfq44-module-source-boundary",
+            );
+            for error in [
+                core.import_module(&module, specifier)
+                    .expect_err("exact lone unit cannot enter the UTF-8 module loader"),
+                core.require_module(&module, specifier)
+                    .expect_err("exact lone unit cannot enter the UTF-8 require loader"),
+            ] {
+                assert!(matches!(
+                    error,
+                    InterpreterError::ModuleResolutionFailed {
+                        specifier,
+                        reason: ModuleResolutionFailureReason::MalformedSpecifier,
+                    } if specifier == expected_label
+                ));
+            }
+        }
     }
 
     /// Pre-create the entry module record (specifier "test", matching

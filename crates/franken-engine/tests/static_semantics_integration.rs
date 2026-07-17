@@ -81,7 +81,7 @@ fn import_stmt(binding: Option<&str>, source: &str, line: u64) -> Statement {
             None => ImportClause::SideEffect,
         },
         binding: binding.map(ToString::to_string),
-        source: source.to_string(),
+        source: source.into(),
         span: span(line),
     })
 }
@@ -95,7 +95,7 @@ fn export_default(expr: Expression, line: u64) -> Statement {
 
 fn export_named(name: &str, line: u64) -> Statement {
     Statement::Export(ExportDeclaration {
-        kind: ExportKind::NamedClause(name.to_string()),
+        kind: ExportKind::NamedClause(name.into()),
         span: span(line),
     })
 }

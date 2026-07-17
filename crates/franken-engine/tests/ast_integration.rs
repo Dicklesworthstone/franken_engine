@@ -28,7 +28,8 @@ use std::collections::BTreeSet;
 use frankenengine_engine::ast::{
     CANONICAL_AST_CONTRACT_VERSION, CANONICAL_AST_HASH_ALGORITHM, CANONICAL_AST_HASH_PREFIX,
     CANONICAL_AST_SCHEMA_VERSION, ExportDeclaration, ExportKind, Expression, ExpressionStatement,
-    ImportClause, ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree,
+    ImportClause, ImportDeclaration, NamedExportClause, ParseGoal, SourceSpan, Statement,
+    SyntaxTree,
 };
 use frankenengine_engine::js_string::JsString;
 
@@ -61,7 +62,7 @@ fn import_stmt(binding: Option<&str>, source: &str) -> Statement {
     Statement::Import(ImportDeclaration {
         clause,
         binding: binding.map(String::from),
-        source: source.to_string(),
+        source: source.into(),
         span: zero_span(),
     })
 }
@@ -75,7 +76,7 @@ fn export_default_stmt(expr: Expression) -> Statement {
 
 fn export_named_stmt(clause: &str) -> Statement {
     Statement::Export(ExportDeclaration {
-        kind: ExportKind::NamedClause(clause.to_string()),
+        kind: ExportKind::NamedClause(clause.into()),
         span: zero_span(),
     })
 }
@@ -524,7 +525,7 @@ fn import_declaration_with_binding() {
             local: "foo".to_string(),
         },
         binding: Some("foo".to_string()),
-        source: "bar".to_string(),
+        source: "bar".into(),
         span: zero_span(),
     };
     assert_eq!(decl.binding.as_deref(), Some("foo"));
@@ -536,7 +537,7 @@ fn import_declaration_without_binding() {
     let decl = ImportDeclaration {
         clause: ImportClause::SideEffect,
         binding: None,
-        source: "side-effect-only".to_string(),
+        source: "side-effect-only".into(),
         span: zero_span(),
     };
     assert!(decl.binding.is_none());
@@ -549,7 +550,7 @@ fn import_declaration_canonical_value_with_binding_has_string() {
             local: "dep".to_string(),
         },
         binding: Some("dep".to_string()),
-        source: "pkg".to_string(),
+        source: "pkg".into(),
         span: zero_span(),
     };
     let cv = decl.canonical_value();
@@ -563,7 +564,7 @@ fn import_declaration_canonical_value_without_binding_has_null() {
     let decl = ImportDeclaration {
         clause: ImportClause::SideEffect,
         binding: None,
-        source: "side".to_string(),
+        source: "side".into(),
         span: zero_span(),
     };
     let cv = decl.canonical_value();
@@ -578,7 +579,7 @@ fn import_declaration_serde_round_trip() {
             local: "x".to_string(),
         },
         binding: Some("x".to_string()),
-        source: "mod".to_string(),
+        source: "mod".into(),
         span: span(0, 20),
     };
     let json = serde_json::to_string(&decl).unwrap();
@@ -591,12 +592,48 @@ fn import_declaration_serde_round_trip_no_binding() {
     let decl = ImportDeclaration {
         clause: ImportClause::SideEffect,
         binding: None,
-        source: "mod".to_string(),
+        source: "mod".into(),
         span: span(0, 15),
     };
     let json = serde_json::to_string(&decl).unwrap();
     let decoded: ImportDeclaration = serde_json::from_str(&json).unwrap();
     assert_eq!(decoded, decl);
+}
+
+#[test]
+fn import_declaration_module_source_wire_is_exact_and_backward_compatible_bd_lfq44() {
+    let ordinary = ImportDeclaration {
+        clause: ImportClause::SideEffect,
+        binding: None,
+        source: "pkg".into(),
+        span: zero_span(),
+    };
+    assert_eq!(
+        serde_json::to_string(&ordinary).unwrap(),
+        r#"{"clause":"SideEffect","binding":null,"source":"pkg","span":{"start_offset":0,"end_offset":0,"start_line":1,"start_column":1,"end_line":1,"end_column":1}}"#
+    );
+
+    let exact = |unit| ImportDeclaration {
+        clause: ImportClause::SideEffect,
+        binding: None,
+        source: JsString::from_code_units(&[unit]),
+        span: zero_span(),
+    };
+    let d800 = exact(0xD800);
+    let dc00 = exact(0xDC00);
+    assert_eq!(
+        serde_json::to_string(&d800).unwrap(),
+        r#"{"clause":"SideEffect","binding":null,"source":{"$wtf16":[55296]},"span":{"start_offset":0,"end_offset":0,"start_line":1,"start_column":1,"end_line":1,"end_column":1}}"#
+    );
+    assert_ne!(d800.canonical_value(), dc00.canonical_value());
+    assert_ne!(
+        serde_json::to_string(&d800).unwrap(),
+        serde_json::to_string(&dc00).unwrap()
+    );
+    assert_eq!(
+        serde_json::from_str::<ImportDeclaration>(&serde_json::to_string(&d800).unwrap()).unwrap(),
+        d800
+    );
 }
 
 // ===========================================================================
@@ -611,9 +648,10 @@ fn export_kind_default_construction() {
 
 #[test]
 fn export_kind_named_clause_construction() {
-    let kind = ExportKind::NamedClause("{ a, b }".to_string());
+    let kind = ExportKind::NamedClause("{ a, b }".into());
     if let ExportKind::NamedClause(clause) = &kind {
-        assert_eq!(clause, "{ a, b }");
+        assert_eq!(clause.canonical_head(), "{ a, b }");
+        assert!(clause.source().is_none());
     } else {
         panic!("expected NamedClause");
     }
@@ -629,7 +667,7 @@ fn export_kind_default_canonical_value_kind_tag() {
 
 #[test]
 fn export_kind_named_canonical_value_kind_tag() {
-    let kind = ExportKind::NamedClause("foo".to_string());
+    let kind = ExportKind::NamedClause("foo".into());
     let cv = kind.canonical_value();
     let dbg = format!("{cv:?}");
     assert!(dbg.contains("\"named\""));
@@ -645,10 +683,37 @@ fn export_kind_serde_round_trip_default() {
 
 #[test]
 fn export_kind_serde_round_trip_named() {
-    let kind = ExportKind::NamedClause("{ x }".to_string());
+    let kind = ExportKind::NamedClause("{ x }".into());
     let json = serde_json::to_string(&kind).unwrap();
     let decoded: ExportKind = serde_json::from_str(&json).unwrap();
     assert_eq!(decoded, kind);
+}
+
+#[test]
+fn named_reexport_module_source_wire_is_exact_and_backward_compatible_bd_lfq44() {
+    let ordinary = ExportKind::NamedClause(NamedExportClause::new("{ x }", Some("pkg".into())));
+    assert_eq!(
+        serde_json::to_string(&ordinary).unwrap(),
+        r#"{"NamedClause":"{ x } from \"pkg\""}"#
+    );
+
+    let exact = |unit| {
+        ExportKind::NamedClause(NamedExportClause::new(
+            "{ x }",
+            Some(JsString::from_code_units(&[unit])),
+        ))
+    };
+    let d800 = exact(0xD800);
+    let dc00 = exact(0xDC00);
+    assert_eq!(
+        serde_json::to_string(&d800).unwrap(),
+        r#"{"NamedClause":{"$module_source":{"canonical_head":"{ x }","source":{"$wtf16":[55296]}}}}"#
+    );
+    assert_ne!(d800.canonical_value(), dc00.canonical_value());
+    assert_eq!(
+        serde_json::from_str::<ExportKind>(&serde_json::to_string(&dc00).unwrap()).unwrap(),
+        dc00
+    );
 }
 
 // ===========================================================================
@@ -667,7 +732,7 @@ fn export_declaration_construction() {
 #[test]
 fn export_declaration_canonical_value_has_kind_and_span() {
     let decl = ExportDeclaration {
-        kind: ExportKind::NamedClause("{ a }".to_string()),
+        kind: ExportKind::NamedClause("{ a }".into()),
         span: zero_span(),
     };
     let cv = decl.canonical_value();
@@ -1012,7 +1077,7 @@ fn traverse_body_collecting_spans() {
                 local: "a".to_string(),
             },
             binding: Some("a".to_string()),
-            source: "pkg_a".to_string(),
+            source: "pkg_a".into(),
             span: span(0, 20),
         }),
         Statement::Export(ExportDeclaration {
@@ -1048,7 +1113,7 @@ fn traverse_extracting_all_import_sources() {
         .iter()
         .filter_map(|s| {
             if let Statement::Import(decl) = s {
-                Some(decl.source.as_str())
+                decl.source.as_str()
             } else {
                 None
             }
@@ -1125,7 +1190,7 @@ fn import_empty_source_string() {
             local: String::new(),
         },
         binding: Some(String::new()),
-        source: String::new(),
+        source: String::new().into(),
         span: zero_span(),
     };
     let json = serde_json::to_string(&decl).unwrap();
@@ -1135,7 +1200,7 @@ fn import_empty_source_string() {
 
 #[test]
 fn export_named_empty_clause() {
-    let kind = ExportKind::NamedClause(String::new());
+    let kind = ExportKind::NamedClause(String::new().into());
     let json = serde_json::to_string(&kind).unwrap();
     let decoded: ExportKind = serde_json::from_str(&json).unwrap();
     assert_eq!(decoded, kind);
@@ -1238,7 +1303,7 @@ fn import_declaration_canonical_value_deterministic() {
             local: "x".to_string(),
         },
         binding: Some("x".to_string()),
-        source: "m".to_string(),
+        source: "m".into(),
         span: span(0, 10),
     };
     let cv1 = decl.canonical_value();
@@ -1257,7 +1322,7 @@ fn export_kind_canonical_value_deterministic() {
 #[test]
 fn export_declaration_canonical_value_deterministic() {
     let decl = ExportDeclaration {
-        kind: ExportKind::NamedClause("{ b }".to_string()),
+        kind: ExportKind::NamedClause("{ b }".into()),
         span: span(5, 15),
     };
     let cv1 = decl.canonical_value();
@@ -1487,7 +1552,7 @@ fn canonical_ast_contract_constants_are_pinned() {
     );
     assert_eq!(
         CANONICAL_AST_SCHEMA_VERSION,
-        "franken-engine.parser-ast.schema.v3"
+        "franken-engine.parser-ast.schema.v4"
     );
     assert_eq!(CANONICAL_AST_HASH_ALGORITHM, "sha256");
     assert_eq!(CANONICAL_AST_HASH_PREFIX, "sha256:");

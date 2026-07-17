@@ -20,11 +20,11 @@ use crate::ast::{
     CatchClause, ClassDeclaration, ContinueStatement, DoWhileStatement, ExportDeclaration,
     ExportKind, Expression, ExpressionStatement, ForInStatement, ForOfStatement, ForStatement,
     FunctionDeclaration, FunctionParam, IfStatement, ImportClause, ImportDeclaration,
-    ImportSpecifier, LabeledStatement, MethodDefinition, MethodKind, ObjectPatternProperty,
-    ObjectProperty, ObjectPropertyKind, ReturnStatement, SourceSpan, Statement, SwitchCase,
-    SwitchStatement, SyntaxTree, ThrowStatement, TryCatchStatement, UnaryOperator,
-    VariableDeclaration, VariableDeclarationKind, VariableDeclarator, WhileStatement,
-    WithStatement,
+    ImportSpecifier, LabeledStatement, MethodDefinition, MethodKind, NamedExportClause,
+    ObjectPatternProperty, ObjectProperty, ObjectPropertyKind, ReturnStatement, SourceSpan,
+    Statement, SwitchCase, SwitchStatement, SyntaxTree, ThrowStatement, TryCatchStatement,
+    UnaryOperator, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+    WhileStatement, WithStatement,
 };
 use crate::deterministic_serde::{self, CanonicalValue};
 use crate::js_string::JsString;
@@ -2757,7 +2757,7 @@ fn parse_named_declaration_export(
     Ok(Some(vec![
         declaration,
         Statement::Export(ExportDeclaration {
-            kind: ExportKind::NamedClause(clause),
+            kind: ExportKind::NamedClause(clause.into()),
             span,
         }),
     ]))
@@ -3459,7 +3459,7 @@ fn parse_named_export_clause(
     clause: &str,
     source_label: &str,
     span: &SourceSpan,
-) -> ParseResult<String> {
+) -> ParseResult<NamedExportClause> {
     let clause = clause.trim();
     let Some(inner_and_trailing) = clause.strip_prefix('{') else {
         return Err(ParseError::new(
@@ -3484,7 +3484,7 @@ fn parse_named_export_clause(
 
     let canonical_head = canonicalize_whitespace(&clause[..close_index + 2]);
     let trailing = inner_and_trailing[close_index + 1..].trim();
-    let canonical_source = if !trailing.is_empty() {
+    let source = if !trailing.is_empty() {
         let Some(source_raw) = trailing.strip_prefix("from").map(str::trim_start) else {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
@@ -3494,18 +3494,10 @@ fn parse_named_export_clause(
             ));
         };
 
-        let source = parse_quoted_string(source_raw).ok_or_else(|| {
+        Some(parse_quoted_string(source_raw).ok_or_else(|| {
             ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "export source must be quoted",
-                source_label.to_string(),
-                Some(span.clone()),
-            )
-        })?;
-        Some(serde_json::to_string(&source).map_err(|error| {
-            ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                format!("export source could not be canonicalized: {error}"),
                 source_label.to_string(),
                 Some(span.clone()),
             )
@@ -3514,10 +3506,7 @@ fn parse_named_export_clause(
         None
     };
 
-    Ok(match canonical_source {
-        Some(source) => format!("{canonical_head} from {source}"),
-        None => canonical_head,
-    })
+    Ok(NamedExportClause::new(canonical_head, source))
 }
 
 fn validate_named_export_specifiers(
@@ -7422,13 +7411,12 @@ fn parse_quoted_expression_string(
     Some(JsString::from_code_units(&units))
 }
 
-/// Parse a quoted string for UTF-8-only syntax fields such as module
-/// specifiers. Exact values containing an unpaired surrogate are rejected
-/// rather than projected to U+FFFD.
-pub(crate) fn parse_quoted_string(input: &str) -> Option<String> {
-    parse_quoted_expression_string(input, LegacyDecimalEscapeMode::Reject)?
-        .as_str()
-        .map(str::to_string)
+/// Parse a quoted module specifier into its exact ECMAScript UTF-16 value.
+/// Module code is strict, so legacy decimal escapes remain rejected while
+/// lone-surrogate Unicode escapes stay distinct rather than being projected
+/// through UTF-8.
+pub(crate) fn parse_quoted_string(input: &str) -> Option<JsString> {
+    parse_quoted_expression_string(input, LegacyDecimalEscapeMode::Reject)
 }
 
 /// Legacy UTF-8 cooker retained for template-literal quasis. Quoted
@@ -10694,12 +10682,23 @@ mod tests {
     }
 
     #[test]
-    fn utf8_module_string_wrapper_rejects_lone_units_bd_vltnh() {
-        assert_eq!(parse_quoted_string(r#""\uD800""#), None);
-        assert_eq!(parse_quoted_string(r"'\uDC00'"), None);
+    fn exact_module_string_wrapper_preserves_lone_units_bd_lfq44() {
         assert_eq!(
-            parse_quoted_string(r#""\uD83D\uDE00""#),
-            Some("😀".to_string())
+            parse_quoted_string(r#""\uD800""#)
+                .expect("high surrogate should remain representable")
+                .code_units_vec(),
+            [0xD800]
+        );
+        assert_eq!(
+            parse_quoted_string(r"'\uDC00'")
+                .expect("low surrogate should remain representable")
+                .code_units_vec(),
+            [0xDC00]
+        );
+        assert_eq!(
+            parse_quoted_string(r#""\uD83D\uDE00""#)
+                .and_then(|value| value.as_str().map(str::to_string)),
+            Some("😀".to_string()),
         );
     }
 
@@ -11763,7 +11762,8 @@ mod tests {
         match &tree.body[0] {
             Statement::Export(export) => match &export.kind {
                 ExportKind::NamedClause(clause) => {
-                    assert_eq!(clause, "{ a, b }");
+                    assert_eq!(clause.canonical_head(), "{ a, b }");
+                    assert!(clause.source().is_none());
                 }
                 _ => panic!("expected named clause export"),
             },
@@ -11783,7 +11783,8 @@ mod tests {
         match &tree.body[0] {
             Statement::Export(export) => match &export.kind {
                 ExportKind::NamedClause(clause) => {
-                    assert_eq!(clause, "{ default as dep, run as start } from \"pkg\"");
+                    assert_eq!(clause.canonical_head(), "{ default as dep, run as start }");
+                    assert_eq!(clause.source().and_then(JsString::as_str), Some("pkg"));
                 }
                 _ => panic!("expected named clause export"),
             },
@@ -11801,8 +11802,42 @@ mod tests {
         };
         assert!(matches!(
             &export.kind,
-            ExportKind::NamedClause(clause) if clause == "{ dep } from \"pkg  name\""
+            ExportKind::NamedClause(clause)
+                if clause.canonical_head() == "{ dep }"
+                    && clause.source().and_then(JsString::as_str) == Some("pkg  name")
         ));
+    }
+
+    #[test]
+    fn module_declarations_preserve_distinct_lone_surrogate_sources_bd_lfq44() {
+        let import_tree = CanonicalEs2020Parser
+            .parse(r#"import "\uD800"; import "\uDC00""#, ParseGoal::Module)
+            .expect("exact import sources should parse");
+        let [Statement::Import(first), Statement::Import(second)] = import_tree.body.as_slice()
+        else {
+            panic!("expected two side-effect imports");
+        };
+        assert_eq!(first.source.code_units_vec(), [0xD800]);
+        assert_eq!(second.source.code_units_vec(), [0xDC00]);
+        assert_ne!(first.source, second.source);
+
+        let export_tree = CanonicalEs2020Parser
+            .parse(r#"export { value } from "\uDC00""#, ParseGoal::Module)
+            .expect("exact re-export source should parse");
+        let Statement::Export(export) = &export_tree.body[0] else {
+            panic!("expected named re-export");
+        };
+        let ExportKind::NamedClause(clause) = &export.kind else {
+            panic!("expected named export clause");
+        };
+        assert_eq!(clause.canonical_head(), "{ value }");
+        assert_eq!(
+            clause
+                .source()
+                .expect("re-export must retain its source")
+                .code_units_vec(),
+            [0xDC00]
+        );
     }
 
     #[test]
@@ -11822,7 +11857,8 @@ mod tests {
         assert!(matches!(
             &tree.body[1],
             Statement::Export(export)
-                if matches!(&export.kind, ExportKind::NamedClause(clause) if clause == "{ x }")
+                if matches!(&export.kind, ExportKind::NamedClause(clause)
+                    if clause.canonical_head() == "{ x }" && clause.source().is_none())
         ));
     }
 
@@ -11841,7 +11877,8 @@ mod tests {
         assert!(matches!(
             &tree.body[1],
             Statement::Export(export)
-                if matches!(&export.kind, ExportKind::NamedClause(clause) if clause == "{ run }")
+                if matches!(&export.kind, ExportKind::NamedClause(clause)
+                    if clause.canonical_head() == "{ run }" && clause.source().is_none())
         ));
     }
 
@@ -11863,7 +11900,8 @@ mod tests {
         assert!(matches!(
             &tree.body[1],
             Statement::Export(export)
-                if matches!(&export.kind, ExportKind::NamedClause(clause) if clause == "{ run }")
+                if matches!(&export.kind, ExportKind::NamedClause(clause)
+                    if clause.canonical_head() == "{ run }" && clause.source().is_none())
         ));
         assert!(matches!(
             &tree.body[2],
@@ -11909,7 +11947,8 @@ mod tests {
         assert!(matches!(
             &tree.body[1],
             Statement::Export(export)
-                if matches!(&export.kind, ExportKind::NamedClause(clause) if clause == "{ Runner }")
+                if matches!(&export.kind, ExportKind::NamedClause(clause)
+                    if clause.canonical_head() == "{ Runner }" && clause.source().is_none())
         ));
     }
 
@@ -13696,9 +13735,18 @@ mod tests {
 
     #[test]
     fn parse_quoted_string_valid_extracts_inner() {
-        assert_eq!(parse_quoted_string("'abc'"), Some("abc".to_string()));
-        assert_eq!(parse_quoted_string("\"xyz\""), Some("xyz".to_string()));
-        assert_eq!(parse_quoted_string("''"), Some(String::new()));
+        assert_eq!(
+            parse_quoted_string("'abc'").and_then(|value| value.as_str().map(str::to_string)),
+            Some("abc".to_string())
+        );
+        assert_eq!(
+            parse_quoted_string("\"xyz\"").and_then(|value| value.as_str().map(str::to_string)),
+            Some("xyz".to_string())
+        );
+        assert_eq!(
+            parse_quoted_string("''").and_then(|value| value.as_str().map(str::to_string)),
+            Some(String::new())
+        );
     }
 
     // -- parse_i64_numeric_literal edge cases --
@@ -14207,14 +14255,14 @@ mod tests {
             statement_kind_label(&Statement::Import(ImportDeclaration {
                 clause: ImportClause::SideEffect,
                 binding: None,
-                source: "m".to_string(),
+                source: "m".into(),
                 span: span.clone(),
             })),
             "import"
         );
         assert_eq!(
             statement_kind_label(&Statement::Export(ExportDeclaration {
-                kind: ExportKind::NamedClause("{}".to_string()),
+                kind: ExportKind::NamedClause("{}".into()),
                 span: span.clone(),
             })),
             "export"

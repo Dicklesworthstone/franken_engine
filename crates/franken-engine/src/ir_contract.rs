@@ -31,12 +31,12 @@ pub struct IrSchemaVersion {
 }
 
 impl IrSchemaVersion {
-    /// `0.2.0` widens JavaScript literal carriers and the IR3 constant pool to
-    /// exact UTF-16 [`JsString`] values. Historical well-formed strings retain
-    /// their plain-string JSON wire shape; lone-surrogate values use `$wtf16`.
+    /// `0.3.0` extends the exact UTF-16 carrier introduced in `0.2.0` to IR1
+    /// module specifiers. Historical well-formed strings retain their plain-
+    /// string JSON wire shape; lone-surrogate values use `$wtf16`.
     pub const CURRENT: Self = Self {
         major: 0,
-        minor: 2,
+        minor: 3,
         patch: 0,
     };
 
@@ -392,7 +392,7 @@ pub enum Ir1Op {
     /// Return from current function.
     Return,
     /// Import a module by specifier.
-    ImportModule { specifier: String },
+    ImportModule { specifier: JsString },
     /// Export a binding from the module.
     ExportBinding { name: String, binding_id: BindingId },
     /// Await an expression (async context).
@@ -630,7 +630,7 @@ impl Ir1Op {
             }
             Self::ImportModule { specifier } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("import_module")),
-                ("specifier", CanonicalValue::str(specifier.clone())),
+                ("specifier", canonical_js_string_value(specifier)),
             ]),
             Self::ExportBinding { name, binding_id } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("export_binding")),
@@ -2923,7 +2923,7 @@ mod tests {
 
     #[test]
     fn schema_version_display() {
-        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.2.0");
+        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.3.0");
     }
 
     #[test]
@@ -3135,7 +3135,7 @@ mod tests {
             Ir1Op::Call { arg_count: 2 },
             Ir1Op::Return,
             Ir1Op::ImportModule {
-                specifier: "mod".to_string(),
+                specifier: "mod".into(),
             },
             Ir1Op::ExportBinding {
                 name: "x".to_string(),
@@ -3680,7 +3680,7 @@ mod tests {
     fn ir_error_display() {
         let err = IrError::new(
             IrErrorCode::SchemaVersionMismatch,
-            "expected 0.2.0, got 0.3.0",
+            "expected 0.3.0, got 0.4.0",
             IrLevel::Ir1,
         );
         let display = err.to_string();
@@ -4384,7 +4384,7 @@ mod tests {
             Ir1Op::Call { arg_count: 3 },
             Ir1Op::Return,
             Ir1Op::ImportModule {
-                specifier: "m".to_string(),
+                specifier: "m".into(),
             },
             Ir1Op::ExportBinding {
                 name: "x".to_string(),
@@ -4412,6 +4412,51 @@ mod tests {
                 serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*op, restored);
         }
+    }
+
+    #[test]
+    fn ir1_import_module_preserves_historical_and_exact_wire_shapes_bd_lfq44() {
+        let ordinary = Ir1Op::ImportModule {
+            specifier: "pkg".into(),
+        };
+        assert_eq!(
+            serde_json::to_string(&ordinary).expect("serialize ordinary import op"),
+            r#"{"ImportModule":{"specifier":"pkg"}}"#
+        );
+        assert_eq!(
+            ordinary.canonical_value(),
+            CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("import_module")),
+                ("specifier", CanonicalValue::str("pkg")),
+            ])
+        );
+
+        let d800 = Ir1Op::ImportModule {
+            specifier: JsString::from_code_units(&[0xD800]),
+        };
+        let dc00 = Ir1Op::ImportModule {
+            specifier: JsString::from_code_units(&[0xDC00]),
+        };
+        let d800_json = serde_json::to_string(&d800).expect("serialize exact import op");
+        let dc00_json = serde_json::to_string(&dc00).expect("serialize exact import op");
+        assert_eq!(
+            d800_json,
+            r#"{"ImportModule":{"specifier":{"$wtf16":[55296]}}}"#
+        );
+        assert_eq!(
+            dc00_json,
+            r#"{"ImportModule":{"specifier":{"$wtf16":[56320]}}}"#
+        );
+        assert_ne!(d800_json, dc00_json);
+        assert_ne!(d800.canonical_value(), dc00.canonical_value());
+        assert_eq!(
+            serde_json::from_str::<Ir1Op>(&d800_json).expect("round-trip exact import op"),
+            d800
+        );
+        assert_eq!(
+            serde_json::from_str::<Ir1Op>(&dc00_json).expect("round-trip exact import op"),
+            dc00
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -4855,7 +4900,7 @@ mod tests {
     fn schema_version_current_value() {
         let v = IrSchemaVersion::CURRENT;
         assert_eq!(v.major, 0);
-        assert_eq!(v.minor, 2);
+        assert_eq!(v.minor, 3);
         assert_eq!(v.patch, 0);
     }
 
@@ -5693,22 +5738,24 @@ mod tests {
     }
 
     #[test]
-    fn verify_schema_version_accepts_old_minor_version() {
-        let old_minor = IrSchemaVersion {
-            major: IrSchemaVersion::CURRENT.major,
-            minor: IrSchemaVersion::CURRENT.minor.saturating_sub(1),
-            patch: 0,
-        };
+    fn verify_schema_version_accepts_historical_minor_versions_bd_lfq44() {
+        for minor in [1, 2] {
+            let header = IrHeader {
+                schema_version: IrSchemaVersion {
+                    major: IrSchemaVersion::CURRENT.major,
+                    minor,
+                    patch: u32::MAX,
+                },
+                level: IrLevel::Ir1,
+                source_hash: None,
+                source_label: "test".to_string(),
+            };
 
-        let header = IrHeader {
-            schema_version: old_minor,
-            level: IrLevel::Ir1,
-            source_hash: None,
-            source_label: "test".to_string(),
-        };
-
-        // Should pass - forward compatibility allows old minor versions
-        assert!(verify_schema_version(&header).is_ok());
+            assert!(
+                verify_schema_version(&header).is_ok(),
+                "engine 0.3 readers retain compatibility with 0.{minor} artifacts"
+            );
+        }
     }
 
     #[test]
@@ -5774,7 +5821,7 @@ mod tests {
 
         // Verify error message contains specific version numbers
         assert!(err.message.contains("99.88.77"));
-        assert!(err.message.contains("0.2.0")); // current version
+        assert!(err.message.contains("0.3.0")); // current version
 
         // Verify error can be displayed and contains IR level
         let display = err.to_string();

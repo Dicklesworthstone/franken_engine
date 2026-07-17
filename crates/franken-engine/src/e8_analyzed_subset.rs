@@ -828,7 +828,7 @@ mod tests {
             Ir1Op::ForOfInit,
             Ir1Op::ForOfNext { done_label: 0 },
             Ir1Op::ImportModule {
-                specifier: "m".to_string(),
+                specifier: "m".into(),
             },
             Ir1Op::ExportBinding {
                 name: "n".to_string(),

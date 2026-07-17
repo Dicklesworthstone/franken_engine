@@ -84,7 +84,7 @@ fn make_import(source: &str, binding: Option<&str>) -> Statement {
     };
     Statement::Import(ImportDeclaration {
         clause,
-        source: source.to_string(),
+        source: source.into(),
         binding: binding.map(|s| s.to_string()),
         span: span(),
     })
@@ -99,7 +99,7 @@ fn make_default_export(expr: Expression) -> Statement {
 
 fn make_named_export(clause: &str) -> Statement {
     Statement::Export(ExportDeclaration {
-        kind: ExportKind::NamedClause(clause.to_string()),
+        kind: ExportKind::NamedClause(clause.into()),
         span: span(),
     })
 }

@@ -100,7 +100,7 @@ fn enrichment_full_program_hash_deterministic_across_constructions() {
                         local: "React".to_string(),
                     },
                     binding: Some("React".to_string()),
-                    source: "react".to_string(),
+                    source: "react".into(),
                     span: span(0, 30),
                 }),
                 Statement::FunctionDeclaration(simple_func(
@@ -138,7 +138,7 @@ fn enrichment_different_import_sources_produce_different_hashes() {
                     local: "x".to_string(),
                 },
                 binding: Some("x".to_string()),
-                source: src.to_string(),
+                source: src.into(),
                 span: s0(),
             })],
         )
@@ -1005,7 +1005,7 @@ fn enrichment_constants_are_stable() {
     );
     assert_eq!(
         CANONICAL_AST_SCHEMA_VERSION,
-        "franken-engine.parser-ast.schema.v3"
+        "franken-engine.parser-ast.schema.v4"
     );
     assert_eq!(CANONICAL_AST_HASH_ALGORITHM, "sha256");
     assert_eq!(CANONICAL_AST_HASH_PREFIX, "sha256:");
@@ -1067,7 +1067,7 @@ fn enrichment_realistic_module_round_trip() {
                     local: "React".to_string(),
                 },
                 binding: Some("React".to_string()),
-                source: "react".to_string(),
+                source: "react".into(),
                 span: span(0, 28),
             }),
             // import { useState } from 'react';
@@ -1076,7 +1076,7 @@ fn enrichment_realistic_module_round_trip() {
                     local: "useState".to_string(),
                 },
                 binding: Some("useState".to_string()),
-                source: "react".to_string(),
+                source: "react".into(),
                 span: span(29, 60),
             }),
             // const [count, setCount] = useState(0);
@@ -1134,11 +1134,11 @@ fn enrichment_statement_span_returns_correct_for_all_18_variants() {
         Statement::Import(ImportDeclaration {
             clause: ImportClause::SideEffect,
             binding: None,
-            source: "m".to_string(),
+            source: "m".into(),
             span: target,
         }),
         Statement::Export(ExportDeclaration {
-            kind: ExportKind::NamedClause("x".to_string()),
+            kind: ExportKind::NamedClause("x".into()),
             span: target,
         }),
         Statement::VariableDeclaration(VariableDeclaration {
@@ -1244,11 +1244,11 @@ fn enrichment_all_18_statement_canonical_kinds_unique() {
         Statement::Import(ImportDeclaration {
             clause: ImportClause::SideEffect,
             binding: None,
-            source: "m".to_string(),
+            source: "m".into(),
             span: s0(),
         }),
         Statement::Export(ExportDeclaration {
-            kind: ExportKind::NamedClause("x".to_string()),
+            kind: ExportKind::NamedClause("x".into()),
             span: s0(),
         }),
         Statement::VariableDeclaration(VariableDeclaration {
@@ -1383,7 +1383,7 @@ fn enrichment_variable_declaration_kind_as_str() {
 fn enrichment_export_kind_default_vs_named_different_canonical() {
     use frankenengine_engine::deterministic_serde::CanonicalValue;
     let default = ExportKind::Default(id("x"));
-    let named = ExportKind::NamedClause("x".to_string());
+    let named = ExportKind::NamedClause("x".into());
     let cv1 = default.canonical_value();
     let cv2 = named.canonical_value();
     assert_ne!(cv1, cv2);
@@ -1695,7 +1695,7 @@ fn enrichment_syntax_tree_with_all_statement_types_round_trips() {
                     local: "x".to_string(),
                 },
                 binding: Some("x".to_string()),
-                source: "mod".to_string(),
+                source: "mod".into(),
                 span: s0(),
             }),
             var_stmt("y", Some(num(1))),

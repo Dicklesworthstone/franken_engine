@@ -529,13 +529,24 @@ const EXACT_MODULE_SOURCE_WIRE_KEY: &str = "$module_source";
 pub struct NamedExportClause {
     canonical_head: String,
     source: Option<JsString>,
+    historical_wire: Option<String>,
 }
 
 impl NamedExportClause {
     pub fn new(canonical_head: impl Into<String>, source: Option<JsString>) -> Self {
+        let canonical_head = canonical_head.into();
+        let historical_wire = match &source {
+            None => Some(canonical_head.clone()),
+            Some(source) => source.as_str().map(|source| {
+                let quoted = serde_json::to_string(source)
+                    .expect("serializing a valid UTF-8 module source should succeed");
+                format!("{canonical_head} from {quoted}")
+            }),
+        };
         Self {
-            canonical_head: canonical_head.into(),
+            canonical_head,
             source,
+            historical_wire,
         }
     }
 
@@ -548,14 +559,7 @@ impl NamedExportClause {
     }
 
     pub fn historical_wire_text(&self) -> Option<String> {
-        match &self.source {
-            None => Some(self.canonical_head.clone()),
-            Some(source) => source.as_str().map(|source| {
-                let quoted = serde_json::to_string(source)
-                    .expect("serializing a valid UTF-8 module source should succeed");
-                format!("{} from {quoted}", self.canonical_head)
-            }),
-        }
+        self.historical_wire.clone()
     }
 
     fn from_historical_text(text: String) -> Self {
@@ -563,11 +567,24 @@ impl NamedExportClause {
         while let Some(index) = text[..search_end].rfind(" from ") {
             let source_raw = &text[index + " from ".len()..];
             if let Some(source) = crate::parser::parse_quoted_string(source_raw) {
-                return Self::new(text[..index].to_string(), Some(source));
+                let canonical_head = text[..index].to_string();
+                return if source.is_well_formed() {
+                    Self {
+                        canonical_head,
+                        source: Some(source),
+                        historical_wire: Some(text),
+                    }
+                } else {
+                    Self::new(canonical_head, Some(source))
+                };
             }
             search_end = index;
         }
-        Self::new(text, None)
+        Self {
+            canonical_head: text.clone(),
+            source: None,
+            historical_wire: Some(text),
+        }
     }
 
     pub fn canonical_value(&self) -> CanonicalValue {
@@ -2813,6 +2830,15 @@ mod tests {
             serde_json::from_str(historical).expect("deserialize historical re-export");
         assert_eq!(restored, re_export);
         assert_eq!(restored.canonical_value(), re_export.canonical_value());
+
+        let single_quoted = r#"{"NamedClause":"{ x } from 'pkg'"}"#;
+        let restored: ExportKind = serde_json::from_str(single_quoted)
+            .expect("deserialize historical single-quoted re-export");
+        assert_eq!(
+            serde_json::to_string(&restored).unwrap(),
+            single_quoted,
+            "historical scalar wire bytes must survive a read/write cycle"
+        );
     }
 
     #[test]
@@ -2861,6 +2887,17 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<ExportKind>(&dc00_json).expect("deserialize DC00 re-export"),
             dc00
+        );
+
+        let historical_scalar = r#"{"NamedClause":"{ x } from \"\\uD800\""}"#;
+        assert_eq!(
+            serde_json::to_string(
+                &serde_json::from_str::<ExportKind>(historical_scalar)
+                    .expect("read an exact source from the historical scalar envelope"),
+            )
+            .expect("canonicalize the exact historical source"),
+            d800_json,
+            "exact sources have one canonical tagged wire form"
         );
     }
 

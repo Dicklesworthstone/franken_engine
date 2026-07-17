@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::{
     BindingPattern, ExportDeclaration, ExportKind, Expression, ExpressionStatement, ImportClause,
-    ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree, VariableDeclaration,
-    VariableDeclarationKind, VariableDeclarator,
+    ImportDeclaration, NamedExportClause, ParseGoal, SourceSpan, Statement, SyntaxTree,
+    VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
 };
 use crate::js_string::JsString;
 
@@ -210,7 +210,7 @@ impl std::error::Error for ArenaError {}
 pub enum ArenaNode {
     Import {
         binding: Option<String>,
-        source: String,
+        source: JsString,
         span: SpanHandle,
     },
     ExportDefault {
@@ -218,7 +218,7 @@ pub enum ArenaNode {
         span: SpanHandle,
     },
     ExportNamedClause {
-        clause: String,
+        clause: NamedExportClause,
         span: SpanHandle,
     },
     ExpressionStatement {
@@ -459,7 +459,7 @@ impl ParserArena {
             Statement::Import(import) => {
                 let span = self.alloc_span(&import.span)?;
                 self.charge_bytes(NODE_BASE_ESTIMATED_BYTES)?;
-                self.charge_bytes(string_bytes(&import.source))?;
+                self.charge_bytes(js_string_bytes(&import.source))?;
                 for binding in import.clause.binding_names() {
                     self.charge_bytes(string_bytes(binding))?;
                 }
@@ -478,7 +478,13 @@ impl ParserArena {
                         ArenaNode::ExportDefault { expression, span }
                     }
                     ExportKind::NamedClause(clause) => {
-                        self.charge_bytes(string_bytes(clause))?;
+                        self.charge_bytes(string_bytes(clause.canonical_head()))?;
+                        if let Some(source) = clause.source() {
+                            self.charge_bytes(js_string_bytes(source))?;
+                        }
+                        if let Some(historical_wire) = clause.historical_wire() {
+                            self.charge_bytes(string_bytes(historical_wire))?;
+                        }
                         ArenaNode::ExportNamedClause {
                             clause: clause.clone(),
                             span,
@@ -917,18 +923,25 @@ fn expression_kind_name(expression: &Expression) -> &'static str {
     }
 }
 
+fn module_source_audit_descriptor(source: &JsString) -> String {
+    serde_json::to_string(source).expect("JsString audit serialization should be infallible")
+}
+
 fn node_audit_descriptor(node: &ArenaNode) -> String {
     match node {
         ArenaNode::Import {
             binding,
             source,
             span,
-        } => format!(
-            "import binding={} source={} span={}",
-            binding.as_deref().unwrap_or("_"),
-            source,
-            span.index()
-        ),
+        } => {
+            let source = module_source_audit_descriptor(source);
+            format!(
+                "import binding={} source={} span={}",
+                binding.as_deref().unwrap_or("_"),
+                source,
+                span.index()
+            )
+        }
         ArenaNode::ExportDefault { expression, span } => {
             format!(
                 "export_default expr={} span={}",
@@ -937,7 +950,9 @@ fn node_audit_descriptor(node: &ArenaNode) -> String {
             )
         }
         ArenaNode::ExportNamedClause { clause, span } => {
-            format!("export_named clause={} span={}", clause, span.index())
+            let clause = serde_json::to_string(clause)
+                .expect("named-export audit serialization should be infallible");
+            format!("export_named clause={clause} span={}", span.index())
         }
         ArenaNode::ExpressionStatement { expression, span } => {
             format!(
@@ -1023,7 +1038,7 @@ mod tests {
                     local: "foo".to_string(),
                 },
                 binding: Some("foo".to_string()),
-                source: "./foo.js".to_string(),
+                source: "./foo.js".into(),
                 span: test_span(),
             })],
             span: test_span(),
@@ -1045,7 +1060,7 @@ mod tests {
         SyntaxTree {
             goal: ParseGoal::Module,
             body: vec![Statement::Export(ExportDeclaration {
-                kind: ExportKind::NamedClause("{ baz }".to_string()),
+                kind: ExportKind::NamedClause("{ baz }".into()),
                 span: test_span(),
             })],
             span: test_span(),
@@ -1683,7 +1698,7 @@ mod tests {
     fn node_audit_descriptor_import() {
         let node = ArenaNode::Import {
             binding: Some("foo".to_string()),
-            source: "./bar.js".to_string(),
+            source: "./bar.js".into(),
             span: SpanHandle::new(0),
         };
         let desc = node_audit_descriptor(&node);
@@ -1696,7 +1711,7 @@ mod tests {
     fn node_audit_descriptor_import_no_binding() {
         let node = ArenaNode::Import {
             binding: None,
-            source: "./side.js".to_string(),
+            source: "./side.js".into(),
             span: SpanHandle::new(0),
         };
         let desc = node_audit_descriptor(&node);
@@ -1717,12 +1732,66 @@ mod tests {
     #[test]
     fn node_audit_descriptor_export_named() {
         let node = ArenaNode::ExportNamedClause {
-            clause: "{ x, y }".to_string(),
+            clause: "{ x, y }".into(),
             span: SpanHandle::new(0),
         };
         let desc = node_audit_descriptor(&node);
         assert!(desc.contains("export_named"));
         assert!(desc.contains("{ x, y }"));
+    }
+
+    #[test]
+    fn node_audit_descriptors_distinguish_exact_module_sources_bd_lfq44() {
+        let import_d800 = ArenaNode::Import {
+            binding: None,
+            source: JsString::from_code_units(&[0xD800]),
+            span: SpanHandle::new(0),
+        };
+        let import_dc00 = ArenaNode::Import {
+            binding: None,
+            source: JsString::from_code_units(&[0xDC00]),
+            span: SpanHandle::new(0),
+        };
+        let import_d800_desc = node_audit_descriptor(&import_d800);
+        let import_dc00_desc = node_audit_descriptor(&import_dc00);
+        assert!(import_d800_desc.contains(r#"{"$wtf16":[55296]}"#));
+        assert!(import_dc00_desc.contains(r#"{"$wtf16":[56320]}"#));
+        assert_ne!(import_d800_desc, import_dc00_desc);
+
+        let ordinary_import = ArenaNode::Import {
+            binding: None,
+            source: JsString::from("exact_utf16=d800"),
+            span: SpanHandle::new(0),
+        };
+        assert_ne!(
+            node_audit_descriptor(&ordinary_import),
+            import_d800_desc,
+            "ordinary text cannot alias the exact-source descriptor"
+        );
+
+        let export_d800 = ArenaNode::ExportNamedClause {
+            clause: NamedExportClause::new("{ value }", Some(JsString::from_code_units(&[0xD800]))),
+            span: SpanHandle::new(0),
+        };
+        let export_dc00 = ArenaNode::ExportNamedClause {
+            clause: NamedExportClause::new("{ value }", Some(JsString::from_code_units(&[0xDC00]))),
+            span: SpanHandle::new(0),
+        };
+        let export_d800_desc = node_audit_descriptor(&export_d800);
+        let export_dc00_desc = node_audit_descriptor(&export_dc00);
+        assert!(export_d800_desc.contains(r#"{"$wtf16":[55296]}"#));
+        assert!(export_dc00_desc.contains(r#"{"$wtf16":[56320]}"#));
+        assert_ne!(export_d800_desc, export_dc00_desc);
+
+        let ordinary_export = ArenaNode::ExportNamedClause {
+            clause: "{ value } from exact_utf16=d800".into(),
+            span: SpanHandle::new(0),
+        };
+        assert_ne!(
+            node_audit_descriptor(&ordinary_export),
+            export_d800_desc,
+            "historical scalar clauses cannot alias the exact-source descriptor"
+        );
     }
 
     #[test]
@@ -1815,6 +1884,32 @@ mod tests {
     }
 
     #[test]
+    fn named_export_arena_bytes_include_owned_historical_wire_bd_lfq44() {
+        let tree = |head: String| SyntaxTree {
+            goal: ParseGoal::Module,
+            body: vec![Statement::Export(ExportDeclaration {
+                kind: ExportKind::NamedClause(NamedExportClause::new(head, None)),
+                span: test_span(),
+            })],
+            span: test_span(),
+        };
+        let short_len = 16usize;
+        let long_len = 1_016usize;
+        let short =
+            ParserArena::from_syntax_tree(&tree("x".repeat(short_len)), ArenaBudget::default())
+                .expect("short historical clause should fit");
+        let long =
+            ParserArena::from_syntax_tree(&tree("x".repeat(long_len)), ArenaBudget::default())
+                .expect("long historical clause should fit");
+
+        assert_eq!(
+            long.bytes_used() - short.bytes_used(),
+            u64::try_from(2 * (long_len - short_len)).unwrap(),
+            "both the canonical head and its owned historical wire are retained"
+        );
+    }
+
+    #[test]
     fn usize_to_index_valid() {
         assert_eq!(
             usize_to_index(0, ArenaBudgetKind::Nodes)
@@ -1866,7 +1961,7 @@ mod tests {
                         local: "fs".to_string(),
                     },
                     binding: Some("fs".to_string()),
-                    source: "node:fs".to_string(),
+                    source: "node:fs".into(),
                     span: test_span(),
                 }),
                 Statement::Export(ExportDeclaration {
@@ -1896,7 +1991,7 @@ mod tests {
             body: vec![Statement::Import(ImportDeclaration {
                 clause: ImportClause::SideEffect,
                 binding: None,
-                source: "./side-effects.js".to_string(),
+                source: "./side-effects.js".into(),
                 span: test_span(),
             })],
             span: test_span(),
@@ -1907,6 +2002,38 @@ mod tests {
             .to_syntax_tree()
             .expect("operation should succeed for valid inputs");
         assert_eq!(recovered, tree);
+    }
+
+    #[test]
+    fn exact_module_sources_roundtrip_without_key_aliasing_bd_lfq44() {
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let dc00 = JsString::from_code_units(&[0xDC00]);
+        let tree = SyntaxTree {
+            goal: ParseGoal::Module,
+            body: vec![
+                Statement::Import(ImportDeclaration {
+                    clause: ImportClause::SideEffect,
+                    binding: None,
+                    source: d800.clone(),
+                    span: test_span(),
+                }),
+                Statement::Export(ExportDeclaration {
+                    kind: ExportKind::NamedClause(NamedExportClause::new(
+                        "{ value }",
+                        Some(dc00.clone()),
+                    )),
+                    span: test_span(),
+                }),
+            ],
+            span: test_span(),
+        };
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
+            .expect("exact module metadata should fit the parser arena");
+        let recovered = arena
+            .to_syntax_tree()
+            .expect("exact module metadata should materialize");
+        assert_eq!(recovered, tree);
+        assert_ne!(d800, dc00);
     }
 
     #[test]

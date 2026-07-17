@@ -166,11 +166,22 @@ fn golden_version_v1_nonempty_fields() {
 #[test]
 fn golden_version_current_check_against_live_no_mismatches() {
     let golden = GoldenVersionVector::current();
+    assert_eq!(golden, GoldenVersionVector::v4());
+    assert_eq!(golden.ast_schema, "franken-engine.parser-ast.schema.v4");
     let mismatches = golden.check_against_live();
     assert!(
         mismatches.is_empty(),
         "golden version mismatches: {mismatches:?}"
     );
+}
+
+#[test]
+fn golden_version_v3_remains_historical_after_module_source_bump_bd_lfq44() {
+    let mismatches = GoldenVersionVector::v3().check_against_live();
+    assert_eq!(mismatches.len(), 1);
+    assert_eq!(mismatches[0].0, "ast_schema");
+    assert_eq!(mismatches[0].1, "franken-engine.parser-ast.schema.v3");
+    assert_eq!(mismatches[0].2, "franken-engine.parser-ast.schema.v4");
 }
 
 #[test]

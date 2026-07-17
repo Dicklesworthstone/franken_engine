@@ -422,9 +422,10 @@
       "engine_export_present": true,
       "file_relation": "different",
       "owner_rationale": "IR contract is central to parser/lowering/runtime compatibility and needs explicit parity.",
-      "test_expectation": "Core now carries IR schema 0.3.0 with the additive Ir1Op and Ir3Instruction CopyDataProperties variants from bd-f1ixz; the separately owned engine mirror remains at schema 0.2.0 without those variants. Future parity work must reconcile the versioned wire, lowering, and execution behavior before ownership or graduation status changes.",
+      "test_expectation": "Core now carries IR schema 0.4.0 and the engine mirror carries schema 0.3.0 after bd-lfq44 exact module-specifier carriers. The engine mirror still lacks the additive Ir1Op and Ir3Instruction CopyDataProperties variants from bd-f1ixz. Future parity work must reconcile the versioned wire, lowering, and execution behavior before ownership or graduation status changes.",
       "known_beads": [
-        "bd-f1ixz"
+        "bd-f1ixz",
+        "bd-lfq44"
       ]
     },
     {

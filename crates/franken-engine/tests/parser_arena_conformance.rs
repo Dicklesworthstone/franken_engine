@@ -71,7 +71,7 @@ fn module_import_default(source: &'static str, local: &str, module: &str) -> Sta
             local: local.to_string(),
         },
         binding: Some(local.to_string()),
-        source: module.to_string(),
+        source: module.into(),
         span: span_for(source),
     })
 }
@@ -80,7 +80,7 @@ fn module_import_side_effect(source: &'static str, module: &str) -> Statement {
     Statement::Import(ImportDeclaration {
         clause: ImportClause::SideEffect,
         binding: None,
-        source: module.to_string(),
+        source: module.into(),
         span: span_for(source),
     })
 }
@@ -94,7 +94,7 @@ fn module_export_default(source: &'static str, expression: Expression) -> Statem
 
 fn module_export_named(source: &'static str, clause: &str) -> Statement {
     Statement::Export(ExportDeclaration {
-        kind: ExportKind::NamedClause(clause.to_string()),
+        kind: ExportKind::NamedClause(clause.into()),
         span: span_for(source),
     })
 }

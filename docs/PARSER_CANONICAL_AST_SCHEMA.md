@@ -93,8 +93,9 @@ string representation.
 
 The historical engine v1 vector remains available for artifact identification;
 `GoldenVersionVector::v2()` records this exact-string checkpoint. The later
-EOF-coordinate migration makes `v3()` the live vector while preserving v2 for
-historical identification. The pinned v2 `D800` syntax-tree vector is:
+EOF-coordinate migration is recorded by `v3()`, and the exact module-source
+migration makes `v4()` live while preserving both historical vectors. The
+pinned v2 `D800` syntax-tree vector is:
 
 `sha256:2d2912b4ee4142810f692d25a6f154e758dccf2aeb9926f5abebab7f5d63773a`
 
@@ -156,10 +157,10 @@ This migration changes values, not shape. The AST contract version, serde
 representation, canonical map keys, SHA-256 algorithm, and hash prefix remain
 unchanged. Historical AST JSON with `end_column: 1` therefore remains readable
 and reproduces its historical hash. Engine `GoldenVersionVector::v1()` and
-`v2()` remain available for artifact identification; `v3()` and `current()`
-bind live checks to the corrected coordinate semantics. Consumers must never
-compare canonical hashes across AST schema versions without an explicit
-migration.
+`v2()` remain available for artifact identification; `v3()` records the
+corrected coordinate checkpoint. The later module-source `v4()` vector and
+`current()` carry those same coordinate semantics. Consumers must never compare
+canonical hashes across AST schema versions without an explicit migration.
 
 Source-backed Parse Event IR readers retain a narrow historical path for the
 pre-migration defect. They accept an old stream only when its terminal event
@@ -169,28 +170,64 @@ tree. Any additional span or hash drift still fails closed. No Parse Event IR
 or materializer wire version changes because this compatibility path adds no
 serialized field.
 
+## Exact Module-Source Metadata Migration
+
+`bd-lfq44` advances the compatibility engine AST schema from v3 to
+`franken-engine.parser-ast.schema.v4` and the native core AST schema from v4 to
+`franken-engine.parser-ast.schema.v5`. The contract version, canonical map
+ordering, hash algorithm, and hash prefix remain unchanged.
+
+`ImportDeclaration::source` now uses `JsString` in both AST seams. A
+well-formed module source retains the historical plain JSON string and
+`CanonicalValue::String` leaf. A source containing a lone surrogate uses the
+same exact `{"$wtf16":[...]}` representation as an exact expression literal.
+The corresponding IR1 `ImportModule::specifier` carrier advances the engine IR
+schema from `0.2.0` to `0.3.0` and the core IR schema from `0.3.0` to `0.4.0`.
+
+Named re-exports now store a `NamedExportClause` with a UTF-8 canonical binding
+head and an optional exact `JsString` source. Source-free and well-formed
+clauses serialize exactly as their historical scalar payload, including
+`{"NamedClause":"{ x } from \"pkg\""}`. A non-well-formed source uses:
+
+```json
+{"NamedClause":{"$module_source":{"canonical_head":"{ x }","source":{"$wtf16":[55296]}}}}
+```
+
+The `$module_source` form is invalid for a well-formed source, preventing two
+wire encodings for the same value. Historical scalar clauses remain readable;
+their optional source is recovered only when the rightmost ` from ` suffix is
+one complete quoted module string. This preserves legal IdentifierName uses
+such as `export { from } from "pkg"`.
+
+These carrier changes leave canonical bytes and hashes for ordinary existing
+trees unchanged. They make exact module-source trees injective: `D800` and
+`DC00` differ in serde, canonical values, IR1, and IR3 constant-pool keys.
+Runtime execution retains that exact value until the explicit UTF-8 filesystem
+path boundary, where a non-well-formed value is rejected without a lossy
+lookup.
+
 ## Compatibility Checks
 
 Pinned by tests:
 
 - [`crates/franken-engine/tests/parser_trait_ast.rs`](../crates/franken-engine/tests/parser_trait_ast.rs)
   - contract constants/accessors are stable
-  - live schema-v3 hash vectors:
+  - live schema-v4 hash vectors (ordinary canonical bytes carried forward):
     - `-7` (script) -> `sha256:8fbc2bb1f3f8fbf7c6e7fc08a89dc768a0ac973390555ecae9b215d442e604c7`
     - `import dep from "pkg"` (module) -> `sha256:58af3ebe9640c16302cc30b9ac25be14d592d62ffd33595310a2cacf0a7c11be`
     - `export default true` (module) -> `sha256:3165b53e61ee5a66ab81a15b52e6ff84ebd4de83501dbb6e64629dbefe294b36`
   - the corresponding schema-v2 hashes remain asserted after reconstructing
     the historical root column, including a serde reader round-trip
 - [`crates/franken-engine/tests/ast_integration.rs`](../crates/franken-engine/tests/ast_integration.rs)
-  - engine v3 contract constants/accessors and hash prefix checks
+  - engine v4 contract constants/accessors and hash prefix checks
   - exact `D800` serde, canonical-value, and pinned hash checks
 - [`crates/franken-engine/src/parser_arena.rs`](../crates/franken-engine/src/parser_arena.rs)
   - exact string-literal arena round-trip without UTF-8 projection
 - [`crates/franken-core/src/ast.rs`](../crates/franken-core/src/ast.rs)
-  - core v4 carries forward the v3 lone-surrogate string-literal vector
+  - core v5 carries forward the v3 lone-surrogate string-literal vector
     (`D800`) ->
     `sha256:2d2912b4ee4142810f692d25a6f154e758dccf2aeb9926f5abebab7f5d63773a`
-  - core v4 carries forward the v3 Annex-B for-in vector ->
+  - core v5 carries forward the v3 Annex-B for-in vector ->
     `sha256:166c2e3ca50abc0b25c83ce8cfefb4be4a7eac33e7337809f1594e22ff9fe963`
 
 ## Replay Commands

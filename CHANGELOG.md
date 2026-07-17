@@ -10,6 +10,37 @@ The first conventional release, `v0.1.0`, was published on 2026-05-29. Current `
 
 ---
 
+## Post-Snapshot Update — Exact Module-Source Metadata (2026-07-17)
+
+`bd-lfq44` closes the remaining UTF-8 projection in parsed ECMAScript module
+sources. Imports and named re-exports now retain exact `JsString` code units
+through parser AST metadata, the engine parser arena, IR1, and IR3 constant
+pools. A source containing `\uD800` therefore remains distinct from one
+containing `\uDC00`; neither can silently alias through a replacement-character
+projection during module lookup.
+
+- The compatibility engine AST schema advances from v3 to v4 and its IR schema
+  from `0.2.0` to `0.3.0`. The native core AST advances from v4 to v5 and its IR
+  schema from `0.3.0` to `0.4.0`. Both Cargo packages remain on the unreleased
+  `0.2.0` compatibility-staging line.
+- `ImportDeclaration::source` and `Ir1Op::ImportModule::specifier` use
+  `JsString`. Ordinary well-formed values keep their historical plain-string
+  serde and canonical bytes; exact values use the established `$wtf16` unit
+  representation.
+- Named exports separate their canonical binding head from an optional exact
+  module source. Source-free and well-formed clauses retain the historical
+  scalar `NamedClause` payload. Only a non-well-formed source uses the
+  namespaced `$module_source` payload, and readers reject that tagged form for
+  well-formed content so the wire has one canonical encoding.
+- Runtime import dispatch carries the exact value to the existing filesystem
+  conversion seam. A non-well-formed value is rejected there before path or
+  cache lookup; the independent string-based resolver/ESM graph APIs are not
+  reinterpreted or widened by this parser-path checkpoint.
+- Current readers retain same-major historical AST/IR inputs. Existing
+  well-formed parser hashes and phase0 semantic artifacts remain unchanged;
+  only schema identifiers, compatibility vectors, and IR-header snapshots
+  advance.
+
 ## Post-Snapshot Update — Parser EOF Coordinate Schema (2026-07-17)
 
 `bd-4tt6s` corrects the canonical `SyntaxTree` root span in both parser seams.
@@ -65,9 +96,9 @@ execution. Ordinary well-formed strings retain their historical JSON and
 canonical leaf shape; lone units use the tagged `$wtf16` representation and
 remain distinct through an end-to-end source parse, lower, and execute cycle.
 
-Module-specifier metadata remains a separate UTF-8-only boundary tracked by
-`bd-lfq44`, while contextual legacy decimal escapes remain tracked by
-`bd-xcqzp`. This schema landing creates no tag or release.
+The later `bd-lfq44` checkpoint above completes exact module-specifier metadata
+through the compiled parser/lowering path. Contextual legacy decimal escapes
+remain tracked by `bd-xcqzp`. Neither schema landing creates a tag or release.
 
 ### Core `CopyDataProperties` IR schema slice (`bd-f1ixz`)
 

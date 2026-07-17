@@ -40,7 +40,7 @@ fn fixture_tree() -> SyntaxTree {
                     local: "alpha".to_string(),
                 },
                 binding: Some("alpha".to_string()),
-                source: "./dep.mjs".to_string(),
+                source: "./dep.mjs".into(),
                 span: span(0, 24, 1, 1),
             }),
             Statement::Expression(ExpressionStatement {
@@ -50,7 +50,7 @@ fn fixture_tree() -> SyntaxTree {
                 span: span(25, 37, 2, 1),
             }),
             Statement::Export(ExportDeclaration {
-                kind: ExportKind::NamedClause("alpha".to_string()),
+                kind: ExportKind::NamedClause("alpha".into()),
                 span: span(38, 55, 3, 1),
             }),
         ],
@@ -650,7 +650,7 @@ fn arena_import_without_binding_roundtrip() {
         body: vec![Statement::Import(ImportDeclaration {
             clause: ImportClause::SideEffect,
             binding: None,
-            source: "./side-effect.js".to_string(),
+            source: "./side-effect.js".into(),
             span: span(0, 30, 1, 1),
         })],
         span: span(0, 30, 1, 1),

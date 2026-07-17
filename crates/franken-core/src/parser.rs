@@ -5817,6 +5817,15 @@ fn parse_statement_inner(
         ));
     }
 
+    if starts_with_keyword(statement, "else") {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "else clause requires a matching if statement",
+            context.source_label.to_string(),
+            Some(span),
+        ));
+    }
+
     // Control flow statement dispatch
     if statement.starts_with("if ") || statement.starts_with("if(") {
         return self::parse_if_statement(statement, goal, span, context);
@@ -16557,6 +16566,60 @@ mod tests {
                 "invalid outer-do handler ownership must fail closed: {invalid:?}"
             );
         }
+    }
+
+    #[test]
+    fn unmatched_second_else_fails_closed_bd_9fakj() {
+        let parser = CanonicalEs2020Parser;
+        let second_else = "do if (q) do x()\nwhile (a)\nelse y()\nwhile (b)\nelse z();";
+        let logical_lines = merge_logical_lines(second_else);
+        assert_eq!(
+            logical_lines.len(),
+            2,
+            "the completed outer do must retire every dangling-if owner"
+        );
+        assert_eq!(split_statement_segments(second_else).len(), 2);
+        let error = parser
+            .parse(second_else, ParseGoal::Script)
+            .expect_err("a second else has no matching if statement");
+        assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
+        assert!(error.message.contains("matching if statement"));
+
+        for invalid in [
+            "else fallback();",
+            "else;",
+            "else();",
+            "else.foo;",
+            "else if (q) x();",
+            "if (q) x(); else y(); else z();",
+            "if (q) x(); next(); else z();",
+            "do if (q) x(); else y(); while (false); else z();",
+            "/* gap */\u{feff}else fallback();",
+        ] {
+            assert!(
+                parser.parse(invalid, ParseGoal::Script).is_err(),
+                "an unmatched else must fail closed: {invalid:?}"
+            );
+        }
+
+        for valid in [
+            "if (q) x(); else y();",
+            "if (q) if (r) x(); else y();",
+            "if (q) x(); else if (r) y(); else z();",
+            "do if (q) do x()\nwhile (a)\nelse y()\nwhile (b);",
+        ] {
+            parser
+                .parse(valid, ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("valid dangling-else binding failed: {error:?}"));
+        }
+
+        let keyword_boundaries = parser
+            .parse(
+                r#"elsewhere(); else$foo(); elseπ(); else\u0066oo(); object.else(); object["else"];"#,
+                ParseGoal::Script,
+            )
+            .expect("identifiers and member names containing else remain ordinary expressions");
+        assert_eq!(keyword_boundaries.body.len(), 6);
     }
 
     #[test]

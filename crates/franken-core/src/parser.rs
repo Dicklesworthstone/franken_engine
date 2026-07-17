@@ -10092,10 +10092,19 @@ fn try_parse_binary(
     let mut best_pos: usize = 0;
     let mut best_len: usize = 0;
     let mut skip_until = 0usize;
+    let mut saw_nullish_coalescing = false;
+    let mut saw_logical_operator = false;
+    let mut saw_disallowed_mixture = false;
     let grammar_context = ScanGrammarContext::from_execution_context(context).expression();
     let complete =
-        scan_binding_pattern_source_with_context(expr, grammar_context, |i, _ch, depth, quoted| {
+        scan_binding_pattern_source_with_context(expr, grammar_context, |i, ch, depth, quoted| {
             if quoted || depth != 0 || i < skip_until {
+                return;
+            }
+            if ch == ',' {
+                saw_disallowed_mixture |= saw_nullish_coalescing && saw_logical_operator;
+                saw_nullish_coalescing = false;
+                saw_logical_operator = false;
                 return;
             }
             let Some((op, len)) = match_binary_operator_at(bytes, i) else {
@@ -10106,6 +10115,13 @@ fn try_parse_binary(
             if generator_function_marker {
                 skip_until = i.saturating_add(len);
                 return;
+            }
+            match op {
+                BinaryOperator::NullishCoalescing => saw_nullish_coalescing = true,
+                BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr => {
+                    saw_logical_operator = true;
+                }
+                _ => {}
             }
             // For the same precedence, prefer the rightmost for right-associative,
             // leftmost for left-associative.
@@ -10150,6 +10166,14 @@ fn try_parse_binary(
         return Some(Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "lexically incomplete expression while scanning binary operators",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )));
+    }
+    if saw_disallowed_mixture || (saw_nullish_coalescing && saw_logical_operator) {
+        return Some(Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "unparenthesized `??` cannot be mixed with `&&` or `||`",
             context.source_label.to_string(),
             Some(span.clone()),
         )));
@@ -20940,6 +20964,116 @@ strict"; var static = 1; }"#,
             }
             other => panic!("expected Binary, got {other:?}"),
         }
+    }
+
+    // Donor parity for bd-fbexl was checked against Node 20.19.4 and Bun
+    // 1.3.14: both reject the unparenthesized mixtures below and accept the
+    // corresponding parenthesized, assignment-boundary, and optional-chain
+    // forms. Keep the matrix local to the parser regression so precedence
+    // changes cannot silently re-admit the early-error cases.
+    #[test]
+    fn nullish_and_logical_mixtures_require_parentheses_bd_fbexl() {
+        let parser = CanonicalEs2020Parser;
+
+        for source in [
+            "a ?? b || c;",
+            "a || b ?? c;",
+            "a ?? b && c;",
+            "a && b ?? c;",
+            "a ?? b || c && d;",
+            "(a ?? b || c);",
+            "call(a ?? b || c);",
+            "[a && b ?? c];",
+            "({ value: a ?? b || c });",
+            "a ? b ?? c || d : e;",
+            "target = a && b ?? c;",
+            "x => a ?? b || c;",
+            "`${a ?? b || c}`;",
+            "a ?? /* gap */ b || c;",
+            "a ?? b\n|| c;",
+            "obj?.value ?? fallback || other;",
+            "if (a ?? b || c) run();",
+            "while (a && b ?? c) run();",
+            "for (; a ?? b || c; ) run();",
+            "a ?? b || c, d;",
+            "a, b && c ?? d;",
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("unparenthesized mixtures must be syntax errors");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+            assert!(
+                error.message.contains("cannot be mixed"),
+                "unexpected error for {source:?}: {error:?}"
+            );
+        }
+
+        for source in [
+            "(a ?? b) || c;",
+            "a ?? (b || c);",
+            "(a && b) ?? c;",
+            "a && (b ?? c);",
+            "a ?? b ?? c;",
+            "a && b || c;",
+            "obj?.value ?? fallback;",
+            "a ??= b || c;",
+            "a ||= b ?? c;",
+            "call((a ?? b) || c);",
+            "`${(a ?? b) || c}`;",
+            "(a ?? b)\n|| c;",
+            "a ?? b ? c || d : e && f;",
+            "if ((a ?? b) || c) run();",
+            "while (a && (b ?? c)) run();",
+            "for (; a ?? (b || c); ) run();",
+            "a ?? b, c || d;",
+            "(a && b, c ?? d);",
+            "for (a ?? b, c || d;;) run();",
+        ] {
+            parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|error| {
+                    panic!("valid grouped expression failed: {source:?}: {error:?}")
+                });
+        }
+
+        for source in [
+            "a ?? b ||",
+            "a ?? /* gap */ || c",
+            "a ?? (b || c",
+            "call(a && b ??)",
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("malformed mixtures must remain syntax errors");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+        }
+
+        let left_grouped = parse_script("(a ?? b) || c;");
+        assert!(matches!(
+            first_expr(&left_grouped),
+            Expression::Binary {
+                operator: BinaryOperator::LogicalOr,
+                left,
+                right,
+            } if matches!(left.as_ref(), Expression::Binary {
+                operator: BinaryOperator::NullishCoalescing,
+                ..
+            }) && matches!(right.as_ref(), Expression::Identifier(name) if name == "c")
+        ));
+
+        let right_grouped = parse_script("a ?? (b || c);");
+        assert!(matches!(
+            first_expr(&right_grouped),
+            Expression::Binary {
+                operator: BinaryOperator::NullishCoalescing,
+                left,
+                right,
+            } if matches!(left.as_ref(), Expression::Identifier(name) if name == "a")
+                && matches!(right.as_ref(), Expression::Binary {
+                    operator: BinaryOperator::LogicalOr,
+                    ..
+                })
+        ));
     }
 
     #[test]

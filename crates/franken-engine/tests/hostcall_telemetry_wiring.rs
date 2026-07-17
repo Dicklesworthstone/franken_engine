@@ -271,7 +271,7 @@ fn require_failure_emits_deterministic_module_load_record() {
     let (first_error, first_records) = run_once();
     assert!(matches!(
         first_error,
-        InterpreterError::RequireSpecifierNotString { got } if got == "number"
+        InterpreterError::RequireSpecifierNotString { ref got } if got == "number"
     ));
     let require_records = first_records
         .iter()

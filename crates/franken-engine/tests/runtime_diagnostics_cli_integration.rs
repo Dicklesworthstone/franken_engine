@@ -36,7 +36,7 @@ use frankenengine_engine::expected_loss_selector::ContainmentAction;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::hostcall_telemetry::{
     FlowLabel, HostcallResult, HostcallType, RecordInput, RecorderConfig, ResourceDelta,
-    TelemetryRecorder,
+    TelemetryDropCounts, TelemetryRecorder,
 };
 use frankenengine_engine::runtime_diagnostics_cli::*;
 use frankenengine_engine::security_epoch::SecurityEpoch;

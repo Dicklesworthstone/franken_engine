@@ -877,6 +877,12 @@ fn lower_ir0_to_ir1_with_ambient_grant(
     for alias in confirmed_os_module_aliases(&ir0.tree.body, &binding_lookup) {
         binding_lookup.insert(os_module_alias_sentinel(&alias), 0);
     }
+    // bd-fdqd4: usage-gated pure-compute `zlib` bindings. Supported
+    // compression/decompression calls and `zlib.constants` lower to builtin
+    // hostcalls; unsupported/bare aliases retain the ambient require denial.
+    for alias in confirmed_zlib_module_aliases(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(zlib_module_alias_sentinel(&alias), 0);
+    }
     // bd-suwvw: same usage-gated sentinel recording for `require('timers')`
     // (member calls lower to the SAME `builtin:SetTimeout`/… hostcalls as the
     // bare globals; member reads lower to the like-named injected runtime
@@ -2098,6 +2104,7 @@ fn reserve_and_mark_source_scope_bindings(
     }
     suppress_stream_module_sentinels(binding_lookup, &lexical_names);
     suppress_net_module_sentinels(binding_lookup, &lexical_names);
+    suppress_zlib_module_sentinels(binding_lookup, &lexical_names);
     for name in reserve_root_scope_bindings(statements, binding_lookup, binding_index) {
         binding_lookup.insert(lexical_binding_sentinel(&name), 0);
         let binding_id = *binding_lookup
@@ -2115,6 +2122,7 @@ fn mark_pre_reserved_source_scope_bindings(
     let reserved = reserve_root_scope_bindings(statements, binding_lookup, binding_index);
     suppress_stream_module_sentinels(binding_lookup, &reserved);
     suppress_net_module_sentinels(binding_lookup, &reserved);
+    suppress_zlib_module_sentinels(binding_lookup, &reserved);
     for name in reserved {
         binding_lookup.insert(lexical_binding_sentinel(&name), 0);
         let binding_id = *binding_lookup
@@ -2353,6 +2361,7 @@ fn prepare_function_body_bindings(
     for name in &local_names {
         suppress_stream_module_sentinel(body_lookup, name);
         suppress_net_module_sentinel(body_lookup, name);
+        suppress_zlib_module_sentinel(body_lookup, name);
     }
     for name in &local_names {
         body_lookup.insert(lexical_binding_sentinel(name), 0);
@@ -2363,6 +2372,7 @@ fn prepare_function_body_bindings(
     if let Some(name) = self_name {
         suppress_stream_module_sentinel(body_lookup, name);
         suppress_net_module_sentinel(body_lookup, name);
+        suppress_zlib_module_sentinel(body_lookup, name);
         body_lookup.insert(lexical_binding_sentinel(name), 0);
     }
 
@@ -2863,6 +2873,7 @@ fn allocate_destructure_param_bindings(
             .map_err(LoweringPipelineError::SemanticViolation)?;
             suppress_stream_module_sentinel(binding_lookup, inner_name);
             suppress_net_module_sentinel(binding_lookup, inner_name);
+            suppress_zlib_module_sentinel(binding_lookup, inner_name);
         }
     }
     Ok(())
@@ -3357,6 +3368,9 @@ fn lower_statement_to_ir1_with_flow(
                                     .contains_key(&querystring_module_alias_sentinel(alias)))
                             || (is_require_os_module_initializer(init, binding_lookup)
                                 && binding_lookup.contains_key(&os_module_alias_sentinel(alias)))
+                            || (is_require_zlib_module_initializer(init, binding_lookup)
+                                && binding_lookup
+                                    .contains_key(&zlib_module_alias_sentinel(alias)))
                             // bd-suwvw: confirmed timers / timers-promises
                             // aliases join the same elision (their operations
                             // are recognized at the member call/read sites).
@@ -3638,6 +3652,7 @@ fn lower_statement_to_ir1_with_flow(
             let lexical_binding_snapshot = binding_entry_snapshot(binding_lookup, &lexical_names);
             suppress_stream_module_sentinels(binding_lookup, &lexical_names);
             suppress_net_module_sentinels(binding_lookup, &lexical_names);
+            suppress_zlib_module_sentinels(binding_lookup, &lexical_names);
             for name in for_in_stmt.binding.binding_names() {
                 let binding_id = if for_in_stmt.binding_kind == Some(VariableDeclarationKind::Var) {
                     reserve_binding_id(binding_lookup, binding_index, name)
@@ -3769,6 +3784,7 @@ fn lower_statement_to_ir1_with_flow(
             let lexical_binding_snapshot = binding_entry_snapshot(binding_lookup, &lexical_names);
             suppress_stream_module_sentinels(binding_lookup, &lexical_names);
             suppress_net_module_sentinels(binding_lookup, &lexical_names);
+            suppress_zlib_module_sentinels(binding_lookup, &lexical_names);
             for name in for_of_stmt.binding.binding_names() {
                 let binding_id = if for_of_stmt.binding_kind == Some(VariableDeclarationKind::Var) {
                     reserve_binding_id(binding_lookup, binding_index, name)
@@ -4222,6 +4238,7 @@ fn lower_statement_to_ir1_with_flow(
                         binding_entry_snapshot(binding_lookup, &catch_lexical_names);
                     suppress_stream_module_sentinels(binding_lookup, &catch_lexical_names);
                     suppress_net_module_sentinels(binding_lookup, &catch_lexical_names);
+                    suppress_zlib_module_sentinels(binding_lookup, &catch_lexical_names);
                     reserve_and_mark_source_scope_bindings(
                         &handler.body.body,
                         binding_lookup,
@@ -4597,6 +4614,7 @@ fn lower_statement_to_ir1_with_flow(
             // this function body (sentinel keys only; see
             // `seed_timers_module_alias_sentinels`).
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
+            seed_zlib_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
@@ -4618,6 +4636,7 @@ fn lower_statement_to_ir1_with_flow(
                 .map_err(LoweringPipelineError::SemanticViolation)?;
                 suppress_stream_module_sentinel(&mut body_lookup, pname);
                 suppress_net_module_sentinel(&mut body_lookup, pname);
+                suppress_zlib_module_sentinel(&mut body_lookup, pname);
             }
             // For destructuring-pattern params, allocate inner identifier
             // bindings and emit destructuring ops that copy from each
@@ -4749,6 +4768,7 @@ fn lower_statement_to_ir1_with_flow(
             // this function body (sentinel keys only; see
             // `seed_timers_module_alias_sentinels`).
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
+            seed_zlib_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
@@ -4769,6 +4789,7 @@ fn lower_statement_to_ir1_with_flow(
                 .map_err(LoweringPipelineError::SemanticViolation)?;
                 suppress_stream_module_sentinel(&mut body_lookup, pname);
                 suppress_net_module_sentinel(&mut body_lookup, pname);
+                suppress_zlib_module_sentinel(&mut body_lookup, pname);
             }
             // Destructure non-identifier ctor params (applies defaults) before the body.
             allocate_destructure_param_bindings(
@@ -4944,6 +4965,7 @@ fn lower_statement_to_ir1_with_flow(
                 let mut m_lookup = BTreeMap::new();
                 // bd-suwvw: see the body_lookup seeding above.
                 seed_timers_module_alias_sentinels(&mut m_lookup, binding_lookup);
+                seed_zlib_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_fs_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_events_module_sentinels(&mut m_lookup, binding_lookup);
                 seed_stream_module_sentinels(&mut m_lookup, binding_lookup);
@@ -4964,6 +4986,7 @@ fn lower_statement_to_ir1_with_flow(
                     .map_err(LoweringPipelineError::SemanticViolation)?;
                     suppress_stream_module_sentinel(&mut m_lookup, pname);
                     suppress_net_module_sentinel(&mut m_lookup, pname);
+                    suppress_zlib_module_sentinel(&mut m_lookup, pname);
                 }
                 // Destructure non-identifier params (applies defaults) before the body.
                 allocate_destructure_param_bindings(
@@ -5127,6 +5150,7 @@ fn lower_switch_to_ir1(
     let lexical_binding_snapshot = binding_entry_snapshot(binding_lookup, &lexical_names);
     suppress_stream_module_sentinels(binding_lookup, &lexical_names);
     suppress_net_module_sentinels(binding_lookup, &lexical_names);
+    suppress_zlib_module_sentinels(binding_lookup, &lexical_names);
     for name in &lexical_names {
         let binding_id = reserve_fresh_binding_id(binding_lookup, binding_index, name);
         binding_lookup.insert(lexical_binding_sentinel(name), 0);
@@ -11210,6 +11234,7 @@ fn lower_expression_to_ir1_inner(
             // sep/eq/options on parse/stringify, optional pid on getPriority).
             if let Some(capability) = querystring_builtin_call_capability(callee, binding_lookup)
                 .or_else(|| os_builtin_call_capability(callee, binding_lookup))
+                .or_else(|| zlib_builtin_call_capability(callee, binding_lookup))
                 // bd-suwvw: `require('timers/promises')` member calls
                 // (`tp.setTimeout(ms, value)`, `tp.setInterval(ms)`) share
                 // the slot-0 no-receiver convention with querystring/os.
@@ -12509,6 +12534,16 @@ fn lower_expression_to_ir1_inner(
                 }
                 return Ok(());
             }
+            // bd-fdqd4: `zlib.constants` is an engine-owned immutable numeric
+            // bundle. The confirmed module alias is lowering-only, so allocate
+            // the constants object directly without evaluating ambient require.
+            if zlib_constants_member_read(object, property, *computed, binding_lookup) {
+                ops.push(Ir1Op::HostCall {
+                    capability: "builtin:ZlibConstants".to_string(),
+                    arg_count: 0,
+                });
+                return Ok(());
+            }
             // bd-70cv1: deterministic TLS module constants remain lowering
             // only. The root bundle is allocated by a pure builtin hostcall;
             // the default protocol floor is a literal. No host trust store is
@@ -13066,6 +13101,7 @@ fn lower_expression_to_ir1_inner(
             // this function body (sentinel keys only; see
             // `seed_timers_module_alias_sentinels`).
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
+            seed_zlib_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
@@ -13100,6 +13136,7 @@ fn lower_expression_to_ir1_inner(
                 .map_err(LoweringPipelineError::SemanticViolation)?;
                 suppress_stream_module_sentinel(&mut body_lookup, pname);
                 suppress_net_module_sentinel(&mut body_lookup, pname);
+                suppress_zlib_module_sentinel(&mut body_lookup, pname);
             }
             // Destructure non-identifier params (applies defaults) before the body.
             allocate_destructure_param_bindings(
@@ -13225,6 +13262,7 @@ fn lower_expression_to_ir1_inner(
             // this function body (sentinel keys only; see
             // `seed_timers_module_alias_sentinels`).
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
+            seed_zlib_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
@@ -13233,6 +13271,7 @@ fn lower_expression_to_ir1_inner(
             if let Some(self_name) = name {
                 suppress_stream_module_sentinel(&mut body_lookup, self_name);
                 suppress_net_module_sentinel(&mut body_lookup, self_name);
+                suppress_zlib_module_sentinel(&mut body_lookup, self_name);
             }
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
@@ -13261,6 +13300,7 @@ fn lower_expression_to_ir1_inner(
                 .map_err(LoweringPipelineError::SemanticViolation)?;
                 suppress_stream_module_sentinel(&mut body_lookup, pname);
                 suppress_net_module_sentinel(&mut body_lookup, pname);
+                suppress_zlib_module_sentinel(&mut body_lookup, pname);
             }
             allocate_destructure_param_bindings(
                 &destructure_params,
@@ -13833,6 +13873,7 @@ fn lower_expression_to_ir1_inner(
             // this function body (sentinel keys only; see
             // `seed_timers_module_alias_sentinels`).
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
+            seed_zlib_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
@@ -13841,6 +13882,7 @@ fn lower_expression_to_ir1_inner(
             if let Some(self_name) = name {
                 suppress_stream_module_sentinel(&mut body_lookup, self_name);
                 suppress_net_module_sentinel(&mut body_lookup, self_name);
+                suppress_zlib_module_sentinel(&mut body_lookup, self_name);
             }
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
@@ -13857,6 +13899,7 @@ fn lower_expression_to_ir1_inner(
                 .map_err(LoweringPipelineError::SemanticViolation)?;
                 suppress_stream_module_sentinel(&mut body_lookup, pname);
                 suppress_net_module_sentinel(&mut body_lookup, pname);
+                suppress_zlib_module_sentinel(&mut body_lookup, pname);
             }
             // Destructure non-identifier ctor params (applies defaults) before the body.
             allocate_destructure_param_bindings(
@@ -14032,6 +14075,7 @@ fn lower_expression_to_ir1_inner(
                 let mut m_lookup = BTreeMap::new();
                 // bd-suwvw: see the body_lookup seeding above.
                 seed_timers_module_alias_sentinels(&mut m_lookup, binding_lookup);
+                seed_zlib_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_fs_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_events_module_sentinels(&mut m_lookup, binding_lookup);
                 seed_stream_module_sentinels(&mut m_lookup, binding_lookup);
@@ -14040,6 +14084,7 @@ fn lower_expression_to_ir1_inner(
                 if let Some(self_name) = name {
                     suppress_stream_module_sentinel(&mut m_lookup, self_name);
                     suppress_net_module_sentinel(&mut m_lookup, self_name);
+                    suppress_zlib_module_sentinel(&mut m_lookup, self_name);
                 }
                 let method_self_snapshot = name.as_deref().map(|self_name| {
                     expose_class_expression_self_binding(binding_lookup, self_name, bid)
@@ -14059,6 +14104,7 @@ fn lower_expression_to_ir1_inner(
                     .map_err(LoweringPipelineError::SemanticViolation)?;
                     suppress_stream_module_sentinel(&mut m_lookup, pname);
                     suppress_net_module_sentinel(&mut m_lookup, pname);
+                    suppress_zlib_module_sentinel(&mut m_lookup, pname);
                 }
                 // Destructure non-identifier params (applies defaults) before the body.
                 allocate_destructure_param_bindings(
@@ -15593,6 +15639,154 @@ fn confirmed_querystring_module_aliases(
     used
 }
 
+// ---------------------------------------------------------------------------
+// Node `zlib` pure-compute builtin recognition (bd-fdqd4)
+// ---------------------------------------------------------------------------
+
+fn is_zlib_module_specifier(specifier: &str) -> bool {
+    specifier == "zlib" || specifier == "node:zlib"
+}
+
+fn zlib_module_alias_sentinel(name: &str) -> String {
+    format!("\0zlibmod\0{name}")
+}
+
+fn is_require_zlib_module_initializer(
+    expr: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    let Expression::Call {
+        callee, arguments, ..
+    } = expr
+    else {
+        return false;
+    };
+    matches!(callee.as_ref(), Expression::Identifier(name)
+        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+        && matches!(arguments.as_slice(), [specifier]
+            if well_formed_string_literal(specifier).is_some_and(is_zlib_module_specifier))
+}
+
+fn zlib_method_capability(method: &str) -> Option<&'static str> {
+    match method {
+        "gzipSync" => Some("builtin:ZlibGzipSync"),
+        "gunzipSync" => Some("builtin:ZlibGunzipSync"),
+        "deflateSync" => Some("builtin:ZlibDeflateSync"),
+        "inflateSync" => Some("builtin:ZlibInflateSync"),
+        "deflateRawSync" => Some("builtin:ZlibDeflateRawSync"),
+        "inflateRawSync" => Some("builtin:ZlibInflateRawSync"),
+        "unzipSync" => Some("builtin:ZlibUnzipSync"),
+        "gzip" => Some("builtin:ZlibGzip"),
+        "gunzip" => Some("builtin:ZlibGunzip"),
+        "deflate" => Some("builtin:ZlibDeflate"),
+        "inflate" => Some("builtin:ZlibInflate"),
+        _ => None,
+    }
+}
+
+fn is_zlib_module_object(expr: &Expression, binding_lookup: &BTreeMap<String, BindingId>) -> bool {
+    match expr {
+        Expression::Identifier(alias) => {
+            binding_lookup.contains_key(&zlib_module_alias_sentinel(alias))
+        }
+        Expression::Call { .. } => is_require_zlib_module_initializer(expr, binding_lookup),
+        _ => false,
+    }
+}
+
+fn zlib_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee
+    else {
+        return None;
+    };
+    if !is_zlib_module_object(object, binding_lookup) {
+        return None;
+    }
+    zlib_method_capability(well_formed_static_name(property)?)
+}
+
+fn zlib_constants_member_read(
+    object: &Expression,
+    property: &Expression,
+    computed: bool,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    if !is_zlib_module_object(object, binding_lookup) {
+        return false;
+    }
+    let property = match computed {
+        false => well_formed_static_name(property),
+        true => well_formed_string_literal(property),
+    };
+    property == Some("constants")
+}
+
+fn is_zlib_alias_usage(expr: &Expression, alias: &str) -> bool {
+    match expr {
+        Expression::Call { callee, .. } => module_alias_member_name(callee, alias)
+            .is_some_and(|method| zlib_method_capability(method).is_some()),
+        Expression::Member { .. } => module_alias_member_name(expr, alias) == Some("constants"),
+        _ => false,
+    }
+}
+
+fn confirmed_zlib_module_aliases(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeMap::new();
+    for (statement_index, statement) in body.iter().enumerate() {
+        if let Statement::VariableDeclaration(declaration) = statement {
+            if declaration.kind != VariableDeclarationKind::Const {
+                continue;
+            }
+            for (declarator_index, declarator) in declaration.declarations.iter().enumerate() {
+                if let (BindingPattern::Identifier(name), Some(initializer)) =
+                    (&declarator.pattern, &declarator.initializer)
+                    && is_require_zlib_module_initializer(initializer, binding_lookup)
+                {
+                    candidates.insert(name.clone(), (statement_index, declarator_index));
+                }
+            }
+        }
+    }
+
+    candidates
+        .into_iter()
+        .filter(|(alias, (statement_index, declarator_index))| {
+            !module_alias_has_predeclaration_hazard(
+                body,
+                *statement_index,
+                *declarator_index,
+                alias,
+                LoweringOnlyModuleAliasSurface::Zlib,
+                binding_lookup,
+            ) && body.iter().any(|statement| {
+                module_alias_statement_contains_unshadowed_usage(
+                    statement,
+                    alias,
+                    LoweringOnlyModuleAliasSurface::Zlib,
+                )
+            }) && !body.iter().any(|statement| {
+                module_alias_statement_has_rejected_use(
+                    statement,
+                    alias,
+                    LoweringOnlyModuleAliasSurface::Zlib,
+                )
+            })
+        })
+        .map(|(alias, _)| alias)
+        .collect()
+}
+
 /// bd-suwvw: true when `specifier` names the Node timers module — `timers`
 /// or `node:timers`.
 fn is_timers_module_specifier(specifier: &str) -> bool {
@@ -15900,6 +16094,32 @@ fn seed_timers_module_alias_sentinels(
     }
 }
 
+/// bd-fdqd4: retain authenticated zlib provenance in nested callbacks while
+/// keeping the module object entirely lowering-only.
+fn seed_zlib_module_alias_sentinels(
+    body_lookup: &mut BTreeMap<String, BindingId>,
+    outer_lookup: &BTreeMap<String, BindingId>,
+) {
+    for key in outer_lookup.keys() {
+        if key.starts_with("\0zlibmod\0") {
+            body_lookup.insert(key.clone(), 0);
+        }
+    }
+}
+
+fn suppress_zlib_module_sentinel(binding_lookup: &mut BTreeMap<String, BindingId>, name: &str) {
+    binding_lookup.remove(&zlib_module_alias_sentinel(name));
+}
+
+fn suppress_zlib_module_sentinels(
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    names: &BTreeSet<String>,
+) {
+    for name in names {
+        suppress_zlib_module_sentinel(binding_lookup, name);
+    }
+}
+
 /// bd-8u1t5: carry confirmed fs and fs/promises provenance into every fresh
 /// function/method lookup. This makes the deep pre-scan actionable inside
 /// callbacks, try/catch bodies, and promise arrows without creating a runtime
@@ -16041,6 +16261,7 @@ fn net_socket_constructor_capability(
 enum LoweringOnlyModuleAliasSurface {
     Net,
     Tls,
+    Zlib,
     StreamConstructor,
     StreamPipeline,
     StreamPromises,
@@ -16106,6 +16327,7 @@ fn is_module_alias_usage(
         LoweringOnlyModuleAliasSurface::Tls => {
             is_tls_alias_call(expr, alias) || is_tls_alias_constant_read(expr, alias)
         }
+        LoweringOnlyModuleAliasSurface::Zlib => is_zlib_alias_usage(expr, alias),
         LoweringOnlyModuleAliasSurface::StreamConstructor => is_stream_constructor_use(expr, alias),
         LoweringOnlyModuleAliasSurface::StreamPipeline => {
             is_stream_pipeline_direct_call(expr, alias)
@@ -16430,6 +16652,8 @@ fn module_alias_write_target_has_rejected_use(
             ..
         } => {
             module_alias_member_name(target, alias).is_some()
+                || (surface == LoweringOnlyModuleAliasSurface::Zlib
+                    && module_alias_expr_contains_unshadowed_usage(target, alias, surface))
                 || module_alias_expr_has_rejected_use(object, alias, surface)
                 || (*computed && module_alias_expr_has_rejected_use(property, alias, surface))
         }
@@ -16454,6 +16678,8 @@ fn module_alias_expr_has_rejected_use(
             LoweringOnlyModuleAliasSurface::Net => net_alias_member_name(callee, alias)
                 .is_some_and(|method| net_method_capability(method).is_some()),
             LoweringOnlyModuleAliasSurface::Tls => is_tls_alias_call(expr, alias),
+            LoweringOnlyModuleAliasSurface::Zlib => module_alias_member_name(callee, alias)
+                .is_some_and(|method| zlib_method_capability(method).is_some()),
             LoweringOnlyModuleAliasSurface::StreamConstructor => false,
             LoweringOnlyModuleAliasSurface::StreamPipeline => {
                 is_stream_pipeline_direct_call(expr, alias)
@@ -16495,6 +16721,12 @@ fn module_alias_expr_has_rejected_use(
         Expression::Member { .. }
             if surface == LoweringOnlyModuleAliasSurface::Tls
                 && is_tls_alias_constant_read(expr, alias) =>
+        {
+            false
+        }
+        Expression::Member { .. }
+            if surface == LoweringOnlyModuleAliasSurface::Zlib
+                && module_alias_member_name(expr, alias) == Some("constants") =>
         {
             false
         }
@@ -17022,6 +17254,7 @@ fn module_alias_expression_is_predeclaration_call_hazard(
     ) || matches!(expression, Expression::Call { .. })
         && !is_require_net_module_initializer(expression, binding_lookup)
         && !is_require_tls_module_initializer(expression, binding_lookup)
+        && !is_require_zlib_module_initializer(expression, binding_lookup)
 }
 
 fn module_alias_expression_has_predeclaration_call_hazard(

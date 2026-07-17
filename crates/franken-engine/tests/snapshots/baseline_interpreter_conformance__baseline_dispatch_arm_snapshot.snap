@@ -1,10 +1,9 @@
 ---
 source: crates/franken-engine/tests/baseline_interpreter_conformance.rs
-assertion_line: 95
 expression: actual
 ---
-total=293
-unique=293
+total=305
+unique=305
 duplicates=0
 
 builtin:ApplyHostCall
@@ -295,6 +294,18 @@ builtin:WeakMap
 builtin:WeakMapPrototypeGet
 builtin:WeakMapPrototypeHas
 builtin:WeakSet
+builtin:ZlibConstants
+builtin:ZlibDeflate
+builtin:ZlibDeflateRawSync
+builtin:ZlibDeflateSync
+builtin:ZlibGunzip
+builtin:ZlibGunzipSync
+builtin:ZlibGzip
+builtin:ZlibGzipSync
+builtin:ZlibInflate
+builtin:ZlibInflateRawSync
+builtin:ZlibInflateSync
+builtin:ZlibUnzipSync
 builtin:isFinite
 builtin:isNaN
 builtin:parseFloat

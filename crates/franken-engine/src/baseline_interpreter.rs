@@ -41,10 +41,12 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, LinkedList, VecDeque};
 use std::fmt;
 use std::fs;
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use flate2::{Compression, GzBuilder, read::MultiGzDecoder};
 use hmac::{Hmac, Mac};
 use regex::{NoExpand, Regex, RegexBuilder};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -290,6 +292,20 @@ const MEMORY_ESTIMATE_WRITABLE_TERMINAL_BASE_BYTES: u64 = 192;
 const MEMORY_ESTIMATE_WRITABLE_END_CALLBACK_BYTES: u64 = 160;
 /// BotGuard typed-array v1 per-buffer cap from bd-8enww.2.1.
 const MAX_ARRAY_BUFFER_BYTE_LENGTH: u64 = 8 * 1024 * 1024;
+/// Conservative workspace charge for zlib-rs's 32 KiB window, hash chains,
+/// pending buffers, and wrapper state. The current pure-Rust deflater uses
+/// roughly 311 KiB before caller-owned input/output storage.
+const ZLIB_CODEC_WORKSPACE_BYTES: u64 = 512 * 1024;
+const ZLIB_IO_CHUNK_BYTES: usize = 64 * 1024;
+/// Conservative upper bound for the two heap metadata records and their
+/// property strings published by one Buffer result. The exact allocator check
+/// still runs before commit; this reserve makes the pre-codec operation-wide
+/// peak proof independent of the eventual compressed length.
+const ZLIB_PUBLICATION_METADATA_BYTES: u64 = 64 * 1024;
+/// One deterministic instruction-budget unit per KiB of admitted codec work.
+/// Compression additionally scales input work by the requested level, while
+/// decompression reserves the full engine output cap before touching a codec.
+const ZLIB_WORK_UNIT_BYTES: u64 = 1024;
 /// Approximate metadata footprint for an ArrayBuffer-backed typed-array view.
 const MEMORY_ESTIMATE_TYPED_ARRAY_VIEW_BYTES: u64 = 48;
 /// Approximate metadata footprint for an ArrayBuffer-backed DataView.
@@ -305,6 +321,42 @@ enum HostcallCapabilityClass {
     Runtime(RuntimeCapability),
     InternalAllowed,
     Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ZlibFormat {
+    Gzip,
+    Zlib,
+    Raw,
+    Auto,
+}
+
+enum ZlibOperationFailure {
+    Data { code: &'static str, message: String },
+    OutputLimit,
+    Resource(InterpreterError),
+}
+
+impl From<InterpreterError> for ZlibOperationFailure {
+    fn from(error: InterpreterError) -> Self {
+        Self::Resource(error)
+    }
+}
+
+impl ZlibOperationFailure {
+    fn data(message: impl Into<String>) -> Self {
+        Self::Data {
+            code: "Z_DATA_ERROR",
+            message: message.into(),
+        }
+    }
+
+    fn need_dictionary(message: impl Into<String>) -> Self {
+        Self::Data {
+            code: "Z_NEED_DICT",
+            message: message.into(),
+        }
+    }
 }
 
 /// Closed allowlist of `promise:*` sub-capabilities recognised by
@@ -7664,13 +7716,26 @@ impl InterpreterCore {
         closure_id: u32,
         callback_args: Vec<Value>,
     ) -> Result<(), InterpreterError> {
+        self.schedule_io_callback_with_label(closure_id, callback_args, Label::Public)
+    }
+
+    /// Schedule an I/O-lane callback under the aggregate label of the data
+    /// delivered to it. Existing host-I/O callers use the public wrapper;
+    /// pure zlib callbacks pass their input/dictionary label so deferred
+    /// callback execution cannot launder classified Buffer backing storage.
+    fn schedule_io_callback_with_label(
+        &mut self,
+        closure_id: u32,
+        callback_args: Vec<Value>,
+        callback_label: Label,
+    ) -> Result<(), InterpreterError> {
         let retained_bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
             .saturating_add(Self::estimate_value_vec_bytes(&callback_args));
         self.apply_memory_component_delta(0, retained_bytes)?;
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
         let seq = self.event_loop.schedule_io_completion(
             crate::closure_model::ClosureHandle(closure_id),
-            crate::ifc_artifacts::Label::Public,
+            callback_label,
         );
         if let Err(error) = self.apply_promise_runtime_memory_delta(previous_promise_bytes) {
             self.event_loop.rollback_last_scheduled(seq);
@@ -33088,11 +33153,12 @@ impl InterpreterCore {
                         // same one timer + promise-reaction callbacks use): undefined
                         // `this`, err-first arguments, runs the closure body to
                         // completion against its captured environment.
-                        self.invoke_inline_method_call(
+                        self.invoke_inline_method_call_with_argument_label(
                             Some(module),
                             Value::Closure(closure_id),
                             Value::Undefined,
                             callback_args,
+                            Some(macrotask.label.clone()),
                         )
                         .map(|_| ())
                     }
@@ -39432,6 +39498,641 @@ impl InterpreterCore {
         Ok(())
     }
 
+    fn zlib_input_byte_length(&self, value: &Value) -> Result<usize, InterpreterError> {
+        match value {
+            Value::Str(text) => Ok(text.len()),
+            Value::Object(_) => Ok(self.buffer_like_view(value)?.byte_length),
+            other => Err(InterpreterError::TypeError {
+                expected: "string, Buffer, or Uint8Array zlib input".to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn zlib_input_bytes(&self, value: &Value) -> Result<Vec<u8>, InterpreterError> {
+        match value {
+            Value::Str(text) => {
+                self.check_buffer_temporary_bytes(text.len())?;
+                Ok(text.as_bytes().to_vec())
+            }
+            Value::Object(_) => self.bytes_for_buffer_like(value),
+            other => Err(InterpreterError::TypeError {
+                expected: "string, Buffer, or Uint8Array zlib input".to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn zlib_options_value(&self, args: RegRange) -> Result<Option<Value>, InterpreterError> {
+        Ok(match self.builtin_arg(args, 1)? {
+            Some(Value::Object(object_id)) => Some(Value::Object(object_id)),
+            _ => None,
+        })
+    }
+
+    fn zlib_level(&self, options: Option<&Value>) -> Result<i32, InterpreterError> {
+        let Some(level) = options.and_then(|value| self.fs_object_property(value, "level")) else {
+            return Ok(6);
+        };
+        let level = match level {
+            Value::Int(level) => i32::try_from(level).ok(),
+            Value::Float(level) if level.inner().fract() == 0.0 => {
+                i32::try_from(level.inner() as i64).ok()
+            }
+            _ => None,
+        }
+        .ok_or_else(|| InterpreterError::RangeError {
+            message: "zlib level must be an integer between -1 and 9".to_string(),
+        })?;
+        if !(-1..=9).contains(&level) {
+            return Err(InterpreterError::RangeError {
+                message: format!("zlib level {level} is outside -1..=9"),
+            });
+        }
+        Ok(if level == -1 { 6 } else { level })
+    }
+
+    fn zlib_dictionary_value(
+        &self,
+        options: Option<&Value>,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let Some(dictionary) =
+            options.and_then(|value| self.fs_object_property(value, "dictionary"))
+        else {
+            return Ok(None);
+        };
+        if matches!(dictionary, Value::Undefined) {
+            return Ok(None);
+        }
+        let Value::Object(_) = dictionary else {
+            return Err(InterpreterError::TypeError {
+                expected: "Buffer or Uint8Array zlib dictionary".to_string(),
+                got: dictionary.type_name().to_string(),
+            });
+        };
+        self.buffer_like_view(&dictionary)?;
+        Ok(Some(dictionary))
+    }
+
+    fn zlib_work_cost(input_len: usize, dictionary_len: usize, compress: bool, level: i32) -> u64 {
+        let units = |bytes: u64| {
+            (bytes.saturating_add(ZLIB_WORK_UNIT_BYTES - 1) / ZLIB_WORK_UNIT_BYTES).max(1)
+        };
+        let input_bytes = u64::try_from(input_len).unwrap_or(u64::MAX);
+        let dictionary_bytes = u64::try_from(dictionary_len).unwrap_or(u64::MAX);
+        let output_bound = if compress {
+            u64::try_from(zlib_rs::compress_bound(input_len))
+                .unwrap_or(u64::MAX)
+                .saturating_add(32)
+                .min(MAX_ARRAY_BUFFER_BYTE_LENGTH)
+        } else {
+            MAX_ARRAY_BUFFER_BYTE_LENGTH
+        };
+        let input_units = units(input_bytes.saturating_add(dictionary_bytes));
+        let level_multiplier = if compress {
+            u64::try_from(level.max(1)).unwrap_or(1)
+        } else {
+            1
+        };
+        input_units
+            .saturating_mul(level_multiplier)
+            .saturating_add(units(output_bound))
+    }
+
+    fn charge_zlib_work(&mut self, work_cost: u64) -> Result<(), InterpreterError> {
+        let next_executed = self.instructions_executed.saturating_add(work_cost);
+        if next_executed > self.config.instruction_budget {
+            return Err(InterpreterError::BudgetExhausted {
+                executed: self.instructions_executed,
+                budget: self.config.instruction_budget,
+            });
+        }
+        self.instructions_executed = next_executed;
+        Ok(())
+    }
+
+    fn zlib_codec_preflight(
+        &self,
+        input_len: usize,
+        dictionary_len: usize,
+    ) -> Result<(), ZlibOperationFailure> {
+        let input_len = u64::try_from(input_len).map_err(|_| {
+            ZlibOperationFailure::Resource(InterpreterError::RangeError {
+                message: "zlib input exceeds memory accounting range".to_string(),
+            })
+        })?;
+        let dictionary_len = u64::try_from(dictionary_len).map_err(|_| {
+            ZlibOperationFailure::Resource(InterpreterError::RangeError {
+                message: "zlib dictionary exceeds memory accounting range".to_string(),
+            })
+        })?;
+        if input_len > MAX_ARRAY_BUFFER_BYTE_LENGTH || dictionary_len > MAX_ARRAY_BUFFER_BYTE_LENGTH
+        {
+            return Err(ZlibOperationFailure::OutputLimit);
+        }
+        self.check_temporary_memory_budget(
+            input_len
+                .saturating_add(dictionary_len)
+                .saturating_add(ZLIB_CODEC_WORKSPACE_BYTES)
+                .saturating_add(MAX_ARRAY_BUFFER_BYTE_LENGTH)
+                .saturating_add(ZLIB_IO_CHUNK_BYTES as u64),
+        )?;
+        Ok(())
+    }
+
+    fn zlib_deflate_bytes(
+        &self,
+        format: ZlibFormat,
+        input: &[u8],
+        dictionary: Option<&[u8]>,
+        level: i32,
+    ) -> Result<Vec<u8>, ZlibOperationFailure> {
+        self.zlib_codec_preflight(input.len(), dictionary.map_or(0, <[u8]>::len))?;
+        let output_limit =
+            usize::try_from(MAX_ARRAY_BUFFER_BYTE_LENGTH).expect("8 MiB zlib limit fits usize");
+        let mut output = vec![0u8; output_limit];
+
+        if format == ZlibFormat::Gzip {
+            let cursor = Cursor::new(output.as_mut_slice());
+            let mut encoder = GzBuilder::new()
+                .mtime(0)
+                .write(cursor, Compression::new(u32::try_from(level).unwrap_or(6)));
+            encoder
+                .write_all(input)
+                .map_err(|_| ZlibOperationFailure::OutputLimit)?;
+            let cursor = encoder
+                .finish()
+                .map_err(|_| ZlibOperationFailure::OutputLimit)?;
+            let written = usize::try_from(cursor.position())
+                .map_err(|_| ZlibOperationFailure::OutputLimit)?;
+            if written > output_limit {
+                return Err(ZlibOperationFailure::OutputLimit);
+            }
+            output.truncate(written);
+            return Ok(output);
+        }
+
+        let zlib_header = format == ZlibFormat::Zlib;
+        let mut encoder = zlib_rs::Deflate::new(level, zlib_header, 15);
+        if let Some(dictionary) = dictionary {
+            encoder
+                .set_dictionary(dictionary)
+                .map_err(|error| ZlibOperationFailure::data(error.as_str()))?;
+        }
+        let mut overflow = [0u8; 1];
+        loop {
+            let before_in = encoder.total_in();
+            let before_out = encoder.total_out();
+            let input_offset = usize::try_from(before_in)
+                .map_err(|_| ZlibOperationFailure::data("invalid deflate input offset"))?;
+            let output_offset =
+                usize::try_from(before_out).map_err(|_| ZlibOperationFailure::OutputLimit)?;
+            let output_slice = if output_offset < output_limit {
+                &mut output[output_offset..]
+            } else {
+                &mut overflow[..]
+            };
+            let status = encoder
+                .compress(
+                    input.get(input_offset..).ok_or_else(|| {
+                        ZlibOperationFailure::data("invalid deflate input offset")
+                    })?,
+                    output_slice,
+                    zlib_rs::DeflateFlush::Finish,
+                )
+                .map_err(|error| ZlibOperationFailure::data(error.as_str()))?;
+            let produced = encoder.total_out().saturating_sub(before_out);
+            if output_offset >= output_limit && produced > 0 {
+                return Err(ZlibOperationFailure::OutputLimit);
+            }
+            if status == zlib_rs::Status::StreamEnd {
+                let written = usize::try_from(encoder.total_out())
+                    .map_err(|_| ZlibOperationFailure::OutputLimit)?;
+                if written > output_limit {
+                    return Err(ZlibOperationFailure::OutputLimit);
+                }
+                output.truncate(written);
+                return Ok(output);
+            }
+            if encoder.total_in() == before_in && encoder.total_out() == before_out {
+                return Err(ZlibOperationFailure::data(
+                    "deflate made no forward progress",
+                ));
+            }
+        }
+    }
+
+    fn zlib_inflate_stream(
+        &self,
+        input: &[u8],
+        dictionary: Option<&[u8]>,
+        zlib_header: bool,
+    ) -> Result<Vec<u8>, ZlibOperationFailure> {
+        self.zlib_codec_preflight(input.len(), dictionary.map_or(0, <[u8]>::len))?;
+        let output_limit =
+            usize::try_from(MAX_ARRAY_BUFFER_BYTE_LENGTH).expect("8 MiB zlib limit fits usize");
+        let mut output = vec![0u8; output_limit];
+        let mut overflow = [0u8; 1];
+        let mut decoder = zlib_rs::Inflate::new(zlib_header, 15);
+        let mut dictionary_installed = false;
+        if !zlib_header {
+            if let Some(dictionary) = dictionary {
+                decoder
+                    .set_dictionary(dictionary)
+                    .map_err(|error| ZlibOperationFailure::data(error.as_str()))?;
+                dictionary_installed = true;
+            }
+        }
+
+        loop {
+            let before_in = decoder.total_in();
+            let before_out = decoder.total_out();
+            let input_offset = usize::try_from(before_in)
+                .map_err(|_| ZlibOperationFailure::data("invalid inflate input offset"))?;
+            let output_offset =
+                usize::try_from(before_out).map_err(|_| ZlibOperationFailure::OutputLimit)?;
+            let output_slice = if output_offset < output_limit {
+                &mut output[output_offset..]
+            } else {
+                &mut overflow[..]
+            };
+            let status = match decoder.decompress(
+                input
+                    .get(input_offset..)
+                    .ok_or_else(|| ZlibOperationFailure::data("invalid inflate input offset"))?,
+                output_slice,
+                zlib_rs::InflateFlush::Finish,
+            ) {
+                Ok(status) => status,
+                Err(zlib_rs::InflateError::NeedDict { .. }) if !dictionary_installed => {
+                    let Some(dictionary) = dictionary else {
+                        return Err(ZlibOperationFailure::need_dictionary(
+                            "preset dictionary is required",
+                        ));
+                    };
+                    decoder
+                        .set_dictionary(dictionary)
+                        .map_err(|error| ZlibOperationFailure::need_dictionary(error.as_str()))?;
+                    dictionary_installed = true;
+                    continue;
+                }
+                Err(error) => {
+                    return Err(ZlibOperationFailure::data(error.as_str()));
+                }
+            };
+            let produced = decoder.total_out().saturating_sub(before_out);
+            if output_offset >= output_limit && produced > 0 {
+                return Err(ZlibOperationFailure::OutputLimit);
+            }
+            if status == zlib_rs::Status::StreamEnd {
+                let written = usize::try_from(decoder.total_out())
+                    .map_err(|_| ZlibOperationFailure::OutputLimit)?;
+                if written > output_limit {
+                    return Err(ZlibOperationFailure::OutputLimit);
+                }
+                output.truncate(written);
+                return Ok(output);
+            }
+            if decoder.total_in() == before_in && decoder.total_out() == before_out {
+                return Err(ZlibOperationFailure::data(
+                    "truncated or invalid compressed data",
+                ));
+            }
+        }
+    }
+
+    fn zlib_gunzip_bytes(&self, input: &[u8]) -> Result<Vec<u8>, ZlibOperationFailure> {
+        self.zlib_codec_preflight(input.len(), 0)?;
+        let output_limit =
+            usize::try_from(MAX_ARRAY_BUFFER_BYTE_LENGTH).expect("8 MiB zlib limit fits usize");
+        let mut output = vec![0u8; output_limit];
+        let mut decoder = MultiGzDecoder::new(input);
+        let mut written = 0usize;
+        while written < output_limit {
+            let end = written
+                .saturating_add(ZLIB_IO_CHUNK_BYTES)
+                .min(output_limit);
+            let count = decoder
+                .read(&mut output[written..end])
+                .map_err(|error| ZlibOperationFailure::data(error.to_string()))?;
+            if count == 0 {
+                output.truncate(written);
+                return Ok(output);
+            }
+            written = written
+                .checked_add(count)
+                .ok_or(ZlibOperationFailure::OutputLimit)?;
+        }
+        let mut overflow = [0u8; 1];
+        match decoder.read(&mut overflow) {
+            Ok(0) => {
+                output.truncate(written);
+                Ok(output)
+            }
+            Ok(_) => Err(ZlibOperationFailure::OutputLimit),
+            Err(error) => Err(ZlibOperationFailure::data(error.to_string())),
+        }
+    }
+
+    fn zlib_inflate_bytes(
+        &self,
+        format: ZlibFormat,
+        input: &[u8],
+        dictionary: Option<&[u8]>,
+    ) -> Result<Vec<u8>, ZlibOperationFailure> {
+        match format {
+            ZlibFormat::Gzip => self.zlib_gunzip_bytes(input),
+            ZlibFormat::Zlib => self.zlib_inflate_stream(input, dictionary, true),
+            ZlibFormat::Raw => self.zlib_inflate_stream(input, dictionary, false),
+            ZlibFormat::Auto if input.starts_with(&[0x1f, 0x8b]) => self.zlib_gunzip_bytes(input),
+            ZlibFormat::Auto => self.zlib_inflate_stream(input, dictionary, true),
+        }
+    }
+
+    fn alloc_zlib_buffer(
+        &mut self,
+        bytes: &[u8],
+        live_output_capacity: usize,
+        label: &Label,
+        publish_hostcall_label: bool,
+    ) -> Result<Value, InterpreterError> {
+        let label_bytes = Self::estimate_label_bytes(label);
+        let live_temporary_bytes = u64::try_from(live_output_capacity)
+            .unwrap_or(u64::MAX)
+            // One backing label and, for synchronous calls, one pending-result
+            // label can both be retained while the codec output Vec is live.
+            // A third charge covers the temporary clones used by the joins.
+            .saturating_add(label_bytes.saturating_mul(3));
+        let live_temporary_bytes =
+            usize::try_from(live_temporary_bytes).map_err(|_| InterpreterError::RangeError {
+                message: "zlib temporary memory exceeds accounting range".to_string(),
+            })?;
+        let previous_heap_len = self.heap.len();
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let result = (|| {
+            let object_id =
+                self.alloc_fresh_buffer_object(bytes.len(), Some(bytes), live_temporary_bytes)?;
+            self.join_binary_storage_label(object_id, label)?;
+            if publish_hostcall_label {
+                self.replace_pending_hostcall_result_label(Some(label.clone()))?;
+            }
+            Ok(Value::Object(object_id))
+        })();
+        if result.is_err() {
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+        }
+        result
+    }
+
+    fn zlib_output_limit_error(&self) -> InterpreterError {
+        InterpreterError::RangeError {
+            message: format!(
+                "zlib output exceeds the engine Buffer cap of {MAX_ARRAY_BUFFER_BYTE_LENGTH} bytes"
+            ),
+        }
+    }
+
+    fn zlib_sync_data_error(
+        &mut self,
+        code: &'static str,
+        message: String,
+        label: &Label,
+    ) -> InterpreterError {
+        // Materialize the shared prototype outside the transaction so a
+        // rollback can never leave builtin_prototypes pointing past heap.len().
+        if let Err(error) = self.ensure_builtin_prototype("Error") {
+            return error;
+        }
+        let dominant_label = if label > &self.pending_exception_label {
+            label
+        } else {
+            &self.pending_exception_label
+        };
+        if let Err(error) =
+            self.check_temporary_memory_budget(Self::estimate_label_bytes(dominant_label))
+        {
+            return error;
+        }
+        let next_pending_label = dominant_label.clone();
+        let previous_label_bytes = Self::estimate_label_bytes(&self.pending_exception_label);
+        let next_label_bytes = Self::estimate_label_bytes(&next_pending_label);
+        let previous_heap_len = self.heap.len();
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let thrown = match self.construct_buffer_node_error("Error", code, message) {
+            Ok(value) => value,
+            Err(error) => {
+                self.rollback_heap_to_len(previous_heap_len);
+                self.estimated_memory_bytes = previous_estimated_bytes;
+                return error;
+            }
+        };
+        if let Err(error) =
+            self.apply_memory_component_delta(previous_label_bytes, next_label_bytes)
+        {
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+            return error;
+        }
+        self.pending_exception = Some(thrown.clone());
+        self.pending_exception_label = next_pending_label;
+        InterpreterError::UncaughtException {
+            value: Self::uncaught_exception_description(&thrown),
+        }
+    }
+
+    fn schedule_zlib_data_error_callback(
+        &mut self,
+        callback: u32,
+        code: &'static str,
+        message: String,
+        invocation_label: Label,
+    ) -> Result<Value, InterpreterError> {
+        // Keep the canonical Error prototype outside the rollback boundary;
+        // builtin_prototypes must never retain an ObjectId truncated below.
+        self.ensure_builtin_prototype("Error")?;
+        let previous_heap_len = self.heap.len();
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let error = match self.construct_buffer_node_error("Error", code, message) {
+            Ok(error) => error,
+            Err(error) => {
+                self.rollback_heap_to_len(previous_heap_len);
+                self.estimated_memory_bytes = previous_estimated_bytes;
+                return Err(error);
+            }
+        };
+        if let Err(schedule_error) =
+            self.schedule_io_callback_with_label(callback, vec![error], invocation_label)
+        {
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+            return Err(schedule_error);
+        }
+        Ok(Value::Undefined)
+    }
+
+    fn dispatch_zlib_hostcall(
+        &mut self,
+        cap: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let (compress, format, asynchronous) = match cap {
+            "builtin:ZlibGzipSync" => (true, ZlibFormat::Gzip, false),
+            "builtin:ZlibGunzipSync" => (false, ZlibFormat::Gzip, false),
+            "builtin:ZlibDeflateSync" => (true, ZlibFormat::Zlib, false),
+            "builtin:ZlibInflateSync" => (false, ZlibFormat::Zlib, false),
+            "builtin:ZlibDeflateRawSync" => (true, ZlibFormat::Raw, false),
+            "builtin:ZlibInflateRawSync" => (false, ZlibFormat::Raw, false),
+            "builtin:ZlibUnzipSync" => (false, ZlibFormat::Auto, false),
+            "builtin:ZlibGzip" => (true, ZlibFormat::Gzip, true),
+            "builtin:ZlibGunzip" => (false, ZlibFormat::Gzip, true),
+            "builtin:ZlibDeflate" => (true, ZlibFormat::Zlib, true),
+            "builtin:ZlibInflate" => (false, ZlibFormat::Zlib, true),
+            _ => {
+                return Err(InterpreterError::InternalError {
+                    details: format!("unknown zlib builtin {cap}"),
+                });
+            }
+        };
+        let input_value =
+            self.builtin_arg(args, 0)?
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "zlib input argument".to_string(),
+                    got: "missing argument".to_string(),
+                })?;
+        let callback = if asynchronous {
+            let callback = self
+                .builtin_arg(args, args.count.saturating_sub(1))?
+                .and_then(|value| match value {
+                    Value::Closure(closure_id) => Some(closure_id),
+                    _ => None,
+                });
+            Some(callback.ok_or_else(|| InterpreterError::TypeError {
+                expected: "zlib callback function".to_string(),
+                got: "missing or non-callable callback".to_string(),
+            })?)
+        } else {
+            None
+        };
+        let options = self.zlib_options_value(args)?;
+        let level = self.zlib_level(options.as_ref())?;
+        let dictionary_value = self.zlib_dictionary_value(options.as_ref())?;
+        let input_len = self.zlib_input_byte_length(&input_value)?;
+        let dictionary_len = dictionary_value
+            .as_ref()
+            .map(|value| self.buffer_like_view(value).map(|view| view.byte_length))
+            .transpose()?
+            .unwrap_or(0);
+        let input_len_u64 = u64::try_from(input_len).unwrap_or(u64::MAX);
+        let dictionary_len_u64 = u64::try_from(dictionary_len).unwrap_or(u64::MAX);
+        if input_len_u64 > MAX_ARRAY_BUFFER_BYTE_LENGTH
+            || dictionary_len_u64 > MAX_ARRAY_BUFFER_BYTE_LENGTH
+        {
+            return Err(self.zlib_output_limit_error());
+        }
+
+        // Authenticate the full invocation label through borrowed register and
+        // Buffer-backing labels. Then prove the worst physical peak before the
+        // first attacker-sized clone or codec instruction: input + dictionary
+        // copies, codec workspace, the bounded output Vec, a maximum-size
+        // published Buffer, metadata, and all retained/temporary label clones.
+        let invocation_label = {
+            let mut dominant_label: Option<&Label> = None;
+            for index in 0..args.count {
+                let register =
+                    args.start
+                        .checked_add(index)
+                        .ok_or(InterpreterError::RegisterOutOfBounds {
+                            register: args.start,
+                            max: u32::MAX,
+                        })?;
+                let candidate = self.get_register_label(register)?;
+                if dominant_label.is_none_or(|current| candidate > current) {
+                    dominant_label = Some(candidate);
+                }
+            }
+            if let Value::Object(object_id) = &input_value
+                && let Some(candidate) = self.binary_storage_label_ref(*object_id)
+                && dominant_label.is_none_or(|current| candidate > current)
+            {
+                dominant_label = Some(candidate);
+            }
+            if let Some(Value::Object(object_id)) = dictionary_value.as_ref()
+                && let Some(candidate) = self.binary_storage_label_ref(*object_id)
+                && dominant_label.is_none_or(|current| candidate > current)
+            {
+                dominant_label = Some(candidate);
+            }
+            let label_bytes = dominant_label.map(Self::estimate_label_bytes).unwrap_or(0);
+            self.check_temporary_memory_budget(
+                input_len_u64
+                    .saturating_add(dictionary_len_u64)
+                    .saturating_add(ZLIB_CODEC_WORKSPACE_BYTES)
+                    .saturating_add(MAX_ARRAY_BUFFER_BYTE_LENGTH.saturating_mul(2))
+                    .saturating_add(ZLIB_IO_CHUNK_BYTES as u64)
+                    .saturating_add(ZLIB_PUBLICATION_METADATA_BYTES)
+                    .saturating_add(label_bytes.saturating_mul(3)),
+            )?;
+            dominant_label.cloned().unwrap_or(Label::Public)
+        };
+
+        self.charge_zlib_work(Self::zlib_work_cost(
+            input_len,
+            dictionary_len,
+            compress,
+            level,
+        ))?;
+        let input = self.zlib_input_bytes(&input_value)?;
+        let dictionary = dictionary_value
+            .as_ref()
+            .map(|value| self.bytes_for_buffer_like(value))
+            .transpose()?;
+        let result = if compress {
+            self.zlib_deflate_bytes(format, &input, dictionary.as_deref(), level)
+        } else {
+            self.zlib_inflate_bytes(format, &input, dictionary.as_deref())
+        };
+        // Codec workspaces are gone when the helper returns. Release the
+        // caller-owned input and dictionary clones before allocating the
+        // output Buffer so the publication preflight can describe the exact
+        // remaining peak: output Vec capacity + committed Buffer + labels.
+        drop(input);
+        drop(dictionary);
+
+        match (result, callback) {
+            (Ok(bytes), None) => {
+                let live_output_capacity = bytes.capacity();
+                self.alloc_zlib_buffer(&bytes, live_output_capacity, &invocation_label, true)
+            }
+            (Ok(bytes), Some(callback)) => {
+                let previous_heap_len = self.heap.len();
+                let previous_estimated_bytes = self.estimated_memory_bytes;
+                let live_output_capacity = bytes.capacity();
+                let value =
+                    self.alloc_zlib_buffer(&bytes, live_output_capacity, &invocation_label, false)?;
+                drop(bytes);
+                if let Err(error) = self.schedule_io_callback_with_label(
+                    callback,
+                    vec![Value::Null, value],
+                    invocation_label,
+                ) {
+                    self.rollback_heap_to_len(previous_heap_len);
+                    self.estimated_memory_bytes = previous_estimated_bytes;
+                    return Err(error);
+                }
+                Ok(Value::Undefined)
+            }
+            (Err(ZlibOperationFailure::Data { code, message }), None) => {
+                Err(self.zlib_sync_data_error(code, message, &invocation_label))
+            }
+            (Err(ZlibOperationFailure::Data { code, message }), Some(callback)) => {
+                self.schedule_zlib_data_error_callback(callback, code, message, invocation_label)
+            }
+            (Err(ZlibOperationFailure::OutputLimit), _) => Err(self.zlib_output_limit_error()),
+            (Err(ZlibOperationFailure::Resource(error)), _) => Err(error),
+        }
+    }
+
     fn dispatch_builtin_hostcall(
         &mut self,
         cap: &str,
@@ -40089,6 +40790,32 @@ impl InterpreterCore {
             "builtin:NetConnect" | "builtin:NetCreateConnection" => {
                 self.connect_loopback_socket(args)
             }
+            "builtin:ZlibConstants" => {
+                if args.count != 0 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "zero zlib.constants hostcall arguments".to_string(),
+                        got: format!("{} argument(s)", args.count),
+                    });
+                }
+                let constants = self.alloc_object_with_properties(&[
+                    ("Z_BEST_COMPRESSION", Value::Int(9)),
+                    ("Z_NO_COMPRESSION", Value::Int(0)),
+                    ("Z_DEFAULT_COMPRESSION", Value::Int(-1)),
+                    ("BROTLI_PARAM_QUALITY", Value::Int(1)),
+                ])?;
+                Ok(Value::Object(constants))
+            }
+            "builtin:ZlibGzipSync" => self.dispatch_zlib_hostcall(cap, args),
+            "builtin:ZlibGunzipSync" => self.dispatch_zlib_hostcall(cap, args),
+            "builtin:ZlibDeflateSync" => self.dispatch_zlib_hostcall(cap, args),
+            "builtin:ZlibInflateSync" => self.dispatch_zlib_hostcall(cap, args),
+            "builtin:ZlibDeflateRawSync" => self.dispatch_zlib_hostcall(cap, args),
+            "builtin:ZlibInflateRawSync" => self.dispatch_zlib_hostcall(cap, args),
+            "builtin:ZlibUnzipSync" => self.dispatch_zlib_hostcall(cap, args),
+            "builtin:ZlibGzip" => self.dispatch_zlib_hostcall(cap, args),
+            "builtin:ZlibGunzip" => self.dispatch_zlib_hostcall(cap, args),
+            "builtin:ZlibDeflate" => self.dispatch_zlib_hostcall(cap, args),
+            "builtin:ZlibInflate" => self.dispatch_zlib_hostcall(cap, args),
             "builtin:NetSocket" => {
                 let lifecycle_label = self.writable_invocation_label(args)?;
                 let socket = self.construct_loopback_socket(false, None, lifecycle_label)?;
@@ -69143,6 +69870,239 @@ mod async_runtime_tests_current {
                 "bad".to_string()
             ))
         );
+    }
+
+    #[test]
+    fn zlib_buffer_and_dictionary_backing_labels_reach_output_bd_fdqd4() {
+        let mut core = test_interpreter();
+        let source = core
+            .alloc_buffer_from_bytes(b"classified payload")
+            .expect("source Buffer");
+        core.join_binary_storage_label(source, &Label::Secret)
+            .expect("classify source backing");
+        core.write_reg(0, Value::Object(source))
+            .expect("source register");
+
+        let Value::Object(compressed) = core
+            .dispatch_zlib_hostcall("builtin:ZlibGzipSync", RegRange { start: 0, count: 1 })
+            .expect("classified gzip")
+        else {
+            panic!("gzip must return a Buffer");
+        };
+        assert_eq!(core.binary_storage_label(compressed), Label::Secret);
+        assert_eq!(core.pending_hostcall_result_label, Some(Label::Secret));
+        core.clear_pending_hostcall_result_label();
+
+        let dictionary = core
+            .alloc_buffer_from_bytes(b"classified dictionary")
+            .expect("dictionary Buffer");
+        core.join_binary_storage_label(dictionary, &Label::Secret)
+            .expect("classify dictionary backing");
+        let options = core
+            .alloc_object_with_properties(&[("dictionary", Value::Object(dictionary))])
+            .expect("zlib options");
+        core.write_reg(0, Value::str("classified dictionary payload"))
+            .expect("public source register");
+        core.write_reg(1, Value::Object(options))
+            .expect("options register");
+        core.set_register_label(0, Label::Public)
+            .expect("public source label");
+        core.set_register_label(1, Label::Public)
+            .expect("public options label");
+
+        let Value::Object(compressed) = core
+            .dispatch_zlib_hostcall("builtin:ZlibDeflateSync", RegRange { start: 0, count: 2 })
+            .expect("dictionary deflate")
+        else {
+            panic!("deflate must return a Buffer");
+        };
+        assert_eq!(core.binary_storage_label(compressed), Label::Secret);
+        assert_eq!(core.pending_hostcall_result_label, Some(Label::Secret));
+    }
+
+    #[test]
+    fn zlib_decompression_limit_refuses_without_heap_publication_bd_fdqd4() {
+        let oversized = vec![b'x'; MAX_ARRAY_BUFFER_BYTE_LENGTH as usize + 1];
+        let mut storage = vec![0u8; zlib_rs::compress_bound(oversized.len())];
+        let compressed = {
+            let (written, _) =
+                zlib_rs::compress_slice(&mut storage, &oversized, Default::default());
+            written.to_vec()
+        };
+
+        let mut core = test_interpreter();
+        let input = core
+            .alloc_buffer_from_bytes(&compressed)
+            .expect("compressed bomb Buffer");
+        core.write_reg(0, Value::Object(input))
+            .expect("compressed input register");
+        let heap_before = core.heap.len();
+        let memory_before = core.estimated_memory_bytes();
+
+        assert!(matches!(
+            core.dispatch_zlib_hostcall(
+                "builtin:ZlibInflateSync",
+                RegRange { start: 0, count: 1 },
+            ),
+            Err(InterpreterError::RangeError { .. })
+        ));
+        assert_eq!(core.heap.len(), heap_before);
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+        assert!(core.pending_hostcall_result_label.is_none());
+    }
+
+    #[test]
+    fn zlib_codec_preflight_and_labeled_io_scheduling_are_atomic_bd_fdqd4() {
+        let mut core = test_interpreter();
+        core.write_reg(0, Value::str("small input"))
+            .expect("input register");
+        let baseline = core.sync_estimated_memory_bytes().expect("memory baseline");
+        let heap_before = core.heap.len();
+        core.config.max_total_memory_bytes = baseline
+            .saturating_add(ZLIB_CODEC_WORKSPACE_BYTES)
+            .saturating_add(MAX_ARRAY_BUFFER_BYTE_LENGTH.saturating_mul(2))
+            .saturating_add(ZLIB_IO_CHUNK_BYTES as u64)
+            .saturating_add(ZLIB_PUBLICATION_METADATA_BYTES)
+            .saturating_sub(1);
+
+        assert!(matches!(
+            core.dispatch_zlib_hostcall("builtin:ZlibGzipSync", RegRange { start: 0, count: 1 },),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.heap.len(), heap_before);
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+
+        core.config.max_total_memory_bytes = DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES;
+        core.schedule_io_callback_with_label(77, vec![Value::Undefined], Label::Secret)
+            .expect("labeled I/O callback");
+        let turn = core.event_loop.turn();
+        assert_eq!(
+            turn.macrotask.expect("scheduled callback").label,
+            Label::Secret
+        );
+    }
+
+    #[test]
+    fn zlib_composite_clone_peak_and_codec_work_refuse_before_mutation_bd_fdqd4() {
+        let mut core = test_interpreter();
+        let input = core
+            .alloc_buffer_from_bytes(&vec![b'a'; 64 * 1024])
+            .expect("input Buffer");
+        let dictionary = core
+            .alloc_buffer_from_bytes(&vec![b'b'; 64 * 1024])
+            .expect("dictionary Buffer");
+        let options = core
+            .alloc_object_with_properties(&[("dictionary", Value::Object(dictionary))])
+            .expect("options");
+        core.write_reg(0, Value::Object(input)).expect("input reg");
+        core.write_reg(1, Value::Object(options))
+            .expect("options reg");
+        let baseline = core.sync_estimated_memory_bytes().expect("memory baseline");
+        let heap_before = core.heap.len();
+        let instructions_before = core.instructions_executed;
+
+        // Each old sequential copy fit this allowance in isolation; their
+        // combined clone+codec+publication peak does not.
+        core.config.max_total_memory_bytes = baseline.saturating_add(128 * 1024);
+        assert!(matches!(
+            core.dispatch_zlib_hostcall(
+                "builtin:ZlibDeflateSync",
+                RegRange { start: 0, count: 2 },
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.heap.len(), heap_before);
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert_eq!(core.instructions_executed, instructions_before);
+
+        core.config.max_total_memory_bytes = DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES;
+        let cost = InterpreterCore::zlib_work_cost(64 * 1024, 64 * 1024, true, 6);
+        core.config.instruction_budget = instructions_before.saturating_add(cost).saturating_sub(1);
+        assert!(matches!(
+            core.dispatch_zlib_hostcall(
+                "builtin:ZlibDeflateSync",
+                RegRange { start: 0, count: 2 },
+            ),
+            Err(InterpreterError::BudgetExhausted { .. })
+        ));
+        assert_eq!(core.heap.len(), heap_before);
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert_eq!(core.instructions_executed, instructions_before);
+    }
+
+    #[test]
+    fn zlib_error_transactions_preserve_prototype_and_pending_state_bd_fdqd4() {
+        let mut core = test_interpreter();
+        let error_prototype = core
+            .ensure_builtin_prototype("Error")
+            .expect("Error prototype");
+        let baseline = core.sync_estimated_memory_bytes().expect("memory baseline");
+        let heap_before = core.heap.len();
+
+        // Measure the exact retained error-object delta, then leave precisely
+        // enough room for construction but not callback scheduling.
+        core.construct_buffer_node_error(
+            "Error",
+            "Z_DATA_ERROR",
+            "transactional zlib error".to_string(),
+        )
+        .expect("probe error");
+        let error_delta = core.estimated_memory_bytes().saturating_sub(baseline);
+        core.rollback_heap_to_len(heap_before);
+        core.estimated_memory_bytes = baseline;
+        core.config.max_total_memory_bytes = baseline.saturating_add(error_delta);
+
+        assert!(matches!(
+            core.schedule_zlib_data_error_callback(
+                77,
+                "Z_DATA_ERROR",
+                "transactional zlib error".to_string(),
+                Label::Public,
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.heap.len(), heap_before);
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert!(core.pending_io_callbacks.is_empty());
+        assert!(!core.event_loop.has_pending_work());
+        assert_eq!(core.builtin_prototypes.get("Error"), Some(&error_prototype));
+        assert!((error_prototype.0 as usize) < core.heap.len());
+
+        let custom_label = Label::Custom {
+            name: "zlib-sync-error-label".repeat(64),
+            level: 9,
+        };
+        core.config.max_total_memory_bytes = baseline;
+        let sync_error = core.zlib_sync_data_error(
+            "Z_DATA_ERROR",
+            "sync label refusal".to_string(),
+            &custom_label,
+        );
+        assert!(matches!(
+            sync_error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(core.heap.len(), heap_before);
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert!(core.pending_exception.is_none());
+        assert_eq!(core.pending_exception_label, Label::Public);
+        assert_eq!(core.builtin_prototypes.get("Error"), Some(&error_prototype));
+
+        let mut callback_core = test_interpreter();
+        callback_core
+            .schedule_zlib_data_error_callback(
+                91,
+                "Z_DATA_ERROR",
+                "one callback argument".to_string(),
+                Label::Public,
+            )
+            .expect("schedule zlib error callback");
+        let callback_args = callback_core
+            .pending_io_callbacks
+            .values()
+            .next()
+            .expect("pending zlib callback args");
+        assert_eq!(callback_args.len(), 1);
     }
 }
 

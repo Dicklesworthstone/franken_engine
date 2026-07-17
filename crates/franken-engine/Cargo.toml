@@ -254,6 +254,7 @@ ryu-js = "1.0"
 url = "2.5.8"
 sha2 = "0.10"
 flate2 = "1.1"
+zlib-rs = { version = "0.6.3", default-features = false, features = ["std", "rust-allocator"] }
 lz4_flex = "0.11"
 zstd = "0.13"
 subtle = "2.6"

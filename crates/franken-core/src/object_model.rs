@@ -49,6 +49,20 @@ pub struct OrderedStringMap<V> {
     // keeps its ADR-frozen public struct shape; OrderedStringMap's standalone
     // map-shaped serde intentionally ignores it.
     baseline_string_key_order: Option<Vec<String>>,
+    // Typed Symbol-keyed data/accessor properties for the executable core
+    // baseline. These remain private metadata for the same public-shape
+    // reason as `baseline_string_key_order`; HeapObject's custom serde owns
+    // their additive wire representation.
+    baseline_symbol_properties: BTreeMap<SymbolId, BaselineSymbolProperty<V>>,
+    baseline_symbol_key_order: Vec<SymbolId>,
+}
+
+/// Private descriptor carrier used by the executable baseline heap while its
+/// public `HeapObject` fields remain frozen to string-keyed maps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BaselineSymbolProperty<V> {
+    Data(V),
+    Accessor { get: Option<V>, set: Option<V> },
 }
 
 impl<V: PartialEq> PartialEq for OrderedStringMap<V> {
@@ -56,6 +70,8 @@ impl<V: PartialEq> PartialEq for OrderedStringMap<V> {
         self.by_key == other.by_key
             && self.array_indices == other.array_indices
             && self.string_insertion_order == other.string_insertion_order
+            && self.baseline_symbol_properties == other.baseline_symbol_properties
+            && self.baseline_symbol_key_order == other.baseline_symbol_key_order
     }
 }
 
@@ -68,6 +84,8 @@ impl<V> Default for OrderedStringMap<V> {
             array_indices: BTreeMap::new(),
             string_insertion_order: Vec::new(),
             baseline_string_key_order: None,
+            baseline_symbol_properties: BTreeMap::new(),
+            baseline_symbol_key_order: Vec::new(),
         }
     }
 }
@@ -193,6 +211,8 @@ impl<V> OrderedStringMap<V> {
         if let Some(order) = self.baseline_string_key_order.as_mut() {
             order.retain(|key| !removed_keys.contains(key));
         }
+        self.baseline_symbol_properties.clear();
+        self.baseline_symbol_key_order.clear();
     }
 
     /// Retain only entries for which `keep` returns true.
@@ -244,6 +264,66 @@ impl<V> OrderedStringMap<V> {
 
     pub(crate) fn set_baseline_string_key_order(&mut self, order: Option<Vec<String>>) {
         self.baseline_string_key_order = order;
+    }
+
+    pub(crate) fn baseline_symbol_property(
+        &self,
+        symbol: SymbolId,
+    ) -> Option<&BaselineSymbolProperty<V>> {
+        self.baseline_symbol_properties.get(&symbol)
+    }
+
+    pub(crate) fn baseline_symbol_properties(
+        &self,
+    ) -> impl Iterator<Item = (SymbolId, &BaselineSymbolProperty<V>)> {
+        self.baseline_symbol_key_order.iter().filter_map(|symbol| {
+            self.baseline_symbol_properties
+                .get(symbol)
+                .map(|property| (*symbol, property))
+        })
+    }
+
+    pub(crate) fn baseline_symbol_key_order(&self) -> &[SymbolId] {
+        &self.baseline_symbol_key_order
+    }
+
+    /// Insert or replace a typed Symbol property. Replacing an existing
+    /// descriptor retains its creation position; deleting and re-inserting
+    /// appends it.
+    pub(crate) fn insert_baseline_symbol_property(
+        &mut self,
+        symbol: SymbolId,
+        property: BaselineSymbolProperty<V>,
+    ) -> Option<BaselineSymbolProperty<V>> {
+        if !self.baseline_symbol_properties.contains_key(&symbol) {
+            self.baseline_symbol_key_order.push(symbol);
+        }
+        self.baseline_symbol_properties.insert(symbol, property)
+    }
+
+    pub(crate) fn remove_baseline_symbol_property(
+        &mut self,
+        symbol: SymbolId,
+    ) -> Option<BaselineSymbolProperty<V>> {
+        let removed = self.baseline_symbol_properties.remove(&symbol);
+        if removed.is_some() {
+            self.baseline_symbol_key_order
+                .retain(|candidate| *candidate != symbol);
+        }
+        removed
+    }
+
+    pub(crate) fn restore_baseline_symbol_property(
+        &mut self,
+        symbol: SymbolId,
+        property: BaselineSymbolProperty<V>,
+        position: usize,
+    ) {
+        self.baseline_symbol_properties.insert(symbol, property);
+        self.baseline_symbol_key_order
+            .retain(|candidate| *candidate != symbol);
+        let position = position.min(self.baseline_symbol_key_order.len());
+        self.baseline_symbol_key_order.insert(position, symbol);
     }
 }
 

@@ -1290,7 +1290,9 @@ fn os_builtin_call_capability(
 /// `builtin:*` hostcall during lowering. Keep this list limited to executable
 /// arms in `baseline_interpreter.rs`; the numeric stdlib bridge advertises a
 /// wider aspirational surface that is not callable yet (bd-zql4d).
-const STATIC_BUILTIN_GLOBALS: [&str; 5] = ["Object", "Array", "String", "Math", "JSON"];
+const STATIC_BUILTIN_GLOBALS: [&str; 7] = [
+    "Object", "Array", "String", "Math", "JSON", "Symbol", "Reflect",
+];
 
 /// Intrinsics that exist only through a direct-call lowering seam. Bare
 /// unshadowed reads are undefined, but a real outer lexical binding with the
@@ -1324,6 +1326,22 @@ fn is_non_materialized_intrinsic_global(name: &str) -> bool {
     is_static_builtin_global(name) || DIRECT_CALL_INTRINSIC_GLOBALS.contains(&name)
 }
 
+/// Materialize the supported first-class builtin global values. Most static
+/// builtin globals exist only as call-lowering receivers, but `Symbol` is also
+/// callable and therefore needs a real value when it is read unbound.
+fn static_builtin_global_factory_capability(
+    name: &str,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    if binding_lookup.contains_key(name) {
+        return None;
+    }
+    match name {
+        "Symbol" => Some("builtin:SymbolFunction"),
+        _ => None,
+    }
+}
+
 fn static_builtin_call_capability(
     callee: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
@@ -1349,23 +1367,30 @@ fn static_builtin_call_capability(
     match (global.as_str(), property_name) {
         ("Object", "keys") => Some("builtin:ObjectKeys"),
         ("Object", "values") => Some("builtin:ObjectValues"),
+        ("Object", "entries") => Some("builtin:ObjectEntries"),
+        ("Object", "assign") => Some("builtin:ObjectAssign"),
+        ("Object", "getOwnPropertyNames") => Some("builtin:ObjectGetOwnPropertyNames"),
+        ("Object", "getOwnPropertySymbols") => Some("builtin:ObjectGetOwnPropertySymbols"),
         ("Array", "isArray") => Some("builtin:ArrayIsArray"),
         ("String", "fromCharCode") => Some("builtin:StringFromCharCode"),
         ("String", "fromCodePoint") => Some("builtin:StringFromCodePoint"),
         ("Math", "abs") => Some("builtin:MathAbs"),
         ("JSON", "parse") => Some("builtin:JsonParse"),
         ("JSON", "stringify") => Some("builtin:JsonStringify"),
+        ("Symbol", "for") => Some("builtin:SymbolFor"),
+        ("Symbol", "keyFor") => Some("builtin:SymbolKeyFor"),
+        ("Reflect", "ownKeys") => Some("builtin:ReflectOwnKeys"),
         _ => None,
     }
 }
 
-/// Recognize the one supported first-class static builtin member read.
+/// Recognize supported first-class static builtin member reads.
 ///
 /// Core has no materialized `Array` global object, so an unshadowed
-/// `Array.isArray` value read needs a dedicated pure factory hostcall. Keep
-/// this allowlist separate from direct-call interception: widening it to an
-/// arbitrary capability-backed callable would bypass the normal hostcall
-/// authority boundary when the returned value is invoked.
+/// `Array.isArray` value read needs a dedicated factory hostcall. Well-known
+/// `Symbol.*` values likewise materialize through explicit zero-argument
+/// builtin capabilities. Keep this allowlist separate from direct-call
+/// interception because these entries produce first-class values.
 fn static_builtin_member_factory_capability(
     object: &Expression,
     property: &Expression,
@@ -1384,6 +1409,19 @@ fn static_builtin_member_factory_capability(
     };
     match (global.as_str(), property_name) {
         ("Array", "isArray") => Some("builtin:ArrayIsArrayFunction"),
+        ("Symbol", "iterator") => Some("builtin:SymbolIterator"),
+        ("Symbol", "toPrimitive") => Some("builtin:SymbolToPrimitive"),
+        ("Symbol", "hasInstance") => Some("builtin:SymbolHasInstance"),
+        ("Symbol", "toStringTag") => Some("builtin:SymbolToStringTag"),
+        ("Symbol", "species") => Some("builtin:SymbolSpecies"),
+        ("Symbol", "isConcatSpreadable") => Some("builtin:SymbolIsConcatSpreadable"),
+        ("Symbol", "unscopables") => Some("builtin:SymbolUnscopables"),
+        ("Symbol", "asyncIterator") => Some("builtin:SymbolAsyncIterator"),
+        ("Symbol", "match") => Some("builtin:SymbolMatch"),
+        ("Symbol", "matchAll") => Some("builtin:SymbolMatchAll"),
+        ("Symbol", "replace") => Some("builtin:SymbolReplace"),
+        ("Symbol", "search") => Some("builtin:SymbolSearch"),
+        ("Symbol", "split") => Some("builtin:SymbolSplit"),
         _ => None,
     }
 }
@@ -8959,13 +8997,25 @@ fn lower_expression_to_ir1(
 ) -> Result<(), LoweringPipelineError> {
     match expression {
         Expression::Identifier(name) => {
-            // Core has no heap-backed Object/Array/String/Math/JSON globals,
-            // and `require` is supported only as a direct-call lowering seam.
-            // An unbound bare read is therefore undefined and must not create
-            // a forward-reference entry that poisons a later supported static
-            // call such as `Math.nope; Math.abs(1)` (bd-zql4d) or a later
-            // unshadowed `require('x')` after lowering a nested closure
-            // (bd-x0ld5).
+            // `Symbol` is the one supported static builtin global that also
+            // has a first-class callable value. Materialize it before the
+            // non-materialized-global fallback while preserving lexical
+            // shadowing.
+            if let Some(capability) = static_builtin_global_factory_capability(name, binding_lookup)
+            {
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: 0,
+                });
+                return Ok(());
+            }
+            // Core has no heap-backed global objects for the remaining static
+            // builtin receivers, and `require` is supported only as a
+            // direct-call lowering seam. An unbound bare read is therefore
+            // undefined and must not create a forward-reference entry that
+            // poisons a later supported static call such as
+            // `Math.nope; Math.abs(1)` (bd-zql4d) or a later unshadowed
+            // `require('x')` after lowering a nested closure (bd-x0ld5).
             if is_non_materialized_intrinsic_global(name)
                 && !binding_lookup.contains_key(name.as_str())
             {
@@ -10243,11 +10293,11 @@ fn lower_expression_to_ir1(
             property,
             computed,
         } => {
-            // bd-cue2u: unshadowed `Array.isArray` / `Array["isArray"]`
-            // member reads materialize a deterministic first-class builtin
-            // callable. Direct calls are still intercepted earlier as
-            // `builtin:ArrayIsArray`, while lexical `Array` bindings fall
-            // through to ordinary property access.
+            // bd-cue2u / bd-n8eta.4.3: unshadowed `Array.isArray` and
+            // well-known `Symbol.*` member reads materialize deterministic
+            // first-class builtin values. Direct static calls are intercepted
+            // earlier, while lexical bindings fall through to ordinary
+            // property access.
             if let Some(capability) = static_builtin_member_factory_capability(
                 object,
                 property,
@@ -11458,6 +11508,36 @@ mod tests {
         Ir0Module::from_syntax_tree(tree, "fixture.js")
     }
 
+    fn lower_source_to_ir1_bd_n8eta_4_3(source: &str) -> Ir1Module {
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect("bd-n8eta.4.3 lowering source should parse");
+        lower_ir0_to_ir1(&Ir0Module::from_syntax_tree(tree, "bd_n8eta_4_3.js"))
+            .expect("bd-n8eta.4.3 source should lower to IR1")
+            .module
+    }
+
+    fn host_calls_bd_n8eta_4_3(ops: &[Ir1Op]) -> Vec<(&str, u32)> {
+        fn visit<'a>(ops: &'a [Ir1Op], calls: &mut Vec<(&'a str, u32)>) {
+            for op in ops {
+                if let Ir1Op::HostCall {
+                    capability,
+                    arg_count,
+                } = op
+                {
+                    calls.push((capability.as_str(), *arg_count));
+                }
+                if let Some(body_ops) = nested_function_body(op) {
+                    visit(body_ops, calls);
+                }
+            }
+        }
+
+        let mut calls = Vec::new();
+        visit(ops, &mut calls);
+        calls
+    }
+
     fn lower_rest_source_to_ir3(source: &str) -> Result<Ir3Module, LoweringPipelineError> {
         let tree = CanonicalEs2020Parser
             .parse(source, ParseGoal::Script)
@@ -11589,6 +11669,102 @@ mod tests {
                 .iter()
                 .all(|check| check.passed)
         );
+    }
+
+    #[test]
+    fn unbound_symbol_global_materializes_first_class_factory_bd_n8eta_4_3() {
+        let ir1 = lower_source_to_ir1_bd_n8eta_4_3(
+            "const factory = Symbol; const value = factory('description'); value;",
+        );
+
+        assert_eq!(
+            host_calls_bd_n8eta_4_3(&ir1.ops),
+            vec![("builtin:SymbolFunction", 0)]
+        );
+    }
+
+    #[test]
+    fn static_symbol_object_and_reflect_calls_lower_explicitly_bd_n8eta_4_3() {
+        let ir1 = lower_source_to_ir1_bd_n8eta_4_3(
+            "Symbol.for('first');\
+             Symbol.keyFor(Symbol.for('second'));\
+             Object.entries({});\
+             Object.assign({}, {});\
+             Object.getOwnPropertyNames({});\
+             Object.getOwnPropertySymbols({});\
+             Reflect.ownKeys({});",
+        );
+
+        assert_eq!(
+            host_calls_bd_n8eta_4_3(&ir1.ops),
+            vec![
+                ("builtin:SymbolFor", 1),
+                ("builtin:SymbolFor", 1),
+                ("builtin:SymbolKeyFor", 1),
+                ("builtin:ObjectEntries", 1),
+                ("builtin:ObjectAssign", 2),
+                ("builtin:ObjectGetOwnPropertyNames", 1),
+                ("builtin:ObjectGetOwnPropertySymbols", 1),
+                ("builtin:ReflectOwnKeys", 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn well_known_symbol_member_reads_lower_explicitly_bd_n8eta_4_3() {
+        let ir1 = lower_source_to_ir1_bd_n8eta_4_3(
+            "Symbol.iterator;\
+             Symbol['toPrimitive'];\
+             Symbol.hasInstance;\
+             Symbol['toStringTag'];\
+             Symbol.species;\
+             Symbol['isConcatSpreadable'];\
+             Symbol.unscopables;\
+             Symbol['asyncIterator'];\
+             Symbol.match;\
+             Symbol['matchAll'];\
+             Symbol.replace;\
+             Symbol['search'];\
+             Symbol.split;",
+        );
+
+        assert_eq!(
+            host_calls_bd_n8eta_4_3(&ir1.ops),
+            vec![
+                ("builtin:SymbolIterator", 0),
+                ("builtin:SymbolToPrimitive", 0),
+                ("builtin:SymbolHasInstance", 0),
+                ("builtin:SymbolToStringTag", 0),
+                ("builtin:SymbolSpecies", 0),
+                ("builtin:SymbolIsConcatSpreadable", 0),
+                ("builtin:SymbolUnscopables", 0),
+                ("builtin:SymbolAsyncIterator", 0),
+                ("builtin:SymbolMatch", 0),
+                ("builtin:SymbolMatchAll", 0),
+                ("builtin:SymbolReplace", 0),
+                ("builtin:SymbolSearch", 0),
+                ("builtin:SymbolSplit", 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn captured_lexical_globals_shadow_symbol_object_and_reflect_lowering_bd_n8eta_4_3() {
+        let ir1 = lower_source_to_ir1_bd_n8eta_4_3(
+            "const Symbol = { for: 1, iterator: 2 };\
+             const Object = { entries: 3, getOwnPropertySymbols: 4 };\
+             const Reflect = { ownKeys: 5 };\
+             function read() {\
+                 Symbol.for('value');\
+                 Object.entries({});\
+                 Object.getOwnPropertySymbols({});\
+                 Reflect.ownKeys({});\
+                 return Symbol.iterator;\
+             }\
+             read();",
+        );
+
+        assert!(host_calls_bd_n8eta_4_3(&ir1.ops).is_empty());
     }
 
     #[test]

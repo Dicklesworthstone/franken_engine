@@ -65,8 +65,12 @@ proptest! {
                 Op::Reset(i) => {
                     if !lazy_seeds.is_empty() {
                         let idx = i % lazy_seeds.len();
-                        lazy.reset_execution_state_from_seed(&lazy_seeds[idx]);
-                        eager.reset_execution_state_from_seed_eager_for_test(&eager_seeds[idx]);
+                        lazy
+                            .reset_execution_state_from_seed(&lazy_seeds[idx])
+                            .expect("captured seed must remain valid");
+                        eager
+                            .reset_execution_state_from_seed_eager_for_test(&eager_seeds[idx])
+                            .expect("captured eager seed must remain valid");
                     }
                 }
             }

@@ -51,7 +51,10 @@ use crate::js_string::JsString;
 use crate::lowering_pipeline::{
     CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX, LoweringContext, lower_ir0_to_ir3,
 };
-use crate::object_model::{OrderedStringMap, canonical_array_index};
+use crate::object_model::{
+    BaselineSymbolProperty, OrderedStringMap, PropertyKey as TypedPropertyKey, SymbolId,
+    WellKnownSymbol, canonical_array_index,
+};
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 use crate::runtime_config::ExecutionConfig;
 
@@ -109,6 +112,10 @@ const MEMORY_ESTIMATE_ITERATOR_BASE_BYTES: u64 = 32;
 const MEMORY_ESTIMATE_GENERATOR_BASE_BYTES: u64 = 48;
 /// Approximate per-resumable CopyDataProperties state footprint.
 const MEMORY_ESTIMATE_COPY_DATA_PROPERTIES_STATE_BASE_BYTES: u64 = 64;
+/// Fixed persisted mapping for ES2020 well-known Symbol identities.
+const WELL_KNOWN_SYMBOL_SCHEMA: &str = "es2020-symbol-ids-1-13-v1";
+/// First dynamically allocated Symbol identity after the fixed well-known set.
+const FIRST_DYNAMIC_SYMBOL_ID: u32 = 14;
 
 /// Canonical operator-facing label for the deterministic execution profile.
 pub const DETERMINISTIC_PROFILE_LABEL: &str = "baseline_deterministic_profile";
@@ -296,6 +303,350 @@ pub enum Value {
     Promise(u32),
     /// Builtin callable bound into the runtime environment.
     BuiltinFunction(BuiltinFunction),
+    /// ECMAScript Symbol primitive identity. Additive variants stay at the
+    /// tail so all pre-existing non-self-describing serde discriminants remain
+    /// stable.
+    Symbol(SymbolId),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RuntimeSymbolKind {
+    Private,
+    Global,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeSymbolRecord {
+    symbol_id: SymbolId,
+    kind: RuntimeSymbolKind,
+    description: Option<JsString>,
+    registry_key: Option<JsString>,
+}
+
+struct RuntimeSymbolRecordRef<'a>(&'a RuntimeSymbolRecord);
+
+impl Serialize for RuntimeSymbolRecordRef<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+
+        let record = self.0;
+        let mut wire = serializer.serialize_struct(
+            "RuntimeSymbolRecord",
+            if matches!(record.kind, RuntimeSymbolKind::Global) {
+                4
+            } else {
+                3
+            },
+        )?;
+        wire.serialize_field("symbol_id", &record.symbol_id.0)?;
+        wire.serialize_field(
+            "kind",
+            match record.kind {
+                RuntimeSymbolKind::Private => "private",
+                RuntimeSymbolKind::Global => "global",
+            },
+        )?;
+        wire.serialize_field("description", &record.description)?;
+        if matches!(record.kind, RuntimeSymbolKind::Global) {
+            wire.serialize_field("registry_key", &record.registry_key)?;
+        }
+        wire.end()
+    }
+}
+
+/// Distinguishes a missing field from a present JSON `null` field.
+#[derive(Debug)]
+struct PresentNullable<T>(Option<T>);
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for PresentNullable<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Option::<T>::deserialize(deserializer).map(Self)
+    }
+}
+
+fn deserialize_present_nullable<'de, D, T>(
+    deserializer: D,
+) -> Result<Option<PresentNullable<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    PresentNullable::<T>::deserialize(deserializer).map(Some)
+}
+
+/// Distinguishes an absent optional field from a present value while still
+/// rejecting JSON `null` for non-nullable records.
+#[derive(Debug)]
+struct PresentValue<T>(T);
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for PresentValue<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        T::deserialize(deserializer).map(Self)
+    }
+}
+
+fn deserialize_present_value<'de, D, T>(
+    deserializer: D,
+) -> Result<Option<PresentValue<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    PresentValue::<T>::deserialize(deserializer).map(Some)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeSymbolState {
+    next_symbol_id: u32,
+    symbols: BTreeMap<SymbolId, RuntimeSymbolRecord>,
+}
+
+impl Default for RuntimeSymbolState {
+    fn default() -> Self {
+        Self {
+            next_symbol_id: FIRST_DYNAMIC_SYMBOL_ID,
+            symbols: BTreeMap::new(),
+        }
+    }
+}
+
+impl Serialize for RuntimeSymbolState {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+
+        let records = self
+            .symbols
+            .values()
+            .map(RuntimeSymbolRecordRef)
+            .collect::<Vec<_>>();
+        let mut state = serializer.serialize_struct("RuntimeSymbolState", 3)?;
+        state.serialize_field("well_known_schema", WELL_KNOWN_SYMBOL_SCHEMA)?;
+        state.serialize_field("next_symbol_id", &self.next_symbol_id)?;
+        state.serialize_field("symbols", &records)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for RuntimeSymbolState {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct SymbolStateWire {
+            well_known_schema: String,
+            next_symbol_id: u32,
+            symbols: Vec<SymbolRecordWire>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct SymbolRecordWire {
+            symbol_id: u32,
+            kind: String,
+            #[serde(default, deserialize_with = "deserialize_present_nullable")]
+            description: Option<PresentNullable<JsString>>,
+            #[serde(default, deserialize_with = "deserialize_present_nullable")]
+            registry_key: Option<PresentNullable<JsString>>,
+        }
+
+        let wire = SymbolStateWire::deserialize(deserializer)?;
+        if wire.well_known_schema != WELL_KNOWN_SYMBOL_SCHEMA {
+            return Err(D::Error::custom("unknown well-known Symbol schema"));
+        }
+        let mut symbols = BTreeMap::new();
+        let mut previous_id = None;
+        for record in wire.symbols {
+            let id = SymbolId(record.symbol_id);
+            if let Some(previous) = previous_id
+                && id <= previous
+            {
+                return Err(D::Error::custom(
+                    "dynamic Symbol records must be strictly increasing",
+                ));
+            }
+            previous_id = Some(id);
+            let description = record
+                .description
+                .ok_or_else(|| D::Error::custom("Symbol description field is required"))?
+                .0;
+            let (kind, registry_key) = match record.kind.as_str() {
+                "private" => {
+                    if record.registry_key.is_some() {
+                        return Err(D::Error::custom(
+                            "private Symbol record forbids registry_key",
+                        ));
+                    }
+                    (RuntimeSymbolKind::Private, None)
+                }
+                "global" => {
+                    let registry_key = record
+                        .registry_key
+                        .ok_or_else(|| {
+                            D::Error::custom("global Symbol record requires registry_key")
+                        })?
+                        .0
+                        .ok_or_else(|| {
+                            D::Error::custom("global Symbol registry_key cannot be null")
+                        })?;
+                    if description.as_ref() != Some(&registry_key) {
+                        return Err(D::Error::custom(
+                            "global Symbol description must equal registry_key",
+                        ));
+                    }
+                    (RuntimeSymbolKind::Global, Some(registry_key))
+                }
+                _ => return Err(D::Error::custom("unknown dynamic Symbol kind")),
+            };
+            if symbols
+                .insert(
+                    id,
+                    RuntimeSymbolRecord {
+                        symbol_id: id,
+                        kind,
+                        description,
+                        registry_key,
+                    },
+                )
+                .is_some()
+            {
+                return Err(D::Error::custom("duplicate dynamic Symbol id"));
+            }
+        }
+        let state = Self {
+            next_symbol_id: wire.next_symbol_id,
+            symbols,
+        };
+        state.validate().map_err(D::Error::custom)?;
+        Ok(state)
+    }
+}
+
+impl RuntimeSymbolState {
+    fn is_default(&self) -> bool {
+        self.next_symbol_id == FIRST_DYNAMIC_SYMBOL_ID && self.symbols.is_empty()
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.next_symbol_id < FIRST_DYNAMIC_SYMBOL_ID {
+            return Err("next_symbol_id overlaps reserved well-known Symbols".to_string());
+        }
+        let mut registry_keys = BTreeSet::new();
+        for (id, record) in &self.symbols {
+            if id.0 < FIRST_DYNAMIC_SYMBOL_ID || id.0 == u32::MAX {
+                return Err(format!("invalid dynamic Symbol id {}", id.0));
+            }
+            if record.symbol_id != *id {
+                return Err("dynamic Symbol record id mismatch".to_string());
+            }
+            if id.0 >= self.next_symbol_id {
+                return Err(format!(
+                    "dynamic Symbol id {} is not below next_symbol_id {}",
+                    id.0, self.next_symbol_id
+                ));
+            }
+            match record.kind {
+                RuntimeSymbolKind::Private => {
+                    if record.registry_key.is_some() {
+                        return Err("private Symbol has a registry key".to_string());
+                    }
+                }
+                RuntimeSymbolKind::Global => {
+                    let key = record
+                        .registry_key
+                        .as_ref()
+                        .ok_or_else(|| "global Symbol lacks a registry key".to_string())?;
+                    if record.description.as_ref() != Some(key) {
+                        return Err("global Symbol description/registry mismatch".to_string());
+                    }
+                    if !registry_keys.insert(key.clone()) {
+                        return Err("duplicate global Symbol registry key".to_string());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn contains(&self, id: SymbolId) -> bool {
+        (1..FIRST_DYNAMIC_SYMBOL_ID).contains(&id.0) || self.symbols.contains_key(&id)
+    }
+
+    fn allocate_private(
+        &mut self,
+        description: Option<JsString>,
+    ) -> Result<SymbolId, InterpreterError> {
+        self.allocate(RuntimeSymbolKind::Private, description, None)
+    }
+
+    fn intern_global(&mut self, key: JsString) -> Result<SymbolId, InterpreterError> {
+        if let Some(record) = self.symbols.values().find(|record| {
+            matches!(record.kind, RuntimeSymbolKind::Global)
+                && record.registry_key.as_ref() == Some(&key)
+        }) {
+            return Ok(record.symbol_id);
+        }
+        self.allocate(RuntimeSymbolKind::Global, Some(key.clone()), Some(key))
+    }
+
+    fn allocate(
+        &mut self,
+        kind: RuntimeSymbolKind,
+        description: Option<JsString>,
+        registry_key: Option<JsString>,
+    ) -> Result<SymbolId, InterpreterError> {
+        if self.next_symbol_id == u32::MAX {
+            return Err(InterpreterError::TypeError {
+                expected: "available Symbol identity".to_string(),
+                got: "Symbol identity space exhausted".to_string(),
+            });
+        }
+        let symbol_id = SymbolId(self.next_symbol_id);
+        self.next_symbol_id += 1;
+        self.symbols.insert(
+            symbol_id,
+            RuntimeSymbolRecord {
+                symbol_id,
+                kind,
+                description,
+                registry_key,
+            },
+        );
+        Ok(symbol_id)
+    }
+
+    fn key_for(&self, id: SymbolId) -> Option<&JsString> {
+        self.symbols.get(&id).and_then(|record| {
+            matches!(record.kind, RuntimeSymbolKind::Global)
+                .then_some(record.registry_key.as_ref())
+                .flatten()
+        })
+    }
+
+    fn description(&self, id: SymbolId) -> Option<&JsString> {
+        self.symbols
+            .get(&id)
+            .and_then(|record| record.description.as_ref())
+    }
+}
+
+fn well_known_symbol_description(id: SymbolId) -> Option<&'static str> {
+    match id.0 {
+        1 => Some("Symbol.iterator"),
+        2 => Some("Symbol.toPrimitive"),
+        3 => Some("Symbol.hasInstance"),
+        4 => Some("Symbol.toStringTag"),
+        5 => Some("Symbol.species"),
+        6 => Some("Symbol.isConcatSpreadable"),
+        7 => Some("Symbol.unscopables"),
+        8 => Some("Symbol.asyncIterator"),
+        9 => Some("Symbol.match"),
+        10 => Some("Symbol.matchAll"),
+        11 => Some("Symbol.replace"),
+        12 => Some("Symbol.search"),
+        13 => Some("Symbol.split"),
+        _ => None,
+    }
 }
 
 /// Small set of builtin callable kinds the baseline interpreter exposes as
@@ -314,6 +665,10 @@ pub enum BuiltinFunctionKind {
     StringPrototypeIsWellFormed,
     StringPrototypeToWellFormed,
     ArrayIsArray,
+    Symbol,
+    SymbolFor,
+    SymbolKeyFor,
+    SymbolPrototypeToString,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -351,6 +706,13 @@ impl BuiltinFunction {
         }
     }
 
+    fn symbol(kind: BuiltinFunctionKind) -> Self {
+        Self {
+            kind,
+            module_specifier: String::new(),
+        }
+    }
+
     fn display_name(&self) -> &'static str {
         match self.kind {
             BuiltinFunctionKind::Require => "require",
@@ -361,6 +723,10 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StringPrototypeIsWellFormed => "isWellFormed",
             BuiltinFunctionKind::StringPrototypeToWellFormed => "toWellFormed",
             BuiltinFunctionKind::ArrayIsArray => "isArray",
+            BuiltinFunctionKind::Symbol => "Symbol",
+            BuiltinFunctionKind::SymbolFor => "for",
+            BuiltinFunctionKind::SymbolKeyFor => "keyFor",
+            BuiltinFunctionKind::SymbolPrototypeToString => "toString",
         }
     }
 }
@@ -380,6 +746,7 @@ impl Value {
             Self::Int(n) => *n != 0,
             Self::Float(f) => !f.is_nan() && f.inner() != 0.0,
             Self::Str(s) => !s.is_empty(),
+            Self::Symbol(_) => true,
             Self::Object(_)
             | Self::Function(_)
             | Self::Closure(_)
@@ -413,7 +780,8 @@ impl Value {
             | Self::Bool(_)
             | Self::Int(_)
             | Self::Float(_)
-            | Self::Str(_) => false,
+            | Self::Str(_)
+            | Self::Symbol(_) => false,
             Self::Object(_)
             | Self::Function(_)
             | Self::Closure(_)
@@ -437,6 +805,7 @@ impl Value {
             Self::Bool(_) => "boolean",
             Self::Int(_) | Self::Float(_) => "number",
             Self::Str(_) => "string",
+            Self::Symbol(_) => "symbol",
             Self::Object(_) => "object",
             Self::Function(_)
             | Self::Closure(_)
@@ -459,6 +828,7 @@ impl Value {
             Self::Bool(_) => "boolean",
             Self::Int(_) | Self::Float(_) => "number",
             Self::Str(_) => "string",
+            Self::Symbol(_) => "symbol",
             Self::Function(_)
             | Self::Closure(_)
             | Self::GeneratorFunction(_)
@@ -483,6 +853,7 @@ impl fmt::Display for Value {
             Self::Int(n) => write!(f, "{n}"),
             Self::Float(fv) => write!(f, "{fv}"),
             Self::Str(s) => write!(f, "{s}"),
+            Self::Symbol(id) => write!(f, "Symbol({})", id.0),
             Self::Object(id) => write!(f, "[object#{}]", id.0),
             Self::Function(idx) => write!(f, "[function#{idx}]"),
             Self::Closure(idx) => write!(f, "[closure#{idx}]"),
@@ -523,6 +894,35 @@ pub struct HeapObject {
     pub is_array: bool,
 }
 
+struct HeapSymbolPropertyRef<'a> {
+    symbol_id: SymbolId,
+    property: &'a BaselineSymbolProperty<Value>,
+}
+
+impl Serialize for HeapSymbolPropertyRef<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+
+        match self.property {
+            BaselineSymbolProperty::Data(value) => {
+                let mut record = serializer.serialize_struct("SymbolProperty", 3)?;
+                record.serialize_field("symbol_id", &self.symbol_id.0)?;
+                record.serialize_field("kind", "data")?;
+                record.serialize_field("value", value)?;
+                record.end()
+            }
+            BaselineSymbolProperty::Accessor { get, set } => {
+                let mut record = serializer.serialize_struct("SymbolProperty", 4)?;
+                record.serialize_field("symbol_id", &self.symbol_id.0)?;
+                record.serialize_field("kind", "accessor")?;
+                record.serialize_field("get", get)?;
+                record.serialize_field("set", set)?;
+                record.end()
+            }
+        }
+    }
+}
+
 impl Serialize for HeapObject {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct as _;
@@ -533,8 +933,18 @@ impl Serialize for HeapObject {
                 .filter(|key| canonical_array_index(key).is_none())
                 .collect::<Vec<_>>()
         });
-        let field_count =
-            4 + if self.accessors.is_empty() { 0 } else { 1 } + if order.is_some() { 1 } else { 0 };
+        let symbol_properties = self
+            .properties
+            .baseline_symbol_properties()
+            .map(|(symbol_id, property)| HeapSymbolPropertyRef {
+                symbol_id,
+                property,
+            })
+            .collect::<Vec<_>>();
+        let field_count = 4
+            + if self.accessors.is_empty() { 0 } else { 1 }
+            + if order.is_some() { 1 } else { 0 }
+            + if symbol_properties.is_empty() { 0 } else { 1 };
         let mut object = serializer.serialize_struct("HeapObject", field_count)?;
         object.serialize_field("properties", &self.properties)?;
         if !self.accessors.is_empty() {
@@ -545,6 +955,9 @@ impl Serialize for HeapObject {
         object.serialize_field("is_array", &self.is_array)?;
         if let Some(order) = &order {
             object.serialize_field("own_string_key_order", order)?;
+        }
+        if !symbol_properties.is_empty() {
+            object.serialize_field("symbol_properties", &symbol_properties)?;
         }
         object.end()
     }
@@ -565,6 +978,20 @@ impl<'de> Deserialize<'de> for HeapObject {
             is_array: bool,
             #[serde(default)]
             own_string_key_order: Option<Vec<String>>,
+            #[serde(default)]
+            symbol_properties: Vec<HeapSymbolPropertyWire>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct HeapSymbolPropertyWire {
+            symbol_id: u32,
+            kind: String,
+            value: Option<Value>,
+            #[serde(default, deserialize_with = "deserialize_present_nullable")]
+            get: Option<PresentNullable<Value>>,
+            #[serde(default, deserialize_with = "deserialize_present_nullable")]
+            set: Option<PresentNullable<Value>>,
         }
 
         let wire = HeapObjectWire::deserialize(deserializer)?;
@@ -605,6 +1032,47 @@ impl<'de> Deserialize<'de> for HeapObject {
             object.properties.set_baseline_string_key_order(Some(order));
         }
 
+        let mut seen_symbols = BTreeSet::new();
+        for record in wire.symbol_properties {
+            let symbol_id = SymbolId(record.symbol_id);
+            if symbol_id.0 == 0 {
+                return Err(D::Error::custom("Symbol property id 0 is invalid"));
+            }
+            if !seen_symbols.insert(symbol_id) {
+                return Err(D::Error::custom("duplicate Symbol property id"));
+            }
+            let property = match record.kind.as_str() {
+                "data" => {
+                    if record.get.is_some() || record.set.is_some() {
+                        return Err(D::Error::custom("data Symbol property forbids get/set"));
+                    }
+                    BaselineSymbolProperty::Data(
+                        record.value.ok_or_else(|| {
+                            D::Error::custom("data Symbol property requires value")
+                        })?,
+                    )
+                }
+                "accessor" => {
+                    if record.value.is_some() {
+                        return Err(D::Error::custom("accessor Symbol property forbids value"));
+                    }
+                    let get = record
+                        .get
+                        .ok_or_else(|| D::Error::custom("accessor Symbol property requires get"))?
+                        .0;
+                    let set = record
+                        .set
+                        .ok_or_else(|| D::Error::custom("accessor Symbol property requires set"))?
+                        .0;
+                    BaselineSymbolProperty::Accessor { get, set }
+                }
+                _ => return Err(D::Error::custom("unknown Symbol property kind")),
+            };
+            object
+                .properties
+                .insert_baseline_symbol_property(symbol_id, property);
+        }
+
         Ok(object)
     }
 }
@@ -619,6 +1087,12 @@ impl PartialEq for HeapObject {
             && self.properties.baseline_string_key_order().is_some()
                 == other.properties.baseline_string_key_order().is_some()
             && self.own_property_keys() == other.own_property_keys()
+            && self.properties.baseline_symbol_key_order()
+                == other.properties.baseline_symbol_key_order()
+            && self
+                .properties
+                .baseline_symbol_properties()
+                .eq(other.properties.baseline_symbol_properties())
     }
 }
 
@@ -638,6 +1112,15 @@ impl HeapObject {
 
     fn contains_own_property(&self, key: &str) -> bool {
         self.accessors.contains_key(key) || self.properties.contains_key(key)
+    }
+
+    fn contains_own_typed_property(&self, key: &TypedPropertyKey) -> bool {
+        match key {
+            TypedPropertyKey::String(key) => self.contains_own_property(key),
+            TypedPropertyKey::Symbol(symbol) => {
+                self.properties.baseline_symbol_property(*symbol).is_some()
+            }
+        }
     }
 
     /// Record a logical own-property definition without moving an existing
@@ -740,6 +1223,96 @@ impl HeapObject {
 
         array_indices.into_values().chain(ordinary).collect()
     }
+
+    /// Return all live own keys in ECMAScript order: integer strings,
+    /// ordinary strings, then Symbols in their property-creation order.
+    fn own_typed_property_keys(&self) -> Vec<TypedPropertyKey> {
+        self.own_property_keys()
+            .into_iter()
+            .map(TypedPropertyKey::String)
+            .chain(
+                self.properties
+                    .baseline_symbol_key_order()
+                    .iter()
+                    .copied()
+                    .map(TypedPropertyKey::Symbol),
+            )
+            .collect()
+    }
+}
+
+fn heap_object_contains_symbols(object: &HeapObject) -> bool {
+    !object.properties.baseline_symbol_key_order().is_empty()
+        || object
+            .properties
+            .values()
+            .any(|value| matches!(value, Value::Symbol(_)))
+        || object.accessors.values().any(|accessor| {
+            accessor
+                .get
+                .as_ref()
+                .is_some_and(|value| matches!(value, Value::Symbol(_)))
+                || accessor
+                    .set
+                    .as_ref()
+                    .is_some_and(|value| matches!(value, Value::Symbol(_)))
+        })
+        || object
+            .properties
+            .baseline_symbol_properties()
+            .any(|(_, property)| match property {
+                BaselineSymbolProperty::Data(value) => matches!(value, Value::Symbol(_)),
+                BaselineSymbolProperty::Accessor { get, set } => {
+                    get.as_ref()
+                        .is_some_and(|value| matches!(value, Value::Symbol(_)))
+                        || set
+                            .as_ref()
+                            .is_some_and(|value| matches!(value, Value::Symbol(_)))
+                }
+            })
+}
+
+fn validate_symbol_value(state: &RuntimeSymbolState, value: &Value) -> Result<(), String> {
+    if let Value::Symbol(id) = value
+        && !state.contains(*id)
+    {
+        return Err(format!("unresolved Symbol id {}", id.0));
+    }
+    Ok(())
+}
+
+fn validate_heap_symbol_references(
+    state: &RuntimeSymbolState,
+    object: &HeapObject,
+) -> Result<(), String> {
+    for value in object.properties.values() {
+        validate_symbol_value(state, value)?;
+    }
+    for accessor in object.accessors.values() {
+        if let Some(getter) = &accessor.get {
+            validate_symbol_value(state, getter)?;
+        }
+        if let Some(setter) = &accessor.set {
+            validate_symbol_value(state, setter)?;
+        }
+    }
+    for (id, property) in object.properties.baseline_symbol_properties() {
+        if !state.contains(id) {
+            return Err(format!("unresolved Symbol property id {}", id.0));
+        }
+        match property {
+            BaselineSymbolProperty::Data(value) => validate_symbol_value(state, value)?,
+            BaselineSymbolProperty::Accessor { get, set } => {
+                if let Some(getter) = get {
+                    validate_symbol_value(state, getter)?;
+                }
+                if let Some(setter) = set {
+                    validate_symbol_value(state, setter)?;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Baseline accessor descriptor: getter/setter functions for one property key.
@@ -767,6 +1340,25 @@ enum AccessorKind {
 /// up again immediately before each read so a preceding getter can delete a
 /// later key, while keys added after the snapshot remain absent.
 #[derive(Debug, Clone)]
+enum CopyDataPropertiesWriteMode {
+    /// Object rest/spread define fresh own data properties and never invoke a
+    /// setter on the newly created target.
+    CreateData,
+    /// Object.assign performs ordinary Set on its target. The source offset
+    /// lets the HostCall resume the correct argument after a getter/setter.
+    Set {
+        target_receiver: Value,
+        source_arg_offset: u32,
+    },
+}
+
+#[derive(Debug, Clone)]
+enum CopyDataPropertiesAwaiting {
+    Getter(TypedPropertyKey),
+    Setter,
+}
+
+#[derive(Debug, Clone)]
 struct CopyDataPropertiesState {
     instruction_ip: usize,
     register_base: usize,
@@ -777,12 +1369,13 @@ struct CopyDataPropertiesState {
     /// makes indexed property reads linear overall instead of rescanning the
     /// prefix for every code-unit key.
     string_units: Option<Vec<u16>>,
-    keys: Vec<String>,
-    excluded: BTreeSet<String>,
+    keys: Vec<TypedPropertyKey>,
+    excluded: BTreeSet<TypedPropertyKey>,
     next_index: usize,
-    /// The getter return value is written to the instruction's `value_dst`.
-    /// Returning to the same instruction consumes it under this key.
-    awaiting_key: Option<String>,
+    write_mode: CopyDataPropertiesWriteMode,
+    /// Getter results return through the operation's scratch register;
+    /// setters return only for control-flow continuation.
+    awaiting: Option<CopyDataPropertiesAwaiting>,
 }
 
 impl CopyDataPropertiesState {
@@ -1553,6 +2146,7 @@ impl EvidenceLog {
                     }
                     string_hash
                 }
+                Value::Symbol(id) => 18 + u64::from(id.0),
                 Value::Object(id) => 6 + (id.0 as u64),
                 Value::Function(id) => 7 + (*id as u64),
                 Value::Closure(id) => 8 + (*id as u64),
@@ -2001,6 +2595,105 @@ pub struct ExecutionSeed {
     heap: Vec<HeapObject>,
     function_prototypes: BTreeMap<FunctionObjectKey, ObjectId>,
     function_objects: BTreeMap<FunctionObjectKey, ObjectId>,
+    symbol_state: RuntimeSymbolState,
+}
+
+impl Serialize for ExecutionSeed {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+
+        let include_symbol_state = !self.symbol_state.is_default() || self.contains_symbol_values();
+        let mut seed = serializer
+            .serialize_struct("ExecutionSeed", if include_symbol_state { 6 } else { 5 })?;
+        seed.serialize_field("registers", &self.registers)?;
+        seed.serialize_field("register_labels", &self.register_labels)?;
+        seed.serialize_field("heap", &self.heap)?;
+        seed.serialize_field(
+            "function_prototypes",
+            &self
+                .function_prototypes
+                .iter()
+                .map(|(key, value)| (*key, *value))
+                .collect::<Vec<_>>(),
+        )?;
+        seed.serialize_field(
+            "function_objects",
+            &self
+                .function_objects
+                .iter()
+                .map(|(key, value)| (*key, *value))
+                .collect::<Vec<_>>(),
+        )?;
+        if include_symbol_state {
+            seed.serialize_field("symbol_state", &self.symbol_state)?;
+        }
+        seed.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for ExecutionSeed {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct ExecutionSeedWire {
+            registers: Vec<Value>,
+            register_labels: Vec<crate::ifc_artifacts::Label>,
+            heap: Vec<HeapObject>,
+            function_prototypes: Vec<(FunctionObjectKey, ObjectId)>,
+            function_objects: Vec<(FunctionObjectKey, ObjectId)>,
+            #[serde(default, deserialize_with = "deserialize_present_value")]
+            symbol_state: Option<PresentValue<RuntimeSymbolState>>,
+        }
+
+        let wire = ExecutionSeedWire::deserialize(deserializer)?;
+        let symbol_state_was_present = wire.symbol_state.is_some();
+        let function_prototypes = wire
+            .function_prototypes
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        let function_objects = wire
+            .function_objects
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        let seed = Self {
+            registers: wire.registers,
+            register_labels: wire.register_labels,
+            heap: wire.heap,
+            function_prototypes,
+            function_objects,
+            symbol_state: wire.symbol_state.map(|state| state.0).unwrap_or_default(),
+        };
+        if !symbol_state_was_present && seed.contains_symbol_values() {
+            return Err(D::Error::custom(
+                "execution seed with Symbol values or keys requires symbol_state",
+            ));
+        }
+        seed.validate_symbol_references()
+            .map_err(D::Error::custom)?;
+        Ok(seed)
+    }
+}
+
+impl ExecutionSeed {
+    fn contains_symbol_values(&self) -> bool {
+        self.registers
+            .iter()
+            .any(|value| matches!(value, Value::Symbol(_)))
+            || self.heap.iter().any(heap_object_contains_symbols)
+    }
+
+    fn validate_symbol_references(&self) -> Result<(), String> {
+        self.symbol_state.validate()?;
+        for value in &self.registers {
+            validate_symbol_value(&self.symbol_state, value)?;
+        }
+        for object in &self.heap {
+            validate_heap_symbol_references(&self.symbol_state, object)?;
+        }
+        Ok(())
+    }
 }
 
 /// Eager execution seed for testing comparison
@@ -2008,6 +2701,20 @@ pub struct ExecutionSeed {
 pub struct EagerExecutionSeed {
     pub registers: Vec<Value>,
     pub heap: Vec<HeapObject>,
+    symbol_state: RuntimeSymbolState,
+}
+
+impl EagerExecutionSeed {
+    fn validate_symbol_references(&self) -> Result<(), String> {
+        self.symbol_state.validate()?;
+        for value in &self.registers {
+            validate_symbol_value(&self.symbol_state, value)?;
+        }
+        for object in &self.heap {
+            validate_heap_symbol_references(&self.symbol_state, object)?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2029,10 +2736,11 @@ struct ModuleExecutionSnapshot {
     current_module_specifier: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 enum FunctionObjectKey {
     Function(u32),
     Closure(u32),
+    Builtin(BuiltinFunctionKind),
 }
 
 // ---------------------------------------------------------------------------
@@ -2089,6 +2797,8 @@ pub struct InterpreterCore {
     call_stack: Vec<CallFrame>,
     /// Object heap.
     heap: Vec<HeapObject>,
+    /// Interpreter-owned Symbol identities, descriptions, and global registry.
+    symbol_state: RuntimeSymbolState,
     /// Approximate live memory tracked for fail-closed budget enforcement.
     estimated_memory_bytes: u64,
     /// Dedicated iterator runtime state used by iterator-specific IR3 ops.
@@ -2234,6 +2944,7 @@ impl InterpreterCore {
             register_labels: vec![crate::ifc_artifacts::Label::Public; max_regs],
             call_stack: Vec::new(),
             heap: Vec::new(),
+            symbol_state: RuntimeSymbolState::default(),
             estimated_memory_bytes: 0,
             iterators: Vec::new(),
             function_prototypes: BTreeMap::new(),
@@ -2344,7 +3055,7 @@ impl InterpreterCore {
             _ => current_seed,
         };
         self.last_pre_run_seed = Some(seed.clone());
-        self.reset_execution_state_from_seed(&seed);
+        self.reset_execution_state_from_seed(&seed)?;
         self.sync_estimated_memory_bytes()?;
         let entry_specifier = module.header.source_label.clone();
         self.current_module_specifier = Some(entry_specifier.clone());
@@ -2430,10 +3141,19 @@ impl InterpreterCore {
             heap: self.heap.clone(),
             function_prototypes: self.function_prototypes.clone(),
             function_objects: self.function_objects.clone(),
+            symbol_state: self.symbol_state.clone(),
         }
     }
 
-    pub fn reset_execution_state_from_seed(&mut self, seed: &ExecutionSeed) {
+    pub fn reset_execution_state_from_seed(
+        &mut self,
+        seed: &ExecutionSeed,
+    ) -> Result<(), InterpreterError> {
+        seed.validate_symbol_references()
+            .map_err(|got| InterpreterError::TypeError {
+                expected: "execution seed with resolved Symbol identities".to_string(),
+                got,
+            })?;
         self.register_base = 0;
         self.registers = seed.registers.clone();
         self.register_labels = seed.register_labels.clone();
@@ -2441,6 +3161,7 @@ impl InterpreterCore {
             .resize(self.registers.len(), crate::ifc_artifacts::Label::Public);
         self.call_stack.clear();
         self.heap = seed.heap.clone();
+        self.symbol_state = seed.symbol_state.clone();
         self.iterators.clear();
         self.function_prototypes = seed.function_prototypes.clone();
         self.function_objects = seed.function_objects.clone();
@@ -2464,6 +3185,7 @@ impl InterpreterCore {
         self.promise_combinators.clear();
         self.promise_combinator_watchers.clear();
         self.next_promise_combinator_id = 0;
+        Ok(())
     }
 
     // ---- Proptest helper methods (H2.4) ---------------------------------
@@ -2538,13 +3260,23 @@ impl InterpreterCore {
         EagerExecutionSeed {
             registers: self.registers.clone(),
             heap: self.heap.clone(),
+            symbol_state: self.symbol_state.clone(),
         }
     }
 
     /// Reset from eager seed format for testing
-    pub fn reset_execution_state_from_seed_eager_for_test(&mut self, seed: &EagerExecutionSeed) {
+    pub fn reset_execution_state_from_seed_eager_for_test(
+        &mut self,
+        seed: &EagerExecutionSeed,
+    ) -> Result<(), InterpreterError> {
+        seed.validate_symbol_references()
+            .map_err(|got| InterpreterError::TypeError {
+                expected: "eager execution seed with resolved Symbol identities".to_string(),
+                got,
+            })?;
         self.registers = seed.registers.clone();
         self.heap = seed.heap.clone();
+        self.symbol_state = seed.symbol_state.clone();
 
         // Reset other state like the normal reset method
         self.register_base = 0;
@@ -2570,6 +3302,7 @@ impl InterpreterCore {
         self.promise_combinators.clear();
         self.promise_combinator_watchers.clear();
         self.next_promise_combinator_id = 0;
+        Ok(())
     }
 
     fn snapshot_module_execution(&self) -> ModuleExecutionSnapshot {
@@ -3122,6 +3855,51 @@ impl InterpreterCore {
                 };
                 self.array_is_array_value(arg)
             }
+            BuiltinFunctionKind::Symbol => {
+                let description = if args.count > 0 {
+                    self.symbol_description_argument(Some(self.read_reg(args.start)?))?
+                } else {
+                    None
+                };
+                self.allocate_private_symbol(description).map(Value::Symbol)
+            }
+            BuiltinFunctionKind::SymbolFor => {
+                let value = if args.count > 0 {
+                    self.read_reg(args.start)?
+                } else {
+                    Value::Undefined
+                };
+                let key = self.symbol_registry_key_argument(value)?;
+                self.intern_global_symbol(key).map(Value::Symbol)
+            }
+            BuiltinFunctionKind::SymbolKeyFor => {
+                let value = if args.count > 0 {
+                    self.read_reg(args.start)?
+                } else {
+                    Value::Undefined
+                };
+                let Value::Symbol(symbol) = value else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "Symbol".to_string(),
+                        got: value.type_name().to_string(),
+                    });
+                };
+                Ok(self
+                    .symbol_state
+                    .key_for(symbol)
+                    .cloned()
+                    .map(Value::Str)
+                    .unwrap_or(Value::Undefined))
+            }
+            BuiltinFunctionKind::SymbolPrototypeToString => {
+                let Some(Value::Symbol(symbol)) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "Symbol receiver".to_string(),
+                        got: receiver.map_or("undefined", Value::type_name).to_string(),
+                    });
+                };
+                Ok(Value::Str(self.symbol_to_string(*symbol)))
+            }
             BuiltinFunctionKind::StringPrototypeCharAt
             | BuiltinFunctionKind::StringPrototypeCharCodeAt
             | BuiltinFunctionKind::StringPrototypeCodePointAt
@@ -3138,7 +3916,7 @@ impl InterpreterCore {
                 } else {
                     None
                 };
-                Ok(match builtin.kind {
+                match builtin.kind {
                     BuiltinFunctionKind::StringPrototypeCharAt => {
                         Self::string_char_at_value(&text, index.as_ref())
                     }
@@ -3152,15 +3930,20 @@ impl InterpreterCore {
                         Self::string_at_value(&text, index.as_ref())
                     }
                     BuiltinFunctionKind::StringPrototypeIsWellFormed => {
-                        Self::string_is_well_formed_value(&text)
+                        Ok(Self::string_is_well_formed_value(&text))
                     }
                     BuiltinFunctionKind::StringPrototypeToWellFormed => {
-                        Self::string_to_well_formed_value(&text)
+                        Ok(Self::string_to_well_formed_value(&text))
                     }
-                    BuiltinFunctionKind::Require | BuiltinFunctionKind::ArrayIsArray => {
+                    BuiltinFunctionKind::Require
+                    | BuiltinFunctionKind::ArrayIsArray
+                    | BuiltinFunctionKind::Symbol
+                    | BuiltinFunctionKind::SymbolFor
+                    | BuiltinFunctionKind::SymbolKeyFor
+                    | BuiltinFunctionKind::SymbolPrototypeToString => {
                         unreachable!("handled above")
                     }
-                })
+                }
             }
         }
     }
@@ -3181,6 +3964,68 @@ impl InterpreterCore {
                 Ok(Value::Bool(is_array))
             }
             _ => Ok(Value::Bool(false)),
+        }
+    }
+
+    fn symbol_description_argument(
+        &self,
+        value: Option<Value>,
+    ) -> Result<Option<JsString>, InterpreterError> {
+        match value {
+            None | Some(Value::Undefined) => Ok(None),
+            Some(Value::Str(text)) => Ok(Some(text)),
+            Some(Value::Symbol(_)) => Err(InterpreterError::TypeError {
+                expected: "Symbol description coercible to string".to_string(),
+                got: "symbol".to_string(),
+            }),
+            Some(value) => Ok(Some(JsString::from(self.value_to_string(&value)))),
+        }
+    }
+
+    fn symbol_registry_key_argument(&self, value: Value) -> Result<JsString, InterpreterError> {
+        match value {
+            Value::Str(text) => Ok(text),
+            Value::Symbol(_) => Err(InterpreterError::TypeError {
+                expected: "Symbol.for key coercible to string".to_string(),
+                got: "symbol".to_string(),
+            }),
+            value => Ok(JsString::from(self.value_to_string(&value))),
+        }
+    }
+
+    fn allocate_private_symbol(
+        &mut self,
+        description: Option<JsString>,
+    ) -> Result<SymbolId, InterpreterError> {
+        let previous = self.symbol_state.clone();
+        let previous_memory = self.estimated_memory_bytes;
+        let symbol = self.symbol_state.allocate_private(description)?;
+        if let Err(err) = self.sync_estimated_memory_bytes() {
+            self.symbol_state = previous;
+            self.estimated_memory_bytes = previous_memory;
+            return Err(err);
+        }
+        Ok(symbol)
+    }
+
+    fn intern_global_symbol(&mut self, key: JsString) -> Result<SymbolId, InterpreterError> {
+        let previous = self.symbol_state.clone();
+        let previous_memory = self.estimated_memory_bytes;
+        let symbol = self.symbol_state.intern_global(key)?;
+        if let Err(err) = self.sync_estimated_memory_bytes() {
+            self.symbol_state = previous;
+            self.estimated_memory_bytes = previous_memory;
+            return Err(err);
+        }
+        Ok(symbol)
+    }
+
+    fn symbol_to_string(&self, symbol: SymbolId) -> JsString {
+        let prefix = JsString::from("Symbol(");
+        let suffix = JsString::from(")");
+        match self.symbol_description(symbol) {
+            Some(description) => prefix.concat(&description).concat(&suffix),
+            None => prefix.concat(&suffix),
         }
     }
 
@@ -3211,8 +4056,14 @@ impl InterpreterCore {
     /// `ToIntegerOrInfinity`-style coercion for index arguments (engine
     /// `value_as_integer` parity): numbers and numeric strings truncate
     /// toward zero, `NaN` contributes 0, everything else falls back to 0.
-    fn string_index_as_integer(value: &Value) -> i64 {
-        match value {
+    fn string_index_as_integer(value: &Value) -> Result<i64, InterpreterError> {
+        Ok(match value {
+            Value::Symbol(_) => {
+                return Err(InterpreterError::TypeError {
+                    expected: "string index coercible to number".to_string(),
+                    got: "symbol".to_string(),
+                });
+            }
             Value::Int(n) => *n,
             Value::Float(f) => {
                 let v = f.inner();
@@ -3231,34 +4082,46 @@ impl InterpreterCore {
                 }
             }
             _ => 0,
-        }
+        })
     }
 
     /// `String.prototype.charAt`: the single UTF-16 code unit at `index`. A
     /// surrogate half stays a real lone-surrogate string value; out-of-range
     /// or negative indices yield the empty string.
-    fn string_char_at_value(text: &JsString, index: Option<&Value>) -> Value {
-        let index = index.map(Self::string_index_as_integer).unwrap_or(0);
+    fn string_char_at_value(
+        text: &JsString,
+        index: Option<&Value>,
+    ) -> Result<Value, InterpreterError> {
+        let index = index
+            .map(Self::string_index_as_integer)
+            .transpose()?
+            .unwrap_or(0);
         if index < 0 {
-            return Value::str("");
+            return Ok(Value::str(""));
         }
-        match text.encode_utf16().nth(index as usize) {
+        Ok(match text.encode_utf16().nth(index as usize) {
             Some(unit) => Value::Str(JsString::from_code_units(&[unit])),
             None => Value::str(""),
-        }
+        })
     }
 
     /// `String.prototype.charCodeAt`: the exact code unit as an integer, or
     /// `NaN` when out of range.
-    fn string_char_code_at_value(text: &JsString, index: Option<&Value>) -> Value {
-        let index = index.map(Self::string_index_as_integer).unwrap_or(0);
+    fn string_char_code_at_value(
+        text: &JsString,
+        index: Option<&Value>,
+    ) -> Result<Value, InterpreterError> {
+        let index = index
+            .map(Self::string_index_as_integer)
+            .transpose()?
+            .unwrap_or(0);
         if index < 0 {
-            return Value::Float(Float64::new(f64::NAN));
+            return Ok(Value::Float(Float64::new(f64::NAN)));
         }
-        match text.encode_utf16().nth(index as usize) {
+        Ok(match text.encode_utf16().nth(index as usize) {
             Some(unit) => Value::Int(i64::from(unit)),
             None => Value::Float(Float64::new(f64::NAN)),
-        }
+        })
     }
 
     /// `String.prototype.codePointAt`: UTF-16 code-unit indexed per ES2015
@@ -3266,28 +4129,39 @@ impl InterpreterCore {
     /// own unit value), matching the engine seams upgraded by bd-rdnhc so
     /// the differential oracle agrees; out-of-range / negative yields
     /// undefined.
-    fn string_code_point_at_value(text: &JsString, index: Option<&Value>) -> Value {
-        let index = index.map(Self::string_index_as_integer).unwrap_or(0);
+    fn string_code_point_at_value(
+        text: &JsString,
+        index: Option<&Value>,
+    ) -> Result<Value, InterpreterError> {
+        let index = index
+            .map(Self::string_index_as_integer)
+            .transpose()?
+            .unwrap_or(0);
         if index < 0 {
-            return Value::Undefined;
+            return Ok(Value::Undefined);
         }
-        match text.code_point_at(index as usize) {
+        Ok(match text.code_point_at(index as usize) {
             Some(code_point) => Value::Int(i64::from(code_point)),
             None => Value::Undefined,
-        }
+        })
     }
 
     /// `String.prototype.at`: relative code-unit indexing (negative counts
     /// from the end); out-of-range yields undefined.
-    fn string_at_value(text: &JsString, index: Option<&Value>) -> Value {
+    fn string_at_value(text: &JsString, index: Option<&Value>) -> Result<Value, InterpreterError> {
         let units: Vec<u16> = text.code_units_vec();
         let len = units.len() as i64;
-        let raw = index.map(Self::string_index_as_integer).unwrap_or(0);
+        let raw = index
+            .map(Self::string_index_as_integer)
+            .transpose()?
+            .unwrap_or(0);
         let idx = if raw < 0 { raw + len } else { raw };
         if idx < 0 || idx >= len {
-            return Value::Undefined;
+            return Ok(Value::Undefined);
         }
-        Value::Str(JsString::from_code_units(&[units[idx as usize]]))
+        Ok(Value::Str(JsString::from_code_units(
+            &[units[idx as usize]],
+        )))
     }
 
     /// `String.prototype.isWellFormed` (ES2024): `true` iff the string
@@ -3334,6 +4208,60 @@ impl InterpreterCore {
                 .and_then(|index| text.encode_utf16().nth(index as usize))
                 .map(|unit| Value::Str(JsString::from_code_units(&[unit]))),
         }
+    }
+
+    fn symbol_property_value(&self, symbol: SymbolId, key: &TypedPropertyKey) -> Option<Value> {
+        let TypedPropertyKey::String(key) = key else {
+            return None;
+        };
+        match key.as_str() {
+            "description" => Some(
+                self.symbol_description(symbol)
+                    .map(Value::Str)
+                    .unwrap_or(Value::Undefined),
+            ),
+            "toString" => Some(Value::BuiltinFunction(BuiltinFunction::symbol(
+                BuiltinFunctionKind::SymbolPrototypeToString,
+            ))),
+            _ => None,
+        }
+    }
+
+    fn symbol_constructor_property_value(key: &str) -> Option<Value> {
+        let builtin = |kind| Value::BuiltinFunction(BuiltinFunction::symbol(kind));
+        Some(match key {
+            "for" => builtin(BuiltinFunctionKind::SymbolFor),
+            "keyFor" => builtin(BuiltinFunctionKind::SymbolKeyFor),
+            "iterator" => Value::Symbol(WellKnownSymbol::Iterator.id()),
+            "toPrimitive" => Value::Symbol(WellKnownSymbol::ToPrimitive.id()),
+            "hasInstance" => Value::Symbol(WellKnownSymbol::HasInstance.id()),
+            "toStringTag" => Value::Symbol(WellKnownSymbol::ToStringTag.id()),
+            "species" => Value::Symbol(WellKnownSymbol::Species.id()),
+            "isConcatSpreadable" => Value::Symbol(WellKnownSymbol::IsConcatSpreadable.id()),
+            "unscopables" => Value::Symbol(WellKnownSymbol::Unscopables.id()),
+            "asyncIterator" => Value::Symbol(WellKnownSymbol::AsyncIterator.id()),
+            "match" => Value::Symbol(WellKnownSymbol::Match.id()),
+            "matchAll" => Value::Symbol(WellKnownSymbol::MatchAll.id()),
+            "replace" => Value::Symbol(WellKnownSymbol::Replace.id()),
+            "search" => Value::Symbol(WellKnownSymbol::Search.id()),
+            "split" => Value::Symbol(WellKnownSymbol::Split.id()),
+            _ => return None,
+        })
+    }
+
+    fn validate_runtime_property_key(
+        &self,
+        key: &TypedPropertyKey,
+    ) -> Result<(), InterpreterError> {
+        if let TypedPropertyKey::Symbol(symbol) = key
+            && !self.symbol_state.contains(*symbol)
+        {
+            return Err(InterpreterError::TypeError {
+                expected: "resolved Symbol property key".to_string(),
+                got: format!("unresolved Symbol id {}", symbol.0),
+            });
+        }
+        Ok(())
     }
 
     fn evaluate_module_ir3(
@@ -3957,6 +4885,26 @@ impl InterpreterCore {
         let ctx = self.hook_context(module);
         let property_key = key.to_string();
         self.enforce_hook_action(hook.pre_property_access(&ctx, &target, &property_key))
+    }
+
+    fn run_pre_typed_property_access_hook(
+        &self,
+        module: &Ir3Module,
+        target: ObjectId,
+        key: &TypedPropertyKey,
+    ) -> Result<(), InterpreterError> {
+        match key {
+            TypedPropertyKey::String(key) => self.run_pre_property_access_hook(module, target, key),
+            // The frozen callback cannot carry Symbol identity. Do not
+            // stringify it; typed-hook support is owned by bd-n8eta.4.4.
+            TypedPropertyKey::Symbol(_) if self.hook.is_some() => {
+                Err(InterpreterError::TypeError {
+                    expected: "typed property hook support".to_string(),
+                    got: "Symbol property access with legacy string hook".to_string(),
+                })
+            }
+            TypedPropertyKey::Symbol(_) => Ok(()),
+        }
     }
 
     fn run_pre_call_hook(
@@ -4939,6 +5887,14 @@ impl InterpreterCore {
                                 if let Some(builtin_cap) =
                                     self.map_function_index_to_builtin_capability(func_idx)
                                 {
+                                    if builtin_cap == "builtin:ObjectAssign" {
+                                        let entered_accessor =
+                                            self.execute_object_assign(module, args, dst)?;
+                                        if !entered_accessor {
+                                            self.ip += 1;
+                                        }
+                                        continue;
+                                    }
                                     // Dispatch as a builtin hostcall
                                     let result =
                                         self.dispatch_builtin_hostcall(&builtin_cap, args)?;
@@ -5289,8 +6245,19 @@ impl InterpreterCore {
                 } => {
                     // Promise hostcalls are always allowed (runtime-internal).
                     let is_promise_cap = capability.0.starts_with("promise:");
+                    let resuming_object_assign = capability.0 == "builtin:ObjectAssign"
+                        && self
+                            .copy_data_properties_states
+                            .last()
+                            .is_some_and(|state| {
+                                state.belongs_to(self.ip, self.register_base, self.call_stack.len())
+                                    && matches!(
+                                        state.write_mode,
+                                        CopyDataPropertiesWriteMode::Set { .. }
+                                    )
+                            });
 
-                    if !is_promise_cap {
+                    if !resuming_object_assign && !is_promise_cap {
                         // Map the CapabilityTag string to a typed RuntimeCapability.
                         // Tags that map to a RuntimeCapability are checked against
                         // the granted set.  Tags with no mapping are internal
@@ -5309,21 +6276,31 @@ impl InterpreterCore {
                         }
                     }
 
-                    self.emit_witness(
-                        WitnessEventKind::HostcallDispatched,
-                        Some(&format!("cap:{}", capability.0)),
-                    );
-                    self.emit_witness(
-                        WitnessEventKind::CapabilityChecked,
-                        Some(&format!("granted:{}", capability.0)),
-                    );
+                    if !resuming_object_assign {
+                        self.emit_witness(
+                            WitnessEventKind::HostcallDispatched,
+                            Some(&format!("cap:{}", capability.0)),
+                        );
+                        self.emit_witness(
+                            WitnessEventKind::CapabilityChecked,
+                            Some(&format!("granted:{}", capability.0)),
+                        );
 
-                    self.hostcall_decisions.push(HostcallDecisionRecord {
-                        seq: self.hostcall_decisions.len() as u64,
-                        capability: capability.clone(),
-                        allowed: true,
-                        instruction_index: self.ip as u32,
-                    });
+                        self.hostcall_decisions.push(HostcallDecisionRecord {
+                            seq: self.hostcall_decisions.len() as u64,
+                            capability: capability.clone(),
+                            allowed: true,
+                            instruction_index: self.ip as u32,
+                        });
+                    }
+
+                    if capability.0 == "builtin:ObjectAssign" {
+                        let entered_accessor = self.execute_object_assign(module, args, dst)?;
+                        if !entered_accessor {
+                            self.ip += 1;
+                        }
+                        continue;
+                    }
 
                     // Promise hostcalls return an explicit label for their
                     // Promise-handle result.  Keep this separate from generic
@@ -5398,14 +6375,15 @@ impl InterpreterCore {
                 Ir3Instruction::GetProperty { obj, key, dst } => {
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
-                    let key_str = Self::property_key(&key_val);
+                    let property_key = Self::property_key(&key_val);
+                    self.validate_runtime_property_key(&property_key)?;
 
                     let called_accessor = match &obj_val {
                         Value::Object(oid) => self.load_object_property_or_call_accessor(
                             module,
                             obj_val.clone(),
                             *oid,
-                            &key_str,
+                            &property_key,
                             dst,
                         )?,
                         // String receivers expose `length` (UTF-16 code-unit
@@ -5413,21 +6391,41 @@ impl InterpreterCore {
                         // bd-2vzgi; unknown keys yield `undefined` per ES
                         // GetV semantics, matching the engine (bd-7zwar —
                         // previously a fail-closed TypeError).
-                        Value::Str(text) => match Self::string_property_value(text, &key_str) {
-                            Some(value) => {
-                                self.write_reg(dst, value)?;
-                                false
+                        Value::Str(text) => match &property_key {
+                            TypedPropertyKey::String(key) => {
+                                match Self::string_property_value(text, key) {
+                                    Some(value) => {
+                                        self.write_reg(dst, value)?;
+                                        false
+                                    }
+                                    None => {
+                                        self.write_reg(dst, Value::Undefined)?;
+                                        false
+                                    }
+                                }
                             }
-                            None => {
+                            TypedPropertyKey::Symbol(_) => {
                                 self.write_reg(dst, Value::Undefined)?;
                                 false
                             }
                         },
+                        Value::Symbol(symbol) => {
+                            match self.symbol_property_value(*symbol, &property_key) {
+                                Some(value) => {
+                                    self.write_reg(dst, value)?;
+                                    false
+                                }
+                                None => {
+                                    self.write_reg(dst, Value::Undefined)?;
+                                    false
+                                }
+                            }
+                        }
                         _ if Self::function_object_key(&obj_val).is_some() => self
                             .load_function_like_property_or_call_accessor(
                                 module,
                                 obj_val.clone(),
-                                &key_str,
+                                &property_key,
                                 dst,
                             )?,
                         _ => {
@@ -5445,21 +6443,22 @@ impl InterpreterCore {
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
                     let set_val = self.read_reg(val)?;
-                    let key_str = Self::property_key(&key_val);
+                    let property_key = Self::property_key(&key_val);
+                    self.validate_runtime_property_key(&property_key)?;
 
                     let called_accessor = match &obj_val {
                         Value::Object(oid) => self.set_object_property_or_call_accessor(
                             module,
                             obj_val.clone(),
                             *oid,
-                            key_str,
+                            property_key.clone(),
                             set_val,
                         )?,
                         _ if Self::function_object_key(&obj_val).is_some() => self
                             .set_function_like_property_or_call_accessor(
                                 module,
                                 obj_val.clone(),
-                                &key_str,
+                                &property_key,
                                 set_val,
                             )?,
                         _ => {
@@ -5476,13 +6475,30 @@ impl InterpreterCore {
                 Ir3Instruction::DeleteProperty { obj, key, dst } => {
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
-                    let key_str = Self::property_key(&key_val);
+                    let property_key = Self::property_key(&key_val);
+                    self.validate_runtime_property_key(&property_key)?;
 
                     match obj_val {
                         Value::Object(oid) => {
-                            self.run_pre_property_access_hook(module, oid, &key_str)?;
-                            self.remove_object_property(oid, &key_str)?;
-                            self.mark_deleted_for_in_iterators(oid, &key_str);
+                            self.run_pre_typed_property_access_hook(module, oid, &property_key)?;
+                            self.remove_object_typed_property(oid, &property_key)?;
+                            if let TypedPropertyKey::String(key) = &property_key {
+                                self.mark_deleted_for_in_iterators(oid, key);
+                            }
+                            self.write_reg(dst, Value::Bool(true))?;
+                        }
+                        function_like if Self::function_object_key(&function_like).is_some() => {
+                            if let Some(oid) = self.function_object_id(&function_like) {
+                                self.run_pre_typed_property_access_hook(
+                                    module,
+                                    oid,
+                                    &property_key,
+                                )?;
+                                self.remove_object_typed_property(oid, &property_key)?;
+                                if let TypedPropertyKey::String(key) = &property_key {
+                                    self.mark_deleted_for_in_iterators(oid, key);
+                                }
+                            }
                             self.write_reg(dst, Value::Bool(true))?;
                         }
                         _ => {
@@ -5549,6 +6565,12 @@ impl InterpreterCore {
                             .heap
                             .get(arr_id.0 as usize)
                             .ok_or(InterpreterError::ObjectNotFound { id: arr_id.0 })?;
+                        if matches!(obj.properties.get("length"), Some(Value::Symbol(_))) {
+                            return Err(InterpreterError::TypeError {
+                                expected: "array length coercible to number".to_string(),
+                                got: "symbol".to_string(),
+                            });
+                        }
                         let length = obj
                             .properties
                             .get("length")
@@ -5682,33 +6704,37 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::SpreadIntoObject { target, source } => {
-                    // Spread source object properties into target
-                    let target_val = self.read_reg(target)?;
-                    let source_val = self.read_reg(source)?;
-                    if let (Value::Object(target_id), Value::Object(source_id)) =
-                        (target_val, source_val)
-                    {
-                        // Collect source properties
-                        let properties: Vec<(String, Value)> = {
-                            if let Some(obj) = self.heap.get(source_id.0 as usize) {
-                                obj.own_property_keys()
-                                    .into_iter()
-                                    .filter_map(|key| {
-                                        obj.properties.get(&key).cloned().map(|value| (key, value))
-                                    })
-                                    .collect()
-                            } else {
-                                Vec::new()
-                            }
-                        };
-                        // Copy to target
-                        if self.heap.get(target_id.0 as usize).is_some() {
-                            for (key, val) in properties {
-                                self.set_object_property(target_id, key, val)?;
-                            }
-                        }
+                    let state_was_active =
+                        self.copy_data_properties_states
+                            .last()
+                            .is_some_and(|state| {
+                                state.belongs_to(self.ip, self.register_base, self.call_stack.len())
+                            });
+                    let original_source = state_was_active.then(|| {
+                        self.copy_data_properties_states
+                            .last()
+                            .expect("active spread copy state should exist")
+                            .source
+                            .clone()
+                    });
+                    if !state_was_active && self.read_reg(source)?.is_nullish() {
+                        self.ip += 1;
+                        continue;
                     }
-                    self.ip += 1;
+                    let entered_getter = self.execute_copy_data_properties(
+                        module,
+                        target,
+                        source,
+                        RegRange { start: 0, count: 0 },
+                        source,
+                        CopyDataPropertiesWriteMode::CreateData,
+                    )?;
+                    if !entered_getter {
+                        if let Some(original_source) = original_source {
+                            self.write_reg(source, original_source)?;
+                        }
+                        self.ip += 1;
+                    }
                 }
                 Ir3Instruction::CopyDataProperties {
                     target,
@@ -5717,7 +6743,12 @@ impl InterpreterCore {
                     value_dst,
                 } => {
                     let entered_getter = self.execute_copy_data_properties(
-                        module, target, source, excluded, value_dst,
+                        module,
+                        target,
+                        source,
+                        excluded,
+                        value_dst,
+                        CopyDataPropertiesWriteMode::CreateData,
                     )?;
                     if !entered_getter {
                         self.ip += 1;
@@ -6030,6 +7061,13 @@ impl InterpreterCore {
                         let val = self.read_reg(reg)?;
                         let part_str = match val {
                             Value::Str(s) => s,
+                            Value::Symbol(_) => {
+                                return Err(InterpreterError::TypeError {
+                                    expected: "template substitution coercible to string"
+                                        .to_string(),
+                                    got: "symbol".to_string(),
+                                });
+                            }
                             Value::Int(n) => JsString::from(n.to_string()),
                             Value::Float(f) => JsString::from(f.to_string()),
                             Value::Bool(b) => JsString::from(if b { "true" } else { "false" }),
@@ -6845,6 +7883,13 @@ impl InterpreterCore {
             }
             (Value::Str(x), other) => {
                 let other_str = match other {
+                    Value::Symbol(_) => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "string concatenation operand coercible to string"
+                                .to_string(),
+                            got: "symbol".to_string(),
+                        });
+                    }
                     Value::Object(_) | Value::Iterator(_) | Value::Generator(_) => {
                         "[object Object]".to_string()
                     }
@@ -6860,6 +7905,13 @@ impl InterpreterCore {
             }
             (other, Value::Str(y)) => {
                 let other_str = match other {
+                    Value::Symbol(_) => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "string concatenation operand coercible to string"
+                                .to_string(),
+                            got: "symbol".to_string(),
+                        });
+                    }
                     Value::Object(_) | Value::Iterator(_) | Value::Generator(_) => {
                         "[object Object]".to_string()
                     }
@@ -7284,13 +8336,27 @@ impl InterpreterCore {
 
     fn eval_in_operator(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
         let key = Self::property_key(&self.read_reg(lhs)?);
+        self.validate_runtime_property_key(&key)?;
         let target = self.read_reg(rhs)?;
         match target {
             Value::Object(object_id) => {
                 self.heap
                     .get(object_id.0 as usize)
                     .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-                Ok(Value::Bool(self.prototype_chain_has_key(object_id, &key)?))
+                Ok(Value::Bool(
+                    self.prototype_chain_has_typed_key(object_id, &key)?,
+                ))
+            }
+            function_like if Self::function_object_key(&function_like).is_some() => {
+                let Some(object_id) = self.function_object_id(&function_like) else {
+                    return Ok(Value::Bool(false));
+                };
+                self.heap
+                    .get(object_id.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+                Ok(Value::Bool(
+                    self.prototype_chain_has_typed_key(object_id, &key)?,
+                ))
             }
             other => Err(InterpreterError::TypeError {
                 expected: "object".to_string(),
@@ -7449,6 +8515,17 @@ impl InterpreterCore {
         object_id: ObjectId,
         key: &str,
     ) -> Result<Option<RuntimeProperty>, InterpreterError> {
+        self.prototype_chain_lookup_typed_property(
+            object_id,
+            &TypedPropertyKey::String(key.to_string()),
+        )
+    }
+
+    fn prototype_chain_lookup_typed_property(
+        &self,
+        object_id: ObjectId,
+        key: &TypedPropertyKey,
+    ) -> Result<Option<RuntimeProperty>, InterpreterError> {
         let mut current = Some(object_id);
         let mut depth = 0u32;
         let mut visited = BTreeSet::new();
@@ -7461,11 +8538,30 @@ impl InterpreterCore {
                 .heap
                 .get(id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
-            if let Some(accessor) = object.accessors.get(key) {
-                return Ok(Some(RuntimeProperty::Accessor(accessor.clone())));
-            }
-            if let Some(val) = object.properties.get(key) {
-                return Ok(Some(RuntimeProperty::Data(val.clone())));
+            match key {
+                TypedPropertyKey::String(key) => {
+                    if let Some(accessor) = object.accessors.get(key) {
+                        return Ok(Some(RuntimeProperty::Accessor(accessor.clone())));
+                    }
+                    if let Some(val) = object.properties.get(key) {
+                        return Ok(Some(RuntimeProperty::Data(val.clone())));
+                    }
+                }
+                TypedPropertyKey::Symbol(symbol) => {
+                    if let Some(property) = object.properties.baseline_symbol_property(*symbol) {
+                        return Ok(Some(match property {
+                            BaselineSymbolProperty::Data(value) => {
+                                RuntimeProperty::Data(value.clone())
+                            }
+                            BaselineSymbolProperty::Accessor { get, set } => {
+                                RuntimeProperty::Accessor(AccessorProperty {
+                                    get: get.clone(),
+                                    set: set.clone(),
+                                })
+                            }
+                        }));
+                    }
+                }
             }
             current = object.prototype;
             depth += 1;
@@ -7496,14 +8592,17 @@ impl InterpreterCore {
         }
     }
 
-    fn copy_data_properties_keys(&self, source: &Value) -> Result<Vec<String>, InterpreterError> {
+    fn copy_data_properties_keys(
+        &self,
+        source: &Value,
+    ) -> Result<Vec<TypedPropertyKey>, InterpreterError> {
         match source {
             Value::Undefined | Value::Null => Err(InterpreterError::TypeError {
                 expected: "object-coercible object-rest source".to_string(),
                 got: source.type_name().to_string(),
             }),
             Value::Str(text) => Ok((0..text.utf16_len())
-                .map(|index| index.to_string())
+                .map(|index| TypedPropertyKey::String(index.to_string()))
                 .collect()),
             _ => {
                 let Some(object_id) = self.copy_data_properties_object_id(source) else {
@@ -7518,13 +8617,16 @@ impl InterpreterCore {
                     .get(object_id.0 as usize)
                     .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
                 Ok(object
-                    .own_property_keys()
+                    .own_typed_property_keys()
                     .into_iter()
                     // Array length is a non-enumerable own data property. The
                     // current baseline descriptor carrier has no general
                     // enumerable bit yet, so preserve this shipped invariant
                     // explicitly for array-backed objects.
-                    .filter(|key| !(object.is_array && key == "length"))
+                    .filter(|key| {
+                        !(object.is_array
+                            && matches!(key, TypedPropertyKey::String(key) if key == "length"))
+                    })
                     .collect())
             }
         }
@@ -7533,10 +8635,13 @@ impl InterpreterCore {
     fn copy_data_properties_own_property(
         &self,
         source: &Value,
-        key: &str,
+        key: &TypedPropertyKey,
         string_units: Option<&[u16]>,
     ) -> Result<Option<RuntimeProperty>, InterpreterError> {
         if let Some(units) = string_units {
+            let TypedPropertyKey::String(key) = key else {
+                return Ok(None);
+            };
             let Ok(index) = key.parse::<usize>() else {
                 return Ok(None);
             };
@@ -7552,17 +8657,34 @@ impl InterpreterCore {
             .heap
             .get(object_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-        if object.is_array && key == "length" {
+        if object.is_array && matches!(key, TypedPropertyKey::String(key) if key == "length") {
             return Ok(None);
         }
-        if let Some(accessor) = object.accessors.get(key) {
-            return Ok(Some(RuntimeProperty::Accessor(accessor.clone())));
-        }
-        Ok(object
-            .properties
-            .get(key)
-            .cloned()
-            .map(RuntimeProperty::Data))
+        Ok(match key {
+            TypedPropertyKey::String(key) => {
+                if let Some(accessor) = object.accessors.get(key) {
+                    Some(RuntimeProperty::Accessor(accessor.clone()))
+                } else {
+                    object
+                        .properties
+                        .get(key)
+                        .cloned()
+                        .map(RuntimeProperty::Data)
+                }
+            }
+            TypedPropertyKey::Symbol(symbol) => object
+                .properties
+                .baseline_symbol_property(*symbol)
+                .map(|property| match property {
+                    BaselineSymbolProperty::Data(value) => RuntimeProperty::Data(value.clone()),
+                    BaselineSymbolProperty::Accessor { get, set } => {
+                        RuntimeProperty::Accessor(AccessorProperty {
+                            get: get.clone(),
+                            set: set.clone(),
+                        })
+                    }
+                }),
+        })
     }
 
     fn discard_copy_data_properties_state(&mut self, state_index: usize) {
@@ -7577,9 +8699,79 @@ impl InterpreterCore {
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
     }
 
-    /// Execute or resume the CopyDataProperties operation used by object-rest
-    /// binding initialization. Returns `true` when control entered a getter;
-    /// that getter returns to this same instruction and writes `value_dst`.
+    /// Apply one copied value according to the operation's target-write
+    /// semantics. Object rest/spread use CreateDataProperty; Object.assign
+    /// uses Set and therefore may suspend in a target setter.
+    fn write_copied_property(
+        &mut self,
+        module: &Ir3Module,
+        state_index: usize,
+        key: TypedPropertyKey,
+        value: Value,
+    ) -> Result<bool, InterpreterError> {
+        let target_id = self.copy_data_properties_states[state_index].target_id;
+        let write_mode = self.copy_data_properties_states[state_index]
+            .write_mode
+            .clone();
+        let CopyDataPropertiesWriteMode::Set {
+            target_receiver, ..
+        } = write_mode
+        else {
+            self.set_plain_data_typed_property(target_id, key, value)?;
+            return Ok(false);
+        };
+
+        self.run_pre_typed_property_access_hook(module, target_id, &key)?;
+        if matches!(&key, TypedPropertyKey::String(key) if key == "__proto__") {
+            let prototype = match value {
+                Value::Object(id) => Some(id),
+                Value::Null => None,
+                _ => return Ok(false),
+            };
+            self.heap
+                .get_mut(target_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: target_id.0 })?
+                .prototype = prototype;
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Ok(false);
+        }
+
+        match self.prototype_chain_lookup_typed_property(target_id, &key)? {
+            Some(RuntimeProperty::Accessor(accessor)) => {
+                let Some(setter) = accessor.set else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "writable Object.assign target property".to_string(),
+                        got: match key {
+                            TypedPropertyKey::String(key) => key,
+                            TypedPropertyKey::Symbol(symbol) => {
+                                format!("Symbol({})", symbol.0)
+                            }
+                        },
+                    });
+                };
+                self.copy_data_properties_states[state_index].awaiting =
+                    Some(CopyDataPropertiesAwaiting::Setter);
+                self.sync_estimated_memory_bytes()?;
+                self.enter_function_call(
+                    module,
+                    setter,
+                    target_receiver,
+                    vec![value],
+                    self.ip,
+                    None,
+                )?;
+                Ok(true)
+            }
+            _ => {
+                self.set_object_typed_property(target_id, key, value)?;
+                Ok(false)
+            }
+        }
+    }
+
+    /// Execute or resume one typed own-property copy. Returns `true` when
+    /// control entered a getter or setter; that call returns to this same
+    /// instruction and, for getters, writes `value_dst`.
     fn execute_copy_data_properties(
         &mut self,
         module: &Ir3Module,
@@ -7587,6 +8779,7 @@ impl InterpreterCore {
         source: u32,
         excluded: RegRange,
         value_dst: u32,
+        write_mode: CopyDataPropertiesWriteMode,
     ) -> Result<bool, InterpreterError> {
         let instruction_ip = self.ip;
         let register_base = self.register_base;
@@ -7598,12 +8791,39 @@ impl InterpreterCore {
         {
             self.copy_data_properties_states.len() - 1
         } else {
-            let target_value = self.read_reg(target)?;
-            let Value::Object(target_id) = target_value else {
-                return Err(InterpreterError::TypeError {
-                    expected: "object CopyDataProperties target".to_string(),
-                    got: target_value.type_name().to_string(),
-                });
+            let target_id = match &write_mode {
+                CopyDataPropertiesWriteMode::CreateData => {
+                    let target_value = self.read_reg(target)?;
+                    let Value::Object(target_id) = target_value else {
+                        return Err(InterpreterError::TypeError {
+                            expected: "object CopyDataProperties target".to_string(),
+                            got: target_value.type_name().to_string(),
+                        });
+                    };
+                    self.heap
+                        .get(target_id.0 as usize)
+                        .ok_or(InterpreterError::ObjectNotFound { id: target_id.0 })?;
+                    target_id
+                }
+                CopyDataPropertiesWriteMode::Set {
+                    target_receiver, ..
+                } => match target_receiver {
+                    Value::Object(target_id) => {
+                        self.heap
+                            .get(target_id.0 as usize)
+                            .ok_or(InterpreterError::ObjectNotFound { id: target_id.0 })?;
+                        *target_id
+                    }
+                    function_like if Self::function_object_key(function_like).is_some() => self
+                        .ensure_function_object(function_like)?
+                        .expect("function-like assign target should have an object carrier"),
+                    other => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "object Object.assign target".to_string(),
+                            got: other.type_name().to_string(),
+                        });
+                    }
+                },
             };
             let source_value = self.read_reg(source)?;
             let keys = self.copy_data_properties_keys(&source_value)?;
@@ -7631,7 +8851,8 @@ impl InterpreterCore {
                 keys,
                 excluded: excluded_keys,
                 next_index: 0,
-                awaiting_key: None,
+                write_mode,
+                awaiting: None,
             };
             self.check_temporary_memory_budget(Self::estimate_copy_data_properties_state_bytes(
                 &state,
@@ -7645,8 +8866,9 @@ impl InterpreterCore {
             self.copy_data_properties_states.len() - 1
         };
 
-        if let Some(key) = self.copy_data_properties_states[state_index]
-            .awaiting_key
+        if let Some(CopyDataPropertiesAwaiting::Getter(key)) = self.copy_data_properties_states
+            [state_index]
+            .awaiting
             .take()
         {
             let value = match self.read_reg(value_dst) {
@@ -7656,10 +8878,13 @@ impl InterpreterCore {
                     return Err(err);
                 }
             };
-            let target_id = self.copy_data_properties_states[state_index].target_id;
-            if let Err(err) = self.set_plain_data_property(target_id, key, value) {
-                self.discard_copy_data_properties_state(state_index);
-                return Err(err);
+            match self.write_copied_property(module, state_index, key, value) {
+                Ok(true) => return Ok(true),
+                Ok(false) => {}
+                Err(err) => {
+                    self.discard_copy_data_properties_state(state_index);
+                    return Err(err);
+                }
             }
         }
 
@@ -7700,16 +8925,18 @@ impl InterpreterCore {
                 Some(RuntimeProperty::Data(value)) => value,
                 Some(RuntimeProperty::Accessor(accessor)) => {
                     let Some(getter) = accessor.get else {
-                        let target_id = self.copy_data_properties_states[state_index].target_id;
-                        if let Err(err) =
-                            self.set_plain_data_property(target_id, key, Value::Undefined)
+                        match self.write_copied_property(module, state_index, key, Value::Undefined)
                         {
-                            self.discard_copy_data_properties_state(state_index);
-                            return Err(err);
+                            Ok(true) => return Ok(true),
+                            Ok(false) => continue,
+                            Err(err) => {
+                                self.discard_copy_data_properties_state(state_index);
+                                return Err(err);
+                            }
                         }
-                        continue;
                     };
-                    self.copy_data_properties_states[state_index].awaiting_key = Some(key);
+                    self.copy_data_properties_states[state_index].awaiting =
+                        Some(CopyDataPropertiesAwaiting::Getter(key));
                     if let Err(err) = self.sync_estimated_memory_bytes() {
                         self.discard_copy_data_properties_state(state_index);
                         return Err(err);
@@ -7728,10 +8955,13 @@ impl InterpreterCore {
                     return Ok(true);
                 }
             };
-            let target_id = self.copy_data_properties_states[state_index].target_id;
-            if let Err(err) = self.set_plain_data_property(target_id, key, value) {
-                self.discard_copy_data_properties_state(state_index);
-                return Err(err);
+            match self.write_copied_property(module, state_index, key, value) {
+                Ok(true) => return Ok(true),
+                Ok(false) => {}
+                Err(err) => {
+                    self.discard_copy_data_properties_state(state_index);
+                    return Err(err);
+                }
             }
         }
     }
@@ -7776,11 +9006,11 @@ impl InterpreterCore {
         module: &Ir3Module,
         receiver: Value,
         object_id: ObjectId,
-        key: &str,
+        key: &TypedPropertyKey,
         dst: u32,
     ) -> Result<bool, InterpreterError> {
-        self.run_pre_property_access_hook(module, object_id, key)?;
-        let property = self.prototype_chain_lookup_property(object_id, key)?;
+        self.run_pre_typed_property_access_hook(module, object_id, key)?;
+        let property = self.prototype_chain_lookup_typed_property(object_id, key)?;
         self.load_runtime_property(module, receiver, property, dst)
     }
 
@@ -7789,11 +9019,11 @@ impl InterpreterCore {
         module: &Ir3Module,
         receiver: Value,
         object_id: ObjectId,
-        key: String,
+        key: TypedPropertyKey,
         value: Value,
     ) -> Result<bool, InterpreterError> {
-        self.run_pre_property_access_hook(module, object_id, &key)?;
-        if key == "__proto__" {
+        self.run_pre_typed_property_access_hook(module, object_id, &key)?;
+        if matches!(&key, TypedPropertyKey::String(key) if key == "__proto__") {
             let prototype = match value {
                 Value::Object(id) => Some(id),
                 Value::Null => None,
@@ -7808,7 +9038,7 @@ impl InterpreterCore {
             self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
             return Ok(false);
         }
-        match self.prototype_chain_lookup_property(object_id, &key)? {
+        match self.prototype_chain_lookup_typed_property(object_id, &key)? {
             Some(RuntimeProperty::Accessor(accessor)) => {
                 if let Some(setter) = accessor.set {
                     self.enter_function_call(
@@ -7825,7 +9055,7 @@ impl InterpreterCore {
                 }
             }
             _ => {
-                self.set_object_property(object_id, key, value)?;
+                self.set_object_typed_property(object_id, key, value)?;
                 Ok(false)
             }
         }
@@ -7835,17 +9065,30 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         receiver: Value,
-        key: &str,
+        key: &TypedPropertyKey,
         dst: u32,
     ) -> Result<bool, InterpreterError> {
+        if let (
+            Value::BuiltinFunction(BuiltinFunction {
+                kind: BuiltinFunctionKind::Symbol,
+                ..
+            }),
+            TypedPropertyKey::String(key),
+        ) = (&receiver, key)
+            && let Some(value) = Self::symbol_constructor_property_value(key)
+        {
+            self.write_reg(dst, value)?;
+            return Ok(false);
+        }
+
         if let Some(object_id) = self.function_object_id(&receiver) {
-            self.run_pre_property_access_hook(module, object_id, key)?;
-            if let Some(property) = self.prototype_chain_lookup_property(object_id, key)? {
+            self.run_pre_typed_property_access_hook(module, object_id, key)?;
+            if let Some(property) = self.prototype_chain_lookup_typed_property(object_id, key)? {
                 return self.load_runtime_property(module, receiver, Some(property), dst);
             }
         }
 
-        if key == "prototype"
+        if matches!(key, TypedPropertyKey::String(key) if key == "prototype")
             && let Some(prototype) = self.function_prototype_for_value(&receiver)?
         {
             self.write_reg(dst, Value::Object(prototype))?;
@@ -7860,7 +9103,7 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         receiver: Value,
-        key: &str,
+        key: &TypedPropertyKey,
         value: Value,
     ) -> Result<bool, InterpreterError> {
         let Some(object_id) = self.ensure_function_object(&receiver)? else {
@@ -7873,11 +9116,11 @@ impl InterpreterCore {
             module,
             receiver.clone(),
             object_id,
-            key.to_string(),
+            key.clone(),
             value.clone(),
         )?;
         if !called
-            && key == "prototype"
+            && matches!(key, TypedPropertyKey::String(key) if key == "prototype")
             && let Value::Object(prototype) = value
             && let Some(function_key) = self.function_prototype_key_for_value(&receiver)?
         {
@@ -7886,10 +9129,10 @@ impl InterpreterCore {
         Ok(called)
     }
 
-    fn prototype_chain_has_key(
+    fn prototype_chain_has_typed_key(
         &self,
         object_id: ObjectId,
-        key: &str,
+        key: &TypedPropertyKey,
     ) -> Result<bool, InterpreterError> {
         let mut current = Some(object_id);
         let mut depth = 0u32;
@@ -7903,7 +9146,7 @@ impl InterpreterCore {
                 .heap
                 .get(id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
-            if object.properties.contains_key(key) || object.accessors.contains_key(key) {
+            if object.contains_own_typed_property(key) {
                 return Ok(true);
             }
             current = object.prototype;
@@ -7925,6 +9168,7 @@ impl InterpreterCore {
             Value::Int(n) => crate::object_model::JsValue::Int(*n),
             Value::Float(f) => crate::object_model::JsValue::Float(f.inner().to_bits()),
             Value::Str(s) => crate::object_model::JsValue::Str(s.clone()),
+            Value::Symbol(symbol) => crate::object_model::JsValue::Symbol(*symbol),
             Value::Object(id) => {
                 crate::object_model::JsValue::Object(crate::object_model::ObjectHandle(id.0))
             }
@@ -7947,7 +9191,7 @@ impl InterpreterCore {
             }
             crate::object_model::JsValue::Object(handle) => Value::Object(ObjectId(handle.0)),
             crate::object_model::JsValue::Function(idx) => Value::Function(*idx),
-            crate::object_model::JsValue::Symbol(sym) => Value::str(format!("Symbol({})", sym.0)),
+            crate::object_model::JsValue::Symbol(sym) => Value::Symbol(*sym),
         }
     }
 
@@ -8019,6 +9263,12 @@ impl InterpreterCore {
             .heap
             .get(obj_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?;
+        if matches!(object.properties.get("length"), Some(Value::Symbol(_))) {
+            return Err(InterpreterError::TypeError {
+                expected: "array-like length coercible to number".to_string(),
+                got: "symbol".to_string(),
+            });
+        }
         if let Some(Value::Int(length)) = object.properties.get("length") {
             return Ok(u32::try_from((*length).max(0)).unwrap_or(u32::MAX));
         }
@@ -9029,13 +10279,14 @@ impl InterpreterCore {
         self.event_loop.microtasks.compact();
     }
 
-    fn property_key(value: &Value) -> String {
+    fn property_key(value: &Value) -> TypedPropertyKey {
         match value {
+            Value::Symbol(symbol) => TypedPropertyKey::Symbol(*symbol),
             // Property keys remain UTF-8 `String`: a lone-surrogate key routes
             // through the lossy projection (documented engine-parity boundary).
-            Value::Str(s) => s.to_string(),
-            Value::Int(n) => n.to_string(),
-            _ => value.to_string(),
+            Value::Str(s) => TypedPropertyKey::String(s.to_string()),
+            Value::Int(n) => TypedPropertyKey::String(n.to_string()),
+            _ => TypedPropertyKey::String(value.to_string()),
         }
     }
 
@@ -9064,6 +10315,7 @@ impl InterpreterCore {
                 }
             }
             Value::Undefined
+            | Value::Symbol(_)
             | Value::Object(_)
             | Value::Function(_)
             | Value::Closure(_)
@@ -9101,6 +10353,7 @@ impl InterpreterCore {
                 }
             }
             Value::Undefined => Some(f64::NAN),
+            Value::Symbol(_) => None,
             Value::Object(_)
             | Value::Function(_)
             | Value::Closure(_)
@@ -9116,6 +10369,19 @@ impl InterpreterCore {
         }
     }
 
+    fn reject_symbol_numeric_coercion(
+        value: &Value,
+        expected: &str,
+    ) -> Result<(), InterpreterError> {
+        if matches!(value, Value::Symbol(_)) {
+            return Err(InterpreterError::TypeError {
+                expected: expected.to_string(),
+                got: "symbol".to_string(),
+            });
+        }
+        Ok(())
+    }
+
     fn abstract_eq_values(a: &Value, b: &Value) -> bool {
         match (a, b) {
             (Value::Undefined, Value::Undefined)
@@ -9123,6 +10389,7 @@ impl InterpreterCore {
             | (Value::Bool(_), Value::Bool(_))
             | (Value::Int(_), Value::Int(_))
             | (Value::Str(_), Value::Str(_))
+            | (Value::Symbol(_), Value::Symbol(_))
             | (Value::Object(_), Value::Object(_))
             | (Value::Function(_), Value::Function(_))
             | (Value::Closure(_), Value::Closure(_))
@@ -9151,6 +10418,7 @@ impl InterpreterCore {
             // to numbers, strings, or booleans via numeric coercion.
             (Value::Null, _) | (_, Value::Null) => false,
             (Value::Undefined, _) | (_, Value::Undefined) => false,
+            (Value::Symbol(_), _) | (_, Value::Symbol(_)) => false,
             _ => match (Self::coerce_to_float(a), Self::coerce_to_float(b)) {
                 (Some(lhs), Some(rhs)) => {
                     if lhs.is_nan() || rhs.is_nan() {
@@ -9186,12 +10454,14 @@ impl InterpreterCore {
             "number:isNaN" => {
                 // Global isNaN: coerces argument to number, then checks NaN
                 // isNaN(undefined) = true, isNaN("hello") = true
+                Self::reject_symbol_numeric_coercion(&arg0, "number-coercible primitive")?;
                 let number = Self::coerce_to_float(&arg0).unwrap_or(f64::NAN);
                 Ok(Value::Bool(number.is_nan()))
             }
             "number:isFinite" => {
                 // Global isFinite: coerces argument to number, then checks finite
                 // isFinite(undefined) = false, isFinite("123") = true
+                Self::reject_symbol_numeric_coercion(&arg0, "number-coercible primitive")?;
                 let number = Self::coerce_to_float(&arg0).unwrap_or(f64::NAN);
                 Ok(Value::Bool(number.is_finite()))
             }
@@ -9338,6 +10608,12 @@ impl InterpreterCore {
                 let delay_ms = match delay_val {
                     Value::Int(i) => i.max(0) as u64,
                     Value::Float(f) => f.0.max(0.0) as u64,
+                    Value::Symbol(_) => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "timer delay coercible to number".to_string(),
+                            got: "symbol".to_string(),
+                        });
+                    }
                     _ => 0,
                 };
 
@@ -9394,6 +10670,12 @@ impl InterpreterCore {
                 let delay_ms = match delay_val {
                     Value::Int(i) => i.max(0) as u64,
                     Value::Float(f) => f.0.max(0.0) as u64,
+                    Value::Symbol(_) => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "timer delay coercible to number".to_string(),
+                            got: "symbol".to_string(),
+                        });
+                    }
                     _ => 0,
                 };
 
@@ -9490,6 +10772,44 @@ impl InterpreterCore {
             "builtin:ArrayIsArrayFunction" => {
                 Ok(Value::BuiltinFunction(BuiltinFunction::array_is_array()))
             }
+            "builtin:SymbolFunction" => Ok(Value::BuiltinFunction(BuiltinFunction::symbol(
+                BuiltinFunctionKind::Symbol,
+            ))),
+            "builtin:SymbolFor" => {
+                let value = self.optional_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let key = self.symbol_registry_key_argument(value)?;
+                self.intern_global_symbol(key).map(Value::Symbol)
+            }
+            "builtin:SymbolKeyFor" => {
+                let value = self.optional_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let Value::Symbol(symbol) = value else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "Symbol".to_string(),
+                        got: value.type_name().to_string(),
+                    });
+                };
+                Ok(self
+                    .symbol_state
+                    .key_for(symbol)
+                    .cloned()
+                    .map(Value::Str)
+                    .unwrap_or(Value::Undefined))
+            }
+            "builtin:SymbolIterator" => Ok(Value::Symbol(WellKnownSymbol::Iterator.id())),
+            "builtin:SymbolToPrimitive" => Ok(Value::Symbol(WellKnownSymbol::ToPrimitive.id())),
+            "builtin:SymbolHasInstance" => Ok(Value::Symbol(WellKnownSymbol::HasInstance.id())),
+            "builtin:SymbolToStringTag" => Ok(Value::Symbol(WellKnownSymbol::ToStringTag.id())),
+            "builtin:SymbolSpecies" => Ok(Value::Symbol(WellKnownSymbol::Species.id())),
+            "builtin:SymbolIsConcatSpreadable" => {
+                Ok(Value::Symbol(WellKnownSymbol::IsConcatSpreadable.id()))
+            }
+            "builtin:SymbolUnscopables" => Ok(Value::Symbol(WellKnownSymbol::Unscopables.id())),
+            "builtin:SymbolAsyncIterator" => Ok(Value::Symbol(WellKnownSymbol::AsyncIterator.id())),
+            "builtin:SymbolMatch" => Ok(Value::Symbol(WellKnownSymbol::Match.id())),
+            "builtin:SymbolMatchAll" => Ok(Value::Symbol(WellKnownSymbol::MatchAll.id())),
+            "builtin:SymbolReplace" => Ok(Value::Symbol(WellKnownSymbol::Replace.id())),
+            "builtin:SymbolSearch" => Ok(Value::Symbol(WellKnownSymbol::Search.id())),
+            "builtin:SymbolSplit" => Ok(Value::Symbol(WellKnownSymbol::Split.id())),
             "builtin:ArrayPrototypePop" => {
                 let this = self.required_arg(args, 0, "array object")?;
                 let array_id = self.expect_object(this, "array object")?;
@@ -9534,6 +10854,80 @@ impl InterpreterCore {
                 };
                 Ok(Value::Object(self.alloc_array_from_values(&values)?))
             }
+            "builtin:ObjectEntries" => {
+                let this = self.required_arg(args, 0, "object")?;
+                let object_id = self.expect_object(this, "object")?;
+                let keys = self.own_enumerable_keys(object_id)?;
+                let entries = {
+                    let object = self
+                        .heap
+                        .get(object_id.0 as usize)
+                        .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+                    keys.into_iter()
+                        .filter_map(|key| {
+                            object
+                                .properties
+                                .get(&key)
+                                .cloned()
+                                .map(|value| (key, value))
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let mut values = Vec::with_capacity(entries.len());
+                for (key, value) in entries {
+                    let entry = self.alloc_array_from_values(&[Value::str(key), value])?;
+                    values.push(Value::Object(entry));
+                }
+                Ok(Value::Object(self.alloc_array_from_values(&values)?))
+            }
+            "builtin:ObjectGetOwnPropertyNames" => {
+                let this = self.required_arg(args, 0, "object")?;
+                let object_id = self.expect_object(this, "object")?;
+                let object = self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+                let values = object
+                    .own_property_keys()
+                    .into_iter()
+                    .map(Value::str)
+                    .collect::<Vec<_>>();
+                Ok(Value::Object(self.alloc_array_from_values(&values)?))
+            }
+            "builtin:ObjectGetOwnPropertySymbols" => {
+                let this = self.required_arg(args, 0, "object")?;
+                let values = self
+                    .object_like_storage_id(&this, "object")?
+                    .map(|object_id| {
+                        self.heap[object_id.0 as usize]
+                            .properties
+                            .baseline_symbol_key_order()
+                            .iter()
+                            .copied()
+                            .map(Value::Symbol)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                Ok(Value::Object(self.alloc_array_from_values(&values)?))
+            }
+            "builtin:ReflectOwnKeys" => {
+                let this = self.required_arg(args, 0, "object")?;
+                let values = self
+                    .object_like_storage_id(&this, "object")?
+                    .map(|object_id| {
+                        self.heap[object_id.0 as usize]
+                            .own_typed_property_keys()
+                            .into_iter()
+                            .map(|key| match key {
+                                TypedPropertyKey::String(key) => Value::str(key),
+                                TypedPropertyKey::Symbol(symbol) => Value::Symbol(symbol),
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                Ok(Value::Object(self.alloc_array_from_values(&values)?))
+            }
+            "builtin:ObjectAssign" => self.object_assign(args),
 
             // String methods (hostcall convention: receiver in args[0],
             // index in args[1]; shared impls with the BuiltinFunction
@@ -9545,7 +10939,7 @@ impl InterpreterCore {
                     other => JsString::from(self.value_to_string(other)),
                 };
                 let index = self.optional_arg(args, 1)?;
-                Ok(Self::string_char_at_value(&text, index.as_ref()))
+                Self::string_char_at_value(&text, index.as_ref())
             }
             "builtin:StringPrototypeCharCodeAt" => {
                 let receiver = self.required_arg(args, 0, "string")?;
@@ -9554,7 +10948,7 @@ impl InterpreterCore {
                     other => JsString::from(self.value_to_string(other)),
                 };
                 let index = self.optional_arg(args, 1)?;
-                Ok(Self::string_char_code_at_value(&text, index.as_ref()))
+                Self::string_char_code_at_value(&text, index.as_ref())
             }
             "builtin:StringPrototypeCodePointAt" => {
                 let receiver = self.required_arg(args, 0, "string")?;
@@ -9563,7 +10957,7 @@ impl InterpreterCore {
                     other => JsString::from(self.value_to_string(other)),
                 };
                 let index = self.optional_arg(args, 1)?;
-                Ok(Self::string_code_point_at_value(&text, index.as_ref()))
+                Self::string_code_point_at_value(&text, index.as_ref())
             }
             "builtin:StringPrototypeAt" => {
                 let receiver = self.required_arg(args, 0, "string")?;
@@ -9572,7 +10966,7 @@ impl InterpreterCore {
                     other => JsString::from(self.value_to_string(other)),
                 };
                 let index = self.optional_arg(args, 1)?;
-                Ok(Self::string_at_value(&text, index.as_ref()))
+                Self::string_at_value(&text, index.as_ref())
             }
             "builtin:StringPrototypeIsWellFormed" => {
                 let receiver = self.required_arg(args, 0, "string")?;
@@ -9614,6 +11008,13 @@ impl InterpreterCore {
                                 0
                             }
                         }
+                        Value::Symbol(_) => {
+                            return Err(InterpreterError::TypeError {
+                                expected: "String.fromCharCode argument coercible to number"
+                                    .to_string(),
+                                got: "symbol".to_string(),
+                            });
+                        }
                         _ => 0,
                     };
                     units.push((unit & 0xFFFF) as u16);
@@ -9649,6 +11050,13 @@ impl InterpreterCore {
                                 trimmed.parse::<f64>().unwrap_or(f64::NAN)
                             }
                         }
+                        Value::Symbol(_) => {
+                            return Err(InterpreterError::TypeError {
+                                expected: "String.fromCodePoint argument coercible to number"
+                                    .to_string(),
+                                got: "symbol".to_string(),
+                            });
+                        }
                         _ => f64::NAN,
                     };
                     if !code_point_number.is_finite()
@@ -9682,6 +11090,10 @@ impl InterpreterCore {
                         Value::Int(i64::MIN) => Ok(Value::Float(Float64::new(-(i64::MIN as f64)))),
                         Value::Int(n) => Ok(Value::Int(n.abs())),
                         Value::Float(f) => Ok(Value::Float(Float64::new(f.inner().abs()))),
+                        Value::Symbol(_) => Err(InterpreterError::TypeError {
+                            expected: "Math.abs argument coercible to number".to_string(),
+                            got: "symbol".to_string(),
+                        }),
                         _ => Ok(Value::Float(Float64::new(f64::NAN))),
                     }
                 } else {
@@ -9737,6 +11149,7 @@ impl InterpreterCore {
                         out.push('"');
                         out
                     }
+                    Value::Symbol(_) => "undefined".to_string(),
                     Value::Object(_) => "{}".to_string(), // Basic object stringification
                     Value::Function(_) => "undefined".to_string(),
                     Value::Closure(_) => "undefined".to_string(),
@@ -10384,6 +11797,35 @@ impl InterpreterCore {
         }
     }
 
+    /// Resolve the heap carrier shared by ordinary objects and function-like
+    /// values. A function with no user-defined properties has no allocated
+    /// sidecar yet, so callers observe an empty own-key set without forcing an
+    /// allocation.
+    fn object_like_storage_id(
+        &self,
+        value: &Value,
+        expected: &str,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        let object_id = match value {
+            Value::Object(object_id) => Some(*object_id),
+            function_like if Self::function_object_key(function_like).is_some() => {
+                self.function_object_id(function_like)
+            }
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: expected.to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        if let Some(object_id) = object_id {
+            self.heap
+                .get(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        }
+        Ok(object_id)
+    }
+
     fn own_enumerable_keys(&self, object_id: ObjectId) -> Result<Vec<String>, InterpreterError> {
         let object = self
             .heap
@@ -10394,6 +11836,144 @@ impl InterpreterCore {
             .into_iter()
             .filter(|key| !(object.is_array && key == "length"))
             .collect())
+    }
+
+    /// Execute or resume the source-facing `Object.assign` HostCall. It uses
+    /// the same typed key snapshot/descriptor recheck machinery as object
+    /// spread, but writes with ordinary Set semantics and can therefore pause
+    /// in either a source getter or a target setter.
+    fn execute_object_assign(
+        &mut self,
+        module: &Ir3Module,
+        args: RegRange,
+        dst: u32,
+    ) -> Result<bool, InterpreterError> {
+        let active = self.copy_data_properties_states.last().and_then(|state| {
+            if !state.belongs_to(self.ip, self.register_base, self.call_stack.len()) {
+                return None;
+            }
+            match &state.write_mode {
+                CopyDataPropertiesWriteMode::Set {
+                    target_receiver,
+                    source_arg_offset,
+                } => Some((*source_arg_offset, target_receiver.clone())),
+                CopyDataPropertiesWriteMode::CreateData => None,
+            }
+        });
+
+        let (mut source_offset, target_value) = if let Some(active) = active {
+            active
+        } else {
+            let target_value = self.required_arg(args, 0, "object Object.assign target")?;
+            match &target_value {
+                Value::Object(object_id) => {
+                    self.heap
+                        .get(object_id.0 as usize)
+                        .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+                }
+                function_like if Self::function_object_key(function_like).is_some() => {}
+                other => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object Object.assign target".to_string(),
+                        got: other.type_name().to_string(),
+                    });
+                }
+            }
+            (1, target_value)
+        };
+
+        while source_offset < args.count {
+            let source_reg = args.start.checked_add(source_offset).ok_or(
+                InterpreterError::RegisterOutOfBounds {
+                    register: args.start,
+                    max: self.config.max_registers,
+                },
+            )?;
+            let state_is_active = self
+                .copy_data_properties_states
+                .last()
+                .is_some_and(|state| {
+                    state.belongs_to(self.ip, self.register_base, self.call_stack.len())
+                });
+            if !state_is_active && self.read_reg(source_reg)?.is_nullish() {
+                source_offset = source_offset.saturating_add(1);
+                continue;
+            }
+            let entered_accessor = self.execute_copy_data_properties(
+                module,
+                args.start,
+                source_reg,
+                RegRange { start: 0, count: 0 },
+                dst,
+                CopyDataPropertiesWriteMode::Set {
+                    target_receiver: target_value.clone(),
+                    source_arg_offset: source_offset,
+                },
+            )?;
+            if entered_accessor {
+                return Ok(true);
+            }
+            source_offset = source_offset.saturating_add(1);
+        }
+
+        self.write_reg(dst, target_value)?;
+        Ok(false)
+    }
+
+    fn object_assign(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        let target_value = self.required_arg(args, 0, "object")?;
+        let target_id = match &target_value {
+            Value::Object(object_id) => self.expect_object(Value::Object(*object_id), "object")?,
+            function_like if Self::function_object_key(function_like).is_some() => self
+                .ensure_function_object(function_like)?
+                .expect("function-like value should allocate an object carrier"),
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "object".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        for offset in 1..args.count {
+            let source = self.read_arg(args, offset)?;
+            if source.is_nullish() {
+                continue;
+            }
+            let Some(source_id) = self.copy_data_properties_object_id(&source) else {
+                continue;
+            };
+            self.heap
+                .get(source_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: source_id.0 })?;
+            let properties = {
+                let object = self
+                    .heap
+                    .get(source_id.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: source_id.0 })?;
+                object
+                    .own_typed_property_keys()
+                    .into_iter()
+                    .filter_map(|key| match &key {
+                        TypedPropertyKey::String(string_key) => object
+                            .properties
+                            .get(string_key)
+                            .cloned()
+                            .map(|value| (key, value)),
+                        TypedPropertyKey::Symbol(symbol) => object
+                            .properties
+                            .baseline_symbol_property(*symbol)
+                            .and_then(|property| match property {
+                                BaselineSymbolProperty::Data(value) => Some((key, value.clone())),
+                                BaselineSymbolProperty::Accessor { .. } => None,
+                            }),
+                    })
+                    .collect::<Vec<_>>()
+            };
+            for (key, value) in properties {
+                self.set_object_typed_property(target_id, key, value)?;
+            }
+        }
+        Ok(target_value)
     }
 
     /// Map a function index to a builtin capability string if it corresponds to a builtin.
@@ -10435,6 +12015,19 @@ impl InterpreterCore {
         }
     }
 
+    fn symbol_description(&self, id: SymbolId) -> Option<JsString> {
+        well_known_symbol_description(id)
+            .map(JsString::from)
+            .or_else(|| self.symbol_state.description(id).cloned())
+    }
+
+    fn symbol_display_string(&self, id: SymbolId) -> String {
+        self.symbol_description(id).map_or_else(
+            || "Symbol()".to_string(),
+            |description| format!("Symbol({description})"),
+        )
+    }
+
     /// Convert a Value to a string representation for console output.
     fn value_to_string(&self, value: &Value) -> String {
         match value {
@@ -10459,6 +12052,7 @@ impl InterpreterCore {
                 }
             }
             Value::Str(s) => s.to_string(),
+            Value::Symbol(id) => self.symbol_display_string(*id),
             Value::Object(id) => {
                 // Try to get a simple string representation
                 if let Some(_obj) = self.heap.get(id.0 as usize) {
@@ -10613,6 +12207,34 @@ impl InterpreterCore {
         }
     }
 
+    fn estimate_property_key_bytes(key: &TypedPropertyKey) -> u64 {
+        match key {
+            TypedPropertyKey::String(key) => Self::estimate_string_bytes(key),
+            TypedPropertyKey::Symbol(_) => std::mem::size_of::<SymbolId>() as u64,
+        }
+    }
+
+    fn estimate_symbol_state_bytes(state: &RuntimeSymbolState) -> u64 {
+        state.symbols.values().fold(0u64, |total, record| {
+            total
+                .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
+                .saturating_add(
+                    record
+                        .description
+                        .as_ref()
+                        .map(|text| Self::estimate_string_bytes(text))
+                        .unwrap_or(0),
+                )
+                .saturating_add(
+                    record
+                        .registry_key
+                        .as_ref()
+                        .map(|text| Self::estimate_string_bytes(text))
+                        .unwrap_or(0),
+                )
+        })
+    }
+
     fn estimate_label_bytes(label: &crate::ifc_artifacts::Label) -> u64 {
         MEMORY_ESTIMATE_LABEL_BASE_BYTES.saturating_add(match label {
             crate::ifc_artifacts::Label::Custom { name, .. } => name.len() as u64,
@@ -10719,10 +12341,28 @@ impl InterpreterCore {
                     .sum::<u64>()
             })
             .unwrap_or(0);
+        let symbol_properties = object
+            .properties
+            .baseline_symbol_properties()
+            .map(|(_, property)| {
+                MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(match property {
+                    BaselineSymbolProperty::Data(value) => Self::estimate_value_bytes(value),
+                    BaselineSymbolProperty::Accessor { get, set } => get
+                        .as_ref()
+                        .map(Self::estimate_value_bytes)
+                        .unwrap_or(0)
+                        .saturating_add(set.as_ref().map(Self::estimate_value_bytes).unwrap_or(0)),
+                })
+            })
+            .sum::<u64>();
+        let symbol_order = (object.properties.baseline_symbol_key_order().len() as u64)
+            .saturating_mul(std::mem::size_of::<SymbolId>() as u64);
         MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES
             .saturating_add(properties)
             .saturating_add(accessors)
             .saturating_add(own_string_key_order)
+            .saturating_add(symbol_properties)
+            .saturating_add(symbol_order)
     }
 
     fn estimate_iterator_bytes(iterator: &RuntimeIteratorState) -> u64 {
@@ -10750,18 +12390,23 @@ impl InterpreterCore {
         let keys = state
             .keys
             .iter()
-            .map(|key| Self::estimate_string_bytes(key))
+            .map(Self::estimate_property_key_bytes)
             .sum::<u64>();
         let excluded = state
             .excluded
             .iter()
-            .map(|key| Self::estimate_string_bytes(key))
+            .map(Self::estimate_property_key_bytes)
             .sum::<u64>();
-        let awaiting_key = state
-            .awaiting_key
-            .as_deref()
-            .map(Self::estimate_string_bytes)
-            .unwrap_or(0);
+        let awaiting_key = match state.awaiting.as_ref() {
+            Some(CopyDataPropertiesAwaiting::Getter(key)) => Self::estimate_property_key_bytes(key),
+            Some(CopyDataPropertiesAwaiting::Setter) | None => 0,
+        };
+        let write_mode = match &state.write_mode {
+            CopyDataPropertiesWriteMode::CreateData => 0,
+            CopyDataPropertiesWriteMode::Set {
+                target_receiver, ..
+            } => Self::estimate_value_bytes(target_receiver),
+        };
         MEMORY_ESTIMATE_COPY_DATA_PROPERTIES_STATE_BASE_BYTES
             .saturating_add(Self::estimate_value_bytes(&state.source))
             .saturating_add(
@@ -10773,6 +12418,7 @@ impl InterpreterCore {
             .saturating_add(keys)
             .saturating_add(excluded)
             .saturating_add(awaiting_key)
+            .saturating_add(write_mode)
     }
 
     fn estimate_generator_bytes(generator: &GeneratorObject) -> u64 {
@@ -10802,10 +12448,13 @@ impl InterpreterCore {
     }
 
     fn recompute_estimated_memory_bytes(&self) -> u64 {
-        self.heap
-            .iter()
-            .map(Self::estimate_heap_object_bytes)
-            .sum::<u64>()
+        Self::estimate_symbol_state_bytes(&self.symbol_state)
+            .saturating_add(
+                self.heap
+                    .iter()
+                    .map(Self::estimate_heap_object_bytes)
+                    .sum::<u64>(),
+            )
             .saturating_add(
                 self.registers
                     .iter()
@@ -11111,6 +12760,30 @@ impl InterpreterCore {
         key: String,
         value: Value,
     ) -> Result<(), InterpreterError> {
+        self.set_object_typed_property(object_id, TypedPropertyKey::String(key), value)
+    }
+
+    fn set_object_typed_property(
+        &mut self,
+        object_id: ObjectId,
+        key: TypedPropertyKey,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
+        self.validate_runtime_property_key(&key)?;
+        match key {
+            TypedPropertyKey::String(key) => self.set_object_string_property(object_id, key, value),
+            TypedPropertyKey::Symbol(symbol) => {
+                self.set_symbol_property(object_id, symbol, BaselineSymbolProperty::Data(value))
+            }
+        }
+    }
+
+    fn set_object_string_property(
+        &mut self,
+        object_id: ObjectId,
+        key: String,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
         let (
             previous_data,
             previous_data_position,
@@ -11198,6 +12871,26 @@ impl InterpreterCore {
         key: String,
         value: Value,
     ) -> Result<(), InterpreterError> {
+        self.set_plain_data_typed_property(object_id, TypedPropertyKey::String(key), value)
+    }
+
+    fn set_plain_data_typed_property(
+        &mut self,
+        object_id: ObjectId,
+        key: TypedPropertyKey,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
+        self.validate_runtime_property_key(&key)?;
+        let TypedPropertyKey::String(key) = key else {
+            let TypedPropertyKey::Symbol(symbol) = key else {
+                unreachable!();
+            };
+            return self.set_symbol_property(
+                object_id,
+                symbol,
+                BaselineSymbolProperty::Data(value),
+            );
+        };
         let (previous_data, previous_accessor, order_rollback) = {
             let object = self
                 .heap
@@ -11229,22 +12922,82 @@ impl InterpreterCore {
         Ok(())
     }
 
+    fn set_symbol_property(
+        &mut self,
+        object_id: ObjectId,
+        symbol: SymbolId,
+        property: BaselineSymbolProperty<Value>,
+    ) -> Result<(), InterpreterError> {
+        self.validate_runtime_property_key(&TypedPropertyKey::Symbol(symbol))?;
+        let previous_memory = self.estimated_memory_bytes;
+        let (previous, previous_position) = {
+            let object = self
+                .heap
+                .get_mut(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+            let previous_position = object
+                .properties
+                .baseline_symbol_key_order()
+                .iter()
+                .position(|candidate| *candidate == symbol);
+            let previous = object
+                .properties
+                .insert_baseline_symbol_property(symbol, property);
+            (previous, previous_position)
+        };
+        if let Err(err) = self.sync_estimated_memory_bytes() {
+            let object = self
+                .heap
+                .get_mut(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+            object.properties.remove_baseline_symbol_property(symbol);
+            if let Some(previous) = previous {
+                object.properties.restore_baseline_symbol_property(
+                    symbol,
+                    previous,
+                    previous_position.unwrap_or(0),
+                );
+            }
+            self.estimated_memory_bytes = previous_memory;
+            return Err(err);
+        }
+        Ok(())
+    }
+
     fn remove_object_property(
         &mut self,
         object_id: ObjectId,
         key: &str,
     ) -> Result<bool, InterpreterError> {
+        self.remove_object_typed_property(object_id, &TypedPropertyKey::String(key.to_string()))
+    }
+
+    fn remove_object_typed_property(
+        &mut self,
+        object_id: ObjectId,
+        key: &TypedPropertyKey,
+    ) -> Result<bool, InterpreterError> {
+        self.validate_runtime_property_key(key)?;
         let object = self
             .heap
             .get_mut(object_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-        let removed = object.properties.remove(key);
-        let removed_accessor = object.accessors.remove(key);
-        if removed.is_some() || removed_accessor.is_some() {
-            object.forget_property_order(key);
-        }
+        let removed = match key {
+            TypedPropertyKey::String(key) => {
+                let removed = object.properties.remove(key);
+                let removed_accessor = object.accessors.remove(key);
+                if removed.is_some() || removed_accessor.is_some() {
+                    object.forget_property_order(key);
+                }
+                removed.is_some() || removed_accessor.is_some()
+            }
+            TypedPropertyKey::Symbol(symbol) => object
+                .properties
+                .remove_baseline_symbol_property(*symbol)
+                .is_some(),
+        };
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-        Ok(removed.is_some() || removed_accessor.is_some())
+        Ok(removed)
     }
 
     #[cfg(test)]
@@ -11269,6 +13022,7 @@ impl InterpreterCore {
         match value {
             Value::Function(idx) => Some(FunctionObjectKey::Function(*idx)),
             Value::Closure(closure_id) => Some(FunctionObjectKey::Closure(*closure_id)),
+            Value::BuiltinFunction(builtin) => Some(FunctionObjectKey::Builtin(builtin.kind)),
             _ => None,
         }
     }
@@ -11288,6 +13042,7 @@ impl InterpreterCore {
                 })?;
                 Ok(Some(FunctionObjectKey::Closure(*closure_id)))
             }
+            Value::BuiltinFunction(builtin) => Ok(Some(FunctionObjectKey::Builtin(builtin.kind))),
             _ => Ok(None),
         }
     }
@@ -12926,6 +14681,764 @@ mod tests {
 
     fn quickjs_test_core() -> InterpreterCore {
         InterpreterCore::new(test_quickjs_config(), "test-trace")
+    }
+
+    fn lower_symbol_source_bd_n8eta_4_3(source: &str) -> Ir3Module {
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect("Symbol regression source should parse");
+        lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, "bd_n8eta_4_3.js"),
+            &LoweringContext::new(
+                "trace-bd-n8eta-4-3",
+                "decision-bd-n8eta-4-3",
+                "policy-bd-n8eta-4-3",
+            ),
+        )
+        .expect("Symbol regression source should lower")
+        .ir3
+    }
+
+    #[test]
+    fn symbol_value_and_heap_wire_are_typed_and_backward_readable_bd_n8eta_4_3() {
+        assert_eq!(
+            serde_json::to_string(&Value::Symbol(SymbolId(14))).unwrap(),
+            r#"{"Symbol":14}"#
+        );
+
+        let legacy = HeapObject::new();
+        let legacy_wire = serde_json::to_string(&legacy).unwrap();
+        assert!(!legacy_wire.contains("symbol_properties"));
+        assert_eq!(
+            serde_json::to_string(&serde_json::from_str::<HeapObject>(&legacy_wire).unwrap())
+                .unwrap(),
+            legacy_wire
+        );
+
+        let mut object = HeapObject::new();
+        object.properties.insert_baseline_symbol_property(
+            SymbolId(14),
+            BaselineSymbolProperty::Data(Value::Int(2)),
+        );
+        object.properties.insert_baseline_symbol_property(
+            SymbolId(15),
+            BaselineSymbolProperty::Accessor {
+                get: None,
+                set: Some(Value::Function(7)),
+            },
+        );
+        assert_ne!(legacy.properties, object.properties);
+        let wire = serde_json::to_string(&object).unwrap();
+        assert!(wire.ends_with(
+            r#","symbol_properties":[{"symbol_id":14,"kind":"data","value":{"Int":2}},{"symbol_id":15,"kind":"accessor","get":null,"set":{"Function":7}}]}"#
+        ));
+        assert_eq!(serde_json::from_str::<HeapObject>(&wire).unwrap(), object);
+    }
+
+    #[test]
+    fn symbol_heap_wire_rejects_malformed_records_bd_n8eta_4_3() {
+        let malformed = [
+            r#"{"properties":{},"prototype":null,"constructor_function":null,"is_array":false,"symbol_properties":[{"symbol_id":0,"kind":"data","value":{"Int":1}}]}"#,
+            r#"{"properties":{},"prototype":null,"constructor_function":null,"is_array":false,"symbol_properties":[{"symbol_id":14,"kind":"data","value":{"Int":1}},{"symbol_id":14,"kind":"data","value":{"Int":2}}]}"#,
+            r#"{"properties":{},"prototype":null,"constructor_function":null,"is_array":false,"symbol_properties":[{"symbol_id":14,"kind":"data","value":{"Int":1},"get":null}]}"#,
+            r#"{"properties":{},"prototype":null,"constructor_function":null,"is_array":false,"symbol_properties":[{"symbol_id":14,"kind":"accessor","get":null}]}"#,
+            r#"{"properties":{},"prototype":null,"constructor_function":null,"is_array":false,"symbol_properties":[{"symbol_id":14,"kind":"mystery","value":{"Int":1}}]}"#,
+            r#"{"properties":{},"prototype":null,"constructor_function":null,"is_array":false,"symbol_properties":[{"symbol_id":14,"kind":"data","value":{"Int":1},"extra":true}]}"#,
+        ];
+        for wire in malformed {
+            assert!(
+                serde_json::from_str::<HeapObject>(wire).is_err(),
+                "malformed Symbol property unexpectedly decoded: {wire}"
+            );
+        }
+    }
+
+    #[test]
+    fn symbol_state_wire_rejects_noncanonical_identity_records_bd_n8eta_4_3() {
+        let malformed = [
+            r#"{"well_known_schema":"wrong","next_symbol_id":14,"symbols":[]}"#,
+            r#"{"well_known_schema":"es2020-symbol-ids-1-13-v1","next_symbol_id":14,"symbols":[{"symbol_id":13,"kind":"private","description":null}]}"#,
+            r#"{"well_known_schema":"es2020-symbol-ids-1-13-v1","next_symbol_id":15,"symbols":[{"symbol_id":14,"kind":"private"}]}"#,
+            r#"{"well_known_schema":"es2020-symbol-ids-1-13-v1","next_symbol_id":15,"symbols":[{"symbol_id":14,"kind":"private","description":null,"registry_key":"x"}]}"#,
+            r#"{"well_known_schema":"es2020-symbol-ids-1-13-v1","next_symbol_id":15,"symbols":[{"symbol_id":14,"kind":"global","description":"x","registry_key":null}]}"#,
+            r#"{"well_known_schema":"es2020-symbol-ids-1-13-v1","next_symbol_id":15,"symbols":[{"symbol_id":14,"kind":"global","description":"x","registry_key":"y"}]}"#,
+            r#"{"well_known_schema":"es2020-symbol-ids-1-13-v1","next_symbol_id":16,"symbols":[{"symbol_id":14,"kind":"private","description":null},{"symbol_id":15,"kind":"private","description":null,"extra":true}]}"#,
+        ];
+        for wire in malformed {
+            assert!(
+                serde_json::from_str::<RuntimeSymbolState>(wire).is_err(),
+                "malformed Symbol state unexpectedly decoded: {wire}"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_symbol_properties_stay_distinct_ordered_and_prototyped_bd_n8eta_4_3() {
+        let mut core = quickjs_test_core();
+        let first = core
+            .allocate_private_symbol(Some(JsString::from("first")))
+            .unwrap();
+        let second = core
+            .allocate_private_symbol(Some(JsString::from("second")))
+            .unwrap();
+        let prototype = core.alloc_object_with_prototype(None).unwrap();
+        let object = core.alloc_object_with_prototype(Some(prototype)).unwrap();
+
+        core.set_object_property(object, "2".to_string(), Value::Int(2))
+            .unwrap();
+        core.set_object_property(object, "a".to_string(), Value::Int(1))
+            .unwrap();
+        core.set_object_property(object, "Symbol(14)".to_string(), Value::Int(9))
+            .unwrap();
+        core.set_object_typed_property(object, TypedPropertyKey::Symbol(first), Value::Int(7))
+            .unwrap();
+        core.set_object_typed_property(prototype, TypedPropertyKey::Symbol(second), Value::Int(8))
+            .unwrap();
+
+        assert_eq!(
+            core.prototype_chain_lookup_typed_property(object, &TypedPropertyKey::Symbol(first))
+                .unwrap(),
+            Some(RuntimeProperty::Data(Value::Int(7)))
+        );
+        assert_eq!(
+            core.prototype_chain_lookup_typed_property(object, &TypedPropertyKey::Symbol(second))
+                .unwrap(),
+            Some(RuntimeProperty::Data(Value::Int(8)))
+        );
+        assert!(
+            core.prototype_chain_has_typed_key(object, &TypedPropertyKey::Symbol(second))
+                .unwrap()
+        );
+        assert_eq!(
+            core.heap[object.0 as usize].own_typed_property_keys(),
+            vec![
+                TypedPropertyKey::String("2".to_string()),
+                TypedPropertyKey::String("a".to_string()),
+                TypedPropertyKey::String("Symbol(14)".to_string()),
+                TypedPropertyKey::Symbol(first),
+            ]
+        );
+
+        core.set_symbol_property(
+            object,
+            first,
+            BaselineSymbolProperty::Accessor {
+                get: Some(Value::Function(3)),
+                set: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            core.heap[object.0 as usize]
+                .properties
+                .baseline_symbol_key_order(),
+            &[first]
+        );
+        core.set_object_typed_property(object, TypedPropertyKey::Symbol(first), Value::Int(7))
+            .unwrap();
+
+        core.remove_object_typed_property(object, &TypedPropertyKey::Symbol(first))
+            .unwrap();
+        core.set_object_typed_property(object, TypedPropertyKey::Symbol(second), Value::Int(10))
+            .unwrap();
+        core.set_object_typed_property(object, TypedPropertyKey::Symbol(first), Value::Int(11))
+            .unwrap();
+        assert_eq!(
+            core.heap[object.0 as usize]
+                .properties
+                .baseline_symbol_key_order(),
+            &[second, first]
+        );
+    }
+
+    #[test]
+    fn symbol_seed_wire_restore_and_registry_are_atomic_bd_n8eta_4_3() {
+        let mut core = quickjs_test_core();
+        let private = core
+            .allocate_private_symbol(Some(JsString::from("private")))
+            .unwrap();
+        let global = core.intern_global_symbol(JsString::from("shared")).unwrap();
+        core.write_reg(0, Value::Symbol(private)).unwrap();
+        core.write_reg(1, Value::Symbol(global)).unwrap();
+        let seed = core.capture_execution_seed();
+        let wire = serde_json::to_string(&seed).unwrap();
+        assert!(wire.contains(r#""well_known_schema":"es2020-symbol-ids-1-13-v1""#));
+        assert!(wire.contains(r#""next_symbol_id":16"#));
+        let decoded: ExecutionSeed = serde_json::from_str(&wire).unwrap();
+        assert_eq!(decoded, seed);
+
+        let later = core.allocate_private_symbol(None).unwrap();
+        assert_eq!(later, SymbolId(16));
+        core.reset_execution_state_from_seed(&decoded).unwrap();
+        assert_eq!(
+            core.symbol_state.key_for(global),
+            Some(&JsString::from("shared"))
+        );
+        assert_eq!(core.allocate_private_symbol(None).unwrap(), SymbolId(16));
+
+        let default_wire = serde_json::to_string(
+            &InterpreterCore::new(test_quickjs_config(), "default-symbol-state")
+                .capture_execution_seed(),
+        )
+        .unwrap();
+        assert!(!default_wire.contains("symbol_state"));
+    }
+
+    #[test]
+    fn whole_seed_rejects_unresolved_dynamic_symbol_ids_bd_n8eta_4_3() {
+        let default_seed = InterpreterCore::new(test_quickjs_config(), "invalid-symbol-seed")
+            .capture_execution_seed();
+        let mut wire = serde_json::to_value(&default_seed).unwrap();
+        wire["registers"][0] = serde_json::json!({"Symbol": 14});
+        assert!(serde_json::from_value::<ExecutionSeed>(wire).is_err());
+
+        let mut missing_state_wire = serde_json::to_value(&default_seed).unwrap();
+        missing_state_wire["registers"][0] = serde_json::json!({"Symbol": 1});
+        assert!(missing_state_wire.get("symbol_state").is_none());
+        assert!(serde_json::from_value::<ExecutionSeed>(missing_state_wire).is_err());
+
+        let mut null_state_wire = serde_json::to_value(&default_seed).unwrap();
+        null_state_wire["symbol_state"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<ExecutionSeed>(null_state_wire).is_err());
+    }
+
+    #[test]
+    fn eager_seed_rejects_unresolved_symbols_atomically_bd_n8eta_4_3() {
+        let mut core = quickjs_test_core();
+        let before = core.capture_execution_seed();
+        let mut eager_seed = core.capture_execution_seed_eager_for_test();
+        eager_seed.registers[0] = Value::Symbol(SymbolId(999));
+
+        assert!(matches!(
+            core.reset_execution_state_from_seed_eager_for_test(&eager_seed),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        assert_eq!(core.capture_execution_seed(), before);
+    }
+
+    #[test]
+    fn symbol_allocation_and_property_budget_failures_roll_back_bd_n8eta_4_3() {
+        let mut allocation_core = quickjs_test_core();
+        allocation_core.config.max_total_memory_bytes = 1;
+        assert!(matches!(
+            allocation_core.allocate_private_symbol(Some(JsString::from("too-large"))),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(allocation_core.symbol_state.is_default());
+        assert_eq!(allocation_core.estimated_memory_bytes(), 0);
+
+        let mut property_core = quickjs_test_core();
+        let symbol = property_core.allocate_private_symbol(None).unwrap();
+        let object = property_core.alloc_object_with_prototype(None).unwrap();
+        let baseline_memory = property_core.estimated_memory_bytes();
+        property_core.config.max_total_memory_bytes = baseline_memory + 1;
+        assert!(matches!(
+            property_core.set_object_typed_property(
+                object,
+                TypedPropertyKey::Symbol(symbol),
+                Value::str("x".repeat(512)),
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(
+            property_core.heap[object.0 as usize]
+                .properties
+                .baseline_symbol_key_order()
+                .is_empty()
+        );
+        assert_eq!(property_core.estimated_memory_bytes(), baseline_memory);
+    }
+
+    #[test]
+    fn implicit_symbol_string_concatenation_fails_closed_bd_n8eta_4_3() {
+        let mut core = quickjs_test_core();
+        core.registers.resize(2, Value::Undefined);
+        core.registers[0] = Value::str("prefix");
+        core.registers[1] = Value::Symbol(WellKnownSymbol::Iterator.id());
+
+        for (lhs, rhs) in [(0, 1), (1, 0)] {
+            assert!(matches!(
+                core.eval_add(lhs, rhs),
+                Err(InterpreterError::TypeError { ref got, .. }) if got == "symbol"
+            ));
+        }
+    }
+
+    #[test]
+    fn implicit_symbol_numeric_coercions_fail_closed_bd_n8eta_4_3() {
+        let mut core = quickjs_test_core();
+        core.registers.resize(2, Value::Undefined);
+        core.registers[0] = Value::Symbol(WellKnownSymbol::Iterator.id());
+        core.registers[1] = Value::Int(1);
+
+        let results = [
+            core.eval_add(0, 1),
+            core.eval_arith(0, 1, "sub"),
+            core.eval_arith(0, 1, "mul"),
+            core.eval_div(0, 1),
+            core.eval_mod(0, 1),
+            core.eval_exp(0, 1),
+            core.eval_unary_plus(0),
+            core.eval_unary_neg(0),
+            core.eval_bit_not(0),
+            core.eval_relational(0, 1, "<"),
+            core.eval_bitwise(0, 1, "|"),
+        ];
+        assert!(
+            results
+                .into_iter()
+                .all(|result| matches!(result, Err(InterpreterError::TypeError { .. })))
+        );
+    }
+
+    #[test]
+    fn symbol_legacy_numeric_coercion_sinks_fail_closed_bd_n8eta_4_3() {
+        let mut core = quickjs_test_core();
+        let symbol = Value::Symbol(WellKnownSymbol::Iterator.id());
+        core.registers[0] = Value::Int(65);
+        core.registers[1] = symbol.clone();
+
+        for capability in ["number:isNaN", "number:isFinite"] {
+            assert!(matches!(
+                core.dispatch_number_hostcall(capability, RegRange { start: 1, count: 1 }),
+                Err(InterpreterError::TypeError { .. })
+            ));
+        }
+        for capability in [
+            "number:Number.isNaN",
+            "number:Number.isFinite",
+            "number:Number.isInteger",
+            "number:Number.isSafeInteger",
+        ] {
+            assert_eq!(
+                core.dispatch_number_hostcall(capability, RegRange { start: 1, count: 1 })
+                    .unwrap(),
+                Value::Bool(false)
+            );
+        }
+
+        let text = JsString::from("abc");
+        assert!(InterpreterCore::string_char_at_value(&text, Some(&symbol)).is_err());
+        assert!(InterpreterCore::string_char_code_at_value(&text, Some(&symbol)).is_err());
+        assert!(InterpreterCore::string_code_point_at_value(&text, Some(&symbol)).is_err());
+        assert!(InterpreterCore::string_at_value(&text, Some(&symbol)).is_err());
+
+        for capability in ["builtin:StringFromCharCode", "builtin:StringFromCodePoint"] {
+            assert!(matches!(
+                core.dispatch_builtin_hostcall(capability, RegRange { start: 0, count: 2 }),
+                Err(InterpreterError::TypeError { .. })
+            ));
+        }
+        assert!(matches!(
+            core.dispatch_builtin_hostcall("builtin:MathAbs", RegRange { start: 1, count: 1 }),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        for capability in ["timer:setTimeout", "timer:setInterval"] {
+            assert!(matches!(
+                core.dispatch_timer_hostcall(capability, RegRange { start: 0, count: 2 }),
+                Err(InterpreterError::TypeError { .. })
+            ));
+        }
+        assert_eq!(
+            core.dispatch_timer_hostcall("timer:clearTimeout", RegRange { start: 1, count: 1 })
+                .unwrap(),
+            Value::Undefined
+        );
+
+        let array_like = core.alloc_object_with_prototype(None).unwrap();
+        core.set_plain_data_property(array_like, "length".into(), symbol)
+            .unwrap();
+        assert!(matches!(
+            core.array_like_length(array_like),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        core.registers[1] = Value::Object(array_like);
+        core.registers[2] = Value::Int(0);
+        assert!(matches!(
+            core.execute(&test_module(vec![
+                Ir3Instruction::ArraySlice {
+                    array: 1,
+                    start: 2,
+                    dst: 0,
+                },
+                Ir3Instruction::Halt,
+            ])),
+            Err(InterpreterError::TypeError { .. })
+        ));
+    }
+
+    #[test]
+    fn symbol_source_identity_keys_and_reflection_match_both_lanes_bd_n8eta_4_3() {
+        let module = lower_symbol_source_bd_n8eta_4_3(
+            "const first = Symbol('same');\
+             const second = Symbol('same');\
+             const global = Symbol.for('shared');\
+             const key = Symbol('key');\
+             const object = { [key]: 7, 'Symbol(17)': 9 };\
+             object[key] = 8;\
+             const setWorked = object[key] === 8;\
+             delete object[key];\
+             const deleteWorked = !(key in object);\
+             object[key] = 7;\
+             const spread = { ...object };\
+             const assigned = Object.assign({}, object);\
+             (typeof Symbol === 'function' && typeof first === 'symbol' && first !== second &&\
+              first.description === 'same' && first.toString() === 'Symbol(same)' &&\
+              Symbol().description === undefined &&\
+              global === Symbol.for('shared') && Symbol.keyFor(global) === 'shared' &&\
+              Symbol.keyFor(first) === undefined && Symbol.keyFor(Symbol.iterator) === undefined &&\
+              setWorked && deleteWorked && object[key] === 7 && object['Symbol(17)'] === 9 &&\
+              key in object && spread[key] === 7 && assigned[key] === 7 &&\
+              Object.keys(object).length === 1 &&\
+              Object.getOwnPropertySymbols(object)[0] === key &&\
+              Reflect.ownKeys(object).length === 2) ? 1 : 0;",
+        );
+        assert_eq!(quickjs_execute(&module).unwrap().value, Value::Int(1));
+        assert_eq!(v8_execute(&module).unwrap().value, Value::Int(1));
+    }
+
+    #[test]
+    fn function_like_symbol_own_keys_match_both_lanes_bd_n8eta_4_3() {
+        let cases = [
+            (
+                "get-set-in",
+                "const s=Symbol(); function f(){} f[s]=9; (s in f && f[s]===9)?1:0;",
+            ),
+            (
+                "reflection",
+                "const s=Symbol(); function f(){} f[s]=9; (Object.getOwnPropertySymbols(f)[0]===s && Reflect.ownKeys(f).length===1)?1:0;",
+            ),
+            (
+                "spread",
+                "const s=Symbol(); function f(){} f[s]=9; const copy={...f}; copy[s]===9?1:0;",
+            ),
+            (
+                "assign",
+                "const s=Symbol(); function f(){} f[s]=9; const copy=Object.assign({},f); copy[s]===9?1:0;",
+            ),
+            (
+                "delete",
+                "const s=Symbol(); function f(){} f[s]=9; (delete f[s] && !(s in f))?1:0;",
+            ),
+        ];
+        for (name, source) in cases {
+            let module = lower_symbol_source_bd_n8eta_4_3(source);
+            assert_eq!(
+                quickjs_execute(&module)
+                    .unwrap_or_else(|error| panic!("QuickJsLane {name}: {error}"))
+                    .value,
+                Value::Int(1),
+                "QuickJsLane {name}"
+            );
+            assert_eq!(
+                v8_execute(&module)
+                    .unwrap_or_else(|error| panic!("V8Lane {name}: {error}"))
+                    .value,
+                Value::Int(1),
+                "V8Lane {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn symbol_accessor_spread_resumes_getter_and_defines_data_bd_n8eta_4_3() {
+        let mut core = quickjs_test_core();
+        let symbol = core
+            .allocate_private_symbol(Some(JsString::from("spread")))
+            .unwrap();
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        let source = core.alloc_object_with_prototype(None).unwrap();
+        core.set_plain_data_property(source, "calls".into(), Value::Int(0))
+            .unwrap();
+        core.set_plain_data_property(source, "marker".into(), Value::Int(41))
+            .unwrap();
+        core.set_symbol_property(
+            source,
+            symbol,
+            BaselineSymbolProperty::Accessor {
+                get: Some(Value::Function(0)),
+                set: None,
+            },
+        )
+        .unwrap();
+        core.registers[1] = Value::Object(target);
+        core.registers[2] = Value::Object(source);
+
+        let result = core
+            .execute(&test_module_with_pool_and_functions(
+                vec![
+                    Ir3Instruction::SpreadIntoObject {
+                        target: 1,
+                        source: 2,
+                    },
+                    Ir3Instruction::Move { dst: 0, src: 1 },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadThis { dst: 0 },
+                    Ir3Instruction::LoadStr {
+                        dst: 1,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 0,
+                        key: 1,
+                        dst: 2,
+                    },
+                    Ir3Instruction::LoadInt { dst: 3, value: 1 },
+                    Ir3Instruction::Add {
+                        dst: 4,
+                        lhs: 2,
+                        rhs: 3,
+                    },
+                    Ir3Instruction::SetProperty {
+                        obj: 0,
+                        key: 1,
+                        val: 4,
+                    },
+                    Ir3Instruction::LoadStr {
+                        dst: 5,
+                        pool_index: 1,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 0,
+                        key: 5,
+                        dst: 6,
+                    },
+                    Ir3Instruction::Return { value: 6 },
+                ],
+                vec!["calls".to_string(), "marker".to_string()],
+                vec![class_test_function(3, "symbol_spread_getter")],
+            ))
+            .unwrap();
+
+        assert_eq!(result.value, Value::Object(target));
+        assert_eq!(core.registers[2], Value::Object(source));
+        assert_eq!(
+            core.heap[source.0 as usize].properties.get("calls"),
+            Some(&Value::Int(1))
+        );
+        assert!(matches!(
+            core.heap[target.0 as usize]
+                .properties
+                .baseline_symbol_property(symbol),
+            Some(BaselineSymbolProperty::Data(Value::Int(41)))
+        ));
+        assert!(core.copy_data_properties_states.is_empty());
+    }
+
+    #[test]
+    fn symbol_accessor_object_assign_runs_getter_then_setter_once_bd_n8eta_4_3() {
+        let mut core = quickjs_test_core();
+        let symbol = core
+            .allocate_private_symbol(Some(JsString::from("assign")))
+            .unwrap();
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        let source = core.alloc_object_with_prototype(None).unwrap();
+        let later_source = core.alloc_object_with_prototype(None).unwrap();
+        core.set_plain_data_property(source, "getterCalls".into(), Value::Int(0))
+            .unwrap();
+        core.set_plain_data_property(source, "marker".into(), Value::Int(41))
+            .unwrap();
+        core.set_plain_data_property(target, "setterCalls".into(), Value::Int(0))
+            .unwrap();
+        core.set_plain_data_property(target, "received".into(), Value::Int(0))
+            .unwrap();
+        core.set_plain_data_property(later_source, "after".into(), Value::Int(2))
+            .unwrap();
+        core.set_symbol_property(
+            source,
+            symbol,
+            BaselineSymbolProperty::Accessor {
+                get: Some(Value::Function(0)),
+                set: None,
+            },
+        )
+        .unwrap();
+        core.set_symbol_property(
+            target,
+            symbol,
+            BaselineSymbolProperty::Accessor {
+                get: None,
+                set: Some(Value::Function(1)),
+            },
+        )
+        .unwrap();
+        core.registers[1] = Value::Object(target);
+        core.registers[2] = Value::Object(source);
+        core.registers[3] = Value::Object(later_source);
+
+        let result = core
+            .execute(&test_module_with_pool_and_functions(
+                vec![
+                    Ir3Instruction::HostCall {
+                        capability: CapabilityTag("builtin:ObjectAssign".to_string()),
+                        args: RegRange { start: 1, count: 3 },
+                        dst: 0,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadThis { dst: 0 },
+                    Ir3Instruction::LoadStr {
+                        dst: 1,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 0,
+                        key: 1,
+                        dst: 2,
+                    },
+                    Ir3Instruction::LoadInt { dst: 3, value: 1 },
+                    Ir3Instruction::Add {
+                        dst: 4,
+                        lhs: 2,
+                        rhs: 3,
+                    },
+                    Ir3Instruction::SetProperty {
+                        obj: 0,
+                        key: 1,
+                        val: 4,
+                    },
+                    Ir3Instruction::LoadStr {
+                        dst: 5,
+                        pool_index: 1,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 0,
+                        key: 5,
+                        dst: 6,
+                    },
+                    Ir3Instruction::Return { value: 6 },
+                    Ir3Instruction::LoadThis { dst: 2 },
+                    Ir3Instruction::LoadStr {
+                        dst: 1,
+                        pool_index: 2,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 2,
+                        key: 1,
+                        dst: 3,
+                    },
+                    Ir3Instruction::LoadInt { dst: 4, value: 1 },
+                    Ir3Instruction::Add {
+                        dst: 5,
+                        lhs: 3,
+                        rhs: 4,
+                    },
+                    Ir3Instruction::SetProperty {
+                        obj: 2,
+                        key: 1,
+                        val: 5,
+                    },
+                    Ir3Instruction::LoadStr {
+                        dst: 6,
+                        pool_index: 3,
+                    },
+                    Ir3Instruction::SetProperty {
+                        obj: 2,
+                        key: 6,
+                        val: 0,
+                    },
+                    Ir3Instruction::Return { value: 0 },
+                ],
+                vec![
+                    "getterCalls".to_string(),
+                    "marker".to_string(),
+                    "setterCalls".to_string(),
+                    "received".to_string(),
+                ],
+                vec![
+                    class_test_function(2, "symbol_assign_getter"),
+                    Ir3FunctionDesc {
+                        entry: 11,
+                        arity: 1,
+                        frame_size: 7,
+                        name: Some("symbol_assign_setter".to_string()),
+                        is_generator: false,
+                        rest_param_index: None,
+                    },
+                ],
+            ))
+            .unwrap();
+
+        assert_eq!(result.value, Value::Object(target));
+        assert_eq!(
+            core.heap[source.0 as usize].properties.get("getterCalls"),
+            Some(&Value::Int(1))
+        );
+        assert_eq!(
+            core.heap[target.0 as usize].properties.get("setterCalls"),
+            Some(&Value::Int(1))
+        );
+        assert_eq!(
+            core.heap[target.0 as usize].properties.get("received"),
+            Some(&Value::Int(41))
+        );
+        assert_eq!(
+            core.heap[target.0 as usize].properties.get("after"),
+            Some(&Value::Int(2))
+        );
+        assert!(matches!(
+            core.heap[target.0 as usize]
+                .properties
+                .baseline_symbol_property(symbol),
+            Some(BaselineSymbolProperty::Accessor { .. })
+        ));
+        assert_eq!(result.hostcall_decisions.len(), 1);
+        assert!(core.copy_data_properties_states.is_empty());
+    }
+
+    #[test]
+    fn symbol_object_assign_rejections_clear_continuations_bd_n8eta_4_3() {
+        for throwing_setter in [false, true] {
+            let mut core = quickjs_test_core();
+            let symbol = core.allocate_private_symbol(None).unwrap();
+            let target = core.alloc_object_with_prototype(None).unwrap();
+            let source = core.alloc_object_with_prototype(None).unwrap();
+            core.set_symbol_property(source, symbol, BaselineSymbolProperty::Data(Value::Int(7)))
+                .unwrap();
+            core.set_symbol_property(
+                target,
+                symbol,
+                BaselineSymbolProperty::Accessor {
+                    get: None,
+                    set: throwing_setter.then_some(Value::Function(0)),
+                },
+            )
+            .unwrap();
+            core.registers[1] = Value::Object(target);
+            core.registers[2] = Value::Object(source);
+
+            let module = test_module_with_pool_and_functions(
+                vec![
+                    Ir3Instruction::HostCall {
+                        capability: CapabilityTag("builtin:ObjectAssign".to_string()),
+                        args: RegRange { start: 1, count: 2 },
+                        dst: 0,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadStr {
+                        dst: 0,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::Throw { value: 0 },
+                ],
+                vec!["setter failed".to_string()],
+                vec![Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("throwing_symbol_assign_setter".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            assert!(core.execute(&module).is_err());
+            assert!(core.copy_data_properties_states.is_empty());
+            assert!(matches!(
+                core.heap[target.0 as usize]
+                    .properties
+                    .baseline_symbol_property(symbol),
+                Some(BaselineSymbolProperty::Accessor { .. })
+            ));
+        }
     }
 
     fn class_test_function(entry: u32, name: &str) -> Ir3FunctionDesc {
@@ -17176,7 +19689,8 @@ mod tests {
             vec!["a".to_string(), "b".to_string(), "x".to_string()]
         );
 
-        core.reset_execution_state_from_seed(&seed);
+        core.reset_execution_state_from_seed(&seed)
+            .expect("captured seed must remain valid");
         assert_eq!(
             core.heap[object_id.0 as usize].own_property_keys(),
             vec!["a".to_string(), "x".to_string(), "b".to_string()]
@@ -20200,7 +22714,8 @@ mod tests {
                 .unwrap(),
             excluded: BTreeSet::new(),
             next_index: 0,
-            awaiting_key: None,
+            write_mode: CopyDataPropertiesWriteMode::CreateData,
+            awaiting: None,
         };
         let state_bytes = InterpreterCore::estimate_copy_data_properties_state_bytes(&probe_state);
         core.config.max_total_memory_bytes = baseline_memory

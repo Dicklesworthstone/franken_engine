@@ -70806,7 +70806,7 @@ mod async_runtime_tests_current {
             ],
             vec![],
         );
-        core.run_loop(&module).expect("labeled cluster reads");
+        assert_eq!(core.run_loop(&module), Err(InterpreterError::Halted));
         assert_eq!(core.get_register_label(4), Ok(&Label::Secret));
         assert_eq!(core.get_register_label(5), Ok(&Label::Secret));
         assert_eq!(core.get_register_label(9), Ok(&Label::Secret));

@@ -16907,6 +16907,12 @@ fn module_alias_expr_has_rejected_use(
 ) -> bool {
     match expr {
         Expression::Identifier(name) => name == alias,
+        Expression::Call { .. }
+            if surface == LoweringOnlyModuleAliasSurface::Cluster
+                && is_discarded_cluster_listener_registration(expr, alias) =>
+        {
+            true
+        }
         Expression::Call {
             callee, arguments, ..
         } if match surface {

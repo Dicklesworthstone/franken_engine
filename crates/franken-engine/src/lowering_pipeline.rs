@@ -938,6 +938,15 @@ fn lower_ir0_to_ir1_with_ambient_grant(
     {
         binding_lookup.insert(pending_stream_passthrough_binding_sentinel(&local), 0);
     }
+    for local in confirmed_stream_transform_destructured_requires(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(pending_stream_transform_binding_sentinel(&local), 0);
+    }
+    for local in confirmed_stream_pipeline_destructured_requires(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(pending_stream_pipeline_binding_sentinel(&local), 0);
+    }
+    for local in confirmed_stream_promises_destructured_requires(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(pending_stream_promises_binding_sentinel(&local), 0);
+    }
     for local in confirmed_stream_readable_named_imports(&ir0.tree.body) {
         binding_lookup.insert(stream_readable_binding_sentinel(&local), 0);
     }
@@ -946,6 +955,15 @@ fn lower_ir0_to_ir1_with_ambient_grant(
     }
     for local in confirmed_stream_passthrough_named_imports(&ir0.tree.body) {
         binding_lookup.insert(stream_passthrough_binding_sentinel(&local), 0);
+    }
+    for local in confirmed_stream_transform_named_imports(&ir0.tree.body) {
+        binding_lookup.insert(stream_transform_binding_sentinel(&local), 0);
+    }
+    for local in confirmed_stream_pipeline_named_imports(&ir0.tree.body) {
+        binding_lookup.insert(stream_pipeline_binding_sentinel(&local), 0);
+    }
+    for local in confirmed_stream_promises_pipeline_named_imports(&ir0.tree.body) {
+        binding_lookup.insert(stream_promises_pipeline_binding_sentinel(&local), 0);
     }
     let mut synthetic_export_index = 0u32;
     let mut synthetic_import_index = 0u32;
@@ -1116,8 +1134,25 @@ fn lower_ir0_to_ir1_with_ambient_grant(
                                         "PassThrough" => binding_lookup.contains_key(
                                             &stream_passthrough_binding_sentinel(&spec.local_name),
                                         ),
+                                        "Transform" => binding_lookup.contains_key(
+                                            &stream_transform_binding_sentinel(&spec.local_name),
+                                        ),
+                                        "pipeline" => binding_lookup.contains_key(
+                                            &stream_pipeline_binding_sentinel(&spec.local_name),
+                                        ),
                                         _ => false,
                                     });
+                        let complete_stream_promises_named_import =
+                            is_stream_promises_module_specifier(&import.source)
+                                && !specifiers.is_empty()
+                                && specifiers.iter().all(|spec| {
+                                    spec.import_name == "pipeline"
+                                        && binding_lookup.contains_key(
+                                            &stream_promises_pipeline_binding_sentinel(
+                                                &spec.local_name,
+                                            ),
+                                        )
+                                });
                         let named_builtin_import = (is_fs_module_specifier(&import.source)
                             && specifiers.iter().any(|spec| {
                                 binding_lookup.contains_key(&fs_named_import_sentinel(
@@ -1156,9 +1191,12 @@ fn lower_ir0_to_ir1_with_ambient_grant(
                                         &spec.local_name,
                                     ))
                                 }))
-                            || complete_stream_named_import;
-                        if is_stream_module_specifier(&import.source)
+                            || complete_stream_named_import
+                            || complete_stream_promises_named_import;
+                        if (is_stream_module_specifier(&import.source)
+                            || is_stream_promises_module_specifier(&import.source))
                             && !complete_stream_named_import
+                            && !complete_stream_promises_named_import
                         {
                             for spec in specifiers {
                                 suppress_stream_module_sentinel(
@@ -2133,9 +2171,16 @@ fn binding_entry_snapshot(
             let stream_readable = stream_readable_binding_sentinel(name);
             let stream_writable = stream_writable_binding_sentinel(name);
             let stream_passthrough = stream_passthrough_binding_sentinel(name);
+            let stream_transform = stream_transform_binding_sentinel(name);
+            let stream_pipeline = stream_pipeline_binding_sentinel(name);
+            let stream_promises = stream_promises_binding_sentinel(name);
+            let stream_promises_pipeline = stream_promises_pipeline_binding_sentinel(name);
             let pending_stream_readable = pending_stream_readable_binding_sentinel(name);
             let pending_stream_writable = pending_stream_writable_binding_sentinel(name);
             let pending_stream_passthrough = pending_stream_passthrough_binding_sentinel(name);
+            let pending_stream_transform = pending_stream_transform_binding_sentinel(name);
+            let pending_stream_pipeline = pending_stream_pipeline_binding_sentinel(name);
+            let pending_stream_promises = pending_stream_promises_binding_sentinel(name);
             let net_module = net_module_alias_sentinel(name);
             let tls_module = tls_module_alias_sentinel(name);
             [
@@ -2154,6 +2199,22 @@ fn binding_entry_snapshot(
                     binding_lookup.get(&stream_passthrough).copied(),
                 ),
                 (
+                    stream_transform.clone(),
+                    binding_lookup.get(&stream_transform).copied(),
+                ),
+                (
+                    stream_pipeline.clone(),
+                    binding_lookup.get(&stream_pipeline).copied(),
+                ),
+                (
+                    stream_promises.clone(),
+                    binding_lookup.get(&stream_promises).copied(),
+                ),
+                (
+                    stream_promises_pipeline.clone(),
+                    binding_lookup.get(&stream_promises_pipeline).copied(),
+                ),
+                (
                     pending_stream_readable.clone(),
                     binding_lookup.get(&pending_stream_readable).copied(),
                 ),
@@ -2164,6 +2225,18 @@ fn binding_entry_snapshot(
                 (
                     pending_stream_passthrough.clone(),
                     binding_lookup.get(&pending_stream_passthrough).copied(),
+                ),
+                (
+                    pending_stream_transform.clone(),
+                    binding_lookup.get(&pending_stream_transform).copied(),
+                ),
+                (
+                    pending_stream_pipeline.clone(),
+                    binding_lookup.get(&pending_stream_pipeline).copied(),
+                ),
+                (
+                    pending_stream_promises.clone(),
+                    binding_lookup.get(&pending_stream_promises).copied(),
                 ),
                 (net_module.clone(), binding_lookup.get(&net_module).copied()),
                 (tls_module.clone(), binding_lookup.get(&tls_module).copied()),
@@ -3193,6 +3266,24 @@ fn lower_statement_to_ir1_with_flow(
                             .is_some()
                         {
                             binding_lookup.insert(stream_passthrough_binding_sentinel(local), 0);
+                        }
+                        if binding_lookup
+                            .remove(&pending_stream_transform_binding_sentinel(local))
+                            .is_some()
+                        {
+                            binding_lookup.insert(stream_transform_binding_sentinel(local), 0);
+                        }
+                        if binding_lookup
+                            .remove(&pending_stream_pipeline_binding_sentinel(local))
+                            .is_some()
+                        {
+                            binding_lookup.insert(stream_pipeline_binding_sentinel(local), 0);
+                        }
+                        if binding_lookup
+                            .remove(&pending_stream_promises_binding_sentinel(local))
+                            .is_some()
+                        {
+                            binding_lookup.insert(stream_promises_binding_sentinel(local), 0);
                         }
                         if let Some(&local_bid) = binding_lookup.get(local) {
                             ops.push(Ir1Op::LoadLiteral {
@@ -11133,6 +11224,7 @@ fn lower_expression_to_ir1_inner(
                 // pure engine builtin; no stream module or constructor object
                 // crosses the lowering boundary.
                 .or_else(|| stream_readable_from_call_capability(callee, binding_lookup))
+                .or_else(|| stream_pipeline_call_capability(callee, binding_lookup))
             {
                 let arg_count = arguments.len();
                 if arg_count > u32::MAX as usize {
@@ -15892,6 +15984,8 @@ enum LoweringOnlyModuleAliasSurface {
     Net,
     Tls,
     StreamConstructor,
+    StreamPipeline,
+    StreamPromises,
 }
 
 fn module_alias_member_name<'a>(callee: &'a Expression, alias: &str) -> Option<&'a str> {
@@ -15955,6 +16049,12 @@ fn is_module_alias_usage(
             is_tls_alias_call(expr, alias) || is_tls_alias_constant_read(expr, alias)
         }
         LoweringOnlyModuleAliasSurface::StreamConstructor => is_stream_constructor_use(expr, alias),
+        LoweringOnlyModuleAliasSurface::StreamPipeline => {
+            is_stream_pipeline_direct_call(expr, alias)
+        }
+        LoweringOnlyModuleAliasSurface::StreamPromises => {
+            is_stream_promises_pipeline_call(expr, alias)
+        }
     }
 }
 
@@ -16297,6 +16397,12 @@ fn module_alias_expr_has_rejected_use(
                 .is_some_and(|method| net_method_capability(method).is_some()),
             LoweringOnlyModuleAliasSurface::Tls => is_tls_alias_call(expr, alias),
             LoweringOnlyModuleAliasSurface::StreamConstructor => false,
+            LoweringOnlyModuleAliasSurface::StreamPipeline => {
+                is_stream_pipeline_direct_call(expr, alias)
+            }
+            LoweringOnlyModuleAliasSurface::StreamPromises => {
+                is_stream_promises_pipeline_call(expr, alias)
+            }
         } =>
         {
             arguments
@@ -17251,6 +17357,10 @@ fn is_stream_module_specifier(specifier: &str) -> bool {
     specifier == "stream" || specifier == "node:stream"
 }
 
+fn is_stream_promises_module_specifier(specifier: &str) -> bool {
+    specifier == "stream/promises" || specifier == "node:stream/promises"
+}
+
 fn stream_readable_binding_sentinel(name: &str) -> String {
     format!("\0stream-readable\0{name}")
 }
@@ -17261,6 +17371,22 @@ fn stream_writable_binding_sentinel(name: &str) -> String {
 
 fn stream_passthrough_binding_sentinel(name: &str) -> String {
     format!("\0stream-passthrough\0{name}")
+}
+
+fn stream_transform_binding_sentinel(name: &str) -> String {
+    format!("\0stream-transform\0{name}")
+}
+
+fn stream_pipeline_binding_sentinel(name: &str) -> String {
+    format!("\0stream-pipeline\0{name}")
+}
+
+fn stream_promises_binding_sentinel(name: &str) -> String {
+    format!("\0stream-promises\0{name}")
+}
+
+fn stream_promises_pipeline_binding_sentinel(name: &str) -> String {
+    format!("\0stream-promises-pipeline\0{name}")
 }
 
 fn pending_stream_readable_binding_sentinel(name: &str) -> String {
@@ -17275,13 +17401,32 @@ fn pending_stream_passthrough_binding_sentinel(name: &str) -> String {
     format!("\0stream-passthrough-pending\0{name}")
 }
 
+fn pending_stream_transform_binding_sentinel(name: &str) -> String {
+    format!("\0stream-transform-pending\0{name}")
+}
+
+fn pending_stream_pipeline_binding_sentinel(name: &str) -> String {
+    format!("\0stream-pipeline-pending\0{name}")
+}
+
+fn pending_stream_promises_binding_sentinel(name: &str) -> String {
+    format!("\0stream-promises-pending\0{name}")
+}
+
 fn suppress_stream_module_sentinel(binding_lookup: &mut BTreeMap<String, BindingId>, name: &str) {
     binding_lookup.remove(&stream_readable_binding_sentinel(name));
     binding_lookup.remove(&stream_writable_binding_sentinel(name));
     binding_lookup.remove(&stream_passthrough_binding_sentinel(name));
+    binding_lookup.remove(&stream_transform_binding_sentinel(name));
+    binding_lookup.remove(&stream_pipeline_binding_sentinel(name));
+    binding_lookup.remove(&stream_promises_binding_sentinel(name));
+    binding_lookup.remove(&stream_promises_pipeline_binding_sentinel(name));
     binding_lookup.remove(&pending_stream_readable_binding_sentinel(name));
     binding_lookup.remove(&pending_stream_writable_binding_sentinel(name));
     binding_lookup.remove(&pending_stream_passthrough_binding_sentinel(name));
+    binding_lookup.remove(&pending_stream_transform_binding_sentinel(name));
+    binding_lookup.remove(&pending_stream_pipeline_binding_sentinel(name));
+    binding_lookup.remove(&pending_stream_promises_binding_sentinel(name));
 }
 
 fn suppress_stream_module_sentinels(
@@ -17330,6 +17475,24 @@ fn is_stream_constructor_use(expr: &Expression, local: &str) -> bool {
             if matches!(callee.as_ref(), Expression::Identifier(name) if name == local))
 }
 
+fn is_stream_pipeline_direct_call(expr: &Expression, local: &str) -> bool {
+    matches!(expr,
+        Expression::Call { callee, .. }
+            if matches!(callee.as_ref(), Expression::Identifier(name) if name == local))
+}
+
+fn is_stream_promises_pipeline_call(expr: &Expression, local: &str) -> bool {
+    matches!(expr,
+        Expression::Call { callee, .. }
+            if matches!(callee.as_ref(), Expression::Member {
+                object,
+                property,
+                computed: false,
+                ..
+            } if matches!(object.as_ref(), Expression::Identifier(name) if name == local)
+                && well_formed_static_name(property).is_some_and(|name| name == "pipeline")))
+}
+
 fn is_stream_readable_usage(expr: &Expression, local: &str) -> bool {
     is_stream_readable_from_direct_call(expr, local) || is_stream_constructor_use(expr, local)
 }
@@ -17340,19 +17503,23 @@ fn is_stream_readable_usage(expr: &Expression, local: &str) -> bool {
 /// authorizing an unrelated alias/escape, while nested same-named bindings do
 /// not count as either confirmation or rejection.
 fn stream_constructor_binding_is_exhaustively_supported(body: &[Statement], local: &str) -> bool {
+    stream_binding_is_exhaustively_supported(
+        body,
+        local,
+        LoweringOnlyModuleAliasSurface::StreamConstructor,
+    )
+}
+
+fn stream_binding_is_exhaustively_supported(
+    body: &[Statement],
+    local: &str,
+    surface: LoweringOnlyModuleAliasSurface,
+) -> bool {
     body.iter().any(|statement| {
-        module_alias_statement_contains_unshadowed_usage(
-            statement,
-            local,
-            LoweringOnlyModuleAliasSurface::StreamConstructor,
-        )
-    }) && !body.iter().any(|statement| {
-        module_alias_statement_has_rejected_use(
-            statement,
-            local,
-            LoweringOnlyModuleAliasSurface::StreamConstructor,
-        )
-    })
+        module_alias_statement_contains_unshadowed_usage(statement, local, surface)
+    }) && !body
+        .iter()
+        .any(|statement| module_alias_statement_has_rejected_use(statement, local, surface))
 }
 
 fn confirmed_stream_readable_destructured_requires(
@@ -17490,6 +17657,92 @@ fn confirmed_stream_passthrough_destructured_requires(
         .collect()
 }
 
+fn confirmed_stream_destructured_export(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+    export: &str,
+    surface: LoweringOnlyModuleAliasSurface,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeMap::new();
+    for (statement_index, stmt) in body.iter().enumerate() {
+        let Statement::VariableDeclaration(vd) = stmt else {
+            continue;
+        };
+        if vd.kind != VariableDeclarationKind::Const {
+            continue;
+        }
+        for (declarator_index, declaration) in vd.declarations.iter().enumerate() {
+            let (Some(init), BindingPattern::ObjectPattern(properties)) =
+                (&declaration.initializer, &declaration.pattern)
+            else {
+                continue;
+            };
+            if !is_require_stream_module_initializer(init, binding_lookup) {
+                continue;
+            }
+            for property in properties {
+                if !property.computed
+                    && well_formed_static_name(&property.key).is_some_and(|name| name == export)
+                    && let BindingPattern::Identifier(local) = &property.value
+                {
+                    candidates.insert(local.clone(), (statement_index, declarator_index));
+                }
+            }
+        }
+    }
+    candidates
+        .into_iter()
+        .filter(|(local, (statement_index, declarator_index))| {
+            stream_binding_is_exhaustively_supported(body, local, surface)
+                && !module_alias_has_predeclaration_hazard(
+                    body,
+                    *statement_index,
+                    *declarator_index,
+                    local,
+                    surface,
+                    binding_lookup,
+                )
+        })
+        .map(|(local, _)| local)
+        .collect()
+}
+
+fn confirmed_stream_transform_destructured_requires(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    confirmed_stream_destructured_export(
+        body,
+        binding_lookup,
+        "Transform",
+        LoweringOnlyModuleAliasSurface::StreamConstructor,
+    )
+}
+
+fn confirmed_stream_pipeline_destructured_requires(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    confirmed_stream_destructured_export(
+        body,
+        binding_lookup,
+        "pipeline",
+        LoweringOnlyModuleAliasSurface::StreamPipeline,
+    )
+}
+
+fn confirmed_stream_promises_destructured_requires(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    confirmed_stream_destructured_export(
+        body,
+        binding_lookup,
+        "promises",
+        LoweringOnlyModuleAliasSurface::StreamPromises,
+    )
+}
+
 fn confirmed_stream_readable_named_imports(body: &[Statement]) -> BTreeSet<String> {
     let mut candidates = BTreeSet::new();
     for stmt in body {
@@ -17557,6 +17810,62 @@ fn confirmed_stream_passthrough_named_imports(body: &[Statement]) -> BTreeSet<St
         .collect()
 }
 
+fn confirmed_stream_named_export(
+    body: &[Statement],
+    promises_module: bool,
+    export: &str,
+    surface: LoweringOnlyModuleAliasSurface,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for stmt in body {
+        if let Statement::Import(import) = stmt
+            && (if promises_module {
+                is_stream_promises_module_specifier(&import.source)
+            } else {
+                is_stream_module_specifier(&import.source)
+            })
+            && let ImportClause::Named { specifiers } = &import.clause
+        {
+            for specifier in specifiers {
+                if specifier.import_name == export {
+                    candidates.insert(specifier.local_name.clone());
+                }
+            }
+        }
+    }
+    candidates
+        .into_iter()
+        .filter(|local| stream_binding_is_exhaustively_supported(body, local, surface))
+        .collect()
+}
+
+fn confirmed_stream_transform_named_imports(body: &[Statement]) -> BTreeSet<String> {
+    confirmed_stream_named_export(
+        body,
+        false,
+        "Transform",
+        LoweringOnlyModuleAliasSurface::StreamConstructor,
+    )
+}
+
+fn confirmed_stream_pipeline_named_imports(body: &[Statement]) -> BTreeSet<String> {
+    confirmed_stream_named_export(
+        body,
+        false,
+        "pipeline",
+        LoweringOnlyModuleAliasSurface::StreamPipeline,
+    )
+}
+
+fn confirmed_stream_promises_pipeline_named_imports(body: &[Statement]) -> BTreeSet<String> {
+    confirmed_stream_named_export(
+        body,
+        true,
+        "pipeline",
+        LoweringOnlyModuleAliasSurface::StreamPipeline,
+    )
+}
+
 fn confirmed_stream_destructure_locals(
     pattern: &BindingPattern,
     init: &Expression,
@@ -17588,6 +17897,15 @@ fn confirmed_stream_destructure_locals(
             "PassThrough" => {
                 binding_lookup.contains_key(&pending_stream_passthrough_binding_sentinel(local))
             }
+            "Transform" => {
+                binding_lookup.contains_key(&pending_stream_transform_binding_sentinel(local))
+            }
+            "pipeline" => {
+                binding_lookup.contains_key(&pending_stream_pipeline_binding_sentinel(local))
+            }
+            "promises" => {
+                binding_lookup.contains_key(&pending_stream_promises_binding_sentinel(local))
+            }
             _ => false,
         };
         if !confirmed {
@@ -17606,6 +17924,10 @@ fn seed_stream_module_sentinels(
         if key.starts_with("\0stream-readable\0")
             || key.starts_with("\0stream-writable\0")
             || key.starts_with("\0stream-passthrough\0")
+            || key.starts_with("\0stream-transform\0")
+            || key.starts_with("\0stream-pipeline\0")
+            || key.starts_with("\0stream-promises\0")
+            || key.starts_with("\0stream-promises-pipeline\0")
         {
             body_lookup.insert(key.clone(), 0);
         }
@@ -17625,8 +17947,40 @@ fn stream_constructor_capability(
         Some("builtin:StreamWritable")
     } else if binding_lookup.contains_key(&stream_passthrough_binding_sentinel(name)) {
         Some("builtin:StreamPassThrough")
+    } else if binding_lookup.contains_key(&stream_transform_binding_sentinel(name)) {
+        Some("builtin:StreamTransform")
     } else {
         None
+    }
+}
+
+fn stream_pipeline_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    match callee {
+        Expression::Identifier(name)
+            if binding_lookup.contains_key(&stream_pipeline_binding_sentinel(name)) =>
+        {
+            Some("builtin:StreamPipeline")
+        }
+        Expression::Identifier(name)
+            if binding_lookup.contains_key(&stream_promises_pipeline_binding_sentinel(name)) =>
+        {
+            Some("builtin:StreamPromisesPipeline")
+        }
+        Expression::Member {
+            object,
+            property,
+            computed: false,
+            ..
+        } if matches!(object.as_ref(), Expression::Identifier(name)
+            if binding_lookup.contains_key(&stream_promises_binding_sentinel(name)))
+            && well_formed_static_name(property).is_some_and(|name| name == "pipeline") =>
+        {
+            Some("builtin:StreamPromisesPipeline")
+        }
+        _ => None,
     }
 }
 
@@ -22498,6 +22852,62 @@ mod tests {
             !ops.iter()
                 .any(|op| matches!(op, Ir1Op::ImportModule { .. }))
         );
+    }
+
+    #[test]
+    fn stream_transform_and_pipeline_surfaces_lower_statically_bd_fw7zd_12() {
+        let source = r#"
+            const { Readable, Writable, Transform, pipeline, promises } = require('stream');
+            const upper = new Transform({ transform(chunk, encoding, callback) { callback(null, chunk); } });
+            const sink = new Writable({ write(chunk, encoding, callback) { callback(); } });
+            pipeline(Readable.from(['x']), upper, sink, () => {});
+            promises.pipeline(Readable.from(['y']), sink);
+        "#;
+        let tree =
+            crate::parser_api_stability::parse_script(source).expect("parse stream pipeline CJS");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "stream_pipeline_bd_fw7zd_12.js");
+        let ir1 = lower_ir0_to_ir1(&ir0).expect("lower stream pipeline CJS");
+        assert_eq!(count_hostcall_deep(&ir1.ops, "builtin:StreamTransform"), 1);
+        assert_eq!(count_hostcall_deep(&ir1.ops, "builtin:StreamPipeline"), 1);
+        assert_eq!(
+            count_hostcall_deep(&ir1.ops, "builtin:StreamPromisesPipeline"),
+            1
+        );
+        assert_eq!(count_hostcall_deep(&ir1.ops, "module:require"), 0);
+
+        let ops = lower_esm_source_ops(
+            "import { Readable, Writable, Transform } from 'node:stream';\n\
+             import { pipeline } from 'node:stream/promises';\n\
+             const t = new Transform({ transform(c, e, cb) { cb(null, c); } });\n\
+             const w = new Writable({ write(c, e, cb) { cb(); } });\n\
+             await pipeline(Readable.from(['x']), t, w);",
+            "stream_pipeline_bd_fw7zd_12.mjs",
+        );
+        assert_eq!(count_hostcall_deep(&ops, "builtin:StreamTransform"), 1);
+        assert_eq!(
+            count_hostcall_deep(&ops, "builtin:StreamPromisesPipeline"),
+            1
+        );
+    }
+
+    #[test]
+    fn stream_transform_pipeline_escapes_remain_fail_closed_bd_fw7zd_12() {
+        for source in [
+            "const { Transform } = require('stream'); console.log(Transform);",
+            "const { pipeline } = require('stream'); const escaped = pipeline;",
+            "const { promises } = require('stream'); console.log(promises['pipeline']);",
+        ] {
+            let tree = crate::parser_api_stability::parse_script(source)
+                .expect("parse rejected stream use");
+            let ir0 = Ir0Module::from_syntax_tree(tree, "stream_rejected_bd_fw7zd_12.js");
+            let error = lower_ir0_to_ir1(&ir0).expect_err("stream escape must not be elided");
+            assert!(
+                error.to_string().contains("ambient")
+                    || error.to_string().contains("require")
+                    || error.to_string().contains("unsupported"),
+                "unexpected fail-closed error: {error}"
+            );
+        }
     }
 
     #[test]

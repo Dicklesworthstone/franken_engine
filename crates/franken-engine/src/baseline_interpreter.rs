@@ -2145,6 +2145,14 @@ pub enum BuiltinFunctionKind {
     StreamPassThroughFinal,
     /// Composite teardown for the two authenticated halves of PassThrough.
     StreamPassThroughDestroy,
+    /// Transform-specific completion tokens. They remain at the enum tail
+    /// because builtin discriminants participate in deterministic hashing.
+    StreamTransformWriteDone,
+    StreamTransformFinal,
+    StreamTransformFinalDone,
+    /// Authenticated terminal listeners owned by one `stream.pipeline` run.
+    StreamPipelineFinish,
+    StreamPipelineError,
 }
 
 impl BuiltinFunctionKind {
@@ -2295,6 +2303,19 @@ impl BuiltinFunction {
             module_specifier: Arc::from(""),
             iterator_handle: Some(token),
             bound_object: Some(destination.0),
+        }
+    }
+
+    fn stream_pipeline_listener(kind: BuiltinFunctionKind, token: u32, stage: ObjectId) -> Self {
+        debug_assert!(matches!(
+            kind,
+            BuiltinFunctionKind::StreamPipelineFinish | BuiltinFunctionKind::StreamPipelineError
+        ));
+        Self {
+            kind,
+            module_specifier: Arc::from(""),
+            iterator_handle: Some(token),
+            bound_object: Some(stage.0),
         }
     }
 
@@ -3388,6 +3409,11 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StreamPassThroughWrite => "_write",
             BuiltinFunctionKind::StreamPassThroughFinal => "_final",
             BuiltinFunctionKind::StreamPassThroughDestroy => "destroy",
+            BuiltinFunctionKind::StreamTransformWriteDone
+            | BuiltinFunctionKind::StreamTransformFinalDone => "callback",
+            BuiltinFunctionKind::StreamTransformFinal => "_final",
+            BuiltinFunctionKind::StreamPipelineFinish => "onfinish",
+            BuiltinFunctionKind::StreamPipelineError => "onerror",
             BuiltinFunctionKind::NetServerListen => "listen",
             BuiltinFunctionKind::NetServerAddress => "address",
             BuiltinFunctionKind::NetServerClose => "close",
@@ -6259,6 +6285,15 @@ enum WritableErrorOrigin {
     Destroy,
 }
 
+/// Authenticated stream role. Public `__type` mirrors remain guest-mutable,
+/// so every dual-stream branch consults this fixed-size engine-owned marker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WritableStreamFlavor {
+    Writable,
+    PassThrough,
+    Transform,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WritableTerminalCallbackError {
     EndAfterFinish,
@@ -6312,12 +6347,14 @@ struct WritableTerminalState {
 /// lifecycle completion.
 #[derive(Debug, PartialEq, Eq)]
 struct WritableState {
+    flavor: WritableStreamFlavor,
     object_mode: bool,
     high_water_mark: usize,
     write_callback: Option<Value>,
     final_callback: Option<Value>,
     writes: WritableWriteQueue,
     buffered_length: usize,
+    need_drain: bool,
     /// Nested `cork()` depth. This fixed-size field is covered by the
     /// conservative Writable base charge.
     cork_depth: u32,
@@ -6362,6 +6399,32 @@ struct WritableState {
     deferred_final_tick_sequence: Option<u64>,
     inside_write_invocation: bool,
     lifecycle_label: Label,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StreamPipelineCompletion {
+    Callback(Value),
+    Promise(crate::promise_model::PromiseHandle),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamPipelinePhase {
+    Running,
+    Destroying,
+    Settling,
+}
+
+/// One authenticated linear pipeline. Internal EventEmitter listeners carry
+/// the process-lifetime token and bound stage id; the close barrier,
+/// completion target, first error, and IFC provenance never enter guest state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StreamPipelineState {
+    stages: Vec<ObjectId>,
+    pending_close: Vec<ObjectId>,
+    completion: StreamPipelineCompletion,
+    registration_label: Label,
+    first_error: Option<(Value, Label)>,
+    phase: StreamPipelinePhase,
 }
 
 /// One listener in the interpreter-wide EventEmitter side table (bd-2dmnn).
@@ -6628,6 +6691,8 @@ pub struct InterpreterCore {
     /// link before its Promise reaction becomes observable (bd-asw4m.1).
     event_promise_waiters: BTreeMap<ObjectId, BTreeMap<String, Vec<EventPromiseWaiterRecord>>>,
     next_event_promise_waiter_id: u64,
+    stream_pipelines: BTreeMap<u32, StreamPipelineState>,
+    next_stream_pipeline_token: u32,
     /// bd-3894s slice (2d): deferred readable-stream emissions (`'data'`/`'end'`),
     /// keyed by the `IoCompletion` macrotask registration sequence (parallel to
     /// `pending_io_callbacks`, which carries closure callbacks). Drained by
@@ -6846,6 +6911,8 @@ impl InterpreterCore {
             event_listeners: BTreeMap::new(),
             event_promise_waiters: BTreeMap::new(),
             next_event_promise_waiter_id: 0,
+            stream_pipelines: BTreeMap::new(),
+            next_stream_pipeline_token: 0,
             pending_stream_emissions: BTreeMap::new(),
             readable_from_streams: BTreeMap::new(),
             pending_readable_from_pumps: BTreeMap::new(),
@@ -9664,10 +9731,32 @@ impl InterpreterCore {
             value,
             Value::BuiltinFunction(BuiltinFunction {
                 kind: BuiltinFunctionKind::StreamReadablePipeData
-                    | BuiltinFunctionKind::StreamReadablePipeEnd,
+                    | BuiltinFunctionKind::StreamReadablePipeEnd
+                    | BuiltinFunctionKind::StreamPipelineFinish
+                    | BuiltinFunctionKind::StreamPipelineError,
                 ..
             })
         )
+    }
+
+    fn remove_stream_pipeline_listener_records(&mut self, token: u32, stages: &[ObjectId]) {
+        for target in stages {
+            for event in ["error", "close"] {
+                let listener = Value::BuiltinFunction(BuiltinFunction::stream_pipeline_listener(
+                    if event == "error" {
+                        BuiltinFunctionKind::StreamPipelineError
+                    } else {
+                        BuiltinFunctionKind::StreamPipelineFinish
+                    },
+                    token,
+                    *target,
+                ));
+                while self
+                    .remove_event_listener(*target, event, &listener)
+                    .is_some()
+                {}
+            }
+        }
     }
 
     /// Internal pipe callbacks share the ordinary dispatch table, but they are
@@ -9915,6 +10004,18 @@ impl InterpreterCore {
             })
             .unwrap_or(0);
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
+    }
+
+    fn clear_stream_pipeline_execution_state(&mut self) {
+        let tokens: Vec<u32> = self.stream_pipelines.keys().copied().collect();
+        for token in tokens {
+            if let Some(state) = self.stream_pipelines.remove(&token) {
+                self.remove_stream_pipeline_listener_records(token, &state.stages);
+                self.estimated_memory_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(Self::stream_pipeline_state_bytes(&state));
+            }
+        }
     }
 
     /// Side-table state is execution-local even when the interpreter instance
@@ -10274,12 +10375,14 @@ impl InterpreterCore {
             ("closed", Value::Bool(false)),
         ];
         let state = WritableState {
+            flavor: WritableStreamFlavor::Writable,
             object_mode,
             high_water_mark: usize::try_from(high_water_mark).unwrap_or(usize::MAX),
             write_callback,
             final_callback,
             writes: WritableWriteQueue::default(),
             buffered_length: 0,
+            need_drain: false,
             cork_depth: 0,
             end_requested: false,
             destroy_requested: false,
@@ -10372,6 +10475,7 @@ impl InterpreterCore {
             to_array_waiter: None,
         };
         let writable_state = WritableState {
+            flavor: WritableStreamFlavor::PassThrough,
             object_mode,
             high_water_mark: high_water_mark_usize,
             write_callback: Some(Value::BuiltinFunction(BuiltinFunction::new_kind(
@@ -10382,6 +10486,7 @@ impl InterpreterCore {
             ))),
             writes: WritableWriteQueue::default(),
             buffered_length: 0,
+            need_drain: false,
             cork_depth: 0,
             end_requested: false,
             destroy_requested: false,
@@ -10462,6 +10567,170 @@ impl InterpreterCore {
         Ok(Value::Object(object_id))
     }
 
+    /// Construct one authenticated Transform by composing the existing
+    /// Readable and Writable kernels. The guest callbacks remain inside the
+    /// Writable state, while `flavor` is the unforgeable authority deciding
+    /// which completion-token family may publish readable output.
+    fn construct_stream_transform(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        if args.count == 0 {
+            return Err(InterpreterError::TypeError {
+                expected: "Transform options with callable transform".to_string(),
+                got: "missing options".to_string(),
+            });
+        }
+        let options = self.read_reg(args.start)?;
+        let Value::Object(options_id) = options else {
+            return Err(InterpreterError::TypeError {
+                expected: "Transform options object".to_string(),
+                got: options.type_name().to_string(),
+            });
+        };
+        let object = self
+            .heap
+            .get(options_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: options_id.0 })?;
+        let transform_callback = match object.properties.get("transform").cloned() {
+            Some(value) if value.is_callable() => value,
+            Some(value) => {
+                return Err(InterpreterError::TypeError {
+                    expected: "callable Transform transform option".to_string(),
+                    got: value.type_name().to_string(),
+                });
+            }
+            None => {
+                return Err(InterpreterError::TypeError {
+                    expected: "callable Transform transform option".to_string(),
+                    got: "missing transform".to_string(),
+                });
+            }
+        };
+        let final_callback = match object.properties.get("flush").cloned() {
+            None | Some(Value::Undefined) => Value::BuiltinFunction(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::StreamTransformFinal,
+            )),
+            Some(value) if value.is_callable() => value,
+            Some(value) => {
+                return Err(InterpreterError::TypeError {
+                    expected: "callable Transform flush option".to_string(),
+                    got: value.type_name().to_string(),
+                });
+            }
+        };
+        let lifecycle_label = self.get_register_label(args.start)?;
+        self.check_temporary_memory_budget(
+            Self::estimate_label_bytes(lifecycle_label).saturating_mul(2),
+        )?;
+        let (object_mode, high_water_mark, lifecycle_label) =
+            self.stream_constructor_options(args, 65_536)?;
+        let high_water_mark_usize = usize::try_from(high_water_mark).unwrap_or(usize::MAX);
+        let readable_state = ReadableFromState {
+            source: Value::Undefined,
+            push_only: true,
+            object_mode,
+            high_water_mark: high_water_mark_usize,
+            read_callback: None,
+            buffer: VecDeque::new(),
+            buffered_length: 0,
+            eof_requested: false,
+            data_readable_pending: false,
+            eof_readable_pending: false,
+            read_callback_active: false,
+            decode_utf8: false,
+            utf8_pending: Vec::new(),
+            destroy_requested: false,
+            destroy_error: None,
+            next_index: 0,
+            phase: ReadableFromPumpPhase::Data,
+            flowing: false,
+            paused: false,
+            lifecycle_label: lifecycle_label.clone(),
+            to_array_waiter: None,
+        };
+        let writable_state = WritableState {
+            flavor: WritableStreamFlavor::Transform,
+            object_mode,
+            high_water_mark: high_water_mark_usize,
+            write_callback: Some(transform_callback),
+            final_callback: Some(final_callback),
+            writes: WritableWriteQueue::default(),
+            buffered_length: 0,
+            need_drain: false,
+            cork_depth: 0,
+            end_requested: false,
+            destroy_requested: false,
+            end_callbacks: LinkedList::new(),
+            end_callback_batch_remaining: 0,
+            finished_end_callback_batch_remaining: 0,
+            final_status: WritableFinalStatus::NotStarted,
+            prefinish_emitted: false,
+            finished: false,
+            terminal_error: None,
+            terminal_error_origin: None,
+            terminal_error_emitted: false,
+            tick_phase: WritableTickPhase::Callbacks,
+            tick_sequence: None,
+            deferred_final_tick_sequence: None,
+            inside_write_invocation: false,
+            lifecycle_label,
+        };
+        let properties = [
+            ("__type", Value::str("Transform")),
+            ("__maxListeners", Value::Int(10)),
+            ("readable", Value::Bool(true)),
+            ("readableEnded", Value::Bool(false)),
+            ("readableFlowing", Value::Null),
+            ("readableLength", Value::Int(0)),
+            ("readableObjectMode", Value::Bool(object_mode)),
+            ("readableHighWaterMark", Value::Int(high_water_mark)),
+            ("writable", Value::Bool(true)),
+            ("writableEnded", Value::Bool(false)),
+            ("writableFinished", Value::Bool(false)),
+            ("writableLength", Value::Int(0)),
+            ("writableCorked", Value::Int(0)),
+            ("writableNeedDrain", Value::Bool(false)),
+            ("writableObjectMode", Value::Bool(object_mode)),
+            ("writableHighWaterMark", Value::Int(high_water_mark)),
+            ("destroyed", Value::Bool(false)),
+            ("closed", Value::Bool(false)),
+        ];
+        let mut projected_object = HeapObject::new();
+        for (key, value) in &properties {
+            projected_object
+                .properties
+                .insert((*key).to_string(), value.clone());
+        }
+        let readable_bytes = Self::estimate_readable_from_state_bytes(&readable_state);
+        let writable_bytes = Self::estimate_writable_state_bytes(&writable_state);
+        let object_bytes = Self::estimate_heap_object_bytes(&projected_object);
+        drop(projected_object);
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_add(readable_bytes)
+            .saturating_add(writable_bytes)
+            .saturating_add(object_bytes);
+        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
+        {
+            return Err(self.memory_budget_error(
+                requested_bytes,
+                self.heap_object_count_u32().saturating_add(1),
+            ));
+        }
+        let previous_total = self.estimated_memory_bytes;
+        let previous_heap_len = self.heap.len();
+        self.apply_memory_component_delta(0, readable_bytes.saturating_add(writable_bytes))?;
+        let object_id = match self.alloc_object_with_properties(&properties) {
+            Ok(object_id) => object_id,
+            Err(error) => {
+                self.rollback_heap_to_len(previous_heap_len);
+                self.estimated_memory_bytes = previous_total;
+                return Err(error);
+            }
+        };
+        self.readable_from_streams.insert(object_id, readable_state);
+        self.writable_streams.insert(object_id, writable_state);
+        Ok(Value::Object(object_id))
+    }
+
     /// Resolve public Writable state from engine-owned storage before ordinary
     /// heap properties. Guest writes, accessors, and deletions may mutate the
     /// compatibility mirrors, but they cannot forge these authoritative reads.
@@ -10481,9 +10750,7 @@ impl InterpreterCore {
                     i64::try_from(state.buffered_length).unwrap_or(i64::MAX),
                 )),
                 "writableCorked" => Some(Value::Int(i64::from(state.cork_depth))),
-                "writableNeedDrain" => Some(Value::Bool(
-                    state.buffered_length > 0 && state.buffered_length >= state.high_water_mark,
-                )),
+                "writableNeedDrain" => Some(Value::Bool(state.need_drain)),
                 "writableObjectMode" => Some(Value::Bool(state.object_mode)),
                 "writableHighWaterMark" => Some(Value::Int(
                     i64::try_from(state.high_water_mark).unwrap_or(i64::MAX),
@@ -10679,6 +10946,9 @@ impl InterpreterCore {
             });
         }
         state.buffered_length = next_length;
+        if next_length >= state.high_water_mark {
+            state.need_drain = true;
+        }
         if request_end {
             state.cork_depth = 0;
             state.end_requested = true;
@@ -10686,6 +10956,7 @@ impl InterpreterCore {
         debug_assert_eq!(Self::estimate_writable_state_bytes(state), next_bytes);
         let below_high_water_mark = next_length < state.high_water_mark;
         self.mirror_writable_length(object_id, next_length);
+        self.mirror_writable_bool(object_id, "writableNeedDrain", !below_high_water_mark);
         Ok(Some(below_high_water_mark))
     }
 
@@ -11840,11 +12111,11 @@ impl InterpreterCore {
         Ok(())
     }
 
-    /// An engine-owned PassThrough callback can fail only after the Writable
-    /// driver has authenticated and activated its completion token. Convert
-    /// that failure into one aggregate terminal transition so neither half can
-    /// remain live waiting for a callback/EOF that will never arrive.
-    fn record_passthrough_internal_failure(
+    /// A dual-stream callback can fail only after the Writable driver has
+    /// authenticated and activated its completion token. Convert that failure
+    /// into one aggregate terminal transition so neither half can remain live
+    /// waiting for a callback/EOF that will never arrive.
+    fn record_dual_stream_failure(
         &mut self,
         object_id: ObjectId,
         error: Value,
@@ -11925,6 +12196,68 @@ impl InterpreterCore {
         Ok(())
     }
 
+    /// Complete the Readable half after the ordinary Writable completion
+    /// kernel has retained a Transform callback error. Keeping that kernel as
+    /// the sole register-to-state transfer preserves its exact accounting and
+    /// FIFO failure semantics while making Readable the sole shared emitter.
+    fn destroy_dual_stream_after_writable_error(
+        &mut self,
+        object_id: ObjectId,
+    ) -> Result<(), InterpreterError> {
+        let Some(temporary_bytes) = self
+            .writable_streams
+            .get(&object_id)
+            .and_then(|state| state.terminal_error.as_ref())
+            .map(|(error, label)| {
+                Self::estimate_value_bytes(error).saturating_add(Self::estimate_label_bytes(label))
+            })
+        else {
+            return Ok(());
+        };
+        self.check_temporary_memory_budget(temporary_bytes)?;
+        let (error, error_label) = self
+            .writable_streams
+            .get(&object_id)
+            .and_then(|state| state.terminal_error.clone())
+            .expect("Transform terminal error survived temporary-memory preflight");
+        let readable_lifecycle_label = self
+            .readable_from_streams
+            .get(&object_id)
+            .filter(|state| !state.destroy_requested)
+            .map(|state| {
+                self.clone_dominant_label_with_temporary_budget(
+                    &state.lifecycle_label,
+                    &error_label,
+                    Self::estimate_label_bytes(&error_label),
+                )
+            })
+            .transpose()?;
+        let Some(readable_lifecycle_label) = readable_lifecycle_label else {
+            return Ok(());
+        };
+        let readable_reservation = self
+            .readable_destroy_memory_projection(object_id, Some(&error), &readable_lifecycle_label)
+            .map(|(previous, destroyed, pump)| {
+                destroyed.saturating_add(pump).saturating_sub(previous)
+            })
+            .unwrap_or(0);
+        self.apply_memory_component_delta(0, readable_reservation)?;
+        if let Some(state) = self.writable_streams.get_mut(&object_id) {
+            state.destroy_requested = true;
+            state.terminal_error_emitted = true;
+        }
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(readable_reservation);
+        self.commit_readable_destroy(
+            object_id,
+            Value::Object(object_id),
+            Some(error),
+            readable_lifecycle_label,
+        )?;
+        Ok(())
+    }
+
     fn emit_writable_prefinish(
         &mut self,
         object_id: ObjectId,
@@ -11988,6 +12321,7 @@ impl InterpreterCore {
                         state.write_callback.clone(),
                         state.writes[index].value.clone(),
                         state.writes[index].label.join(&state.lifecycle_label),
+                        state.flavor,
                     ))
                 } else if state.end_requested
                     && state.final_status == WritableFinalStatus::NotStarted
@@ -12002,13 +12336,14 @@ impl InterpreterCore {
                         state.final_callback.clone(),
                         Value::Undefined,
                         state.lifecycle_label.clone(),
+                        state.flavor,
                     ))
                 } else {
                     None
                 }
             };
 
-            let Some((is_final, record_index, callback, value, label)) = action else {
+            let Some((is_final, record_index, callback, value, label, flavor)) = action else {
                 return Ok(());
             };
             if !is_final && callback.is_none() {
@@ -12050,8 +12385,13 @@ impl InterpreterCore {
                     Value::BuiltinFunction(builtin)
                         if builtin.kind == BuiltinFunctionKind::StreamPassThroughFinal
                 );
+                let completion_kind = if flavor == WritableStreamFlavor::Transform {
+                    BuiltinFunctionKind::StreamTransformFinalDone
+                } else {
+                    BuiltinFunctionKind::StreamWritableFinalDone
+                };
                 let completion = Value::BuiltinFunction(BuiltinFunction::writable_completion(
-                    BuiltinFunctionKind::StreamWritableFinalDone,
+                    completion_kind,
                     object_id,
                     token,
                 ));
@@ -12065,8 +12405,8 @@ impl InterpreterCore {
                 if let Err(error) = invocation {
                     let (error_value, error_label, consumes_pending_exception) =
                         self.writable_invocation_error_value(&error, label);
-                    if passthrough_internal {
-                        self.record_passthrough_internal_failure(
+                    if passthrough_internal || flavor == WritableStreamFlavor::Transform {
+                        self.record_dual_stream_failure(
                             object_id,
                             error_value,
                             error_label,
@@ -12092,8 +12432,13 @@ impl InterpreterCore {
                 Value::BuiltinFunction(builtin)
                     if builtin.kind == BuiltinFunctionKind::StreamPassThroughWrite
             );
+            let completion_kind = if flavor == WritableStreamFlavor::Transform {
+                BuiltinFunctionKind::StreamTransformWriteDone
+            } else {
+                BuiltinFunctionKind::StreamWritableWriteDone
+            };
             let completion = Value::BuiltinFunction(BuiltinFunction::writable_completion(
-                BuiltinFunctionKind::StreamWritableWriteDone,
+                completion_kind,
                 object_id,
                 token,
             ));
@@ -12127,7 +12472,7 @@ impl InterpreterCore {
                         record.status = WritableWriteStatus::Pending;
                         self.next_writable_completion_token = token;
                     }
-                } else if passthrough_internal {
+                } else if passthrough_internal || flavor == WritableStreamFlavor::Transform {
                     let (error_value, error_label, consumes_pending_exception) =
                         if matches!(&error, InterpreterError::UncaughtException { .. })
                             && let Some(pending) = self.pending_exception.as_ref()
@@ -12141,7 +12486,7 @@ impl InterpreterCore {
                         } else {
                             self.writable_invocation_error_value(&error, label)
                         };
-                    self.record_passthrough_internal_failure(
+                    self.record_dual_stream_failure(
                         object_id,
                         error_value,
                         error_label,
@@ -12843,6 +13188,7 @@ impl InterpreterCore {
                 phase,
                 completed_front,
                 writes_empty,
+                need_drain,
                 final_done,
                 terminal_error_none,
                 end_callback_batch_remaining,
@@ -12863,6 +13209,7 @@ impl InterpreterCore {
                         .front()
                         .is_some_and(|record| record.status == WritableWriteStatus::Completed),
                     state.writes.is_empty(),
+                    state.need_drain,
                     state.final_status == WritableFinalStatus::Done,
                     state.terminal_error.is_none(),
                     state.end_callback_batch_remaining,
@@ -12955,6 +13302,28 @@ impl InterpreterCore {
                         fallback_label,
                         invocation_charge,
                     );
+                }
+                if writes_empty && need_drain && terminal_error_none {
+                    let label = self
+                        .writable_streams
+                        .get(&object_id)
+                        .expect("Writable drain state was checked")
+                        .lifecycle_label
+                        .clone();
+                    self.writable_streams
+                        .get_mut(&object_id)
+                        .expect("Writable drain state survived label clone")
+                        .need_drain = false;
+                    self.mirror_writable_bool(object_id, "writableNeedDrain", false);
+                    self.schedule_writable_tick(object_id)?;
+                    self.emit_event_listener_records(
+                        module,
+                        object_id,
+                        "drain",
+                        Vec::new(),
+                        label,
+                    )?;
+                    return Ok(());
                 }
                 if !writes_empty || (!final_done && terminal_error_none) {
                     return Ok(());
@@ -14571,6 +14940,530 @@ impl InterpreterCore {
         self.writable_end(module, Value::Object(destination), args)
     }
 
+    fn stream_pipeline_state_bytes(state: &StreamPipelineState) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(
+                u64::try_from(state.stages.capacity())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(std::mem::size_of::<ObjectId>() as u64),
+            )
+            .saturating_add(
+                u64::try_from(state.pending_close.capacity())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(std::mem::size_of::<ObjectId>() as u64),
+            )
+            .saturating_add(match &state.completion {
+                StreamPipelineCompletion::Callback(callback) => {
+                    Self::estimate_value_bytes(callback)
+                }
+                StreamPipelineCompletion::Promise(_) => 0,
+            })
+            .saturating_add(Self::estimate_label_bytes(&state.registration_label))
+            .saturating_add(state.first_error.as_ref().map_or(0, |(error, label)| {
+                Self::estimate_value_bytes(error).saturating_add(Self::estimate_label_bytes(label))
+            }))
+    }
+
+    fn construct_stream_pipeline(
+        &mut self,
+        module: &Ir3Module,
+        args: RegRange,
+        promise_mode: bool,
+    ) -> Result<Value, InterpreterError> {
+        let stage_count = if promise_mode {
+            args.count
+        } else {
+            args.count.saturating_sub(1)
+        };
+        if stage_count < 2 || (!promise_mode && args.count < 3) {
+            return Err(InterpreterError::TypeError {
+                expected: "stream.pipeline(source, destination[, ...], completion)".to_string(),
+                got: format!("{} argument(s)", args.count),
+            });
+        }
+        let stage_capacity =
+            usize::try_from(stage_count).map_err(|_| InterpreterError::RangeError {
+                message: "stream.pipeline stage count exceeds host address space".to_string(),
+            })?;
+        let one_stage_vector_bytes = u64::try_from(stage_capacity)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(std::mem::size_of::<ObjectId>() as u64);
+        let stage_vector_peak_bytes = one_stage_vector_bytes.saturating_mul(3);
+        self.check_temporary_memory_budget(stage_vector_peak_bytes)?;
+        let vector_allocation_error = || {
+            self.memory_budget_error(
+                self.estimated_memory_bytes
+                    .saturating_add(stage_vector_peak_bytes),
+                self.heap_object_count_u32(),
+            )
+        };
+        let mut stages = Vec::new();
+        stages
+            .try_reserve_exact(stage_capacity)
+            .map_err(|_| vector_allocation_error())?;
+        for index in 0..stage_count {
+            let value = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
+            let Value::Object(object_id) = value else {
+                return Err(InterpreterError::TypeError {
+                    expected: "engine-owned stream pipeline stage".to_string(),
+                    got: value.type_name().to_string(),
+                });
+            };
+            stages.push(object_id);
+        }
+        for (index, stage) in stages.iter().copied().enumerate() {
+            if index + 1 < stages.len() && !self.readable_from_streams.contains_key(&stage) {
+                return Err(InterpreterError::TypeError {
+                    expected: "Readable pipeline source stage".to_string(),
+                    got: "non-Readable object".to_string(),
+                });
+            }
+            if index > 0 && !self.writable_streams.contains_key(&stage) {
+                return Err(InterpreterError::TypeError {
+                    expected: "Writable pipeline destination stage".to_string(),
+                    got: "non-Writable object".to_string(),
+                });
+            }
+        }
+        let callback = if promise_mode {
+            None
+        } else {
+            let value = self
+                .builtin_arg(args, stage_count)?
+                .unwrap_or(Value::Undefined);
+            if !value.is_callable() {
+                return Err(InterpreterError::TypeError {
+                    expected: "callable stream.pipeline completion".to_string(),
+                    got: value.type_name().to_string(),
+                });
+            }
+            Some(value)
+        };
+        let mut retained_stages = Vec::new();
+        retained_stages
+            .try_reserve_exact(stage_capacity)
+            .map_err(|_| vector_allocation_error())?;
+        retained_stages.extend(stages.iter().copied());
+        let mut pending_close = Vec::new();
+        pending_close
+            .try_reserve_exact(stage_capacity)
+            .map_err(|_| vector_allocation_error())?;
+        pending_close.extend(stages.iter().copied());
+        let next_token = self
+            .next_stream_pipeline_token
+            .checked_add(1)
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "stream.pipeline token space exhausted".to_string(),
+            })?;
+        let registration_label = self.join_arg_range_label(args)?;
+        let promise = if promise_mode {
+            Some(self.create_promise()?)
+        } else {
+            None
+        };
+        let completion = match (callback, promise) {
+            (Some(callback), None) => StreamPipelineCompletion::Callback(callback),
+            (None, Some(promise)) => StreamPipelineCompletion::Promise(promise),
+            _ => unreachable!("pipeline completion mode was validated"),
+        };
+        let state = StreamPipelineState {
+            stages: retained_stages,
+            pending_close,
+            completion,
+            registration_label,
+            first_error: None,
+            phase: StreamPipelinePhase::Running,
+        };
+        let state_bytes = Self::stream_pipeline_state_bytes(&state);
+        if let Err(error) = self.apply_memory_component_delta(0, state_bytes) {
+            if let StreamPipelineCompletion::Promise(promise) = state.completion {
+                self.rollback_fresh_promise(promise);
+            }
+            return Err(error);
+        }
+        let token = self.next_stream_pipeline_token;
+        self.next_stream_pipeline_token = next_token;
+        self.stream_pipelines.insert(token, state);
+
+        for stage in &stages {
+            let error_listener = EventListenerRecord {
+                listener: Value::BuiltinFunction(BuiltinFunction::stream_pipeline_listener(
+                    BuiltinFunctionKind::StreamPipelineError,
+                    token,
+                    *stage,
+                )),
+                once: false,
+            };
+            if let Err(error) = self.insert_event_listener(*stage, "error", error_listener, false) {
+                if let Some(state) = self.stream_pipelines.remove(&token) {
+                    self.remove_stream_pipeline_listener_records(token, &state.stages);
+                    self.estimated_memory_bytes = self
+                        .estimated_memory_bytes
+                        .saturating_sub(Self::stream_pipeline_state_bytes(&state));
+                    if let StreamPipelineCompletion::Promise(promise) = state.completion {
+                        self.rollback_fresh_promise(promise);
+                    }
+                }
+                return Err(error);
+            }
+        }
+        for stage in &stages {
+            let close_listener = EventListenerRecord {
+                listener: Value::BuiltinFunction(BuiltinFunction::stream_pipeline_listener(
+                    BuiltinFunctionKind::StreamPipelineFinish,
+                    token,
+                    *stage,
+                )),
+                once: true,
+            };
+            if let Err(error) = self.insert_event_listener(*stage, "close", close_listener, false) {
+                if let Some(state) = self.stream_pipelines.remove(&token) {
+                    self.remove_stream_pipeline_listener_records(token, &state.stages);
+                    self.estimated_memory_bytes = self
+                        .estimated_memory_bytes
+                        .saturating_sub(Self::stream_pipeline_state_bytes(&state));
+                    if let StreamPipelineCompletion::Promise(promise) = state.completion {
+                        self.rollback_fresh_promise(promise);
+                    }
+                }
+                return Err(error);
+            }
+        }
+        let sink = *stages.last().expect("validated pipeline has a sink");
+
+        for index in (0..stages.len() - 1).rev() {
+            let destination_register = args
+                .start
+                .checked_add(u32::try_from(index + 1).unwrap_or(u32::MAX))
+                .ok_or(InterpreterError::RegisterOutOfBounds {
+                    register: args.start,
+                    max: self.config.max_registers,
+                })?;
+            if let Err(error) = self.readable_pipe(
+                module,
+                Value::Object(stages[index]),
+                RegRange {
+                    start: destination_register,
+                    count: 1,
+                },
+            ) {
+                for source in stages.iter().copied() {
+                    if let Some(link) = self.readable_pipe_links.get(&source).copied() {
+                        self.detach_readable_pipe(source, link.destination, link.token);
+                    }
+                }
+                if let Some(state) = self.stream_pipelines.remove(&token) {
+                    self.remove_stream_pipeline_listener_records(token, &state.stages);
+                    self.estimated_memory_bytes = self
+                        .estimated_memory_bytes
+                        .saturating_sub(Self::stream_pipeline_state_bytes(&state));
+                    if let StreamPipelineCompletion::Promise(promise) = state.completion {
+                        self.rollback_fresh_promise(promise);
+                    }
+                }
+                return Err(error);
+            }
+        }
+        Ok(
+            match self
+                .stream_pipelines
+                .get(&token)
+                .map(|state| &state.completion)
+            {
+                Some(StreamPipelineCompletion::Promise(promise)) => Value::Promise(promise.0),
+                _ => Value::Object(sink),
+            },
+        )
+    }
+
+    fn destroy_stream_pipeline_stage(
+        &mut self,
+        stage: ObjectId,
+        error: &Value,
+        error_label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let readable = self.readable_from_streams.contains_key(&stage);
+        let writable = self.writable_streams.contains_key(&stage);
+        match (readable, writable) {
+            (true, true) => {
+                if self
+                    .writable_streams
+                    .get(&stage)
+                    .is_some_and(|state| state.destroy_requested)
+                {
+                    return Ok(());
+                }
+                self.record_dual_stream_failure(
+                    stage,
+                    error.clone(),
+                    error_label.clone(),
+                    WritableErrorOrigin::Write,
+                    false,
+                )
+            }
+            (true, false) => {
+                let Some(lifecycle_label) = self
+                    .readable_from_streams
+                    .get(&stage)
+                    .filter(|state| !state.destroy_requested)
+                    .map(|state| {
+                        self.clone_dominant_label_with_temporary_budget(
+                            &state.lifecycle_label,
+                            error_label,
+                            Self::estimate_label_bytes(error_label),
+                        )
+                    })
+                    .transpose()?
+                else {
+                    return Ok(());
+                };
+                self.commit_readable_destroy(
+                    stage,
+                    Value::Object(stage),
+                    Some(error.clone()),
+                    lifecycle_label,
+                )?;
+                Ok(())
+            }
+            (false, true) => {
+                if self
+                    .writable_streams
+                    .get(&stage)
+                    .is_some_and(|state| state.destroy_requested)
+                {
+                    return Ok(());
+                }
+                self.record_writable_terminal_error(
+                    stage,
+                    error.clone(),
+                    error_label.clone(),
+                    WritableErrorOrigin::Destroy,
+                    false,
+                )?;
+                self.writable_destroy_with_trigger(
+                    Value::Object(stage),
+                    None,
+                    error_label.clone(),
+                )?;
+                Ok(())
+            }
+            (false, false) => Ok(()),
+        }
+    }
+
+    /// Admit the complete first-error transition before mutating any stage.
+    /// Every per-stage kernel below performs the same exact check again, but
+    /// this aggregate upper bound prevents a later stage's memory refusal from
+    /// leaving an earlier stage destroyed and the pipeline permanently split.
+    fn preflight_stream_pipeline_error_teardown(
+        &self,
+        token: u32,
+        error: &Value,
+        error_label: &Label,
+        retained_pipeline_bytes: u64,
+    ) -> Result<(), InterpreterError> {
+        let Some(pipeline) = self.stream_pipelines.get(&token) else {
+            return Ok(());
+        };
+        let mut positive_delta = retained_pipeline_bytes;
+        for stage in &pipeline.stages {
+            if let Some(readable) = self
+                .readable_from_streams
+                .get(stage)
+                .filter(|state| !state.destroy_requested)
+            {
+                let lifecycle_label = if &readable.lifecycle_label >= error_label {
+                    &readable.lifecycle_label
+                } else {
+                    error_label
+                };
+                if let Some((previous, destroyed, pump)) =
+                    self.readable_destroy_memory_projection(*stage, Some(error), lifecycle_label)
+                {
+                    positive_delta = positive_delta
+                        .saturating_add(destroyed.saturating_add(pump).saturating_sub(previous));
+                }
+            }
+            if let Some(writable) = self
+                .writable_streams
+                .get(stage)
+                .filter(|state| !state.destroy_requested)
+            {
+                let old_dynamic = Self::estimate_writable_error_dynamic_bytes(writable);
+                let lifecycle_label = if &writable.lifecycle_label >= error_label {
+                    &writable.lifecycle_label
+                } else {
+                    error_label
+                };
+                let next_dynamic = Self::estimate_label_bytes(lifecycle_label)
+                    .saturating_add(Self::estimate_writable_value_bytes(error))
+                    .saturating_add(Self::estimate_label_bytes(error_label));
+                positive_delta =
+                    positive_delta.saturating_add(next_dynamic.saturating_sub(old_dynamic));
+            }
+        }
+        let requested_bytes = self.estimated_memory_bytes.saturating_add(positive_delta);
+        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
+        {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
+        Ok(())
+    }
+
+    fn settle_stream_pipeline(
+        &mut self,
+        module: &Ir3Module,
+        token: u32,
+        close_label: Label,
+    ) -> Result<Value, InterpreterError> {
+        let settlement_label = {
+            let Some(state) = self.stream_pipelines.get(&token) else {
+                return Ok(Value::Undefined);
+            };
+            let terminal_label = state
+                .first_error
+                .as_ref()
+                .map_or(&close_label, |(_, label)| label);
+            self.clone_dominant_label_with_temporary_budget(
+                &state.registration_label,
+                terminal_label,
+                0,
+            )?
+        };
+        let Some(state) = self.stream_pipelines.remove(&token) else {
+            return Ok(Value::Undefined);
+        };
+        let state_bytes = Self::stream_pipeline_state_bytes(&state);
+        self.remove_stream_pipeline_listener_records(token, &state.stages);
+        for source in state.stages.iter().copied() {
+            if let Some(link) = self.readable_pipe_links.get(&source).copied() {
+                self.detach_readable_pipe(source, link.destination, link.token);
+            }
+        }
+        let error = state.first_error.map(|(error, _)| error);
+        let result = match (state.completion, error) {
+            (StreamPipelineCompletion::Callback(callback), error) => {
+                let arguments = error.map_or_else(Vec::new, |error| vec![error]);
+                self.invoke_inline_method_call_with_argument_label(
+                    Some(module),
+                    callback,
+                    Value::Undefined,
+                    arguments,
+                    Some(settlement_label),
+                )
+                .map(|_| ())
+            }
+            (StreamPipelineCompletion::Promise(promise), error) => {
+                if let Some(error) = error {
+                    self.reject_promise(promise, Self::value_to_js_value(&error), settlement_label)
+                } else {
+                    self.fulfill_promise(
+                        promise,
+                        crate::object_model::JsValue::Undefined,
+                        settlement_label,
+                    )
+                }
+            }
+        };
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(state_bytes);
+        result?;
+        Ok(Value::Undefined)
+    }
+
+    fn stream_pipeline_listener_settle(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Value,
+        builtin: &BuiltinFunction,
+        is_error: bool,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let Some(token) = builtin.iterator_handle else {
+            return Ok(Value::Undefined);
+        };
+        let Value::Object(stage) = receiver else {
+            return Ok(Value::Undefined);
+        };
+        if builtin.bound_object != Some(stage.0)
+            || self.stream_pipelines.get(&token).is_none_or(|state| {
+                state.phase == StreamPipelinePhase::Settling || !state.stages.contains(&stage)
+            })
+        {
+            return Ok(Value::Undefined);
+        }
+
+        if is_error {
+            if self
+                .stream_pipelines
+                .get(&token)
+                .is_none_or(|state| state.phase != StreamPipelinePhase::Running)
+            {
+                return Ok(Value::Undefined);
+            }
+            let error = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+            let error_label = self.writable_invocation_label(args)?;
+            let retained_bytes = Self::estimate_value_bytes(&error)
+                .saturating_add(Self::estimate_label_bytes(&error_label));
+            self.preflight_stream_pipeline_error_teardown(
+                token,
+                &error,
+                &error_label,
+                retained_bytes,
+            )?;
+            self.apply_memory_component_delta(0, retained_bytes)?;
+            let stage_count = {
+                let state = self
+                    .stream_pipelines
+                    .get_mut(&token)
+                    .expect("authenticated pipeline retained its state");
+                state.first_error = Some((error.clone(), error_label.clone()));
+                state.phase = StreamPipelinePhase::Destroying;
+                state.stages.len()
+            };
+            for index in 0..stage_count {
+                let source = self
+                    .stream_pipelines
+                    .get(&token)
+                    .and_then(|state| state.stages.get(index))
+                    .copied()
+                    .expect("pipeline stage survived authenticated error transition");
+                if let Some(link) = self.readable_pipe_links.get(&source).copied() {
+                    self.detach_readable_pipe(source, link.destination, link.token);
+                }
+            }
+            for index in 0..stage_count {
+                let stage = self
+                    .stream_pipelines
+                    .get(&token)
+                    .and_then(|state| state.stages.get(index))
+                    .copied()
+                    .expect("pipeline stage survived authenticated error transition");
+                self.destroy_stream_pipeline_stage(stage, &error, &error_label)?;
+            }
+            return Ok(Value::Undefined);
+        }
+
+        let close_label = self.writable_invocation_label(args)?;
+        let ready = {
+            let state = self
+                .stream_pipelines
+                .get_mut(&token)
+                .expect("authenticated pipeline retained its state");
+            state.pending_close.retain(|pending| *pending != stage);
+            if state.pending_close.is_empty() {
+                state.phase = StreamPipelinePhase::Settling;
+                true
+            } else {
+                false
+            }
+        };
+        if ready {
+            self.settle_stream_pipeline(module, token, close_label)
+        } else {
+            Ok(Value::Undefined)
+        }
+    }
+
     fn readable_is_paused(&self, receiver: Value) -> Result<Value, InterpreterError> {
         let object_id = self.readable_receiver_id(receiver)?;
         let paused = self
@@ -15120,6 +16013,185 @@ impl InterpreterCore {
         Ok(Value::Undefined)
     }
 
+    fn stream_transform_publish_completion_value(
+        &mut self,
+        module: &Ir3Module,
+        object_id: ObjectId,
+        token: u32,
+        args: RegRange,
+    ) -> Result<(), InterpreterError> {
+        if self.writable_completion_error_register(args)?.is_some() || args.count < 2 {
+            return Ok(());
+        }
+        let Some(value) = self.builtin_arg(args, 1)? else {
+            return Ok(());
+        };
+        if matches!(value, Value::Undefined | Value::Null) {
+            return Ok(());
+        }
+        let original_label = self
+            .writable_streams
+            .get(&object_id)
+            .and_then(|state| {
+                state
+                    .writes
+                    .iter()
+                    .find(|record| record.status == WritableWriteStatus::Active(token))
+                    .map(|record| record.label.clone())
+                    .or_else(|| Some(state.lifecycle_label.clone()))
+            })
+            .unwrap_or(Label::Public);
+        let callback_label = self.writable_invocation_label(args)?;
+        let mut label =
+            self.join_owned_label_with_temporary_budget(original_label, &callback_label)?;
+        if let Value::Object(value_id) = &value {
+            let storage_label = self.binary_storage_label(*value_id);
+            label = self.join_owned_label_with_temporary_budget(label, &storage_label)?;
+        }
+        self.readable_enqueue_value(object_id, value, label)?;
+        if self
+            .readable_from_streams
+            .get(&object_id)
+            .is_some_and(|state| state.flowing && !state.buffer.is_empty())
+        {
+            self.drive_readable_from_pump(object_id, Some(module))?;
+        }
+        Ok(())
+    }
+
+    /// Transform callbacks receive a distinct authenticated completion. A
+    /// successful second argument is published synchronously before the
+    /// Writable record completes, preserving transform/write alternation.
+    fn stream_transform_write_done(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let (object_id, token) = Self::writable_bound_completion(builtin)?;
+        let authenticated = self.writable_streams.get(&object_id).is_some_and(|state| {
+            state.flavor == WritableStreamFlavor::Transform
+                && state
+                    .writes
+                    .iter()
+                    .any(|record| record.status == WritableWriteStatus::Active(token))
+        });
+        if !authenticated {
+            return Ok(Value::Undefined);
+        }
+        let has_error = self.writable_completion_error_register(args)?.is_some();
+        if self
+            .writable_streams
+            .get(&object_id)
+            .is_some_and(|state| state.tick_sequence.is_none())
+        {
+            self.next_writable_tick_sequence
+                .checked_add(1)
+                .ok_or_else(|| InterpreterError::InternalError {
+                    details: "Writable tick sequence space exhausted".to_string(),
+                })?;
+        }
+        self.stream_transform_publish_completion_value(module, object_id, token, args)?;
+        let completion_args = RegRange {
+            start: args.start,
+            count: u32::from(args.count > 0),
+        };
+        let result = self.writable_write_done(module, builtin, completion_args)?;
+        if has_error {
+            self.destroy_dual_stream_after_writable_error(object_id)?;
+        }
+        Ok(result)
+    }
+
+    /// Default Transform `_final` when no guest `flush` hook exists.
+    fn stream_transform_final(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let object_id = self.writable_receiver_id(receiver)?;
+        if self
+            .writable_streams
+            .get(&object_id)
+            .is_none_or(|state| state.flavor != WritableStreamFlavor::Transform)
+        {
+            return Err(InterpreterError::TypeError {
+                expected: "Transform receiver".to_string(),
+                got: "non-Transform Writable".to_string(),
+            });
+        }
+        let completion = self.read_reg(args.start)?;
+        let Value::BuiltinFunction(completion) = completion else {
+            return Err(InterpreterError::TypeError {
+                expected: "authenticated Transform final completion".to_string(),
+                got: completion.type_name().to_string(),
+            });
+        };
+        self.stream_transform_final_done(module, &completion, RegRange { start: 0, count: 0 })
+    }
+
+    fn stream_transform_final_done(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let (object_id, token) = Self::writable_bound_completion(builtin)?;
+        let authenticated = self.writable_streams.get(&object_id).is_some_and(|state| {
+            state.flavor == WritableStreamFlavor::Transform
+                && state.final_status == WritableFinalStatus::Active(token)
+        });
+        if !authenticated {
+            return Ok(Value::Undefined);
+        }
+        let has_error = self.writable_completion_error_register(args)?.is_some();
+        if has_error {
+            let completion_args = RegRange {
+                start: args.start,
+                count: u32::from(args.count > 0),
+            };
+            let result = self.writable_final_done(module, builtin, completion_args)?;
+            self.destroy_dual_stream_after_writable_error(object_id)?;
+            return Ok(result);
+        }
+
+        let lifecycle_label = self.writable_invocation_label(args)?;
+        let defer_final_until_end = self
+            .readable_from_streams
+            .get(&object_id)
+            .is_some_and(|state| state.flowing && !state.paused && !state.destroy_requested);
+        if self
+            .writable_streams
+            .get(&object_id)
+            .is_some_and(|state| state.deferred_final_tick_sequence.is_none())
+        {
+            let sequence = self.next_writable_tick_sequence;
+            let next_sequence =
+                sequence
+                    .checked_add(1)
+                    .ok_or_else(|| InterpreterError::InternalError {
+                        details: "Writable tick sequence space exhausted".to_string(),
+                    })?;
+            self.writable_streams
+                .get_mut(&object_id)
+                .expect("authenticated Transform final retained its Writable state")
+                .deferred_final_tick_sequence = Some(sequence);
+            self.next_writable_tick_sequence = next_sequence;
+        }
+        self.stream_transform_publish_completion_value(module, object_id, token, args)?;
+        self.emit_writable_prefinish_with_tick(object_id, module, false)?;
+        self.readable_request_eof_with_flow_commitment(
+            object_id,
+            lifecycle_label,
+            defer_final_until_end,
+        )?;
+        if !defer_final_until_end {
+            self.writable_final_done(module, builtin, RegRange { start: 0, count: 0 })?;
+        }
+        Ok(Value::Undefined)
+    }
+
     /// Node orders a flowing PassThrough's readable `end` before Writable
     /// `finish`. Keep the authenticated token Active through the End pump,
     /// then consume its reserved tick without a guest-visible wrapper.
@@ -15130,9 +16202,8 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         let Some(token) = self.writable_streams.get(&object_id).and_then(|state| {
             let authenticated_internal_final = matches!(
-                state.final_callback.as_ref(),
-                Some(Value::BuiltinFunction(builtin))
-                    if builtin.kind == BuiltinFunctionKind::StreamPassThroughFinal
+                state.flavor,
+                WritableStreamFlavor::PassThrough | WritableStreamFlavor::Transform
             );
             match state.final_status {
                 WritableFinalStatus::Active(token) if authenticated_internal_final => Some(token),
@@ -16810,6 +17881,7 @@ impl InterpreterCore {
         // seeded heap. Otherwise a reused id can inherit callbacks, buffered
         // chunks, pumps, listeners, or static `events.once` links from the
         // preceding execution.
+        self.clear_stream_pipeline_execution_state();
         self.clear_readable_execution_state();
         self.clear_writable_execution_state();
         self.clear_loopback_execution_state();
@@ -19863,6 +20935,35 @@ impl InterpreterCore {
             ),
             BuiltinFunctionKind::StreamPassThroughDestroy => {
                 self.stream_passthrough_destroy(receiver.unwrap_or(Value::Undefined), args)
+            }
+            BuiltinFunctionKind::StreamTransformWriteDone => {
+                self.stream_transform_write_done(module, builtin, args)
+            }
+            BuiltinFunctionKind::StreamTransformFinal => self.stream_transform_final(
+                module,
+                receiver.unwrap_or(Value::Undefined),
+                args,
+            ),
+            BuiltinFunctionKind::StreamTransformFinalDone => {
+                self.stream_transform_final_done(module, builtin, args)
+            }
+            BuiltinFunctionKind::StreamPipelineFinish => {
+                self.stream_pipeline_listener_settle(
+                    module,
+                    receiver.unwrap_or(Value::Undefined),
+                    builtin,
+                    false,
+                    args,
+                )
+            }
+            BuiltinFunctionKind::StreamPipelineError => {
+                self.stream_pipeline_listener_settle(
+                    module,
+                    receiver.unwrap_or(Value::Undefined),
+                    builtin,
+                    true,
+                    args,
+                )
             }
             BuiltinFunctionKind::NetServerListen => {
                 self.loopback_server_listen(receiver.unwrap_or(Value::Undefined), args)
@@ -28774,7 +29875,17 @@ impl InterpreterCore {
         let root_has_writable = self.writable_streams.contains_key(&object_id)
             || self.writable_terminal_states.contains_key(&object_id);
         let root_type_tag = if root_has_readable && root_has_writable {
-            Some("PassThrough".to_string())
+            Some(
+                match self
+                    .writable_streams
+                    .get(&object_id)
+                    .map(|state| state.flavor)
+                {
+                    Some(WritableStreamFlavor::Transform) => "Transform",
+                    _ => "PassThrough",
+                }
+                .to_string(),
+            )
         } else if root_has_readable {
             Some("Readable".to_string())
         } else if root_has_writable {
@@ -28865,7 +29976,7 @@ impl InterpreterCore {
     /// Resolve a Map/Set prototype method name to its receiver-aware builtin
     /// callable (bd-juodx). `.size` is a data property, not a method.
     fn collection_prototype_method(type_tag: &str, key: &str) -> Option<BuiltinFunction> {
-        if type_tag == "PassThrough" {
+        if matches!(type_tag, "PassThrough" | "Transform") {
             return match key {
                 "destroy" => Some(BuiltinFunction::new_kind(
                     BuiltinFunctionKind::StreamPassThroughDestroy,
@@ -28910,54 +30021,57 @@ impl InterpreterCore {
             // deferred egress.
             ("ClientRequest", "write") => Some(BuiltinFunction::client_request_write()),
             ("ClientRequest", "end") => Some(BuiltinFunction::client_request_end()),
-            ("Readable" | "PassThrough", "pause") => Some(BuiltinFunction::new_kind(
+            ("Readable" | "PassThrough" | "Transform", "pause") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamReadablePause,
             )),
-            ("Readable" | "PassThrough", "resume") => Some(BuiltinFunction::new_kind(
-                BuiltinFunctionKind::StreamReadableResume,
-            )),
-            ("Readable" | "PassThrough", "isPaused") => Some(BuiltinFunction::new_kind(
-                BuiltinFunctionKind::StreamReadableIsPaused,
-            )),
-            ("Readable" | "PassThrough", "push") => Some(BuiltinFunction::new_kind(
+            ("Readable" | "PassThrough" | "Transform", "resume") => Some(
+                BuiltinFunction::new_kind(BuiltinFunctionKind::StreamReadableResume),
+            ),
+            ("Readable" | "PassThrough" | "Transform", "isPaused") => Some(
+                BuiltinFunction::new_kind(BuiltinFunctionKind::StreamReadableIsPaused),
+            ),
+            ("Readable" | "PassThrough" | "Transform", "push") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamReadablePush,
             )),
-            ("Readable" | "PassThrough", "toArray") => Some(BuiltinFunction::new_kind(
-                BuiltinFunctionKind::StreamReadableToArray,
-            )),
-            ("Readable" | "PassThrough", "read") => Some(BuiltinFunction::new_kind(
+            ("Readable" | "PassThrough" | "Transform", "toArray") => Some(
+                BuiltinFunction::new_kind(BuiltinFunctionKind::StreamReadableToArray),
+            ),
+            ("Readable" | "PassThrough" | "Transform", "read") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamReadableRead,
             )),
-            ("Readable" | "PassThrough", "unshift") => Some(BuiltinFunction::new_kind(
-                BuiltinFunctionKind::StreamReadableUnshift,
-            )),
-            ("Readable" | "PassThrough", "pipe") => Some(BuiltinFunction::new_kind(
+            ("Readable" | "PassThrough" | "Transform", "unshift") => Some(
+                BuiltinFunction::new_kind(BuiltinFunctionKind::StreamReadableUnshift),
+            ),
+            ("Readable" | "PassThrough" | "Transform", "pipe") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamReadablePipe,
             )),
-            ("Readable" | "PassThrough", "unpipe") => Some(BuiltinFunction::new_kind(
-                BuiltinFunctionKind::StreamReadableUnpipe,
-            )),
-            ("Readable" | "PassThrough", "setEncoding") => Some(BuiltinFunction::new_kind(
-                BuiltinFunctionKind::StreamReadableSetEncoding,
-            )),
+            ("Readable" | "PassThrough" | "Transform", "unpipe") => Some(
+                BuiltinFunction::new_kind(BuiltinFunctionKind::StreamReadableUnpipe),
+            ),
+            ("Readable" | "PassThrough" | "Transform", "setEncoding") => Some(
+                BuiltinFunction::new_kind(BuiltinFunctionKind::StreamReadableSetEncoding),
+            ),
             ("Readable", "destroy") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamReadableDestroy,
             )),
             ("PassThrough", "destroy") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamPassThroughDestroy,
             )),
-            ("Writable" | "PassThrough", "write") => Some(BuiltinFunction::new_kind(
+            ("Transform", "destroy") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::StreamPassThroughDestroy,
+            )),
+            ("Writable" | "PassThrough" | "Transform", "write") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamWritableWrite,
             )),
-            ("Writable" | "PassThrough", "end") => Some(BuiltinFunction::new_kind(
+            ("Writable" | "PassThrough" | "Transform", "end") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamWritableEnd,
             )),
-            ("Writable" | "PassThrough", "cork") => Some(BuiltinFunction::new_kind(
+            ("Writable" | "PassThrough" | "Transform", "cork") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamWritableCork,
             )),
-            ("Writable" | "PassThrough", "uncork") => Some(BuiltinFunction::new_kind(
-                BuiltinFunctionKind::StreamWritableUncork,
-            )),
+            ("Writable" | "PassThrough" | "Transform", "uncork") => Some(
+                BuiltinFunction::new_kind(BuiltinFunctionKind::StreamWritableUncork),
+            ),
             ("Writable", "destroy") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamWritableDestroy,
             )),
@@ -38150,6 +39264,21 @@ impl InterpreterCore {
                 // bd-fw7zd.10: one engine-owned object composes the existing
                 // Readable and Writable kernels without materializing a module.
                 self.construct_stream_passthrough(args)
+            }
+            "builtin:StreamTransform" => self.construct_stream_transform(args),
+            "builtin:StreamPipeline" => {
+                let module = module.ok_or_else(|| InterpreterError::TypeError {
+                    expected: "module-backed stream.pipeline".to_string(),
+                    got: "missing module context".to_string(),
+                })?;
+                self.construct_stream_pipeline(module, args, false)
+            }
+            "builtin:StreamPromisesPipeline" => {
+                let module = module.ok_or_else(|| InterpreterError::TypeError {
+                    expected: "module-backed stream/promises.pipeline".to_string(),
+                    got: "missing module context".to_string(),
+                })?;
+                self.construct_stream_pipeline(module, args, true)
             }
             "builtin:ImportMeta" => {
                 if args.count != 0 {
@@ -48244,6 +49373,14 @@ impl InterpreterCore {
         )
     }
 
+    fn stream_pipelines_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.stream_pipelines
+                .values()
+                .map(Self::stream_pipeline_state_bytes),
+        )
+    }
+
     fn writable_terminal_states_memory_bytes(&self) -> u64 {
         Self::saturating_sum(
             self.writable_terminal_states
@@ -48312,6 +49449,7 @@ impl InterpreterCore {
             .saturating_add(self.weakmap_storage_memory_bytes())
             .saturating_add(self.event_listeners_memory_bytes())
             .saturating_add(self.event_promise_waiters_memory_bytes())
+            .saturating_add(self.stream_pipelines_memory_bytes())
             .saturating_add(self.readable_from_streams_memory_bytes())
             .saturating_add(Self::saturating_sum(
                 self.readable_pump_reservations
@@ -63915,7 +65053,7 @@ mod async_runtime_tests_current {
         state.writes[0].status = WritableWriteStatus::Active(token);
         state.inside_write_invocation = true;
 
-        core.record_passthrough_internal_failure(
+        core.record_dual_stream_failure(
             passthrough,
             Value::str("forwarding failed"),
             Label::Secret,

@@ -1387,7 +1387,6 @@ fn writable_destroy_error_argument_is_deferred_and_handled() {
 }
 
 #[test]
-#[ignore = "bd-fw7zd: Transform slice not implemented yet"]
 fn transform_flush_and_object_mode() {
     assert_cases(&[
         EvalCase {
@@ -1436,6 +1435,97 @@ fn transform_flush_and_object_mode() {
                 transform.end({ v: 5 });
             "#,
             expected: "v:6\nv:10\nend",
+        },
+    ]);
+}
+
+#[test]
+fn transform_async_serialization_and_drain_bd_fw7zd_12() {
+    assert_cases(&[
+        EvalCase {
+            ids: &["bd-fw7zd.12-transform-error-dual-close"],
+            description: "Transform callback errors destroy both halves through one shared close",
+            source: r#"
+                const { Transform } = require('stream');
+                const events = [];
+                const transform = new Transform({ transform(chunk, encoding, callback) { callback(new Error('boom')); } });
+                transform.on('error', error => events.push('error:' + error.message));
+                transform.on('close', () => {
+                  events.push('close:' + transform.destroyed + ':' + transform.closed);
+                  console.log(events.join(','));
+                });
+                transform.write('x');
+            "#,
+            expected: "error:boom,close:true:true",
+        },
+        EvalCase {
+            ids: &["bd-fw7zd.12-transform-flush-throw-dual-close"],
+            description: "Transform flush throws use the same aggregate error and close path",
+            source: r#"
+                const { Transform } = require('stream');
+                const events = [];
+                const transform = new Transform({
+                  transform(chunk, encoding, callback) { callback(null, chunk); },
+                  flush() { throw new Error('flush-boom'); }
+                });
+                transform.resume();
+                transform.on('error', error => events.push('error:' + error.message));
+                transform.on('close', () => {
+                  events.push('close:' + transform.destroyed + ':' + transform.closed);
+                  console.log(events.join(','));
+                });
+                transform.end('x');
+            "#,
+            expected: "error:flush-boom,close:true:true",
+        },
+        EvalCase {
+            ids: &["tc::stream::0059"],
+            description: "Transform retains one drain obligation across async callbacks",
+            source: r#"
+                import { once } from 'node:events';
+                import { Transform } from 'node:stream';
+                const events = [];
+                const transform = new Transform({
+                  highWaterMark: 4,
+                  transform(chunk, encoding, callback) { setImmediate(() => callback(null, chunk)); }
+                });
+                transform.resume();
+                transform.on('drain', () => events.push('drain'));
+                transform.on('end', () => events.push('end'));
+                transform.on('close', () => events.push('close'));
+                events.push('write:first:' + transform.write(Buffer.alloc(8, 'a')));
+                events.push('write:second:' + transform.write(Buffer.alloc(8, 'b')));
+                await once(transform, 'drain');
+                transform.end();
+                await once(transform, 'close');
+                console.log(events.join(','));
+            "#,
+            expected: "write:first:false,write:second:false,drain,end,close",
+        },
+        EvalCase {
+            ids: &["tc::stream::0065"],
+            description: "async Transform callbacks serialize before pipeline resolution",
+            source: r#"
+                import { Readable, Transform, Writable } from 'node:stream';
+                import { pipeline } from 'node:stream/promises';
+                const events = [];
+                const chunks = [];
+                const transform = new Transform({
+                  transform(chunk, encoding, callback) {
+                    const text = String(chunk);
+                    events.push('start:' + text);
+                    setImmediate(() => { events.push('done:' + text); callback(null, text + '!'); });
+                  }
+                });
+                const sink = new Writable({
+                  write(chunk, encoding, callback) { chunks.push(String(chunk)); events.push('write:' + String(chunk)); callback(); }
+                });
+                await pipeline(Readable.from(['one', 'two']), transform, sink);
+                events.push('pipeline:resolved');
+                console.log(events.join(','));
+                console.log(chunks.join(','));
+            "#,
+            expected: "start:one,done:one,write:one!,start:two,done:two,write:two!,pipeline:resolved\none!,two!",
         },
     ]);
 }
@@ -1568,7 +1658,6 @@ fn passthrough_preserves_chunks_and_shared_lifecycle() {
 }
 
 #[test]
-#[ignore = "bd-fw7zd: promise pipeline slice not implemented yet"]
 fn promise_pipeline_covers_sync_transform_object_mode_and_flush() {
     assert_cases(&[
         EvalCase {
@@ -1754,7 +1843,6 @@ fn pipe_unpipe_and_event_emitter_inheritance() {
 }
 
 #[test]
-#[ignore = "bd-fw7zd: callback pipeline slice not implemented yet"]
 fn callback_pipeline_success_error_and_three_stage_order() {
     assert_cases(&[
         EvalCase {
@@ -1794,7 +1882,6 @@ fn callback_pipeline_success_error_and_three_stage_order() {
 }
 
 #[test]
-#[ignore = "bd-fw7zd: promise pipeline slice not implemented yet"]
 fn promise_pipeline_success_order_and_error_propagation() {
     assert_cases(&[
         EvalCase {
@@ -1856,6 +1943,31 @@ fn promise_pipeline_success_order_and_error_propagation() {
                 console.log(events.join(','));
             "#,
             expected: "transform:ok,write:ok,transform:bad,pipeline:rejected:transform-fail",
+        },
+        EvalCase {
+            ids: &["bd-fw7zd.12-pipeline-close-barrier"],
+            description: "pipeline retains the first error and rejects only after every stage closes",
+            source: r#"
+                import { Readable, Transform, Writable } from 'node:stream';
+                import { pipeline } from 'node:stream/promises';
+                const closes = [];
+                const source = Readable.from(['ok', 'bad', 'later']);
+                const transform = new Transform({
+                  transform(chunk, encoding, callback) {
+                    callback(String(chunk) === 'bad' ? new Error('first-error') : null, chunk);
+                  }
+                });
+                const sink = new Writable({ write(chunk, encoding, callback) { callback(); } });
+                source.on('close', () => closes.push('source'));
+                transform.on('close', () => closes.push('transform'));
+                sink.on('close', () => closes.push('sink'));
+                try {
+                  await pipeline(source, transform, sink);
+                } catch (error) {
+                  console.log('closed:' + closes.length + ',rejected:' + error.message);
+                }
+            "#,
+            expected: "closed:3,rejected:first-error",
         },
     ]);
 }

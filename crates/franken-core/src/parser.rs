@@ -19,10 +19,10 @@ use crate::ast::{
     CatchClause, ClassDeclaration, ContinueStatement, DoWhileStatement, ExportDeclaration,
     ExportKind, Expression, ExpressionStatement, ForInStatement, ForOfStatement, ForStatement,
     FunctionDeclaration, FunctionParam, IfStatement, ImportClause, ImportDeclaration,
-    ImportSpecifier, MethodDefinition, MethodKind, ObjectPatternProperty, ObjectProperty,
-    ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement, SyntaxTree,
-    ThrowStatement, TryCatchStatement, UnaryOperator, UpdateOperator, VariableDeclaration,
-    VariableDeclarationKind, VariableDeclarator, WhileStatement,
+    ImportSpecifier, MethodDefinition, MethodKind, NamedExportClause, ObjectPatternProperty,
+    ObjectProperty, ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement,
+    SyntaxTree, ThrowStatement, TryCatchStatement, UnaryOperator, UpdateOperator,
+    VariableDeclaration, VariableDeclarationKind, VariableDeclarator, WhileStatement,
 };
 use crate::deterministic_serde::{self, CanonicalValue};
 use crate::js_string::JsString;
@@ -6239,7 +6239,7 @@ fn parse_named_export_clause(
     clause: &str,
     source_label: &str,
     span: &SourceSpan,
-) -> ParseResult<String> {
+) -> ParseResult<NamedExportClause> {
     let clause = clause.trim();
     let Some(inner_and_trailing) = clause.strip_prefix('{') else {
         return Err(ParseError::new(
@@ -6264,7 +6264,7 @@ fn parse_named_export_clause(
 
     let canonical_head = canonicalize_whitespace(&clause[..close_index + 2]);
     let trailing = inner_and_trailing[close_index + 1..].trim();
-    let canonical_source = if !trailing.is_empty() {
+    let source = if !trailing.is_empty() {
         let Some(source_raw) = trailing.strip_prefix("from").map(str::trim_start) else {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
@@ -6282,22 +6282,12 @@ fn parse_named_export_clause(
                 Some(span.clone()),
             )
         })?;
-        Some(serde_json::to_string(&source).map_err(|error| {
-            ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                format!("export source could not be canonicalized: {error}"),
-                source_label.to_string(),
-                Some(span.clone()),
-            )
-        })?)
+        Some(source)
     } else {
         None
     };
 
-    Ok(match canonical_source {
-        Some(source) => format!("{canonical_head} from {source}"),
-        None => canonical_head,
-    })
+    Ok(NamedExportClause::new(canonical_head, source))
 }
 
 fn validate_named_export_specifiers(
@@ -11556,14 +11546,11 @@ fn parse_quoted_expression_string(
     Some(JsString::from_code_units(&units))
 }
 
-/// Parse a quoted string for UTF-8-only syntax fields such as module
-/// specifiers. Cooking is shared with expression literals, but an exact value
-/// containing an unpaired surrogate is rejected instead of being projected to
-/// U+FFFD and silently changing the requested module name.
-pub(crate) fn parse_quoted_string(input: &str) -> Option<String> {
-    parse_quoted_expression_string(input, LegacyDecimalEscapeMode::Reject)?
-        .as_str()
-        .map(str::to_string)
+/// Parse a quoted module source exactly, including lone UTF-16 surrogates.
+/// Cooking is shared with expression literals and never projects through
+/// UTF-8, so distinct exact module keys remain distinct through lowering.
+pub(crate) fn parse_quoted_string(input: &str) -> Option<JsString> {
+    parse_quoted_expression_string(input, LegacyDecimalEscapeMode::Reject)
 }
 
 /// Parse a regex literal: `/pattern/flags`.
@@ -18784,6 +18771,27 @@ strict"; var static = 1; }"#,
     }
 
     #[test]
+    fn import_sources_keep_d800_and_dc00_distinct_bd_lfq44() {
+        let parser = CanonicalEs2020Parser;
+        let d800_tree = parser
+            .parse(r#"import "\uD800""#, ParseGoal::Module)
+            .expect("D800 import should parse");
+        let dc00_tree = parser
+            .parse(r#"import "\uDC00""#, ParseGoal::Module)
+            .expect("DC00 import should parse");
+        let Statement::Import(d800) = &d800_tree.body[0] else {
+            panic!("expected D800 import statement");
+        };
+        let Statement::Import(dc00) = &dc00_tree.body[0] else {
+            panic!("expected DC00 import statement");
+        };
+
+        assert_eq!(d800.source.code_units_vec(), vec![0xD800]);
+        assert_eq!(dc00.source.code_units_vec(), vec![0xDC00]);
+        assert_ne!(d800.source, dc00.source);
+    }
+
+    #[test]
     fn import_named_clause_parsed_without_binding() {
         let parser = CanonicalEs2020Parser;
         let tree = parser
@@ -18976,7 +18984,8 @@ strict"; var static = 1; }"#,
         match &tree.body[0] {
             Statement::Export(export) => match &export.kind {
                 ExportKind::NamedClause(clause) => {
-                    assert_eq!(clause, "{ a, b }");
+                    assert_eq!(clause.canonical_head(), "{ a, b }");
+                    assert_eq!(clause.source(), None);
                 }
                 _ => panic!("expected named clause export"),
             },
@@ -18996,12 +19005,44 @@ strict"; var static = 1; }"#,
         match &tree.body[0] {
             Statement::Export(export) => match &export.kind {
                 ExportKind::NamedClause(clause) => {
-                    assert_eq!(clause, "{ default as dep, run as start } from \"pkg\"");
+                    assert_eq!(
+                        clause.historical_wire_text().as_deref(),
+                        Some("{ default as dep, run as start } from \"pkg\"")
+                    );
                 }
                 _ => panic!("expected named clause export"),
             },
             _ => panic!("expected export statement"),
         }
+    }
+
+    #[test]
+    fn named_reexport_sources_keep_d800_and_dc00_distinct_bd_lfq44() {
+        let parser = CanonicalEs2020Parser;
+        let d800_tree = parser
+            .parse(r#"export { value } from "\uD800""#, ParseGoal::Module)
+            .expect("D800 re-export should parse");
+        let dc00_tree = parser
+            .parse(r#"export { value } from "\uDC00""#, ParseGoal::Module)
+            .expect("DC00 re-export should parse");
+        let Statement::Export(d800_export) = &d800_tree.body[0] else {
+            panic!("expected D800 export statement");
+        };
+        let Statement::Export(dc00_export) = &dc00_tree.body[0] else {
+            panic!("expected DC00 export statement");
+        };
+        let ExportKind::NamedClause(d800_clause) = &d800_export.kind else {
+            panic!("expected D800 named export");
+        };
+        let ExportKind::NamedClause(dc00_clause) = &dc00_export.kind else {
+            panic!("expected DC00 named export");
+        };
+        let d800 = d800_clause.source().expect("D800 source");
+        let dc00 = dc00_clause.source().expect("DC00 source");
+
+        assert_eq!(d800.code_units_vec(), vec![0xD800]);
+        assert_eq!(dc00.code_units_vec(), vec![0xDC00]);
+        assert_ne!(d800, dc00);
     }
 
     #[test]
@@ -19015,7 +19056,10 @@ strict"; var static = 1; }"#,
         let ExportKind::NamedClause(clause) = &export.kind else {
             panic!("expected named export clause");
         };
-        assert_eq!(clause, r#"{ value } from "a  b""#);
+        assert_eq!(
+            clause.historical_wire_text().as_deref(),
+            Some(r#"{ value } from "a  b""#)
+        );
     }
 
     #[test]
@@ -20594,29 +20638,32 @@ strict"; var static = 1; }"#,
 
     #[test]
     fn parse_quoted_string_valid_extracts_inner() {
-        assert_eq!(parse_quoted_string("'abc'"), Some("abc".to_string()));
-        assert_eq!(parse_quoted_string("\"xyz\""), Some("xyz".to_string()));
-        assert_eq!(parse_quoted_string("''"), Some(String::new()));
-        assert_eq!(parse_quoted_string("'a\\\nb'"), Some("ab".to_string()));
+        assert_eq!(parse_quoted_string("'abc'"), Some("abc".into()));
+        assert_eq!(parse_quoted_string("\"xyz\""), Some("xyz".into()));
+        assert_eq!(parse_quoted_string("''"), Some(JsString::empty()));
+        assert_eq!(parse_quoted_string("'a\\\nb'"), Some("ab".into()));
         assert_eq!(
             parse_quoted_string("'a\u{2028}b'"),
-            Some("a\u{2028}b".to_string()),
+            Some("a\u{2028}b".into()),
             "ES2020 permits unescaped line and paragraph separators in string literals"
         );
         assert_eq!(
             parse_quoted_string(r"'a\nb'"),
-            Some("a\nb".to_string()),
-            "UTF-8-only syntax strings still use the shared escape cooking"
+            Some("a\nb".into()),
+            "module sources still use the shared escape cooking"
         );
     }
 
     #[test]
-    fn parse_quoted_string_rejects_lone_surrogate_module_names_bd_vltnh() {
-        assert_eq!(parse_quoted_string(r#""\uD800""#), None);
-        assert_eq!(parse_quoted_string(r"'\uDC00'"), None);
+    fn parse_quoted_string_preserves_lone_surrogate_module_names_bd_lfq44() {
+        let d800 = parse_quoted_string(r#""\uD800""#).expect("D800 source");
+        let dc00 = parse_quoted_string(r"'\uDC00'").expect("DC00 source");
+        assert_eq!(d800.code_units_vec(), vec![0xD800]);
+        assert_eq!(dc00.code_units_vec(), vec![0xDC00]);
+        assert_ne!(d800, dc00);
         assert_eq!(
             parse_quoted_string(r#""\uD83D\uDE00""#),
-            Some("😀".to_string()),
+            Some("😀".into()),
             "well-formed surrogate pairs remain valid UTF-8 module names"
         );
     }
@@ -21123,14 +21170,14 @@ strict"; var static = 1; }"#,
             statement_kind_label(&Statement::Import(ImportDeclaration {
                 clause: ImportClause::SideEffect,
                 binding: None,
-                source: "m".to_string(),
+                source: "m".into(),
                 span: span.clone(),
             })),
             "import"
         );
         assert_eq!(
             statement_kind_label(&Statement::Export(ExportDeclaration {
-                kind: ExportKind::NamedClause("{}".to_string()),
+                kind: ExportKind::NamedClause("{}".into()),
                 span: span.clone(),
             })),
             "export"

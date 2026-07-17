@@ -37,14 +37,15 @@ pub struct IrSchemaVersion {
 }
 
 impl IrSchemaVersion {
-    /// `0.3.0` adds dedicated object-rest `CopyDataProperties` operations to
-    /// IR1 and IR3. `0.2.0` widened JavaScript literal carriers and the IR3
+    /// `0.4.0` widens IR1 module specifiers to exact UTF-16 [`JsString`]
+    /// values. `0.3.0` adds dedicated object-rest `CopyDataProperties`
+    /// operations to IR1 and IR3. `0.2.0` widened JavaScript literal carriers and the IR3
     /// constant pool to exact UTF-16 [`JsString`] values. Historical
     /// well-formed strings retain their plain-string JSON wire shape;
     /// lone-surrogate values use `$wtf16`.
     pub const CURRENT: Self = Self {
         major: 0,
-        minor: 3,
+        minor: 4,
         patch: 0,
     };
 
@@ -429,7 +430,7 @@ pub enum Ir1Op {
     /// Return from current function.
     Return,
     /// Import a module by specifier.
-    ImportModule { specifier: String },
+    ImportModule { specifier: JsString },
     /// Export a binding from the module.
     ExportBinding { name: String, binding_id: BindingId },
     /// Await an expression (async context).
@@ -657,10 +658,7 @@ impl Ir1Op {
                     "op".to_string(),
                     CanonicalValue::String("import_module".to_string()),
                 );
-                map.insert(
-                    "specifier".to_string(),
-                    CanonicalValue::String(specifier.clone()),
-                );
+                map.insert("specifier".to_string(), specifier.canonical_value());
             }
             Self::ExportBinding { name, binding_id } => {
                 map.insert(
@@ -3442,7 +3440,7 @@ mod tests {
 
     #[test]
     fn schema_version_display() {
-        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.3.0");
+        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.4.0");
     }
 
     #[test]
@@ -3463,7 +3461,7 @@ mod tests {
         };
 
         assert!(verify_schema_version(&header(IrSchemaVersion::CURRENT, IrLevel::Ir3)).is_ok());
-        for minor in [1, 2] {
+        for minor in [1, 2, 3] {
             assert!(
                 verify_schema_version(&header(
                     IrSchemaVersion {
@@ -3474,7 +3472,7 @@ mod tests {
                     IrLevel::Ir1,
                 ))
                 .is_ok(),
-                "core 0.3 readers retain compatibility with 0.{minor} artifacts"
+                "core 0.4 readers retain compatibility with 0.{minor} artifacts"
             );
         }
 
@@ -3511,6 +3509,46 @@ mod tests {
         let a = IrSchemaVersion::CURRENT.canonical_value();
         let b = IrSchemaVersion::CURRENT.canonical_value();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn ir1_import_module_preserves_ordinary_wire_bytes_bd_lfq44() {
+        let op = Ir1Op::ImportModule {
+            specifier: "pkg".into(),
+        };
+        let json = serde_json::to_string(&op).expect("serialize ordinary module import");
+        assert_eq!(json, r#"{"ImportModule":{"specifier":"pkg"}}"#);
+        assert_eq!(
+            serde_json::from_str::<Ir1Op>(&json).expect("read historical module import"),
+            op
+        );
+    }
+
+    #[test]
+    fn ir1_import_module_keeps_d800_and_dc00_distinct_bd_lfq44() {
+        let make = |unit| Ir1Op::ImportModule {
+            specifier: JsString::from_code_units(&[unit]),
+        };
+        let d800 = make(0xD800);
+        let dc00 = make(0xDC00);
+        let d800_json = serde_json::to_string(&d800).expect("serialize D800 module import");
+        let dc00_json = serde_json::to_string(&dc00).expect("serialize DC00 module import");
+
+        assert_eq!(
+            d800_json,
+            r#"{"ImportModule":{"specifier":{"$wtf16":[55296]}}}"#
+        );
+        assert_ne!(d800, dc00);
+        assert_ne!(d800.canonical_value(), dc00.canonical_value());
+        assert_ne!(d800_json, dc00_json);
+        assert_eq!(
+            serde_json::from_str::<Ir1Op>(&d800_json).expect("read D800 module import"),
+            d800
+        );
+        assert_eq!(
+            serde_json::from_str::<Ir1Op>(&dc00_json).expect("read DC00 module import"),
+            dc00
+        );
     }
 
     #[test]
@@ -3815,7 +3853,7 @@ mod tests {
             Ir1Op::Call { arg_count: 2 },
             Ir1Op::Return,
             Ir1Op::ImportModule {
-                specifier: "mod".to_string(),
+                specifier: "mod".into(),
             },
             Ir1Op::ExportBinding {
                 name: "x".to_string(),
@@ -5034,7 +5072,7 @@ mod tests {
             Ir1Op::Call { arg_count: 3 },
             Ir1Op::Return,
             Ir1Op::ImportModule {
-                specifier: "m".to_string(),
+                specifier: "m".into(),
             },
             Ir1Op::ExportBinding {
                 name: "x".to_string(),
@@ -5508,7 +5546,7 @@ mod tests {
     fn schema_version_current_value() {
         let v = IrSchemaVersion::CURRENT;
         assert_eq!(v.major, 0);
-        assert_eq!(v.minor, 3);
+        assert_eq!(v.minor, 4);
         assert_eq!(v.patch, 0);
     }
 

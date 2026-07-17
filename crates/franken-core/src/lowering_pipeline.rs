@@ -1807,8 +1807,8 @@ pub fn lower_ir0_to_ir1(
                     ir1.ops.push(Ir1Op::Pop);
                 }
                 ExportKind::NamedClause(clause) => {
-                    let specifiers = parse_named_export_clause_bindings(clause);
-                    if let Some(source_specifier) = parse_named_export_clause_source(clause) {
+                    let specifiers = parse_named_export_clause_bindings(clause.canonical_head());
+                    if let Some(source_specifier) = clause.source().cloned() {
                         if specifiers.is_empty() {
                             ir1.ops.push(Ir1Op::ImportModule {
                                 specifier: source_specifier,
@@ -2745,11 +2745,7 @@ fn reject_self_referential_parameter_capture(
 
 fn parse_named_export_clause_bindings(clause: &str) -> Vec<(String, String)> {
     let trimmed = clause.trim();
-    let local_clause = split_named_export_clause(trimmed)
-        .map(|(head, _)| head.trim())
-        .unwrap_or(trimmed);
-
-    if let Some(inner) = local_clause
+    if let Some(inner) = trimmed
         .strip_prefix('{')
         .and_then(|body| body.strip_suffix('}'))
     {
@@ -2781,20 +2777,6 @@ fn parse_named_export_clause_bindings(clause: &str) -> Vec<(String, String)> {
     } else {
         vec![(trimmed.to_string(), trimmed.to_string())]
     }
-}
-
-fn parse_named_export_clause_source(clause: &str) -> Option<String> {
-    let trimmed = clause.trim();
-    let (_head, source_raw) = split_named_export_clause(trimmed)?;
-    parse_quoted_export_source(source_raw.trim())
-}
-
-fn split_named_export_clause(clause: &str) -> Option<(&str, &str)> {
-    clause.split_once(" from ")
-}
-
-fn parse_quoted_export_source(input: &str) -> Option<String> {
-    crate::parser::parse_quoted_string(input)
 }
 
 fn alloc_pattern_primary_binding(
@@ -5814,7 +5796,7 @@ pub fn lower_ir2_to_ir3(
             }
             Ir1Op::ImportModule { specifier } => {
                 let string_reg = alloc_register(&mut register_cursor);
-                let pool_index = push_constant(&mut ir3.constant_pool, specifier);
+                let pool_index = push_constant(&mut ir3.constant_pool, specifier.clone());
                 ir3.instructions.push(Ir3Instruction::LoadStr {
                     dst: string_reg,
                     pool_index,
@@ -12887,7 +12869,7 @@ mod tests {
     #[test]
     fn classify_import_module() {
         let (effect, cap, flow) = classify_ir1_op(&Ir1Op::ImportModule {
-            specifier: "mod".to_string(),
+            specifier: "mod".into(),
         });
         assert_eq!(effect, EffectBoundary::ReadEffect);
         assert!(cap.is_some());
@@ -13205,7 +13187,7 @@ mod tests {
                 clause: ImportClause::Default {
                     local: "_".to_string(),
                 },
-                source: "lodash".to_string(),
+                source: "lodash".into(),
                 binding: Some("_".to_string()),
                 span: span(),
             })],
@@ -13221,6 +13203,50 @@ mod tests {
             .any(|op| matches!(op, Ir1Op::ImportModule { specifier } if specifier == "lodash"));
         assert!(has_import);
         assert_eq!(result.module.scopes[0].kind, ScopeKind::Module);
+    }
+
+    #[test]
+    fn lowering_keeps_import_and_reexport_exact_sources_distinct_bd_lfq44() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                r#"import "\uD800"; export {} from "\uDC00""#,
+                ParseGoal::Module,
+            )
+            .expect("exact module sources should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "exact_module_sources.mjs");
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("exact module sources should lower to IR1")
+            .module;
+        let specifiers: Vec<&JsString> = ir1
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Ir1Op::ImportModule { specifier } => Some(specifier),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(specifiers.len(), 2);
+        assert_eq!(specifiers[0].code_units_vec(), vec![0xD800]);
+        assert_eq!(specifiers[1].code_units_vec(), vec![0xDC00]);
+        assert_ne!(specifiers[0], specifiers[1]);
+
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("exact module sources should lower to IR2")
+            .module;
+        let ir3 = lower_ir2_to_ir3(&ir2)
+            .expect("exact module sources should lower to IR3")
+            .module;
+        assert!(
+            ir3.constant_pool
+                .iter()
+                .any(|value| value.code_units_vec() == vec![0xD800])
+        );
+        assert!(
+            ir3.constant_pool
+                .iter()
+                .any(|value| value.code_units_vec() == vec![0xDC00])
+        );
     }
 
     #[test]
@@ -13270,7 +13296,7 @@ mod tests {
                     span: span(),
                 }),
                 Statement::Export(ExportDeclaration {
-                    kind: ExportKind::NamedClause("{ foo as published }".to_string()),
+                    kind: ExportKind::NamedClause("{ foo as published }".into()),
                     span: span(),
                 }),
             ],
@@ -13292,7 +13318,7 @@ mod tests {
         let tree = SyntaxTree {
             goal: ParseGoal::Module,
             body: vec![Statement::Export(ExportDeclaration {
-                kind: ExportKind::NamedClause("{ foo as bar } from \"./dep.js\"".to_string()),
+                kind: ExportKind::NamedClause("{ foo as bar } from \"./dep.js\"".into()),
                 span: span(),
             })],
             span: span(),
@@ -13336,7 +13362,7 @@ mod tests {
         let tree = SyntaxTree {
             goal: ParseGoal::Module,
             body: vec![Statement::Export(ExportDeclaration {
-                kind: ExportKind::NamedClause("{ bar }".to_string()),
+                kind: ExportKind::NamedClause("{ bar }".into()),
                 span: span(),
             })],
             span: span(),
@@ -13358,7 +13384,7 @@ mod tests {
             goal: ParseGoal::Module,
             body: vec![
                 Statement::Export(ExportDeclaration {
-                    kind: ExportKind::NamedClause("{ foo }".to_string()),
+                    kind: ExportKind::NamedClause("{ foo }".into()),
                     span: span(),
                 }),
                 Statement::VariableDeclaration(VariableDeclaration {
@@ -13656,7 +13682,7 @@ mod tests {
                     clause: ImportClause::Default {
                         local: "_".to_string(),
                     },
-                    source: "lodash".to_string(),
+                    source: "lodash".into(),
                     binding: Some("_".to_string()),
                     span: span(),
                 }),
@@ -13892,7 +13918,7 @@ mod tests {
         let labels = BTreeMap::new();
         let label = infer_data_label_for_op(
             &Ir1Op::ImportModule {
-                specifier: "lodash".to_string(),
+                specifier: "lodash".into(),
             },
             &labels,
             Label::Public,
@@ -17636,7 +17662,7 @@ mod tests {
         for (body_op, expected_detail) in [
             (
                 Ir1Op::ImportModule {
-                    specifier: "./dependency.js".to_string(),
+                    specifier: "./dependency.js".into(),
                 },
                 "ImportModule is not valid in a deferred function body",
             ),

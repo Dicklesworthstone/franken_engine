@@ -2910,7 +2910,7 @@ pub struct InterpreterCore {
 }
 
 impl InterpreterCore {
-    fn module_specifier_string(value: &JsString) -> Result<&str, InterpreterError> {
+    fn filesystem_module_specifier(value: &JsString) -> Result<&str, InterpreterError> {
         value.as_str().ok_or_else(|| InterpreterError::TypeError {
             expected: "well-formed UTF-8 module specifier".to_string(),
             got: "ECMAScript string containing a lone surrogate".to_string(),
@@ -3771,8 +3771,9 @@ impl InterpreterCore {
     fn import_module(
         &mut self,
         module: &Ir3Module,
-        specifier: &str,
+        specifier: &JsString,
     ) -> Result<Value, InterpreterError> {
+        let specifier = Self::filesystem_module_specifier(specifier)?;
         self.run_pre_import_hook(module, specifier)?;
         let resolved = self.resolve_module_specifier(specifier)?;
         let is_cjs = Path::new(&resolved)
@@ -3786,8 +3787,9 @@ impl InterpreterCore {
     fn require_module(
         &mut self,
         module: &Ir3Module,
-        specifier: &str,
+        specifier: &JsString,
     ) -> Result<Value, InterpreterError> {
+        let specifier = Self::filesystem_module_specifier(specifier)?;
         self.run_pre_import_hook(module, specifier)?;
         let resolved = self.resolve_require_specifier(specifier)?;
         let is_cjs = match Path::new(&resolved)
@@ -3838,12 +3840,11 @@ impl InterpreterCore {
                         });
                     }
                 };
-                let specifier = Self::module_specifier_string(&specifier)?;
                 let previous_module_specifier = self.current_module_specifier.clone();
                 if !builtin.module_specifier.is_empty() {
                     self.current_module_specifier = Some(builtin.module_specifier.clone());
                 }
-                let result = self.require_module(module, specifier);
+                let result = self.require_module(module, &specifier);
                 self.current_module_specifier = previous_module_specifier;
                 result
             }
@@ -6327,8 +6328,7 @@ impl InterpreterCore {
                                 });
                             }
                         };
-                        let specifier = Self::module_specifier_string(&specifier)?;
-                        self.require_module(module, specifier)?
+                        self.require_module(module, &specifier)?
                     } else if capability.0.starts_with("number:") {
                         self.dispatch_number_hostcall(&capability.0, args)?
                     } else if capability.0.starts_with("console:") {
@@ -6346,7 +6346,7 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::ImportModule { specifier, dst } => {
                     let spec_val = self.read_reg(specifier)?;
-                    let specifier_str = match spec_val {
+                    let specifier = match spec_val {
                         Value::Str(s) => s,
                         other => {
                             return Err(InterpreterError::ImportSpecifierNotString {
@@ -6354,8 +6354,7 @@ impl InterpreterCore {
                             });
                         }
                     };
-                    let specifier_str = Self::module_specifier_string(&specifier_str)?;
-                    let namespace = self.import_module(module, specifier_str)?;
+                    let namespace = self.import_module(module, &specifier)?;
                     self.write_reg(dst, namespace)?;
                     self.ip += 1;
                 }
@@ -16208,31 +16207,37 @@ mod tests {
     }
 
     #[test]
-    fn module_specifier_strings_reject_lone_surrogates_bd_vltnh() {
+    fn filesystem_module_boundary_rejects_distinct_lone_surrogates_bd_lfq44() {
         let ordinary = JsString::from("./fixture.js");
         assert_eq!(
-            InterpreterCore::module_specifier_string(&ordinary).unwrap(),
+            InterpreterCore::filesystem_module_specifier(&ordinary).unwrap(),
             "./fixture.js"
         );
 
-        let exact = JsString::from_code_units(&[0xD800]);
-        let error = InterpreterCore::module_specifier_string(&exact).unwrap_err();
-        assert!(matches!(error, InterpreterError::TypeError { .. }));
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let dc00 = JsString::from_code_units(&[0xDC00]);
+        assert_ne!(d800, dc00);
+        assert_eq!(d800.as_utf8_projection(), dc00.as_utf8_projection());
 
-        let mut module = test_module(vec![
-            Ir3Instruction::LoadStr {
-                dst: 0,
-                pool_index: 0,
-            },
-            Ir3Instruction::ImportModule {
-                specifier: 0,
-                dst: 1,
-            },
-            Ir3Instruction::Halt,
-        ]);
-        module.constant_pool.push(exact);
-        let error = quickjs_execute(&module).unwrap_err();
-        assert!(matches!(error, InterpreterError::TypeError { .. }));
+        for exact in [d800, dc00] {
+            let error = InterpreterCore::filesystem_module_specifier(&exact).unwrap_err();
+            assert!(matches!(error, InterpreterError::TypeError { .. }));
+
+            let mut module = test_module(vec![
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 0,
+                },
+                Ir3Instruction::ImportModule {
+                    specifier: 0,
+                    dst: 1,
+                },
+                Ir3Instruction::Halt,
+            ]);
+            module.constant_pool.push(exact);
+            let error = quickjs_execute(&module).unwrap_err();
+            assert!(matches!(error, InterpreterError::TypeError { .. }));
+        }
     }
 
     #[test]

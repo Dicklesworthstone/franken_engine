@@ -15,8 +15,7 @@ mod ast {
     pub use frankenengine_engine::ast::*;
 }
 
-#[path = "../src/parser_arena.rs"]
-mod parser_arena;
+use frankenengine_engine::parser_arena;
 
 use ast::{
     BindingPattern, ExportDeclaration, ExportKind, Expression, ExpressionStatement, ImportClause,

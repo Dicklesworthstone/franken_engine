@@ -8,6 +8,7 @@ use std::fmt;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -2340,36 +2341,66 @@ enum PendingClauseKind {
     DoWhileAwaitCondition,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingClauseContinuation {
     kind: PendingClauseKind,
     fragment_start: usize,
-    direct_do_depth: usize,
+    deferred_statement_owner: Option<Arc<PendingStatementOwner>>,
+    owner_stack_complete: bool,
     declaration_initializer_active: bool,
 }
 
-fn direct_do_chain_depth_with_complete_body(
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingStatementOwner {
+    kind: PendingStatementClauseKind,
+    parent: Option<Arc<Self>>,
+}
+
+fn push_pending_statement_owner(
+    owners: Option<Arc<PendingStatementOwner>>,
+    kind: PendingStatementClauseKind,
+) -> Arc<PendingStatementOwner> {
+    Arc::new(PendingStatementOwner {
+        kind,
+        parent: owners,
+    })
+}
+
+fn push_pending_statement_owners(
+    mut owners: Option<Arc<PendingStatementOwner>>,
+    kind: PendingStatementClauseKind,
+    count: usize,
+) -> Option<Arc<PendingStatementOwner>> {
+    for _ in 0..count {
+        owners = Some(push_pending_statement_owner(owners, kind));
+    }
+    owners
+}
+
+fn direct_statement_owner_stack_with_complete_body(
     statement: &str,
+    base_owner: Option<Arc<PendingStatementOwner>>,
     grammar_context: ScanGrammarContext,
     completion_recursion_limit: usize,
     completion_memo: &mut DoWhileCompletionMemo,
-) -> usize {
-    let Some(mut body) = trim_binding_pattern_trivia_with_context(statement, grammar_context)
-    else {
-        return 0;
-    };
-    let mut do_depth = 0usize;
+) -> Option<Arc<PendingStatementOwner>> {
+    let mut body = trim_binding_pattern_trivia_with_context(statement, grammar_context)?;
+    let mut owners = base_owner;
+    let mut owner_count = 0usize;
     let mut statement_depth = 0usize;
+    let mut saw_if_owner = false;
     loop {
         if starts_with_keyword(body, "do") {
-            do_depth = do_depth.saturating_add(1);
+            owners = Some(push_pending_statement_owner(
+                owners,
+                PendingStatementClauseKind::DoWhile,
+            ));
+            owner_count = owner_count.saturating_add(1);
             statement_depth = statement_depth.saturating_add(1);
             if statement_depth >= completion_recursion_limit {
-                return 0;
+                return None;
             }
-            let Some(next_body) = clause_keyword_tail(body, "do", grammar_context) else {
-                return 0;
-            };
+            let next_body = clause_keyword_tail(body, "do", grammar_context)?;
             body = next_body;
             continue;
         }
@@ -2381,41 +2412,74 @@ fn direct_do_chain_depth_with_complete_body(
         };
         statement_depth = statement_depth.saturating_add(1);
         if statement_depth >= completion_recursion_limit {
-            return 0;
+            return None;
         }
-        let Some(wrapper_tail) = clause_keyword_tail(body, wrapper, grammar_context) else {
-            return 0;
-        };
-        let Some((_, next_body)) =
-            extract_balanced_with_context(wrapper_tail, '(', ')', grammar_context)
-        else {
-            return 0;
-        };
-        let Some(next_body) = trim_binding_pattern_trivia_with_context(next_body, grammar_context)
-        else {
-            return 0;
-        };
-        if wrapper == "if"
-            && !find_top_level_keyword_indices_with_context(next_body, "else", grammar_context)
-                .is_empty()
-        {
-            return 0;
+        let wrapper_tail = clause_keyword_tail(body, wrapper, grammar_context)?;
+        let (_, next_body) =
+            extract_balanced_with_context(wrapper_tail, '(', ')', grammar_context)?;
+        let next_body = trim_binding_pattern_trivia_with_context(next_body, grammar_context)?;
+        if wrapper == "if" {
+            owners = Some(push_pending_statement_owner(
+                owners,
+                PendingStatementClauseKind::IfElse,
+            ));
+            owner_count = owner_count.saturating_add(1);
+            saw_if_owner = true;
         }
         body = next_body;
     }
-    if do_depth > 0
+    if saw_if_owner
+        && !find_top_level_keyword_indices_with_context(body, "else", grammar_context).is_empty()
+    {
+        return None;
+    }
+    let following = match owners.as_deref().map(|owner| owner.kind) {
+        Some(PendingStatementClauseKind::IfElse) => "else",
+        Some(PendingStatementClauseKind::DoWhile) => "while",
+        None => return None,
+    };
+    (owner_count > 0
         && statement_is_complete_before_clause_with_limit(
             body,
-            "while",
+            following,
             grammar_context,
             completion_recursion_limit.saturating_sub(statement_depth),
             completion_memo,
-        )
-    {
-        do_depth
-    } else {
-        0
+        ))
+    .then_some(owners)
+    .flatten()
+}
+
+fn pending_clause_from_owner_stack(
+    mut owner: Option<Arc<PendingStatementOwner>>,
+    following: &str,
+    fragment_start: usize,
+) -> Option<PendingClauseContinuation> {
+    while let Some(current) = owner {
+        let parent = current.parent.clone();
+        match current.kind {
+            PendingStatementClauseKind::IfElse => {
+                if starts_with_keyword(following, "else") {
+                    return Some(pending_clause_with_deferred_statement_owner(
+                        PendingClauseKind::IfAwaitElse,
+                        fragment_start,
+                        parent,
+                    ));
+                }
+                owner = parent;
+            }
+            PendingStatementClauseKind::DoWhile => {
+                return starts_with_keyword(following, "while").then_some(
+                    pending_clause_with_deferred_statement_owner(
+                        PendingClauseKind::DoAwaitWhile,
+                        fragment_start,
+                        parent,
+                    ),
+                );
+            }
+        }
     }
+    None
 }
 
 fn pending_clause_after_statement(
@@ -2426,48 +2490,56 @@ fn pending_clause_after_statement(
     completion_recursion_limit: usize,
     completion_memo: &mut DoWhileCompletionMemo,
 ) -> Option<PendingClauseContinuation> {
-    let (kind, direct_do_depth) = if starts_with_keyword(statement, "if")
-        && starts_with_keyword(following, "else")
-    {
-        (PendingClauseKind::IfAwaitElse, 0)
-    } else if starts_with_keyword(statement, "try")
+    if starts_with_keyword(statement, "try")
         && (starts_with_keyword(following, "catch") || starts_with_keyword(following, "finally"))
     {
-        (PendingClauseKind::TryAwaitHandler, 0)
-    } else if starts_with_keyword(statement, "do")
-        && starts_with_keyword(following, "while")
-        && !do_while_statement_is_complete_with_limit(
+        return Some(pending_clause_with_kind(
+            PendingClauseKind::TryAwaitHandler,
+            fragment_start,
+        ));
+    }
+    let direct_do_waits_for_following_while =
+        starts_with_keyword(statement, "do") && starts_with_keyword(following, "while");
+    if direct_do_waits_for_following_while
+        && do_while_statement_is_complete_with_limit(
             statement,
             grammar_context,
             completion_recursion_limit,
             completion_memo,
         )
     {
-        (
-            PendingClauseKind::DoAwaitWhile,
-            direct_do_chain_depth_with_complete_body(
-                statement,
-                grammar_context,
-                completion_recursion_limit,
-                completion_memo,
-            ),
-        )
-    } else {
-        return advance_clause_statement(
-            pending_clause_with_kind(PendingClauseKind::ElseAwaitStatement, fragment_start),
-            statement,
-            following,
+        return None;
+    }
+    if let Some(owners) = direct_statement_owner_stack_with_complete_body(
+        statement,
+        None,
+        grammar_context,
+        completion_recursion_limit,
+        completion_memo,
+    ) && let Some(pending) =
+        pending_clause_from_owner_stack(Some(owners), following, fragment_start)
+    {
+        return Some(pending);
+    }
+    if starts_with_keyword(statement, "if") && starts_with_keyword(following, "else") {
+        return Some(pending_clause_with_kind(
+            PendingClauseKind::IfAwaitElse,
             fragment_start,
-            false,
-            (grammar_context, completion_recursion_limit, completion_memo),
-        );
-    };
-    Some(PendingClauseContinuation {
-        kind,
+        ));
+    }
+    if starts_with_keyword(statement, "do") && starts_with_keyword(following, "while") {
+        let mut pending = pending_clause_with_kind(PendingClauseKind::DoAwaitWhile, fragment_start);
+        pending.owner_stack_complete = false;
+        return Some(pending);
+    }
+    advance_clause_statement(
+        pending_clause_with_kind(PendingClauseKind::ElseAwaitStatement, fragment_start),
+        statement,
+        following,
         fragment_start,
-        direct_do_depth,
-        declaration_initializer_active: false,
-    })
+        false,
+        (grammar_context, completion_recursion_limit, completion_memo),
+    )
 }
 
 fn clause_keyword_tail<'a>(
@@ -2713,19 +2785,71 @@ fn pending_clause_with_kind(
     PendingClauseContinuation {
         kind,
         fragment_start,
-        direct_do_depth: 0,
+        deferred_statement_owner: None,
+        owner_stack_complete: true,
         declaration_initializer_active: false,
     }
+}
+
+fn pending_clause_with_deferred_statement_owner(
+    kind: PendingClauseKind,
+    fragment_start: usize,
+    deferred_statement_owner: Option<Arc<PendingStatementOwner>>,
+) -> PendingClauseContinuation {
+    let mut pending = pending_clause_with_kind(kind, fragment_start);
+    pending.deferred_statement_owner = deferred_statement_owner;
+    pending
+}
+
+fn continue_pending_clause(
+    kind: PendingClauseKind,
+    fragment_start: usize,
+    pending: &PendingClauseContinuation,
+) -> PendingClauseContinuation {
+    let mut continuation = pending_clause_with_deferred_statement_owner(
+        kind,
+        fragment_start,
+        pending.deferred_statement_owner.clone(),
+    );
+    continuation.owner_stack_complete = pending.owner_stack_complete;
+    continuation
+}
+
+fn defer_pending_if_owners(
+    mut pending: PendingClauseContinuation,
+    count: usize,
+) -> PendingClauseContinuation {
+    pending.deferred_statement_owner = push_pending_statement_owners(
+        pending.deferred_statement_owner,
+        PendingStatementClauseKind::IfElse,
+        count,
+    );
+    pending
 }
 
 fn completed_clause_statement(
     await_else_after_completion: bool,
     next_after_trivia: &str,
     current_len: usize,
+    pending: &PendingClauseContinuation,
 ) -> Option<PendingClauseContinuation> {
-    (await_else_after_completion && starts_with_keyword(next_after_trivia, "else")).then_some(
-        pending_clause_with_kind(PendingClauseKind::IfAwaitElse, current_len),
-    )
+    if await_else_after_completion && starts_with_keyword(next_after_trivia, "else") {
+        Some(continue_pending_clause(
+            PendingClauseKind::IfAwaitElse,
+            current_len,
+            pending,
+        ))
+    } else {
+        let mut continuation = pending_clause_from_owner_stack(
+            pending.deferred_statement_owner.clone(),
+            next_after_trivia,
+            current_len,
+        );
+        if let Some(continuation) = continuation.as_mut() {
+            continuation.owner_stack_complete = pending.owner_stack_complete;
+        }
+        continuation
+    }
 }
 
 fn advance_clause_statement(
@@ -2733,10 +2857,11 @@ fn advance_clause_statement(
     mut statement: &str,
     next_after_trivia: &str,
     current_len: usize,
-    mut await_else_after_completion: bool,
+    await_else_after_completion: bool,
     completion: (ScanGrammarContext, usize, &mut DoWhileCompletionMemo),
 ) -> Option<PendingClauseContinuation> {
     let (grammar_context, completion_recursion_limit, completion_memo) = completion;
+    let mut direct_if_depth = usize::from(await_else_after_completion);
     loop {
         if starts_with_keyword(statement, "if") {
             match parenthesized_statement_status(statement, "if", grammar_context) {
@@ -2746,17 +2871,19 @@ fn advance_clause_statement(
                     return Some(pending);
                 }
                 Some(ParenthesizedStatementStatus::MissingBody) => {
-                    return Some(pending_clause_with_kind(
+                    let continuation = continue_pending_clause(
                         PendingClauseKind::ElseIfAwaitBody,
                         current_len,
-                    ));
+                        &pending,
+                    );
+                    return Some(defer_pending_if_owners(continuation, direct_if_depth));
                 }
                 Some(ParenthesizedStatementStatus::Complete) => {
                     let tail = clause_keyword_tail(statement, "if", grammar_context)?;
                     let (_, body) = extract_balanced_with_context(tail, '(', ')', grammar_context)?;
                     statement =
                         trim_binding_pattern_leading_trivia_with_context(body, grammar_context)?;
-                    await_else_after_completion = true;
+                    direct_if_depth = direct_if_depth.saturating_add(1);
                     continue;
                 }
                 Some(ParenthesizedStatementStatus::Invalid)
@@ -2778,12 +2905,16 @@ fn advance_clause_statement(
                     return Some(pending);
                 }
                 Some(ParenthesizedStatementStatus::MissingBody) => {
-                    let kind = if await_else_after_completion {
+                    let kind = if direct_if_depth > 0 {
                         PendingClauseKind::ElseIfAwaitBody
                     } else {
                         PendingClauseKind::ElseAwaitStatement
                     };
-                    return Some(pending_clause_with_kind(kind, current_len));
+                    let continuation = continue_pending_clause(kind, current_len, &pending);
+                    return Some(defer_pending_if_owners(
+                        continuation,
+                        direct_if_depth.saturating_sub(1),
+                    ));
                 }
                 Some(ParenthesizedStatementStatus::Complete) => {
                     let tail = clause_keyword_tail(statement, keyword, grammar_context)?;
@@ -2817,27 +2948,47 @@ fn advance_clause_statement(
                 completion_recursion_limit,
                 completion_memo,
             ) {
+                let completed_pending =
+                    defer_pending_if_owners(pending.clone(), direct_if_depth.saturating_sub(1));
                 return completed_clause_statement(
-                    await_else_after_completion,
+                    direct_if_depth > 0,
                     next_after_trivia,
                     current_len,
+                    &completed_pending,
                 );
             }
             if starts_with_keyword(next_after_trivia, "while") {
-                return Some(pending_clause_with_kind(
-                    PendingClauseKind::DoAwaitWhile,
-                    current_len,
-                ));
+                let base_owner = push_pending_statement_owners(
+                    pending.deferred_statement_owner.clone(),
+                    PendingStatementClauseKind::IfElse,
+                    direct_if_depth,
+                );
+                let owners = direct_statement_owner_stack_with_complete_body(
+                    statement,
+                    base_owner,
+                    grammar_context,
+                    completion_recursion_limit,
+                    completion_memo,
+                )?;
+                let mut continuation =
+                    pending_clause_from_owner_stack(Some(owners), next_after_trivia, current_len);
+                if let Some(continuation) = continuation.as_mut() {
+                    continuation.owner_stack_complete = pending.owner_stack_complete;
+                }
+                return continuation;
             }
         }
 
         if declaration_source_needs_continuation(statement, next_after_trivia, grammar_context) {
-            let kind = if await_else_after_completion {
+            let kind = if direct_if_depth > 0 {
                 PendingClauseKind::ElseIfDeclarationContinuation
             } else {
                 PendingClauseKind::ElseDeclarationContinuation
             };
-            let mut continuation = pending_clause_with_kind(kind, current_len);
+            let mut continuation = defer_pending_if_owners(
+                continue_pending_clause(kind, current_len, &pending),
+                direct_if_depth.saturating_sub(1),
+            );
             continuation.declaration_initializer_active =
                 declaration_source_has_active_initializer(statement, grammar_context);
             return Some(continuation);
@@ -2845,17 +2996,24 @@ fn advance_clause_statement(
         if statement_allows_expression_continuation(statement, grammar_context)
             && expression_statement_continues(statement, next_after_trivia, grammar_context)
         {
-            let kind = if await_else_after_completion {
+            let kind = if direct_if_depth > 0 {
                 PendingClauseKind::ElseIfExpressionContinuation
             } else {
                 PendingClauseKind::ElseExpressionContinuation
             };
-            return Some(pending_clause_with_kind(kind, current_len));
+            let continuation = continue_pending_clause(kind, current_len, &pending);
+            return Some(defer_pending_if_owners(
+                continuation,
+                direct_if_depth.saturating_sub(1),
+            ));
         }
+        let completed_pending =
+            defer_pending_if_owners(pending.clone(), direct_if_depth.saturating_sub(1));
         return completed_clause_statement(
-            await_else_after_completion,
+            direct_if_depth > 0,
             next_after_trivia,
             current_len,
+            &completed_pending,
         );
     }
 }
@@ -2881,9 +3039,10 @@ fn advance_pending_clause(
             }
             let alternate = clause_keyword_tail(fragment, "else", grammar_context)?;
             if alternate.is_empty() {
-                return Some(pending_clause_with_kind(
+                return Some(continue_pending_clause(
                     PendingClauseKind::ElseAwaitStatement,
                     current_text.len(),
+                    &pending,
                 ));
             }
             advance_clause_statement(
@@ -2905,12 +3064,13 @@ fn advance_pending_clause(
         ),
         PendingClauseKind::ElseExpressionContinuation => {
             if expression_statement_continues(fragment, next_after_trivia, grammar_context) {
-                Some(pending_clause_with_kind(
+                Some(continue_pending_clause(
                     PendingClauseKind::ElseExpressionContinuation,
                     current_text.len(),
+                    &pending,
                 ))
             } else {
-                None
+                completed_clause_statement(false, next_after_trivia, current_text.len(), &pending)
             }
         }
         PendingClauseKind::ElseDeclarationContinuation => {
@@ -2926,15 +3086,16 @@ fn advance_pending_clause(
                 completion_recursion_limit,
                 completion_memo,
             ) {
-                let mut continuation = pending_clause_with_kind(
+                let mut continuation = continue_pending_clause(
                     PendingClauseKind::ElseDeclarationContinuation,
                     current_text.len(),
+                    &pending,
                 );
                 continuation.declaration_initializer_active =
                     pending.declaration_initializer_active;
                 Some(continuation)
             } else {
-                None
+                completed_clause_statement(false, next_after_trivia, current_text.len(), &pending)
             }
         }
         PendingClauseKind::ElseIfAwaitBody => advance_clause_statement(
@@ -2947,17 +3108,13 @@ fn advance_pending_clause(
         ),
         PendingClauseKind::ElseIfExpressionContinuation => {
             if expression_statement_continues(fragment, next_after_trivia, grammar_context) {
-                Some(pending_clause_with_kind(
+                Some(continue_pending_clause(
                     PendingClauseKind::ElseIfExpressionContinuation,
                     current_text.len(),
-                ))
-            } else if starts_with_keyword(next_after_trivia, "else") {
-                Some(pending_clause_with_kind(
-                    PendingClauseKind::IfAwaitElse,
-                    current_text.len(),
+                    &pending,
                 ))
             } else {
-                None
+                completed_clause_statement(true, next_after_trivia, current_text.len(), &pending)
             }
         }
         PendingClauseKind::ElseIfDeclarationContinuation => {
@@ -2973,20 +3130,16 @@ fn advance_pending_clause(
                 completion_recursion_limit,
                 completion_memo,
             ) {
-                let mut continuation = pending_clause_with_kind(
+                let mut continuation = continue_pending_clause(
                     PendingClauseKind::ElseIfDeclarationContinuation,
                     current_text.len(),
+                    &pending,
                 );
                 continuation.declaration_initializer_active =
                     pending.declaration_initializer_active;
                 Some(continuation)
-            } else if starts_with_keyword(next_after_trivia, "else") {
-                Some(pending_clause_with_kind(
-                    PendingClauseKind::IfAwaitElse,
-                    current_text.len(),
-                ))
             } else {
-                None
+                completed_clause_statement(true, next_after_trivia, current_text.len(), &pending)
             }
         }
         PendingClauseKind::TryAwaitHandler => {
@@ -3071,9 +3224,10 @@ fn advance_pending_clause(
             }
             let condition = clause_keyword_tail(fragment, "while", grammar_context)?;
             if condition.is_empty() && next_after_trivia.starts_with('(') {
-                Some(pending_clause_with_kind(
+                Some(continue_pending_clause(
                     PendingClauseKind::DoWhileAwaitCondition,
                     current_text.len(),
+                    &pending,
                 ))
             } else {
                 None
@@ -3084,17 +3238,21 @@ fn advance_pending_clause(
 }
 
 fn advance_direct_do_while_clause(
-    pending: PendingClauseContinuation,
+    pending: &PendingClauseContinuation,
     current_text: &str,
     next_after_trivia: &str,
     grammar_context: ScanGrammarContext,
 ) -> Option<Option<PendingClauseContinuation>> {
-    if pending.kind != PendingClauseKind::DoAwaitWhile || pending.direct_do_depth == 0 {
+    if !pending.owner_stack_complete {
         return None;
     }
     let fragment = current_text.get(pending.fragment_start..)?;
     let fragment = trim_binding_pattern_trivia_with_context(fragment, grammar_context)?;
-    let condition = clause_keyword_tail(fragment, "while", grammar_context)?;
+    let condition = match pending.kind {
+        PendingClauseKind::DoAwaitWhile => clause_keyword_tail(fragment, "while", grammar_context)?,
+        PendingClauseKind::DoWhileAwaitCondition => fragment,
+        _ => return None,
+    };
     let (_, rest) = extract_balanced_with_context(condition, '(', ')', grammar_context)?;
     let rest = trim_binding_pattern_trivia_with_context(rest, grammar_context)?;
     let rest = if let Some(rest) = rest.strip_prefix(';') {
@@ -3105,17 +3263,12 @@ fn advance_direct_do_while_clause(
     if !rest.is_empty() {
         return None;
     }
-    if pending.direct_do_depth > 1 {
-        return starts_with_keyword(next_after_trivia, "while").then_some(Some(
-            PendingClauseContinuation {
-                kind: PendingClauseKind::DoAwaitWhile,
-                fragment_start: current_text.len(),
-                direct_do_depth: pending.direct_do_depth.saturating_sub(1),
-                declaration_initializer_active: false,
-            },
-        ));
-    }
-    Some(None)
+    Some(completed_clause_statement(
+        false,
+        next_after_trivia,
+        current_text.len(),
+        pending,
+    ))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -3871,7 +4024,7 @@ fn merge_logical_lines_with_completion_limit(
             } else if accumulating && pending_clause_continuation.is_some() {
                 if let (Some(statement_start), Some(pending)) = (
                     pending_declaration_trailing_statement_start,
-                    pending_clause_continuation,
+                    pending_clause_continuation.clone(),
                 ) {
                     let trailing_fragment =
                         current_text.get(statement_start..).and_then(|fragment| {
@@ -3892,7 +4045,8 @@ fn merge_logical_lines_with_completion_limit(
                         pending_clause_continuation = Some(PendingClauseContinuation {
                             kind: PendingClauseKind::IfAwaitElse,
                             fragment_start: statement_start,
-                            direct_do_depth: 0,
+                            deferred_statement_owner: pending.deferred_statement_owner.clone(),
+                            owner_stack_complete: pending.owner_stack_complete,
                             declaration_initializer_active: false,
                         });
                         pending_declaration_trailing_statement_start = None;
@@ -3932,12 +4086,13 @@ fn merge_logical_lines_with_completion_limit(
                     (
                         false,
                         if !line_has_significant_code {
-                            pending_clause_continuation
+                            pending_clause_continuation.clone()
                         } else {
                             let pending = pending_clause_continuation
+                                .clone()
                                 .expect("pending continuation checked above");
                             if let Some(direct_continuation) = advance_direct_do_while_clause(
-                                pending,
+                                &pending,
                                 &current_text,
                                 next_after_trivia,
                                 grammar_context,
@@ -3945,7 +4100,7 @@ fn merge_logical_lines_with_completion_limit(
                                 direct_continuation
                             } else {
                                 advance_pending_clause(
-                                    pending,
+                                    pending.clone(),
                                     &current_text,
                                     next_after_trivia,
                                     grammar_context,
@@ -3968,7 +4123,10 @@ fn merge_logical_lines_with_completion_limit(
                                         PendingClauseContinuation {
                                             kind: pending.kind,
                                             fragment_start: current_text.len(),
-                                            direct_do_depth: pending.direct_do_depth,
+                                            deferred_statement_owner: pending
+                                                .deferred_statement_owner
+                                                .clone(),
+                                            owner_stack_complete: pending.owner_stack_complete,
                                             declaration_initializer_active: pending
                                                 .declaration_initializer_active,
                                         },
@@ -15592,6 +15750,119 @@ mod tests {
                 "source: {quoted_follower:?}"
             );
         }
+    }
+
+    #[test]
+    fn outer_do_owner_survives_physical_else_after_inner_trailer_bd_l9mgs() {
+        let source = "do if (q) do x()\nwhile (a)\nelse y()\nwhile (b); z();";
+        assert_eq!(
+            merge_logical_lines(source).len(),
+            1,
+            "the inner trailer must leave the enclosing if and outer do owners pending"
+        );
+        assert_eq!(split_statement_segments(source).len(), 2);
+
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect("the physical-line else must bind before the outer do trailer");
+        assert_eq!(tree.body.len(), 2);
+        assert!(matches!(
+            &tree.body[0],
+            Statement::DoWhile(outer)
+                if matches!(&outer.condition, Expression::Identifier(name) if name == "b")
+                    && matches!(
+                    outer.body.as_ref(),
+                    Statement::If(inner)
+                        if matches!(&inner.condition, Expression::Identifier(name) if name == "q")
+                            && matches!(
+                                inner.consequent.as_ref(),
+                                Statement::DoWhile(inner_do)
+                                    if matches!(
+                                        &inner_do.condition,
+                                        Expression::Identifier(name) if name == "a"
+                                    )
+                            )
+                            && inner.alternate.is_some()
+                )
+        ));
+
+        let split_conditions = "do if (q) do x()\nwhile\n(a)\nelse y()\nwhile\n(b);";
+        assert_eq!(merge_logical_lines(split_conditions).len(), 1);
+        assert_eq!(split_statement_segments(split_conditions).len(), 1);
+        assert_eq!(
+            CanonicalEs2020Parser
+                .parse(split_conditions, ParseGoal::Script)
+                .expect("split inner and outer trailers must retain their ordered owners")
+                .body
+                .len(),
+            1
+        );
+
+        let trivia_gap = "do if (q) do x()\nwhile (a) /* inner */\n// owner gap\n\u{feff}else /* alternate */ y()\nwhile (b);";
+        assert_eq!(merge_logical_lines(trivia_gap).len(), 1);
+        assert_eq!(split_statement_segments(trivia_gap).len(), 1);
+        CanonicalEs2020Parser
+            .parse(trivia_gap, ParseGoal::Script)
+            .expect("comments and BOM trivia must not retire pending statement owners");
+
+        let nested_alternate =
+            "do if (q) do x()\nwhile (a)\nelse if (r) do y()\nwhile (c)\nelse z()\nwhile (b);";
+        assert_eq!(merge_logical_lines(nested_alternate).len(), 1);
+        assert_eq!(split_statement_segments(nested_alternate).len(), 1);
+        let nested_tree = CanonicalEs2020Parser
+            .parse(nested_alternate, ParseGoal::Script)
+            .expect("a nested alternate must expose owners in grammar order");
+        assert!(matches!(
+            &nested_tree.body[..],
+            [Statement::DoWhile(outer)]
+                if matches!(
+                    outer.body.as_ref(),
+                    Statement::If(first)
+                        if matches!(
+                            first.alternate.as_deref(),
+                            Some(Statement::If(second))
+                                if matches!(second.consequent.as_ref(), Statement::DoWhile(_))
+                                    && second.alternate.is_some()
+                        )
+                )
+        ));
+
+        let stacked_if_owners = "do if (q) do x()\nwhile (a)\nelse if (r) if (s) do y()\nwhile (c)\nelse z()\nelse w()\nwhile (b);";
+        assert_eq!(merge_logical_lines(stacked_if_owners).len(), 1);
+        assert_eq!(split_statement_segments(stacked_if_owners).len(), 1);
+        CanonicalEs2020Parser
+            .parse(stacked_if_owners, ParseGoal::Script)
+            .expect("each directly nested if owner must survive its inner alternate");
+
+        let independent_while = "do if (q) do x()\nwhile (a)\nelse y()\nwhile (b)\nwhile (c) z();";
+        assert_eq!(merge_logical_lines(independent_while).len(), 2);
+        assert_eq!(split_statement_segments(independent_while).len(), 2);
+        assert!(matches!(
+            &CanonicalEs2020Parser
+                .parse(independent_while, ParseGoal::Script)
+                .expect("the while after the completed outer trailer is independent")
+                .body[..],
+            [Statement::DoWhile(_), Statement::While(_)]
+        ));
+
+        for invalid in [
+            "do do x()\nwhile (a)\nelse y()\nwhile (b);",
+            "do if (q) do x()\nwhile (a)\nelse y()\nwhile (b)\nelse z();",
+        ] {
+            assert!(
+                merge_logical_lines(invalid).len() > 1,
+                "a mandatory do owner must block an unrelated else: {invalid:?}"
+            );
+        }
+        assert!(
+            CanonicalEs2020Parser
+                .parse(
+                    "do do x()\nwhile (a)\nelse y()\nwhile (b);",
+                    ParseGoal::Script,
+                )
+                .is_err(),
+            "an else cannot cross a mandatory outer do trailer"
+        );
     }
 
     #[test]

@@ -2331,6 +2331,7 @@ enum PendingClauseKind {
     ElseIfExpressionContinuation,
     ElseIfDeclarationContinuation,
     TryAwaitHandler,
+    CatchAwaitParameter,
     CatchAwaitBody,
     CatchAwaitFinally,
     FinallyAwaitBody,
@@ -2351,6 +2352,14 @@ struct PendingClauseContinuation {
 struct PendingStatementOwner {
     kind: PendingStatementClauseKind,
     parent: Option<Arc<Self>>,
+}
+
+struct DirectStatementOwnerStack<'a> {
+    body: &'a str,
+    owners: Option<Arc<PendingStatementOwner>>,
+    owner_count: usize,
+    statement_depth: usize,
+    saw_if_owner: bool,
 }
 
 fn push_pending_statement_owner(
@@ -2374,13 +2383,12 @@ fn push_pending_statement_owners(
     owners
 }
 
-fn direct_statement_owner_stack_with_complete_body(
-    statement: &str,
+fn direct_statement_owner_stack<'a>(
+    statement: &'a str,
     base_owner: Option<Arc<PendingStatementOwner>>,
     grammar_context: ScanGrammarContext,
     completion_recursion_limit: usize,
-    completion_memo: &mut DoWhileCompletionMemo,
-) -> Option<Arc<PendingStatementOwner>> {
+) -> Option<DirectStatementOwnerStack<'a>> {
     let mut body = trim_binding_pattern_trivia_with_context(statement, grammar_context)?;
     let mut owners = base_owner;
     let mut owner_count = 0usize;
@@ -2425,6 +2433,35 @@ fn direct_statement_owner_stack_with_complete_body(
         }
         body = next_body;
     }
+
+    Some(DirectStatementOwnerStack {
+        body,
+        owners,
+        owner_count,
+        statement_depth,
+        saw_if_owner,
+    })
+}
+
+fn direct_statement_owner_stack_with_complete_body(
+    statement: &str,
+    base_owner: Option<Arc<PendingStatementOwner>>,
+    grammar_context: ScanGrammarContext,
+    completion_recursion_limit: usize,
+    completion_memo: &mut DoWhileCompletionMemo,
+) -> Option<Arc<PendingStatementOwner>> {
+    let DirectStatementOwnerStack {
+        body,
+        owners,
+        owner_count,
+        statement_depth,
+        saw_if_owner,
+    } = direct_statement_owner_stack(
+        statement,
+        base_owner,
+        grammar_context,
+        completion_recursion_limit,
+    )?;
     if saw_if_owner
         && !find_top_level_keyword_indices_with_context(body, "else", grammar_context).is_empty()
     {
@@ -2493,13 +2530,42 @@ fn pending_clause_after_statement(
     completion_recursion_limit: usize,
     completion_memo: &mut DoWhileCompletionMemo,
 ) -> Option<PendingClauseContinuation> {
-    if starts_with_keyword(statement, "try")
-        && (starts_with_keyword(following, "catch") || starts_with_keyword(following, "finally"))
+    if starts_with_keyword(statement, "try") {
+        let pending = pending_clause_with_kind(PendingClauseKind::TryAwaitHandler, fragment_start);
+        if let Some(continuation) = pending_clause_after_try_prefix(
+            statement,
+            following,
+            fragment_start,
+            pending,
+            grammar_context,
+        ) {
+            return Some(continuation);
+        }
+    }
+    if let Some(DirectStatementOwnerStack {
+        body,
+        owners,
+        owner_count,
+        ..
+    }) =
+        direct_statement_owner_stack(statement, None, grammar_context, completion_recursion_limit)
+        && owner_count > 0
+        && starts_with_keyword(body, "try")
     {
-        return Some(pending_clause_with_kind(
+        let pending = pending_clause_with_deferred_statement_owner(
             PendingClauseKind::TryAwaitHandler,
             fragment_start,
-        ));
+            owners,
+        );
+        if let Some(continuation) = pending_clause_after_try_prefix(
+            body,
+            following,
+            fragment_start,
+            pending,
+            grammar_context,
+        ) {
+            return Some(continuation);
+        }
     }
     let direct_do_waits_for_following_while =
         starts_with_keyword(statement, "do") && starts_with_keyword(following, "while");
@@ -2557,26 +2623,38 @@ fn clause_keyword_tail<'a>(
     trim_binding_pattern_leading_trivia_with_context(source.strip_prefix(keyword)?, grammar_context)
 }
 
-fn catch_clause_is_complete(fragment: &str, grammar_context: ScanGrammarContext) -> bool {
-    let Some(after_catch) = clause_keyword_tail(fragment, "catch", grammar_context) else {
-        return false;
-    };
+fn balanced_block_tail(source: &str, grammar_context: ScanGrammarContext) -> Option<&str> {
+    if !source.starts_with('{') {
+        return None;
+    }
+    let (_, rest) = extract_balanced_with_context(source, '{', '}', grammar_context)?;
+    trim_binding_pattern_trivia_with_context(rest, grammar_context)
+}
+
+fn catch_clause_tail_after_body(
+    fragment: &str,
+    grammar_context: ScanGrammarContext,
+) -> Option<&str> {
+    let after_catch = clause_keyword_tail(fragment, "catch", grammar_context)?;
     if after_catch.is_empty() {
-        return false;
+        return None;
     }
     let body_source = if after_catch.starts_with('(') {
-        let Some((_, remaining)) =
-            extract_balanced_with_context(after_catch, '(', ')', grammar_context)
-        else {
-            return false;
-        };
+        let (_, remaining) = extract_balanced_with_context(after_catch, '(', ')', grammar_context)?;
         trim_binding_pattern_leading_trivia_with_context(remaining, grammar_context)
             .unwrap_or_default()
     } else {
         after_catch
     };
-    body_source.starts_with('{')
-        && extract_balanced_with_context(body_source, '{', '}', grammar_context).is_some()
+    balanced_block_tail(body_source, grammar_context)
+}
+
+fn finally_clause_tail_after_body(
+    fragment: &str,
+    grammar_context: ScanGrammarContext,
+) -> Option<&str> {
+    let body = clause_keyword_tail(fragment, "finally", grammar_context)?;
+    balanced_block_tail(body, grammar_context)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2855,6 +2933,122 @@ fn completed_clause_statement(
     }
 }
 
+fn completed_catch_clause(
+    pending: &PendingClauseContinuation,
+    handler_tail: &str,
+    next_after_trivia: &str,
+    current_len: usize,
+    grammar_context: ScanGrammarContext,
+) -> Option<PendingClauseContinuation> {
+    if handler_tail.is_empty() {
+        if starts_with_keyword(next_after_trivia, "finally") {
+            Some(continue_pending_clause(
+                PendingClauseKind::CatchAwaitFinally,
+                current_len,
+                pending,
+            ))
+        } else {
+            completed_clause_statement(false, next_after_trivia, current_len, pending)
+        }
+    } else if starts_with_keyword(handler_tail, "finally") {
+        let finalizer_body = clause_keyword_tail(handler_tail, "finally", grammar_context)?;
+        if finalizer_body.is_empty() && next_after_trivia.starts_with('{') {
+            Some(continue_pending_clause(
+                PendingClauseKind::FinallyAwaitBody,
+                current_len,
+                pending,
+            ))
+        } else if finally_clause_tail_after_body(handler_tail, grammar_context)
+            .is_some_and(str::is_empty)
+        {
+            completed_clause_statement(false, next_after_trivia, current_len, pending)
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+fn pending_clause_after_try_prefix(
+    statement: &str,
+    following: &str,
+    current_len: usize,
+    pending: PendingClauseContinuation,
+    grammar_context: ScanGrammarContext,
+) -> Option<PendingClauseContinuation> {
+    let try_body = clause_keyword_tail(statement, "try", grammar_context)?;
+    let (_, tail) = extract_balanced_with_context(try_body, '{', '}', grammar_context)?;
+    let tail = trim_binding_pattern_trivia_with_context(tail, grammar_context)?;
+    if tail.is_empty() {
+        return (starts_with_keyword(following, "catch")
+            || starts_with_keyword(following, "finally"))
+        .then_some(pending);
+    }
+
+    if starts_with_keyword(tail, "catch") {
+        let after_catch = clause_keyword_tail(tail, "catch", grammar_context)?;
+        if after_catch.is_empty() {
+            return if following.starts_with('(') {
+                Some(continue_pending_clause(
+                    PendingClauseKind::CatchAwaitParameter,
+                    current_len,
+                    &pending,
+                ))
+            } else if following.starts_with('{') {
+                Some(continue_pending_clause(
+                    PendingClauseKind::CatchAwaitBody,
+                    current_len,
+                    &pending,
+                ))
+            } else {
+                None
+            };
+        }
+        let body_source = if after_catch.starts_with('(') {
+            let (_, remaining) =
+                extract_balanced_with_context(after_catch, '(', ')', grammar_context)?;
+            let remaining =
+                trim_binding_pattern_leading_trivia_with_context(remaining, grammar_context)?;
+            if remaining.is_empty() {
+                return following.starts_with('{').then(|| {
+                    continue_pending_clause(
+                        PendingClauseKind::CatchAwaitBody,
+                        current_len,
+                        &pending,
+                    )
+                });
+            }
+            remaining
+        } else {
+            after_catch
+        };
+        let handler_tail = balanced_block_tail(body_source, grammar_context)?;
+        return completed_catch_clause(
+            &pending,
+            handler_tail,
+            following,
+            current_len,
+            grammar_context,
+        );
+    }
+
+    if starts_with_keyword(tail, "finally") {
+        let finalizer_body = clause_keyword_tail(tail, "finally", grammar_context)?;
+        if finalizer_body.is_empty() {
+            return following.starts_with('{').then(|| {
+                continue_pending_clause(PendingClauseKind::FinallyAwaitBody, current_len, &pending)
+            });
+        }
+        return finally_clause_tail_after_body(tail, grammar_context)
+            .is_some_and(str::is_empty)
+            .then(|| completed_clause_statement(false, following, current_len, &pending))
+            .flatten();
+    }
+
+    None
+}
+
 fn advance_clause_statement(
     pending: PendingClauseContinuation,
     mut statement: &str,
@@ -2935,14 +3129,18 @@ fn advance_clause_statement(
             continue;
         }
 
-        if starts_with_keyword(statement, "try")
-            && (starts_with_keyword(next_after_trivia, "catch")
-                || starts_with_keyword(next_after_trivia, "finally"))
-        {
-            return Some(pending_clause_with_kind(
-                PendingClauseKind::TryAwaitHandler,
+        if starts_with_keyword(statement, "try") {
+            let try_pending = defer_pending_if_owners(
+                continue_pending_clause(PendingClauseKind::TryAwaitHandler, current_len, &pending),
+                direct_if_depth,
+            );
+            return pending_clause_after_try_prefix(
+                statement,
+                next_after_trivia,
                 current_len,
-            ));
+                try_pending,
+                grammar_context,
+            );
         }
         if starts_with_keyword(statement, "do") {
             if do_while_statement_is_complete_with_limit(
@@ -3150,9 +3348,10 @@ fn advance_pending_clause(
                 let after_catch = clause_keyword_tail(fragment, "catch", grammar_context)?;
                 if after_catch.is_empty() {
                     return if next_after_trivia.starts_with('{') {
-                        Some(pending_clause_with_kind(
+                        Some(continue_pending_clause(
                             PendingClauseKind::CatchAwaitBody,
                             current_text.len(),
+                            &pending,
                         ))
                     } else if next_after_trivia.starts_with('(') {
                         Some(pending)
@@ -3166,28 +3365,38 @@ fn advance_pending_clause(
                     if trim_binding_pattern_leading_trivia_with_context(body, grammar_context)
                         .is_some_and(str::is_empty)
                     {
-                        return Some(pending_clause_with_kind(
+                        return Some(continue_pending_clause(
                             PendingClauseKind::CatchAwaitBody,
                             current_text.len(),
+                            &pending,
                         ));
                     }
                 }
-                if !catch_clause_is_complete(fragment, grammar_context) {
-                    return None;
-                }
-                starts_with_keyword(next_after_trivia, "finally").then_some(
-                    pending_clause_with_kind(
-                        PendingClauseKind::CatchAwaitFinally,
-                        current_text.len(),
-                    ),
+                let handler_tail = catch_clause_tail_after_body(fragment, grammar_context)?;
+                completed_catch_clause(
+                    &pending,
+                    handler_tail,
+                    next_after_trivia,
+                    current_text.len(),
+                    grammar_context,
                 )
             } else if starts_with_keyword(fragment, "finally") {
                 let body = clause_keyword_tail(fragment, "finally", grammar_context)?;
                 if body.is_empty() && next_after_trivia.starts_with('{') {
-                    Some(pending_clause_with_kind(
+                    Some(continue_pending_clause(
                         PendingClauseKind::FinallyAwaitBody,
                         current_text.len(),
+                        &pending,
                     ))
+                } else if finally_clause_tail_after_body(fragment, grammar_context)
+                    .is_some_and(str::is_empty)
+                {
+                    completed_clause_statement(
+                        false,
+                        next_after_trivia,
+                        current_text.len(),
+                        &pending,
+                    )
                 } else {
                     None
                 }
@@ -3195,16 +3404,39 @@ fn advance_pending_clause(
                 None
             }
         }
-        PendingClauseKind::CatchAwaitBody => {
-            if !fragment.starts_with('{')
-                || extract_balanced_with_context(fragment, '{', '}', grammar_context).is_none()
-            {
-                return None;
+        PendingClauseKind::CatchAwaitParameter => {
+            let (_, body_source) =
+                extract_balanced_with_context(fragment, '(', ')', grammar_context)?;
+            let body_source =
+                trim_binding_pattern_leading_trivia_with_context(body_source, grammar_context)?;
+            if body_source.is_empty() {
+                next_after_trivia.starts_with('{').then(|| {
+                    continue_pending_clause(
+                        PendingClauseKind::CatchAwaitBody,
+                        current_text.len(),
+                        &pending,
+                    )
+                })
+            } else {
+                let handler_tail = balanced_block_tail(body_source, grammar_context)?;
+                completed_catch_clause(
+                    &pending,
+                    handler_tail,
+                    next_after_trivia,
+                    current_text.len(),
+                    grammar_context,
+                )
             }
-            starts_with_keyword(next_after_trivia, "finally").then_some(pending_clause_with_kind(
-                PendingClauseKind::CatchAwaitFinally,
+        }
+        PendingClauseKind::CatchAwaitBody => {
+            let handler_tail = balanced_block_tail(fragment, grammar_context)?;
+            completed_catch_clause(
+                &pending,
+                handler_tail,
+                next_after_trivia,
                 current_text.len(),
-            ))
+                grammar_context,
+            )
         }
         PendingClauseKind::CatchAwaitFinally => {
             if !starts_with_keyword(fragment, "finally") {
@@ -3212,15 +3444,25 @@ fn advance_pending_clause(
             }
             let body = clause_keyword_tail(fragment, "finally", grammar_context)?;
             if body.is_empty() && next_after_trivia.starts_with('{') {
-                Some(pending_clause_with_kind(
+                Some(continue_pending_clause(
                     PendingClauseKind::FinallyAwaitBody,
                     current_text.len(),
+                    &pending,
                 ))
+            } else if finally_clause_tail_after_body(fragment, grammar_context)
+                .is_some_and(str::is_empty)
+            {
+                completed_clause_statement(false, next_after_trivia, current_text.len(), &pending)
             } else {
                 None
             }
         }
-        PendingClauseKind::FinallyAwaitBody => None,
+        PendingClauseKind::FinallyAwaitBody => {
+            if !balanced_block_tail(fragment, grammar_context).is_some_and(str::is_empty) {
+                return None;
+            }
+            completed_clause_statement(false, next_after_trivia, current_text.len(), &pending)
+        }
         PendingClauseKind::DoAwaitWhile => {
             if !starts_with_keyword(fragment, "while") {
                 return None;
@@ -3352,15 +3594,14 @@ fn next_significant_offsets_after_physical_lines(
     next_offsets
 }
 
-fn trailing_statement_source<'a>(
+fn trailing_statement_source_unfiltered<'a>(
     source: &'a str,
     grammar_context: ScanGrammarContext,
     completion_recursion_limit: usize,
     completion_memo: &mut DoWhileCompletionMemo,
 ) -> Option<&'a str> {
     trim_binding_pattern_trivia_with_context(source, grammar_context)
-        .filter(|source| !source.ends_with(';'))
-        .and_then(|_| {
+        .and_then(|source| {
             split_statement_segments_with_completion_limit_and_memo(
                 source,
                 grammar_context,
@@ -3371,6 +3612,51 @@ fn trailing_statement_source<'a>(
             .map(|(_, _, statement)| *statement)
         })
         .and_then(|source| trim_binding_pattern_trivia_with_context(source, grammar_context))
+}
+
+fn trailing_statement_source<'a>(
+    source: &'a str,
+    grammar_context: ScanGrammarContext,
+    completion_recursion_limit: usize,
+    completion_memo: &mut DoWhileCompletionMemo,
+) -> Option<&'a str> {
+    let source = trim_binding_pattern_trivia_with_context(source, grammar_context)?;
+    if source.ends_with(';') {
+        return None;
+    }
+    trailing_statement_source_unfiltered(
+        source,
+        grammar_context,
+        completion_recursion_limit,
+        completion_memo,
+    )
+}
+
+fn trailing_statement_source_before_clause<'a>(
+    source: &'a str,
+    following: &str,
+    grammar_context: ScanGrammarContext,
+    completion_recursion_limit: usize,
+    completion_memo: &mut DoWhileCompletionMemo,
+) -> Option<&'a str> {
+    let may_follow_terminated_body = ["else", "while"]
+        .into_iter()
+        .any(|keyword| starts_with_keyword(following, keyword));
+    if may_follow_terminated_body {
+        trailing_statement_source_unfiltered(
+            source,
+            grammar_context,
+            completion_recursion_limit,
+            completion_memo,
+        )
+    } else {
+        trailing_statement_source(
+            source,
+            grammar_context,
+            completion_recursion_limit,
+            completion_memo,
+        )
+    }
 }
 
 fn declaration_source_needs_continuation(
@@ -3513,8 +3799,9 @@ fn trailing_statement_continuation_state(
     completion_recursion_limit: usize,
     completion_memo: &mut DoWhileCompletionMemo,
 ) -> (bool, bool, Option<PendingClauseContinuation>) {
-    let trailing_source = trailing_statement_source(
+    let trailing_source = trailing_statement_source_before_clause(
         source,
+        next_after_trivia,
         grammar_context,
         completion_recursion_limit,
         completion_memo,
@@ -4142,8 +4429,9 @@ fn merge_logical_lines_with_completion_limit(
                                             | PendingClauseKind::DoWhileAwaitCondition
                                     )
                                     .then(|| {
-                                        trailing_statement_source(
+                                        trailing_statement_source_before_clause(
                                             &current_text,
+                                            next_after_trivia,
                                             grammar_context,
                                             completion_recursion_limit,
                                             &mut completion_memo,
@@ -16074,6 +16362,199 @@ mod tests {
             assert!(
                 parser.parse(invalid, ParseGoal::Script).is_err(),
                 "invalid handler ordering must fail closed: {invalid:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn outer_do_owner_survives_multiline_try_body_bd_h19yb() {
+        let parser = CanonicalEs2020Parser;
+        for (source, has_handler, has_finalizer) in [
+            (
+                "do try {\n  body();\n}\ncatch (error) {\n  recover();\n}\nwhile (again);\nnext();",
+                true,
+                false,
+            ),
+            (
+                "do try {\n  body();\n}\nfinally {\n  cleanup();\n}\nwhile (again);\nnext();",
+                false,
+                true,
+            ),
+            (
+                "do try {\n  body();\n}\n/* handler gap */\u{feff}catch\n(error)\n{\n  recover();\n}\n// finalizer gap\n\u{feff}finally\n{\n  cleanup();\n}\n/* trailer gap */\u{feff}while\n(again);\nnext();",
+                true,
+                true,
+            ),
+            (
+                "do try {\n  try { body(); } finally { innerCleanup(); }\n}\ncatch (error) { recover(); }\nfinally { cleanup(); }\nwhile (again);\nnext();",
+                true,
+                true,
+            ),
+            (
+                "do try { body(); }\ncatch (error) { recover(); } finally { cleanup(); }\nwhile (again);\nnext();",
+                true,
+                true,
+            ),
+            (
+                "do try { body(); } catch (error) { recover(); }\nfinally { cleanup(); }\nwhile (again);\nnext();",
+                true,
+                true,
+            ),
+            (
+                "do try { body(); } catch\n(error) { recover(); }\nwhile (again);\nnext();",
+                true,
+                false,
+            ),
+            (
+                "do try { body(); } finally\n{ cleanup(); }\nwhile (again);\nnext();",
+                false,
+                true,
+            ),
+        ] {
+            let logical_lines = merge_logical_lines(source);
+            assert_eq!(
+                logical_lines.len(),
+                2,
+                "the completed handler must leave the outer do trailer pending: {:?}",
+                logical_lines
+                    .iter()
+                    .map(|line| line.text.as_str())
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                split_statement_segments(source).len(),
+                2,
+                "the adjacent statement must remain independent: {source:?}"
+            );
+            let tree = parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|error| {
+                    panic!("a multiline try body must remain owned by its outer do: {error:?}")
+                });
+            assert!(matches!(
+                &tree.body[..],
+                [Statement::DoWhile(statement), Statement::Expression(_)]
+                    if matches!(&statement.condition, Expression::Identifier(name) if name == "again")
+                        && matches!(statement.body.as_ref(), Statement::TryCatch(try_statement)
+                            if try_statement.handler.is_some() == has_handler
+                                && try_statement.finalizer.is_some() == has_finalizer)
+            ));
+        }
+
+        let same_line_adjacency = "do try { body(); } finally { cleanup(); } while (false) next();";
+        assert_eq!(merge_logical_lines(same_line_adjacency).len(), 1);
+        assert_eq!(split_statement_segments(same_line_adjacency).len(), 2);
+        assert!(matches!(
+            &parser
+                .parse(same_line_adjacency, ParseGoal::Script)
+                .expect("do-while ASI may separate a same-line adjacent statement")
+                .body[..],
+            [Statement::DoWhile(_), Statement::Expression(_)]
+        ));
+
+        let no_else =
+            "do if (q) try { body(); }\ncatch (error) { recover(); }\nwhile (outer);\nnext();";
+        assert_eq!(merge_logical_lines(no_else).len(), 2);
+        assert_eq!(split_statement_segments(no_else).len(), 2);
+        assert!(matches!(
+            &parser
+                .parse(no_else, ParseGoal::Script)
+                .expect("a skipped dangling-else owner must expose the outer do trailer")
+                .body[..],
+            [Statement::DoWhile(outer), Statement::Expression(_)]
+                if matches!(&outer.condition, Expression::Identifier(name) if name == "outer")
+                    && matches!(outer.body.as_ref(), Statement::If(inner)
+                        if inner.alternate.is_none()
+                            && matches!(inner.consequent.as_ref(), Statement::TryCatch(_)))
+        ));
+
+        let try_alternate = "do if (false) prior();\nelse try { body(); }\ncatch (error) { recover(); }\nwhile (false);\nnext();";
+        let try_alternate_lines = merge_logical_lines(try_alternate);
+        assert_eq!(
+            try_alternate_lines.len(),
+            2,
+            "logical lines: {:?}",
+            try_alternate_lines
+                .iter()
+                .map(|line| line.text.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(split_statement_segments(try_alternate).len(), 2);
+        assert!(matches!(
+            &parser
+                .parse(try_alternate, ParseGoal::Script)
+                .expect("a try alternate must retain the outer do owner")
+                .body[..],
+            [Statement::DoWhile(outer), Statement::Expression(_)]
+                if matches!(outer.body.as_ref(), Statement::If(if_statement)
+                    if matches!(if_statement.alternate.as_deref(), Some(Statement::TryCatch(_))))
+        ));
+
+        let ordered_owners = "do if (q) do try { body(); }\ncatch (error) { recover(); }\nfinally { cleanup(); }\nwhile (inner)\nelse alternate()\nwhile (outer);\nnext();";
+        assert_eq!(merge_logical_lines(ordered_owners).len(), 2);
+        assert_eq!(split_statement_segments(ordered_owners).len(), 2);
+        assert!(matches!(
+            &parser
+                .parse(ordered_owners, ParseGoal::Script)
+                .expect("try phases must preserve every ordered do/if owner")
+                .body[..],
+            [Statement::DoWhile(outer), Statement::Expression(_)]
+                if matches!(&outer.condition, Expression::Identifier(name) if name == "outer")
+                    && matches!(outer.body.as_ref(), Statement::If(if_statement)
+                        if if_statement.alternate.is_some()
+                            && matches!(if_statement.consequent.as_ref(), Statement::DoWhile(inner)
+                                if matches!(&inner.condition, Expression::Identifier(name) if name == "inner")
+                                    && matches!(inner.body.as_ref(), Statement::TryCatch(try_statement)
+                                        if try_statement.handler.is_some()
+                                            && try_statement.finalizer.is_some())))
+        ));
+
+        let nested_do = "do do try { body(); }\ncatch (error) { recover(); }\nwhile (inner)\nwhile (outer);\nnext();";
+        assert_eq!(merge_logical_lines(nested_do).len(), 2);
+        assert_eq!(split_statement_segments(nested_do).len(), 2);
+        assert!(matches!(
+            &parser
+                .parse(nested_do, ParseGoal::Script)
+                .expect("each nested do owner must claim exactly one trailer")
+                .body[..],
+            [Statement::DoWhile(outer), Statement::Expression(_)]
+                if matches!(outer.body.as_ref(), Statement::DoWhile(inner)
+                    if matches!(inner.body.as_ref(), Statement::TryCatch(_)))
+        ));
+
+        let independent_while =
+            "do try { body(); }\nfinally { cleanup(); }\nwhile (outer);\nwhile (other) next();";
+        assert_eq!(merge_logical_lines(independent_while).len(), 2);
+        assert_eq!(split_statement_segments(independent_while).len(), 2);
+        assert!(matches!(
+            &parser
+                .parse(independent_while, ParseGoal::Script)
+                .expect("a second while must remain independent")
+                .body[..],
+            [Statement::DoWhile(_), Statement::While(_)]
+        ));
+
+        for invalid in [
+            "do try {}\nnext();\ncatch (error) {}\nwhile (outer);",
+            "do try {}\ncatch (error) {}\nnext();\nwhile (outer);",
+            "do try {}\ncatch (error) {};\nwhile (outer);",
+            "do try {}\ncatch (error) {}\ncatch (other) {}\nwhile (outer);",
+            "do try {}\nfinally {}\ncatch (error) {}\nwhile (outer);",
+            "do try {}\nfinally {}\nwhile (outer);\nfinally {}",
+            "try {};\ncatch (error) {}",
+            "try {} catch (error) {};\nfinally {}",
+        ] {
+            assert!(
+                merge_logical_lines(invalid).len() > 1,
+                "an adjacent statement or exhausted phase must retire the outer owner: {invalid:?}"
+            );
+            assert!(
+                split_statement_segments(invalid).len() > 1,
+                "invalid clause ordering must not become one segment: {invalid:?}"
+            );
+            assert!(
+                parser.parse(invalid, ParseGoal::Script).is_err(),
+                "invalid outer-do handler ownership must fail closed: {invalid:?}"
             );
         }
     }

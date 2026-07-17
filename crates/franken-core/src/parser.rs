@@ -7059,10 +7059,8 @@ fn scan_binding_pattern_source_until_with_context_seeded(
                 _ => {}
             }
             if slash_goal == SlashGoal::RegExp {
-                if let Some((_pattern, _flags, consumed)) =
-                    parse_regexp_literal_prefix(&source[index..])
-                {
-                    let regexp_end = index.saturating_add(consumed);
+                if let Some(prefix) = parse_regexp_literal_prefix(&source[index..]) {
+                    let regexp_end = index.saturating_add(prefix.consumed);
                     visit_or_stop!(index, ch, depth, true);
                     while let Some((next_index, next_ch)) = chars.peek().copied() {
                         if next_index >= regexp_end {
@@ -8984,14 +8982,25 @@ fn parse_primary_expression(
         return result;
     }
 
-    if parse_regexp_literal_prefix(expression)
-        .is_some_and(|(_, _, consumed)| consumed < expression.len())
-    {
-        return Err(unsupported_expression_syntax_error(
-            "unsupported or malformed RegExp-literal postfix expression",
-            span,
-            context,
-        ));
+    if let Some(prefix) = parse_regexp_literal_prefix(expression) {
+        if let Some(flag_error) = prefix.flag_error {
+            let message = match flag_error {
+                RegExpFlagError::Duplicate(flag) => {
+                    format!("duplicate RegExp literal flag `{flag}`")
+                }
+                RegExpFlagError::Unsupported(flag) => {
+                    format!("unsupported RegExp literal flag `{flag}`")
+                }
+            };
+            return Err(unsupported_expression_syntax_error(&message, span, context));
+        }
+        if prefix.consumed < expression.len() {
+            return Err(unsupported_expression_syntax_error(
+                "unsupported or malformed RegExp-literal postfix expression",
+                span,
+                context,
+            ));
+        }
     }
 
     if let Some(identifier) = parse_identifier_reference(expression, span, context)? {
@@ -11466,14 +11475,70 @@ pub(crate) fn parse_quoted_string(input: &str) -> Option<String> {
 /// Parse a regex literal: `/pattern/flags`.
 ///
 /// The pattern may contain escaped slashes (`\/`) or character classes with
-/// slashes (`[/]`). Flags are the standard ECMAScript regex flags: g, i, m, s, u, y.
+/// slashes (`[/]`). Flags are the parser's supported RegExp flag set: d, g, i, m, s, u, y.
 fn parse_regexp_literal(input: &str) -> Option<(String, String)> {
     let input = input.trim();
-    let (pattern, flags, consumed) = parse_regexp_literal_prefix(input)?;
-    (consumed == input.len()).then_some((pattern, flags))
+    let prefix = parse_regexp_literal_prefix(input)?;
+    (prefix.consumed == input.len() && prefix.flag_error.is_none())
+        .then_some((prefix.pattern, prefix.flags))
 }
 
-fn parse_regexp_literal_prefix(input: &str) -> Option<(String, String, usize)> {
+struct RegExpLiteralPrefix {
+    pattern: String,
+    flags: String,
+    consumed: usize,
+    flag_error: Option<RegExpFlagError>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RegExpFlagError {
+    Duplicate(char),
+    Unsupported(char),
+}
+
+fn regexp_flag_error(flags: &str) -> Option<RegExpFlagError> {
+    let mut seen = 0u8;
+    for flag in flags.chars() {
+        let bit = match flag {
+            'd' => 1 << 0,
+            'g' => 1 << 1,
+            'i' => 1 << 2,
+            'm' => 1 << 3,
+            's' => 1 << 4,
+            'u' => 1 << 5,
+            'y' => 1 << 6,
+            unsupported => return Some(RegExpFlagError::Unsupported(unsupported)),
+        };
+        if seen & bit != 0 {
+            return Some(RegExpFlagError::Duplicate(flag));
+        }
+        seen |= bit;
+    }
+    None
+}
+
+fn regexp_flag_tail_len(source: &str) -> usize {
+    let mut offset = 0usize;
+    while offset < source.len() {
+        let remaining = &source[offset..];
+        if remaining.starts_with('\\') {
+            let consumed = decode_identifier_unicode_escape_prefix(remaining)
+                .map_or(1, |(_decoded, consumed)| consumed);
+            offset = offset.saturating_add(consumed);
+            continue;
+        }
+        let Some(ch) = remaining.chars().next() else {
+            break;
+        };
+        if !is_identifier_part_character(ch) {
+            break;
+        }
+        offset = offset.saturating_add(ch.len_utf8());
+    }
+    offset
+}
+
+fn parse_regexp_literal_prefix(input: &str) -> Option<RegExpLiteralPrefix> {
     let input = input.trim();
     if !input.starts_with('/') {
         return None;
@@ -11513,18 +11578,19 @@ fn parse_regexp_literal_prefix(input: &str) -> Option<(String, String, usize)> {
             // Found closing slash
             let pattern = &input[1..i];
             let rest = &input[i + 1..];
-            // Parse flags (g, i, m, s, u, y, d)
-            let mut flags = String::new();
-            for fc in rest.chars() {
-                if matches!(fc, 'g' | 'i' | 'm' | 's' | 'u' | 'y' | 'd') {
-                    flags.push(fc);
-                } else {
-                    // Stop at non-flag character (could be operator or whitespace)
-                    break;
-                }
-            }
-            let consumed = i + 1 + flags.len();
-            return Some((pattern.to_string(), flags, consumed));
+            // RegExp flags lexically consume an IdentifierPart sequence. Keep
+            // that complete extent even when validation fails so delimiter and
+            // slash-goal scanners do not reinterpret an invalid flag tail as
+            // surrounding source. The parser's existing accepted set is
+            // `dgimsuy`; duplicates and every other spelling fail separately.
+            let flag_len = regexp_flag_tail_len(rest);
+            let flags = rest[..flag_len].to_string();
+            return Some(RegExpLiteralPrefix {
+                pattern: pattern.to_string(),
+                flag_error: regexp_flag_error(&flags),
+                flags,
+                consumed: i + 1 + flag_len,
+            });
         }
         i += 1;
     }
@@ -23641,6 +23707,131 @@ ${/[}]/}C`}D`;"#,
     }
 
     // -- RegExp literal parsing tests --
+
+    // Donor parity for bd-ngkuz was checked against Node 20.19.4 and Bun
+    // 1.3.14: both accept the unique `dgimsuy` combinations and reject the
+    // duplicate, unsupported, escaped, Unicode, template, and control-head
+    // cases below. `v` remains outside this parser's existing flag contract
+    // and is tested separately from that donor matrix.
+    #[test]
+    fn regexp_literal_flags_are_complete_and_unique_bd_ngkuz() {
+        let parser = CanonicalEs2020Parser;
+
+        for source in [
+            "/x/;",
+            "/x/g;",
+            "/x/dgimsuy;",
+            "/x/yusmigd;",
+            "/x/g / 2;",
+            "/[}]/gi.test(\"}\");",
+            "`${/[}]/gi}`;",
+            "if (ready) /[)]/gi;",
+            "while (false) /[}]/y;",
+            "for (; /[;]/g.test(value); ) step();",
+        ] {
+            parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("valid RegExp flags failed: {source:?}: {error:?}"));
+        }
+
+        for flag in ['d', 'g', 'i', 'm', 's', 'u', 'y'] {
+            let source = format!("/x/{flag}{flag};");
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("a duplicate RegExp flag must be rejected");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
+            assert!(
+                error.message.contains("duplicate RegExp literal flag"),
+                "unexpected duplicate diagnostic: {error:?}"
+            );
+        }
+
+        for (source, diagnostic) in [
+            ("/x/z;", "unsupported RegExp literal flag `z`"),
+            ("/x/gz;", "unsupported RegExp literal flag `z`"),
+            ("/x/gfoo;", "unsupported RegExp literal flag `f`"),
+            ("/x/1;", "unsupported RegExp literal flag `1`"),
+            ("/x/$;", "unsupported RegExp literal flag `$`"),
+            ("/x/π;", "unsupported RegExp literal flag `π`"),
+            (r"/x/\u0067;", "unsupported RegExp literal flag `\\`"),
+            (r"/x/\u{67};", "unsupported RegExp literal flag `\\`"),
+            (
+                "/x/g\u{0301};",
+                "unsupported RegExp literal flag `\u{0301}`",
+            ),
+            (
+                "/x/g\u{200c};",
+                "unsupported RegExp literal flag `\u{200c}`",
+            ),
+            ("`${/[}]/gg}`;", "duplicate RegExp literal flag `g`"),
+            ("if (ready) /[)]/gg;", "duplicate RegExp literal flag `g`"),
+            (
+                "while (ready) /[}]/gz;",
+                "unsupported RegExp literal flag `z`",
+            ),
+            (
+                "for (; /[;]/gz.test(value); ) step();",
+                "unsupported RegExp literal flag `z`",
+            ),
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("invalid RegExp flags must fail in every expression context");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+            assert!(
+                error.message.contains(diagnostic),
+                "unexpected error for {source:?}: {error:?}"
+            );
+        }
+
+        let version_extension = parser.parse("/x/v;", ParseGoal::Script).expect_err(
+            "the post-contract `v` flag must not enter the existing flag set implicitly",
+        );
+        assert!(
+            version_extension
+                .message
+                .contains("unsupported RegExp literal flag `v`")
+        );
+
+        for malformed in [
+            "/[abc/gg;",
+            "/abc\n/gg;",
+            "`${/[}]/gg`;",
+            "if (/[(]/gg.test(x)) run();",
+        ] {
+            let error = parser
+                .parse(malformed, ParseGoal::Script)
+                .expect_err("malformed RegExp delimiters must remain syntax errors");
+            assert_eq!(
+                error.code,
+                ParseErrorCode::UnsupportedSyntax,
+                "{malformed:?}"
+            );
+        }
+
+        let complete_invalid = parse_regexp_literal_prefix("/x/gz + tail")
+            .expect("a malformed flag tail still has a complete lexical extent");
+        assert_eq!(complete_invalid.pattern, "x");
+        assert_eq!(complete_invalid.flags, "gz");
+        assert_eq!(complete_invalid.consumed, "/x/gz".len());
+        assert_eq!(
+            complete_invalid.flag_error,
+            Some(RegExpFlagError::Unsupported('z'))
+        );
+
+        let escaped = parse_regexp_literal_prefix(r"/x/\u0067 + tail")
+            .expect("an escaped flag spelling must be consumed as one lexical tail");
+        assert_eq!(escaped.flags, r"\u0067");
+        assert_eq!(escaped.consumed, r"/x/\u0067".len());
+        assert_eq!(escaped.flag_error, Some(RegExpFlagError::Unsupported('\\')));
+
+        assert_eq!(
+            parse_regexp_literal("/x/yusmigd"),
+            Some(("x".to_string(), "yusmigd".to_string()))
+        );
+        assert_eq!(parse_regexp_literal("/x/gg"), None);
+        assert_eq!(parse_regexp_literal("/x/gz"), None);
+    }
 
     #[test]
     fn parse_regexp_literal_simple_pattern() {

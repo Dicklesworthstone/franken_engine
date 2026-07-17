@@ -7918,7 +7918,9 @@ fn parse_static_property_name(
     };
 
     if matches!(source.as_bytes().first(), Some(b'\'' | b'"')) {
-        let cooked = parse_binding_property_string_literal(source).ok_or_else(&invalid_key)?;
+        let cooked =
+            parse_binding_property_string_literal(source, legacy_decimal_escape_mode(context))
+                .ok_or_else(&invalid_key)?;
         return Ok(Expression::StringLiteral(cooked.into()));
     }
 
@@ -8144,7 +8146,10 @@ fn decode_binding_unicode_escape_value(
     }
 }
 
-fn parse_binding_property_string_literal(source: &str) -> Option<String> {
+fn parse_binding_property_string_literal(
+    source: &str,
+    legacy_mode: LegacyDecimalEscapeMode,
+) -> Option<String> {
     if source.len() < 2 {
         return None;
     }
@@ -8152,10 +8157,14 @@ fn parse_binding_property_string_literal(source: &str) -> Option<String> {
     if !matches!(delimiter, '\'' | '"') || source.chars().next_back()? != delimiter {
         return None;
     }
-    unescape_binding_property_string(&source[1..source.len() - 1], delimiter)
+    unescape_binding_property_string(&source[1..source.len() - 1], delimiter, legacy_mode)
 }
 
-fn unescape_binding_property_string(inner: &str, delimiter: char) -> Option<String> {
+fn unescape_binding_property_string(
+    inner: &str,
+    delimiter: char,
+    legacy_mode: LegacyDecimalEscapeMode,
+) -> Option<String> {
     if !inner.contains('\\') {
         return (!inner.contains(delimiter) && !inner.contains('\n') && !inner.contains('\r'))
             .then(|| inner.to_string());
@@ -8177,13 +8186,10 @@ fn unescape_binding_property_string(inner: &str, delimiter: char) -> Option<Stri
             'b' => out.push('\u{0008}'),
             'f' => out.push('\u{000C}'),
             'v' => out.push('\u{000B}'),
-            '0' => {
-                if chars.peek().is_some_and(|ch| ch.is_ascii_digit()) {
-                    return None;
-                }
-                out.push('\0');
-            }
-            '1'..='9' => return None,
+            '0' if !chars.peek().is_some_and(char::is_ascii_digit) => out.push('\0'),
+            decimal @ '0'..='9' => out.push(char::from_u32(u32::from(
+                decode_legacy_decimal_escape(decimal, &mut chars, legacy_mode)?,
+            ))?),
             '\\' => out.push('\\'),
             '\'' => out.push('\''),
             '"' => out.push('"'),
@@ -8799,7 +8805,8 @@ fn parse_primary_expression(
 ) -> ParseResult<Expression> {
     let expression = expression.trim();
 
-    if let Some(value) = parse_quoted_expression_string(expression) {
+    let legacy_decimal_escapes = legacy_decimal_escape_mode(context);
+    if let Some(value) = parse_quoted_expression_string(expression, legacy_decimal_escapes) {
         return Ok(Expression::StringLiteral(value));
     }
 
@@ -8809,7 +8816,9 @@ fn parse_primary_expression(
     // postfix parser validate its complete tail below.
     let has_valid_quoted_prefix = if matches!(expression.as_bytes().first(), Some(b'"' | b'\'')) {
         let valid = leading_string_literal_end(expression)
-            .and_then(|end| parse_quoted_expression_string(&expression[..end]))
+            .and_then(|end| {
+                parse_quoted_expression_string(&expression[..end], legacy_decimal_escapes)
+            })
             .is_some();
         if !valid {
             return Err(unsupported_expression_syntax_error(
@@ -11396,7 +11405,50 @@ fn leading_string_literal_end(expr: &str) -> Option<usize> {
 /// Unlike a Rust `String`, [`JsString`] can retain unpaired surrogate escapes.
 /// Adjacent high/low units are normalized by `JsString::from_code_units`, so
 /// paired escapes still heal to the ordinary UTF-8 fast representation.
-fn parse_quoted_expression_string(input: &str) -> Option<JsString> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LegacyDecimalEscapeMode {
+    AnnexBSloppy,
+    Reject,
+}
+
+fn legacy_decimal_escape_mode(context: &ParseExecutionContext<'_>) -> LegacyDecimalEscapeMode {
+    if context.goal == ParseGoal::Script && !context.strict_mode {
+        LegacyDecimalEscapeMode::AnnexBSloppy
+    } else {
+        LegacyDecimalEscapeMode::Reject
+    }
+}
+
+fn decode_legacy_decimal_escape(
+    first: char,
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    mode: LegacyDecimalEscapeMode,
+) -> Option<u16> {
+    if mode == LegacyDecimalEscapeMode::Reject {
+        return None;
+    }
+    if matches!(first, '8' | '9') {
+        // NonOctalDecimalEscapeSequence contributes the digit character, not
+        // its numeric value.
+        return u16::try_from(u32::from(first)).ok();
+    }
+
+    let mut value = first.to_digit(8)?;
+    let following_limit = if matches!(first, '0'..='3') { 2 } else { 1 };
+    for _ in 0..following_limit {
+        let Some(digit) = chars.peek().and_then(|next| next.to_digit(8)) else {
+            break;
+        };
+        chars.next();
+        value = value.checked_mul(8)?.checked_add(digit)?;
+    }
+    u16::try_from(value).ok()
+}
+
+fn parse_quoted_expression_string(
+    input: &str,
+    legacy_mode: LegacyDecimalEscapeMode,
+) -> Option<JsString> {
     if input.len() < 2 {
         return None;
     }
@@ -11431,12 +11483,13 @@ fn parse_quoted_expression_string(input: &str) -> Option<JsString> {
             'f' => units.push(0x000C),
             'v' => units.push(0x000B),
             '0' if !chars.peek().is_some_and(char::is_ascii_digit) => units.push(0),
-            '0' => return None,
-            // Legacy decimal escapes depend on Script/strict context. The
-            // current expression cooker has no such context, so reject them
-            // instead of silently producing the wrong value; Annex-B support
-            // is tracked separately from the exact-carrier migration.
-            '1'..='9' => return None,
+            decimal @ '0'..='9' => {
+                units.push(decode_legacy_decimal_escape(
+                    decimal,
+                    &mut chars,
+                    legacy_mode,
+                )?);
+            }
             '\\' => units.push(u16::from(b'\\')),
             '\'' => units.push(u16::from(b'\'')),
             '"' => units.push(u16::from(b'"')),
@@ -11467,7 +11520,7 @@ fn parse_quoted_expression_string(input: &str) -> Option<JsString> {
 /// containing an unpaired surrogate is rejected instead of being projected to
 /// U+FFFD and silently changing the requested module name.
 pub(crate) fn parse_quoted_string(input: &str) -> Option<String> {
-    parse_quoted_expression_string(input)?
+    parse_quoted_expression_string(input, LegacyDecimalEscapeMode::Reject)?
         .as_str()
         .map(str::to_string)
 }
@@ -13957,7 +14010,11 @@ fn parse_class_parts(
             if super_name.is_empty() {
                 continue;
             }
-            let Ok(super_class) = parse_expression(super_name, span, context, 1) else {
+            let Ok(super_class) =
+                with_grammar_context(context, true, false, false, false, false, |context| {
+                    parse_expression(super_name, span, context, 1)
+                })
+            else {
                 continue;
             };
             if extract_balanced_with_context_seeded(
@@ -14066,7 +14123,26 @@ fn parse_class_body(
         } else {
             kind
         };
-        let key = Expression::Identifier(method_name.to_string());
+        let (key, computed) = if let Some(inner) = method_name
+            .strip_prefix('[')
+            .and_then(|name| name.strip_suffix(']'))
+        {
+            (
+                with_grammar_context(context, true, false, false, false, false, |context| {
+                    parse_expression(inner.trim(), span, context, 1)
+                })?,
+                true,
+            )
+        } else if matches!(method_name.as_bytes().first(), Some(b'\'' | b'"')) {
+            (
+                with_grammar_context(context, true, false, false, false, false, |context| {
+                    parse_static_property_name(method_name, span, context, "class-method")
+                })?,
+                false,
+            )
+        } else {
+            (Expression::Identifier(method_name.to_string()), false)
+        };
         let rest = &rest[paren_idx..];
 
         // Parse parameters.
@@ -14113,7 +14189,7 @@ fn parse_class_body(
                 span: span.clone(),
             },
             is_static,
-            computed: false,
+            computed,
             span: span.clone(),
         });
     }
@@ -14500,7 +14576,7 @@ mod tests {
             (r#""\q""#, "q"),
             (r#""\"""#, "\""),
         ] {
-            let value = parse_quoted_expression_string(source)
+            let value = parse_quoted_expression_string(source, LegacyDecimalEscapeMode::Reject)
                 .unwrap_or_else(|| panic!("{source:?} should cook"));
             assert_eq!(value, expected, "{source:?}");
             assert!(value.is_well_formed(), "{source:?}");
@@ -14516,27 +14592,30 @@ mod tests {
             "\"a\\\u{2028}b\"",
             "\"a\\\u{2029}b\"",
         ] {
-            let value = parse_quoted_expression_string(source)
+            let value = parse_quoted_expression_string(source, LegacyDecimalEscapeMode::Reject)
                 .unwrap_or_else(|| panic!("{source:?} should cook"));
             assert_eq!(value, "ab", "{source:?}");
         }
 
         assert_eq!(
-            parse_quoted_expression_string(r#""\u{1F600}""#)
+            parse_quoted_expression_string(r#""\u{1F600}""#, LegacyDecimalEscapeMode::Reject,)
                 .expect("braced astral escape should cook")
                 .code_units_vec(),
             [0xD83D, 0xDE00]
         );
         assert_eq!(
-            parse_quoted_expression_string("\"\\0\\\n8\"")
+            parse_quoted_expression_string("\"\\0\\\n8\"", LegacyDecimalEscapeMode::Reject,)
                 .expect("continuation separates zero from a later digit")
                 .code_units_vec(),
             [0x0000, u16::from(b'8')]
         );
         assert_eq!(
-            parse_quoted_expression_string("\"\\uD83D\\\n\\uDE00\"")
-                .expect("continuation may separate a surrogate escape pair")
-                .code_units_vec(),
+            parse_quoted_expression_string(
+                "\"\\uD83D\\\n\\uDE00\"",
+                LegacyDecimalEscapeMode::Reject,
+            )
+            .expect("continuation may separate a surrogate escape pair")
+            .code_units_vec(),
             [0xD83D, 0xDE00]
         );
     }
@@ -14565,15 +14644,111 @@ mod tests {
         }
     }
 
+    // Node 20.19.4 matches these Annex-B values and strict failures. Bun
+    // 1.3.14's CLI parser currently diverges by rejecting sloppy octal while
+    // accepting strict `\8`/`\9`; this parser follows ECMA-262 and Node.
     #[test]
-    fn legacy_decimal_escapes_fail_closed_until_contextualized_bd_xcqzp() {
+    fn legacy_decimal_escapes_follow_annex_b_in_sloppy_scripts_bd_xcqzp() {
         let parser = CanonicalEs2020Parser;
-        for source in [r#""\1""#, r#""\8""#, r#""\9""#, r#""\08""#] {
+        for (source, expected_units) in [
+            (r#""\1""#, &[0x0001][..]),
+            (r#""\8""#, &[0x0038][..]),
+            (r#""\9""#, &[0x0039][..]),
+            (r#""\08""#, &[0x0000, 0x0038][..]),
+            (r#""\18""#, &[0x0001, 0x0038][..]),
+            (r#""\118""#, &[0x0009, 0x0038][..]),
+            (r#""\377""#, &[0x00FF][..]),
+            (r#""\400""#, &[0x0020, 0x0030][..]),
+            (r#""\478""#, &[0x0027, 0x0038][..]),
+        ] {
+            let tree = parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("sloppy {source:?} should parse: {error}"));
+            assert!(matches!(
+                first_expr(&tree),
+                Expression::StringLiteral(value)
+                    if value.code_units_vec() == expected_units
+            ));
+        }
+
+        let postfix = parser
+            .parse(r#""\1".length"#, ParseGoal::Script)
+            .expect("a sloppy legacy escape may be a postfix receiver");
+        assert!(matches!(
+            first_expr(&postfix),
+            Expression::Member { object, .. }
+                if matches!(object.as_ref(), Expression::StringLiteral(value)
+                    if value.code_units_vec() == [0x0001])
+        ));
+
+        for source in [
+            r#"let value = "\118";"#,
+            r#"({"\1": value});"#,
+            r#"let {"\1": value} = source;"#,
+            r#""use\x20strict"; "\1";"#,
+            r#""not a directive" + suffix; "use strict"; "\1";"#,
+            r#"{ "use strict"; "\1"; }"#,
+            r#"; "use strict"; "\1";"#,
+            "\"use strict\"\n+suffix; \"\\1\";",
+        ] {
+            parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("sloppy context should accept {source:?}: {error}"));
+        }
+    }
+
+    #[test]
+    fn strict_and_module_code_reject_legacy_decimal_escapes_bd_xcqzp() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            r#""use strict"; "\1";"#,
+            r#""prologue"; "use strict"; "\8";"#,
+            r#""\1"; "use strict";"#,
+            r#""use strict"; ({"\1": value});"#,
+            r#""use strict"; let {"\1": value} = source;"#,
+            r#"function f() { "prologue"; "use strict"; return "\1"; }"#,
+            r#""use strict"; function f() { return "\1"; }"#,
+            r#"const f = () => { "use strict"; return "\1"; };"#,
+            r#"class C { method() { return "\1"; } }"#,
+            r#"function f(value = "\1") { "use strict"; }"#,
+            r#"const f = (value = "\1") => { "use strict"; };"#,
+            r#"class C { method(value = "\1") {} }"#,
+            r#"class C { "\1"() {} }"#,
+            r#"class C { ["\1"]() {} }"#,
+            r#"class C extends ("\1") {}"#,
+        ] {
             let error = parser
                 .parse(source, ParseGoal::Script)
-                .expect_err("context-free cooking must not guess legacy decimal semantics");
+                .expect_err("strict Script code must reject legacy decimal escapes");
             assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
         }
+
+        parser
+            .parse(r#"class C { "ok"() {} }"#, ParseGoal::Script)
+            .expect("an ordinary quoted class method name remains valid");
+        parser
+            .parse(r#"class C { ["ok"]() {} }"#, ParseGoal::Script)
+            .expect("an ordinary computed class method name remains valid");
+
+        for source in [
+            r#""\1";"#,
+            r#""\8";"#,
+            r#""\9";"#,
+            r#""\08";"#,
+            r#"let {"\1": value} = source;"#,
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Module)
+                .expect_err("Module code is strict and must reject legacy decimal escapes");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+        }
+
+        parser
+            .parse(r#""use strict"; "\0";"#, ParseGoal::Script)
+            .expect("plain NUL escapes remain valid in strict Script code");
+        parser
+            .parse(r#""\0";"#, ParseGoal::Module)
+            .expect("plain NUL escapes remain valid in Module code");
     }
 
     #[test]
@@ -18209,8 +18384,6 @@ strict"; var static = 1; }"#,
             "var {0_1: value} = source",
             "var {a-b: value} = source",
             r"var {\u0030bad: value} = source",
-            r"var {'\01': value} = source",
-            r"var {'\1': value} = source",
             r#"var {"a""b": value} = source"#,
             r"var {'a''b': value} = source",
             "var {'a\nb': value} = source",
@@ -18302,7 +18475,6 @@ strict"; var static = 1; }"#,
             "let value = {a-b: 7}",
             r#"let value = {"a""b": 7}"#,
             r"let value = {'a''b': 7}",
-            r"let value = {'\01': 7}",
         ] {
             let error = parser
                 .parse(source, ParseGoal::Script)

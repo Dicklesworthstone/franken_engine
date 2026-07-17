@@ -15,7 +15,7 @@ use std::fs;
 use std::io::Cursor;
 
 use frankenengine_engine::ast::{
-    BinaryOperator, CANONICAL_AST_CONTRACT_VERSION, CANONICAL_AST_HASH_ALGORITHM,
+    BinaryOperator, BindingPattern, CANONICAL_AST_CONTRACT_VERSION, CANONICAL_AST_HASH_ALGORITHM,
     CANONICAL_AST_HASH_PREFIX, CANONICAL_AST_SCHEMA_VERSION, ExportKind, Expression, ParseGoal,
     SourceSpan, Statement, SyntaxTree, VariableDeclarationKind,
 };
@@ -1556,6 +1556,117 @@ fn parser_emits_binary_numeric_literal() {
     } else {
         panic!("expected VariableDeclaration");
     }
+}
+
+#[test]
+fn parser_legacy_decimal_escapes_follow_annex_b_in_sloppy_scripts_bd_xcqzp() {
+    let parser = CanonicalEs2020Parser;
+
+    for (source, expected_units) in [
+        (r#""\1""#, &[0x0001][..]),
+        (r#""\8""#, &[0x0038][..]),
+        (r#""\9""#, &[0x0039][..]),
+        (r#""\08""#, &[0x0000, 0x0038][..]),
+        (r#""\18""#, &[0x0001, 0x0038][..]),
+        (r#""\118""#, &[0x0009, 0x0038][..]),
+        (r#""\377""#, &[0x00FF][..]),
+        (r#""\400""#, &[0x0020, 0x0030][..]),
+        (r#""\478""#, &[0x0027, 0x0038][..]),
+    ] {
+        let tree = parser
+            .parse(source, ParseGoal::Script)
+            .unwrap_or_else(|error| panic!("sloppy {source:?} should parse: {error}"));
+        assert!(matches!(
+            tree.body.first(),
+            Some(Statement::Expression(expression))
+                if matches!(&expression.expression, Expression::StringLiteral(value)
+                    if value.code_units_vec() == expected_units)
+        ));
+    }
+
+    for source in [
+        r#"let value = "\118";"#,
+        r#"({"\1": value});"#,
+        r#"let {"\1": value} = source;"#,
+        r#"({ "\1"() {} });"#,
+        r#""use\x20strict"; "\1";"#,
+        r#""not a directive" + suffix; "use strict"; "\1";"#,
+        r#"{ "use strict"; "\1"; }"#,
+        r#"; "use strict"; "\1";"#,
+        "\"use strict\"\n+suffix; \"\\1\";",
+    ] {
+        parser
+            .parse(source, ParseGoal::Script)
+            .unwrap_or_else(|error| panic!("sloppy context should accept {source:?}: {error}"));
+    }
+
+    let binding_tree = parser
+        .parse(r#"let {"\1": value} = source;"#, ParseGoal::Script)
+        .expect("a sloppy quoted binding key should parse");
+    assert!(matches!(
+        binding_tree.body.first(),
+        Some(Statement::VariableDeclaration(declaration))
+            if matches!(&declaration.declarations[0].pattern,
+                BindingPattern::ObjectPattern(properties)
+                    if matches!(&properties[0].key, Expression::StringLiteral(value)
+                        if value.code_units_vec() == [0x0001]))
+    ));
+}
+
+#[test]
+fn parser_strict_and_module_code_reject_legacy_decimal_escapes_bd_xcqzp() {
+    let parser = CanonicalEs2020Parser;
+
+    for source in [
+        r#""use strict"; "\1";"#,
+        r#""prologue"; "use strict"; "\8";"#,
+        r#""\1"; "use strict";"#,
+        r#""use strict"; ({"\1": value});"#,
+        r#""use strict"; let {"\1": value} = source;"#,
+        r#""use strict"; ({ "\1"() {} });"#,
+        r#"function f() { "prologue"; "use strict"; return "\1"; }"#,
+        r#""use strict"; function f() { return "\1"; }"#,
+        r#"const f = () => { "use strict"; return "\1"; };"#,
+        r#"class C { method() { return "\1"; } }"#,
+        r#"function f(value = "\1") { "use strict"; }"#,
+        r#"const f = (value = "\1") => { "use strict"; };"#,
+        r#"class C { method(value = "\1") {} }"#,
+        r#"class C { "\1"() {} }"#,
+        r#"class C { ["\1"]() {} }"#,
+        r#"class C extends ("\1") {}"#,
+    ] {
+        let error = parser
+            .parse(source, ParseGoal::Script)
+            .expect_err("strict Script code must reject legacy decimal escapes");
+        assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+    }
+
+    parser
+        .parse(r#"class C { "ok"() {} }"#, ParseGoal::Script)
+        .expect("an ordinary quoted class method name remains valid");
+    parser
+        .parse(r#"class C { ["ok"]() {} }"#, ParseGoal::Script)
+        .expect("an ordinary computed class method name remains valid");
+
+    for source in [
+        r#""\1";"#,
+        r#""\8";"#,
+        r#""\9";"#,
+        r#""\08";"#,
+        r#"let {"\1": value} = source;"#,
+    ] {
+        let error = parser
+            .parse(source, ParseGoal::Module)
+            .expect_err("Module code must reject legacy decimal escapes");
+        assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+    }
+
+    parser
+        .parse(r#""use strict"; "\0";"#, ParseGoal::Script)
+        .expect("plain NUL escapes remain valid in strict Script code");
+    parser
+        .parse(r#""\0";"#, ParseGoal::Module)
+        .expect("plain NUL escapes remain valid in Module code");
 }
 
 // ---------------------------------------------------------------------------

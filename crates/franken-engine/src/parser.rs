@@ -2598,7 +2598,7 @@ fn parse_source(
         max_recursion_observed: 0,
         statement_depth: 0,
         pattern_depth: 0,
-        strict_mode: false,
+        strict_mode: goal == ParseGoal::Module,
     };
 
     if source_bytes > options.budget.max_source_bytes {
@@ -2630,20 +2630,7 @@ fn parse_source(
     let stripped = strip_comments_to_whitespace(text);
     let logical_lines = merge_logical_lines(&stripped);
     let mut statements = Vec::with_capacity(8);
-
-    // Check for "use strict" directive in the first statement of global scripts
-    if !logical_lines.is_empty() {
-        let first_line = &logical_lines[0];
-        if let Some((_start, _end, text)) = split_statement_segments(&first_line.text)
-            .into_iter()
-            .next()
-        {
-            let trimmed_text = text.trim();
-            if is_use_strict_directive(trimmed_text) {
-                context.strict_mode = true;
-            }
-        }
-    }
+    context.strict_mode |= has_use_strict_directive(&stripped);
 
     for logical_line in &logical_lines {
         for (start_in_line, end_in_line, statement_text) in
@@ -3771,7 +3758,13 @@ fn parse_object_binding_pattern(
         if let Some(colon_pos) = find_top_level_colon_in_pattern(seg) {
             let key_src = seg[..colon_pos].trim();
             let value_src = seg[colon_pos + 1..].trim();
-            let key = Expression::Identifier(key_src.to_string());
+            let key = parse_contextual_static_property_key(
+                key_src,
+                span,
+                context,
+                legacy_decimal_escape_mode(context),
+                "object-binding",
+            )?;
             let value = parse_binding_pattern(value_src, span, context)?;
             properties.push(ObjectPatternProperty {
                 key,
@@ -3799,6 +3792,28 @@ fn parse_object_binding_pattern(
     }
 
     Ok(BindingPattern::ObjectPattern(properties))
+}
+
+fn parse_contextual_static_property_key(
+    source: &str,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+    legacy_mode: LegacyDecimalEscapeMode,
+    construct: &str,
+) -> ParseResult<Expression> {
+    if matches!(source.as_bytes().first(), Some(b'\'' | b'"')) {
+        return parse_quoted_expression_string(source, legacy_mode)
+            .map(Expression::StringLiteral)
+            .ok_or_else(|| {
+                ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    format!("invalid quoted {construct} property key: `{source}`"),
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                )
+            });
+    }
+    Ok(Expression::Identifier(source.to_string()))
 }
 
 /// Find `:` at the top level of a pattern element.
@@ -4253,7 +4268,8 @@ fn parse_primary_expression(
 ) -> ParseResult<Expression> {
     let expression = expression.trim();
 
-    if let Some(value) = parse_quoted_expression_string(expression) {
+    let legacy_decimal_escapes = legacy_decimal_escape_mode(context);
+    if let Some(value) = parse_quoted_expression_string(expression, legacy_decimal_escapes) {
         return Ok(Expression::StringLiteral(value));
     }
 
@@ -4263,7 +4279,9 @@ fn parse_primary_expression(
     // postfix parser validate its complete tail below.
     let has_valid_quoted_prefix = if matches!(expression.as_bytes().first(), Some(b'"' | b'\'')) {
         let valid = leading_string_literal_end(expression)
-            .and_then(|end| parse_quoted_expression_string(&expression[..end]))
+            .and_then(|end| {
+                parse_quoted_expression_string(&expression[..end], legacy_decimal_escapes)
+            })
             .is_some();
         if !valid {
             return Err(unsupported_expression_syntax_error(
@@ -4611,18 +4629,22 @@ fn try_parse_arrow_function(
         let after = after_params.trim_start();
         let body_src = after.strip_prefix("=>")?;
         let body_src = body_src.trim();
-
-        let params = match parse_arrow_params(params_src, span, context) {
-            Ok(p) => p,
-            Err(e) => return Some(Err(e)),
+        let directive_source = if body_src.starts_with('{') {
+            extract_balanced(body_src, '{', '}')
+                .map(|(inner, _)| inner)
+                .unwrap_or("")
+        } else {
+            ""
         };
-        Some(parse_arrow_body(
-            body_src,
-            params,
-            is_async,
-            span,
+
+        Some(with_function_strict_mode(
+            directive_source,
+            false,
             context,
-            recursion_depth,
+            |context| {
+                let params = parse_arrow_params(params_src, span, context)?;
+                parse_arrow_body(body_src, params, is_async, span, context, recursion_depth)
+            },
         ))
     } else {
         // ident => body (single param, no parens)
@@ -4684,7 +4706,8 @@ fn parse_arrow_body(
 ) -> ParseResult<Expression> {
     let body = if body_src.starts_with('{') {
         if let Some((block_src, _)) = extract_balanced(body_src, '{', '}') {
-            let stmts = parse_body_statements(block_src, ParseGoal::Script, span, context)?;
+            let stmts =
+                parse_function_body_statements(block_src, ParseGoal::Script, span, context, false)?;
             ArrowBody::Block(BlockStatement {
                 body: stmts,
                 span: span.clone(),
@@ -6887,16 +6910,26 @@ fn try_parse_object_method(
         return Ok(None);
     }
 
-    // Plain method: `name(params){body}` where `name` is a bare identifier.
+    // Plain method: `name(params){body}` where `name` is an IdentifierName or
+    // quoted PropertyName.
     let Some(paren_idx) = part.find('(') else {
         return Ok(None);
     };
     let name = part[..paren_idx].trim();
-    if !is_identifier(name) {
+    let key = if is_identifier(name) {
+        Expression::Identifier(canonicalize_identifier(name))
+    } else if matches!(name.as_bytes().first(), Some(b'\'' | b'"')) {
+        parse_contextual_static_property_key(
+            name,
+            span,
+            context,
+            legacy_decimal_escape_mode(context),
+            "object-method",
+        )?
+    } else {
         return Ok(None);
-    }
+    };
     let value = parse_function_expression(&part[paren_idx..], span, context, recursion_depth + 1)?;
-    let key = Expression::Identifier(canonicalize_identifier(name));
     Ok(Some((key, value, false)))
 }
 
@@ -7239,7 +7272,48 @@ fn leading_string_literal_end(expr: &str) -> Option<usize> {
 /// Unlike a Rust `String`, [`JsString`] can retain unpaired surrogate escapes.
 /// Adjacent high/low units are normalized by `JsString::from_code_units`, so
 /// paired escapes still heal to the ordinary UTF-8 fast representation.
-fn parse_quoted_expression_string(input: &str) -> Option<JsString> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LegacyDecimalEscapeMode {
+    AnnexBSloppy,
+    Reject,
+}
+
+fn legacy_decimal_escape_mode(context: &ParseExecutionContext<'_>) -> LegacyDecimalEscapeMode {
+    if context.strict_mode {
+        LegacyDecimalEscapeMode::Reject
+    } else {
+        LegacyDecimalEscapeMode::AnnexBSloppy
+    }
+}
+
+fn decode_legacy_decimal_escape(
+    first: char,
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    mode: LegacyDecimalEscapeMode,
+) -> Option<u16> {
+    if mode == LegacyDecimalEscapeMode::Reject {
+        return None;
+    }
+    if matches!(first, '8' | '9') {
+        return u16::try_from(u32::from(first)).ok();
+    }
+
+    let mut value = first.to_digit(8)?;
+    let following_limit = if matches!(first, '0'..='3') { 2 } else { 1 };
+    for _ in 0..following_limit {
+        let Some(digit) = chars.peek().and_then(|next| next.to_digit(8)) else {
+            break;
+        };
+        chars.next();
+        value = value.checked_mul(8)?.checked_add(digit)?;
+    }
+    u16::try_from(value).ok()
+}
+
+fn parse_quoted_expression_string(
+    input: &str,
+    legacy_mode: LegacyDecimalEscapeMode,
+) -> Option<JsString> {
     if input.len() < 2 {
         return None;
     }
@@ -7274,10 +7348,13 @@ fn parse_quoted_expression_string(input: &str) -> Option<JsString> {
             'f' => units.push(0x000C),
             'v' => units.push(0x000B),
             '0' if !chars.peek().is_some_and(char::is_ascii_digit) => units.push(0),
-            '0' => return None,
-            // Legacy decimal escapes depend on Script/strict context. Reject
-            // them here until the contextual parser lane handles Annex B.
-            '1'..='9' => return None,
+            decimal @ '0'..='9' => {
+                units.push(decode_legacy_decimal_escape(
+                    decimal,
+                    &mut chars,
+                    legacy_mode,
+                )?);
+            }
             '\\' => units.push(u16::from(b'\\')),
             '\'' => units.push(u16::from(b'\'')),
             '"' => units.push(u16::from(b'"')),
@@ -7306,7 +7383,7 @@ fn parse_quoted_expression_string(input: &str) -> Option<JsString> {
 /// specifiers. Exact values containing an unpaired surrogate are rejected
 /// rather than projected to U+FFFD.
 pub(crate) fn parse_quoted_string(input: &str) -> Option<String> {
-    parse_quoted_expression_string(input)?
+    parse_quoted_expression_string(input, LegacyDecimalEscapeMode::Reject)?
         .as_str()
         .map(str::to_string)
 }
@@ -8505,23 +8582,6 @@ fn parse_body_statements(
     let logical_lines = merge_logical_lines(trimmed);
     let mut stmts = Vec::with_capacity(8);
 
-    // Save the current strict mode state to restore later for nested scopes
-    let saved_strict_mode = context.strict_mode;
-
-    // Check for "use strict" directive in the first statement
-    if !logical_lines.is_empty() {
-        let first_line = &logical_lines[0];
-        if let Some((_start, _end, text)) = split_statement_segments(&first_line.text)
-            .into_iter()
-            .next()
-        {
-            let trimmed_text = text.trim();
-            if is_use_strict_directive(trimmed_text) {
-                context.strict_mode = true;
-            }
-        }
-    }
-
     for ll in &logical_lines {
         for (_start, _end, text) in split_statement_segments(&ll.text) {
             let inner_span = span.clone();
@@ -8529,21 +8589,154 @@ fn parse_body_statements(
         }
     }
 
-    // Restore the previous strict mode state (for nested function contexts)
-    context.strict_mode = saved_strict_mode;
-
     Ok(stmts)
 }
 
-fn is_use_strict_directive(statement: &str) -> bool {
-    let trimmed = statement.trim();
-    // Check for "use strict" or 'use strict' directive
-    (trimmed == "\"use strict\";" ||
-     trimmed == "'use strict';" ||
-     trimmed == "\"use strict\"" ||
-     trimmed == "'use strict'") &&
-    // Ensure it's not a complex expression
-    !trimmed.contains('(') && !trimmed.contains('+') && !trimmed.contains('-')
+fn parse_function_body_statements(
+    body_src: &str,
+    goal: ParseGoal,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+    force_strict: bool,
+) -> ParseResult<Vec<Statement>> {
+    with_function_strict_mode(body_src, force_strict, context, |context| {
+        parse_body_statements(body_src, goal, span, context)
+    })
+}
+
+fn with_function_strict_mode<T>(
+    body_src: &str,
+    force_strict: bool,
+    context: &mut ParseExecutionContext<'_>,
+    operation: impl FnOnce(&mut ParseExecutionContext<'_>) -> ParseResult<T>,
+) -> ParseResult<T> {
+    let saved_strict_mode = context.strict_mode;
+    context.strict_mode |= force_strict || has_use_strict_directive(body_src);
+    let result = operation(context);
+    context.strict_mode = saved_strict_mode;
+    result
+}
+
+fn is_directive_whitespace(ch: char) -> bool {
+    ch.is_whitespace() || ch == '\u{FEFF}'
+}
+
+fn starts_directive_identifier_part(source: &str) -> bool {
+    source.chars().next().is_some_and(|ch| {
+        matches!(ch, '\\' | '\u{200C}' | '\u{200D}') || is_identifier_continue(ch)
+    })
+}
+
+fn starts_directive_expression_continuation(source: &str) -> bool {
+    let source = source.trim_start_matches(is_directive_whitespace);
+    if source.starts_with("++") || source.starts_with("--") {
+        return false;
+    }
+    if source.starts_with('.') && source.as_bytes().get(1).is_some_and(u8::is_ascii_digit) {
+        return false;
+    }
+    if source.starts_with("!=") {
+        return true;
+    }
+    matches!(
+        source.chars().next(),
+        Some(
+            '(' | '['
+                | '`'
+                | '.'
+                | '+'
+                | '-'
+                | '*'
+                | '/'
+                | '%'
+                | '<'
+                | '>'
+                | '='
+                | '&'
+                | '|'
+                | '^'
+                | '?'
+                | ','
+        )
+    ) || source
+        .strip_prefix("in")
+        .is_some_and(|rest| !starts_directive_identifier_part(rest))
+        || source
+            .strip_prefix("instanceof")
+            .is_some_and(|rest| !starts_directive_identifier_part(rest))
+}
+
+fn trim_directive_whitespace(mut source: &str) -> (&str, bool) {
+    let mut saw_line_terminator = false;
+    let mut whitespace_end = 0usize;
+    for (index, ch) in source.char_indices() {
+        if is_directive_whitespace(ch) {
+            saw_line_terminator |= matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}');
+            whitespace_end = index + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    source = &source[whitespace_end..];
+    (source, saw_line_terminator)
+}
+
+fn strip_initial_hashbang(source: &str) -> &str {
+    let source = source.strip_prefix('\u{FEFF}').unwrap_or(source);
+    if !source.starts_with("#!") {
+        return source;
+    }
+    source
+        .find('\n')
+        .map_or("", |newline| &source[newline + 1..])
+}
+
+fn has_use_strict_directive(source: &str) -> bool {
+    let mut source = strip_initial_hashbang(source);
+    loop {
+        (source, _) = trim_directive_whitespace(source);
+        let Some(delimiter) = source.chars().next().filter(|ch| matches!(ch, '\'' | '"')) else {
+            return false;
+        };
+
+        let mut escaped = false;
+        let mut closing_index = None;
+        for (index, ch) in source[delimiter.len_utf8()..].char_indices() {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == delimiter {
+                closing_index = Some(delimiter.len_utf8() + index);
+                break;
+            } else if matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}') {
+                return false;
+            }
+        }
+        let Some(closing_index) = closing_index else {
+            return false;
+        };
+        let directive = &source[delimiter.len_utf8()..closing_index];
+        let after_literal = &source[closing_index + delimiter.len_utf8()..];
+        let (after_whitespace, saw_line_terminator) = trim_directive_whitespace(after_literal);
+        let terminated = after_whitespace.is_empty()
+            || after_whitespace.starts_with(';')
+            || (saw_line_terminator && !starts_directive_expression_continuation(after_whitespace));
+        if !terminated {
+            return false;
+        }
+        if directive == "use strict" {
+            return true;
+        }
+
+        source = if let Some(rest) = after_whitespace.strip_prefix(';') {
+            rest
+        } else if saw_line_terminator {
+            after_whitespace
+        } else {
+            return false;
+        };
+    }
 }
 
 fn parse_block_statement(
@@ -9553,8 +9746,6 @@ fn parse_function_expression(
             Some(span.clone()),
         )
     })?;
-    let params = parse_arrow_params(params_src, span, context)?;
-
     // Parse body.
     let rest = rest.trim_start();
     let (body_src, _) = extract_balanced(rest, '{', '}').ok_or_else(|| {
@@ -9566,7 +9757,11 @@ fn parse_function_expression(
         )
     })?;
     let goal = ParseGoal::Script;
-    let body_stmts = parse_body_statements(body_src, goal, span, context)?;
+    let (params, body_stmts) = with_function_strict_mode(body_src, false, context, |context| {
+        let params = parse_arrow_params(params_src, span, context)?;
+        let body = parse_body_statements(body_src, goal, span, context)?;
+        Ok((params, body))
+    })?;
 
     Ok(Expression::Function {
         name,
@@ -9632,10 +9827,10 @@ fn parse_class_parts(
             )
         })?;
         let super_name = after_extends[..brace].trim();
-        (
-            Some(Box::new(Expression::Identifier(super_name.to_string()))),
-            &after_extends[brace..],
-        )
+        let super_class = with_function_strict_mode("", true, context, |context| {
+            parse_expression(super_name, span, context, 1)
+        })?;
+        (Some(Box::new(super_class)), &after_extends[brace..])
     } else {
         (None, rest)
     };
@@ -9747,7 +9942,28 @@ fn parse_class_body(
         } else {
             kind
         };
-        let key = Expression::Identifier(method_name.to_string());
+        let (key, computed) = if let Some(inner) = method_name
+            .strip_prefix('[')
+            .and_then(|name| name.strip_suffix(']'))
+        {
+            (
+                with_function_strict_mode("", true, context, |context| {
+                    parse_expression(inner.trim(), span, context, 1)
+                })?,
+                true,
+            )
+        } else {
+            (
+                parse_contextual_static_property_key(
+                    method_name,
+                    span,
+                    context,
+                    LegacyDecimalEscapeMode::Reject,
+                    "class-method",
+                )?,
+                false,
+            )
+        };
         let rest = &rest[paren_idx..];
 
         // Parse parameters.
@@ -9759,8 +9975,6 @@ fn parse_class_body(
                 Some(span.clone()),
             )
         })?;
-        let params = parse_arrow_params(params_src, span, context)?;
-
         // Parse method body.
         let rest = rest.trim_start();
         let (body_src, _) = extract_balanced(rest, '{', '}').ok_or_else(|| {
@@ -9772,7 +9986,11 @@ fn parse_class_body(
             )
         })?;
         let goal = ParseGoal::Script;
-        let body_stmts = parse_body_statements(body_src, goal, span, context)?;
+        let (params, body_stmts) = with_function_strict_mode(body_src, true, context, |context| {
+            let params = parse_arrow_params(params_src, span, context)?;
+            let body = parse_body_statements(body_src, goal, span, context)?;
+            Ok((params, body))
+        })?;
 
         methods.push(MethodDefinition {
             key,
@@ -9783,7 +10001,7 @@ fn parse_class_body(
                 span: span.clone(),
             },
             is_static,
-            computed: false,
+            computed,
             span: span.clone(),
         });
     }
@@ -9905,8 +10123,6 @@ fn parse_function_declaration(
         )
     })?;
 
-    let params = parse_arrow_params(params_src, &span, context)?;
-
     // Parse body.
     let rest = rest.trim_start();
     let (body_src, _) = extract_balanced(rest, '{', '}').ok_or_else(|| {
@@ -9918,7 +10134,11 @@ fn parse_function_declaration(
         )
     })?;
     let goal = ParseGoal::Script; // Function bodies use script goal.
-    let body_stmts = parse_body_statements(body_src, goal, &span, context)?;
+    let (params, body_stmts) = with_function_strict_mode(body_src, false, context, |context| {
+        let params = parse_arrow_params(params_src, &span, context)?;
+        let body = parse_body_statements(body_src, goal, &span, context)?;
+        Ok((params, body))
+    })?;
 
     Ok(Statement::FunctionDeclaration(FunctionDeclaration {
         name,
@@ -10194,7 +10414,7 @@ mod tests {
             (r#""\q""#, "q"),
             (r#""\"""#, "\""),
         ] {
-            let value = parse_quoted_expression_string(source)
+            let value = parse_quoted_expression_string(source, LegacyDecimalEscapeMode::Reject)
                 .unwrap_or_else(|| panic!("{source:?} should cook"));
             assert_eq!(value, expected, "{source:?}");
             assert!(value.is_well_formed(), "{source:?}");
@@ -10210,7 +10430,7 @@ mod tests {
             "\"a\\\u{2028}b\"",
             "\"a\\\u{2029}b\"",
         ] {
-            let value = parse_quoted_expression_string(source)
+            let value = parse_quoted_expression_string(source, LegacyDecimalEscapeMode::Reject)
                 .unwrap_or_else(|| panic!("{source:?} should cook"));
             assert_eq!(value, "ab", "{source:?}");
         }
@@ -10220,7 +10440,7 @@ mod tests {
             ("\"a\u{2029}b\"", "a\u{2029}b"),
         ] {
             assert_eq!(
-                parse_quoted_expression_string(source)
+                parse_quoted_expression_string(source, LegacyDecimalEscapeMode::Reject)
                     .unwrap_or_else(|| panic!("{source:?} should cook")),
                 expected,
                 "{source:?}"
@@ -10235,15 +10455,18 @@ mod tests {
         }
 
         assert_eq!(
-            parse_quoted_expression_string(r#""\u{1F600}""#)
+            parse_quoted_expression_string(r#""\u{1F600}""#, LegacyDecimalEscapeMode::Reject,)
                 .expect("braced astral escape should cook")
                 .code_units_vec(),
             [0xD83D, 0xDE00]
         );
         assert_eq!(
-            parse_quoted_expression_string("\"\\uD83D\\\n\\uDE00\"")
-                .expect("continuation may separate surrogate escapes")
-                .code_units_vec(),
+            parse_quoted_expression_string(
+                "\"\\uD83D\\\n\\uDE00\"",
+                LegacyDecimalEscapeMode::Reject,
+            )
+            .expect("continuation may separate surrogate escapes")
+            .code_units_vec(),
             [0xD83D, 0xDE00]
         );
 
@@ -10296,14 +10519,113 @@ mod tests {
         }
     }
 
+    // Node 20.19.4 matches these Annex-B values and strict failures. Bun
+    // 1.3.14's CLI parser currently diverges by rejecting sloppy octal while
+    // accepting strict `\8`/`\9`; this parser follows ECMA-262 and Node.
     #[test]
-    fn legacy_decimal_escapes_fail_closed_until_contextualized_bd_xcqzp() {
-        for source in [r#""\1""#, r#""\8""#, r#""\9""#, r#""\08""#] {
-            let error = CanonicalEs2020Parser
+    fn legacy_decimal_escapes_follow_annex_b_in_sloppy_scripts_bd_xcqzp() {
+        let parser = CanonicalEs2020Parser;
+        for (source, expected_units) in [
+            (r#""\1""#, &[0x0001][..]),
+            (r#""\8""#, &[0x0038][..]),
+            (r#""\9""#, &[0x0039][..]),
+            (r#""\08""#, &[0x0000, 0x0038][..]),
+            (r#""\18""#, &[0x0001, 0x0038][..]),
+            (r#""\118""#, &[0x0009, 0x0038][..]),
+            (r#""\377""#, &[0x00FF][..]),
+            (r#""\400""#, &[0x0020, 0x0030][..]),
+            (r#""\478""#, &[0x0027, 0x0038][..]),
+        ] {
+            let tree = parser
                 .parse(source, ParseGoal::Script)
-                .expect_err("context-free cooking must not guess legacy decimal semantics");
+                .unwrap_or_else(|error| panic!("sloppy {source:?} should parse: {error}"));
+            assert!(matches!(
+                first_expr(&tree),
+                Expression::StringLiteral(value)
+                    if value.code_units_vec() == expected_units
+            ));
+        }
+
+        let postfix = parser
+            .parse(r#""\1".length"#, ParseGoal::Script)
+            .expect("a sloppy legacy escape may be a postfix receiver");
+        assert!(matches!(
+            first_expr(&postfix),
+            Expression::Member { object, .. }
+                if matches!(object.as_ref(), Expression::StringLiteral(value)
+                    if value.code_units_vec() == [0x0001])
+        ));
+
+        for source in [
+            r#"let value = "\118";"#,
+            r#"({"\1": value});"#,
+            r#"let {"\1": value} = source;"#,
+            r#"({ "\1"() {} });"#,
+            r#""use\x20strict"; "\1";"#,
+            r#""not a directive" + suffix; "use strict"; "\1";"#,
+            r#"{ "use strict"; "\1"; }"#,
+            r#"; "use strict"; "\1";"#,
+            "\"use strict\"\n+suffix; \"\\1\";",
+        ] {
+            parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("sloppy context should accept {source:?}: {error}"));
+        }
+    }
+
+    #[test]
+    fn strict_and_module_code_reject_legacy_decimal_escapes_bd_xcqzp() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            r#""use strict"; "\1";"#,
+            r#""prologue"; "use strict"; "\8";"#,
+            r#""\1"; "use strict";"#,
+            r#""use strict"; ({"\1": value});"#,
+            r#""use strict"; let {"\1": value} = source;"#,
+            r#""use strict"; ({ "\1"() {} });"#,
+            r#"function f() { "prologue"; "use strict"; return "\1"; }"#,
+            r#""use strict"; function f() { return "\1"; }"#,
+            r#"const f = () => { "use strict"; return "\1"; };"#,
+            r#"class C { method() { return "\1"; } }"#,
+            r#"function f(value = "\1") { "use strict"; }"#,
+            r#"const f = (value = "\1") => { "use strict"; };"#,
+            r#"class C { method(value = "\1") {} }"#,
+            r#"class C { "\1"() {} }"#,
+            r#"class C { ["\1"]() {} }"#,
+            r#"class C extends ("\1") {}"#,
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("strict Script code must reject legacy decimal escapes");
             assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
         }
+
+        parser
+            .parse(r#"class C { "ok"() {} }"#, ParseGoal::Script)
+            .expect("an ordinary quoted class method name remains valid");
+        parser
+            .parse(r#"class C { ["ok"]() {} }"#, ParseGoal::Script)
+            .expect("an ordinary computed class method name remains valid");
+
+        for source in [
+            r#""\1";"#,
+            r#""\8";"#,
+            r#""\9";"#,
+            r#""\08";"#,
+            r#"let {"\1": value} = source;"#,
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Module)
+                .expect_err("Module code is strict and must reject legacy decimal escapes");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+        }
+
+        parser
+            .parse(r#""use strict"; "\0";"#, ParseGoal::Script)
+            .expect("plain NUL escapes remain valid in strict Script code");
+        parser
+            .parse(r#""\0";"#, ParseGoal::Module)
+            .expect("plain NUL escapes remain valid in Module code");
     }
 
     #[test]

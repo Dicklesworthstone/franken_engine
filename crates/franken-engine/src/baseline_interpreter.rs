@@ -50,6 +50,7 @@ use regex::{NoExpand, Regex, RegexBuilder};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
+use url::{Url, form_urlencoded};
 
 use frankenengine_core::object_model::OrderedStringMap;
 use frankenengine_extension_host::host_io::{
@@ -2153,6 +2154,17 @@ pub enum BuiltinFunctionKind {
     /// Authenticated terminal listeners owned by one `stream.pipeline` run.
     StreamPipelineFinish,
     StreamPipelineError,
+    /// WHATWG `URLSearchParams` receiver methods. Appended at the true enum
+    /// tail because builtin discriminants participate in deterministic hashes
+    /// (bd-8y0gs).
+    UrlSearchParamsGet,
+    UrlSearchParamsHas,
+    UrlSearchParamsGetAll,
+    UrlSearchParamsAppend,
+    UrlSearchParamsSort,
+    UrlSearchParamsDelete,
+    UrlSearchParamsSet,
+    UrlSearchParamsToString,
 }
 
 impl BuiltinFunctionKind {
@@ -3414,6 +3426,14 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StreamTransformFinal => "_final",
             BuiltinFunctionKind::StreamPipelineFinish => "onfinish",
             BuiltinFunctionKind::StreamPipelineError => "onerror",
+            BuiltinFunctionKind::UrlSearchParamsGet => "get",
+            BuiltinFunctionKind::UrlSearchParamsHas => "has",
+            BuiltinFunctionKind::UrlSearchParamsGetAll => "getAll",
+            BuiltinFunctionKind::UrlSearchParamsAppend => "append",
+            BuiltinFunctionKind::UrlSearchParamsSort => "sort",
+            BuiltinFunctionKind::UrlSearchParamsDelete => "delete",
+            BuiltinFunctionKind::UrlSearchParamsSet => "set",
+            BuiltinFunctionKind::UrlSearchParamsToString => "toString",
             BuiltinFunctionKind::NetServerListen => "listen",
             BuiltinFunctionKind::NetServerAddress => "address",
             BuiltinFunctionKind::NetServerClose => "close",
@@ -6097,6 +6117,35 @@ struct ReadableToArrayWaiter {
     label: Label,
 }
 
+/// Authenticated, engine-owned WHATWG URL state (bd-8y0gs). The guest heap
+/// carries only the opaque object identity; every observable field is derived
+/// from this canonical serialization so writing forgeable `__type`-style
+/// properties cannot manufacture a URL instance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UrlRuntimeState {
+    href: String,
+    search_params: ObjectId,
+    lifecycle_label: Label,
+}
+
+/// Ordered duplicate-preserving URLSearchParams storage. A linked instance
+/// updates its owning URL transactionally after every mutation; standalone
+/// instances leave `owner_url` empty.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UrlSearchParamsRuntimeState {
+    pairs: Vec<(String, String)>,
+    owner_url: Option<ObjectId>,
+    lifecycle_label: Label,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UrlSearchParamsMutation {
+    Append(String, String),
+    Sort,
+    Delete(String),
+    Set(String, String),
+}
+
 /// One engine-owned buffered chunk. Keeping the value and its IFC label in
 /// the same side-table record prevents guest writes to public stream mirrors
 /// from forging either queue contents or provenance.
@@ -6691,6 +6740,10 @@ pub struct InterpreterCore {
     /// link before its Promise reaction becomes observable (bd-asw4m.1).
     event_promise_waiters: BTreeMap<ObjectId, BTreeMap<String, Vec<EventPromiseWaiterRecord>>>,
     next_event_promise_waiter_id: u64,
+    /// Non-forgeable WHATWG URL brands and state (bd-8y0gs). These maps are
+    /// execution-local and are cleared before a seed can reuse heap ObjectIds.
+    url_objects: BTreeMap<ObjectId, UrlRuntimeState>,
+    url_search_params: BTreeMap<ObjectId, UrlSearchParamsRuntimeState>,
     stream_pipelines: BTreeMap<u32, StreamPipelineState>,
     next_stream_pipeline_token: u32,
     /// bd-3894s slice (2d): deferred readable-stream emissions (`'data'`/`'end'`),
@@ -6911,6 +6964,8 @@ impl InterpreterCore {
             event_listeners: BTreeMap::new(),
             event_promise_waiters: BTreeMap::new(),
             next_event_promise_waiter_id: 0,
+            url_objects: BTreeMap::new(),
+            url_search_params: BTreeMap::new(),
             stream_pipelines: BTreeMap::new(),
             next_stream_pipeline_token: 0,
             pending_stream_emissions: BTreeMap::new(),
@@ -10003,6 +10058,15 @@ impl InterpreterCore {
                     .sum()
             })
             .unwrap_or(0);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
+    }
+
+    fn clear_url_execution_state(&mut self) {
+        let released_bytes = self
+            .url_objects_memory_bytes()
+            .saturating_add(self.url_search_params_memory_bytes());
+        self.url_objects.clear();
+        self.url_search_params.clear();
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
     }
 
@@ -17881,6 +17945,7 @@ impl InterpreterCore {
         // seeded heap. Otherwise a reused id can inherit callbacks, buffered
         // chunks, pumps, listeners, or static `events.once` links from the
         // preceding execution.
+        self.clear_url_execution_state();
         self.clear_stream_pipeline_execution_state();
         self.clear_readable_execution_state();
         self.clear_writable_execution_state();
@@ -18039,6 +18104,23 @@ impl InterpreterCore {
             .unwrap_or(Label::Public)
     }
 
+    fn url_state_label_ref(&self, object_id: ObjectId) -> Option<&Label> {
+        self.url_objects
+            .get(&object_id)
+            .map(|state| &state.lifecycle_label)
+            .or_else(|| {
+                self.url_search_params
+                    .get(&object_id)
+                    .map(|state| &state.lifecycle_label)
+            })
+    }
+
+    fn url_state_label(&self, object_id: ObjectId) -> Label {
+        self.url_state_label_ref(object_id)
+            .cloned()
+            .unwrap_or(Label::Public)
+    }
+
     fn stream_state_label_ref(&self, object_id: ObjectId) -> Option<&Label> {
         let mut label: Option<&Label> = None;
         let mut current = Some(object_id);
@@ -18191,6 +18273,17 @@ impl InterpreterCore {
             && let Value::Object(target_id) = self.read_reg(args.start)?
         {
             self.join_binary_storage_label(target_id, label)?;
+        }
+
+        if matches!(
+            builtin.kind,
+            Kind::UrlSearchParamsAppend
+                | Kind::UrlSearchParamsSort
+                | Kind::UrlSearchParamsDelete
+                | Kind::UrlSearchParamsSet
+        ) && let Value::Object(object_id) = receiver
+        {
+            self.join_url_search_params_lifecycle_label(*object_id, label)?;
         }
         Ok(())
     }
@@ -18874,6 +18967,7 @@ impl InterpreterCore {
             queued.fill(false);
             Self::queue_object_id_from_value(value, &mut frontier, &mut queued);
             while let Some(object_index) = frontier.pop() {
+                let object_id = ObjectId(object_index);
                 let object_index = object_index as usize;
                 if object_index >= self.heap.len() {
                     continue;
@@ -18899,6 +18993,17 @@ impl InterpreterCore {
                 if let Some(prototype) = object.prototype {
                     Self::queue_object_id_from_value(
                         &Value::Object(prototype),
+                        &mut frontier,
+                        &mut queued,
+                    );
+                }
+                // URL.searchParams is a native authenticated edge stored
+                // outside guest-visible heap properties. State captures must
+                // traverse it exactly like an ordinary property so a label on
+                // the URL reaches the semantically reachable params object.
+                if let Some(state) = self.url_objects.get(&object_id) {
+                    Self::queue_object_id_from_value(
+                        &Value::Object(state.search_params),
                         &mut frontier,
                         &mut queued,
                     );
@@ -22209,6 +22314,127 @@ impl InterpreterCore {
                     }
                 }
                 Ok(Value::Float(f64::NAN.into()))
+            }
+            BuiltinFunctionKind::UrlSearchParamsGet => {
+                let object_id = self.url_search_params_receiver_id(receiver, "get")?;
+                let name_value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let name_bound = self.url_value_to_string_upper_bound(&name_value);
+                self.check_temporary_memory_budget(
+                    name_bound.saturating_add(Self::estimate_url_search_params_state_bytes(
+                        &self.url_search_params[&object_id],
+                    )),
+                )?;
+                let name = self.value_to_string(&name_value);
+                let value = self.url_search_params[&object_id]
+                    .pairs
+                    .iter()
+                    .find_map(|(candidate, value)| (candidate == &name).then(|| value.clone()))
+                    .map(Value::str)
+                    .unwrap_or(Value::Null);
+                Ok(value)
+            }
+            BuiltinFunctionKind::UrlSearchParamsHas => {
+                let object_id = self.url_search_params_receiver_id(receiver, "has")?;
+                let name_value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                self.check_temporary_memory_budget(
+                    self.url_value_to_string_upper_bound(&name_value),
+                )?;
+                let name = self.value_to_string(&name_value);
+                Ok(Value::Bool(
+                    self.url_search_params[&object_id]
+                        .pairs
+                        .iter()
+                        .any(|(candidate, _)| candidate == &name),
+                ))
+            }
+            BuiltinFunctionKind::UrlSearchParamsGetAll => {
+                let object_id = self.url_search_params_receiver_id(receiver, "getAll")?;
+                let name_value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let name_bound = self.url_value_to_string_upper_bound(&name_value);
+                self.check_temporary_memory_budget(
+                    name_bound.saturating_add(
+                        Self::estimate_url_search_params_state_bytes(
+                            &self.url_search_params[&object_id],
+                        )
+                        .saturating_mul(2),
+                    ),
+                )?;
+                let name = self.value_to_string(&name_value);
+                let values: Vec<Value> = self.url_search_params[&object_id]
+                    .pairs
+                    .iter()
+                    .filter_map(|(candidate, value)| {
+                        (candidate == &name).then(|| Value::str(value))
+                    })
+                    .collect();
+                Ok(Value::Object(self.alloc_array_from_values(&values)?))
+            }
+            BuiltinFunctionKind::UrlSearchParamsAppend
+            | BuiltinFunctionKind::UrlSearchParamsSort
+            | BuiltinFunctionKind::UrlSearchParamsDelete
+            | BuiltinFunctionKind::UrlSearchParamsSet => {
+                let object_id =
+                    self.url_search_params_receiver_id(receiver, builtin.display_name())?;
+                let mutation = match builtin.kind {
+                    BuiltinFunctionKind::UrlSearchParamsAppend => {
+                        let name_value =
+                            self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                        let value_value =
+                            self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                        self.check_temporary_memory_budget(
+                            self.url_value_to_string_upper_bound(&name_value)
+                                .saturating_add(
+                                    self.url_value_to_string_upper_bound(&value_value),
+                                ),
+                        )?;
+                        UrlSearchParamsMutation::Append(
+                            self.value_to_string(&name_value),
+                            self.value_to_string(&value_value),
+                        )
+                    }
+                    BuiltinFunctionKind::UrlSearchParamsSort => UrlSearchParamsMutation::Sort,
+                    BuiltinFunctionKind::UrlSearchParamsDelete => {
+                        let name_value =
+                            self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                        self.check_temporary_memory_budget(
+                            self.url_value_to_string_upper_bound(&name_value),
+                        )?;
+                        UrlSearchParamsMutation::Delete(self.value_to_string(&name_value))
+                    }
+                    BuiltinFunctionKind::UrlSearchParamsSet => {
+                        let name_value =
+                            self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                        let value_value =
+                            self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                        self.check_temporary_memory_budget(
+                            self.url_value_to_string_upper_bound(&name_value)
+                                .saturating_add(
+                                    self.url_value_to_string_upper_bound(&value_value),
+                                ),
+                        )?;
+                        UrlSearchParamsMutation::Set(
+                            self.value_to_string(&name_value),
+                            self.value_to_string(&value_value),
+                        )
+                    }
+                    _ => unreachable!("URLSearchParams mutation arm was filtered"),
+                };
+                let args_label = self.join_arg_range_label(args)?;
+                let state_label = self
+                    .url_state_label_ref(object_id)
+                    .unwrap_or(&Label::Public);
+                let mutation_label =
+                    self.join_owned_label_with_temporary_budget(args_label, state_label)?;
+                self.mutate_url_search_params(object_id, mutation, &mutation_label)?;
+                Ok(Value::Undefined)
+            }
+            BuiltinFunctionKind::UrlSearchParamsToString => {
+                let object_id = self.url_search_params_receiver_id(receiver, "toString")?;
+                let pairs = &self.url_search_params[&object_id].pairs;
+                self.check_temporary_memory_budget(
+                    Self::url_serialization_upper_bound(pairs).saturating_mul(2),
+                )?;
+                Ok(Value::str(Self::serialize_url_search_params(pairs)))
             }
             BuiltinFunctionKind::FsStatsIsFile
             | BuiltinFunctionKind::FsStatsIsDirectory
@@ -25587,11 +25813,16 @@ impl InterpreterCore {
                             Value::Object(object_id) => self.stream_state_label(*object_id),
                             _ => Label::Public,
                         };
+                        let url_state_label = match &receiver_val {
+                            Value::Object(object_id) => self.url_state_label(*object_id),
+                            _ => Label::Public,
+                        };
                         let result_label = self
                             .join_arg_range_label(args)?
                             .join(self.get_register_label(receiver)?)
                             .join(&binary_storage_label)
                             .join(&stream_state_label)
+                            .join(&url_state_label)
                             .join(&callback_result_label);
                         self.propagate_builtin_binary_mutation_label(
                             builtin,
@@ -26099,6 +26330,14 @@ impl InterpreterCore {
                             binary_storage_label,
                         )?;
                     }
+                    if let Some(url_state_label) =
+                        object_id.and_then(|id| self.url_state_label_ref(id))
+                    {
+                        result_label = self.join_owned_label_with_temporary_budget(
+                            result_label,
+                            url_state_label,
+                        )?;
+                    }
                     let stream_state_label = if let Some(object_id) = object_id {
                         self.stream_state_label_with_temporary_budget(
                             object_id,
@@ -26206,7 +26445,20 @@ impl InterpreterCore {
                     match obj_val {
                         Value::Object(oid) => {
                             self.run_pre_property_access_hook(module, oid, &key_str)?;
-                            if key_str == "__proto__" {
+                            let mutation_label = self
+                                .get_register_label(obj)?
+                                .join(self.get_register_label(key)?)
+                                .join(self.get_register_label(val)?);
+                            if self.set_url_object_property(
+                                oid,
+                                &key_str,
+                                &set_val,
+                                &mutation_label,
+                            )? {
+                                // Native URL setter committed through its
+                                // authenticated side table; no guest-writable
+                                // mirror property is created.
+                            } else if key_str == "__proto__" {
                                 // `__proto__` sets the internal prototype link so
                                 // prototype-chain lookups (incl. class `extends`,
                                 // which lowers to `Child.prototype.__proto__ =
@@ -29853,6 +30105,14 @@ impl InterpreterCore {
             depth += 1;
         }
 
+        // URL fields are native accessors over authenticated side-table state.
+        // Consult them only after ordinary own/inherited properties have had a
+        // chance to shadow the accessor, and never trust guest heap metadata as
+        // a brand (bd-8y0gs).
+        if let Some(value) = self.url_object_property_value(object_id, key)? {
+            return Ok(value);
+        }
+
         // Array exotic objects expose their prototype methods (e.g. `push`)
         // even though we do not allocate a shared `Array.prototype` object.
         // This is a fallback: own/inherited data properties walked above win,
@@ -29874,7 +30134,9 @@ impl InterpreterCore {
         let root_has_readable = self.readable_from_streams.contains_key(&object_id);
         let root_has_writable = self.writable_streams.contains_key(&object_id)
             || self.writable_terminal_states.contains_key(&object_id);
-        let root_type_tag = if root_has_readable && root_has_writable {
+        let root_type_tag = if self.url_search_params.contains_key(&object_id) {
+            Some("URLSearchParams".to_string())
+        } else if root_has_readable && root_has_writable {
             Some(
                 match self
                     .writable_streams
@@ -29908,6 +30170,7 @@ impl InterpreterCore {
             return Ok(Value::BuiltinFunction(builtin));
         }
         if let Some(tag) = root_type_tag.as_deref()
+            && (tag != "URLSearchParams" || self.url_search_params.contains_key(&object_id))
             && let Some(builtin) = Self::collection_prototype_method(tag, key)
         {
             return Ok(Value::BuiltinFunction(builtin));
@@ -29999,6 +30262,30 @@ impl InterpreterCore {
             ("Map", "clear") => Some(BuiltinFunction::map_clear()),
             ("Set", "clear") => Some(BuiltinFunction::set_clear()),
             ("Date", "getTime") => Some(BuiltinFunction::date_get_time()),
+            ("URLSearchParams", "get") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::UrlSearchParamsGet,
+            )),
+            ("URLSearchParams", "has") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::UrlSearchParamsHas,
+            )),
+            ("URLSearchParams", "getAll") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::UrlSearchParamsGetAll,
+            )),
+            ("URLSearchParams", "append") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::UrlSearchParamsAppend,
+            )),
+            ("URLSearchParams", "sort") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::UrlSearchParamsSort,
+            )),
+            ("URLSearchParams", "delete") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::UrlSearchParamsDelete,
+            )),
+            ("URLSearchParams", "set") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::UrlSearchParamsSet,
+            )),
+            ("URLSearchParams", "toString") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::UrlSearchParamsToString,
+            )),
             ("FsStats", "isFile") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::FsStatsIsFile,
             )),
@@ -38567,6 +38854,588 @@ impl InterpreterCore {
         Some(rendered)
     }
 
+    fn construct_node_invalid_url_error(&mut self, input: &str) -> Result<Value, InterpreterError> {
+        let prototype = self.ensure_builtin_prototype("TypeError")?;
+        let error_id = self.alloc_object_with_prototype(Some(prototype))?;
+        self.initialize_error_like_object(error_id, "TypeError", format!("Invalid URL: {input}"))?;
+        self.set_object_property(error_id, "code".to_string(), Value::str("ERR_INVALID_URL"))?;
+        Ok(Value::Object(error_id))
+    }
+
+    fn throw_invalid_url_error(&mut self, input: &str) -> InterpreterError {
+        let thrown = match self.construct_node_invalid_url_error(input) {
+            Ok(value) => value,
+            Err(error) => return error,
+        };
+        self.pending_exception = Some(thrown.clone());
+        self.pending_exception_label = Label::Public;
+        InterpreterError::UncaughtException {
+            value: Self::uncaught_exception_description(&thrown),
+        }
+    }
+
+    fn parse_whatwg_url(
+        &mut self,
+        input: &str,
+        base: Option<&str>,
+    ) -> Result<Url, InterpreterError> {
+        if let Some(base) = base {
+            let parsed_base = Url::parse(base).map_err(|_| self.throw_invalid_url_error(base))?;
+            parsed_base
+                .join(input)
+                .map_err(|_| self.throw_invalid_url_error(input))
+        } else {
+            Url::parse(input).map_err(|_| self.throw_invalid_url_error(input))
+        }
+    }
+
+    fn url_pairs(parsed: &Url) -> Vec<(String, String)> {
+        parsed.query_pairs().into_owned().collect()
+    }
+
+    fn serialize_url_search_params(pairs: &[(String, String)]) -> String {
+        let mut serializer = form_urlencoded::Serializer::new(String::new());
+        for (name, value) in pairs {
+            serializer.append_pair(name, value);
+        }
+        serializer.finish()
+    }
+
+    fn url_serialization_upper_bound(pairs: &[(String, String)]) -> u64 {
+        let encoded_units = Self::saturating_sum(pairs.iter().flat_map(|(name, value)| {
+            [
+                u64::try_from(name.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(3),
+                u64::try_from(value.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(3),
+            ]
+        }));
+        MEMORY_ESTIMATE_STRING_BASE_BYTES
+            .saturating_add(encoded_units)
+            .saturating_add(
+                u64::try_from(pairs.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(2),
+            )
+    }
+
+    /// Conservative allocation bound for the engine's primitive string
+    /// coercion. URL entry points reserve this before calling
+    /// `value_to_string`, so even Buffer/Error object coercions cannot create
+    /// an unmetered host allocation before URL parsing starts.
+    fn url_value_to_string_upper_bound(&self, value: &Value) -> u64 {
+        match value {
+            Value::Str(text) => Self::estimate_js_string_bytes(text),
+            Value::BigInt(digits) => Self::estimate_string_bytes(digits),
+            Value::Object(object_id) => {
+                let Some(object) = self.heap.get(object_id.0 as usize) else {
+                    return MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(64);
+                };
+                let buffer_render = object
+                    .typed_array
+                    .as_ref()
+                    .filter(|view| view.is_buffer)
+                    .map(|view| {
+                        MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(
+                            u64::try_from(view.byte_length)
+                                .unwrap_or(u64::MAX)
+                                .saturating_mul(3),
+                        )
+                    })
+                    .unwrap_or(0);
+                buffer_render.max(
+                    Self::estimate_heap_object_bytes(object)
+                        .saturating_mul(2)
+                        .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES)
+                        .saturating_add(128),
+                )
+            }
+            Value::BuiltinFunction(builtin) => {
+                Self::estimate_string_bytes(&builtin.module_specifier).saturating_add(128)
+            }
+            // Numeric/id renderings and the remaining fixed tags are all
+            // bounded well below this allocation, including a String header.
+            _ => MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(128),
+        }
+    }
+
+    /// Worst-case owned pair storage produced while decoding one query-like
+    /// string. There can be at most one more pair than source bytes; every
+    /// pair owns two String headers, and percent/form decoding cannot produce
+    /// more scalar bytes than the conservatively tripled source bound.
+    fn url_decoded_pairs_upper_bound(source_bytes: u64) -> u64 {
+        let pair_count = source_bytes.saturating_add(1);
+        (std::mem::size_of::<Vec<(String, String)>>() as u64)
+            .saturating_add(
+                pair_count.saturating_mul(
+                    (std::mem::size_of::<(String, String)>() as u64)
+                        .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_mul(2)),
+                ),
+            )
+            .saturating_add(source_bytes.saturating_mul(3))
+    }
+
+    /// Aggregate peak for string coercion, the `url` crate's parsed record,
+    /// canonical serialization, IDNA/percent-encoding scratch, and owned query
+    /// pairs. The multiplier intentionally covers simultaneous parser input
+    /// and output buffers; structural pair overhead is charged separately.
+    fn url_parse_working_upper_bound(input_bytes: u64, base_bytes: u64) -> u64 {
+        let source_bytes = input_bytes.saturating_add(base_bytes);
+        source_bytes
+            .saturating_mul(16)
+            .saturating_add(Self::url_decoded_pairs_upper_bound(source_bytes))
+            .saturating_add((std::mem::size_of::<Url>() as u64).saturating_mul(2))
+            .saturating_add(1024)
+    }
+
+    fn url_search_params_mutation_input_bytes(mutation: &UrlSearchParamsMutation) -> u64 {
+        match mutation {
+            UrlSearchParamsMutation::Append(name, value)
+            | UrlSearchParamsMutation::Set(name, value) => Self::estimate_string_bytes(name)
+                .saturating_add(Self::estimate_string_bytes(value))
+                .saturating_add(std::mem::size_of::<(String, String)>() as u64),
+            UrlSearchParamsMutation::Delete(name) => Self::estimate_string_bytes(name),
+            UrlSearchParamsMutation::Sort => 0,
+        }
+    }
+
+    fn allocate_url_search_params_state(
+        &mut self,
+        pairs: Vec<(String, String)>,
+        owner_url: Option<ObjectId>,
+        lifecycle_label: Label,
+    ) -> Result<ObjectId, InterpreterError> {
+        let state = UrlSearchParamsRuntimeState {
+            pairs,
+            owner_url,
+            lifecycle_label,
+        };
+        let retained_bytes = Self::estimate_url_search_params_state_bytes(&state);
+        self.check_temporary_memory_budget(
+            retained_bytes.saturating_add(Self::estimate_heap_object_bytes(&HeapObject::new())),
+        )?;
+        let previous_heap_len = self.heap.len();
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let object_id = match self.alloc_object_with_prototype(None) {
+            Ok(object_id) => object_id,
+            Err(error) => return Err(error),
+        };
+        if let Err(error) = self.apply_memory_component_delta(0, retained_bytes) {
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+            return Err(error);
+        }
+        self.url_search_params.insert(object_id, state);
+        Ok(object_id)
+    }
+
+    fn construct_url(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        let input_value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let base_value = match self.builtin_arg(args, 1)? {
+            None | Some(Value::Undefined) => None,
+            Some(value) => Some(value),
+        };
+        let input_bound = self.url_value_to_string_upper_bound(&input_value);
+        let base_bound = base_value
+            .as_ref()
+            .map(|value| self.url_value_to_string_upper_bound(value))
+            .unwrap_or(0);
+        self.check_temporary_memory_budget(Self::url_parse_working_upper_bound(
+            input_bound,
+            base_bound,
+        ))?;
+        let input = self.value_to_string(&input_value);
+        let base = base_value.map(|value| self.value_to_string(&value));
+        let parsed = self.parse_whatwg_url(&input, base.as_deref())?;
+        let href = parsed.as_str().to_string();
+        let pairs = Self::url_pairs(&parsed);
+        drop(parsed);
+        drop(input);
+        drop(base);
+        let lifecycle_label = self.join_arg_range_label(args)?;
+
+        let projected_state_bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_mul(2)
+            .saturating_add(std::mem::size_of::<UrlRuntimeState>() as u64)
+            .saturating_add(std::mem::size_of::<UrlSearchParamsRuntimeState>() as u64)
+            .saturating_add(Self::estimate_string_bytes(&href))
+            .saturating_add(Self::estimate_url_pair_storage_bytes(&pairs))
+            .saturating_add(Self::estimate_label_bytes(&lifecycle_label).saturating_mul(2));
+        self.check_temporary_memory_budget(projected_state_bytes.saturating_add(
+            Self::estimate_heap_object_bytes(&HeapObject::new()).saturating_mul(2),
+        ))?;
+        let mut url_state = UrlRuntimeState {
+            href,
+            search_params: ObjectId(0),
+            lifecycle_label: lifecycle_label.clone(),
+        };
+        let mut params_state = UrlSearchParamsRuntimeState {
+            pairs,
+            owner_url: Some(ObjectId(0)),
+            lifecycle_label,
+        };
+
+        let previous_heap_len = self.heap.len();
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let mut url_id = None;
+        let mut params_id = None;
+        let outcome = (|| {
+            let allocated_url = self.alloc_object_with_prototype(None)?;
+            url_id = Some(allocated_url);
+            let allocated_params = self.alloc_object_with_prototype(None)?;
+            params_id = Some(allocated_params);
+            url_state.search_params = allocated_params;
+            params_state.owner_url = Some(allocated_url);
+            let retained_bytes = Self::estimate_url_state_bytes(&url_state)
+                .saturating_add(Self::estimate_url_search_params_state_bytes(&params_state));
+            self.apply_memory_component_delta(0, retained_bytes)?;
+            self.url_objects.insert(allocated_url, url_state);
+            self.url_search_params
+                .insert(allocated_params, params_state);
+            Ok(Value::Object(allocated_url))
+        })();
+        if outcome.is_err() {
+            if let Some(id) = url_id {
+                self.url_objects.remove(&id);
+            }
+            if let Some(id) = params_id {
+                self.url_search_params.remove(&id);
+            }
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+        }
+        outcome
+    }
+
+    fn construct_url_search_params(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        let initializer = self.builtin_arg(args, 0)?;
+        let pairs = match initializer {
+            None | Some(Value::Undefined) => Vec::new(),
+            Some(Value::Object(object_id)) => {
+                let state = self.url_search_params.get(&object_id).ok_or_else(|| {
+                    InterpreterError::TypeError {
+                        expected: "string or branded URLSearchParams initializer".to_string(),
+                        got: "object".to_string(),
+                    }
+                })?;
+                self.check_temporary_memory_budget(Self::estimate_url_search_params_state_bytes(
+                    state,
+                ))?;
+                state.pairs.clone()
+            }
+            Some(value) => {
+                let input_bound = self.url_value_to_string_upper_bound(&value);
+                self.check_temporary_memory_budget(
+                    input_bound.saturating_add(Self::url_decoded_pairs_upper_bound(input_bound)),
+                )?;
+                let input = self.value_to_string(&value);
+                let input = input.strip_prefix('?').unwrap_or(&input);
+                form_urlencoded::parse(input.as_bytes())
+                    .into_owned()
+                    .collect()
+            }
+        };
+        let lifecycle_label = self.join_arg_range_label(args)?;
+        let object_id = self.allocate_url_search_params_state(pairs, None, lifecycle_label)?;
+        Ok(Value::Object(object_id))
+    }
+
+    fn url_search_params_receiver_id(
+        &self,
+        receiver: Option<Value>,
+        method: &str,
+    ) -> Result<ObjectId, InterpreterError> {
+        let receiver = receiver.unwrap_or(Value::Undefined);
+        let Value::Object(object_id) = receiver else {
+            return Err(InterpreterError::TypeError {
+                expected: format!("URLSearchParams receiver for {method}"),
+                got: receiver.type_name().to_string(),
+            });
+        };
+        if !self.url_search_params.contains_key(&object_id) {
+            return Err(InterpreterError::TypeError {
+                expected: format!("branded URLSearchParams receiver for {method}"),
+                got: "ordinary object".to_string(),
+            });
+        }
+        Ok(object_id)
+    }
+
+    fn url_object_property_value(
+        &self,
+        object_id: ObjectId,
+        key: &str,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let Some(state) = self.url_objects.get(&object_id) else {
+            return Ok(None);
+        };
+        if key == "searchParams" {
+            return Ok(Some(Value::Object(state.search_params)));
+        }
+        if !matches!(
+            key,
+            "href"
+                | "protocol"
+                | "hostname"
+                | "port"
+                | "host"
+                | "origin"
+                | "username"
+                | "password"
+                | "pathname"
+                | "search"
+                | "hash"
+        ) {
+            return Ok(None);
+        }
+        let href_bytes = Self::estimate_string_bytes(&state.href);
+        self.check_temporary_memory_budget(Self::url_parse_working_upper_bound(href_bytes, 0))?;
+        let parsed = Url::parse(&state.href).map_err(|error| InterpreterError::InternalError {
+            details: format!("authenticated URL state failed to reparse: {error}"),
+        })?;
+        let value = match key {
+            "href" => Value::str(parsed.as_str()),
+            "protocol" => Value::str(format!("{}:", parsed.scheme())),
+            "hostname" => Value::str(parsed.host_str().unwrap_or_default()),
+            "port" => Value::str(
+                parsed
+                    .port()
+                    .map(|port| port.to_string())
+                    .unwrap_or_default(),
+            ),
+            "host" => {
+                let mut host = parsed.host_str().unwrap_or_default().to_string();
+                if let Some(port) = parsed.port() {
+                    host.push(':');
+                    host.push_str(&port.to_string());
+                }
+                Value::str(host)
+            }
+            "origin" => Value::str(parsed.origin().ascii_serialization()),
+            "username" => Value::str(parsed.username()),
+            "password" => Value::str(parsed.password().unwrap_or_default()),
+            "pathname" => Value::str(parsed.path()),
+            "search" => Value::str(
+                parsed
+                    .query()
+                    .filter(|query| !query.is_empty())
+                    .map(|query| format!("?{query}"))
+                    .unwrap_or_default(),
+            ),
+            "hash" => Value::str(
+                parsed
+                    .fragment()
+                    .filter(|fragment| !fragment.is_empty())
+                    .map(|fragment| format!("#{fragment}"))
+                    .unwrap_or_default(),
+            ),
+            _ => unreachable!("URL getter key was validated before parsing"),
+        };
+        Ok(Some(value))
+    }
+
+    fn set_url_object_property(
+        &mut self,
+        object_id: ObjectId,
+        key: &str,
+        value: &Value,
+        mutation_label: &Label,
+    ) -> Result<bool, InterpreterError> {
+        if !matches!(key, "pathname" | "hash") || !self.url_objects.contains_key(&object_id) {
+            return Ok(false);
+        }
+        let current = self
+            .url_objects
+            .get(&object_id)
+            .expect("URL brand checked before state read");
+        let clone_bytes = Self::estimate_url_state_bytes(current);
+        let value_bound = self.url_value_to_string_upper_bound(value);
+        let href_bytes = Self::estimate_string_bytes(&current.href);
+        let aggregate_peak = clone_bytes
+            .saturating_add(value_bound)
+            .saturating_add(Self::url_parse_working_upper_bound(href_bytes, 0))
+            .saturating_add(value_bound.saturating_mul(3))
+            .saturating_add(Self::estimate_label_bytes(mutation_label).saturating_mul(2));
+        self.check_temporary_memory_budget(aggregate_peak)?;
+        let mut projected = current.clone();
+        let mut parsed =
+            Url::parse(&projected.href).map_err(|error| InterpreterError::InternalError {
+                details: format!("authenticated URL state failed to reparse: {error}"),
+            })?;
+        let text = self.value_to_string(value);
+        match key {
+            "pathname" => parsed.set_path(&text),
+            "hash" if text.is_empty() => parsed.set_fragment(None),
+            "hash" => parsed.set_fragment(Some(text.strip_prefix('#').unwrap_or(&text))),
+            _ => unreachable!("URL setter key was validated"),
+        }
+        projected.href = parsed.into();
+        drop(text);
+        projected.lifecycle_label = projected.lifecycle_label.join(mutation_label);
+        let previous_bytes = Self::estimate_url_state_bytes(current);
+        let next_bytes = Self::estimate_url_state_bytes(&projected);
+        self.check_temporary_memory_budget(next_bytes)?;
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        self.url_objects.insert(object_id, projected);
+        Ok(true)
+    }
+
+    fn mutate_url_search_params(
+        &mut self,
+        object_id: ObjectId,
+        mutation: UrlSearchParamsMutation,
+        mutation_label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let current =
+            self.url_search_params
+                .get(&object_id)
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "URLSearchParams receiver".to_string(),
+                    got: "unbranded object".to_string(),
+                })?;
+        let owner_bytes = current
+            .owner_url
+            .and_then(|owner| self.url_objects.get(&owner))
+            .map(Self::estimate_url_state_bytes)
+            .unwrap_or(0);
+        let current_params_bytes = Self::estimate_url_search_params_state_bytes(current);
+        let previous_bytes = current_params_bytes.saturating_add(owner_bytes);
+        let mutation_input_bytes = Self::url_search_params_mutation_input_bytes(&mutation);
+        let mutation_label_bytes = Self::estimate_label_bytes(mutation_label);
+        let projected_params_upper = current_params_bytes
+            .saturating_add(mutation_input_bytes.saturating_mul(2))
+            .saturating_add(std::mem::size_of::<(String, String)>() as u64);
+        let sort_scratch = u64::try_from(current.pairs.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(std::mem::size_of::<(String, String)>() as u64);
+        let serialized_upper = Self::url_serialization_upper_bound(&current.pairs)
+            .saturating_add(mutation_input_bytes.saturating_mul(3))
+            .saturating_add(2);
+        let owner_parse_upper = current
+            .owner_url
+            .and_then(|owner| self.url_objects.get(&owner))
+            .map(|owner| {
+                Self::url_parse_working_upper_bound(
+                    Self::estimate_string_bytes(&owner.href),
+                    serialized_upper,
+                )
+            })
+            .unwrap_or(0);
+        let projection_stage = mutation_input_bytes
+            .saturating_add(projected_params_upper)
+            .saturating_add(sort_scratch)
+            .saturating_add(mutation_label_bytes.saturating_mul(2));
+        let owner_stage = mutation_input_bytes
+            .saturating_add(projected_params_upper)
+            .saturating_add(serialized_upper.saturating_mul(2))
+            .saturating_add(owner_bytes)
+            .saturating_add(owner_parse_upper)
+            .saturating_add(serialized_upper.saturating_mul(3))
+            .saturating_add(mutation_label_bytes.saturating_mul(3));
+        self.check_temporary_memory_budget(projection_stage.max(owner_stage))?;
+        let mut projected = current.clone();
+        match mutation {
+            UrlSearchParamsMutation::Append(name, value) => projected.pairs.push((name, value)),
+            UrlSearchParamsMutation::Sort => projected
+                .pairs
+                .sort_by(|left, right| left.0.encode_utf16().cmp(right.0.encode_utf16())),
+            UrlSearchParamsMutation::Delete(name) => {
+                projected.pairs.retain(|(candidate, _)| candidate != &name);
+            }
+            UrlSearchParamsMutation::Set(name, value) => {
+                let mut found = false;
+                projected.pairs.retain_mut(|(candidate, existing)| {
+                    if candidate != &name {
+                        return true;
+                    }
+                    if found {
+                        false
+                    } else {
+                        *existing = value.clone();
+                        found = true;
+                        true
+                    }
+                });
+                if !found {
+                    projected.pairs.push((name, value));
+                }
+            }
+        }
+        projected.lifecycle_label = projected.lifecycle_label.join(mutation_label);
+
+        let serialized = Self::serialize_url_search_params(&projected.pairs);
+        let mut projected_owner = if let Some(owner_id) = projected.owner_url {
+            let mut owner = self.url_objects.get(&owner_id).cloned().ok_or_else(|| {
+                InterpreterError::InternalError {
+                    details: "linked URLSearchParams lost its authenticated owner".to_string(),
+                }
+            })?;
+            let mut parsed =
+                Url::parse(&owner.href).map_err(|error| InterpreterError::InternalError {
+                    details: format!("authenticated URL state failed to reparse: {error}"),
+                })?;
+            parsed.set_query((!serialized.is_empty()).then_some(serialized.as_str()));
+            owner.href = parsed.into();
+            owner.lifecycle_label = owner.lifecycle_label.join(mutation_label);
+            Some((owner_id, owner))
+        } else {
+            None
+        };
+        let next_bytes = Self::estimate_url_search_params_state_bytes(&projected).saturating_add(
+            projected_owner
+                .as_ref()
+                .map(|(_, owner)| Self::estimate_url_state_bytes(owner))
+                .unwrap_or(0),
+        );
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        self.url_search_params.insert(object_id, projected);
+        if let Some((owner_id, owner)) = projected_owner.take() {
+            self.url_objects.insert(owner_id, owner);
+        }
+        Ok(())
+    }
+
+    fn join_url_search_params_lifecycle_label(
+        &mut self,
+        object_id: ObjectId,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let Some(state) = self.url_search_params.get(&object_id) else {
+            return Ok(());
+        };
+        let next_params_label = state.lifecycle_label.join(label);
+        let owner_id = state.owner_url;
+        let next_owner_label = owner_id
+            .and_then(|owner| self.url_objects.get(&owner))
+            .map(|owner| owner.lifecycle_label.join(label));
+        let previous_label_bytes = Self::estimate_label_bytes(&state.lifecycle_label)
+            .saturating_add(
+                owner_id
+                    .and_then(|owner| self.url_objects.get(&owner))
+                    .map(|owner| Self::estimate_label_bytes(&owner.lifecycle_label))
+                    .unwrap_or(0),
+            );
+        let next_label_bytes = Self::estimate_label_bytes(&next_params_label).saturating_add(
+            next_owner_label
+                .as_ref()
+                .map(Self::estimate_label_bytes)
+                .unwrap_or(0),
+        );
+        self.check_temporary_memory_budget(next_label_bytes)?;
+        self.apply_memory_component_delta(previous_label_bytes, next_label_bytes)?;
+        if let Some(state) = self.url_search_params.get_mut(&object_id) {
+            state.lifecycle_label = next_params_label;
+        }
+        if let (Some(owner_id), Some(next_owner_label)) = (owner_id, next_owner_label)
+            && let Some(owner) = self.url_objects.get_mut(&owner_id)
+        {
+            owner.lifecycle_label = next_owner_label;
+        }
+        Ok(())
+    }
+
     fn dispatch_builtin_hostcall(
         &mut self,
         cap: &str,
@@ -39186,6 +40055,8 @@ impl InterpreterCore {
                 };
                 Ok(Value::str(converted))
             }
+            "builtin:Url" => self.construct_url(args),
+            "builtin:UrlSearchParams" => self.construct_url_search_params(args),
             "builtin:EventEmitter" => {
                 // bd-2dmnn: both `EventEmitter()` and `new EventEmitter()` lower
                 // to this pure-compute constructor. Methods are resolved lazily
@@ -49345,6 +50216,50 @@ impl InterpreterCore {
         )
     }
 
+    fn estimate_url_state_bytes(state: &UrlRuntimeState) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(std::mem::size_of::<UrlRuntimeState>() as u64)
+            .saturating_add(Self::estimate_string_bytes(&state.href))
+            .saturating_add(Self::estimate_label_bytes(&state.lifecycle_label))
+    }
+
+    fn estimate_url_pair_storage_bytes(pairs: &[(String, String)]) -> u64 {
+        u64::try_from(pairs.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(std::mem::size_of::<(String, String)>() as u64)
+            .saturating_add(Self::saturating_sum(pairs.iter().flat_map(
+                |(name, value)| {
+                    [
+                        Self::estimate_string_bytes(name),
+                        Self::estimate_string_bytes(value),
+                    ]
+                },
+            )))
+    }
+
+    fn estimate_url_search_params_state_bytes(state: &UrlSearchParamsRuntimeState) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(std::mem::size_of::<UrlSearchParamsRuntimeState>() as u64)
+            .saturating_add(Self::estimate_url_pair_storage_bytes(&state.pairs))
+            .saturating_add(Self::estimate_label_bytes(&state.lifecycle_label))
+    }
+
+    fn url_objects_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.url_objects
+                .values()
+                .map(Self::estimate_url_state_bytes),
+        )
+    }
+
+    fn url_search_params_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.url_search_params
+                .values()
+                .map(Self::estimate_url_search_params_state_bytes),
+        )
+    }
+
     fn readable_from_streams_memory_bytes(&self) -> u64 {
         Self::saturating_sum(
             self.readable_from_streams
@@ -49447,6 +50362,8 @@ impl InterpreterCore {
             .saturating_add(self.weakmap_storage_memory_bytes())
             .saturating_add(self.event_listeners_memory_bytes())
             .saturating_add(self.event_promise_waiters_memory_bytes())
+            .saturating_add(self.url_objects_memory_bytes())
+            .saturating_add(self.url_search_params_memory_bytes())
             .saturating_add(self.stream_pipelines_memory_bytes())
             .saturating_add(self.readable_from_streams_memory_bytes())
             .saturating_add(Self::saturating_sum(
@@ -57612,6 +58529,149 @@ mod async_runtime_tests_current {
             core.get_register_label(4).expect("rest result label"),
             &Label::Secret
         );
+    }
+
+    #[test]
+    fn url_state_is_memory_exact_ifc_labeled_and_seed_cleared_bd_8y0gs() {
+        let mut core = test_interpreter();
+        let seed = core.capture_execution_seed();
+        core.write_reg(0, Value::str("http://example.com/?a=1"))
+            .expect("URL source register");
+        core.set_register_label(0, Label::Secret)
+            .expect("URL source label");
+        let Value::Object(url_id) = core
+            .construct_url(RegRange { start: 0, count: 1 })
+            .expect("construct authenticated URL")
+        else {
+            panic!("URL constructor must return an object");
+        };
+        let params_id = core.url_objects[&url_id].search_params;
+        assert_eq!(core.url_objects[&url_id].lifecycle_label, Label::Secret);
+        assert_eq!(
+            core.url_search_params[&params_id].lifecycle_label,
+            Label::Secret
+        );
+        core.write_reg(1, Value::Object(url_id))
+            .expect("URL object register");
+        core.set_register_label(1, Label::Secret)
+            .expect("URL object label");
+        let capture_sources = core.capture_heap_label_sources();
+        assert_eq!(capture_sources[url_id.0 as usize], Some(1));
+        assert_eq!(
+            capture_sources[params_id.0 as usize],
+            Some(1),
+            "native URL.searchParams reachability must project the URL register label"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        let previous_register_bytes = core.registers_memory_bytes();
+        let previous_heap_bytes = core.heap_memory_bytes();
+        core.reset_execution_state_from_seed(&seed)
+            .expect("restore pre-URL seed");
+        core.apply_register_heap_memory_delta(previous_register_bytes, previous_heap_bytes)
+            .expect("account restored register and heap state");
+        assert!(core.url_objects.is_empty());
+        assert!(core.url_search_params.is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn url_constructor_and_linked_mutation_refusals_are_atomic_bd_8y0gs() {
+        let mut refused = test_interpreter();
+        refused
+            .write_reg(0, Value::str("http://example.com/?a=1"))
+            .expect("URL source register");
+        let baseline_heap_len = refused.heap.len();
+        let baseline_bytes = refused.estimated_memory_bytes();
+        refused.config.max_total_memory_bytes = baseline_bytes;
+        assert!(matches!(
+            refused.construct_url(RegRange { start: 0, count: 1 }),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(refused.heap.len(), baseline_heap_len);
+        assert!(refused.url_objects.is_empty());
+        assert!(refused.url_search_params.is_empty());
+        assert_eq!(refused.estimated_memory_bytes(), baseline_bytes);
+
+        let mut second_allocation_refused = test_interpreter();
+        second_allocation_refused
+            .write_reg(0, Value::str("http://example.com/?a=1"))
+            .expect("URL source register");
+        let baseline_heap_len = second_allocation_refused.heap.len();
+        let baseline_bytes = second_allocation_refused.estimated_memory_bytes();
+        second_allocation_refused.config.max_heap_objects = u32::try_from(baseline_heap_len)
+            .unwrap_or(u32::MAX)
+            .saturating_add(1);
+        assert!(matches!(
+            second_allocation_refused.construct_url(RegRange { start: 0, count: 1 }),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(second_allocation_refused.heap.len(), baseline_heap_len);
+        assert!(second_allocation_refused.url_objects.is_empty());
+        assert!(second_allocation_refused.url_search_params.is_empty());
+        assert_eq!(
+            second_allocation_refused.estimated_memory_bytes(),
+            baseline_bytes
+        );
+
+        let mut pair_amplification_refused = test_interpreter();
+        let tiny_pairs = "a=&".repeat(64);
+        pair_amplification_refused
+            .write_reg(0, Value::str(&tiny_pairs))
+            .expect("URLSearchParams source register");
+        let baseline_heap_len = pair_amplification_refused.heap.len();
+        let baseline_bytes = pair_amplification_refused.estimated_memory_bytes();
+        let former_three_x_check =
+            InterpreterCore::estimate_string_bytes(&tiny_pairs).saturating_mul(3);
+        pair_amplification_refused.config.max_total_memory_bytes =
+            baseline_bytes.saturating_add(former_three_x_check);
+        assert!(matches!(
+            pair_amplification_refused.construct_url_search_params(RegRange { start: 0, count: 1 }),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(pair_amplification_refused.heap.len(), baseline_heap_len);
+        assert!(pair_amplification_refused.url_search_params.is_empty());
+        assert_eq!(
+            pair_amplification_refused.estimated_memory_bytes(),
+            baseline_bytes
+        );
+
+        let mut core = test_interpreter();
+        core.write_reg(0, Value::str("http://example.com/?a=1"))
+            .expect("URL source register");
+        let Value::Object(url_id) = core
+            .construct_url(RegRange { start: 0, count: 1 })
+            .expect("construct URL before mutation")
+        else {
+            panic!("URL constructor must return an object");
+        };
+        let params_id = core.url_objects[&url_id].search_params;
+        let before_params = core.url_search_params[&params_id].clone();
+        let before_url = core.url_objects[&url_id].clone();
+        let before_bytes = core.estimated_memory_bytes();
+        let former_clone_only_check =
+            InterpreterCore::estimate_url_search_params_state_bytes(&before_params)
+                .saturating_add(InterpreterCore::estimate_url_state_bytes(&before_url))
+                .saturating_mul(2);
+        core.config.max_total_memory_bytes = before_bytes.saturating_add(former_clone_only_check);
+        assert!(matches!(
+            core.mutate_url_search_params(
+                params_id,
+                UrlSearchParamsMutation::Append("large".to_string(), "value".repeat(64)),
+                &Label::Public,
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.url_search_params[&params_id], before_params);
+        assert_eq!(core.url_objects[&url_id], before_url);
+        assert_eq!(core.estimated_memory_bytes(), before_bytes);
+        assert_eq!(before_bytes, core.recompute_estimated_memory_bytes());
     }
 
     /// bd-fw7zd: the engine-owned finite stream queue must participate in both

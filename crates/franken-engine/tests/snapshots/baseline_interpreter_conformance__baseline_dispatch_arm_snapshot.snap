@@ -1,9 +1,10 @@
 ---
 source: crates/franken-engine/tests/baseline_interpreter_conformance.rs
+assertion_line: 95
 expression: actual
 ---
-total=272
-unique=272
+total=293
+unique=293
 duplicates=0
 
 builtin:ApplyHostCall
@@ -76,6 +77,7 @@ builtin:EncodeURIComponent
 builtin:Error
 builtin:EvalError
 builtin:EventEmitter
+builtin:EventsOnce
 builtin:FunctionPrototypeApply
 builtin:FunctionPrototypeCall
 builtin:ImportMeta
@@ -117,6 +119,11 @@ builtin:MathSin
 builtin:MathSqrt
 builtin:MathTan
 builtin:MathTrunc
+builtin:NetConnect
+builtin:NetCreateServer
+builtin:NetIsIP
+builtin:NetSocket
+builtin:NetSocketInstanceOf
 builtin:Number
 builtin:NumberIsFinite
 builtin:NumberIsInteger
@@ -220,6 +227,13 @@ builtin:SetPrototypeClear
 builtin:SetPrototypeDelete
 builtin:SetPrototypeHas
 builtin:SetTimeout
+builtin:StreamPassThrough
+builtin:StreamPipeline
+builtin:StreamPromisesPipeline
+builtin:StreamReadable
+builtin:StreamReadableFrom
+builtin:StreamTransform
+builtin:StreamWritable
 builtin:String
 builtin:StringFromCharCode
 builtin:StringFromCodePoint
@@ -266,9 +280,17 @@ builtin:SyntaxError
 builtin:TimersPromisesSetImmediate
 builtin:TimersPromisesSetInterval
 builtin:TimersPromisesSetTimeout
+builtin:TlsCheckServerIdentity
+builtin:TlsConnect
+builtin:TlsCreateSecureContext
+builtin:TlsCreateServer
+builtin:TlsGetCiphers
+builtin:TlsRootCertificates
 builtin:TypeError
 builtin:URIError
 builtin:Uint8Array
+builtin:Url
+builtin:UrlSearchParams
 builtin:WeakMap
 builtin:WeakMapPrototypeGet
 builtin:WeakMapPrototypeHas

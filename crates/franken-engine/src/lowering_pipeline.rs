@@ -13537,6 +13537,36 @@ fn lower_expression_to_ir1_inner(
                 });
                 return Ok(());
             }
+            // bd-8y0gs: WHATWG URL constructors are pure-compute globals with no
+            // eval-scope binding. Only the unshadowed bare constructor names are
+            // intercepted; local `URL` / `URLSearchParams` bindings retain ordinary
+            // JavaScript construction semantics and unsupported aliases fail closed.
+            if let Some(capability) = url_constructor_capability(callee, binding_lookup) {
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
             // `new ArrayBuffer(length)` is the root of the typed-array/DataView
             // object model. Route the unshadowed global constructor to the runtime
             // hostcall so allocation, zero-fill, byteLength, and budget failures
@@ -14386,6 +14416,27 @@ fn date_constructor_capability(
     }
 }
 
+/// Capabilities for the unshadowed WHATWG URL constructors (bd-8y0gs).
+/// These globals intentionally stay lowering-only: exposing a synthetic
+/// constructor object would make aliases/escapes look supported when the
+/// authenticated engine-owned object model only accepts direct construction.
+fn url_constructor_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Identifier(name) = callee else {
+        return None;
+    };
+    if is_lexically_shadowed(binding_lookup, name) {
+        return None;
+    }
+    match name.as_str() {
+        "URL" => Some("builtin:Url"),
+        "URLSearchParams" => Some("builtin:UrlSearchParams"),
+        _ => None,
+    }
+}
+
 /// Capability for `new ArrayBuffer(length)` (bd-8enww.2.2). Returns `None`
 /// when `ArrayBuffer` is shadowed by a user binding so local constructors retain
 /// ordinary `new` semantics.
@@ -14442,7 +14493,14 @@ fn data_view_constructor_capability(
 fn known_constructor_typeof_name(name: &str) -> bool {
     matches!(
         name,
-        "Date" | "ArrayBuffer" | "Uint8Array" | "Int32Array" | "Uint32Array" | "DataView"
+        "Date"
+            | "URL"
+            | "URLSearchParams"
+            | "ArrayBuffer"
+            | "Uint8Array"
+            | "Int32Array"
+            | "Uint32Array"
+            | "DataView"
     )
 }
 

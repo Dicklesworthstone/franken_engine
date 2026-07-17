@@ -2318,9 +2318,6 @@ fn merge_logical_lines_update_is_prefix(
 
 fn statement_clause_continues(statement: &str, following: &str) -> bool {
     (starts_with_keyword(statement, "if") && starts_with_keyword(following, "else"))
-        || (starts_with_keyword(statement, "try")
-            && (starts_with_keyword(following, "catch")
-                || starts_with_keyword(following, "finally")))
         || (starts_with_keyword(statement, "do") && starts_with_keyword(following, "while"))
 }
 
@@ -2436,6 +2433,9 @@ fn direct_statement_owner_stack_with_complete_body(
     let following = match owners.as_deref().map(|owner| owner.kind) {
         Some(PendingStatementClauseKind::IfElse) => "else",
         Some(PendingStatementClauseKind::DoWhile) => "while",
+        Some(PendingStatementClauseKind::TryHandler | PendingStatementClauseKind::CatchFinally) => {
+            return None;
+        }
         None => return None,
     };
     (owner_count > 0
@@ -2476,6 +2476,9 @@ fn pending_clause_from_owner_stack(
                         parent,
                     ),
                 );
+            }
+            PendingStatementClauseKind::TryHandler | PendingStatementClauseKind::CatchFinally => {
+                return None;
             }
         }
     }
@@ -4784,6 +4787,8 @@ fn do_while_statement_complete_prefix_uncached(
 enum PendingStatementClauseKind {
     IfElse,
     DoWhile,
+    TryHandler,
+    CatchFinally,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4862,6 +4867,53 @@ fn consume_pending_statement_clause(
     kind: PendingStatementClauseKind,
 ) -> bool {
     take_pending_statement_clause(pending, kind).is_some()
+}
+
+fn transition_pending_statement_clause(
+    pending: &mut Vec<PendingStatementClause>,
+    from: PendingStatementClauseKind,
+    to: PendingStatementClauseKind,
+) -> bool {
+    let Some(index) = pending.iter().rposition(|clause| clause.kind == from) else {
+        return false;
+    };
+    let clause = pending[index];
+    pending.truncate(index);
+    pending.push(PendingStatementClause {
+        kind: to,
+        start_index: clause.start_index,
+    });
+    true
+}
+
+fn consume_pending_try_finalizer(pending: &mut Vec<PendingStatementClause>) -> bool {
+    let Some(index) = pending.iter().rposition(|clause| {
+        matches!(
+            clause.kind,
+            PendingStatementClauseKind::TryHandler | PendingStatementClauseKind::CatchFinally
+        )
+    }) else {
+        return false;
+    };
+    pending.truncate(index);
+    true
+}
+
+fn pending_try_clause_continues(
+    pending: &mut Vec<PendingStatementClause>,
+    following: &str,
+) -> bool {
+    if starts_with_keyword(following, "catch") {
+        transition_pending_statement_clause(
+            pending,
+            PendingStatementClauseKind::TryHandler,
+            PendingStatementClauseKind::CatchFinally,
+        )
+    } else if starts_with_keyword(following, "finally") {
+        consume_pending_try_finalizer(pending)
+    } else {
+        false
+    }
 }
 
 fn retire_completed_do_while_clauses(
@@ -4987,6 +5039,14 @@ fn split_statement_segments_with_completion_limit_and_memo<'a>(
                 .next_back()
                 .is_some_and(is_identifier_part_character)
             && !starts_identifier_part(&line[index + "if".len()..]);
+        let starts_try = depth == 0
+            && previous_significant != Some('.')
+            && line[index..].starts_with("try")
+            && !line[..index]
+                .chars()
+                .next_back()
+                .is_some_and(is_identifier_part_character)
+            && !starts_identifier_part(&line[index + "try".len()..]);
         let starts_else = depth == 0
             && previous_significant != Some('.')
             && line[index..].starts_with("else")
@@ -5115,6 +5175,12 @@ fn split_statement_segments_with_completion_limit_and_memo<'a>(
                 start_index: index,
             });
         }
+        if starts_try {
+            pending_statement_clauses.push(PendingStatementClause {
+                kind: PendingStatementClauseKind::TryHandler,
+                start_index: index,
+            });
+        }
         let mut split_segment = false;
         match ch {
             '(' => {
@@ -5156,6 +5222,7 @@ fn split_statement_segments_with_completion_limit_and_memo<'a>(
                         || starts_with_keyword(seg, "if")
                         || starts_with_keyword(seg, "for")
                         || starts_with_keyword(seg, "while")
+                        || starts_with_keyword(seg, "with")
                         || starts_with_keyword(seg, "do")
                         || starts_with_keyword(seg, "try")
                         || starts_with_keyword(seg, "switch")
@@ -5164,25 +5231,29 @@ fn split_statement_segments_with_completion_limit_and_memo<'a>(
                         let after = index.saturating_add(1);
                         let rest_with_trivia = &line[after..];
                         let rest = trim_directive_trivia(rest_with_trivia).0;
-                        let pending_clause_continues = if starts_with_keyword(rest, "while") {
-                            let consumed = take_pending_statement_clause(
-                                &mut pending_statement_clauses,
-                                PendingStatementClauseKind::DoWhile,
-                            );
-                            if let Some(clause) = consumed {
-                                active_do_while_trailer = Some(
-                                    ActiveDoWhileTrailer::awaiting_condition(clause.start_index),
+                        let pending_clause_continues =
+                            if pending_try_clause_continues(&mut pending_statement_clauses, rest) {
+                                true
+                            } else if starts_with_keyword(rest, "while") {
+                                let consumed = take_pending_statement_clause(
+                                    &mut pending_statement_clauses,
+                                    PendingStatementClauseKind::DoWhile,
                                 );
-                            }
-                            consumed.is_some()
-                        } else if starts_with_keyword(rest, "else") {
-                            consume_pending_statement_clause(
-                                &mut pending_statement_clauses,
-                                PendingStatementClauseKind::IfElse,
-                            )
-                        } else {
-                            false
-                        };
+                                if let Some(clause) = consumed {
+                                    active_do_while_trailer =
+                                        Some(ActiveDoWhileTrailer::awaiting_condition(
+                                            clause.start_index,
+                                        ));
+                                }
+                                consumed.is_some()
+                            } else if starts_with_keyword(rest, "else") {
+                                consume_pending_statement_clause(
+                                    &mut pending_statement_clauses,
+                                    PendingStatementClauseKind::IfElse,
+                                )
+                            } else {
+                                false
+                            };
                         let continues =
                             statement_clause_continues(seg, rest) || pending_clause_continues;
                         if !rest_with_trivia.trim_start().is_empty() && !continues {
@@ -5447,6 +5518,15 @@ fn parse_statement_inner(
     if let Some(kind) = parse_variable_declaration_kind(statement) {
         return parse_variable_declaration(statement, kind, span, context)
             .map(Statement::VariableDeclaration);
+    }
+
+    if starts_with_keyword(statement, "catch") || starts_with_keyword(statement, "finally") {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "catch/finally clause requires a matching try statement",
+            context.source_label.to_string(),
+            Some(span),
+        ));
     }
 
     // Control flow statement dispatch
@@ -15863,6 +15943,139 @@ mod tests {
                 .is_err(),
             "an else cannot cross a mandatory outer do trailer"
         );
+    }
+
+    #[test]
+    fn wrapped_try_handlers_remain_owned_during_segmentation_bd_j7c6t() {
+        let parser = CanonicalEs2020Parser;
+        for (source, logical_line_count) in [
+            ("while (a) try {}\ncatch (error) {}\nnext();", 2),
+            (
+                "for (; a;) try {} /* handler gap */\ncatch (error) {} // finalizer gap\nfinally {}\nnext();",
+                2,
+            ),
+            (
+                "while (a) try {}\n/* gap */\u{feff}catch\n(error)\n{}\nfinally\n{}\nnext();",
+                2,
+            ),
+            ("if (a) try {} catch (error) {} else fallback(); next();", 1),
+            (
+                "if (a) while (b) try {} finally {} else fallback(); next();",
+                1,
+            ),
+            ("while (a) try {} catch (error) {} finally {} next();", 1),
+            (
+                "while (a) try { try {} finally {} } catch (error) {} next();",
+                1,
+            ),
+        ] {
+            assert_eq!(
+                merge_logical_lines(source).len(),
+                logical_line_count,
+                "physical-line merging must preserve the handler chain: {source:?}"
+            );
+            assert_eq!(
+                split_statement_segments(source).len(),
+                2,
+                "a wrapped handler chain must remain one statement: {source:?}"
+            );
+            assert_eq!(
+                parser
+                    .parse(source, ParseGoal::Script)
+                    .unwrap_or_else(|error| {
+                        panic!("wrapped try statement must parse in {source:?}: {error:?}")
+                    })
+                    .body
+                    .len(),
+                2,
+                "the adjacent statement must remain independent: {source:?}"
+            );
+        }
+
+        let while_tree = parser
+            .parse(
+                "while (a) try {}\ncatch (error) {}\nnext();",
+                ParseGoal::Script,
+            )
+            .expect("a wrapped multiline catch must parse");
+        assert!(matches!(
+            &while_tree.body[..],
+            [Statement::While(statement), Statement::Expression(_)]
+                if matches!(statement.body.as_ref(), Statement::TryCatch(_))
+        ));
+
+        let if_tree = parser
+            .parse(
+                "if (a) try {} catch (error) {} else fallback(); next();",
+                ParseGoal::Script,
+            )
+            .expect("a try consequent must retain the enclosing else");
+        assert!(matches!(
+            &if_tree.body[..],
+            [Statement::If(statement), Statement::Expression(_)]
+                if matches!(statement.consequent.as_ref(), Statement::TryCatch(_))
+                    && statement.alternate.is_some()
+        ));
+
+        let do_source = "do try {} catch (error) {}\nwhile (a); next();";
+        assert_eq!(merge_logical_lines(do_source).len(), 1);
+        assert_eq!(split_statement_segments(do_source).len(), 2);
+        let do_tree = parser
+            .parse(do_source, ParseGoal::Script)
+            .expect("a try body must remain attached to its outer do trailer");
+        assert!(matches!(
+            &do_tree.body[..],
+            [Statement::DoWhile(statement), Statement::Expression(_)]
+                if matches!(statement.body.as_ref(), Statement::TryCatch(_))
+        ));
+
+        let stacked_do_source =
+            "do if (a) try {} catch (error) {} else fallback(); while (b); next();";
+        assert_eq!(split_statement_segments(stacked_do_source).len(), 2);
+        let stacked_do_tree = parser
+            .parse(stacked_do_source, ParseGoal::Script)
+            .expect("ordered do/if/try owners must retain every trailing clause");
+        assert!(matches!(
+            &stacked_do_tree.body[..],
+            [Statement::DoWhile(statement), Statement::Expression(_)]
+                if matches!(statement.body.as_ref(), Statement::If(if_statement)
+                    if matches!(if_statement.consequent.as_ref(), Statement::TryCatch(_))
+                        && if_statement.alternate.is_some())
+        ));
+
+        for source in [
+            "with (scope) try {}\ncatch (error) {}\nnext();",
+            "if (a) try {}\ncatch (error) {}\nelse fallback(); next();",
+            "if (a) while (b) try {}\nfinally {}\nelse fallback(); next();",
+        ] {
+            let segments = split_statement_segments(source);
+            assert_eq!(
+                segments.len(),
+                2,
+                "statement segmentation must retain wrapped try ownership: {source:?}"
+            );
+            assert!(
+                segments[0].2.contains("catch") || segments[0].2.contains("finally"),
+                "the handler must remain in the wrapped statement: {source:?}"
+            );
+            assert_eq!(segments[1].2.trim(), "next()");
+        }
+
+        for invalid in [
+            "while (q) try {}\nnext();\ncatch (error) {}",
+            "while (q) try {} catch {} catch {}",
+            "if (q) try {} finally {} catch {}",
+            "try {} finally {} finally {}",
+        ] {
+            assert!(
+                split_statement_segments(invalid).len() > 1,
+                "an exhausted handler phase must not claim another clause: {invalid:?}"
+            );
+            assert!(
+                parser.parse(invalid, ParseGoal::Script).is_err(),
+                "invalid handler ordering must fail closed: {invalid:?}"
+            );
+        }
     }
 
     #[test]
